@@ -42,7 +42,9 @@ _single = threading.Lock()       # one round at a time (the temperatures)
 _smart_single = threading.Lock() # one SMART pass at a time, on its own thread (#974)
 _state = {}                      # node -> {"payload", "at", "misses", "last_ok", "smart", "smart_at", "smart_stale", "absent"}
 _round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "stop": threading.Event()}
-_smart_pass = {"thread": None, "asked": 0}   # the running SMART pass; read_smart_again() calls so far
+# The running SMART pass (its thread, when it started, whether its overrun was
+# said) and how many times read_smart_again() was called.
+_smart_pass = {"thread": None, "started": None, "said": False, "asked": 0}
 _namespace = ["lab"]
 
 
@@ -176,15 +178,27 @@ def _start_smart(due, readings, now, asked):
     helper that takes up to SMART_TIMEOUT (#974). One pass at a time: while
     one runs, hosts that are due stay due and are read on a later round."""
     if not _smart_single.acquire(blocking=False):
+        if _overrun() and not _smart_pass["said"]:
+            _smart_pass["said"] = True
+            print("node probes: a SMART pass has not finished after "
+                  f"{round(time.monotonic() - _smart_pass['started'])} s; showing the last rows as stale", flush=True)
         return
     try:
         thread = threading.Thread(target=_read_smart, args=(due, readings, now, asked),
                                   name="node-probes-smart", daemon=True)
+        _smart_pass.update(thread=thread, started=time.monotonic(), said=False)
         thread.start()
-        _smart_pass["thread"] = thread
     except BaseException:
+        _smart_pass["started"] = None
         _smart_single.release()
         raise
+
+
+def _overrun():
+    """Whether the running SMART pass has gone on far longer than a helper
+    read can (a stalled data volume, say): no host gets a new reading then."""
+    started = _smart_pass["started"]
+    return started is not None and time.monotonic() - started > 2 * SMART_TIMEOUT + INTERVAL
 
 
 def _read_smart(due, readings, now, asked):
@@ -193,6 +207,7 @@ def _read_smart(due, readings, now, asked):
     except Exception as error:
         print(f"node probes: SMART: {str(error)[:160]}", flush=True)
     finally:
+        _smart_pass["started"] = None
         _smart_single.release()
 
 
@@ -200,6 +215,9 @@ def _record_smart(rows, readings, now, asked):
     # A drive the host has put to sleep is left asleep by the helper; its last
     # reading stands in. That may touch the data volume, so it happens outside
     # _lock: a stalled volume must not hold up the pages reading the probe state.
+    with _lock:
+        # A host dropped while this pass ran is not written back to the store.
+        rows = {node: found for node, found in rows.items() if node in _state}
     for node, found in rows.items():
         if found is not None:
             serials = {disk.get("name"): disk.get("serial")
@@ -223,6 +241,8 @@ def _record_smart(rows, readings, now, asked):
                 remembered[node] = found
             if again:
                 entry["smart_at"] = 0
+    if again:
+        return               # the SMART page reads afresh rather than from rows older than the test
     for node, found in remembered.items():
         # The SMART page answers from this reading until the next one has had time to land.
         SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
@@ -234,7 +254,7 @@ def _with_smart(entry):
     if isinstance(rows, dict):
         payload["disks"] = [dict(disk, smart=rows.get(disk.get("name"))) for disk in payload.get("disks", [])]
         payload["smart_helper"] = {"available": True, "disks": len(rows)}
-        if entry["smart_stale"]:
+        if entry["smart_stale"] or _overrun():
             payload["smart_helper"]["stale"] = True
     else:
         payload["smart_helper"] = {"available": False, "reason": SMART_UNAVAILABLE}
@@ -303,10 +323,10 @@ def read_smart_again():
 
 def smart_settled(timeout=None):
     """Wait for the running SMART pass, if any; whether none is running now."""
-    thread = _smart_pass["thread"]
-    if thread is not None:
-        thread.join(timeout)
-    return not (thread and thread.is_alive())
+    if not _smart_single.acquire(timeout=-1 if timeout is None else timeout):
+        return False
+    _smart_single.release()
+    return True
 
 
 def _loop():

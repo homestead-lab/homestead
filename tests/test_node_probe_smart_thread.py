@@ -1,6 +1,8 @@
 """SMART is read on its own thread, one pass at a time, so a slow SMART
 helper never holds up the temperature rounds (#974 part 3)."""
+import contextlib
 import http.server
+import io
 import json
 import socket
 import threading
@@ -9,7 +11,7 @@ import unittest
 import urllib.request
 from unittest import mock
 
-from test_node_probes import Base, PROBES
+from test_node_probes import Base, PODS, PROBES
 
 REAL_URLOPEN = urllib.request.urlopen        # before any test patches it
 
@@ -77,9 +79,57 @@ class SmartThreadTests(Base):
         self.cluster.smart_delay = 0.3
         PROBES.run_round(now=1000)
         PROBES.reset()
+        self.assertTrue(PROBES.smart_settled(0), "reset returned with the pass still running")
         self.assertEqual({}, PROBES.status())
-        self.assertFalse(any(thread.name == "node-probes-smart" and thread.is_alive()
-                             for thread in threading.enumerate()))
+
+    def test_a_pass_that_never_ends_marks_the_rows_stale_and_says_so_once(self):
+        PROBES.run_round(now=1000)
+        self.assertTrue(PROBES.smart_settled(5))
+        release = threading.Event()
+        self.addCleanup(release.set)
+        real = PROBES.SMART.keep_last
+
+        def stalled(*args, **kwargs):           # the data volume stops answering
+            release.wait(5)
+            return real(*args, **kwargs)
+        for patch in (mock.patch.object(PROBES.SMART, "keep_last", stalled),
+                      mock.patch.object(PROBES, "SMART_TIMEOUT", 0.05),
+                      mock.patch.object(PROBES, "INTERVAL", 0.05)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.addCleanup(PROBES.smart_settled, 5)  # after release, before the patches go
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            PROBES.run_round(now=1000 + PROBES.SMART_EVERY)
+            self.assertNotIn("stale", PROBES.node_temps(wait=False)["node1"]["smart_helper"])
+            time.sleep(0.2)                     # past 2 * SMART_TIMEOUT + INTERVAL
+            for step in range(3):
+                PROBES.run_round(now=1000 + PROBES.SMART_EVERY * 2 + step)
+            helper = PROBES.node_temps(wait=False)["node1"]["smart_helper"]
+        self.assertTrue(helper.get("stale"), "the rows looked fresh while no pass could finish")
+        self.assertEqual(1, out.getvalue().count("SMART pass"), out.getvalue())
+        release.set()
+        self.assertTrue(PROBES.smart_settled(5))
+        self.assertNotIn("stale", PROBES.node_temps(wait=False)["node1"]["smart_helper"])
+
+    def test_a_pass_overtaken_by_a_smart_test_does_not_feed_the_smart_page(self):
+        self.cluster.smart_delay = 0.3
+        with mock.patch.object(PROBES.SMART, "remember") as remember:
+            PROBES.run_round(now=1000)
+            PROBES.read_smart_again()           # the test's host was just forgotten
+            self.assertTrue(PROBES.smart_settled(5))
+        remember.assert_not_called()
+
+    def test_a_host_dropped_during_a_pass_is_not_written_back(self):
+        self.cluster.smart_delay = 0.4
+        with mock.patch.object(PROBES.SMART, "keep_last", wraps=PROBES.SMART.keep_last) as keep_last:
+            PROBES.run_round(now=1000)
+            self.cluster.use_pods(*[p for p in PODS if p["spec"]["nodeName"] != "node1"])
+            for step in range(1, PROBES.GONE_AFTER + 1):
+                PROBES.run_round(now=1000 + 15 * step)
+            self.assertNotIn("node1", PROBES.status())
+            self.assertTrue(PROBES.smart_settled(5))
+        self.assertNotIn("node1", [call.args[0] for call in keep_last.call_args_list])
 
 
 class _Probe(http.server.BaseHTTPRequestHandler):
@@ -139,8 +189,8 @@ class RealSocketTests(Base):
         took = time.monotonic() - started
         self.assertLess(took, 0.5, "the rounds waited on a SMART helper that never answers")
         self.assertEqual(41, PROBES.node_temps(wait=False)["node1"]["cpu_c"])
-        self.assertEqual(3, self.reads.count("9100"), "one SMART pass at a time")
         self.assertTrue(PROBES.smart_settled(5), "the pass ends on the socket timeout")
+        self.assertEqual(3, self.reads.count("9100"), "one SMART pass at a time")
         self.assertEqual({"available": False, "reason": PROBES.SMART_UNAVAILABLE},
                          PROBES.node_temps(wait=False)["node1"]["smart_helper"])
         PROBES.run_round(now=1000 + PROBES.SMART_RETRY)
