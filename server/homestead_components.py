@@ -527,6 +527,7 @@ def plan_bodies(distribution, target):
     """The two Plans k3s and RKE2 document: servers one at a time, then agents,
     which wait for the servers' Plan first."""
     image = "rancher/k3s-upgrade" if distribution == "k3s" else "rancher/rke2-upgrade"
+    # cordon, never drain: _cordon_step looks for the controller's "cordon" init container.
     common = {"concurrency": 1, "cordon": True, "serviceAccountName": "system-upgrade",
               "upgrade": {"image": image}, "version": target}
     server = dict(common, nodeSelector={"matchExpressions": [
@@ -641,9 +642,9 @@ def _when(stamp):
 
 
 def _upgrade_runs():
-    """node -> [(started, ended or None, still running, cordoned or None)] for
-    each upgrade job and pod of our Plans there; "cordoned" is when a pod's
-    own cordon step finished. Read strictly - an unread list proves nothing."""
+    """node -> [(started, ended or None, still running, cordon step done)] for
+    each upgrade job and pod of our Plans there (the last is always False for
+    a job). Read strictly - an unread list proves nothing."""
     out = {}
     for job in _strict_items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
         labels = (job.get("metadata") or {}).get("labels") or {}
@@ -655,7 +656,7 @@ def _upgrade_runs():
         ended = bool(status.get("succeeded") or ends)
         end = _when(status.get("completionTime")) or (_when(ends[0].get("lastTransitionTime")) if ends else None)
         out.setdefault(name, []).append((_when(status.get("startTime")), end if ended else None,
-                                         bool(status.get("active")) or not ended, None))
+                                         bool(status.get("active")) or not ended, False))
     for pod in _strict_items(f"/api/v1/namespaces/{SUC_NS}/pods"):
         labels = (pod.get("metadata") or {}).get("labels") or {}
         name = (pod.get("spec") or {}).get("nodeName") or labels.get("upgrade.cattle.io/node")
@@ -668,14 +669,17 @@ def _upgrade_runs():
 
 
 def _cordon_step(status):
-    """When an upgrade pod's own cordon step - the init container "cordon"
-    that the controller adds for a Plan with cordon: true, running kubectl
-    cordon on the host - finished successfully (epoch seconds), or None."""
-    for container in status.get("initContainerStatuses") or []:
-        done = (container.get("state") or {}).get("terminated") or {}
-        if container.get("name") == "cordon" and done.get("exitCode") == 0:
-            return _when(done.get("finishedAt"))
-    return None
+    """Whether an upgrade pod's own cordon step - the init container "cordon"
+    the controller adds for a Plan with cordon: true and no drain (as ours
+    are: with drain it is named "drain"), running kubectl cordon on the host
+    - finished successfully, in a pod that has not succeeded. Once its job
+    completes the controller uncordons the host itself, so a cordon there
+    after that is not this step's; a failed one's cordon is left in place."""
+    if status.get("phase") == "Succeeded":
+        return False
+    return any(container.get("name") == "cordon"
+               and ((container.get("state") or {}).get("terminated") or {}).get("exitCode") == 0
+               for container in status.get("initContainerStatuses") or [])
 
 
 def _upgrade_work(runs=None):
@@ -690,15 +694,16 @@ def _cordoned_by_upgrade(node, rows):
     taint with when it added it (timeAdded), and that must fall inside a run
     there - after it started and, for a finished one, before it ended. A
     taint with no time (added by hand, or by the kubelet for a node that
-    registered cordoned) is ours only when an upgrade pod of ours on the host
-    still shows its own cordon step done. A cordon from before, or with
-    neither to go by, is someone else's."""
+    registered cordoned) - or no unschedulable taint at all yet, in the
+    moment before the controller adds it - is ours only when an upgrade pod
+    of ours on the host, not succeeded, shows its own cordon step done. A
+    cordon from before, or with neither to go by, is someone else's."""
     added = next((_when(t.get("timeAdded")) for t in (node.get("spec") or {}).get("taints") or []
                   if t.get("key") == UNSCHEDULABLE_TAINT), None)
     if added is None:
-        return any(cordoned is not None for _start, _end, _running, cordoned in rows)
+        return any(step for _start, _end, _running, step in rows)
     return any(start is not None and start <= added and (running or (end is not None and added <= end))
-               for start, end, running, _cordoned in rows)
+               for start, end, running, _step in rows)
 
 
 def _newest_upgrade_pod():

@@ -551,7 +551,7 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         self.assertTrue(self.cordoned("node-1"))
 
     @staticmethod
-    def upgrade_pod(node_name, exit_code):
+    def upgrade_pod(node_name, exit_code, phase="Running"):
         """An upgrade pod as the system-upgrade-controller makes it for a Plan
         with cordon: true - its init container "cordon" runs kubectl cordon on
         the host - shaped like a real Pod's status."""
@@ -563,13 +563,50 @@ class ClusterUpgradeEndTests(unittest.TestCase):
             "spec": {"nodeName": node_name,
                      "initContainers": [{"name": "cordon", "args": ["cordon", node_name]}],
                      "containers": [{"name": "upgrade"}]},
-            "status": {"phase": "Running", "startTime": stamp(400),
+            "status": {"phase": phase, "startTime": stamp(400),
                        "initContainerStatuses": [{"name": "cordon", "ready": exit_code == 0, "restartCount": 0,
                                                   "state": {"terminated": {
                                                       "exitCode": exit_code, "reason": "Completed" if exit_code == 0 else "Error",
                                                       "startedAt": stamp(395), "finishedAt": stamp(390)}}}],
-                       "containerStatuses": [{"name": "upgrade", "ready": True, "restartCount": 0,
-                                              "state": {"running": {"startedAt": stamp(385)}}}]}}
+                       "containerStatuses": [{"name": "upgrade", "ready": phase == "Running", "restartCount": 0,
+                                              "state": {"running": {"startedAt": stamp(385)}} if phase == "Running" else
+                                              {"terminated": {"exitCode": 0 if phase == "Succeeded" else 1,
+                                                              "startedAt": stamp(385), "finishedAt": stamp(120)}}}]}}
+
+    @staticmethod
+    def timeless(name):
+        """A cordoned node whose taint carries no timeAdded."""
+        bare = node(name)
+        bare["spec"] = {"unschedulable": True, "taints": [{"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule"}]}
+        return bare
+
+    def test_a_succeeded_upgrade_pods_cordon_step_is_no_evidence(self):
+        # The controller uncordons a host itself once its job completes, so a
+        # cordon there now - here a person's, its taint not yet stamped - is not ours.
+        self.cluster([self.timeless("node-1")],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", succeeded=1),
+                     self.upgrade_pod("node-1", 0, phase="Succeeded"))
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: it was not cordoned by this upgrade's own job", message)
+
+    def test_a_failed_upgrade_pods_cordon_step_still_counts(self):
+        # A failed job's cordon is left in place by the controller: it is ours to undo.
+        self.cluster([self.timeless("node-1")],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]),
+                     self.upgrade_pod("node-1", 0, phase="Failed"))
+        self.assertEqual({}, C._claim(self.item(), lambda _item: None))
+        self.assertEqual("op-7", self.node("node-1")["metadata"]["annotations"][self.MARK])
+
+    def test_the_plans_cordon_and_never_drain(self):
+        # The fallback looks for the init container "cordon"; with drain: set
+        # the controller runs one named "drain" instead (job.go), and it would miss.
+        for distribution in ("k3s", "rke2"):
+            for body in C.plan_bodies(distribution, self.TARGET):
+                self.assertIs(True, body["spec"]["cordon"])
+                self.assertNotIn("drain", body["spec"])
 
     def test_a_cordon_taint_without_its_time_is_claimed_by_the_upgrade_pods_cordon_step(self):
         # The taint has no timeAdded (added by hand, or by the kubelet when the
