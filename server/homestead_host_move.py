@@ -164,8 +164,10 @@ def _landed(proposed):
     meta = proposed["metadata"]
     try:
         fresh = kget(f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}")
-    except urllib.error.HTTPError:
-        return False
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise    # says nothing about the app: the next round asks again
     now = fresh.get("metadata") or {}
     if now.get("deletionTimestamp") or (meta.get("uid") and now.get("uid") != meta.get("uid")):
         return False
@@ -195,7 +197,7 @@ def status(item):
             if not _landed(ref["proposed"]):
                 ref.pop("proposed", None)
                 ref.pop("settled", None)
-                return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"
+                return "failed", 100, f"{name} changed while its image was being pulled, so Homestead stopped; check where it runs now, then review the move again"
         ref.pop("proposed", None)
         ref.pop("settled", None)
         ref["stage"] = "rolling"

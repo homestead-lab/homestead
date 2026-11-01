@@ -77,7 +77,7 @@ class HostMoveStatusWriteTests(unittest.TestCase):
         K.ksend("PUT", APP, edited)
         state, _, message = MOVE.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("nothing was moved", message)
+        self.assertIn("Homestead stopped", message)
         spec = self.kube.object(APP)["spec"]["template"]["spec"]
         self.assertEqual(("example.com/app:2", None), (spec["containers"][0]["image"], spec.get("nodeSelector")))
 
