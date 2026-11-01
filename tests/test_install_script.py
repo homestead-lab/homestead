@@ -121,10 +121,25 @@ class InstallerTests(unittest.TestCase):
 
     def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
-                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1",
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "example-token", "HS_YES": "1",
                                                           "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn"})
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
         self.assertIn("--longhorn-data-path /var/lib/longhorn", out)
+
+    def test_a_work_folder_whose_name_holds_short_letters_still_reads_as_the_work_folder(self):
+        """The installer hides every copy of the token, so a token that can be
+        part of mktemp's random letters ("tok" in homestead.Ab12tokm, about 1 run
+        in 40 000) would cut the folder's name: these tests use one with a dash."""
+        bin_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+        work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        stand_in(bin_dir, "mktemp", 'd="$TMPDIR/homestead.Ab12tokm"; mkdir -p "$d" && echo "$d"')
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "example-token", "HS_YES": "1",
+                                                          "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn", "TMPDIR": work},
+                        path_extra=bin_dir)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
@@ -141,7 +156,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_a_joining_node_takes_the_version_given(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_SERVER": "10.0.0.5",
-                                                          "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1",
+                                                          "HS_TOKEN": "example-token", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1",
                                                           "HS_LONGHORN_DATA_PATH": "/mnt/longhorn-os"})
         self.assertIn("agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
 
