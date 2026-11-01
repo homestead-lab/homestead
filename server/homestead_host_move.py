@@ -152,6 +152,25 @@ def _put_reviewed(proposed, settled, retries=3):
             meta.pop("managedFields", None)
 
 
+def _landed(proposed):
+    """Whether the app already carries the reviewed spec: an earlier PUT that
+    committed but lost its reply (a timeout, a dropped connection) makes the
+    retry conflict on the old resourceVersion. replicas is left out, as an
+    autoscaler may have written it since."""
+    kget, _ = _api()
+    meta = proposed["metadata"]
+    try:
+        fresh = kget(f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}")
+    except urllib.error.HTTPError:
+        return False
+    now = fresh.get("metadata") or {}
+    if now.get("deletionTimestamp") or (meta.get("uid") and now.get("uid") != meta.get("uid")):
+        return False
+    def spec(obj):
+        return {key: value for key, value in (obj.get("spec") or {}).items() if key != "replicas"}
+    return spec(fresh) == spec(proposed)
+
+
 def status(item):
     ref = item["ref"]
     ns, name, node = ref["namespace"], ref["name"], ref.get("node", "")
@@ -168,11 +187,12 @@ def status(item):
         try:
             _put_reviewed(ref["proposed"], ref.get("settled"))
         except urllib.error.HTTPError as error:
-            if error.code == 409:
+            if error.code != 409:
+                raise
+            if not _landed(ref["proposed"]):
                 ref.pop("proposed", None)
                 ref.pop("settled", None)
                 return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"
-            raise
         ref.pop("proposed", None)
         ref.pop("settled", None)
         ref["stage"] = "rolling"

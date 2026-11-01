@@ -83,13 +83,16 @@ class HostMoveTests(unittest.TestCase):
         IMAGES.prepull.assert_not_called()
 
     def test_an_app_edited_while_its_image_was_pulled_is_not_moved(self):
-        item = self.move()
-        def conflict(*a, **k):
-            raise urllib.error.HTTPError("", 409, "conflict", {}, None)
-        with mock.patch.object(W, "ksend", side_effect=conflict, create=True):
-            state, _, message = MOVE.status(item)
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        edited = self.kube.object(path)
+        edited["spec"]["template"]["spec"]["containers"][0]["image"] = DIGEST
+        K.ksend("PUT", path, edited)
+        state, _, message = MOVE.status(item)
         self.assertEqual("failed", state)
         self.assertIn("nothing was moved", message)
+        self.assertEqual(DIGEST, self.kube.object(path)["spec"]["template"]["spec"]["containers"][0]["image"],
+                         "the edit made since the review stands")
         self.assertNotIn("proposed", item["ref"])
         self.assertNotIn("settled", item["ref"])
 
@@ -117,6 +120,46 @@ class HostMoveTests(unittest.TestCase):
         self.assertEqual(("running", "PUT"), (state, self.kube.writes[0][0]))
         self.assertNotIn("proposed", item["ref"])
         self.assertEqual("rolling", item["ref"]["stage"])
+
+    def moved_to_k3s_3(self):
+        """A reviewed manifest that really changes the app: it asks for k3s-3."""
+        proposed = deployment()
+        proposed["spec"]["template"]["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "k3s-3"}
+        MOVE.start({}, proposed, {"move": {"node": "k3s-3", "mode": "pinned"}}, lambda: self.applied.append(True))
+        self.kube.add(pull_daemonset(1))
+        return {"ref": self.started[-1]["ref"]}
+
+    def test_a_put_that_landed_but_lost_its_reply_moves_on_to_rolling(self):
+        # On a real cluster a PUT can commit and its reply be lost (a timeout, a
+        # dropped connection, a 5xx after the write). The retry then sends the old
+        # resourceVersion and gets 409, though the app is rolling to the new host.
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        self.assertEqual({"kubernetes.io/hostname": "k3s-3"},
+                         self.kube.object(path)["spec"]["template"]["spec"].get("nodeSelector"), "the write stands")
+        item = {"ref": json.loads(json.dumps(item["ref"]))}
+        state, _, message = MOVE.status(item)
+        self.assertEqual("running", state, message)
+        self.assertNotIn("nothing was moved", message)
+        self.assertEqual("rolling", item["ref"]["stage"])
+        self.assertNotIn("proposed", item["ref"])
+
+    def test_an_app_edited_another_way_after_a_lost_reply_is_not_moved(self):
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        edited = self.kube.object(path)
+        edited["spec"]["template"]["spec"]["containers"][0]["image"] = DIGEST
+        K.ksend("PUT", path, edited)
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state)
+        self.assertIn("changed while its image was being pulled", message)
+        self.assertNotIn("proposed", item["ref"])
 
     def test_a_move_that_lands_elsewhere_fails_and_says_where(self):
         self.setUp(held=[IMAGE])
