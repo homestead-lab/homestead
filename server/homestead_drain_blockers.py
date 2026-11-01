@@ -19,6 +19,9 @@ Each row is {id, kind, what, why, fix, can_remove, records}:
 - "engines-elsewhere": engines this host's instance-manager still lists whose
   engine record says they run on another host, or that have no engine
   record at all, and no orphan record names.
+- "removing-orphans": orphan records on this host that are being removed
+  already (deletionTimestamp set; Longhorn's finalizer keeps them until it
+  has cleaned up). Explained only.
 - "stuck-pod": a pod on this host still terminating STUCK_AFTER seconds past
   the end of its grace period, with the volumes it keeps attached here.
 - "stuck-attachment": a VolumeAttachment to this host whose volume no pod on
@@ -134,13 +137,30 @@ def _engine_node(engine):
     return (engine.get("spec") or {}).get("nodeID") or None
 
 
+def _terminating(obj):
+    return bool((obj.get("metadata") or {}).get("deletionTimestamp"))
+
+
+def _removing_engines(node, orphans):
+    """The engines named by node's engine-instance orphan records that are
+    being removed already."""
+    return {((o.get("spec") or {}).get("parameters") or {}).get(INSTANCE_NAME)
+            for o in orphans or [] if _terminating(o) and (o.get("spec") or {}).get("nodeID") == node
+            and (o.get("spec") or {}).get("orphanType") == ENGINE_INSTANCE} - {None, ""}
+
+
 def _orphan_rows(node, orphans, engines):
     mine = [o for o in orphans if (o.get("spec") or {}).get("nodeID") == node]
-    removable, other = [], []
+    removable, other, removing = [], [], []
     for orphan in sorted(mine, key=lambda o: o["metadata"]["name"]):
         spec = orphan.get("spec") or {}
         params = spec.get("parameters") or {}
         kind = spec.get("orphanType") or ""
+        if _terminating(orphan):
+            # Longhorn's finalizer keeps a removed record until it has
+            # stopped the process (or deleted the data) it names.
+            removing.append(f"{kind or 'unknown'} {params.get(INSTANCE_NAME) or params.get(DATA_NAME) or orphan['metadata']['name']}")
+            continue
         if kind == ENGINE_INSTANCE and engines is not None:
             name = params.get(INSTANCE_NAME) or ""
             engine = engines.get(name)
@@ -188,6 +208,15 @@ def _orphan_rows(node, orphans, engines):
             f"Longhorn keeps what an orphan record names on {node} until the record is removed; an instance "
             f"record can keep {node}'s instance-manager from stopping.",
             fix))
+    if removing:
+        count = len(removing)
+        rows.append(_row(
+            f"removing-orphans:{node}", "removing-orphans",
+            f"{count} Longhorn orphan record{'s' if count != 1 else ''} on {node} being removed: {_names(removing)}",
+            f"Longhorn keeps a removed orphan record until it has cleaned up what the record names on {node}; "
+            f"until then an engine record's leftover process can still hold {node}'s instance-manager.",
+            "Longhorn is cleaning up; review the restart again in a minute. If a record stays, check Longhorn on "
+            f"{node} (its instance-manager may not be reachable)."))
     return rows
 
 
@@ -348,6 +377,7 @@ def _for_host(node, now=None, read=None):
     if orphans is not None:
         rows += _orphan_rows(node, orphans, engines)
     named = {r["engine"] for row in rows if row["kind"] == "engine-orphans" for r in row["records"]}
+    named |= _removing_engines(node, orphans)
     if managers is not None and engines is not None:
         rows += _elsewhere_row(node, managers, engines, named)
     pods = items("pods")
@@ -450,7 +480,9 @@ def engines_here(node, read=None):
         orphans, managers = got["orphans"] or [], got["instancemanagers"] or []
         engines = _engines_by_name(got["engines"] or [])
         rows = [row for row in _orphan_rows(node, orphans, engines) if row["kind"] == "engine-orphans"]
-        named = {r["engine"] for row in rows for r in row["records"]}
+        # Records being removed are Longhorn's to finish: not counted as what
+        # nothing more will let go, and named when the drain times out.
+        named = {r["engine"] for row in rows for r in row["records"]} | _removing_engines(node, orphans)
         rows += _elsewhere_row(node, managers, engines, named)
         live, _ = _listed(node, managers, engines, named)
     except Exception:  # data not shaped as Longhorn writes it: couldn't check, as unread
@@ -524,6 +556,8 @@ def _remove_one(node, item, read, send):
     except Exception as error:
         return f"it couldn't be read ({_reason(error)})"
     meta, spec = orphan.get("metadata") or {}, orphan.get("spec") or {}
+    if meta.get("uid") == item["uid"] and meta.get("deletionTimestamp"):
+        return "it is being removed already"
     if meta.get("uid") != item["uid"] or meta.get("resourceVersion") != item["resourceVersion"]:
         return "it changed since the review; review the restart again"
     if spec.get("orphanType") != ENGINE_INSTANCE:
@@ -534,13 +568,30 @@ def _remove_one(node, item, read, send):
     if not engine_name:
         return "it names no engine"
     try:
-        where = _engine_node(read(f"{ENGINES}/{urllib.parse.quote(engine_name, safe='')}"))
+        engine = read(f"{ENGINES}/{urllib.parse.quote(engine_name, safe='')}")
     except Exception as error:
         return f"its engine {engine_name} couldn't be read ({_reason(error)})"
+    where = _engine_node(engine)
     if not where:
         return f"its engine {engine_name} is not running anywhere Homestead can see"
     if where == node:
         return f"its engine {engine_name} runs on {node} now"
+    # spec.nodeID is where Longhorn wants the engine; status.instanceManagerName
+    # (v1.13.0 InstanceStatus) is the instance-manager its process runs in.
+    # While that is still node's, the move has not finished.
+    manager = ((engine or {}).get("status") or {}).get("instanceManagerName") or ""
+    if not manager:
+        return f"its engine {engine_name} names no instance-manager"
+    try:
+        im = read(f"{INSTANCE_MANAGERS}/{urllib.parse.quote(manager, safe='')}") or {}
+    except urllib.error.HTTPError as error:
+        im = {} if error.code == 404 else error
+    except Exception as error:
+        im = error
+    if isinstance(im, Exception):
+        return f"its engine's instance-manager {manager} couldn't be read ({_reason(im)})"
+    if (im.get("spec") or {}).get("nodeID") == node:
+        return f"its engine {engine_name} still runs in {node}'s instance-manager"
     try:
         send("DELETE", f"{ORPHANS}/{urllib.parse.quote(name, safe='')}",
              {"apiVersion": "v1", "kind": "DeleteOptions",

@@ -127,6 +127,22 @@ class DrainBlockerTests(unittest.TestCase):
         self.assertEqual(["other-orphans"], self.kinds(rows))
         self.assertFalse(rows[0]["can_remove"])
 
+    def test_an_orphan_record_being_removed_is_explained_not_removable(self):
+        # Longhorn's orphans carry its finalizer: a DELETE only sets
+        # deletionTimestamp, and the record stays until Longhorn has stopped
+        # the process. The leftover is still listed on the instance-manager.
+        removing = engine_orphan("vol-a", 1)
+        removing["metadata"]["deletionTimestamp"] = stamp(NOW - 30)
+        with Kube(removing, engine("vol-a", "node-b"), instance_manager("node-a", engines=["vol-a-e-0"])):
+            rows = BLOCKERS.for_host("node-a", now=NOW)
+        self.assertEqual(["removing-orphans"], self.kinds(rows), "said once, not again as an engine elsewhere")
+        row = rows[0]
+        self.assertFalse(row["can_remove"])
+        self.assertEqual([], row["records"])
+        self.assertIn("being removed", row["what"])
+        self.assertIn("vol-a-e-0", row["what"])
+        self.assertIn("review", row["fix"].lower())
+
     def test_replica_orphans_are_explained_not_removable(self):
         with Kube(fixture("orphan_replica_instance"), fixture("orphan_replica_data")):
             rows = BLOCKERS.for_host("node-a", now=NOW)

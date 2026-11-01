@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_drain_blockers as BLOCKERS
 from fakes.kube import Kube
-from test_drain_blockers import LH, engine, engine_orphan, fixture
+from test_drain_blockers import LH, engine, engine_orphan, fixture, instance_manager
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +48,71 @@ class RemoveTests(unittest.TestCase):
             self.assertTrue(path.endswith("/orphans/" + orphan["metadata"]["name"]))
             self.assertEqual({"uid": orphan["metadata"]["uid"], "resourceVersion": orphan["metadata"]["resourceVersion"]},
                              body["preconditions"])
+
+    def test_a_removed_record_held_by_its_finalizer_is_being_removed_not_removable_again(self):
+        # The real orphan carries Longhorn's finalizer (the fixture has it),
+        # so the fake's DELETE leaves it terminating, as the API server does.
+        with Kube(*self.orphans[:1], *self.engines[:1]) as kube:
+            path = f"{LH}/orphans/{self.orphans[0]['metadata']['name']}"
+            first = BLOCKERS.remove_engine_orphans("node-a", [record(kube.object(path))])
+            terminating = kube.object(path)
+            rows = BLOCKERS.for_host("node-a")
+            again = BLOCKERS.remove_engine_orphans("node-a", [record(terminating)])
+            deletes = self.deletes(kube)
+        self.assertEqual([self.orphans[0]["metadata"]["name"]], first["removed"])
+        self.assertIsNotNone(terminating, "the finalizer keeps the record")
+        self.assertTrue(terminating["metadata"].get("deletionTimestamp"))
+        self.assertEqual(["removing-orphans"], [row["kind"] for row in rows])
+        self.assertFalse(rows[0]["can_remove"])
+        self.assertEqual([], again["removed"])
+        self.assertEqual("it is being removed already", again["refused"][0]["why"])
+        self.assertEqual(1, len(deletes), "no second DELETE")
+
+    def test_removal_refuses_a_record_on_another_host(self):
+        with Kube(*self.orphans, *self.engines) as kube:
+            path = f"{LH}/orphans/{self.orphans[0]['metadata']['name']}"
+            moved = kube.object(path)
+            moved["spec"]["nodeID"] = "node-c"
+            kube.add(moved)
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(kube.object(path))])
+            deletes = self.deletes(kube)
+        self.assertEqual([], deletes)
+        self.assertEqual("it is not on node-a", result["refused"][0]["why"])
+
+    def test_removal_refuses_when_the_engine_is_not_running(self):
+        with Kube(*self.orphans, engine("vol-a", "node-b", state="stopped")) as kube:
+            path = f"{LH}/orphans/{self.orphans[0]['metadata']['name']}"
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(kube.object(path))])
+            deletes = self.deletes(kube)
+        self.assertEqual([], deletes)
+        self.assertIn("not running", result["refused"][0]["why"])
+
+    def test_a_conflict_on_the_delete_is_said_as_changed(self):
+        with Kube(*self.orphans, *self.engines) as kube:
+            path = f"{LH}/orphans/{self.orphans[0]['metadata']['name']}"
+            kube.fail(path, 409, method="DELETE")
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(kube.object(path))])
+            still = kube.object(path)
+        self.assertEqual([], result["removed"])
+        self.assertIn("changed since the review", result["refused"][0]["why"])
+        self.assertIsNone(still["metadata"].get("deletionTimestamp"))
+
+    def test_removal_refuses_while_the_engine_still_reports_this_hosts_instance_manager(self):
+        # spec.nodeID is where Longhorn wants the engine; status.instanceManagerName
+        # is where its process runs. While the spec has moved and the process
+        # hasn't, the record is not removed.
+        here = instance_manager("node-a")
+        im_name = here["metadata"]["name"]
+        with Kube(*self.orphans, *self.engines, here) as kube:
+            moving = kube.object(f"{LH}/engines/vol-a-e-0")
+            moving["status"]["instanceManagerName"] = im_name
+            kube.add(moving)
+            path = f"{LH}/orphans/{self.orphans[0]['metadata']['name']}"
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(kube.object(path))])
+            deletes = self.deletes(kube)
+        self.assertEqual([], deletes)
+        self.assertIn("node-a", result["refused"][0]["why"])
+        self.assertIn("instance-manager", result["refused"][0]["why"])
 
     def test_removal_refuses_an_orphan_whose_engine_is_now_here(self):
         with Kube(*self.orphans, *self.engines) as kube:
