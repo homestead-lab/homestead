@@ -327,14 +327,21 @@ def get_flow2():
 
 def _network_forgotten(keys):
     if "network" in keys:
-        homestead_routes.forget("flow2")
+        CACHE.forget_where(lambda key: key == "flow2")
+
+
+def _network_popped(key, when):
+    # On the popping thread, maybe under the cache's lock (the VIP loop):
+    # a plain pop, which takes no lock.
+    if key == "network":
+        CACHE._cache.pop("flow2", None)
 
 
 # The picture is built from the addresses' reading (above): a change that
 # drops that reading drops the picture too, or a refresh between the two
 # would keep the old addresses for PAGE_SECONDS (#978).
 CACHE.on_forget(_network_forgotten)
-CACHE.on_pop(lambda key, when: _network_forgotten((key,)))
+CACHE.on_pop(_network_popped)
 
 
 def view():

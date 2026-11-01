@@ -593,6 +593,23 @@ class WhatDropsTheKeptPagesTests(unittest.TestCase):
         self.assertTrue(sent)
         self.assertTrue(self.dropped("helm"))
 
+    def test_a_pop_of_the_addresses_under_the_cache_s_lock_does_not_hang(self):
+        # The VIP loop pops "network" holding the cache's lock (a plain Lock):
+        # a pop listener must not take it again. A lock of the test's own, so
+        # a hang here leaves the real one free.
+        import threading
+        self.enterContext(mock.patch.object(CACHE, "_lock", threading.Lock()))
+        self.keep("network", "flow2")
+
+        def vip_loop():
+            with CACHE._lock:
+                CACHE._cache.pop("network", None)
+        thread = threading.Thread(target=vip_loop, daemon=True)
+        thread.start()
+        thread.join(3)
+        self.assertFalse(thread.is_alive(), "the pop waited on the lock its own thread holds")
+        self.assertIsNone(CACHE.kept_at("flow2"))
+
     def test_a_change_of_addresses_drops_the_flow_picture_built_from_them(self):
         self.keep("network", "flow2")
         ROUTER.forget("network")
