@@ -52,7 +52,9 @@ def pod(node, waiting=None, message="", ready=False):
 NOT_FOUND = 'failed to resolve reference "ghcr.example.com/x/frigate:0.18.0": not found'
 
 
-class PrepullJobTests(unittest.TestCase):
+class PullCase(unittest.TestCase):
+    """A pull job's world: the shared fake, a job store and a fake clock."""
+
     def setUp(self):
         self.kube = self.enterContext(Kube())
         self.now = [1_000_000.0]
@@ -74,6 +76,8 @@ class PrepullJobTests(unittest.TestCase):
         self.now[0] += after
         return operations.list_operations()[0]
 
+
+class PrepullJobTests(PullCase):
     def test_a_pull_that_fails_on_every_node_ends_the_job_failed_and_stops_the_pull(self):
         self.start(daemonset(2, 0), pod("node-a", "ErrImagePull", NOT_FOUND), pod("node-b", "ImagePullBackOff",
                                                                                  f'Back-off pulling image "{IMAGE}"'))
@@ -122,6 +126,31 @@ class PrepullJobTests(unittest.TestCase):
         done = self.step()
         self.assertEqual("succeeded", done["status"])
         self.assertEqual("Image cached on 2/2 nodes", done["message"])
+
+
+class PullSweepTests(PullCase):
+    """The leader's minute removes finished pulls; a pull a job still follows
+    is that job's to read first. It used to be removed under the job, whose
+    next look got a 404 and failed a pull that had worked."""
+
+    def test_a_finished_pull_a_running_job_follows_is_left_for_the_job(self):
+        self.start(daemonset(2, 2))
+        IMAGES.prepull_status(sweep=True)               # the tick, before the job's next look
+        self.assertIsNotNone(self.kube.object(DS_PATH))
+        self.assertEqual("succeeded", self.step()["status"])
+        IMAGES.prepull_status(sweep=True)               # the job has ended: cleared away now
+        self.assertIsNone(self.kube.object(DS_PATH))
+
+    def test_a_finished_pull_no_job_follows_is_still_cleared_away(self):
+        self.kube.add(daemonset(1, 1))
+        IMAGES.prepull_status(sweep=True)
+        self.assertIsNone(self.kube.object(DS_PATH))
+
+    def test_nothing_is_cleared_away_while_the_jobs_cannot_be_read(self):
+        self.kube.add(daemonset(1, 1))
+        with mock.patch.object(operations, "stored", side_effect=ValueError("store damaged")):
+            IMAGES.prepull_status(sweep=True)
+        self.assertIsNotNone(self.kube.object(DS_PATH), "what a job follows is not known")
 
 
 if __name__ == "__main__":

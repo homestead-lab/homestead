@@ -118,6 +118,13 @@ class ImageCacheTests(unittest.TestCase):
         self.assertFalse(container["securityContext"]["allowPrivilegeEscalation"])
         self.assertEqual(["ALL"], container["securityContext"]["capabilities"]["drop"])
 
+    def test_a_cleaner_pod_has_a_deadline(self):
+        """A removal that hangs (containerd not answering) ends at its deadline,
+        so its job fails instead of waiting for ever."""
+        IMAGES.cleanup_image(self.unused, ["node1"])
+        self.assertEqual(IMAGES.CLEAN_DEADLINE, self.sent[-1][2]["spec"]["activeDeadlineSeconds"])
+        self.assertLessEqual(IMAGES.CLEAN_DEADLINE, 900)
+
     def test_platform_images_cannot_be_cleaned(self):
         with self.assertRaisesRegex(PermissionError, "platform images"):
             IMAGES.cleanup_image("sha256:" + "d" * 64, ["node1"])

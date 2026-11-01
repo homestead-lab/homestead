@@ -953,6 +953,7 @@ def prepull_status(sweep=True):
     except Exception:
         return {"pulls": [], "finished": []}
     pulls, finished = [], []
+    followed = None
     for item in sets:
         name = item["metadata"]["name"]
         status = item.get("status", {}) or {}
@@ -964,12 +965,27 @@ def prepull_status(sweep=True):
         row = {"name": name, "image": image, "desired": desired, "ready": ready,
                "complete": bool(desired) and ready >= desired}
         if row["complete"]:
-            if sweep:
+            if sweep and followed is None:
+                followed = _followed()
+            # One a job still follows is that job's to see finished first: removed
+            # under it, its next look was a 404 and a pull that worked failed.
+            if sweep and followed is not None and name not in followed:
                 stop_prepull(name)
             finished.append(row)
         else:
             pulls.append(row)
     return {"pulls": pulls, "finished": finished}
+
+
+def _followed():
+    """Every name a job not yet ended names (homestead_helper_sweep's rule), or
+    None, with nothing to be removed, when the jobs cannot be read."""
+    import homestead_helper_sweep as HELPERS
+    try:
+        return HELPERS._followed(I.OPS.stored())
+    except Exception as error:
+        print(f"finished pre-pulls not removed, the jobs could not be read: {str(error)[:160]}", flush=True)
+        return None
 
 
 def stop_prepull(name):
@@ -1002,6 +1018,11 @@ def forget_rollback(namespace, name):
           ctype="application/merge-patch+json")
     I._bust("imgcache", "wl")
     return {"ok": True, "detail": f"{name} no longer keeps its previous image; it can be cleaned up now"}
+
+
+# An image removal pod's time to run: a containerd that does not answer ends
+# it, and its job fails, instead of the pod waiting on the host for ever.
+CLEAN_DEADLINE = 600
 
 
 def cleanup_image(digest, nodes=None, report=None):
@@ -1042,7 +1063,7 @@ def cleanup_image(digest, nodes=None, report=None):
         pod_name = f"homestead-image-clean-{suffix}-{attempt}"
         body = RUNTIME.pod(pod_name, I.NS, node, script, "image-cleanup",
                            {NAMES.key("image-digest"): digest, NAMES.key("cache-node"): node},
-                           app="homestead-image-cleaner")
+                           app="homestead-image-cleaner", deadline=CLEAN_DEADLINE)
         for old in NAMES.find(f"/api/v1/namespaces/{I.NS}/pods", "task", "image-cleanup"):
             meta = old.get("metadata") or {}
             if meta.get("name", "").startswith(f"homestead-image-clean-{suffix}") and                     (old.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
