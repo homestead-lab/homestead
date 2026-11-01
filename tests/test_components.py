@@ -127,7 +127,9 @@ def stamp(ago=0):
 
 
 def cordon(cordoned_ago=300):
-    """A node's spec when cordoned: Kubernetes adds the cordon's taint, with when."""
+    """A node's spec when cordoned: the node lifecycle controller adds the
+    cordon's taint, with when (SwapNodeControllerTaint sets TimeAdded on every
+    taint it adds, pkg/controller/util/node/controller_utils.go)."""
     return {"unschedulable": True, "taints": [
         {"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule", "timeAdded": stamp(cordoned_ago)}]}
 
@@ -547,6 +549,64 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         self.cluster([bare], job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
         C.cancel_run(self.item(), {})
         self.assertTrue(self.cordoned("node-1"))
+
+    @staticmethod
+    def upgrade_pod(node_name, exit_code):
+        """An upgrade pod as the system-upgrade-controller makes it for a Plan
+        with cordon: true - its init container "cordon" runs kubectl cordon on
+        the host - shaped like a real Pod's status."""
+        return {"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": C.SUC_NS, "name": f"apply-homestead-server-on-{node_name}-x1",
+            "creationTimestamp": stamp(400),
+            "labels": {"upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": node_name,
+                       "job-name": f"apply-homestead-server-on-{node_name}"}},
+            "spec": {"nodeName": node_name,
+                     "initContainers": [{"name": "cordon", "args": ["cordon", node_name]}],
+                     "containers": [{"name": "upgrade"}]},
+            "status": {"phase": "Running", "startTime": stamp(400),
+                       "initContainerStatuses": [{"name": "cordon", "ready": exit_code == 0, "restartCount": 0,
+                                                  "state": {"terminated": {
+                                                      "exitCode": exit_code, "reason": "Completed" if exit_code == 0 else "Error",
+                                                      "startedAt": stamp(395), "finishedAt": stamp(390)}}}],
+                       "containerStatuses": [{"name": "upgrade", "ready": True, "restartCount": 0,
+                                              "state": {"running": {"startedAt": stamp(385)}}}]}}
+
+    def test_a_cordon_taint_without_its_time_is_claimed_by_the_upgrade_pods_cordon_step(self):
+        # The taint has no timeAdded (added by hand, or by the kubelet when the
+        # node registered cordoned): the pod's own cordon step is the evidence.
+        bare = node("node-1")
+        bare["spec"] = {"unschedulable": True, "taints": [{"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule"}]}
+        self.cluster([bare], job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     self.upgrade_pod("node-1", 0))
+        item = self.item()
+        self.assertEqual({}, C._claim(item, lambda _item: None))
+        self.assertEqual("op-7", self.node("node-1")["metadata"]["annotations"][self.MARK])
+        # Its pod goes with its job once the Plans are removed.
+        self.c.kube.discard(f"/api/v1/namespaces/{C.SUC_NS}/pods/apply-homestead-server-on-node-1-x1")
+        message = C.cancel_run(item, {})
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_cordon_step_that_failed_is_no_evidence(self):
+        bare = node("node-1")
+        bare["spec"] = {"unschedulable": True, "taints": [{"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule"}]}
+        self.cluster([bare], job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     self.upgrade_pod("node-1", 1))
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertIn("node-1 stays cordoned: it was not cordoned by this upgrade's own job", message)
+
+    def test_a_host_whose_cordoning_job_was_removed_after_its_ttl_stays_cordoned(self):
+        # The job that cordoned node-1 20 minutes ago failed and the controller
+        # removed it 900 s after it ended (ttlSecondsAfterFinished); the job it
+        # made again started after the cordon, so nothing left ties the cordon to us.
+        again = job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1)
+        again["status"]["startTime"] = stamp(30)
+        self.cluster([node("node-1", unschedulable=True, cordoned_ago=1200)], again)
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: it was not cordoned by this upgrade's own job", message)
 
     def test_a_finished_job_justifies_only_a_cordon_made_while_it_ran(self):
         late = job("apply-homestead-server-on-node-1", "homestead-server", "node-1", succeeded=1)

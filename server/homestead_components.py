@@ -641,8 +641,9 @@ def _when(stamp):
 
 
 def _upgrade_runs():
-    """node -> [(started, ended or None, still running)] for each upgrade job
-    and pod of our Plans there. Read strictly - an unread list proves nothing."""
+    """node -> [(started, ended or None, still running, cordoned or None)] for
+    each upgrade job and pod of our Plans there; "cordoned" is when a pod's
+    own cordon step finished. Read strictly - an unread list proves nothing."""
     out = {}
     for job in _strict_items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
         labels = (job.get("metadata") or {}).get("labels") or {}
@@ -654,7 +655,7 @@ def _upgrade_runs():
         ended = bool(status.get("succeeded") or ends)
         end = _when(status.get("completionTime")) or (_when(ends[0].get("lastTransitionTime")) if ends else None)
         out.setdefault(name, []).append((_when(status.get("startTime")), end if ended else None,
-                                         bool(status.get("active")) or not ended))
+                                         bool(status.get("active")) or not ended, None))
     for pod in _strict_items(f"/api/v1/namespaces/{SUC_NS}/pods"):
         labels = (pod.get("metadata") or {}).get("labels") or {}
         name = (pod.get("spec") or {}).get("nodeName") or labels.get("upgrade.cattle.io/node")
@@ -662,8 +663,19 @@ def _upgrade_runs():
             continue
         status = pod.get("status") or {}
         running = status.get("phase") not in ("Succeeded", "Failed")
-        out.setdefault(name, []).append((_when(status.get("startTime")), None, running))
+        out.setdefault(name, []).append((_when(status.get("startTime")), None, running, _cordon_step(status)))
     return out
+
+
+def _cordon_step(status):
+    """When an upgrade pod's own cordon step - the init container "cordon"
+    that the controller adds for a Plan with cordon: true, running kubectl
+    cordon on the host - finished successfully (epoch seconds), or None."""
+    for container in status.get("initContainerStatuses") or []:
+        done = (container.get("state") or {}).get("terminated") or {}
+        if container.get("name") == "cordon" and done.get("exitCode") == 0:
+            return _when(done.get("finishedAt"))
+    return None
 
 
 def _upgrade_work(runs=None):
@@ -673,17 +685,20 @@ def _upgrade_work(runs=None):
 
 
 def _cordoned_by_upgrade(node, rows):
-    """Whether the controller's own evidence ties this cordon to one of our
-    upgrade jobs or pods: Kubernetes stamps the cordon's taint with when it
-    was added, and that must fall inside a run there - after it started and,
-    for a finished one, before it ended. A cordon from before, or with no
-    time to go by, is someone else's."""
+    """Whether Kubernetes' own evidence ties this cordon to one of our
+    upgrade jobs or pods. The node lifecycle controller stamps the cordon's
+    taint with when it added it (timeAdded), and that must fall inside a run
+    there - after it started and, for a finished one, before it ended. A
+    taint with no time (added by hand, or by the kubelet for a node that
+    registered cordoned) is ours only when an upgrade pod of ours on the host
+    still shows its own cordon step done. A cordon from before, or with
+    neither to go by, is someone else's."""
     added = next((_when(t.get("timeAdded")) for t in (node.get("spec") or {}).get("taints") or []
                   if t.get("key") == UNSCHEDULABLE_TAINT), None)
     if added is None:
-        return False
+        return any(cordoned is not None for _start, _end, _running, cordoned in rows)
     return any(start is not None and start <= added and (running or (end is not None and added <= end))
-               for start, end, running in rows)
+               for start, end, running, _cordoned in rows)
 
 
 def _newest_upgrade_pod():
