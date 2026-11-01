@@ -1,8 +1,10 @@
 """The last test file of a full run: no test has left guard state bound (#934).
 
-Three things decide what a write is allowed to do and who it is signed as:
-the request role (host_access.set_role), changes._author_key and changes.REQUEST.user (a thread
-local). A test that binds one and does not restore it changes every test after
+Five bindings decide what a write is allowed to do, who it is signed as and
+which cluster client the lifecycle code uses: the request role
+(host_access.set_role), changes._author_key, changes.REQUEST.user (a thread
+local), and homestead_lifecycle.kget / ksend (server.py binds them; a test
+that calls lifecycle.bind() restores the module with addCleanup). A test that binds one and does not restore it changes every test after
 it, so a file passes alone and fails in the suite, or the other way round.
 A test that sets them restores them itself (mock.patch, addCleanup); this
 file says so when one does not. It sees only the tests of its own process, so
@@ -12,7 +14,7 @@ The files are loaded in name order and all of them are imported before any
 test runs, so what is read here at import is the state a fresh run starts
 from, and the tests then read it after every other file has run. Run alone it
 passes. When it fails, find the test that binds the name with a probe: run the
-suite in one process and compare the three after each test (a TextTestResult
+suite in one process and compare the five after each test (a TextTestResult
 whose stopTest does it names the first test that changes one)."""
 import sys
 import unittest
@@ -22,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_changes as CH
 import homestead_host_access as HOSTACCESS
 import homestead_lifecycle as LIFECYCLE
+import server  # noqa: F401  (binds lifecycle, so the baseline is server's client even if no file imported it yet)
 
 UNSET = object()
 AT_IMPORT = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
