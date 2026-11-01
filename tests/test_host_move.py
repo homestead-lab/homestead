@@ -214,6 +214,14 @@ class HostMoveTests(unittest.TestCase):
         state, _, message = MOVE.status(item)
         self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]), message)
 
+    def test_an_app_gone_on_the_reread_after_a_lost_reply_stops_the_move(self):
+        item, _ = self.lost_reply_from_live()
+        self.kube.fail(self.APP, 404, method="GET")
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state, message)
+        self.assertIn("so Homestead stopped; check where it runs now", message)
+        self.assertNotIn("proposed", item["ref"], "nothing is left to retry")
+
     def test_an_app_scaled_after_a_lost_reply_still_rolls(self):
         item, live = self.lost_reply_from_live()
         live["spec"]["replicas"] = 3
