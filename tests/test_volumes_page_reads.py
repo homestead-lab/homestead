@@ -47,6 +47,49 @@ def old_copy(name):
             "status": {"phase": "Released"}}
 
 
+def bind_what_the_page_reads(test, server):
+    """Every binding the three routes and the writes here reach, set to this
+    cluster and server.py's own for this test only, and put back after it.
+    Other test files bind these modules to fakes of their own, or to None,
+    and leave them so: test_reclass.Cluster binds homestead_reclass, and
+    test_platform's tearDown binds homestead_platform to None. Whatever ran
+    before in a shard must not change what this file reads."""
+    import tempfile
+    import homestead_components as COMPONENTS
+    import homestead_platform as PLATFORM
+    import homestead_storage_classes as SC
+    folder = tempfile.TemporaryDirectory()
+    test.addCleanup(folder.cleanup)
+    patches = [
+        (PLATFORM, "kget", K.kget), (COMPONENTS, "kget", K.kget), (COMPONENTS, "ksend", K.ksend),
+        (SC, "kget", K.kget), (SC, "ksend", K.ksend), (SC, "storage_classes", server.storage_classes),
+        (SC, "_dns_name", server._dns_name), (SC, "_cache", CACHE._cache), (SC, "DATA_DIR", folder.name),
+        # The node probe's readings come from a background loop: none here.
+        (SC, "node_temps", lambda: {}),
+        (RECLASS, "kget", K.kget), (RECLASS, "ksend", K.ksend), (RECLASS, "storage_classes", server.storage_classes),
+        (ROUTER, "_cached", [lambda key, seconds, fn: CACHE.cached(key, seconds, fn)]),
+        (ROUTER, "_store", [CACHE._cache]),
+    ]
+    for module, name, value in patches:
+        test.enterContext(mock.patch.object(module, name, value))
+    # What the platform was last read as, by any test: read again here.
+    test.enterContext(mock.patch.dict(PLATFORM._cached, at=0.0, value=None, failed_at=0.0))
+
+
+def registered():
+    """The job resolvers as the modules register them, not as an earlier test
+    may have left server.OPS.RESOLVERS."""
+    import homestead_components as COMPONENTS
+    import homestead_disk_v2 as DISK_V2
+    import homestead_lhv2_setup as LHV2_SETUP
+    import homestead_storage_server as STORAGE_ROUTES
+    from test_kind_registration import fake_ops
+    ops = fake_ops()
+    for module in (LHV2_SETUP, DISK_V2, COMPONENTS, STORAGE_ROUTES):
+        module.register(ops)
+    return ops.RESOLVERS
+
+
 class VolumesPage(unittest.TestCase):
     def setUp(self):
         clean_cache(self)
@@ -54,13 +97,7 @@ class VolumesPage(unittest.TestCase):
         self.cluster = Cluster(self)
         clean_snapshot(self)
         self.server = self.cluster.server
-        # Other test files bind these modules to fakes of their own and leave
-        # them so (test_reclass.Cluster binds homestead_reclass): read through
-        # this cluster whatever ran before, as Cluster does for LHCAP.
-        import homestead_storage_classes as SC
-        for module in (RECLASS, SC):
-            for name in ("kget", "ksend"):
-                self.enterContext(mock.patch.object(module, name, getattr(K, name)))
+        bind_what_the_page_reads(self, self.server)
         v2_off = {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting", "value": "false",
                   "metadata": {"namespace": "longhorn-system", "name": "v2-data-engine"}}
         for obj in (storage_class("longhorn-r2", default=True), storage_class("fast"), old_copy("pv-old"), v2_off):
@@ -112,11 +149,14 @@ class ReadsTests(VolumesPage):
 
     def test_the_checks_before_a_write_still_read_the_v2_engine_fresh(self):
         self.get("/api/storage/v2")
-        for check in (self.server.STORAGE_CLASSES.v2_engine_status, self.server.LHV2_SETUP.status):
-            before = len(self.cluster.gets())
-            check()
-            self.assertGreater(len(self.cluster.gets()), before, check)
-        self.assertIs(self.server.STORAGE_CLASSES.v2_engine_status, self.server.LHV2_SETUP.status)
+        before = len(self.cluster.gets())
+        self.server.STORAGE_CLASSES.v2_engine_status()
+        self.assertGreater(len(self.cluster.gets()), before, "read again, though the page's reading is kept")
+        # Longhorn capacity and Set up Longhorn V2 are handed the function,
+        # not the route (read from server.py: other tests rebind them).
+        source = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
+        for module in ("LHCAP", "LHV2_SETUP"):
+            self.assertIn(f"{module}.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status", source, module)
 
     def test_a_read_under_way_when_a_class_is_written_is_not_kept(self):
         # Real threads: the page's read is part-way when a write lands; what it
@@ -218,7 +258,7 @@ class WritesTests(VolumesPage):
             self.assertEqual(set(KEYS), self.kept(*KEYS), path)
 
     def ended(self, kind, key, answer=("succeeded", 100, "Done")):
-        resolver = self.server.OPS.RESOLVERS[kind]
+        resolver = registered()[kind]
         self.assertIsNotNone(getattr(resolver, "__wrapped__", None), f"{kind}: drops nothing when its job ends")
         with mock.patch.object(resolver, "__wrapped__", lambda item: answer):
             self.keep()
