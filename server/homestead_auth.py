@@ -223,8 +223,10 @@ def _lead(read, allow_stale):
     finally:
         with _store_reads:
             # Only the cluster failing holds off the next read; a request
-            # running out of its own time says nothing about the cluster.
-            if read.error is not None and not isinstance(read.error, DEADLINE.Spent):
+            # running out of its own time says nothing about the cluster, nor
+            # does a read older than one that has since succeeded.
+            if (read.error is not None and not isinstance(read.error, DEADLINE.Spent)
+                    and read.started >= _store_cache.get("as_of", 0)):
                 _store_cache["failed_at"] = time.time()
             if _store_read is read:
                 _store_read = None

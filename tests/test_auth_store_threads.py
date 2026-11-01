@@ -182,10 +182,10 @@ class SharedReadThreadTests(unittest.TestCase):
 
     def test_a_leader_out_of_its_own_time_does_not_fail_the_requests_waiting_on_it(self):
         self.cold()
-        leader = self.held_read(deadline=0.2)     # a page with little time left asks first
+        leader = self.held_read(deadline=1)       # a page with little time left asks first
         waiters = self.start(*(Request(lambda: AUTH.verify_token(self.token)) for _ in range(4)))
         self.wait_parked(4)
-        self.wire.answer = "timeout"              # its 0.2 s ran out; the API server is fine
+        self.wire.answer = "timeout"              # its 1 s ran out; the API server is fine
         self.wire.release.set()
         self.finish(leader, *waiters)
         self.assertIsInstance(leader.answer, AUTH.StoreUnavailable)
@@ -219,6 +219,38 @@ class SharedReadThreadTests(unittest.TestCase):
         self.wire.release.set()
         self.finish(leader)
         self.assertEqual(1, self.wire.reads)
+
+    def test_a_waiter_stops_at_its_own_bound_behind_a_read_with_no_deadline(self):
+        self.cold()
+        self.enterContext(mock.patch.object(AUTH, "WAIT_IN_REQUEST", 0.3))
+        leader = self.held_read(deadline=None)    # a background loop asked first, with 3 s
+        waiter = Request(lambda: AUTH.verify_token(self.token))   # a page request with its full 15 s
+        waiter.start()
+        waiter.join(2)
+        self.assertFalse(waiter.is_alive(), "the request waited past what its own read would get")
+        self.assertIsInstance(waiter.answer, AUTH.StoreUnavailable)
+        self.assertIn("did not answer in time", waiter.answer.cause)
+        self.assertEqual(0, waiter.cuts)          # its deadline did not stop it
+        self.assertLess(waiter.took, 1.0)
+        self.wire.release.set()
+        self.finish(leader)
+
+    def test_a_hung_read_failing_after_a_newer_one_does_not_hold_off_the_next_read(self):
+        self.expired()
+        leader = self.held_read()
+        time.sleep(AUTH.RETRY + 0.05)
+        late = Request(lambda: AUTH.verify_token(self.token))
+        late.run()                                # the API server is back: a newer read succeeds
+        self.assertEqual("robin", user(late.answer))
+        self.wire.answer = "timeout"
+        self.wire.release.set()                   # the old read fails only now
+        self.finish(leader)
+        self.expired()
+        self.sign_out_elsewhere()
+        nxt = Request(lambda: AUTH.verify_token(self.token))
+        nxt.run()
+        self.assertIsNone(nxt.answer, "the old failure must not stand in for a read")
+        self.assertEqual(3, self.wire.reads)
 
     def test_a_read_begun_before_a_sign_out_here_does_not_bring_the_session_back(self):
         self.expired()
