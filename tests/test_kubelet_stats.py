@@ -58,7 +58,10 @@ class Cluster:
             with self._lock:
                 self.calls.append((name, timeout))
             if self.delay:   # here, not in the fake, which answers one request at a time
-                self.release.wait(self.delay)
+                # A kubelet slower than the read's timeout is given up on at the timeout.
+                limit = self.delay if timeout is None else min(self.delay, timeout)
+                if not self.release.wait(limit) and limit < self.delay:
+                    raise TimeoutError("kubelet did not answer in time")
         return K.kget(path) if timeout is None else K.kget(path, timeout=timeout)
 
 
@@ -112,17 +115,31 @@ class InPlaceTests(Base):
 class BackgroundTests(Base):
     """With the loop running, a build never waits on a kubelet."""
 
-    def test_a_build_does_not_wait_on_slow_kubelets(self):
+    def test_kubelets_that_do_not_answer_cost_one_timeout_once(self):
         cluster = self.cluster(delay=5.0)
         self.addCleanup(cluster.release.set)
-        with self.loop_running():
+        with self.loop_running(), mock.patch.object(KSTATS, "TIMEOUT", 0.5):
             started = time.monotonic()
             nodes = self.get_nodes(cluster)
             took = time.monotonic() - started
-        self.assertLess(took, 1.0, "the build waited on a kubelet")
-        self.assertEqual([], cluster.calls, "nothing is read on the build's thread")
-        self.assertNotIn("fs_pct", nodes["node-a"], "no reading yet: no figures")
+            self.assertLess(took, 1.0, "hosts never read are read at once, not one after another")
+            self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
+            self.assertNotIn("fs_pct", nodes["node-a"], "a kubelet that did not answer is unknown")
+            cluster.calls.clear()
+            started = time.monotonic()
+            self.get_nodes(cluster)
+            took = time.monotonic() - started
+        self.assertLess(took, 0.3, "the build waited on a kubelet the loop is reading")
+        self.assertEqual([], cluster.calls, "a host the loop reads is not read on the build's thread")
         self.assertEqual(set(NAMES), set(KSTATS._wanted), "the loop reads the hosts asked about")
+
+    def test_a_first_build_with_the_loop_running_has_figures(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            nodes = self.get_nodes(cluster)
+        self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
+        self.assertEqual({KSTATS.TIMEOUT}, {timeout for _, timeout in cluster.calls})
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"], "a first build after start (#1076)")
 
     def test_the_loop_reading_is_used_and_unknown_once_a_kubelet_stops(self):
         cluster = self.cluster()
@@ -181,6 +198,52 @@ class BackgroundTests(Base):
         self.assertEqual([], cluster.calls)
 
 
+class Clock:
+    """A fake clock for homestead_kubelet_stats: time.time() is `now`."""
+
+    def __init__(self, now=1_000_000.0):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+
+class FollowerTests(Base):
+    """A replica that builds the Hosts page only now and then (the follower,
+    which mostly serves the leader's copy) still shows current figures (#1076)."""
+
+    def test_a_build_after_the_ask_lapsed_has_fresh_figures(self):
+        cluster = self.cluster()
+        clock = Clock()
+        start = clock.now
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
+            self.get_nodes(cluster)
+            for step in range(1, 7):                     # the loop's rounds, every INTERVAL
+                clock.now = start + step * KSTATS.INTERVAL
+                KSTATS.run_round(cluster.kget)
+            self.assertGreater(clock.now - start, KSTATS.WANTED_FOR, "the ask has lapsed")
+            self.assertEqual({}, KSTATS._wanted, "the loop stopped reading these hosts")
+            clock.now = start + 95
+            cluster.calls.clear()
+            nodes = self.get_nodes(cluster)
+        self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"], "fresh figures, not unknown")
+
+    def test_a_build_inside_the_ask_reads_nothing(self):
+        cluster = self.cluster()
+        clock = Clock()
+        start = clock.now
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
+            self.get_nodes(cluster)
+            clock.now = start + KSTATS.INTERVAL
+            KSTATS.run_round(cluster.kget)
+            clock.now = start + KSTATS.INTERVAL + 5
+            cluster.calls.clear()
+            nodes = self.get_nodes(cluster)
+        self.assertEqual([], cluster.calls, "the loop covers these hosts")
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
+
+
 class SharedReadingTests(Base):
     """The volume list uses the Hosts page's reading instead of its own."""
 
@@ -189,7 +252,6 @@ class SharedReadingTests(Base):
         claims = {}
         with self.loop_running():
             self.get_nodes(cluster)
-            KSTATS.run_round(cluster.kget)
             pods = {"items": [{"metadata": {"uid": f"pod-{n}", "namespace": "lab"},
                                "spec": {"nodeName": n, "volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]},
                                "status": {"phase": "Running"}} for n in NAMES]}
