@@ -21,14 +21,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_changes as CH
 import homestead_host_access as HOSTACCESS
+import homestead_lifecycle as LIFECYCLE
 
 UNSET = object()
-AT_IMPORT = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET)}
+AT_IMPORT = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
+             "lifecycle reads": LIFECYCLE.kget, "lifecycle writes": LIFECYCLE.ksend}
 
 
 class GuardState(unittest.TestCase):
     def test_no_test_left_the_guards_bound(self):
-        now = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET)}
+        now = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
+               "lifecycle reads": LIFECYCLE.kget, "lifecycle writes": LIFECYCLE.ksend}
         left = {name: now[name] for name in now if now[name] is not AT_IMPORT[name] and now[name] != AT_IMPORT[name]}
         if left.get("role", 1) is None:
             del left["role"]
