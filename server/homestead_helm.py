@@ -399,6 +399,10 @@ def job_status(item):
             return "running", 5, "Waiting for the Helm controller"
         raise
     status = job.get("status") or {}
+    if status.get("succeeded") or (status.get("failed") and not status.get("active")):
+        # The release has its new revision now, or a failed one: the Helm
+        # page, kept PAGE_SECONDS, shows it on its next refresh (#978).
+        homestead_routes.forget("helm")
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
     if status.get("failed") and not status.get("active"):
@@ -410,7 +414,8 @@ def job_status(item):
 ROUTES = {
     ("GET", "/api/helm/search"): ("viewer", lambda request: search((request.query.get("q") or [""])[0])),
     ("GET", "/api/helm/chart"): ("viewer", lambda request: chart((request.query.get("repo") or [""])[0], (request.query.get("name") or [""])[0])),
-    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached("helm", 10, releases)),
+    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached(
+        "helm", homestead_routes.PAGE_SECONDS, releases)),
     ("GET", "/api/helm/release"): ("viewer", lambda request: release((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }
 
