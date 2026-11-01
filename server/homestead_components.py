@@ -35,6 +35,7 @@ import homestead_cache as CACHE
 import homestead_fetch as FETCH
 import homestead_forced as FORCED
 import homestead_helm as HELM
+import homestead_job_kinds as JOB_KINDS
 import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_upgrade_check as UPGRADE_CHECK
@@ -89,13 +90,8 @@ RELEASE_WAIT = 15 * 60
 # uncordons that and nothing someone else cordoned. The value is the job's id.
 CORDON_MARK = NAMES.key("upgrade-cordon")
 # Jobs that work on a host (or on every host): a host one of them is on keeps its cordon.
-# The kinds of Homestead job that cordon a host, or hold one that is
-# cordoned, in one place: a host one of them is on keeps its cordon when an
-# upgrade ends. tests/test_components.py checks every module that cordons is
-# here. Exported for other modules that need the same list.
-HOST_CORDON_KINDS = ("node-power", "host-os", "os-rollout", "cluster-shutdown", "host-bond", "host-bridge",
-                     "host-promote", "longhorn-v2-cleanup", "longhorn-v2-prepare", "disk-v2-convert",
-                     "disk-retire", "platform-upgrade")
+# The kinds of job that cordon a host live in homestead_job_kinds.
+HOST_CORDON_KINDS = JOB_KINDS.HOST_CORDON_KINDS
 # Of those, the ones that work across hosts in turn: every host counts as theirs.
 EVERY_HOST = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
 UNSCHEDULABLE_TAINT = "node.kubernetes.io/unschedulable"

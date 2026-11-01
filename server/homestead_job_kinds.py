@@ -21,6 +21,14 @@ from typing import Callable, Optional
 
 import homestead_operations as OPS
 
+# The kinds of Homestead job that cordon a host, or hold one that is cordoned,
+# in one place: a host one of them is on keeps its cordon when an upgrade ends
+# (homestead_components), and the shared cordon helper marks its holders by these
+# names. tests/test_job_kinds.py checks every module that cordons is listed.
+HOST_CORDON_KINDS = ("node-power", "host-os", "os-rollout", "cluster-shutdown", "host-bond", "host-bridge",
+                     "host-promote", "platform-upgrade", "longhorn-v2-cleanup", "longhorn-v2-prepare",
+                     "disk-v2-convert", "disk-retire")
+
 
 def _no_rules_of_its_own(items, kind, ref, resource):
     """A kind no running job refuses: only start()'s shared checks apply."""

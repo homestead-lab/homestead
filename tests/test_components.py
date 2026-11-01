@@ -664,23 +664,6 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         self.assertTrue(self.cordoned("node-1"))
         self.assertIn("Clean up Longhorn V2", message)
 
-    def test_every_module_that_cordons_a_host_has_its_kind_listed(self):
-        import re
-        server = Path(__file__).resolve().parents[1] / "server"
-        cordons = re.compile(r"""set_cordon\([^)]*,\s*True\)|unschedulable['"],\s*['"]value['"]:\s*True""")
-        # Modules with no KIND of their own: the kind whose job runs the cordon.
-        kinds = {"homestead_node_actions.py": "node-power", "homestead_components.py": "platform-upgrade"}
-        # The Hosts page's Cordon is a person's own; it clears any upgrade's mark.
-        people = {"homestead_lifecycle.py"}
-        for path in sorted(server.glob("homestead_*.py")):
-            text = path.read_text()
-            if path.name in people or not cordons.search(text):
-                continue
-            found = re.search(r"""^KIND = ['"]([^'"]+)['"]""", text, re.M)
-            kind = kinds.get(path.name) or (found and found.group(1))
-            self.assertTrue(kind, f"{path.name} cordons a host: name its job kind here")
-            self.assertIn(kind, C.HOST_CORDON_KINDS, f"{path.name} cordons hosts as {kind}")
-
     def test_cancel_says_it_uncordons(self):
         self.cluster([node("node-1")])
         plan_ = C.cancel_plan(self.item())
