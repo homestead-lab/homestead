@@ -224,6 +224,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             def kept(obj):
                 meta = {k: v for k, v in (obj.get("metadata") or {}).items() if k not in ("resourceVersion", "managedFields")}
                 return meta, obj.get("spec")
+            # Defence in depth: original() has already refused a new uid.
             if identity(before)["uid"] != identity(after)["uid"]:
                 raise Stopped(replaced)
             if kept(before) != kept(after):

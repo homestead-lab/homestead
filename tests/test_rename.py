@@ -445,6 +445,22 @@ class RenameTests(unittest.TestCase):
         self.assert_not_put_back("replaced by another object of the same name", 2, writes=("POST", "PATCH", "PATCH"))
         self.assertNotIn("edited by someone else", ops.stored()[0]["message"])
 
+    def test_an_original_recreated_before_the_put_back_is_not_scaled(self):
+        # Deleted and created again with the same spec (stopped) between the
+        # stop wait and the put-back's first look: someone else's Deployment.
+        self.old_pods_outlast_the_wait(2)
+        read = self.read
+        def recreated(path):
+            if path == "/api/v1/pods" and self.pod_reads == 1:  # the stop wait's look at the pods is next
+                self.objects["old"]["metadata"].update(uid="uid-other", resourceVersion="40")
+            return read(path)
+        self.read = recreated
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was replaced by another object of the same name"):
+            self.dispatch()
+        self.assert_not_put_back("replaced by another object of the same name", 2, writes=("POST", "PATCH"))
+        self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
+        self.assertNotIn("edited by someone else", ops.stored()[0]["message"])
+
     def test_the_retry_runs_the_same_checks_as_the_first_try(self):
         # The original no longer fits when it is read again: no second PATCH.
         self.old_pods_outlast_the_wait(2)
