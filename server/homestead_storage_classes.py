@@ -16,6 +16,7 @@ import homestead_disks as DISKS
 import homestead_cache as CACHE
 import homestead_names as NAMES
 import homestead_platform as PLATFORM
+import homestead_routes
 import homestead_shared as SHARED
 import homestead_storage_resize as STORAGE_RESIZE
 
@@ -458,12 +459,22 @@ def _cleanup():
                       if removed else "nothing to remove: every restore class is still in use"}
 
 
+# The Volumes page asks for its classes and the V2 engine on every refresh:
+# kept as long as its main reads, and dropped by a write to a class, a claim,
+# a host, a Longhorn node or the V2 setting (homestead_kube), or by a job that
+# changes the V2 engine when it ends (#978). The checks made before a write
+# (homestead_lhcapacity, homestead_lhv2_setup) call v2_engine_status() itself,
+# and read the cluster as it is.
+CLASSES_KEY, V2_KEY = "sc:classes", "lhv2"
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/storageclasses"): ("viewer", lambda request: class_choices(
         (request.query.get("facts") or [""])[0] == "1")),
-    ("GET", "/api/storage/classes"): ("viewer", lambda request: storage_class_inventory()),
-    ("GET", "/api/storage/v2"): ("viewer", lambda request: v2_engine_status()),
+    ("GET", "/api/storage/classes"): ("viewer", lambda request: homestead_routes.cached(
+        CLASSES_KEY, homestead_routes.PAGE_SECONDS, storage_class_inventory)),
+    ("GET", "/api/storage/v2"): ("viewer", lambda request: homestead_routes.cached(
+        V2_KEY, homestead_routes.PAGE_SECONDS, v2_engine_status)),
     ("POST", "/api/storage/classes"): ("admin", lambda request: create_storage_class(request.body)),
     ("POST", "/api/storage/classes/default"): ("admin", lambda request: set_default_storage_class(request.body.get("name"))),
     ("POST", "/api/storage/classes/delete"): ("admin", lambda request: delete_storage_class(request.body.get("name"))),

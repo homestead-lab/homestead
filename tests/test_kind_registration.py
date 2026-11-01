@@ -245,7 +245,7 @@ class LastKindTests(unittest.TestCase):
         s, ops = self.server, self.registered("storage", "cluster", "self-data")
         self.assertIs(s.STORAGE_ROUTES._restore_then_tidy, ops.RESOLVERS["volume-restore"])
         self.assertIs(s.COPY_JOB.legacy_status, ops.RESOLVERS["restructure"])
-        self.assertIs(s.STORAGE_ROUTES.storage_move_progress, ops.RESOLVERS["reclass"])
+        self.assertIs(s.STORAGE_ROUTES.storage_move_progress, inspect.unwrap(ops.RESOLVERS["reclass"]))
         self.assertIs(s.RECLASS.resumable, ops.RESUMABLE["reclass"])
         self.assertIs(s.SNAPSHOT_DELETE.resumable, ops.RESUMABLE["snapshot-delete"])
         self.assertEqual((s.CANCEL.reclass_plan, s.STORAGE_ROUTES.storage_legacy_cancel), ops.CANCELLERS["reclass"])

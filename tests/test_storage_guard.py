@@ -1,4 +1,5 @@
 import copy
+import inspect
 import tempfile
 import threading
 import unittest
@@ -112,7 +113,7 @@ class StorageGuardTests(unittest.TestCase):
             self.assertIn("protected", str(handler._send.call_args.args[1]))
 
     def test_dispatcher_preserves_legacy_engine_and_never_downgrades_unknown_protocol(self):
-        self.assertIs(server.STORAGE_ROUTES.storage_move_progress, ops.RESOLVERS["reclass"])
+        self.assertIs(server.STORAGE_ROUTES.storage_move_progress, inspect.unwrap(ops.RESOLVERS["reclass"]))
         with mock.patch.object(server.RECLASS, "resolve", return_value=("running", 1, "legacy")) as legacy:
             self.assertEqual("legacy", server.STORAGE_ROUTES.storage_move_progress(self.item)[2])
             legacy.assert_called_once_with(self.item)

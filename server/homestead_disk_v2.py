@@ -1014,6 +1014,6 @@ ROUTES = {
 
 def register(ops):
     """The job store's entries for converting a disk to Longhorn V2 (#622)."""
-    ops.RESOLVERS[KIND] = homestead_routes.drops_when_ended(progress, "disks")
+    ops.RESOLVERS[KIND] = homestead_routes.drops_when_ended(progress, "disks", "lhv2")
     ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)
     ops.LOGGERS[KIND] = logs

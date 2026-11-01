@@ -193,7 +193,9 @@ def progress(item):
 
 
 def register(ops):
-    ops.RESOLVERS[KIND] = progress
+    # The hosts have their hugepages back once the job ends: the V2 engine on
+    # Volumes shows it on its next refresh (#978).
+    ops.RESOLVERS[KIND] = homestead_routes.drops_when_ended(progress, 'lhv2')
     ops.CANCEL_BLOCKS[KIND] = lambda item: 'Inspect saved V2 cleanup. A host may have memory changes awaiting restart.'
 
 
@@ -202,6 +204,8 @@ def recheck(identity):
         item = next((i for i in SETUP.ops.stored() if i.get('id') == identity and i.get('kind') == KIND), None)
         if not item: raise ValueError('V2 cleanup job not found')
         state, percent, message = progress(item)
+        if state in homestead_routes.ENDED:
+            homestead_routes.forget('lhv2')
         item.update(status=state, progress=percent, message=message)
         SETUP.ops.checkpoint(item)
         return public(item)

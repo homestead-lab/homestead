@@ -414,5 +414,7 @@ ROUTES = {
 
 def register(ops):
     """The job store's entry for preparing hosts for Longhorn V2 (#622)."""
-    ops.RESOLVERS["longhorn-v2-prepare"] = homestead_routes.drops_when_ended(progress, "disks")
+    # The host has its hugepages and modules once the job ends: Disks and the
+    # V2 engine on Volumes show them on their next refresh (#978).
+    ops.RESOLVERS["longhorn-v2-prepare"] = homestead_routes.drops_when_ended(progress, "disks", "lhv2")
     CLEANUP.register(ops)
