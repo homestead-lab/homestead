@@ -44,6 +44,7 @@ import urllib.error
 # homestead_group_tiers imports this module too; each reads the other's names
 # only when called, so either may be imported first.
 import homestead_group_tiers as GROUPS
+import homestead_cache as CACHE
 import homestead_kube as KUBE
 
 KIND = "set-priority"
@@ -703,6 +704,7 @@ def start(body, role=None):
 
 
 # ------------------------------------------------- Homestead's own tier
+PODS_KEY, PODS_SECONDS = "pods", 15   # the same entry homestead_cluster keeps
 MARK = "priority-protect"   # homestead.io/priority-protect: the class protect() set itself
 
 
@@ -727,7 +729,11 @@ def protect():
     if current and not (marked == current or adopted):
         return None
     d = lad["default"]["value"]
-    tops = [priority_of(p.get("spec") or {}, lad)[0] for p in kget("/api/v1/pods").get("items", [])
+    # The pod list the Cluster page keeps (homestead_cluster.PODS_KEY, 15 s),
+    # not one of its own each minute: a page being open, or the other loops
+    # reading pods, already paid for it (#980). A verdict is at most 15 s late.
+    pods = CACHE.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
+    tops = [priority_of(p.get("spec") or {}, lad)[0] for p in pods
             if (p.get("metadata") or {}).get("namespace") not in system_ns]
     highest = max([t for t in tops if t is not None and t < SYSTEM_VALUE] or [d])
     now_value = priority_of(spec, lad)[0] if current else d
