@@ -228,6 +228,19 @@ class SharedReadThreadTests(unittest.TestCase):
         self.finish(leader)
         self.assertIsNone(AUTH.verify_token(self.token))
 
+    def test_a_read_begun_before_a_sign_out_stays_out_after_a_conflict_empties_the_copy(self):
+        # A later save refused as a conflict empties the copy; the older read
+        # finishing after that must still not bring the signed-out session back.
+        self.expired()
+        leader = self.held_read(deadline=None)    # answers with the Secret from before
+        AUTH.logout_everywhere("robin")
+        self.kube.fail(PATH, 409, method="PUT")
+        with self.assertRaises(AUTH.StoreConflict):
+            AUTH._save(json.loads(json.dumps(AUTH._load())))
+        self.wire.release.set()
+        self.finish(leader)
+        self.assertIsNone(AUTH.verify_token(self.token))
+
     def test_forgetting_the_copy_also_forgets_a_read_under_way(self):
         # A restored configuration is read afresh (homestead_settings_helpers).
         self.expired()

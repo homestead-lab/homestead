@@ -162,7 +162,7 @@ def invalidate():
     already under way are both forgotten (a restored configuration)."""
     global _store_read
     with _store_reads:
-        _store_cache.update(at=0, as_of=time.time())
+        _store_cache.update(at=0, as_of=max(time.time(), _store_cache.get("as_of", 0)))
         _store_read = None
 
 
@@ -252,7 +252,9 @@ def _read_store(started):
         # A read begun before a save here (or a newer read) answers its own
         # caller but does not replace that copy: a sign-out everywhere must not
         # come back because an older read finished after it.
-        if _store_cache["data"] is None or started >= _store_cache.get("as_of", 0):
+        # An emptied copy (a conflict, invalidate()) keeps its as_of, so a read
+        # begun before it stays out too, and as_of never moves back.
+        if started >= _store_cache.get("as_of", 0):
             _store_cache.update(at=time.time(), data=data, failed_at=0, as_of=started)
     return data
 
@@ -271,11 +273,14 @@ def _save(data):
                       f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}" if data.get("_rv") else f"/api/v1/namespaces/{NS}/secrets", body)
     except urllib.error.HTTPError as e:
         if e.code == 409:
-            _store_cache.update(at=0, data=None)
+            with _store_reads:
+                _store_cache.update(at=0, data=None, as_of=max(time.time(), _store_cache.get("as_of", 0)))
             raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
         raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
-    _store_cache.update(at=time.time(), data=data, failed_at=0, as_of=time.time())
+    with _store_reads:
+        _store_cache.update(at=time.time(), data=data, failed_at=0,
+                            as_of=max(time.time(), _store_cache.get("as_of", 0)))
 
 
 def _signing_key(data=None):
