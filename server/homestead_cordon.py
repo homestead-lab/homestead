@@ -18,6 +18,18 @@ keep was left by a job that ended - often for a person to look at - so, like
 a person's, no job takes it over. When the job list cannot be read, every
 holder counts and nothing is joined or released.
 
+A job that ends leaving its host cordoned for a person on purpose calls
+leave_for_person(), which swaps its holder for person:<job id>. That entry is
+never stale: cordon() reads the host as a person's (PERSON), and release()
+- whoever calls it - lets its own holder go but never uncordons (FOR_PERSON).
+Only a person gives the host back, on the Hosts page.
+
+For adopters: PERSON and LEFT (BEFORE) both mean "was cordoned before" -
+record that, and never release it. Any other done False from cordon() may
+follow a write that applied but whose reply was lost: call release() before
+giving up. That is safe, since release() of a holder not in the mark writes
+nothing.
+
 Every write tests the Node's uid and resourceVersion. A conflict is read again
 and retried, up to WRITE_ATTEMPTS; a write refused while the Node had not
 changed is not asked again. A read that fails is never "free to uncordon"."""
@@ -39,9 +51,21 @@ WRITE_ATTEMPTS = 4
 # node-power job they run - never just by being active.
 BY_MARK_ONLY = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
 
-# cordon() reasons that mean the host was cordoned before this job.
+# A holder of this kind is a person: a job that ended leaving the host
+# cordoned for someone to look at writes person:<its job id>. It is never
+# live and never stale: no job takes it away or uncordons past it.
+PERSON_KIND = "person"
+
+# cordon() reasons that mean the host was cordoned before this job. Both mean
+# "was cordoned before": the job records that and never releases it. Any other
+# done False from cordon() may follow a write whose reply was lost (applied,
+# answer gone): the adopter calls release() before giving up, which is safe -
+# release() of a holder not in the mark writes nothing.
 PERSON = "cordoned by a person"
 LEFT = "cordoned before, by a job that has ended"
+BEFORE = (PERSON, LEFT)
+# release() and leave_for_person(): the host stays cordoned for a person.
+FOR_PERSON = "left cordoned for a person"
 GONE = "host is gone"
 MISSING = "no such host"
 UNREAD_JOBS = "Homestead could not read its job list"
@@ -59,6 +83,10 @@ def _entries(value):
 
 def _holder(entry):
     return entry if ":" in entry else f"{BARE_MARK_KIND}:{entry}"
+
+
+def _person(holder):
+    return holder.startswith(PERSON_KIND + ":")
 
 
 def _annotations(node):
@@ -85,7 +113,7 @@ def holders(node, live=None):
     live: the holders whose job is still going (live_holders()); given, the
     stale ones are left out. None counts every holder."""
     found = set(_marked(node)) | set(_old(node).values())
-    return found if live is None else found & live
+    return found if live is None else {h for h in found if h in live or _person(h)}
 
 
 def _jobs():
@@ -224,6 +252,8 @@ def cordon(node, kind, job_id):
         held = holders(obj)
         if is_cordoned and holder in held:
             return Outcome(True, node, "cordoned")  # done already: a reply lost, or asked twice
+        if is_cordoned and any(_person(h) for h in held):
+            return Outcome(False, node, PERSON)  # left for a person: no job takes it over
         if is_cordoned and not held:
             return Outcome(False, node, PERSON)
         if is_cordoned:
@@ -257,9 +287,16 @@ def release(node, kind, job_id, uid=""):
     def decide(obj):
         if uid and obj["metadata"].get("uid") != uid:
             return gone
+        if _person(holder):
+            return Outcome(False, node, FOR_PERSON)  # only a person gives it back, on the Hosts page
         held = holders(obj)
         if holder not in held:
             return Outcome(True, node, "not held by this job")
+        if any(_person(h) for h in held):
+            # Left for a person: this job lets go, the cordon stays.
+            entries = [h for h in _marked(obj) if h != holder]
+            drop = [key for key, h in _old(obj).items() if h == holder]
+            return _marks(obj, entries, drop), Outcome(False, node, FOR_PERSON)
         jobs = _jobs()
         live = _live(jobs)
         if live is None:
@@ -282,3 +319,26 @@ def release(node, kind, job_id, uid=""):
         return ops, Outcome(True, node, "uncordoned" if is_cordoned else "released")
 
     return _change(node, decide, "releasing", gone)
+
+
+def leave_for_person(node, kind, job_id):
+    """A job ending with its host left cordoned for a person: swap its holder
+    for person:<job id> in one fenced patch, so no later release - this
+    job's, another holder's or anyone's - uncordons it; only a person does,
+    on the Hosts page. A host not cordoned is left as it is. -> Outcome."""
+    holder, person = f"{kind}:{job_id}", f"{PERSON_KIND}:{job_id}"
+
+    def decide(obj):
+        if not bool((obj.get("spec") or {}).get("unschedulable")):
+            return Outcome(False, node, "not cordoned, so not left for a person")
+        marked, old = _marked(obj), _old(obj)
+        if person in marked and holder not in marked and holder not in old.values():
+            return Outcome(True, node, FOR_PERSON)  # done already
+        entries = []
+        for h in [person if h == holder else h for h in marked] + [person]:
+            if h not in entries:
+                entries.append(h)
+        drop = [key for key, h in old.items() if h == holder]
+        return _marks(obj, entries, drop), Outcome(True, node, FOR_PERSON)
+
+    return _change(node, decide, "leaving", Outcome(False, node, MISSING))

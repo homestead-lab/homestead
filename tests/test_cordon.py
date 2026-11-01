@@ -250,6 +250,82 @@ class CordonTest(unittest.TestCase):
         with mock.patch.object(CORDON.OPS, "stored", broken):
             self.assertTrue(CORDON.busy_with("n1", "own"))
 
+    # Left for a person (person:<job id>) ---------------------------------------
+
+    def test_a_person_entry_survives_a_live_holders_release(self):
+        kube = self.kube(node())
+        self.job("A", "platform-upgrade", status="failed")
+        self.job("B", "host-os")
+        CORDON.cordon("n1", "host-os", "B")
+        kube("PATCH", PATH, {"metadata": {"annotations": {CORDON.MARK: "person:A,host-os:B"}}},
+             "application/merge-patch+json")
+        out = CORDON.release("n1", "host-os", "B")
+        self.assertEqual(CORDON.Outcome(False, "n1", CORDON.FOR_PERSON), out)
+        self.assertTrue(cordoned(kube))
+        self.assertEqual("person:A", mark(kube))
+        # Whoever calls it, a person's entry never goes and never uncordons.
+        self.assertEqual(CORDON.Outcome(False, "n1", CORDON.FOR_PERSON), CORDON.release("n1", "person", "A"))
+        self.assertTrue(cordoned(kube))
+        self.assertEqual("person:A", mark(kube))
+
+    def test_a_host_with_only_a_person_entry_is_a_persons_to_cordon(self):
+        kube = self.kube(node(cordoned=True, cordoned_by="person:A"))
+        self.assertEqual(CORDON.Outcome(False, "n1", CORDON.PERSON), CORDON.cordon("n1", "host-os", "j1"))
+        self.assertEqual([], kube.writes)
+
+    def test_a_person_entry_next_to_a_live_holder_still_keeps_new_jobs_out(self):
+        kube = self.kube(node(cordoned=True, cordoned_by="person:A,host-os:B"))
+        self.job("B", "host-os")
+        self.assertEqual(CORDON.Outcome(False, "n1", CORDON.PERSON), CORDON.cordon("n1", "node-power", "j1"))
+        self.assertEqual([], kube.writes)
+
+    def test_a_job_leaves_its_cordon_for_a_person(self):
+        kube = self.kube(node())
+        self.job("A", "platform-upgrade")
+        self.job("B", "host-os")
+        CORDON.cordon("n1", "platform-upgrade", "A")
+        CORDON.cordon("n1", "host-os", "B")
+        before = len(kube.writes)
+        self.assertEqual(CORDON.Outcome(True, "n1", CORDON.FOR_PERSON),
+                         CORDON.leave_for_person("n1", "platform-upgrade", "A"))
+        self.assertEqual(before + 1, len(kube.writes))
+        self.assertEqual("person:A,host-os:B", mark(kube))
+        self.jobs[0]["status"] = "failed"
+        self.assertFalse(CORDON.release("n1", "host-os", "B").done)
+        self.assertTrue(cordoned(kube))
+        self.assertEqual("person:A", mark(kube))
+
+    def test_leave_for_person_on_a_host_not_cordoned_writes_nothing(self):
+        kube = self.kube(node())
+        self.assertFalse(CORDON.leave_for_person("n1", "platform-upgrade", "A").done)
+        self.assertEqual([], kube.writes)
+
+    # The adopter contract ----------------------------------------------------
+
+    def test_before_names_both_ways_a_host_was_cordoned_before(self):
+        self.assertEqual((CORDON.PERSON, CORDON.LEFT), CORDON.BEFORE)
+
+    def test_cordon_after_a_lost_reply_is_done_the_second_time(self):
+        kube = self.kube(node())
+        self.job("j1", "host-os")
+        kube.fail(PATH, TimeoutError("timed out"), method="PATCH", applied=True)
+        first = CORDON.cordon("n1", "host-os", "j1")
+        self.assertFalse(first.done)
+        self.assertNotIn(first.reason, CORDON.BEFORE)  # so the adopter calls release before giving up
+        self.assertTrue(cordoned(kube))
+        self.assertEqual(CORDON.Outcome(True, "n1", "cordoned"), CORDON.cordon("n1", "host-os", "j1"))
+        self.assertEqual(1, len([w for w in kube.writes if w[0] == "PATCH"]))
+
+    def test_release_after_a_lost_reply_is_done_the_second_time(self):
+        kube = self.kube(node())
+        self.job("j1", "host-os")
+        CORDON.cordon("n1", "host-os", "j1")
+        kube.fail(PATH, TimeoutError("timed out"), method="PATCH", applied=True)
+        self.assertFalse(CORDON.release("n1", "host-os", "j1").done)
+        self.assertFalse(cordoned(kube))
+        self.assertTrue(CORDON.release("n1", "host-os", "j1").done)
+        self.assertEqual(2, len([w for w in kube.writes if w[0] == "PATCH"]))  # the cordon, one release
+
     def test_a_failed_read_never_uncordons(self):
         kube = self.kube(node(cordoned=True, cordoned_by="host-os:j1"))
         kube.fail(PATH, 500)
