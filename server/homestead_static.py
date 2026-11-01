@@ -14,6 +14,14 @@ A vendored file named by its content (Name.<first 10 hex of its sha256>.woff2,
 as scripts/subset_fonts.py names the fonts) is kept for good too, but only
 while the bytes on disk still hash to that name (#982).
 
+A build that is not a release (CI's "ci", a plain docker build's "dev") would name
+every build the same, so a kept file could outlive a change. Its files are named by
+a hash of the web folder instead (asset_version), and the page is served with that
+name in place of the source version, so these builds are kept for good too. A
+vendored library file asked for as /vendor/@<version>/... is kept for good while
+<version> is the one the page names (noVNC and Monaco load many files by relative path
+that no ?v= can reach).
+
 The page's big per-tick reads (COMPRESSED_ANSWERS) are gzipped as well (#982).
 Nothing else from /api is: compressing an answer that holds a secret next to
 text the requester chose lets the answer's size give the secret away (BREACH),
@@ -45,7 +53,11 @@ COMPRESSED_ANSWERS = frozenset((
 MIN_ANSWER_GZIP = 1400
 ANSWER_LEVEL = 5
 
+RELEASE = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?")
+PAGE_VERSION = re.compile(rb"\?v=[0-9A-Za-z._+-]+")
+
 _files = {}
+_tree = {}
 _lock = threading.Lock()
 
 
@@ -53,16 +65,71 @@ def forget():
     """Drop every file kept in memory (tests, and a page that changed under us)."""
     with _lock:
         _files.clear()
+        _tree.clear()
+
+
+def _signature(webroot):
+    """(path, size, mtime) of every file under the web folder: cheap to read, changes
+    whenever any file does."""
+    found = []
+    for folder, _, names in os.walk(webroot):
+        for name in sorted(names):
+            path = os.path.join(folder, name)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            found.append((path, stat.st_size, stat.st_mtime_ns))
+    return tuple(sorted(found))
+
+
+def asset_version(version, webroot, refresh=False):
+    """The name the page gives its files. A release names itself; any other build
+    ("ci", "dev", ...) is named by a hash of the web folder's bytes, so two builds
+    never share a name. The hash is kept and read again only when refresh is set (the
+    page is asked for) and a file changed on disk."""
+    if not webroot or RELEASE.fullmatch(version or ""):
+        return version or ""
+    with _lock:
+        kept = _tree.get(webroot)
+    if kept and not refresh:
+        return kept["token"]
+    signature = _signature(webroot)
+    if kept and kept["signature"] == signature:
+        return kept["token"]
+    digest = hashlib.sha256()
+    for path, _, _ in signature:
+        digest.update(os.path.relpath(path, webroot).encode() + b"\0")
+        try:
+            with open(path, "rb") as handle:
+                digest.update(hashlib.sha256(handle.read()).digest())
+        except OSError:
+            continue  # gone or unreadable since the walk (an editor's temp file)
+    token = "c" + digest.hexdigest()[:12]
+    with _lock:
+        _tree[webroot] = {"signature": signature, "token": token}
+    return token
 
 
 def _without_demo(page):
     return b"".join(line for line in page.splitlines(keepends=True) if DEMO_SCRIPT not in line)
 
 
-def _entry(path, plain_page):
+def _changed(path, plain_page):
+    """The file differs on disk from the copy kept (so the build's name may have moved on)."""
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return False
+    with _lock:
+        kept = _files.get((path, plain_page))
+    return bool(kept) and kept["stamp"][:2] != (stat.st_mtime_ns, stat.st_size)
+
+
+def _entry(path, plain_page, token=""):
     """The file's bytes, ETag and gzip copy, read again only when it changed on disk."""
     stat = os.stat(path)
-    key, stamp = (path, plain_page), (stat.st_mtime_ns, stat.st_size)
+    key, stamp = (path, plain_page), (stat.st_mtime_ns, stat.st_size, token)
     with _lock:
         kept = _files.get(key)
     if kept and kept["stamp"] == stamp:
@@ -71,11 +138,20 @@ def _entry(path, plain_page):
         body = handle.read()
     if plain_page:
         body = _without_demo(body)
+    if token and path.endswith(".html"):
+        # The page names its files by the running build, whatever version was written in.
+        body = PAGE_VERSION.sub(b"?v=" + token.encode(), body)
     entry = {"stamp": stamp, "body": body, "gzip": None,
              "etag": '"' + hashlib.sha256(body).hexdigest()[:24] + '"'}
     with _lock:
         _files[key] = entry
     return entry
+
+
+def _vendor_version(request_path):
+    """The version a /vendor/@<version>/... path names ("" for any other path)."""
+    match = re.fullmatch(r"/vendor/@([A-Za-z0-9][A-Za-z0-9.+-]*)/.+", request_path or "")
+    return match.group(1) if match else ""
 
 
 def _wants_gzip(handler):
@@ -128,7 +204,7 @@ def _matches(entry, wanted):
     return "*" in tags or entry["etag"] in [tag[2:] if tag.startswith("W/") else tag for tag in tags]
 
 
-def serve(handler, path, ctype, cache="", version=""):
+def serve(handler, path, ctype, cache="", version="", webroot=""):
     """Send one static file. cache overrides the policy for files that set their own
     (icons, the service worker); a file asked for with ?v= naming the running
     version is kept for good either way."""
@@ -136,10 +212,12 @@ def serve(handler, path, ctype, cache="", version=""):
     page = ctype.startswith("text/html")
     plain_page = page and (query.get("demo") or [""])[0] != "1"
     try:
-        entry = _entry(path, plain_page)
+        token = asset_version(version, webroot, refresh=page or _changed(path, plain_page))
+        entry = _entry(path, plain_page, token)
     except (FileNotFoundError, NotADirectoryError):
         return handler._send(404, {"error": "not found"})
-    versioned = version and (query.get("v") or [""])[0] == version
+    named = urllib.parse.urlsplit(handler.path).path
+    versioned = token and token in ((query.get("v") or [""])[0], _vendor_version(named))
     policy = KEEP if not page and (versioned or _fingerprinted(path, entry)) else (cache or REVALIDATE)
     compressible = ctype.startswith(COMPRESSIBLE) and len(entry["body"]) >= MIN_GZIP
     headers = [("Cache-Control", policy), ("ETag", entry["etag"])]

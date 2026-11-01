@@ -4,6 +4,7 @@ gzipped when the browser accepts it, and demo.js reaches only a demo visit."""
 import gzip
 import hashlib
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -29,7 +30,8 @@ INDEX = """<!DOCTYPE html>
 SCRIPT = "/* core */\n" + "const answer = 42;\n" * 200
 
 
-class StaticFileTests(unittest.TestCase):
+class Served(unittest.TestCase):
+    """A real listener on a temporary web folder; no tests of its own."""
     def setUp(self):
         web = self.enterContext(tempfile.TemporaryDirectory())
         os.makedirs(os.path.join(web, "js"))
@@ -57,6 +59,8 @@ class StaticFileTests(unittest.TestCase):
         finally:
             client.close()
 
+
+class StaticFileTests(Served):
     def test_a_versioned_file_is_kept_for_good(self):
         status, headers, _ = self.get("/js/core.js?v=9.9.9")
         self.assertEqual(200, status)
@@ -191,6 +195,98 @@ class VersionedCacheTests(StaticFileTests):
         self.assertIn(b"demo.js", body)
 
 
+class VendorVersionTests(Served):
+    """noVNC and Monaco load many files by relative path, so they are named under the
+    page's version: /vendor/@<version>/... (#982)."""
+
+    def test_a_vendor_file_under_the_running_version_is_kept_for_good(self):
+        status, headers, body = self.get("/vendor/@9.9.9/xterm/xterm.js")
+        self.assertEqual(200, status)
+        self.assertEqual("public, max-age=31536000, immutable", headers["cache-control"])
+        self.assertEqual(SCRIPT.encode(), body)
+
+    def test_a_vendor_file_under_another_version_is_only_revalidated(self):
+        status, headers, _ = self.get("/vendor/@1.0.0/xterm/xterm.js")
+        self.assertEqual(200, status)
+        self.assertEqual("no-cache", headers["cache-control"])
+
+    def test_the_unversioned_vendor_path_is_still_revalidated(self):
+        self.assertEqual("no-cache", self.get("/vendor/xterm/xterm.js")[1]["cache-control"])
+
+    def test_a_versioned_vendor_path_cannot_climb_out(self):
+        for path in ("/vendor/@9.9.9/../../server/server.py", "/vendor/@9.9.9/xterm/x.py", "/vendor/@/xterm/xterm.js"):
+            with self.subTest(path=path):
+                # refused exactly as an unversioned odd path is, never served
+                self.assertEqual(self.get("/vendor/xterm/x.py")[0], self.get(path)[0])
+                self.assertNotEqual(200, self.get(path)[0])
+
+
+class BuildThatIsNotARelease(Served):
+    """A CI or plain docker build says "ci" or "dev" for every build: its files are
+    named by a hash of the web folder, so they are kept for good and a changed file
+    gets a new name (#982)."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(server, "HOMESTEAD_VERSION", "ci"))
+        STATIC.forget()
+
+    def name(self):
+        _, _, page = self.get("/")
+        match = re.search(rb"/js/core\.js\?v=([^\"]+)", page)
+        return match.group(1).decode()
+
+    def test_the_page_names_its_files_by_a_hash_not_the_source_version(self):
+        name = self.name()
+        self.assertRegex(name, r"^c[0-9a-f]{12}$")
+        self.assertNotIn(b"9.9.9", self.get("/")[2])
+
+    def test_the_scripts_it_names_are_kept_for_good(self):
+        _, headers, _ = self.get(f"/js/core.js?v={self.name()}")
+        self.assertEqual("public, max-age=31536000, immutable", headers["cache-control"])
+
+    def test_vendor_files_under_that_name_are_kept_for_good(self):
+        _, headers, _ = self.get(f"/vendor/@{self.name()}/xterm/xterm.js")
+        self.assertEqual("public, max-age=31536000, immutable", headers["cache-control"])
+
+    def test_a_changed_file_is_never_served_under_the_old_name(self):
+        old = self.name()
+        Path(server.WEBROOT, "js", "core.js").write_text(SCRIPT + "const changed = 1;\n")
+        new = self.name()
+        self.assertNotEqual(old, new)
+        # a page still naming the old build gets revalidated, not kept
+        _, headers, _ = self.get(f"/js/core.js?v={old}")
+        self.assertEqual("no-cache", headers["cache-control"])
+        self.assertEqual("public, max-age=31536000, immutable", self.get(f"/js/core.js?v={new}")[1]["cache-control"])
+
+    def test_a_file_edited_between_page_loads_is_not_kept_under_the_old_name(self):
+        old = self.name()
+        self.get(f"/js/core.js?v={old}")
+        Path(server.WEBROOT, "js", "core.js").write_text(SCRIPT + "const edited = 2;\n")
+        # no page load in between: the old name must not be kept for the new bytes
+        _, headers, _ = self.get(f"/js/core.js?v={old}")
+        self.assertEqual("no-cache", headers["cache-control"])
+
+    def test_a_file_that_vanishes_or_cannot_be_read_does_not_break_the_name(self):
+        Path(server.WEBROOT, "js", "locked.js").write_text("x")
+        real_open = open
+        def refuse(path, *args, **kwargs):
+            if str(path).endswith("locked.js"):
+                raise PermissionError(path)
+            return real_open(path, *args, **kwargs)
+        with mock.patch("homestead_static.open", refuse, create=True):
+            STATIC.forget()
+            self.assertRegex(self.name(), r"^c[0-9a-f]{12}$")
+
+    def test_an_unchanged_folder_keeps_its_name(self):
+        self.assertEqual(self.name(), self.name())
+
+    def test_a_release_page_keeps_its_own_version(self):
+        with mock.patch.object(server, "HOMESTEAD_VERSION", "2.8.1"):
+            STATIC.forget()
+            self.assertIn(b"/js/core.js?v=2.8.1", self.get("/")[2])
+
+
 class RealPageTests(unittest.TestCase):
     """The shipped index.html: its demo.js line is the one taken out."""
 
@@ -200,3 +296,28 @@ class RealPageTests(unittest.TestCase):
         self.assertIn(b"/js/demo.js", page)
         self.assertNotIn(b"/js/demo.js", plain)
         self.assertEqual(len(page.splitlines()) - 1, len(plain.splitlines()))
+
+
+class RealVendorTests(unittest.TestCase):
+    """The shipped noVNC and Monaco: every file their entry points import by a relative
+    path exists, so the versioned prefix reaches all of it."""
+
+    def test_novnc_relative_imports_all_resolve(self):
+        base = ROOT / "web" / "vendor" / "novnc"
+        seen, todo = set(), [base / "core" / "rfb.js"]
+        while todo:
+            file = todo.pop()
+            if file in seen:
+                continue
+            self.assertTrue(file.is_file(), f"{file} is missing")
+            seen.add(file)
+            for spec in re.findall(r"""(?:from|import)\s*\(?\s*['"](\.[^'"]+)['"]""", file.read_text()):
+                todo.append((file.parent / spec).resolve())
+        self.assertGreater(len(seen), 20)
+        self.assertTrue(all(str(f).startswith(str(base.resolve())) for f in seen))
+
+    def test_the_page_loads_no_library_by_an_unversioned_path(self):
+        for name in ("vm-console.js", "views-storage.js", "views-overview.js"):
+            text = (ROOT / "web" / "js" / name).read_text()
+            with self.subTest(name=name):
+                self.assertNotRegex(text, r"""["'`]/vendor/(?:novnc|monaco)""")

@@ -14,6 +14,15 @@ class VendorAssetTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertTrue(server.WEB_PATHS.is_vendor_path(path))
 
+    def test_a_path_under_a_version_is_a_vendor_path_too(self):
+        self.assertTrue(server.WEB_PATHS.is_vendor_path("/vendor/@2.8.334/monaco/vs/loader.js"))
+        self.assertEqual(("/vendor/monaco/vs/loader.js", "c0a1"),
+                         server.WEB_PATHS.split_vendor_version("/vendor/@c0a1/monaco/vs/loader.js"))
+        self.assertEqual(("/vendor/monaco/vs/loader.js", ""),
+                         server.WEB_PATHS.split_vendor_version("/vendor/monaco/vs/loader.js"))
+        for path in ("/vendor/@1/../server/server.py", "/vendor/@/monaco/vs/loader.js", "/vendor/@1/monaco/vs/loader.py"):
+            self.assertFalse(server.WEB_PATHS.is_vendor_path(path), path)
+
     def test_traversal_and_odd_types_are_refused(self):
         for path in ("/vendor/../server/server.py", "/vendor/monaco/../../etc/passwd",
                      "/vendor/monaco/vs/loader.py", "/vendor/monaco/secrets.env",

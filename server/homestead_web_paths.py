@@ -77,9 +77,17 @@ def is_public_path(path):
     return path in PUBLIC or is_asset_path(path) or path.startswith("/api/icons/")
 
 
+def split_vendor_version(path):
+    """/vendor/@<version>/lib/x.js -> ("/vendor/lib/x.js", "<version>"): a library file
+    named under the release (or content hash) of the page that loads it, so everything
+    it imports by relative path carries that version too and can be kept for good (#982)."""
+    match = re.fullmatch(r"/vendor/@([A-Za-z0-9][A-Za-z0-9.+-]*)/(.+)", path or "")
+    return ("/vendor/" + match.group(2), match.group(1)) if match else (path or "", "")
+
+
 def is_vendor_path(path):
     """A file from a vendored library, addressed by its own relative path."""
-    path = path or ""
+    path = split_vendor_version(path)[0]
     return (bool(re.fullmatch(r"/vendor/[A-Za-z0-9][A-Za-z0-9/._-]*", path)) and
             ".." not in path and os.path.splitext(path)[1] in VENDOR_TYPES)
 
