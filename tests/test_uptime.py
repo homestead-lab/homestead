@@ -686,3 +686,18 @@ class PoolTests(Base):
         untouched = [k for k in ("lab/a1", "lab/a2") if apps.get(k, {}).get("misses", 0) == 0
                      and apps.get(k, {}).get("state", "unknown") == "unknown"]
         self.assertEqual(["lab/a1", "lab/a2"], untouched, "not asked this round: no change, no false outage")
+
+    def test_an_app_not_asked_this_round_is_asked_first_next_round(self):
+        asked = []
+        def ask(t):
+            asked.append(t["port"])
+            time.sleep(0.3)
+            return OK
+        rows = [app(name=f"a{i}", port=8000 + i) for i in range(3)]
+        with mock.patch.object(UP, "WORKERS", 1), mock.patch.object(UP, "ROUND_CAP", 0.05), mock.patch.object(UP, "TIMEOUT", 0.05), \
+             mock.patch.object(UP, "ROUND_SLACK", 0):
+            UP.observe(rows, now=1000, ask=ask)
+            UP.observe(rows, now=1060, ask=ask)
+        self.assertEqual(8000, asked[0])
+        self.assertIn(asked[1], (8001, 8002), "the next round starts with one the last round left out")
+

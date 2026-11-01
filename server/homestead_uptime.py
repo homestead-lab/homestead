@@ -70,7 +70,7 @@ DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
 USER_AGENT = "Homestead-uptime/1"
 _lock = threading.Lock()
-_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None, "closed": {}}
+_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None, "closed": {}, "not_asked": set()}
 
 
 # How an app's own check is saved - an annotation on its Deployment, which
@@ -84,7 +84,7 @@ def bind(data_dir="/data", setting=None):
     if setting is not None:
         save_setting = setting
     with _lock:
-        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None, closed={})
+        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None, closed={}, not_asked=set())
 
 
 def _path():
@@ -463,7 +463,10 @@ def observe(workloads, now=None, ask=probe, vms=None):
         except Exception as e:      # a check never stops the round
             results[key] = {"ok": False, "ms": None, "code": None, "error": _why(e)}
 
-    work = [(key, t) for key, t, _ in rows if t]
+    # Those the last round could not ask go first, so no app waits behind the
+    # others round after round with an outage unseen.
+    behind = _state.get("not_asked") or set()
+    work = sorted(((key, t) for key, t, _ in rows if t), key=lambda kt: kt[0] not in behind)
     # One wait for the whole round, as long as its slowest target may take
     # (a target with several ports asked one after another ends by its own
     # bound) times the waves WORKERS make of the round, up to ROUND_CAP - but
@@ -479,6 +482,7 @@ def observe(workloads, now=None, ask=probe, vms=None):
         wait(futures, timeout=max(0, end - time.monotonic()))
         not_asked = {key for future, key in futures.items() if future.cancel()}
         pool.shutdown(wait=False)
+    _state["not_asked"] = not_asked
     with _lock:
         apps = _load()
         _state["observed_at"] = now
