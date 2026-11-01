@@ -39,14 +39,20 @@ def _path():
     return os.path.join(DATA_DIR, "alerts.json")
 
 
-def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        if not isinstance(state, dict):
-            raise ValueError("Invalid alert state")
-    except (OSError, ValueError):
-        state = {}
+def _load(strict=False):
+    """The alert state. Read leniently (a bad file is a fresh start), or with
+    strict, through SHARED.read_json: a file that is there but can't be read
+    raises Unreadable, for a reader that must say so."""
+    if strict:
+        state = SHARED.read_json(_path(), {})
+    else:
+        try:
+            with open(_path(), encoding="utf-8") as handle:
+                state = json.load(handle)
+            if not isinstance(state, dict):
+                raise ValueError("Invalid alert state")
+        except (OSError, ValueError):
+            state = {}
     for key, default in (("seq", 0), ("active", {}), ("log", []), ("acknowledgements", {})):
         state.setdefault(key, default)
     return state
@@ -282,9 +288,9 @@ def note(fact, now=None):
         return entry
 
 
-def log(after=0, categories=None, limit=50):
+def log(after=0, categories=None, limit=50, strict=False):
     with _lock:
-        state = _load()
+        state = _load(strict)
     rows = [e for e in state["log"] if e["id"] > after and (categories is None or e["category"] in categories)]
     return {"latest": state["seq"], "alerts": rows[-limit:] if limit else []}
 
