@@ -100,11 +100,25 @@ test("the same markup is painted again when the viewer's role changes, and after
   assert.equal(t.calls.morphed, before + 2, "a placeholder forgets the last paint");
 });
 
-test("a page showing an app's initials because its icon failed is still painted, so the retry can come", () => {
+test("a page whose failed /api/icons/ icon is due a retry is painted again, so the retry can come", () => {
+  const icon = "/api/icons/" + "c".repeat(64) + ".png", html = `<span class="appav"><img data-icon-src="${icon}"></span>`;
   const t = paintOnly("", { querySelectorAll: sel => sel === ".appav" ? [{ querySelector: () => null }] : [] });
-  t.paint("<p>one</p>"); const before = t.calls.morphed;
-  t.paint("<p>one</p>");
-  assert.equal(t.calls.morphed, before + 1);
+  t.ctx.ICON_FAILED = new Map([[icon, Date.now()]]); t.ctx.ICON_RETRY_MS = 600000;
+  t.paint(html); const before = t.calls.morphed;
+  t.paint(html);
+  assert.equal(t.calls.morphed, before, "not yet due: nothing to paint, the initials stay");
+  t.ctx.ICON_FAILED.set(icon, Date.now() - 600000);
+  t.paint(html);
+  assert.equal(t.calls.morphed, before + 1, "due: painted, so loadAppIcons asks again");
+});
+
+test("an app showing initials for an icon from elsewhere does not stop the same data being skipped", () => {
+  const t = paintOnly("", { querySelectorAll: sel => sel === ".appav" ? [{ querySelector: () => null }] : [] });
+  t.ctx.ICON_FAILED = new Map(); t.ctx.ICON_RETRY_MS = 600000;
+  const html = '<span class="appav"><img src="https://example.com/gone.png"></span>';
+  t.paint(html); const before = t.calls.morphed;
+  t.paint(html); t.paint(html);
+  assert.equal(t.calls.morphed, before, "an external icon that failed is the browser's to retry, not a reason to repaint");
 });
 
 /* App icons */
@@ -179,4 +193,59 @@ test("an icon whose address changes is fetched for the new address", async () =>
   morph(page, el("div", {}, w.avatar(URL_B))); w.load(page); await w.settle();
   assert.equal(w.fetches.at(-1), URL_B);
   assert.equal(page.childNodes[0].querySelectorAll("img")[0].src, "blob:" + URL_B);
+});
+
+/* A part morph leaves alone on purpose (an open "…" menu, a field being typed in) is caught up by the
+   next paint, even when that paint's data is the same (#906 review I37-1). */
+function paintReal(trees) {
+  const host = mount(el("div", { "data-painted": "1" }));
+  Object.defineProperty(host, "classList", { value: { contains: () => false, remove() {}, add() {} } });
+  const doc = Object.assign(DOC, { createElement: () => { const box = el("div", {}); Object.defineProperty(box, "innerHTML", { set(v) { box.childNodes = []; for (const kid of [...trees[v]().childNodes]) box.appendChild(kid); } }); return box; } });
+  const ctx = paintWorld({ location: { search: "" }, STATE: { view: "workloads" }, V: () => host, pageTabs: () => "", filterBar: () => "", ROLE: "admin",
+    enhanceActions() {}, loadAppIcons() {}, dropOrphanTooltip() {}, applyRole() {}, document: doc });
+  vm.runInContext(between(paintSrc, "const PAGE_SNAPSHOT =", "function pageSkeleton(view)"), ctx);
+  vm.runInContext(between(paintSrc, "function paint(html)", "/* data-mkey"), ctx);
+  return { host, paint: h => vm.runInContext(`paint(${JSON.stringify(h)})`, ctx) };
+}
+const menuPage = label => () => el("div", {}, el("details", { class: "actionmenu", open: "" }, el("summary", {}, "…"),
+  el("div", { class: "actionmenu-pop" }, el("button", {}, label))));
+const menuLabel = details => details.querySelector("button").childNodes[0].nodeValue;
+
+test("an action menu open during a change shows the new items once it closes, though the data does not change again", () => {
+  const t = paintReal({ running: menuPage("Stop"), stopped: menuPage("Start") });
+  t.host.appendChild(menuPage("Stop")().childNodes[0]);
+  t.paint("running");
+  const details = t.host.childNodes[0], pop = details.childNodes[1];
+  const shell = el("details", {}, pop); details.shell = shell;          // ui.js lift(): the open menu moves to the page
+  t.paint("stopped");                                                     // the app stops while its menu is open
+  assert.equal(menuLabel(shell), "Stop", "an open menu is left alone");
+  details.shell = null; details.appendChild(pop);                        // ui.js lower(): it closes and goes back
+  t.paint("stopped"); t.paint("stopped");
+  assert.equal(menuLabel(details), "Start", "the next paint brings it up to date");
+});
+
+test("a field focused during a change takes the new attributes once it is left, though the data does not change again", () => {
+  const page = hint => () => el("div", {}, el("input", { placeholder: hint }));
+  const t = paintReal({ before: page("old"), after: page("new") });
+  t.host.appendChild(page("old")().childNodes[0]);
+  t.paint("before");
+  const input = t.host.childNodes[0];
+  input.focus();
+  t.paint("after");
+  assert.equal(input.getAttribute("placeholder"), "old", "a field being typed in is left alone");
+  DOC.activeElement = null;
+  t.paint("after"); t.paint("after");
+  assert.equal(input.getAttribute("placeholder"), "new");
+  assert.equal(t.host.childNodes[0], input);
+});
+
+test("a keyless new row never reuses a row whose key appeared twice", () => {
+  const { morph } = paintWorld();
+  const ul = mount(list(row("a", "A1"), row("a", "A2")));
+  const [first, second] = ul.childNodes;
+  morph(ul, list(row("a", "A1"), el("li", {}, el("button", {}, "plain"))));
+  assert.equal(ul.childNodes[0], first);
+  assert.notEqual(ul.childNodes[1], second, "the second keyed row is not turned into the plain one");
+  assert.equal(second.parentNode, null);
+  assert.equal(ul.childNodes[1].getAttribute("data-mkey"), null);
 });

@@ -323,7 +323,7 @@
       ...(c.image ? [`        image: ${c.image}`] : []),
       ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   // Two cached app icons, so the paths run in the demo: one that answers, one that is gone (404).
-  const DEMO_ICON_OK = "/api/icons/" + "a".repeat(64) + ".png", DEMO_ICON_MISSING = "/api/icons/" + "b".repeat(64) + ".png";
+  const DEMO_ICON_OK = "/api/icons/" + "a".repeat(64) + ".svg", DEMO_ICON_MISSING = "/api/icons/" + "b".repeat(64) + ".png";
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", icon: DEMO_ICON_OK, update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -370,6 +370,8 @@
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
       pod_count: 1, container_count: 1, pods: [pod("homestead-smb", "harvester-node2", "dperson/samba:latest")] },
   ];
+  // For scripts/check_icon_retries.mjs: a browser check changes an app under an open "…" menu.
+  window.__demoWorkloads = workloads;
   const storage = { cap_gb: 1392, avail_gb: 906, used_gb: 486, used_pct: 34.9,
     provisioned_gb: 670, actual_gb: 224, volumes: 8, healthy: 6, degraded: 1,
     faulted: 0, detached: 1, unknown: 1, attached: 7,
@@ -3817,9 +3819,10 @@ ssh_pwauth: true
     if (url.pathname.startsWith("/api/icons/")) {
       (window.__iconRequests ||= []).push(url.pathname);   // for scripts/check_icon_retries.mjs: the demo answers in the page, so no network request shows
       if (url.pathname === DEMO_ICON_MISSING) return new Response("not found", { status: 404, headers: { "Content-Type": "text/plain" } });
-      // A 1x1 grey PNG.
-      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkaGj4DwAEOQJ/1hqoVQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
-      return new Response(png, { status: 200, headers: { "Content-Type": "image/png" } });
+      // A small camera, so the public demo shows a picture rather than a grey square.
+      const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#2563eb"/>'
+        + '<rect x="12" y="22" width="30" height="22" rx="4" fill="#fff"/><path d="M42 29l10-6v18l-10-6z" fill="#fff"/><circle cx="27" cy="33" r="6" fill="#2563eb"/></svg>';
+      return new Response(svg, { status: 200, headers: { "Content-Type": "image/svg+xml" } });
     }
     if (key === "/api/auth/preferences/dashboard") {
       const storageKey = `homestead.demo.dashboard.${typeof ME === "string" ? ME : "demo"}`;

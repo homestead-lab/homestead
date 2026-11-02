@@ -1,5 +1,6 @@
-// A failed app icon is asked for once, not on every refresh (#906), and keyed rows keep their
-// node and focus when a list reorders. Real Chromium and WebKit, the demo's icons: one answers, one 404s.
+// A failed app icon is asked for once, not on every refresh (#906), keyed rows keep their node and
+// focus when a list reorders, and an action menu open while its app changes is brought up to date
+// once it closes. Real Chromium, on the demo's icons: one answers (an SVG), one 404s.
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
@@ -47,6 +48,28 @@ try {
     host.remove(); return out;
   });
   assert.deepEqual(result, { order: "cab", a: true, b: true, c: true, focus: true }, "keyed rows keep their nodes and focus");
+
+  // An app that stops while its "…" menu is open: the open menu is left alone, and once it closes
+  // the next refresh brings it up to date, though the data has not changed again since.
+  const MENU = `#views .wl-row[data-mkey*='"frigate"'] details.actionmenu`;
+  const items = () => page.evaluate(sel => {
+    const d = document.querySelector(sel);
+    return d ? [...(d.shell || d).querySelectorAll(".actionmenu-pop button")].map(b => b.textContent.trim()) : null;
+  }, MENU);
+  const before = await items();
+  assert.ok(before?.includes("Stop") && !before.includes("Start"), `frigate's menu offers Stop: ${JSON.stringify(before)}`);
+  await page.locator(`${MENU} > summary`).click();
+  await page.locator("details.actionmenu-portal[open]").waitFor({ state: "attached" });
+  await page.evaluate(async () => {
+    Object.assign(window.__demoWorkloads.find(w => w.name === "frigate"), { desired: 0, ready: 0 });
+    await refresh(true);
+  });
+  assert.ok((await items()).includes("Stop"), "the open menu is left as it was");
+  await page.keyboard.press("Escape");
+  await page.locator("details.actionmenu-portal").waitFor({ state: "detached" });
+  for (let tick = 0; tick < 2; tick++) await page.evaluate(() => refresh(true));
+  const after = await items();
+  assert.ok(after?.includes("Start") && !after.includes("Stop"), `once closed, frigate's menu offers Start, not Stop: ${JSON.stringify(after)}`);
   assert.deepEqual(errors, []);
   console.log("failed icon asked for once over 3 refreshes; loaded icon kept; keyed rows keep node and focus");
 } finally { await browser.close(); }
