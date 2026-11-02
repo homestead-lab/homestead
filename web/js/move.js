@@ -27,23 +27,61 @@ function fitAfter(node, wl) {
   return { cpuPct: Math.round(cpuPct), memPct: Math.round(memPct) };
 }
 
-let HOST_MOVE_REVIEW = null;
-let HOST_MOVE_SEQUENCE = 0;
-function invalidateHostMove() { HOST_MOVE_REVIEW = null; ++HOST_MOVE_SEQUENCE; }
+/* The Move review (#909) on the shared review flow, which keeps the sequence, the
+   busy flag and the one-shot send. Picking a host or changing a switch makes an
+   open preview stale (invalidateHostMove). This view keeps its words and the
+   consent tick; the Move button stays enabled until the review is blocked, and
+   pressing it too early says why, so the flow is given no button id. */
+const HOST_MOVE = UI.reviewFlow({
+  preview: async config => {
+    const review = await api("/api/move/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
+    if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
+    return { config, ...review };
+  },
+  render: review => {
+    const config = review.config;
+    childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
+      <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
+      ${deployCapacityHtml(review.capacity)}
+      ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Move it despite the warnings</label>` : ""}
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Move</button>`)}`, true);
+  },
+  failed: error => toast(error.message, "bad"),
+  blocked: review => review.capacity.blocked, ack: "hostMoveConfirm",
+  apply: async review => {
+    const button = $("#hostMoveGo");
+    button.disabled = true; button.textContent = "Applying placement…";
+    try {
+      await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
+      toast(`${review.config.name}: placement saved; watch rollout progress in Recent jobs`, "ok");
+      closeModal();
+      setTimeout(() => refresh(true), 1500);
+    } catch (e) {
+      toast(e.message, "bad"); button.disabled = false; button.textContent = "Review again";
+      button.onclick = () => window.hostMoveReview(review.config);
+    }
+  },
+});
+// The host picker's own plan is not a review, but a pick, a switch or a new review still
+// makes the plan being fetched stale, as before.
+let HOST_MOVE_PICKER = 0;
+function invalidateHostMove() { HOST_MOVE.back(); ++HOST_MOVE_PICKER; }
 
 window.moveWorkload = async (name, ns) => {
   invalidateHostMove();
-  const sequence = HOST_MOVE_SEQUENCE;
+  const sequence = HOST_MOVE_PICKER;
   const wl = Object.assign(findWl(name), ns ? { ns } : {});
   childModal("Move · " + name, '<div class="empty"><span class="spin2"></span>checking capacity and hardware constraints…</div>', true);
   let plan;
   try {
     await loadHardwareFeatures();
     plan = await api(`/api/move/plan?ns=${encodeURIComponent(wl.ns)}&name=${encodeURIComponent(name)}&cpu=${wl.cpu || 0}&mem=${wl.mem_mb || 0}`);
-    if (sequence !== HOST_MOVE_SEQUENCE) return;
+    if (sequence !== HOST_MOVE_PICKER) return;
     // An answer with no hosts in it is an error to show, not a spinner to leave running.
     if (!Array.isArray(plan?.candidates)) throw new Error("the plan came back without any hosts to compare");
-  } catch (e) { if (sequence === HOST_MOVE_SEQUENCE) $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  } catch (e) { if (sequence === HOST_MOVE_PICKER) $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   const here = plan.current || wl.node || (wl.nodes && wl.nodes[0]) || "";
   const req = plan.requirements || { devices: [], resources: {}, labels: {} };
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
@@ -122,43 +160,11 @@ window.doMoveNow = async (ns, name) => {
   await window.hostMoveReview({ ns, name, node, pin: !unpin && $("#mv_pin").checked });
 };
 
-window.hostMoveReview = async body => {
-  if (HOST_MOVE_REVIEW?.submitting) return;
-  invalidateHostMove();
-  const sequence = HOST_MOVE_SEQUENCE, config = JSON.parse(JSON.stringify(body));
-  try {
-    const review = await api("/api/move/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
-    if (sequence !== HOST_MOVE_SEQUENCE) return;
-    if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
-    HOST_MOVE_REVIEW = { config, ...review, submitting: false };
-    childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
-      <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
-      ${deployCapacityHtml(review.capacity)}
-      ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Move it despite the warnings</label>` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Move</button>`)}`, true);
-  } catch (e) { toast(e.message, "bad"); }
-};
+window.hostMoveReview = body => { if (!HOST_MOVE.busy) ++HOST_MOVE_PICKER; return HOST_MOVE.open(JSON.parse(JSON.stringify(body))); };
 
 window.confirmHostMove = async () => {
-  const review = HOST_MOVE_REVIEW;
-  if (!review || review.submitting || review.capacity.blocked || !$("#hostMoveConfirm")?.checked)
-    return toast("Review the move and acknowledge its warnings first", "bad");
-  review.submitting = true;
-  const button = $("#hostMoveGo");
-  button.disabled = true; button.textContent = "Applying placement…";
-  try {
-    await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
-    invalidateHostMove();
-    toast(`${review.config.name}: placement saved; watch rollout progress in Recent jobs`, "ok");
-    closeModal();
-    setTimeout(() => refresh(true), 1500);
-  } catch (e) {
-    invalidateHostMove();
-    toast(e.message, "bad"); button.disabled = false; button.textContent = "Review again";
-    button.onclick = () => window.hostMoveReview(review.config);
-  }
+  if (!HOST_MOVE.ready()) return toast("Review the move and acknowledge its warnings first", "bad");
+  await HOST_MOVE.apply();
 };
 
 /* "get everything off this host" — drain without the reboot */
