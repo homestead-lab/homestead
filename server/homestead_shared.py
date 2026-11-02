@@ -162,17 +162,49 @@ class Unreadable(ValueError):
     """A store on the data volume that is there but could not be read."""
 
 
+def _parse(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_json(path):
+    """The JSON in path, opened once more if the volume answered ESTALE.
+
+    Writers replace a file whole (write_json renames a complete one over it),
+    so a reader on the RWX share (NFS) on another node can still hold the file
+    that was just replaced: its open or read answers ESTALE while the new file
+    is already there. Once, never more: a mount that keeps answering ESTALE
+    is stale itself (homestead_stale_mount), and the error is raised."""
+    try:
+        return _parse(path)
+    except OSError as error:
+        if error.errno != errno.ESTALE:
+            raise
+    return _parse(path)
+
+
 def read_json(path, default):
     """A JSON store on the data volume. A missing file is a fresh copy of
     default; a file that is there but cannot be read, is not JSON or holds
     another kind of value raises Unreadable, so nothing is saved over it."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return parse_json(handle, path, default)
-    except FileNotFoundError:
-        return copy.deepcopy(default)
-    except OSError as error:
-        raise _unreadable(path, error) from error
+    # Opened once more if the volume answered ESTALE on open or read, as
+    # load_json does: never twice (see load_json).
+    for again in (True, False):
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return parse_json(handle, path, default)
+        except FileNotFoundError:
+            return copy.deepcopy(default)
+        except OSError as error:
+            if again and error.errno == errno.ESTALE:
+                continue
+            raise _unreadable(path, error) from error
+        except Unreadable as error:
+            # parse_json raises Unreadable for a read that failed; its cause
+            # is the OSError.
+            if again and getattr(error.__cause__, "errno", None) == errno.ESTALE:
+                continue
+            raise
 
 
 def _unreadable(path, error):
