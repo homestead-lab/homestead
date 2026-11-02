@@ -10,7 +10,7 @@ function setup(capacity) {
   let html = "";
   const sent = [], notices = [];
   const fields = { "#deployGo": {}, "#deployCapacityConfirm": { checked: false }, "#deployConfirm": { checked: false } };
-  const context = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {} },
+  const context = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields["#" + id] || null },
     // The logo is made ready first (core.js); none is set here.
     logoReady: async () => {},
     $: selector => fields[selector], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
