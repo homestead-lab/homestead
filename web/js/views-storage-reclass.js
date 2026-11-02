@@ -2,10 +2,9 @@
 /* ---------------- changing a volume's storage class ----------------
    A review first - what uses it, what stops, how much room it takes while
    both copies exist - then the move as a tracked job with its steps. */
-let RECLASS_REVIEW = null, RECLASS_SEQUENCE = 0, RECLASS_BUSY = false;
 window.volumeReclass = async x => {
-  if (RECLASS_BUSY) return;
-  RECLASS_REVIEW = null;
+  if (RECLASS.busy) return;
+  RECLASS.back();
   window.__reclassVolume = x;
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("There is no other storage class to move it to", "warn");
@@ -19,23 +18,24 @@ window.volumeReclass = async x => {
   volumeReclassPlan(x.namespace || "lab", x.pvc_name || x.name);
 };
 
-window.volumeReclassPlan = async (ns, claim) => {
-  if (RECLASS_BUSY) return;
-  RECLASS_REVIEW = null;
-  const sequence = ++RECLASS_SEQUENCE;
-  const host = $("#rc_plan"), go = $("#rc_go");
-  if (!host) return;
-  host.innerHTML = '<div class="empty"><span class="spin2"></span> checking what uses it and where it fits</div>';
-  if (go) go.disabled = true;
-  if ($("#rc_ack")) $("#rc_ack").checked = false;
-  const config = {namespace:ns,claim,target:$("#rc_to").value};
-  let p;
-  try {
-    p = await api("/api/volumes/reclass/plan", { method: "POST", headers: { "Content-Type": "application/json" },
+/* Review, then change a volume's storage class (#909), on the shared review flow: it keeps the sequence, the
+   busy flag and the one-shot send. This view keeps its words and the target it reviewed. */
+let RECLASS_HOST = null;
+const RECLASS = UI.reviewFlow({
+  loading: ({ host, go }) => {
+    host.innerHTML = '<div class="empty"><span class="spin2"></span> checking what uses it and where it fits</div>';
+    if (go) go.disabled = true;
+    if ($("#rc_ack")) $("#rc_ack").checked = false;
+  },
+  live: ({ host }) => $("#rc_plan") === host,
+  preview: async ({ config }) => {
+    const p = await api("/api/volumes/reclass/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config) });
-    if (sequence !== RECLASS_SEQUENCE || $("#rc_plan") !== host) return;
     if (!p.capacity_token || !Array.isArray(p.blockers) || !Array.isArray(p.warnings) || !Array.isArray(p.consumers)) throw new Error("Review is incomplete; nothing can start.");
-  } catch (e) { if (sequence === RECLASS_SEQUENCE && $("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Review unavailable", esc(e.message)); return; }
+    return { config, plan: p };
+  },
+  render: (review, { host }) => {
+    const p = review.plan;
   const sp = p.space || {};
   const verb = c => c.kind === "VirtualMachine" ? (c.running ? "shut down, then started again" : "stopped already; stays stopped")
     : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
@@ -48,35 +48,43 @@ window.volumeReclassPlan = async (ns, claim) => {
     UI.section("Affected apps and VMs", UI.table([{label:"App or VM"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No apps and VMs currently reference this volume."})) +
     UI.section("Storage needed", UI.facts([["New volume",esc(sizeText(sp.size_gb))],["Replica allocation",`${esc(sizeText(sp.allocated_gb))} · ${esc(sp.replicas)} copies`],["Estimated destination room",sp.room_gb == null ? "Unknown" : esc(sizeText(sp.room_gb))]])) +
     UI.more("What is checked", "The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
-  RECLASS_REVIEW = {config,plan:p};
-  volumeReclassReady();
-  if (window.applyRole) applyRole();
-};
-
-window.volumeReclassReady = () => {
-  const ready = !!(RECLASS_REVIEW?.plan.ok && !RECLASS_REVIEW.plan.blockers.length && !RECLASS_BUSY && $("#rc_ack")?.checked && $("#rc_to")?.value === RECLASS_REVIEW.config.target);
-  if ($("#rc_go")) $("#rc_go").disabled = !ready;
-  return ready;
-};
-
-window.volumeReclassStart = async (ns, claim) => {
-  if (!volumeReclassReady() || RECLASS_REVIEW.config.namespace !== ns || RECLASS_REVIEW.config.claim !== claim) return;
-  const review = RECLASS_REVIEW, host = $("#rc_plan"), go = $("#rc_go");
-  RECLASS_REVIEW = null; RECLASS_BUSY = true; go.disabled = true; $("#rc_to").disabled = true;
-  try {
-    const r = await api("/api/volumes/reclass/start", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({...review.config,capacity_token:review.plan.capacity_token,confirm_capacity:true}) });
-    if (!r.operation?.id) throw new Error("Move receipt was not returned");
-    if (typeof noteOperation === "function") noteOperation(r.operation);
-    if ($("#rc_plan") === host) reclassWatch(r.operation.id);
-  } catch (e) {
-    if ($("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Start not confirmed", esc(e.message) + " Check Recent jobs before reviewing again. Nothing was retried.");
-    else toast("Move start not confirmed; check Recent jobs.", "bad");
-  } finally {
-    RECLASS_BUSY = false;
-    if ($("#rc_plan") === host && $("#rc_to")) $("#rc_to").disabled = false;
+    RECLASS.ready();
+    if (window.applyRole) applyRole();
+  },
+  failed: (e, { host }) => { host.innerHTML = UI.callout("bad", "Review unavailable", esc(e.message)); },
+  // Only the plan reviewed can start: it must allow it, the target must still be the one it was made for.
+  blocked: review => !review.plan.ok || !!review.plan.blockers.length, ack: "rc_ack", button: "rc_go",
+  check: review => $("#rc_to")?.value === review.config.target,
+  apply: async review => {
+    const host = RECLASS_HOST = $("#rc_plan"), go = $("#rc_go");
+    go.disabled = true; $("#rc_to").disabled = true;
+    try {
+      const r = await api("/api/volumes/reclass/start", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({...review.config,capacity_token:review.plan.capacity_token,confirm_capacity:true}) });
+      if (!r.operation?.id) throw new Error("Move receipt was not returned");
+      if (typeof noteOperation === "function") noteOperation(r.operation);
+      if ($("#rc_plan") === host) reclassWatch(r.operation.id);
+    } catch (e) {
+      if ($("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Start not confirmed", esc(e.message) + " Check Recent jobs before reviewing again. Nothing was retried.");
+      else toast("Move start not confirmed; check Recent jobs.", "bad");
+    }
+  },
+  after: () => {
+    if ($("#rc_plan") === RECLASS_HOST && $("#rc_to")) $("#rc_to").disabled = false;
     if (typeof refreshOperations === "function") refreshOperations();
-  }
+  },
+});
+window.volumeReclassPlan = async (ns, claim) => {
+  if (RECLASS.busy) return;
+  RECLASS.back();
+  const host = $("#rc_plan"), go = $("#rc_go");
+  if (!host) return;
+  return RECLASS.open({ host, go, config: { namespace: ns, claim, target: $("#rc_to").value } });
+};
+window.volumeReclassReady = () => RECLASS.ready();
+window.volumeReclassStart = async (ns, claim) => {
+  if (!volumeReclassReady() || RECLASS.review.config.namespace !== ns || RECLASS.review.config.claim !== claim) return;
+  await RECLASS.apply();
 };
 
 /* The move as it runs: its steps, the copy's progress, and at the end the
@@ -139,5 +147,5 @@ window.reclassRemoveOld = async pv => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  RECLASS_REVIEW
+  RECLASS_HOST, RECLASS
 };
