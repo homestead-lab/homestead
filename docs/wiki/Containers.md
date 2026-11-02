@@ -207,6 +207,29 @@ marked `$patch: delete`. Homestead's own bookkeeping - update history, the
 digests it last ran, restart stamps - is left out; settings you chose, such as
 the group or logo, stay in. Services and volumes are not in it.
 
+The deploy review has the same **YAML for git** block, with **Copy as YAML for
+git** and **Download**:
+
+- **A new app** is the whole app, as one file (`<app>.yaml`): its Deployment,
+  its Service and each volume claim Deploy creates, one document each, separated
+  by `---`. Status and the fields the cluster writes (`uid`, `resourceVersion`,
+  `creationTimestamp`, `managedFields` and the like) are left out, as is
+  Homestead's own bookkeeping; settings you chose stay. The claims keep
+  Homestead's `homestead.io/managed` label, so Homestead still knows them as
+  its volumes once git has applied them.
+- **A container added to an app** is the patch, as in the edit review
+  (`<app>-patch.yaml`): only what adding the container changes, followed by
+  any volume claim it creates.
+
+Under the YAML, a line names what Homestead also adds when it deploys a new
+app, which the file cannot contain, and only when it applies: an init
+container that gives new volumes to the image's user (the review says "may"
+when only the image itself could tell, since a preview does not read its
+registry), the PriorityClass a Critical or Low tier names when the cluster has
+none to use ("may" when its classes could not be read just now: Deploy then
+waits until they can), and the network attachment of an app with a LAN address. Applying
+the file elsewhere doesn't add them.
+
 Secret values are moved out of the YAML, as well as Homestead can tell them:
 a variable it keeps in the app's own Secret (a masked field, a name that looks
 like a password or token, or one the Secret already holds, even under a new
@@ -215,8 +238,16 @@ name) and any value with a password or token in it (`postgres://user:pass@db`,
 Secret, with the `homestead.io/env-secret` annotation a save adds. It is a
 heuristic: check the YAML before committing it to a public repository.
 
-That Secret (`<app>-env`) exists only once Homestead has saved the app, and
-never in git. If Flux applies the app, create the Secret in git first - for
+A name that ends in `PASS` counts as a password too, written as one word
+(`DBPASS`, `ROOTPASS`, `SMTPPASS`), except the ordinary words that end so:
+`BYPASS`, `COMPASS`, `ENCOMPASS`, `OVERPASS`, `UNDERPASS`, `TRESPASS`, `SURPASS`
+and `IMPASS`. An app saved before keeps such a value as it is until its next
+save: Deploy and Edit then keep it in the app's Secret, and the review shows
+the reference.
+
+That Secret (`<app>-env`) exists only once Homestead has saved (or deployed)
+the app, and never in git. Passwords Deploy generates for an App Store app are
+in it too: the YAML names their keys, never their values. If Flux applies the app, create the Secret in git first - for
 example encrypted with SOPS - with the keys the review lists, or save the app
 here first. Otherwise the pod cannot start.
 

@@ -2653,7 +2653,7 @@ async function viewDeploy(pre) {
   } });
   paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
-      UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
+      UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
       {page:true,cancelHtml:UI.button("Cancel", "go('workloads')", { attrs: 'data-dialog-dismiss="true"' })})}</div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
@@ -2815,10 +2815,6 @@ function renderPorts() { const before = DRENDERING; DRENDERING = true; const row
 function renderVols() { const before = DRENDERING; DRENDERING = true; renderVolumeRows(deployVolumePicker(), DCFG.volumes || []); DRENDERING = before; }
 function renderEnv() { const before = DRENDERING; DRENDERING = true; const rows = Object.entries(DCFG.env || {}); $("#d_env").innerHTML = ""; rows.forEach(([k, v]) => addEnv(k, v, (DCFG.env_meta || []).find(m => m.key === k) || {})); DRENDERING = before; }
 window.addPort = addPort; window.addVol = addVol; window.addEnv = addEnv;
-window.previewYaml = async () => {
-  try { const r = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(collect()) });
-    modal("Manifest preview", `<pre>${esc(JSON.stringify(r, null, 2))}</pre>`, true); } catch (e) { toast(e.message, "bad"); }
-};
 let DEPLOY_REVIEW = null;
 let DEPLOY_REVIEW_SEQUENCE = 0;
 let DEPLOY_SUBMITTING = false;
@@ -2951,8 +2947,8 @@ window.doDeploy = async () => {
       ${deployCapacityHtml(plan.capacity)}
       ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
       ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
-      <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}</div>`, true);
+      ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}</div>
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {

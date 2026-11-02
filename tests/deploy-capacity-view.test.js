@@ -21,7 +21,7 @@ function setup(capacity) {
     volumeListIssue: () => "", closeModal() {}, go() {} };
   vm.createContext(context); require("./helpers/core-text")(context);
   context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
-  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
+  for (const file of ["ui.js", "gitops.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), context);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
   context.collect = () => config;
   return { context, fields, sent, notices, html: () => html, setConfig: c => { config = { ...config, ...c }; } };

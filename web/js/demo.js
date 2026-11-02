@@ -94,6 +94,33 @@
         "harvester-node2": [nic("enp1s0", "mgmt"), nic("enp2s0", "mgmt"), nic("enp4s0", "data", "down"), nic("enp5s0")],
         "harvester-node3": [nic("ens5", "mgmt"), nic("ens6", "mgmt"), nic("ens7"), nic("ens8", "", "up", 1000)] } };
   }
+  // Deploy's YAML for git (#920): a new app as its Deployment, Service and a
+  // claim; a container added to an app as the patch. The secret is named only.
+  function demoDeployYaml(body, app, container, joining) {
+    const ns = body.namespace || "lab", image = body.image || "example/app:1";
+    const env = "        env:\n        - name: ADMIN_PASSWORD\n          valueFrom:\n            secretKeyRef:\n" +
+      `              name: ${app}-env\n              key: ${container}.ADMIN_PASSWORD`;
+    const head = `apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: ${app}\n  namespace: ${ns}\n`;
+    const claim = `apiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: ${container}-config\n  namespace: ${ns}\n` +
+      `  labels:\n    homestead.io/managed: "true"\nspec:\n  accessModes:\n  - ReadWriteOnce\n  storageClassName: longhorn-r2\n` +
+      "  resources:\n    requests:\n      storage: 5Gi\n";
+    const secret = { name: `${app}-env`, keys: [`${container}.ADMIN_PASSWORD`] };
+    // As the server says it: a non-root user the deploy names is sure, root none; one only the
+    // image would name is a "may". A LAN address is sure.
+    const fresh = (body.volumes || []).some(v => v.type === "pvc" && v.create && v.path && !v.read_only);
+    const user = body.run_as_user === "" || body.run_as_user == null ? null : Number(body.run_as_user);
+    const owner = fresh && !body.privileged && !(body.env || {}).PUID && user !== 0;
+    const deploy_adds = joining ? [] : [...(owner ? [{ what: "a volume-owner init container", certain: user !== null }] : []),
+      ...(body.network_mode === "lan" ? [{ what: "a LAN network attachment", certain: true }] : [])];
+    if (joining) return { yaml_file: `${app}-patch.yaml`, secret, deploy_adds, yaml: `${head}  annotations:\n    homestead.io/env-secret: ${app}-env\n` +
+      `spec:\n  template:\n    spec:\n      containers:\n      - name: ${container}\n        image: ${image}\n${env}\n---\n${claim}` };
+    return { yaml_file: `${app}.yaml`, secret, deploy_adds, yaml: `${head}  labels:\n    app: ${app}\n    homestead.io/managed: "true"\n` +
+      `  annotations:\n    homestead.io/env-secret: ${app}-env\nspec:\n  replicas: 1\n  selector:\n    matchLabels:\n      app: ${app}\n` +
+      `  template:\n    metadata:\n      labels:\n        app: ${app}\n    spec:\n      containers:\n      - name: ${container}\n` +
+      `        image: ${image}\n${env}\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: ${app}\n  namespace: ${ns}\n` +
+      `spec:\n  type: LoadBalancer\n  selector:\n    app: ${app}\n  ports:\n  - name: p8080-tcp\n    port: 8080\n    targetPort: 8080\n` +
+      `    protocol: TCP\n---\n${claim}` };
+  }
   function demoPorts() {
     const nic = (name, extra = {}) => ({ name, kind: "nic", link: "up", speed_mbps: 2500, duplex: "full", mtu: 1500, driver: "igc",
       master: "", carries: [], uplink: false, errors: 0, flaps: 0, drops: 0, window_s: 3600, crc: 0, was_mbps: null, bond: null, bond_member: null, ...extra });
@@ -916,7 +943,9 @@
           warnings: joining ? ["Recreate stops old pods before replacements start; every container will be unavailable during the restart"] : [],
           candidates: [...new Set(["harvester-node1", ...(host ? [host] : [])])].map(candidate) },
         capacity_token: "demo-review", impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : workloadName,
-          message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
+          message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." },
+        // YAML for git (#920), as the server writes it: a new app whole, or the patch that adds a container.
+        ...demoDeployYaml(body, joining ? body.target_workload : workloadName, containerName, joining) };
     },
     "/api/vm-disks": vmDisks,
     "/api/vm-disks/import-plan": url => {

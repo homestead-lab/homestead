@@ -17,8 +17,13 @@ import urllib.error
 
 ANNOTATION = "homestead.io/env-secret"
 LABEL = "homestead.io/env-for"
-SECRETISH = re.compile(r"PASSWORD|PASSWD|PASSPHRASE|_PASS$|^PASS$|_PWD$|TOKEN|SECRET|API_?KEY|APIKEY|"
-                       r"PRIVATE_?KEY|ACCESS_?KEY|AUTH_?KEY|PEPPER|SALT|CREDENTIAL", re.I)
+# A name ending in PASS is a password written as one word (DBPASS, ROOTPASS,
+# SMTPPASS), except the ordinary words that end so: BYPASS, COMPASS (and
+# ENCOMPASS), OVERPASS, UNDERPASS, TRESPASS, SURPASS, IMPASS. A saved app
+# changes only at its next save, whose review shows the reference.
+SECRETISH = re.compile(r"PASSWORD|PASSWD|PASSPHRASE|_PASS$|^PASS$|"
+                       r"(?<!BY)(?<!COM)(?<!OVER)(?<!UNDER)(?<!TRES)(?<!SUR)(?<!IM)PASS$|_PWD$|TOKEN|SECRET|"
+                       r"API_?KEY|APIKEY|PRIVATE_?KEY|ACCESS_?KEY|AUTH_?KEY|PEPPER|SALT|CREDENTIAL", re.I)
 KEY = re.compile(r"[^-._a-zA-Z0-9]")
 
 

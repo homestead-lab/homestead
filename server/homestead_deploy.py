@@ -13,7 +13,9 @@ import urllib.request
 
 import homestead_batch_capacity as BATCH_CAPACITY
 import homestead_capacity_review as CAPACITY_REVIEW
+import homestead_claims as CLAIMS
 import homestead_env_secrets as ENVSEC
+import homestead_gitops as GITOPS
 import homestead_lan as LAN
 import homestead_operations as OPS
 import homestead_place as PLACE
@@ -133,21 +135,86 @@ def preview(request):
     b = prepare_deploy_network(b)
     b = apply_deploy_bindings(b)
     b = apply_generated_secrets(b)
+    if b.get("network_mode") == "lan":
+        # The address as Deploy saves it, for the YAML. Not prepare_lan: its
+        # check reads IPAM and the inventory and probes the address, which
+        # Deploy does itself when it runs.
+        b = {**b, "lan": LAN.clean(b.get("lan") or {})}
     if b.get("target_mode") == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
-        dep, svc = MANIFESTS.build_sidecar_deployment(b, current)
+        dep, svc = MANIFESTS.build_sidecar_deployment(b, copy.deepcopy(current))
         return {"deployment": redact_deployment_preview(dep, b), "service": svc,
+                **for_git(b, dep, svc, current),
                 "capacity": capacity, "capacity_token": capacity_token,
                 "app_profile": b.get("app_profile"),
                 "impact": {"mode": "existing", "workload": target,
                            "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
                            "message": "Saving updates the Deployment template and restarts every container in its pods."}}
     dep, svc = MANIFESTS.build_deployment(b)
-    return {"deployment": redact_deployment_preview(dep, b), "service": svc,
+    return {"deployment": redact_deployment_preview(dep, b), "service": svc, **for_git(b, dep, svc),
             "capacity": capacity, "capacity_token": capacity_token,
             "app_profile": b.get("app_profile"),
             "impact": {"mode": "new", "workload": dep["metadata"]["name"],
                        "message": "Creates a new independently managed Deployment."}}
+
+
+def for_git(b, dep, svc, current=None):
+    """What Deploy would create, as YAML for git (#920): a new app whole -
+    its Deployment, Service and each volume claim, one file - and a container
+    added to an app as the patch, as Edit's YAML is (#735), with any claim it
+    creates. Secret values are references to the app's Secret, as a deploy
+    saves them (ENVSEC.as_saved); the Secret is named with its keys only."""
+    ns = b.get("namespace") or DEFAULT_NS
+    masked = {item.get("key") for item in b.get("env_meta") or [] if item.get("masked") and item.get("key")}
+    proposed = copy.deepcopy(dep)
+    claims = [CLAIMS.manifest(ns, c["name"], c["size_gb"], c["storage_class"], c["access_mode"])
+              for c in new_claims(deployment_volumes(b))]
+    extra = [GITOPS.stripped(obj) for obj in (svc, *claims) if obj]
+    if current is None:
+        secret = ENVSEC.as_saved(proposed, dep, masked)
+        return {"yaml": GITOPS.dump_all([GITOPS.stripped(proposed), *extra]), "secret": secret,
+                "yaml_file": f"{dep['metadata']['name']}.yaml", "deploy_adds": deploy_adds(b)}
+    secret = ENVSEC.as_saved(proposed, current, masked, ENVSEC.held(ns, current, kget))
+    patch = GITOPS.document(current, GITOPS.patch(current, proposed))
+    return {"yaml": GITOPS.dump_all([patch, *extra]), "secret": secret,
+            "yaml_file": f"{current['metadata']['name']}-patch.yaml", "deploy_adds": []}
+
+
+def deploy_adds(b):
+    """What a new app's deploy adds when it runs that its YAML cannot hold
+    (run_deploy): the init container that gives new volumes to the image's
+    user (VOLOWNER.prepare), the PriorityClass its tier names when the cluster
+    has none to use (PRIORITY.ensure), and a LAN address's network attachment.
+    Each is {"what", "certain"}: an owner the image alone would name is not
+    read from its registry here, so that one is only "may". [] for none."""
+    adds, maybe = [], False
+    for cfg in (b, *additional_container_configs(b)):
+        asked = []
+        def lookup(image, paths):
+            asked.append(image)
+            return {}
+        if VOLOWNER.prepare(copy.deepcopy(cfg), lookup=lookup).get("volume_owners"):
+            adds = [{"what": "a volume-owner init container", "certain": True}]
+            break
+        maybe = maybe or bool(asked)
+    if not adds and maybe:
+        adds = [{"what": "a volume-owner init container", "certain": False}]
+    tier = MANIFESTS.deploy_tier(b)
+    if tier:
+        lad = PRIORITY.ladder()
+        if lad.get("fallback") and not lad.get("forbidden"):
+            # The read failed: PRIORITY.ensure refuses, and Deploy with it, until it can read them.
+            adds.append({"what": f"a PriorityClass {PRIORITY.TIERS[tier]['name']} if the cluster has none "
+                                 "(its classes could not be read just now; Deploy waits until they can)", "certain": False})
+        else:
+            # Listing forbidden: made by name where missing (_ensure_by_name), as before #429.
+            step = None if lad.get("fallback") else lad.get(tier)
+            name = step["name"] if step else PRIORITY.TIERS[tier]["name"]
+            if lad.get("fallback") or step and step.get("create"):
+                adds.append({"what": f"a PriorityClass {name} if the cluster has none", "certain": True})
+    if b.get("network_mode") == "lan":
+        adds.append({"what": "a LAN network attachment", "certain": True})
+    return adds
 
 
 def run_deploy(b, *, reviewed_current=None):

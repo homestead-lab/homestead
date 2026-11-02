@@ -297,22 +297,10 @@ APP_SETTINGS.bind(lambda: app_settings_payload(), lambda value: save_app_setting
 
 
 # ---------------------------------------------------------------- mutations
-def new_claims(volumes):
-    """The volumes a deploy creates: one per name, however many folders of it
-    are mounted, sized for the largest any of them asks."""
-    claims = {}
-    for v in volumes:
-        if v.get("type") != "pvc" or not v.get("create"):
-            continue
-        name = _dns_name(v.get("source"), "volume name")
-        size = max(1, int(v.get("size_gb") or 5))
-        if name in claims:
-            claims[name]["size_gb"] = max(claims[name]["size_gb"], size)
-            continue
-        claims[name] = {"name": name, "size_gb": size,
-                        "storage_class": v.get("storage_class") or STORAGE_CLASSES.claim_class(),
-                        "access_mode": v.get("access_mode") or "ReadWriteOnce"}
-    return list(claims.values())
+import homestead_claims as CLAIMS
+from homestead_claims import new_claims
+MOVED.update(dict.fromkeys(("new_claims",), CLAIMS))
+CLAIMS.bind(lambda: STORAGE_CLASSES.claim_class())
 
 
 import homestead_share_servers as SHARE_SERVERS
@@ -388,12 +376,8 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=Non
                 f"storage class {sc} creates live-migratable volumes for VM disks, and "
                 "Longhorn cannot mount those into a pod. Shared (ReadWriteMany) storage "
                 f"needs a class without migratable=true — available: {usable}")
-    body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-            "metadata": {"name": name, "namespace": ns, "labels": {NAMES.key("managed"): "true"}},
-            "spec": {"accessModes": [access_mode],
-                     "storageClassName": sc,
-                     "resources": {"requests": {"storage": f"{size_gb}Gi"}}}}
-    return (send or KUBE_HELPERS.ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+    return (send or KUBE_HELPERS.ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims",
+                                        CLAIMS.manifest(ns, name, size_gb, sc, access_mode))
 
 
 # expose a tiny shim module so helper modules can reach raw_get without a cycle
