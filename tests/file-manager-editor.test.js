@@ -20,7 +20,7 @@ async function open() {
     STATE: { data: {} }, monaco,
     $: key => key === "#fm_editor" ? host : key === "#fm_editstate" ? state : { innerHTML: "" },
     $$: () => [], esc: String, icon: () => "", modal() {}, closeModal() {}, toast() {},
-    fmtClock: () => "now", bytesText: n => String(n), UI: { actions: x => x },
+    fmtClock: () => "now", bytesText: n => String(n), UI: { actions: x => x, reviewFlow: () => ({}) },
     ask: async () => false,
     api: async (path, options = {}) => {
       calls.push({ path, body: options.body ? JSON.parse(options.body) : null });

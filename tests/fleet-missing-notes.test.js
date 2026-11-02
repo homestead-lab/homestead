@@ -56,7 +56,7 @@ function architecture() {
   const ctx = {console, Date, Map, Set, Promise, document: {addEventListener() {}}, STATE: {data: {}}, FLEET_LISTS: {},
     toast() {}, $: () => null, location: {href: ""},
     esc: x => String(x).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
-    UI: {callout: (kind, title, body) => `${kind}|${title}|${body}`}};
+    UI: {callout: (kind, title, body) => `${kind}|${title}|${body}`, reviewFlow: () => ({})}};
   ctx.window = ctx;
   vm.createContext(ctx);
   require("./helpers/load-time")(ctx);

@@ -55,6 +55,7 @@ test("each part's Node export names its top-level declarations, and no two parts
   for (const file of PARTS) {
     const ctx = page();
     ctx.module = { exports: {} };
+    ctx.UI = anything();   // a part that builds a UI.reviewFlow while it loads (#909)
     vm.runInContext(text(file), ctx);
     const declared = [...text(file).matchAll(/^(?:async function|function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
     assert.deepEqual(Object.keys(ctx.module.exports), declared, file);
