@@ -286,20 +286,20 @@ async function refresh(force) {
 }
 window.refresh = refresh;
 
-let timer = null;
+/* The main refresh loop is a UI.poll that is not a dialog's (closing one must
+   not stop it). window.__loopTimer is its handle: .stop() ends it. A tab coming
+   back refreshes at once, whatever is open, as UI.poll's own show-read. */
 function startLoop() {
-  clearInterval(timer);
-  clearInterval(window.__loopTimer);
+  window.__loopTimer?.stop?.();
   const s = Math.max(5, +SET.refresh || 15);
-  timer = setInterval(() => {
-    if (document.hidden) return;                       // tab in background
-    if (!$("#modal").classList.contains("hidden")) return; // modal open
-    if (STATE.settingsDirty?.size) return;              // settings being edited
-    refresh();
-  }, s * 1000);
-  window.__loopTimer = timer;
+  window.__loopTimer = UI.poll(async (signal, why) => {
+    if (why !== "show") {
+      if (!$("#modal").classList.contains("hidden")) return; // modal open
+      if (STATE.settingsDirty?.size) return;              // settings being edited
+    }
+    await refresh();       // false means "skipped", which must not end the poll
+  }, s * 1000, { later: true, dialog: false });
 }
-document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
 
 /* ---------------- nav ---------------- */
 $$("#nav a, #bottombar a[data-view]").forEach(a => a.onclick = e => { e.preventDefault(); go(a.dataset.view); });

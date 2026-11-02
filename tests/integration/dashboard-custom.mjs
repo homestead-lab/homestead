@@ -11,7 +11,7 @@ try{for(const theme of ['dark','light']){
  // Exercise srcdoc with Homestead's production parent policy too.
  await page.route(`${base}/?demo=1`,async route=>{const response=await route.fetch();await route.fulfill({response,headers:{...response.headers(),'content-security-policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: https:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"}});});
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="compute"]').waitFor();
- await page.evaluate(theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();},theme);
+ await page.evaluate(theme=>{window.__loopTimer?.stop();SET.theme=theme;applySettings();},theme);
  await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
  await page.getByRole('button',{name:'Add Custom text / HTML',exact:true}).click();
  await page.getByLabel('Custom widget title',{exact:true}).fill('My service notes');

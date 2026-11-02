@@ -6,7 +6,7 @@ await mkdir(out,{recursive:true});const browser=await chromium.launch({headless:
 try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="compute"]').waitFor();
- await page.evaluate(async theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();await go('deploy');},theme);
+ await page.evaluate(async theme=>{window.__loopTimer?.stop();SET.theme=theme;applySettings();await go('deploy');},theme);
  const select=async key=>width>900?page.getByRole('tab',{name:({basics:'Basics',hardware:'Hardware and access',environment:'Environment values',storage:'Storage',placement:'Placement',address:'Address',monitoring:'Monitoring',summary:'Summary'})[key],exact:true}).click():page.locator('#containerDeploy_section').selectOption(key);
  const shown=()=>page.locator('#containerDeploy>.stepper-pane:visible').getAttribute('data-key');
  // (a) The same sections as Edit, in the same order, with Summary last (#544).

@@ -7,7 +7,7 @@ try{for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(theme=>{
-  clearInterval(window.__loopTimer);SET.theme=theme;applySettings();const original=window.api;
+  window.__loopTimer?.stop();SET.theme=theme;applySettings();const original=window.api;
   window.testLayout={layout:{version:1,items:[{id:'compute',width:4,height:0},{id:'containers',width:4,height:240},{id:'portal',width:4,height:240}]},revision:'one'};
   window.api=async(path,opts)=>{
    if(path==='/api/auth/preferences/dashboard'){if(opts?.method==='POST'){testLayout={layout:JSON.parse(opts.body).layout,revision:'two'};}return structuredClone(testLayout);}

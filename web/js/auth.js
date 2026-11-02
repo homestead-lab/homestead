@@ -204,8 +204,8 @@ function stopAuthenticatedWork() {
   authGeneration++;
   if (ME) { lapsedUser = ME; lapsedRole = ROLE; }
   ME = null; ROLE = null;
-  clearInterval(window.__loopTimer);
-  clearInterval(window.__imageUpdateLoop);
+  window.__loopTimer?.stop?.();
+  window.__imageUpdateLoop?.stop?.();
   clearTimeout(window.__imageUpdateStart);
   clearTimeout(window.__operationTimer);
 }

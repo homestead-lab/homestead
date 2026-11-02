@@ -212,12 +212,12 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
 }
 window.loadImageUpdates = loadImageUpdates;
 window.startUpdateChecks = () => {
-  clearInterval(window.__imageUpdateLoop);
+  window.__imageUpdateLoop?.stop?.();
   clearTimeout(window.__imageUpdateStart);
   window.__imageUpdateStart = setTimeout(() => loadImageUpdates(false, false), 3500);
-  window.__imageUpdateLoop = setInterval(() => {
-    if (!document.hidden) loadImageUpdates(false, false);
-  }, 15 * 60 * 1000);
+  // Every 15 minutes; a tab coming back is no reason to ask the registries again.
+  window.__imageUpdateLoop = UI.poll(async () => { await loadImageUpdates(false, false); },
+    15 * 60 * 1000, { later: true, dialog: false, readOnShow: false });
 };
 
 /* The release an update moves to: 2.8.215 → 2.8.217, or a new build of

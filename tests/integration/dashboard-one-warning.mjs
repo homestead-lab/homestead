@@ -11,7 +11,7 @@ try{for(const width of [1440,390]){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1&demo-scenario=critical`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(async()=>{
-  clearInterval(window.__loopTimer);const original=window.api;
+  window.__loopTimer?.stop();const original=window.api;
   window.api=async(path,opts)=>{
    if(path==='/api/history'||path.startsWith('/api/history/long'))throw new Error('history store unreachable');
    if(path==='/api/auth/preferences/dashboard')throw new Error('preferences unreachable');

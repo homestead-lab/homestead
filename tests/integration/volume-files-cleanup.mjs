@@ -11,7 +11,7 @@ try {
     page.on('pageerror', error=>errors.push(error.message));
     await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(()=>{
-      clearInterval(window.__loopTimer);
+      window.__loopTimer?.stop();
       window.filesRequests=[];
       const original=window.api;
       window.api=async(path, options)=>{

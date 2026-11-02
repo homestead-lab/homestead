@@ -611,6 +611,7 @@ function closeModal(updateRoute = true) {
   if (window.fileManagerDismiss) window.fileManagerDismiss();
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
+  if (window.vmConsoleDismiss) window.vmConsoleDismiss();
   window.__modalGuard = null;
   MODAL_EDITS = new Map();
   MODAL_STACK.length = 0;

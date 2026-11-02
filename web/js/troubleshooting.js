@@ -115,6 +115,7 @@
     }, 300);
   }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "aria-invalid", "aria-busy", "disabled"] });
 
+  // Not a read (it flushes the recorder's own notes and repaints its banner), so not a UI.poll.
   setInterval(() => {
     if (!window.can?.("admin")) {
       if (active) { active = null; queue = []; interrupted = ""; try { sessionStorage.removeItem(storeKey); } catch (_) {} banner(); }

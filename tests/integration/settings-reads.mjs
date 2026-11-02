@@ -33,7 +33,7 @@ try {
   await page.goto(`${base}/?demo=1`, {waitUntil: "load"});
   await page.waitForSelector(".dashboard-widget");
   await page.evaluate(() => {
-    clearInterval(window.__loopTimer);  // only Settings' own reads are counted
+    window.__loopTimer?.stop();  // only Settings' own reads are counted
     window.__reads = [];
     window.__pending = [];  // reads not yet answered, with the page they belong to
     const real = window.api;

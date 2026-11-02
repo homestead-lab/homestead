@@ -10,7 +10,7 @@ try{for(const width of [390,1440]){
  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(()=>{
-  clearInterval(window.__loopTimer);
+  window.__loopTimer?.stop();
   const host=document.createElement('div');host.id='uiTableCheck';host.style.cssText='padding:16px';
   host.innerHTML=UI.table([{label:'Host'},{label:'State'},{label:'Memory'},{label:'Note'},{label:'Pool'}],[
    ['host-a','Ready','12 GiB','Its last restart was asked for by the scheduled update window',''],

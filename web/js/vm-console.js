@@ -5,7 +5,7 @@
    port in the same terminal view as container consoles - the one to use for
    a VM that boots without a display, or when the screen is stuck. */
 
-const VMC = { rfb: null, socket: null, watch: 0, ns: "", name: "", kind: "vnc", keyboard: false };
+const VMC = { rfb: null, socket: null, ns: "", name: "", kind: "vnc", keyboard: false };
 // A phone or tablet: its on-screen keyboard only opens for a text field.
 const VMC_TOUCH = () => !!window.matchMedia?.("(pointer: coarse)").matches;
 
@@ -19,6 +19,8 @@ function vmConsoleStop() {
   if (VMC.socket) { try { VMC.socket.close(); } catch (e) { /* already gone */ } VMC.socket = null; }
   if (window.__consoleSocket && window.__consoleSocket === VMC.serial) window.__consoleSocket = null;
 }
+// core.js closeModal() calls this when any dialog closes: the console's session ends with it.
+window.vmConsoleDismiss = () => { if (VMC.rfb || VMC.socket) vmConsoleStop(); };
 
 /* A VM with a GPU passed through and no virtual display adapter draws on
    the GPU's own outputs: the screen here stays black, so it says why. */
@@ -70,9 +72,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
         <button class="btn" onclick="consoleSend()">Send</button></div>`}`, true);
   // Keys typed into the VM are not edits to this dialog: closing it asks nothing.
   window.__modalGuard = () => "";
-  clearInterval(VMC.watch);
-  // Closing the dialog ends the session; nothing else would.
-  VMC.watch = setInterval(() => { if ($("#modal").classList.contains("hidden")) { clearInterval(VMC.watch); vmConsoleStop(); } }, 1000);
+  // Closing the dialog ends the session (closeModal calls vmConsoleDismiss); nothing else would.
   if (kind === "vnc") vmConsoleScreen(); else vmConsoleSerial();
 };
 

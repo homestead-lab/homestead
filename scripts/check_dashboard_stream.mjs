@@ -14,7 +14,7 @@ try {
     await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
     await page.locator("#historyCard .spark").first().waitFor();
     await page.evaluate(async theme=>{
-      clearInterval(window.__loopTimer);SET.theme=theme;applySettings();
+      window.__loopTimer?.stop();SET.theme=theme;applySettings();
       window.streamSample=0;window.historySize=48;
       const original=window.fetch;
       window.fetch=async(...args)=>{
@@ -81,7 +81,16 @@ try {
       SET.refresh=5;startLoop();
     });
     await page.waitForFunction(()=>streamRefs.path.getAttribute("d")!==window.streamSettled,null,{timeout:9000});
-    await page.evaluate(()=>clearInterval(window.__loopTimer));
+    await page.evaluate(()=>window.__loopTimer?.stop());
+    if(width===1440&&theme==="dark"){
+      // The handle must really stop the loop (UI.poll, #909): no tick in more than a full 5 s interval, nor on a tab coming back.
+      await page.evaluate(()=>{window.__ticks=0;const real=window.refresh;window.refresh=(...args)=>{window.__ticks++;return real(...args);};window.__realRefresh=real;});
+      await page.waitForTimeout(5600);
+      await page.evaluate(()=>{document.dispatchEvent(new Event("visibilitychange"));});
+      await page.waitForTimeout(300);
+      assert.equal(await page.evaluate(()=>window.__ticks),0,"a stopped main loop refreshes nothing");
+      await page.evaluate(()=>{window.refresh=window.__realRefresh;});
+    }
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>STATE.busy),false,"saved history must not keep the live poll busy");
     assert.notEqual(await page.evaluate(()=>streamRefs.path.getAttribute("d")),settled,"live charts update while saved history is stalled");

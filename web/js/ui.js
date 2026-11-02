@@ -451,7 +451,10 @@ const UI = (() => {
      AbortSignal to pass to api(); returning false ends the poll. Closing the
      dialog stops its polls and cancels the read still running (stopPolls,
      from closeModal); `dialog: false` is for a poll that is not a dialog's.
-     `later` waits `ms` before the first read.
+     `later` waits `ms` before the first read. The read is also told why it
+     runs, as its second argument: "start", "tick", "show" (the tab came
+     back) or "now". `readOnShow: false` reads nothing on the tab coming back
+     and waits a whole `ms` instead (a slow check, not a view).
      A read that never answers (a connection left half open while Homestead
      restarts, say) would hold the poll for good, the dialog frozen on its
      last answer. So a read is given up after 5 intervals or 30 s, whichever
@@ -460,12 +463,12 @@ const UI = (() => {
      pollCancelled(signal) says the read was cancelled on purpose (the dialog
      closed, another pod picked): its answer or error is not shown. */
   const polls = new Set();
-  function poll(read, ms, { later = false, dialog = true } = {}) {
+  function poll(read, ms, { later = false, dialog = true, readOnShow = true } = {}) {
     const doc = typeof document !== "undefined" ? document : null;
     const hidden = () => doc?.visibilityState === "hidden" || doc?.hidden === true;
     let timer = null, running = null, again = false, stopped = false;
     const wait = () => { clearTimeout(timer); timer = stopped || hidden() ? null : setTimeout(run, ms); };
-    async function run() {
+    async function run(why = "tick") {
       clearTimeout(timer); timer = null;
       if (stopped) return;
       if (running) { again = true; return; }
@@ -481,15 +484,17 @@ const UI = (() => {
         }, Math.max(5 * ms, 30000));
       });
       given.catch(() => { /* raced below */ });
-      try { result = await Promise.race([read(mine.signal), given]); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
+      try { result = await Promise.race([read(mine.signal, why), given]); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
       finally { clearTimeout(limit); }
       if (running === mine) running = null;
       if (stopped) return;
       if (result === false) return handle.stop();
-      if (again) { again = false; return run(); }
+      if (again) { again = false; return run("show"); }
       wait();
     }
-    const shown = () => { if (!hidden()) run(); };
+    // readOnShow: false is for a slow check that a tab coming back is no reason
+    // to repeat: it waits a whole interval from the return instead.
+    const shown = () => { if (hidden()) return; if (readOnShow) run("show"); else if (!running && !timer) wait(); };
     const handle = {
       stop() {
         if (stopped) return;
@@ -499,14 +504,14 @@ const UI = (() => {
         polls.delete(handle);
       },
       // Read now, or straight after the read still running (a new pod picked).
-      now() { run(); },
+      now() { run("now"); },
       // Cancel the read running and read again at once (another pod picked).
       restart() { if (running) { running.abort(); again = true; } else run(); },
       get stopped() { return stopped; },
     };
     doc?.addEventListener?.("visibilitychange", shown);
     if (dialog) polls.add(handle);
-    if (later) wait(); else run();
+    if (later) wait(); else run("start");
     return handle;
   }
   function stopPolls() { [...polls].forEach(p => p.stop()); }

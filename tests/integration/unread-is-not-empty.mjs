@@ -31,7 +31,7 @@ try {
     // Most steps call a page's view directly, so the app still thinks it is on
     // the Dashboard: its refresh tick would repaint the Dashboard over the page
     // a step is reading. The check drives every paint itself.
-    await page.evaluate(() => clearInterval(window.__loopTimer));
+    await page.evaluate(() => window.__loopTimer?.stop());
 
     // Remove a host: unread hosts are not "every host is Ready".
     await page.evaluate(failing, "/api/nodes");
@@ -809,7 +809,7 @@ try {
     await page.evaluate(() => { window.api = window.__realApi; });
     const alerts = await page.evaluate(async () => {
       // The 20-second check is stopped and any read in flight is waited for, so the failing read is this step's own.
-      clearInterval(PWA_ALERTS.timer); await PWA_ALERTS.request;
+      PWA_ALERTS.timer?.stop(); await PWA_ALERTS.request;
       document.body.insertAdjacentHTML("beforeend", '<div id="pwaAlerts"></div>');
       await refreshPwaAlerts(true);
       const real = window.api;
@@ -825,7 +825,7 @@ try {
     // Platform pages, on a cluster that is not Harvester.
     await page.goto(`${base}/?demo=1&platform=k3s`);
     await page.waitForSelector(".dashboard-widget");
-    await page.evaluate(() => clearInterval(window.__loopTimer));
+    await page.evaluate(() => window.__loopTimer?.stop());
 
     // Network overview: unread required components are said, not left out.
     await page.evaluate(failing, "/api/platform/baseline");
