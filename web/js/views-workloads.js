@@ -1234,8 +1234,15 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 /* Balancing hosts, on demand: containers by CPU and memory - each move a
    restart - then volume copies by space - none restart. Each step has its own
    plan, a switch to leave that part out, and a tickbox per container or app
-   that plans it again without it; the review starts what is left. */
+   that plans it again without it; the review starts what is left. A viewer
+   sees the plan read-only (#1084): every switch and tick drawn disabled, and
+   the handlers refuse as well. */
 const BALANCE = {};
+const balanceReadOnly = () => typeof can === "function" && !can("operator");
+// Disabled, and described by the dialog's one line saying who can change it.
+const balanceOff = () => balanceReadOnly() ? ' disabled aria-describedby="balReadOnly"' : "";
+// The lines that tell a person what to do; a viewer gets a plain description.
+const balanceHint = text => `<p class="ui-help">${esc(balanceReadOnly() ? "The plan as Homestead suggests it." : text)}</p>`;
 const balanceReset = () => {
   BALANCE.containers = { on: true, exclude: new Set(), plan: null };
   BALANCE.volumes = { on: true, exclude: new Set(), plan: null, follow: true };
@@ -1247,7 +1254,8 @@ window.balanceHosts = async (start = "containers") => {
     { key: "containers", title: "Containers", html: `<div id="balContainers">${loading("Working out container moves…")}</div>` },
     { key: "volumes", title: "Volume copies", html: `<div id="balVolumes">${loading("Working out volume copy moves…")}</div>` },
     { key: "review", title: "Review", html: '<div id="balReview"></div>' },
-  ], UI.button("Start balancing", "balanceStart()", { kind: "pri", id: "balanceGo", attrs: 'data-need="operator"' })), true);
+  ], UI.button("Start balancing", "balanceStart()", { kind: "pri", id: "balanceGo", attrs: 'data-need="operator"' }),
+  { noticeHtml: balanceReadOnly() ? '<p class="ui-help" id="balReadOnly">Operators can change and apply this plan.</p>' : "" }), true);
   if (start !== "containers") UI.selectSection("balance", start);
   balanceReview();
   await balancePlan("containers");
@@ -1270,9 +1278,9 @@ async function balancePlan(kind) {
   window.applyRole?.();
 }
 
-const balanceSwitch = (kind, b, label) => `<label class="switch balance-switch"><input type="checkbox" ${b.on ? "checked" : ""}
+const balanceSwitch = (kind, b, label) => `<label class="switch balance-switch"><input type="checkbox" ${b.on ? "checked" : ""}${balanceOff()}
   onchange="balanceToggle(${jsq(kind)},this.checked)"> ${esc(label)}</label>`;
-const balanceTick = (kind, id, i, off) => `<label class="rb-app"><input type="checkbox" id="bal_${kind}_${i}" ${off ? "" : "checked"}
+const balanceTick = (kind, id, i, off) => `<label class="rb-app"><input type="checkbox" id="bal_${kind}_${i}" ${off ? "" : "checked"}${balanceOff()}
   onchange="balanceItem(${jsq(kind)},${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`;
 const balanceSkipped = rows => rows.length ? UI.more(`Not moved · ${rows.length}`,
   `<ul class="ui-list">${rows.map(([id, why]) => `<li><span class="mono">${esc(id)}</span>: ${esc(why)}</li>`).join("")}</ul>`) : "";
@@ -1312,7 +1320,7 @@ function balanceContainersHtml(b) {
       : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
     balanceMetrics(plan),
     UI.section("Hosts", hosts),
-    b.on && rows.length ? UI.section(`Containers · ${rows.length}`, '<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>'
+    b.on && rows.length ? UI.section(`Containers · ${rows.length}`, balanceHint("Untick a container to leave it where it is; the moves are worked out again without it.")
       + UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], rows)) : "",
     balanceSkipped((plan.skipped || []).map(s => [s.id, s.why])),
   ].join("");
@@ -1333,7 +1341,7 @@ function balanceVolumesHtml(b) {
   });
   return [
     balanceSwitch("volumes", b, "Balance volume copies"),
-    b.on && balanceMoves("containers").length ? `<label class="switch balance-switch"><input type="checkbox" id="balFollow" ${b.follow ? "checked" : ""}
+    b.on && balanceMoves("containers").length ? `<label class="switch balance-switch"><input type="checkbox" id="balFollow" ${b.follow ? "checked" : ""}${balanceOff()}
       onchange="balanceFollow(this.checked)"> Move a copy of each moved container's volumes to its new host</label>
       <p class="ui-help">So it reads its data locally there. Off, its volumes stay where they are and it reads them over the network.</p>` : "",
     UI.lead(!b.on ? "Volume copies are left where they are."
@@ -1341,7 +1349,7 @@ function balanceVolumesHtml(b) {
       : (plan.closed || []).length ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
       : "The hosts are as even as moving copies can make them."),
     UI.section("Hosts", hosts),
-    b.on && rows.length ? UI.section(`Apps · ${rows.length}`, '<p class="ui-help">Untick an app to leave its volumes where they are; the moves are worked out again without it.</p>'
+    b.on && rows.length ? UI.section(`Apps · ${rows.length}`, balanceHint("Untick an app to leave its volumes where they are; the moves are worked out again without it.")
       + UI.table([{ label: "App" }, { label: "Copies it moves", className: "grow" }], rows)) : "",
     balanceSkipped((plan.skipped || []).map(s => [s.claim, s.why])),
   ].join("");
@@ -1354,22 +1362,24 @@ function balanceReview() {
   const containers = balanceMoves("containers"), volumes = balanceMoves("volumes");
   const pending = ["containers", "volumes"].some(k => BALANCE[k].on && !BALANCE[k].plan);
   pane.innerHTML = pending ? '<div class="empty"><span class="spin2"></span> Waiting for the plans…</div>' : [
-    UI.lead(containers.length || volumes.length ? "Starts what is below, as jobs you can follow and stop in Jobs." : "Nothing to balance with these choices."),
+    UI.lead(!(containers.length || volumes.length) ? "Nothing to balance with these choices."
+      : balanceReadOnly() ? "The plan as Homestead suggests it." : "Starts what is below, as jobs you can follow and stop in Jobs."),
     UI.facts([
       ["Containers", !BALANCE.containers.on ? "left where they are" : containers.length
         ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
       ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
         ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
     containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host within 10 minutes, the job stops there and the rest are not moved; once that container runs, review again to move the rest. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
-    containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now") : "",
+    containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now", { attrs: balanceOff() }) : "",
   ].join("");
   const go = $("#balanceGo");
   if (go) go.disabled = pending || !(containers.length || volumes.length);
 }
 // The volume plan follows the container moves: worked out again when they change.
 const balanceReplanVolumes = () => { BALANCE.volumes.plan = null; balanceReview(); return balancePlan("volumes"); };
-window.balanceFollow = on => { BALANCE.volumes.follow = on; balanceReplanVolumes(); };
+window.balanceFollow = on => { if (balanceReadOnly()) return; BALANCE.volumes.follow = on; balanceReplanVolumes(); };
 window.balanceToggle = (kind, on) => {
+  if (balanceReadOnly()) return;
   BALANCE[kind].on = on;
   const pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");
   if (pane && BALANCE[kind].plan) pane.innerHTML = kind === "containers" ? balanceContainersHtml(BALANCE[kind]) : balanceVolumesHtml(BALANCE[kind]);
@@ -1377,6 +1387,7 @@ window.balanceToggle = (kind, on) => {
   if (kind === "containers") balanceReplanVolumes();
 };
 window.balanceItem = async (kind, id, on) => {
+  if (balanceReadOnly()) return;
   on ? BALANCE[kind].exclude.delete(id) : BALANCE[kind].exclude.add(id);
   BALANCE[kind].plan = null; balanceReview();
   await balancePlan(kind);
