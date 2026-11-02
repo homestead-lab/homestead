@@ -1,0 +1,800 @@
+{
+ "power: gate and send once": [
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "resolve without anything",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "ticked",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "wrong name",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "right name",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   false,
+   0,
+   ""
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "power: lost reply is not retried": [
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "toast",
+   "lost response",
+   "bad"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "mutation: gate and send once": [
+  [
+   "modal",
+   "Inspect VM configuration outcome"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "resolve without anything",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "ticked",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "wrong name",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "right name",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   false,
+   0,
+   ""
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "mutation: lost reply is not retried": [
+  [
+   "modal",
+   "Inspect VM configuration outcome"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "toast",
+   "lost response",
+   "bad"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, keep resources</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      <div class=\"reviewbox\"><b>Resource write receipts and current identities</b><div class=\"small\" style=\"margin-top:10px;overflow-wrap:anywhere\"><b>Secret · lab/&lt;login></b><br>Last write: uncertain · replacement; not adopted<br>Recorded UID: old<br>Current UID: new</div></div>\n      \n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM and what it kept</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new VM change be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "import: gate and send once": [
+  [
+   "modal",
+   "Inspect import"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "resolve without anything",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "ticked",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   false,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "wrong name",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   false,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "right name",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   false,
+   0,
+   ""
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   "<p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "import: lost reply is not retried": [
+  [
+   "modal",
+   "Inspect import"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "toast",
+   "lost response",
+   "bad"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><p class=\"ui-lead\">Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The import outcome is unverified</b><div class=\"ui-callout-body\">A sent request may still finish late. Nothing will be retried, started or deleted.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Resource</th><th class=\"\">Last request</th><th class=\"\">Now</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Resource\">App · &lt;photos></td><td class=\"\" data-label=\"Last request\">Response lost</td><td class=\"\" data-label=\"Now\">identity unproven</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">&lt;photos><br>Recorded UID: unverified<br>Current UID: observed-only</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the retained resources and accept that the old request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Resolve as unknown</button></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "k3s: gate and send once": [
+  [
+   "modal",
+   "Inspect VM configuration outcome"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "state",
+   "resolve without anything",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "state",
+   "ticked",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "state",
+   "wrong name",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "state",
+   "right name",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   false,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "cluster",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   "<p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ]
+ ],
+ "k3s: lost reply is not retried": [
+  [
+   "modal",
+   "Inspect VM configuration outcome"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "cluster",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "toast",
+   "lost response",
+   "bad"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"note bad\">lost response. Nothing was retried. Check the job before opening a new review.</div><p class=\"ui-lead\">Review the planned VMs and retained resources for <b>cluster</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Guest health is unverified</b><div class=\"ui-callout-body\">Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.</div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Retained resources</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"server-1\")\">server-1</a></td><td class=\"\" data-label=\"\">Saved</td><td class=\"\" data-label=\"\">same identity</td></tr><tr><td class=\"\" data-label=\"\">VM · <a onclick=\"vmOpen(\"lab\",\"agent-1\")\">agent-1</a></td><td class=\"\" data-label=\"\">Not sent</td><td class=\"\" data-label=\"\">not found</td></tr></tbody></table></div></section><details class=\"ui-more\" data-disclosure=\"Identity checks and recovery limits\">\n    <summary>Identity checks and recovery limits</summary><div class=\"ui-more-body\"><p>A late effect is possible</p><p style=\"overflow-wrap:anywhere\">server-1<br>Recorded UID: one<br>Current UID: one</p><p style=\"overflow-wrap:anywhere\">agent-1<br>Recorded UID: unverified<br>Current UID: not found</p></div></details><div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">cluster</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"cluster\"\n      data-typed-expect=\"cluster\" oninput=\"powerRecoveryReady()\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"powerRecoveryAck\" onchange=\"powerRecoveryReady()\"><span>I inspected the planned VMs; an earlier request may still finish.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Keep tracking</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"powerRecoveryApply\" onclick=\"powerRecoveryResolve()\" disabled >Stop tracking batch</button></div></div>",
+   true,
+   0,
+   "Review k3s batch"
+  ]
+ ],
+ "blocked, incomplete and failed previews": [
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      <div class=\"note bad\">dispatcher active</div>\n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      \n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "state",
+   "tried",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      <div class=\"note bad\">dispatcher active</div>\n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      \n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<div class=\"note bad\">Recovery review is incomplete. Nothing was resolved.</div><button class=\"btn\" onclick=\"closeModal()\">Close</button>",
+   true,
+   400,
+   ""
+  ],
+  [
+   "state",
+   "tried",
+   "<div class=\"note bad\">Recovery review is incomplete. Nothing was resolved.</div><button class=\"btn\" onclick=\"closeModal()\">Close</button>",
+   true,
+   400,
+   ""
+  ],
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<div class=\"note bad\">Not found</div><button class=\"btn\" onclick=\"closeModal()\">Close</button>",
+   true,
+   400,
+   ""
+  ],
+  [
+   "state",
+   "tried",
+   "<div class=\"note bad\">Not found</div><button class=\"btn\" onclick=\"closeModal()\">Close</button>",
+   true,
+   400,
+   ""
+  ],
+  [
+   "modal",
+   "Inspect VM configuration outcome"
+  ],
+  [
+   "api",
+   "/api/operations/vm-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "no resource data",
+   "<div class=\"note bad\">Resource inspection is incomplete. Nothing was resolved.</div><button class=\"btn\" onclick=\"closeModal()\">Close</button>",
+   true,
+   400,
+   ""
+  ]
+ ],
+ "an older job's reply cannot replace a newer review": [
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "new"
+   }
+  ],
+  [
+   "state",
+   "after the late reply",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/resolve",
+   {
+    "id": "new",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ],
+ "a review does not open while one is being sent": [
+  [
+   "modal",
+   "Inspect VM power outcome"
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/power-recovery/resolve",
+   {
+    "id": "job",
+    "capacity_token": "signed-recovery",
+    "confirm_capacity": true,
+    "confirm": "guest",
+    "acknowledge_unknown": true
+   }
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "job",
+    "status": "failed"
+   }
+  ],
+  [
+   "toast",
+   "Resolved as unknown",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "after",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Resolve tracking, not power</b><p class=\"small\">lab / &lt;guest> · requested restart · uncertain</p>\n        <p class=\"small\">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>\n      \n      \n      <div class=\"reviewbox\"><b>Current observations</b>\n        <p class=\"small\">VM: Running · policy: Manual</p>\n        <p class=\"small\">Instance: Running · Ready: yes · Paused: no</p>\n        <p class=\"small\">Queued power changes: 0 · Original VM: same identity</p>\n        <p class=\"small\" style=\"overflow-wrap:anywhere\">Reviewed VM UID: old<br>Current VM UID: old<br>Current instance UID: new</p></div>\n      <div class=\"note warn small\">A late effect is possible</div>\n      <div class=\"f ui-typed\">\n    <label for=\"powerRecoveryName\">Type <b class=\"mono\">guest</b> to confirm</label>\n    <input id=\"powerRecoveryName\" autocomplete=\"off\" autocapitalize=\"none\" spellcheck=\"false\" placeholder=\"guest\"\n      data-typed-expect=\"guest\" oninput=\"powerRecoveryReady()\"></div>\n        <label class=\"check\"><input id=\"powerRecoveryAck\" type=\"checkbox\" onchange=\"powerRecoveryReady()\"> Record it as unknown: I inspected the VM</label>\n        <p class=\"ui-help\">The old request may still take effect late. Recording it lets a new power action be reviewed.</p>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Keep tracking</button></div><div class=\"ui-actions-end\"><button class=\"btn danger\" id=\"powerRecoveryApply\" disabled onclick=\"powerRecoveryResolve()\">Record unknown outcome</button></div></div></div>",
+   true,
+   0,
+   ""
+  ]
+ ]
+}

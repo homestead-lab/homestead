@@ -410,23 +410,25 @@ window.storageRecoveryApply = async choice => {
   try { await STORAGE_RECOVERY.apply(); } finally { STORAGE_CHOICE = null; }
 };
 
-let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;
-window.powerRecoveryReview = async (id, mutation = false) => {
-  if (POWER_RECOVERY_BUSY) return;
-  POWER_RECOVERY = null;
-  const sequence = ++POWER_RECOVERY_SEQ;
-  const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
-  modal(mutation === "import" ? "Inspect import" : mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking current resources…</div>', true, "operation-review");
-  try {
+/* Inspect an outcome Homestead lost (#909): VM power, VM configuration, an import or a
+   k3s batch. The shared review flow keeps the sequence, the busy flag and the
+   one-shot send; this view keeps its four dialogs and the typed name. */
+const POWER_RECOVERY = UI.reviewFlow({
+  loading: ({mutation}) => modal(mutation === "import" ? "Inspect import" : mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking current resources…</div>', true, "operation-review"),
+  live: () => !!$("#powerRecoveryLoading"),
+  preview: async ({id, mutation}) => {
+    const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
     const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
-    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
     const p = review.plan;
     if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
     if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("Resource inspection is incomplete. Nothing was resolved.");
-    POWER_RECOVERY = {id,...review,endpoint};
+    return {id,...review,endpoint};
+  },
+  render: (review, {mutation}) => {
+    const p = review.plan;
     const observed=p.observed || {}, resource=p.resource || {};
     if (mutation === "import" || p.action === "import-create") {
-      POWER_RECOVERY.importing = true;
+      review.importing = true;
       const kindName = kind => ({PersistentVolumeClaim:"Volume",Deployment:"App",Service:"Network Service",Job:"Copy Job"})[kind] || kind;
       const writeName = value => ({accepted:"Saved",intent:"Sent; no receipt",uncertain:"Response lost",unverified:"Receipt not verified",refused:"Rejected","not dispatched":"Not sent"})[value] || value;
       $("#mbody").innerHTML = UI.lead("Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.") +
@@ -474,34 +476,33 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
-  } catch(error) {
-    if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
-    POWER_RECOVERY=null;
+  },
+  failed: error => {
     $("#mbody").innerHTML=`<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="closeModal()">Close</button>`;
-  }
-};
-window.powerRecoveryReady = () => {
-  const ready=!!(POWER_RECOVERY && !POWER_RECOVERY_BUSY && !POWER_RECOVERY.plan.blocked && $("#powerRecoveryAck")?.checked && (POWER_RECOVERY.importing || typedConfirmMatches("powerRecoveryName")));
-  if ($("#powerRecoveryApply")) $("#powerRecoveryApply").disabled=!ready;
-  return ready;
-};
-window.powerRecoveryResolve = async () => {
-  if (!powerRecoveryReady()) return;
-  const review=POWER_RECOVERY, button=$("#powerRecoveryApply");
-  POWER_RECOVERY=null;POWER_RECOVERY_BUSY=true;button.disabled=true;
-  try {
-    const result=await api(review.endpoint + "/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm_capacity:true,confirm:review.plan.confirm,acknowledge_unknown:true})});
-    if (result.operation) noteOperation(result.operation);
-    toast(result.detail,"ok");closeModal();
-  } catch(error) {
-    if ($("#powerRecoveryApply")===button) {
-      $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. Nothing was retried. Check the job before opening a new review.</div>`);
-      if ($(".modalbox")) $(".modalbox").scrollTop=0;
+  },
+  blocked: review => review.plan.blocked, ack: "powerRecoveryAck", button: "powerRecoveryApply",
+  check: review => !!(review.importing || typedConfirmMatches("powerRecoveryName")),
+  apply: async review => {
+    const button=$("#powerRecoveryApply");
+    button.disabled=true;
+    try {
+      const result=await api(review.endpoint + "/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({id:review.id,capacity_token:review.capacity_token,confirm_capacity:true,confirm:review.plan.confirm,acknowledge_unknown:true})});
+      if (result.operation) noteOperation(result.operation);
+      toast(result.detail,"ok");closeModal();
+    } catch(error) {
+      if ($("#powerRecoveryApply")===button) {
+        $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. Nothing was retried. Check the job before opening a new review.</div>`);
+        if ($(".modalbox")) $(".modalbox").scrollTop=0;
+      }
+      toast(error.message,"bad");
     }
-    toast(error.message,"bad");
-  } finally {POWER_RECOVERY_BUSY=false;refreshOperations(true);}
-};
+  },
+  after: () => refreshOperations(true),
+});
+window.powerRecoveryReview = (id, mutation = false) => POWER_RECOVERY.open({id, mutation});
+window.powerRecoveryReady = () => POWER_RECOVERY.ready();
+window.powerRecoveryResolve = () => POWER_RECOVERY.apply();
 
 /* A disk job whose host was removed (V2 preparation, storage allocation,
    runtime maintenance) can never finish and is never forgotten. The review
