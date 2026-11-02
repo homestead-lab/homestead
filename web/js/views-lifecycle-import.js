@@ -1426,16 +1426,15 @@ window.doImport = async source => {
   await importReview(body);
 };
 
-let IMPORT_REVIEW = null, IMPORT_REVIEW_SEQUENCE = 0;
-window.importReview = async body => {
-  IMPORT_REVIEW = null;
-  const sequence = ++IMPORT_REVIEW_SEQUENCE;
-  const config = JSON.parse(JSON.stringify(body));
-  try {
+/* Review, then import (#909), on the shared review flow: it keeps the sequence, the busy flag and the
+   one-shot send. This view keeps its words. */
+const IMPORT_REVIEW = UI.reviewFlow({
+  preview: async config => {
     const result = await api("/api/import/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(config)});
-    if (sequence !== IMPORT_REVIEW_SEQUENCE) return;
     if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("Import review unavailable; refresh before continuing.");
-    IMPORT_REVIEW = {config, ...result, submitting:false};
+    return {config, ...result};
+  },
+  render: (result, config) => {
     const phaseWarnings = new Map();
     for (const phase of result.phases) {
       const warnings = capacityNotes(phase.capacity).concerns;
@@ -1456,30 +1455,31 @@ window.importReview = async body => {
       ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> Import it anyway, replacing files</label>' : ''}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Import</button>`)}</div>`, true);
-  } catch (e) { toast(e.message, "bad"); }
-};
+  },
+  failed: e => toast(e.message, "bad"),
+  blocked: review => review.capacity.blocked, ack: "importConfirm",
+  apply: async review => {
+    $("#importGo").disabled = true;
+    try {
+      const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+      if (result.operation) window.noteOperation?.(result.operation);
+      toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
+      closeModal(); resetPaint(); viewImport();
+    } catch (e) {
+      // An unknown outcome is never an automatic retry: the flow consumed the review.
+      toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
+      $("#importGo").textContent = "Review again";
+      $("#importGo").disabled = false;
+      $("#importGo").onclick = () => importReview(review.config);
+    }
+  },
+  after: () => window.refreshOperations?.(true),
+});
+window.importReview = body => IMPORT_REVIEW.open(JSON.parse(JSON.stringify(body)));
 window.confirmImport = async () => {
-  const review = IMPORT_REVIEW;
-  if (!review || review.submitting || review.capacity.blocked || !$("#importConfirm")?.checked)
-    return toast("Review and approve the import first", "bad");
-  review.submitting = true;
-  $("#importGo").disabled = true;
-  try {
-    const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
-    if (result.operation) window.noteOperation?.(result.operation);
-    IMPORT_REVIEW = null;
-    toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
-    closeModal(); resetPaint(); viewImport();
-  } catch (e) {
-    IMPORT_REVIEW = null; // An unknown outcome is never an automatic retry.
-    toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
-    $("#importGo").textContent = "Review again";
-    $("#importGo").disabled = false;
-    $("#importGo").onclick = () => importReview(review.config);
-  } finally {
-    window.refreshOperations?.(true);
-  }
+  if (!IMPORT_REVIEW.ready()) return toast("Review and approve the import first", "bad");
+  await IMPORT_REVIEW.apply();
 };
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */

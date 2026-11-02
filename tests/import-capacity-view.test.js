@@ -7,7 +7,7 @@ const vm = require("node:vm");
 function setup({blocked=false, missing=false, fail=false}={}) {
   const calls=[], fields={"#importConfirm":{checked:false}, "#importGo":{}};
   const ctx={console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}}, STATE:{data:{}},
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null}, STATE:{data:{}},
     capacityNotes:plan=>({concerns:plan.warnings||[]}),
     UI:{callout:(tone,title,body)=>`<div role="alert">${title}${body}</div>`,more:(title,body)=>`<details><summary>${title}</summary>${body}</details>`},
     $:key=>fields[key], $$:()=>[], esc:value=>String(value).replaceAll("<","&lt;"),
