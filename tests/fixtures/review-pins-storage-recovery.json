@@ -1,0 +1,300 @@
+{
+ "continueTwice": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Continue copying and checking the data. Apps and VMs remain stopped during the copy.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before you continue</b><div class=\"ui-callout-body\"><ul><li>Memory warning</li></ul></div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>&lt;data></dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>old → new</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Retained</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;app></td><td class=\"\" data-label=\"\">Deployment</td></tr></tbody></table></div><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;copy></td><td class=\"\" data-label=\"\">Confirmed</td><td class=\"\" data-label=\"\">same identity</td></tr></tbody></table></div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Continue move</button></div></div>",
+   false,
+   false
+  ],
+  [
+   "state",
+   "applied without the tick",
+   "<p class=\"ui-lead\">Continue copying and checking the data. Apps and VMs remain stopped during the copy.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before you continue</b><div class=\"ui-callout-body\"><ul><li>Memory warning</li></ul></div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>&lt;data></dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>old → new</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Retained</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;app></td><td class=\"\" data-label=\"\">Deployment</td></tr></tbody></table></div><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;copy></td><td class=\"\" data-label=\"\">Confirmed</td><td class=\"\" data-label=\"\">same identity</td></tr></tbody></table></div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Continue move</button></div></div>",
+   true,
+   true
+  ],
+  [
+   "state",
+   "ticked",
+   "<p class=\"ui-lead\">Continue copying and checking the data. Apps and VMs remain stopped during the copy.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before you continue</b><div class=\"ui-callout-body\"><ul><li>Memory warning</li></ul></div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>&lt;data></dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>old → new</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Retained</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;app></td><td class=\"\" data-label=\"\">Deployment</td></tr></tbody></table></div><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;copy></td><td class=\"\" data-label=\"\">Confirmed</td><td class=\"\" data-label=\"\">same identity</td></tr></tbody></table></div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Continue move</button></div></div>",
+   false,
+   true
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/act",
+   {
+    "id": "job",
+    "action": "continue",
+    "capacity_token": "continue-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<p class=\"ui-lead\">Continue copying and checking the data. Apps and VMs remain stopped during the copy.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before you continue</b><div class=\"ui-callout-body\"><ul><li>Memory warning</li></ul></div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>&lt;data></dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>old → new</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Retained</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;app></td><td class=\"\" data-label=\"\">Deployment</td></tr></tbody></table></div><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;copy></td><td class=\"\" data-label=\"\">Confirmed</td><td class=\"\" data-label=\"\">same identity</td></tr></tbody></table></div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Continue move</button></div></div>",
+   true,
+   true
+  ],
+  [
+   "toast",
+   "Queued",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   null,
+   true,
+   true
+  ]
+ ],
+ "heldRollbackEachWithItsOwnTick": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Retry the held step with fresh safety checks and a new time limit. Nothing that has no confirmed outcome is sent again. Or roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept.</p><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>data</dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>— → —</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Held</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-empty\">Nothing to show.</div><div class=\"ui-empty\">Nothing to show.</div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryRollbackAck\" onchange=\"storageRecoveryReady()\"><span>Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn\" id=\"storageRecoveryRollback\" onclick=\"storageRecoveryApply('rollback')\" disabled >Roll back to the original</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Retry this step</button></div></div>",
+   false,
+   false
+  ],
+  [
+   "state",
+   "rollback with the retry tick",
+   "<p class=\"ui-lead\">Retry the held step with fresh safety checks and a new time limit. Nothing that has no confirmed outcome is sent again. Or roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept.</p><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>data</dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>— → —</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Held</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-empty\">Nothing to show.</div><div class=\"ui-empty\">Nothing to show.</div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryRollbackAck\" onchange=\"storageRecoveryReady()\"><span>Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn\" id=\"storageRecoveryRollback\" onclick=\"storageRecoveryApply('rollback')\" disabled >Roll back to the original</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Retry this step</button></div></div>",
+   false,
+   true
+  ],
+  [
+   "state",
+   "retry with the rollback tick",
+   "<p class=\"ui-lead\">Retry the held step with fresh safety checks and a new time limit. Nothing that has no confirmed outcome is sent again. Or roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept.</p><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>data</dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>— → —</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Held</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-empty\">Nothing to show.</div><div class=\"ui-empty\">Nothing to show.</div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryRollbackAck\" onchange=\"storageRecoveryReady()\"><span>Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button><button type=\"button\" class=\"btn\" id=\"storageRecoveryRollback\" onclick=\"storageRecoveryApply('rollback')\" disabled >Roll back to the original</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Retry this step</button></div></div>",
+   true,
+   false
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/act",
+   {
+    "id": "job",
+    "action": "rollback",
+    "capacity_token": "rollback-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Queued",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "rolled back",
+   null,
+   true,
+   true
+  ]
+ ],
+ "incompleteAndFailedPreviews": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "incomplete",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review unavailable</b><div class=\"ui-callout-body\">The review is incomplete. Refresh it before taking action.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>",
+   false,
+   false
+  ],
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review unavailable</b><div class=\"ui-callout-body\">Not found</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>",
+   false,
+   false
+  ]
+ ],
+ "lostReplyShowsTheJobAndNeverRetries": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/act",
+   {
+    "id": "job",
+    "action": "continue",
+    "capacity_token": "continue-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Check the job before trying again</b><div class=\"ui-callout-body\">Lost response Nothing was retried automatically.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button></div></div>",
+   true,
+   true
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Check the job before trying again</b><div class=\"ui-callout-body\">Lost response Nothing was retried automatically.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"job\")\" >Refresh review</button></div></div>",
+   true,
+   true
+  ]
+ ],
+ "oldPreviewCannotReplaceANewerOne": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "new"
+   }
+  ],
+  [
+   "state",
+   "after the late reply",
+   "<p class=\"ui-lead\">Continue copying and checking the data. Apps and VMs remain stopped during the copy.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before you continue</b><div class=\"ui-callout-body\"><ul><li>Memory warning</li></ul></div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Volume</dt><dd>&lt;data></dd></div><div><dt>Stage</dt><dd>Copying and checking</dd></div><div><dt>Storage</dt><dd>old → new</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Current position</h4></header>\n    <p>Retained</p></section><details class=\"ui-more\" data-disclosure=\"Apps and VMs and retained resources\">\n    <summary>Apps and VMs and retained resources</summary><div class=\"ui-more-body\"><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;app></td><td class=\"\" data-label=\"\">Deployment</td></tr></tbody></table></div><div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">&lt;copy></td><td class=\"\" data-label=\"\">Confirmed</td><td class=\"\" data-label=\"\">same identity</td></tr></tbody></table></div></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"storageRecoveryAck\" onchange=\"storageRecoveryReady()\"><span>Continue despite the warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"storageRecoveryReview(\"new\")\" >Refresh review</button><button type=\"button\" class=\"btn pri\" id=\"storageRecoveryApply\" onclick=\"storageRecoveryApply()\" disabled >Continue move</button></div></div>",
+   false,
+   false
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/act",
+   {
+    "id": "new",
+    "action": "continue",
+    "capacity_token": "continue-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Queued",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   null,
+   true,
+   true
+  ]
+ ],
+ "anotherDialogOpensWhileSending": [
+  [
+   "modal",
+   "Review storage move"
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/preview",
+   {
+    "id": "job"
+   }
+  ],
+  [
+   "api",
+   "/api/operations/storage-recovery/act",
+   {
+    "id": "job",
+    "action": "continue",
+    "capacity_token": "continue-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "modal",
+   "Another"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "after",
+   "",
+   true,
+   true
+  ]
+ ]
+}

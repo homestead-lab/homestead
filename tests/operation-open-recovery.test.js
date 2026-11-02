@@ -6,6 +6,8 @@ function setup(operations = []) {
     $: key => fields[key], HomesteadRouter: {resolve: () => ({view: "vms"})},
     go: (...args) => calls.push(["navigate", ...args]), setTimeout: fn => fn(), clearTimeout() {}};
   ctx.window = ctx; vm.createContext(ctx);
+  // operations.js builds its review flows from UI, which the page loads first.
+  vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/operations.js", "utf8"), ctx);
   ctx.renderOperations = () => calls.push(["render"]);
   ctx.powerRecoveryReview = (...args) => calls.push(["vm-review", ...args]);

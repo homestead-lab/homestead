@@ -314,17 +314,17 @@ window.resumeOperation = async id => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-let STORAGE_RECOVERY = null, STORAGE_RECOVERY_SEQ = 0, STORAGE_RECOVERY_BUSY = false;
-window.storageRecoveryReview = async id => {
-  if (STORAGE_RECOVERY_BUSY) return;
-  window.__reclassTimer?.stop?.(); window.__reclassWatchToken = null;
-  STORAGE_RECOVERY = null;
-  const sequence = ++STORAGE_RECOVERY_SEQ;
-  modal("Review storage move", '<div id="storageRecoveryContent"><div class="empty"><span class="spin2"></span>Checking this move…</div></div>', true, "operation-review");
-  const host = $("#storageRecoveryContent");
-  try {
+/* Review a stopped storage move (#909): the shared review flow keeps the sequence,
+   the one-shot send and the busy flag. This view keeps its words, and its two
+   acknowledgements: the way forward's, and roll back's beside it. */
+const STORAGE_RECOVERY = UI.reviewFlow({
+  loading: () => {
+    window.__reclassTimer?.stop?.(); window.__reclassWatchToken = null;
+    modal("Review storage move", '<div id="storageRecoveryContent"><div class="empty"><span class="spin2"></span>Checking this move…</div></div>', true, "operation-review");
+  },
+  live: () => !!$("#storageRecoveryContent"),
+  preview: async id => {
     const response = await api("/api/operations/storage-recovery/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
-    if (sequence !== STORAGE_RECOVERY_SEQ || $("#storageRecoveryContent") !== host) return;
     const p = response.plan, tokens = response.tokens || {};
     if (!p || p.id !== id || typeof p.can_continue !== "boolean" || typeof p.can_pause !== "boolean" ||
         !Array.isArray(p.resources) || !Array.isArray(p.warnings) || !Array.isArray(p.blockers) ||
@@ -332,8 +332,13 @@ window.storageRecoveryReview = async id => {
     // Forward first (finish a verified copy, or retry the held step), then roll back.
     const forward = ["finish","retry","continue"].find(a => p["can_" + a] === true) || null;
     const action = forward || (p.can_rollback === true ? "rollback" : p.can_pause ? "pause" : null);
+    return {id, action, tokens, plan: p, forward};
+  },
+  render: (review, id) => {
+    const host = $("#storageRecoveryContent");
+    review.host = host;
+    const {plan: p, tokens, action, forward} = review;
     const rollback = !!forward && p.can_rollback === true;
-    STORAGE_RECOVERY = {id, action, tokens, host};
     const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
     const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
       copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
@@ -362,39 +367,47 @@ window.storageRecoveryReview = async id => {
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
         (rollback ? UI.button(labels.rollback, "storageRecoveryApply('rollback')", {id:"storageRecoveryRollback",disabled:true}) : "") +
         (action ? UI.button(labels[action], "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
-  } catch (error) {
-    if (sequence === STORAGE_RECOVERY_SEQ && $("#storageRecoveryContent") === host)
-      host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
-  }
-};
+  },
+  failed: error => {
+    const host = $("#storageRecoveryContent");
+    host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
+  },
+  // Nothing to send when no action is open; the acknowledgements and buttons are
+  // set by storageRecoveryReady(), which knows roll back has its own.
+  blocked: review => !review.action,
+  apply: async review => {
+    const pending = {...review, action: STORAGE_CHOICE || review.action};
+    storageRecoveryReady();
+    try {
+      const result = await api("/api/operations/storage-recovery/act", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        id:pending.id, action:pending.action, capacity_token:pending.tokens[pending.action], confirm_capacity:true})});
+      if ($("#storageRecoveryContent") !== pending.host) return;
+      toast(result.detail,"ok"); closeModal();
+    } catch (error) {
+      if ($("#storageRecoveryContent") === pending.host)
+        pending.host.innerHTML = UI.callout("warn","Check the job before trying again",`${esc(error.message)} Nothing was retried automatically.`) +
+          UI.actions(UI.cancel("Close") + UI.button("Refresh review",`storageRecoveryReview(${jsArg(pending.id)})`));
+    }
+  },
+  after: () => refreshOperations(true),
+});
+let STORAGE_CHOICE = null;
+window.storageRecoveryReview = id => STORAGE_RECOVERY.open(id);
 // Each action has its own acknowledgement: the primary one, and roll back's
 // when it is offered beside a way forward.
 window.storageRecoveryReady = (choice = null) => {
-  const open = !!(STORAGE_RECOVERY?.action && !STORAGE_RECOVERY_BUSY);
+  const open = !!(STORAGE_RECOVERY.review?.action && !STORAGE_RECOVERY.busy);
   const primary = open && !!$("#storageRecoveryAck")?.checked;
   const rollback = open && !!$("#storageRecoveryRollbackAck")?.checked;
   if ($("#storageRecoveryApply")) $("#storageRecoveryApply").disabled = !primary;
   if ($("#storageRecoveryRollback")) $("#storageRecoveryRollback").disabled = !rollback;
-  return choice && choice !== STORAGE_RECOVERY?.action ? rollback && choice === "rollback" : primary;
+  return choice && choice !== STORAGE_RECOVERY.review?.action ? rollback && choice === "rollback" : primary;
 };
 window.storageRecoveryApply = async choice => {
   if (!storageRecoveryReady(choice)) return;
-  const pending = {...STORAGE_RECOVERY};
-  if (choice) {
-    if (!pending.tokens[choice]) return;
-    pending.action = choice;
-  }
-  STORAGE_RECOVERY = null; STORAGE_RECOVERY_BUSY = true; storageRecoveryReady();
-  try {
-    const result = await api("/api/operations/storage-recovery/act", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      id:pending.id, action:pending.action, capacity_token:pending.tokens[pending.action], confirm_capacity:true})});
-    if ($("#storageRecoveryContent") !== pending.host) return;
-    toast(result.detail,"ok"); closeModal();
-  } catch (error) {
-    if ($("#storageRecoveryContent") === pending.host)
-      pending.host.innerHTML = UI.callout("warn","Check the job before trying again",`${esc(error.message)} Nothing was retried automatically.`) +
-        UI.actions(UI.cancel("Close") + UI.button("Refresh review",`storageRecoveryReview(${jsArg(pending.id)})`));
-  } finally { STORAGE_RECOVERY_BUSY = false; refreshOperations(true); }
+  if (choice && !STORAGE_RECOVERY.review.tokens[choice]) return;
+  STORAGE_CHOICE = choice || null;
+  try { await STORAGE_RECOVERY.apply(); } finally { STORAGE_CHOICE = null; }
 };
 
 let POWER_RECOVERY = null, POWER_RECOVERY_SEQ = 0, POWER_RECOVERY_BUSY = false;
