@@ -139,7 +139,7 @@ test("the Add server dialog asks the type first and starts on Proxmox from the V
 
 test("a refused Add server can be corrected and saved again; the name is sent lower case", async () => {
   const src = require("./helpers/lifecycle-source")();
-  const code = between(src, "window.doSrcAdd = ", "let SOURCE_KEY_REVIEW");
+  const code = between(src, "window.doSrcAdd = ", "/* Review, then trust a source's SSH host key");
   const fields = { "#sc_save": { disabled: false }, "#sc_name": { value: " Proxmox " }, "#sc_host": { value: "192.0.2.10" },
     "#sc_user": { value: "root" }, "#sc_pass": { value: "pw" }, "#sc_kind": { value: "proxmox" }, "#sc_path": { value: "" }, "#sc_port": { value: "22" } };
   const sent = [], toasts = [];

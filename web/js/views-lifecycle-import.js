@@ -259,17 +259,17 @@ window.doSrcAdd = async () => {
     else toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad");
   }
 };
-let SOURCE_KEY_REVIEW = null, SOURCE_KEY_SEQUENCE = 0, SOURCE_KEY_BUSY = false;
-window.srcVerify = async name => {
-  if (SOURCE_KEY_BUSY) return;
-  SOURCE_KEY_REVIEW = null;
-  const sequence = ++SOURCE_KEY_SEQUENCE;
-  modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review");
-  try {
+/* Review, then trust a source's SSH host key (#909), on the shared review flow: it keeps the sequence, the
+   busy flag and the one-shot send. This view keeps its words. */
+const SOURCE_KEY = UI.reviewFlow({
+  loading: name => modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review"),
+  live: () => !!$("#sourceKeyLoading"),
+  preview: async name => {
     const review = await api("/api/sources/scan", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
-    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
     if (!review.capacity_token || !review.key || !review.fingerprint || review.name !== name) throw new Error("Fingerprint review is incomplete. Nothing was trusted.");
-    SOURCE_KEY_REVIEW = review;
+    return review;
+  },
+  render: review => {
     const file = {"ssh-ed25519":"ed25519","ecdsa-sha2-nistp256":"ecdsa","ssh-rsa":"rsa"}[review.algorithm];
     $("#mbody").innerHTML = UI.lead("Compare this fingerprint with the source host's own console before allowing Homestead to log in.") +
       UI.callout(review.changed ? "bad" : "warn", review.changed ? "The source key changed" : "A scan is not proof of identity",
@@ -280,30 +280,28 @@ window.srcVerify = async name => {
       UI.more("What trusting changes", `<p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p>${review.previous ? `<p>Previously pinned: <span class="mono" style="overflow-wrap:anywhere">${esc(review.previous)}</span></p>` : ""}`) +
       UI.ack("sourceKeyAck", "I compared this fingerprint with the source host's console.", {onchange:"sourceKeyReady()"}) +
       UI.actions(UI.cancel("Not now") + UI.button("Trust this source", "sourceKeyTrust()", {kind:"pri",id:"sourceKeyApply",disabled:true}));
-  } catch(e) {
-    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
-    SOURCE_KEY_REVIEW = null;
-    $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close"));
-  }
-};
-window.sourceKeyReady = () => {
-  const ready = !!(SOURCE_KEY_REVIEW && !SOURCE_KEY_BUSY && $("#sourceKeyAck")?.checked);
-  if ($("#sourceKeyApply")) $("#sourceKeyApply").disabled = !ready;
-  return ready;
-};
+  },
+  failed: e => { $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close")); },
+  ack: "sourceKeyAck", button: "sourceKeyApply",
+  apply: async review => {
+    const button = $("#sourceKeyApply");
+    button.disabled = true;
+    try {
+      await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
+      toast("Source key pinned", "ok");
+      if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
+    } catch(e) {
+      if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
+      else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
+    }
+  },
+});
+window.srcVerify = name => SOURCE_KEY.open(name);
+window.sourceKeyReady = () => SOURCE_KEY.ready();
 window.sourceKeyTrust = async () => {
   if (!sourceKeyReady()) return;
-  const review = SOURCE_KEY_REVIEW, button = $("#sourceKeyApply");
-  SOURCE_KEY_REVIEW = null; SOURCE_KEY_BUSY = true; $("#sourceKeyApply").disabled = true;
-  try {
-    await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
-    toast("Source key pinned", "ok");
-    if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
-  } catch(e) {
-    if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
-    else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
-  } finally { SOURCE_KEY_BUSY = false; }
+  await SOURCE_KEY.apply();
 };
 window.srcDel = async name => {
   if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
@@ -1552,10 +1550,10 @@ window.imStorageAnyway = () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  importProgressCell, viewImport, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps, SOURCE_LEADS,
-  SOURCE_KEY_REVIEW, importMappingRows, importFolderName, importMappingRow, importVolumeRow, importMapPicture,
-  importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS, clusterVolumesHtml,
-  MOVE_PLAN_SEQUENCE, MOVE_VOLUMES, MOVE_TRANSFER_MODE, MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, moveBody,
-  moveDevicesTable, MOVE_VOLUME_ACTIONS, moveVolumesTable, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves,
-  IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
+  importProgressCell, viewImport, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps,
+  SOURCE_LEADS, SOURCE_KEY, importMappingRows, importFolderName, importMappingRow, importVolumeRow,
+  importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS,
+  clusterVolumesHtml, MOVE_PLAN_SEQUENCE, MOVE_VOLUMES, MOVE_TRANSFER_MODE, MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE,
+  moveBody, moveDevicesTable, MOVE_VOLUME_ACTIONS, moveVolumesTable, MOVE_PHASE_WORDS, movesHtml,
+  movesUnreadHtml, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };

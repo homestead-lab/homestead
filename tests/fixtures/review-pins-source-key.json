@@ -1,0 +1,352 @@
+{
+ "gateAndTrustOnce": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>A scan is not proof of identity</b><div class=\"ui-callout-body\">Use the host's physical console or an already trusted management session, not this new SSH connection.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ssh-ed25519</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true
+  ],
+  [
+   "state",
+   "without the tick",
+   true
+  ],
+  [
+   "state",
+   "ticked",
+   false
+  ],
+  [
+   "api",
+   "/api/sources/trust",
+   {
+    "name": "tower",
+    "key": "public-key",
+    "capacity_token": "signed",
+    "confirm_fingerprint": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   true
+  ],
+  [
+   "toast",
+   "Source key pinned",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "state",
+   "sent",
+   true
+  ]
+ ],
+ "changedKey": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>The source key changed</b><div class=\"ui-callout-body\">A reinstall or an unexpected host can cause this. Confirm the change independently; do not trust it just to clear an error.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ecdsa-sha2-nistp256</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ecdsa_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ]
+ ],
+ "incompleteAndFailedScans": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Source not verified</b><div class=\"ui-callout-body\">Fingerprint review is incomplete. Nothing was trusted.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true
+  ],
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Source not verified</b><div class=\"ui-callout-body\">Fingerprint review is incomplete. Nothing was trusted.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true
+  ],
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Source not verified</b><div class=\"ui-callout-body\">no route</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true
+  ]
+ ],
+ "lostReplyIsNotRetried": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>A scan is not proof of identity</b><div class=\"ui-callout-body\">Use the host's physical console or an already trusted management session, not this new SSH connection.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ssh-ed25519</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/sources/trust",
+   {
+    "name": "tower",
+    "key": "public-key",
+    "capacity_token": "signed",
+    "confirm_fingerprint": true
+   }
+  ],
+  [
+   "mbody",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Trust save not confirmed</b><div class=\"ui-callout-body\">lost response Refresh and scan again; nothing was retried.</div></div>\n    </div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Close</button></div><div class=\"ui-actions-end\"></div></div>"
+  ],
+  [
+   "state",
+   "failed",
+   true
+  ],
+  [
+   "state",
+   "tried again",
+   true
+  ]
+ ],
+ "lostReplyAfterTheDialogMovedOn": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>A scan is not proof of identity</b><div class=\"ui-callout-body\">Use the host's physical console or an already trusted management session, not this new SSH connection.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ssh-ed25519</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/sources/trust",
+   {
+    "name": "tower",
+    "key": "public-key",
+    "capacity_token": "signed",
+    "confirm_fingerprint": true
+   }
+  ],
+  [
+   "toast",
+   "Trust save not confirmed. Refresh Sources before retrying.",
+   "bad"
+  ],
+  [
+   "state",
+   "after",
+   false
+  ]
+ ],
+ "olderScanCannotReplaceANewerOne": [
+  [
+   "modal",
+   "Verify source · old",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>A scan is not proof of identity</b><div class=\"ui-callout-body\">Use the host's physical console or an already trusted management session, not this new SSH connection.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ssh-ed25519</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ],
+  [
+   "state",
+   "after the late scan",
+   true
+  ],
+  [
+   "api",
+   "/api/sources/trust",
+   {
+    "name": "tower",
+    "key": "public-key",
+    "capacity_token": "signed",
+    "confirm_fingerprint": true
+   }
+  ],
+  [
+   "toast",
+   "Source key pinned",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "state",
+   "sent",
+   true
+  ]
+ ],
+ "scanTheDialogHasLeftIsDropped": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "state",
+   "dropped",
+   true
+  ]
+ ],
+ "noScanWhileSaving": [
+  [
+   "modal",
+   "Verify source · tower",
+   "<div id=\"sourceKeyLoading\" class=\"empty\"><span class=\"spin2\"></span>Reading the SSH host key. No login or password is sent…</div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/sources/scan",
+   {
+    "name": "tower"
+   }
+  ],
+  [
+   "mbody",
+   "<p class=\"ui-lead\">Compare this fingerprint with the source host's own console before allowing Homestead to log in.</p><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>A scan is not proof of identity</b><div class=\"ui-callout-body\">Use the host's physical console or an already trusted management session, not this new SSH connection.</div></div>\n    </div><dl class=\"ui-facts\"><div><dt>Host</dt><dd>192.0.2.10:22</dd></div><div><dt>Host key</dt><dd>ssh-ed25519</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Compare fingerprint</h4></header>\n    <div class=\"mono\" style=\"overflow-wrap:anywhere\">SHA256:fixture</div></section><section class=\"ui-section\">\n    <header><h4>On the source console</h4></header>\n    <code style=\"overflow-wrap:anywhere\">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</code></section><details class=\"ui-more\" data-disclosure=\"What trusting changes\">\n    <summary>What trusting changes</summary><div class=\"ui-more-body\"><p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p></div></details><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"sourceKeyAck\" onchange=\"sourceKeyReady()\"><span>I compared this fingerprint with the source host's console.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Not now</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"sourceKeyApply\" onclick=\"sourceKeyTrust()\" disabled >Trust this source</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/sources/trust",
+   {
+    "name": "tower",
+    "key": "public-key",
+    "capacity_token": "signed",
+    "confirm_fingerprint": true
+   }
+  ],
+  [
+   "toast",
+   "Source key pinned",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "state",
+   "after",
+   true
+  ]
+ ]
+}
