@@ -101,7 +101,6 @@ window.nodePromoteStart = async node => {
     toast(r.detail || `Making ${node} a server`, "ok"); closeModal(); refresh(true);
   } catch (e) { toast(e.message, "bad"); }
 };
-let NODE_POWER_REVIEW_SEQUENCE = 0;
 // What would keep the host from draining: each one ticked ("drain anyway")
 // before the normal cordon and drain. Force and a planned outage send no drain.
 const nodePowerDrainBlockers = plan => plan && !plan.force && !plan.planned_outage ? plan.drain_blockers || [] : [];
@@ -157,17 +156,20 @@ window.nodePowerRemoveOrphansConfirm = async i => {
   modalBack();
   return window.nodePowerReview(plan.node, plan.action, !!plan.force);
 };
-window.nodePowerReview = async (node, action, force = false) => {
-  window.__nodePowerPlan = null;
-  const sequence = ++NODE_POWER_REVIEW_SEQUENCE;
-  let plan;
-  try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action, ...(force ? { force: "1" } : {}) })}`); }
-  catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
-  if (sequence !== NODE_POWER_REVIEW_SEQUENCE) return;
-  if (plan.operation?.id) return window.nodePowerFollow(plan.operation.id);
-  if (plan.node !== node || plan.action !== action || !plan.review_token || typeof plan.ready !== 'boolean')
-    return toast("Host review is incomplete; refresh before continuing", "bad");
-  window.__nodePowerPlan = plan;
+/* Review, then reboot or shut down a host (#909), on the shared review flow: it keeps the sequence, the busy flag
+   and the one-shot send. This view keeps its words and each gate's own message. */
+const NODE_POWER = UI.reviewFlow({
+  preview: async ({ node, action, force }) => {
+    const plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action, ...(force ? { force: "1" } : {}) })}`);
+    // A host already being handled is followed, not reviewed.
+    if (plan.operation?.id) return { followed: plan.operation.id };
+    if (plan.node !== node || plan.action !== action || !plan.review_token || typeof plan.ready !== 'boolean')
+      throw Object.assign(new Error("Host review is incomplete; refresh before continuing"), { incomplete: true });
+    return { plan };
+  },
+  render: (review, { node, action }) => {
+    if (review.followed) return window.nodePowerFollow(review.followed);
+    const plan = review.plan;
   const verb = action === "reboot" ? "Reboot" : "Shut down";
   const volumes = plan.volumes || [];
   const workloads = plan.workloads || [];
@@ -248,48 +250,59 @@ window.nodePowerReview = async (node, action, force = false) => {
   childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,
     plan.ready ? UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute", disabled: true }) : "",
     { always: true, noticeHtml: confirm, cancelHtml: UI.cancel(plan.ready ? "Cancel" : "Close") }), true);
-};
+  },
+  failed: error => toast(error.incomplete ? error.message : `Could not assess this host: ${error.message}`, "bad"),
+  blocked: review => !!review.followed || !review.plan.ready,
+  apply: async review => {
+    const plan = review.plan, { node, action } = plan;
+    const c = $("#pw_confirm").value.trim();
+    const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
+    const drainBlockers = nodePowerDrainBlockers(plan);
+    // The flow consumed the review before this, so double clicks and lost replies cannot send twice.
+    const button = $("#pw_execute");
+    if (button) { button.disabled = true; button.textContent = "Starting…"; }
+    try {
+      const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force, choices,
+          allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked,
+          allow_drain_blockers: drainBlockers.length ? nodePowerTickedIds() : [] }) });
+      if (r.operation) window.noteOperation?.(r.operation);
+      if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.planned_outage
+        ? "Homestead will go offline during this host's maintenance. This view reconnects automatically. Scheduling was left unchanged."
+        : plan.force ? "Request accepted without cordon or drain. Scheduling was left unchanged."
+        : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`, r.operation);
+      modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect apps and storage when the host returns.`
+        : `Follow progress in Recent jobs. ${plan.cordoned ? "The host stays cordoned, as it was before." : "Scheduling is allowed again when it is back."}`) +
+        UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
+    } catch (e) {
+      // A power job already going for this host: follow it rather than start another.
+      if (e.body?.operation?.id) return window.nodePowerFollow(e.body.operation.id);
+      toast(e.message + " — inspect Recent jobs and the host before making another request.", "bad");
+      if (button) {
+        button.disabled = false; button.textContent = "Review host again";
+        button.onclick = () => window.nodePowerReview(node, action);
+      }
+    }
+  
+  },
+  after: () => window.refreshOperations?.(true),
+});
+// What the page and its tests read: the plan being reviewed, or nothing once it is consumed.
+Object.defineProperty(window, "__nodePowerPlan", { get: () => NODE_POWER.review?.plan || null, configurable: true });
+window.nodePowerReview = (node, action, force = false) => NODE_POWER.open({ node, action, force });
 window.nodePower = async (node, action) => {
-  const plan = window.__nodePowerPlan;
+  const plan = NODE_POWER.review?.plan;
   if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("Review the host impact again", "bad");
   if (!typedConfirmMatches("pw_confirm")) return;
-  const c = $("#pw_confirm").value.trim();
   if (plan.planned_outage && !$("#pw_outage")?.checked)
     return toast("Acknowledge the whole-cluster outage", "bad");
-  const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
   if (!plan.planned_outage && $("#pw_allow") && !$("#pw_allow").checked)
     return toast("Confirm the apps and VMs that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
     return toast("Confirm the volume risk", "bad");
-  const drainBlockers = nodePowerDrainBlockers(plan);
   if (!nodePowerBlockersTicked(plan))
     return toast("Tick drain anyway for each thing that would keep the host from draining", "bad");
-  // Consume approval before sending, including double clicks and lost replies.
-  window.__nodePowerPlan = null;
-  const button = $("#pw_execute");
-  if (button) { button.disabled = true; button.textContent = "Starting…"; }
-  try {
-    const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force, choices,
-        allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked,
-        allow_drain_blockers: drainBlockers.length ? nodePowerTickedIds() : [] }) });
-    if (r.operation) window.noteOperation?.(r.operation);
-    if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.planned_outage
-      ? "Homestead will go offline during this host's maintenance. This view reconnects automatically. Scheduling was left unchanged."
-      : plan.force ? "Request accepted without cordon or drain. Scheduling was left unchanged."
-      : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`, r.operation);
-    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect apps and storage when the host returns.`
-      : `Follow progress in Recent jobs. ${plan.cordoned ? "The host stays cordoned, as it was before." : "Scheduling is allowed again when it is back."}`) +
-      UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
-  } catch (e) {
-    // A power job already going for this host: follow it rather than start another.
-    if (e.body?.operation?.id) return window.nodePowerFollow(e.body.operation.id);
-    toast(e.message + " — inspect Recent jobs and the host before making another request.", "bad");
-    if (button) {
-      button.disabled = false; button.textContent = "Review host again";
-      button.onclick = () => window.nodePowerReview(node, action);
-    }
-  } finally { window.refreshOperations?.(true); }
+  await NODE_POWER.apply();
 };
 
 /* A reboot or shutdown as it goes: its steps, from the job's recorded phase.
@@ -376,6 +389,6 @@ window.nodePowerFollow = async (id, intro = "", initial = null) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  NODE_POWER_REVIEW_SEQUENCE, nodePowerDrainBlockers, nodePowerTickedIds, nodePowerBlockersTicked, NODE_POWER_FOLLOW,
-  nodePowerSteps, nodePowerProgressMarkup
+  nodePowerDrainBlockers, nodePowerTickedIds, nodePowerBlockersTicked, NODE_POWER, NODE_POWER_FOLLOW, nodePowerSteps,
+  nodePowerProgressMarkup
 };
