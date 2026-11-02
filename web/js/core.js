@@ -44,6 +44,10 @@ async function readClipboard() {
 }
 const HOMESTEAD_VERSION = "2.8.335-dev.4";
 const ICON_BLOBS = new Map();
+/* An icon that could not be fetched is not asked for again on every refresh: its app shows its initials,
+   and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) */
+const ICON_FAILED = new Map();
+const ICON_RETRY_MS = 10 * 60 * 1000;
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
   disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 },
@@ -117,8 +121,13 @@ function loadAppIcons(root = document) {
   });
   root.querySelectorAll("img[data-icon-src]").forEach(img => {
     if (img.dataset.iconLoading) return;
-    img.dataset.iconLoading = "1";
     const url = img.dataset.iconSrc;
+    const failedAt = ICON_FAILED.get(url);
+    if (failedAt !== undefined) {
+      if (Date.now() - failedAt < ICON_RETRY_MS) { img.remove(); return; }
+      ICON_FAILED.delete(url);
+    }
+    img.dataset.iconLoading = "1";
     let pending = ICON_BLOBS.get(url);
     if (!pending) {
       pending = fetch(url, { credentials: "same-origin", cache: "no-store" }).then(response => {
@@ -129,7 +138,7 @@ function loadAppIcons(root = document) {
       pending.catch(() => ICON_BLOBS.delete(url));
     }
     pending.then(objectUrl => { if (img.isConnected) img.src = objectUrl; })
-      .catch(() => { if (img.isConnected) img.remove(); });
+      .catch(() => { ICON_FAILED.set(url, Date.now()); if (img.isConnected) img.remove(); });
   });
 }
 
@@ -909,6 +918,7 @@ function pagePlaceholder(view) {
   const snapshot = PAGE_SNAPSHOT.get(snapshotKey(view));
   if (snapshot) {
     host.innerHTML = snapshot;
+    delete host.dataset.hash;   // what is shown is the snapshot, not a paint to compare with
     enhanceActions(host);
     loadAppIcons(host);
     host.dataset.painted = "1";
@@ -916,6 +926,7 @@ function pagePlaceholder(view) {
     if (window.applyRole) window.applyRole();
     return;
   }
+  delete host.dataset.hash;
   host.innerHTML = pageSkeleton(view);
 }
 window.pagePlaceholder = pagePlaceholder;
@@ -968,6 +979,12 @@ function paint(html) {
   html = filterBar() + html;
   keepSnapshot(snapshotKey(STATE.view), html);
   host.classList.remove("refreshing");
+  // The same data as the last paint of this page is nothing to do: no element built,
+  // nothing compared (#906). Not while an app shows its initials for an icon that failed:
+  // the paint is where its retry comes due. A different viewer is a different paint.
+  const sig = paintSignature(html);
+  if (host.dataset.painted && host.dataset.hash === sig && !failedIconShown(host)) return;
+  host.dataset.hash = sig;
   if (!host.dataset.painted) {
     host.innerHTML = html;
     enhanceActions(host);
@@ -986,26 +1003,69 @@ function paint(html) {
   if (window.applyRole) window.applyRole();
   dropOrphanTooltip();
 }
+/* A cheap signature of what a paint would show: length, a 32-bit FNV-1a hash of the markup, and who is
+   looking (a viewer and an admin see the same markup with different buttons applied by applyRole). */
+function paintSignature(html) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < html.length; i++) { h ^= html.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  const who = (typeof ROLE !== "undefined" ? ROLE : "") + "|" + (typeof ME !== "undefined" ? ME : "");
+  return `${html.length}:${(h >>> 0).toString(36)}:${who}`;
+}
+function failedIconShown(host) {
+  return [...host.querySelectorAll(".appav")].some(avatar => !avatar.querySelector("img"));
+}
+/* data-mkey (not data-key, which other code uses) pairs a row by what it is, not where it is, so a
+   list that re-sorts, gains or loses a row keeps each row's node, focus and state (#906). Children
+   without one are paired by position as before. */
+const mkeyOf = node => node.nodeType === 1 ? node.getAttribute("data-mkey") : null;
+function morphNode(x, y) {
+  if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) { const copy = y.cloneNode(true); x.replaceWith(copy); return copy; }
+  if (x.nodeType === 3) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; return x; }
+  if (x.nodeType !== 1) return x;
+  // never stomp on a field the user is typing in
+  if (document.activeElement === x && /^(INPUT|SELECT|TEXTAREA)$/.test(x.nodeName)) return x;
+  syncAttrs(x, y);
+  if (x.isEqualNode(y)) return x;
+  // An open "…" menu lives on the page while it is open (ui.js), so its
+  // own <details> looks empty: filling it back in would show the menu
+  // twice. It is refreshed when it closes, with the next repaint.
+  if (x.shell) return x;
+  morph(x, y);
+  return x;
+}
+function morphKeyed(a, b) {
+  const an = [...a.childNodes], bn = [...b.childNodes];
+  const byKey = new Map(), plain = [];
+  for (const x of an) { const key = mkeyOf(x); if (key !== null && !byKey.has(key)) byKey.set(key, x); else plain.push(x); }
+  const result = [];
+  let next = 0;
+  for (const y of bn) {
+    const key = mkeyOf(y);
+    let x = null;
+    if (key !== null && byKey.has(key)) { x = byKey.get(key); byKey.delete(key); }
+    else if (key === null && next < plain.length) x = plain[next++];
+    result.push(x ? morphNode(x, y) : y.cloneNode(true));
+  }
+  const keep = new Set(result);
+  for (const x of an) if (!keep.has(x)) x.remove();
+  const focused = document.activeElement;
+  let moved = false;
+  result.forEach((node, i) => {
+    if (a.childNodes[i] !== node) { a.insertBefore(node, a.childNodes[i] || null); moved = true; }
+  });
+  // A browser blurs a node that is moved: give focus back to the one the reader was on.
+  if (moved && focused && focused !== document.activeElement && a.contains(focused)) focused.focus({ preventScroll: true });
+}
 function morph(a, b) {
   // fast path: identical markup, nothing to do
   if (a.isEqualNode(b)) return;
   const an = [...a.childNodes], bn = [...b.childNodes];
+  if (an.some(node => mkeyOf(node) !== null) || bn.some(node => mkeyOf(node) !== null)) return morphKeyed(a, b);
   for (let i = 0; i < Math.max(an.length, bn.length); i++) {
     const x = an[i], y = bn[i];
     if (!y) { x && x.remove(); continue; }
     if (!x) { a.appendChild(y.cloneNode(true)); continue; }
-    if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) { x.replaceWith(y.cloneNode(true)); continue; }
-    if (x.nodeType === 3) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; continue; }
-    if (x.nodeType !== 1) continue;
-    // never stomp on a field the user is typing in
-    if (document.activeElement === x && /^(INPUT|SELECT|TEXTAREA)$/.test(x.nodeName)) continue;
-    syncAttrs(x, y);
-    if (x.isEqualNode(y)) continue;
-    // An open "…" menu lives on the page while it is open (ui.js), so its
-    // own <details> looks empty: filling it back in would show the menu
-    // twice. It is refreshed when it closes, with the next repaint.
-    if (x.shell) continue;
-    morph(x, y);
+    morphNode(x, y);
   }
 }
 function syncAttrs(x, y) {
@@ -1014,6 +1074,14 @@ function syncAttrs(x, y) {
     x.sparkWindow = { before: JSON.parse(x.getAttribute("data-spark-times") || "[]"),
       after: JSON.parse(y.getAttribute("data-spark-times") || "[]") };
   }
+  // An app icon that has loaded keeps its picture and its hidden initials through a repaint:
+  // the new markup carries neither, and stripping them made every tick set every icon again.
+  const iconState = x.nodeName === "IMG" && x.hasAttribute("data-icon-src");
+  if (iconState && y.getAttribute("data-icon-src") !== x.getAttribute("data-icon-src")) {
+    for (const name of ["src", "data-icon-wired", "data-icon-loading"]) x.removeAttribute(name);
+    if (x.previousElementSibling?.classList.contains("avfallback")) x.previousElementSibling.hidden = false;
+  }
+  const initials = x.classList.contains("avfallback") && x.nextElementSibling?.hasAttribute("data-icon-src") && x.nextElementSibling.hasAttribute("src");
   // Whether a <details> is open belongs to the reader, the same way the text in
   // an input does: a background refresh must not fold up a pod tree mid-read.
   const readerOwnsOpen = x.nodeName === "DETAILS";
@@ -1026,10 +1094,12 @@ function syncAttrs(x, y) {
   }
   for (const at of [...x.attributes]) {
     if (readerOwnsOpen && at.name === "open") continue;
+    if (iconState && (at.name === "src" || at.name === "data-icon-wired" || at.name === "data-icon-loading")) continue;
+    if (initials && at.name === "hidden") continue;
     if (!y.hasAttribute(at.name)) x.removeAttribute(at.name);
   }
 }
-function resetPaint() { const h = V(); delete h.dataset.painted; h.classList.remove("refreshing"); h.innerHTML = ""; dropOrphanTooltip(); }
+function resetPaint() { const h = V(); delete h.dataset.painted; delete h.dataset.hash; h.classList.remove("refreshing"); h.innerHTML = ""; dropOrphanTooltip(); }
 
 /* ---------------- chart primitives ---------------- */
 const sparkAnimations = new WeakMap();
