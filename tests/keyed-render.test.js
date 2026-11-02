@@ -9,8 +9,8 @@ const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 const { el, mount, DOC } = require("./helpers/mini-dom");
 
-const paintSrc = fs.readFileSync("web/js/core.js", "utf8");
-const coreSrc = fs.readFileSync("web/js/core.js", "utf8");
+const paintSrc = require("./helpers/core-source")();
+const coreSrc = paintSrc;
 const iconSrc = () => between(coreSrc, "const ICON_", "/* ---------------- settings", {}).replace(/function loadAppIcons[\s\S]*$/, "") ;
 
 function paintWorld(extra = {}) {

@@ -71,7 +71,8 @@ class IconCacheTests(unittest.TestCase):
         self.assertEqual("https://example.com/demo.png", cfg["icon"])
 
     def test_cached_icon_requests_are_release_versioned(self):
-        core = (ROOT / "web" / "js" / "core.js").read_text(encoding="utf-8")
+        # core.js and its parts (#911): the icon loader and the repaints that call it.
+        core = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "web" / "js").glob("core*.js")))
         self.assertIn('icon.startsWith("/api/icons/")', core)
         self.assertIn('fetch(url, { credentials: "same-origin", cache: "no-store" })', core)
         self.assertIn("URL.createObjectURL(blob)", core)

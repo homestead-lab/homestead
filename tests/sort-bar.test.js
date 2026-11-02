@@ -8,7 +8,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const sortBarSource = between(core, "function sortBar(", "\nfunction saveSort(");
 
 /* Just the parts of the DOM sortBar() touches. */

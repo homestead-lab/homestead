@@ -4,7 +4,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
-const html = fs.readFileSync("web/index.html", "utf8"), core = fs.readFileSync("web/js/core.js", "utf8");
+const html = fs.readFileSync("web/index.html", "utf8"), core = require("./helpers/core-source")();
 
 test("the dialog shell is a labelled modal dialog with a Close button", () => {
   assert.match(html, /<div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="mtitle">/);

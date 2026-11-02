@@ -30,7 +30,7 @@ test("ask resolves to the answer, and askText to the text or null", async () => 
     addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: t => { delete listeners[t]; } };
   const ctx = { document, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
-  const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
+  const source = require("./helpers/core-source")();
   vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   const click = answer => body.children[0].handlers.click({ target: { closest: () => ({ dataset: { a: answer } }) } });
 
@@ -59,7 +59,7 @@ test("ask shows the title and the button label it is given", () => {
     querySelector(sel) { return sel === ".askin" ? null : make(); }, set innerHTML(html) { this.html = html; }, get innerHTML() { return this.html; } });
   const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
-  const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
+  const source = require("./helpers/core-source")();
   vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   ctx.window.ask("Delete backup \"nightly\"?", { title: "Delete backup", ok: "Delete backup", danger: true });
   const html = body.children[0].html;
@@ -132,7 +132,7 @@ test("a red button is the caller's choice, not a guess from the first word", () 
     querySelector(sel) { return sel === ".askin" ? null : make(); }, set innerHTML(html) { this.html = html; }, get innerHTML() { return this.html; } });
   const ctx = { document: { createElement: make, body, addEventListener() {}, removeEventListener() {} }, window: {}, esc: s => String(s) };
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
-  const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
+  const source = require("./helpers/core-source")();
   vm.runInContext(between(source, "function askDialog(", "/* The X and Escape"), ctx);
   ctx.window.ask("Delete the draft?", { title: "Delete draft", ok: "Delete draft" });
   assert.match(body.children[0].html, /class="btn pri" data-a="yes">Delete draft</);

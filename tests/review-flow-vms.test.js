@@ -420,7 +420,7 @@ test("pinned: only the newest room check is shown, none once the dialog is gone,
 /* ---------------- options that could not be read (#620 wrap-up gap 64) ---------------- */
 function unread() {
   const t = harness(path => { if (path === "/api/vm/create-options") throw new Error("timed out"); return {}; });
-  const core = fs.readFileSync("web/js/core.js", "utf8");
+  const core = require("./helpers/core-source")();
   vm.runInContext(require("./helpers/between")(core, "function mustRead(", "/* ---------------- configurable hardware"), t.ctx);
   t.ctx.api = async path => {
     t.sent.push({ path });

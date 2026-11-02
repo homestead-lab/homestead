@@ -251,10 +251,10 @@ class JsCalls(unittest.TestCase):
         lines = [call.line for call in SS.js_calls(JS, "api")]
         self.assertFalse({9, 10} & set(lines))
 
-    def test_the_real_declaration_in_core_js_is_not_counted(self):
-        source = SS.text("web/js/core.js")
+    def test_the_real_declaration_in_core_api_js_is_not_counted(self):
+        source = SS.text("web/js/core-api.js")
         declared = source[:source.index("async function api(")].count("\n") + 1
-        lines = [call.line for call in SS.js_calls("web/js/core.js", "api")]
+        lines = [call.line for call in SS.js_calls("web/js/core-api.js", "api")]
         self.assertTrue(lines)
         self.assertNotIn(declared, lines)
 

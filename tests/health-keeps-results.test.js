@@ -78,7 +78,7 @@ function tooltips() {
     document: { addEventListener: on, body: { appendChild() {} } } };
   ctx.window = { addEventListener: on };
   vm.createContext(ctx);
-  const core = fs.readFileSync("web/js/core.js", "utf8");
+  const core = require("./helpers/core-source")();
   vm.runInContext(between(core, "/* ---------------- shared, viewport-safe tooltips", "const ACTION_ICONS"), ctx);
   const fire = (type, e) => (listeners[type] || []).forEach(fn => fn(e));
   const owner = new Element();

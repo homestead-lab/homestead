@@ -9,7 +9,7 @@ const vm = require("node:vm");
 const between = require("./helpers/between");
 
 function load() {
-  const core = fs.readFileSync("web/js/core.js", "utf8");
+  const core = require("./helpers/core-source")();
   const host = { dataset: {}, classList: { add() {}, remove() {} }, innerHTML: "" };
   const ctx = { console, Map, location: { search: "" }, STATE: { view: "nodes" }, V: () => host,
     pageTabs: () => "", filterBar: () => "", pageSkeleton: view => `skeleton:${view}`,

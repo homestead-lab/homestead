@@ -7,7 +7,7 @@ function fixture() {
   const ctx = { SET:{motion:"on"}, document:{hidden:false}, reduced:false,
     esc:String, requestAnimationFrame:fn=>{frames.set(++id,fn);return id}, cancelAnimationFrame:id=>frames.delete(id) };
   ctx.window=ctx;ctx.matchMedia=()=>({matches:ctx.reduced});vm.createContext(ctx);
-  const core=fs.readFileSync("web/js/core.js","utf8");
+  const core=require("./helpers/core-source")();
   vm.runInContext(between(core,"const sparkAnimations","const POL"),ctx);
   const step=now=>{const callbacks=[...frames.values()];frames.clear();callbacks.forEach(fn=>fn(now))};
   const svg={sparkWindow:{before:[1,2,3],after:[2,3,4]},getAttribute:()=>"0 0 300 74"};

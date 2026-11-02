@@ -56,6 +56,14 @@ const MIGRATED = {
   "web/js/views-settings.js": 0,
   "web/js/views-ipam.js": 0,
   "web/js/core.js": 0,
+  "web/js/core-format.js": 0,
+  "web/js/core-api.js": 0,
+  "web/js/core-hardware.js": 0,
+  "web/js/core-modal.js": 0,
+  "web/js/core-tooltips-sort.js": 0,
+  "web/js/core-paint.js": 0,
+  "web/js/core-charts.js": 0,
+  "web/js/core-privileges.js": 0,
   // The cluster-tag shape.
   "web/js/fleet.js": 1,
 };

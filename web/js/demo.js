@@ -897,7 +897,7 @@
           results: [{ node: "harvester-node2", ok: true, note: "updates installed", updates: 4, security: 2, restarted: false }] },
         last: null };
     },
-    // A logo is kept as it is in the demo; nothing is fetched (core.js logoReady).
+    // A logo is kept as it is in the demo; nothing is fetched (core-privileges.js logoReady).
     "/api/logo-fit/keep": (url, init) => ({ icon: JSON.parse(init?.body || "{}").url || "" }),
     "/api/os-updates/check": () => ({ ok: true, checking: { running: false, hosts: ["harvester-node1", "harvester-node2", "harvester-node3"], done: [], failed: {} } }),
     "/api/node/os": url => {
