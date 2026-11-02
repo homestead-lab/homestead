@@ -24,6 +24,9 @@ CLASSES = {"items": [
 
 class StorageClassTests(unittest.TestCase):
     def setUp(self):
+        # Listing classes picks a default on the server, LC and LH (_note_default_class): put all three back.
+        for module in (server, server.LC, server.LH):
+            self.addCleanup(setattr, module, "STORAGE_CLASS", module.STORAGE_CLASS)
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
@@ -140,6 +143,9 @@ class StorageClassTests(unittest.TestCase):
 class LonghornV2Tests(unittest.TestCase):
     def setUp(self):
         plain_platform(self)
+        # Listing classes picks a default on the server, LC and LH (_note_default_class): put all three back.
+        for module in (server, server.LC, server.LH):
+            self.addCleanup(setattr, module, "STORAGE_CLASS", module.STORAGE_CLASS)
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))

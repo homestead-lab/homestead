@@ -1,10 +1,11 @@
 """The last test file of a full run: no test has left guard state bound (#934).
 
-Five bindings decide what a write is allowed to do, who it is signed as and
+These bindings decide what a write is allowed to do, who it is signed as and
 which cluster client the lifecycle code uses: the request role
 (host_access.set_role), changes._author_key, changes.REQUEST.user (a thread
-local), and homestead_lifecycle.kget / ksend (server.py binds them; a test
-that calls lifecycle.bind() restores the module with addCleanup). A test that binds one and does not restore it changes every test after
+local), and what server.py gives homestead_lifecycle through its bind():
+kget, ksend, SYS_NS, _cache, hardware_features, create_pvc and STORAGE_CLASS
+(a test that calls lifecycle.bind() restores the module with addCleanup). A test that binds one and does not restore it changes every test after
 it, so a file passes alone and fails in the suite, or the other way round.
 A test that sets them restores them itself (mock.patch, addCleanup); this
 file says so when one does not. It sees only the tests of its own process, so
@@ -14,7 +15,7 @@ The files are loaded in name order and all of them are imported before any
 test runs, so what is read here at import is the state a fresh run starts
 from, and the tests then read it after every other file has run. Run alone it
 passes. When it fails, find the test that binds the name with a probe: run the
-suite in one process and compare the five after each test (a TextTestResult
+suite in one process and compare them after each test (a TextTestResult
 whose stopTest does it names the first test that changes one)."""
 import sys
 import unittest
@@ -27,14 +28,24 @@ import homestead_lifecycle as LIFECYCLE
 import server  # noqa: F401  (binds lifecycle, so the baseline is server's client even if no file imported it yet)
 
 UNSET = object()
-AT_IMPORT = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
-             "lifecycle reads": LIFECYCLE.kget, "lifecycle writes": LIFECYCLE.ksend}
+# Everything LIFECYCLE.bind sets, not only its client: a test that picks a
+# default storage class leaves LIFECYCLE.STORAGE_CLASS changed unless it puts it back.
+LIFECYCLE_BOUND = {"lifecycle reads": "kget", "lifecycle writes": "ksend", "lifecycle system namespaces": "SYS_NS",
+                   "lifecycle cache": "_cache", "lifecycle hardware features": "hardware_features",
+                   "lifecycle create pvc": "create_pvc", "lifecycle storage class": "STORAGE_CLASS"}
+
+
+def bound_now():
+    return {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
+            **{label: getattr(LIFECYCLE, name) for label, name in LIFECYCLE_BOUND.items()}}
+
+
+AT_IMPORT = bound_now()
 
 
 class GuardState(unittest.TestCase):
     def test_no_test_left_the_guards_bound(self):
-        now = {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
-               "lifecycle reads": LIFECYCLE.kget, "lifecycle writes": LIFECYCLE.ksend}
+        now = bound_now()
         left = {name: now[name] for name in now if now[name] is not AT_IMPORT[name] and now[name] != AT_IMPORT[name]}
         if left.get("role", 1) is None:
             del left["role"]
