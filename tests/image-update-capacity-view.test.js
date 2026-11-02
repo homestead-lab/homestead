@@ -9,7 +9,7 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
   const sent = [], fields = {"#imageCapacityApprove": {checked:false}, "#imageCapacityApply": {},
     "#modal": {classList:{contains:()=>false}}};
   const ctx = {console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}}, STATE:{data:{}}, HomesteadUpdateState:updateState,
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null}, STATE:{data:{}}, HomesteadUpdateState:updateState,
     $:id=>fields[id], $$:()=>[], esc:s=>String(s).replaceAll("<","&lt;"),
     toast:()=>{}, setTimeout:cb=>cb(),
     modal:(_title,body)=>{

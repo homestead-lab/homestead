@@ -12,7 +12,7 @@ function setup({ restarts = 0 } = {}) {
     "#modal": { classList: { contains: () => false } } };
   let away = restarts;
   const ctx = { console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document: { addEventListener() {} }, STATE: { data: {} }, HomesteadUpdateState: updateState,
+    document: { addEventListener() {}, getElementById: id => fields["#" + id] || null }, STATE: { data: {} }, HomesteadUpdateState: updateState,
     $: id => fields[id], $$: () => [], esc: s => String(s).replaceAll("<", "&lt;"),
     toast: () => {}, setTimeout: cb => cb(),
     modal: (_title, body) => {

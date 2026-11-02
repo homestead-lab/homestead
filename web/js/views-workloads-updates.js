@@ -115,7 +115,6 @@ function groupedConcerns(rows) {
     ? `${text.replace(/\.$/, "")} - ${names.length === rows.length ? `all ${rows.length} updates` : names.join(", ")}` : text);
 }
 
-let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
 /* An update can be for a linked cluster (the Homestead updates dialog
    updates them too): its requests carry that cluster, and its rollout is
    keyed by it, since the same app can run on two clusters. */
@@ -137,14 +136,20 @@ const rolloutChanged = (accepted, state) => state.uid !== accepted.uid || (state
       || JSON.stringify(state.images || {}) !== JSON.stringify(accepted.images || {})));
 window.rolloutChanged = rolloutChanged;
 
-async function reviewImageActions(items, action = "update") {
-  const sequence = ++IMAGE_REVIEW_SEQUENCE;
-  IMAGE_REVIEW = null;
-  const rollback = action === "rollback";
-  const count = items.length;
-  modal(rollback ? "Review rollback" : count > 1 ? `Update ${count} apps` : "Review image update",
-    '<div id="imageReviewLoading" class="empty"><span class="spin2"></span> Checking exact images and rollout capacity…</div>', true);
-  try {
+/* Review image updates or a rollback (#909), on the shared review flow: it keeps the sequence, the busy flag
+   and the one-shot send. Sending starts the rollout queue below, which runs on its own: it is not the flow's
+   to hold, so another review can be asked for while it runs (and stops it, by replacing its dialog). */
+let IMAGE_REVIEW_OPEN = null, IMAGE_QUEUE_TOKEN = null, IMAGE_QUEUE_RUNNING = null;
+const IMAGE_REVIEW = UI.reviewFlow({
+  loading: input => {
+    IMAGE_REVIEW_OPEN = input;
+    const count = input.items.length;
+    modal(input.action === "rollback" ? "Review rollback" : count > 1 ? `Update ${count} apps` : "Review image update",
+      '<div id="imageReviewLoading" class="empty"><span class="spin2"></span> Checking exact images and rollout capacity…</div>', true);
+  },
+  live: () => !!$("#imageReviewLoading"),
+  preview: async input => {
+    const { items, action } = input;
     const rows = [];
     for (const item of HomesteadUpdateState.orderApply(items)) {
       const config = {ns: item.ns, name: item.name, action, approved: true,
@@ -152,12 +157,15 @@ async function reviewImageActions(items, action = "update") {
         ...(item.part ? {part: item.part} : {}), ...(item.version ? {version: item.version} : {})};
       const preview = await api("/api/image-updates/preview", {method: "POST",
         headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
-      if (sequence !== IMAGE_REVIEW_SEQUENCE || !$("#imageReviewLoading")) return;
+      if (IMAGE_REVIEW_OPEN !== input || !$("#imageReviewLoading")) throw new Error("This review was replaced");
       if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("Image capacity review unavailable; no update was started");
       rows.push({config, preview});
     }
     if (!rows.length) throw new Error("Select at least one image change");
-    IMAGE_REVIEW = rows;
+    return rows;
+  },
+  render: (rows, { items, action }) => {
+    const rollback = action === "rollback";
     const blocked = rows.some(row => row.preview.capacity.blocked);
     const many = rows.length > 1;
     const concerns = groupedConcerns(rows);
@@ -198,120 +206,123 @@ async function reviewImageActions(items, action = "update") {
     </div>`;
     // What is in the update: read beside the review, never waited for.
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
-  } catch (error) {
-    IMAGE_REVIEW = null;
-    if (sequence === IMAGE_REVIEW_SEQUENCE && $("#imageReviewLoading")) $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
-  }
-}
-window.imageReviewReady = () => {
-  const ready = !!IMAGE_REVIEW?.length && !IMAGE_REVIEW.some(r => r.preview.capacity.blocked) && $("#imageCapacityApprove")?.checked;
-  if ($("#imageCapacityApply")) $("#imageCapacityApply").disabled = !ready;
-  return !!ready;
-};
+  },
+  failed: error => {
+    $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
+  },
+  blocked: rows => rows.some(row => row.preview.capacity.blocked), ack: "imageCapacityApprove", button: "imageCapacityApply",
+  apply: async rows => {
+    // Arm the reload only when this Homestead's own rollout starts, and hold
+    // version notices until the whole queue has finished, including both pods
+    // of a redundant Homestead. An unrelated early response cannot end it.
+    try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
+    const queue = IMAGE_QUEUE_TOKEN = {};
+    const items = rows.map(r => r.config);
+    const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
+    const failures = [];
+    modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
+    const active = () => queue === IMAGE_QUEUE_TOKEN && $("#imageQueue") && !$("#modal").classList.contains("hidden");
+    window.homesteadUpdateQueueActive = active;
+    delete window.__homesteadQueuedVersion;
+    const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
+    // Runs the queue from `start`; a failure stops it there, and Skip and
+    // continue (#295) picks it up again after the failed app.
+    const run = async start => {
+      IMAGE_QUEUE = null;
+      let complete = false;
+      try {
+        for (let index = start; index < rows.length; index++) {
+          const {config, preview} = rows[index], key = rolloutKey(config);
+          if (!active()) return;
+          let job = "";
+          try {
+            if (restartsHomestead(config) && !config.cluster && config.action !== "rollback") {
+              try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
+            }
+            const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
+              {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
+               body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
+            job = result.operation?.id || "";
+            states[key] = result; paint();
+            // Never start the next workload until this exact accepted generation is ready.
+            if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
+            const deadline = Date.now() + 15 * 60 * 1000;
+            let misses = 0;
+            while (true) {
+              if (!active()) return;
+              let state;
+              try {
+                state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
+                  {timeout: 10000, headers: clusterHeaders(config)});
+                misses = 0;
+              } catch (error) {
+                // Homestead is replacing itself - here, or on a linked cluster the
+                // relay cannot reach for that minute: wait for it to answer again.
+                // For any other app, no answer at all (a dropped connection, a
+                // proxy giving up on a long pull, a gateway error) says nothing
+                // about the rollout: ask again, and stop only once it has been
+                // gone a while. An answer that is an error still stops the queue.
+                const unanswered = !error.status || error.status >= 502;
+                misses += 1;
+                if (Date.now() > deadline || !(restartsHomestead(config) || (unanswered && misses <= PROGRESS_MISSES))) {
+                  throw unanswered && !restartsHomestead(config) ? new Error(`Homestead stopped answering while ${config.name} updated (${error.message})`) : error;
+                }
+                states[key] = {...(states[key] || {}), phase: restartsHomestead(config) ? "restarting" : "reconnecting"}; paint();
+                await new Promise(resolve => setTimeout(resolve, 3000));
+                continue;
+              }
+              states[key] = state; paint();
+              if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
+              if (state.phase === "failed") throw new Error("Rollout failed");
+              if (state.phase === "ready") { refreshAfterRollout(); break; }
+              if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+          } catch (error) {
+            // Already on the newest image - updated elsewhere since the review,
+            // by GitOps for one: nothing to do, and no reason to stop the rest.
+            if (!job && /no image update is currently available/i.test(error.message || "")) {
+              states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
+              continue;
+            }
+            failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
+            const rest = rows.slice(index + 1);
+            for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
+            IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
+            paint();
+            return;
+          }
+        }
+        paint();
+        complete = true;
+      } finally {
+        if (!complete && window.homesteadUpdateQueueActive === active) {
+          try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
+        }
+        // Keep the hold while Skip and continue is offered. Closing the dialog
+        // makes active() false, so an abandoned queue never blocks later notices.
+        if (window.homesteadUpdateQueueActive === active && (complete || !IMAGE_QUEUE || !active())) {
+          delete window.homesteadUpdateQueueActive;
+          const served = window.__homesteadQueuedVersion;
+          delete window.__homesteadQueuedVersion;
+          if (served && window.homesteadUpdated) window.homesteadUpdated(served);
+        }
+      }
+    };
+    paint();
+    // The queue runs on after the review is used up, so a new review is not held back by it.
+    IMAGE_QUEUE_RUNNING = run(0);
+  },
+});
+function reviewImageActions(items, action = "update") { return IMAGE_REVIEW.open({ items, action }); }
+window.imageReviewReady = () => IMAGE_REVIEW.ready();
 window.imageUpdateReview = (ns, name) => reviewImageActions([{ns, name}]);
 window.imageUpdateApply = () => imageReviewedApply();
 window.imageReviewedApply = async () => {
   if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
-  const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
-  // Arm the reload only when this Homestead's own rollout starts, and hold
-  // version notices until the whole queue has finished, including both pods
-  // of a redundant Homestead. An unrelated early response cannot end it.
-  try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
-  const sequence = ++IMAGE_REVIEW_SEQUENCE;
-  const items = rows.map(r => r.config);
-  const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
-  const failures = [];
-  modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
-  const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
-  window.homesteadUpdateQueueActive = active;
-  delete window.__homesteadQueuedVersion;
-  const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
-  // Runs the queue from `start`; a failure stops it there, and Skip and
-  // continue (#295) picks it up again after the failed app.
-  const run = async start => {
-    IMAGE_QUEUE = null;
-    let complete = false;
-    try {
-      for (let index = start; index < rows.length; index++) {
-        const {config, preview} = rows[index], key = rolloutKey(config);
-        if (!active()) return;
-        let job = "";
-        try {
-          if (restartsHomestead(config) && !config.cluster && config.action !== "rollback") {
-            try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
-          }
-          const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
-            {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
-             body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
-          job = result.operation?.id || "";
-          states[key] = result; paint();
-          // Never start the next workload until this exact accepted generation is ready.
-          if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
-          const deadline = Date.now() + 15 * 60 * 1000;
-          let misses = 0;
-          while (true) {
-            if (!active()) return;
-            let state;
-            try {
-              state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-                {timeout: 10000, headers: clusterHeaders(config)});
-              misses = 0;
-            } catch (error) {
-              // Homestead is replacing itself - here, or on a linked cluster the
-              // relay cannot reach for that minute: wait for it to answer again.
-              // For any other app, no answer at all (a dropped connection, a
-              // proxy giving up on a long pull, a gateway error) says nothing
-              // about the rollout: ask again, and stop only once it has been
-              // gone a while. An answer that is an error still stops the queue.
-              const unanswered = !error.status || error.status >= 502;
-              misses += 1;
-              if (Date.now() > deadline || !(restartsHomestead(config) || (unanswered && misses <= PROGRESS_MISSES))) {
-                throw unanswered && !restartsHomestead(config) ? new Error(`Homestead stopped answering while ${config.name} updated (${error.message})`) : error;
-              }
-              states[key] = {...(states[key] || {}), phase: restartsHomestead(config) ? "restarting" : "reconnecting"}; paint();
-              await new Promise(resolve => setTimeout(resolve, 3000));
-              continue;
-            }
-            states[key] = state; paint();
-            if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
-            if (state.phase === "failed") throw new Error("Rollout failed");
-            if (state.phase === "ready") { refreshAfterRollout(); break; }
-            if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
-            await new Promise(resolve => setTimeout(resolve, 2000));
-          }
-        } catch (error) {
-          // Already on the newest image - updated elsewhere since the review,
-          // by GitOps for one: nothing to do, and no reason to stop the rest.
-          if (!job && /no image update is currently available/i.test(error.message || "")) {
-            states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
-            continue;
-          }
-          failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
-          const rest = rows.slice(index + 1);
-          for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
-          IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
-          paint();
-          return;
-        }
-      }
-      paint();
-      complete = true;
-    } finally {
-      if (!complete && window.homesteadUpdateQueueActive === active) {
-        try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
-      }
-      // Keep the hold while Skip and continue is offered. Closing the dialog
-      // makes active() false, so an abandoned queue never blocks later notices.
-      if (window.homesteadUpdateQueueActive === active && (complete || !IMAGE_QUEUE || !active())) {
-        delete window.homesteadUpdateQueueActive;
-        const served = window.__homesteadQueuedVersion;
-        delete window.__homesteadQueuedVersion;
-        if (served && window.homesteadUpdated) window.homesteadUpdated(served);
-      }
-    }
-  };
-  paint();
-  await run(0);
+  IMAGE_QUEUE_RUNNING = null;
+  await IMAGE_REVIEW.apply();
+  await IMAGE_QUEUE_RUNNING;
 };
 let IMAGE_QUEUE = null;     // the stopped queue, while Skip and continue can resume it
 // Progress reads in a row with no answer before the queue stops: about a
@@ -506,5 +517,8 @@ window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(n
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  shortImage, imageVersion, imageChangeWords, imagePlacementBlocker, UNCHANGED_BY_UPDATE, updateConcerns, groupedConcerns, IMAGE_REVIEW, clusterHeaders, rolloutKey, rolloutBody, restartsHomestead, rolloutChanged, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, refreshAfterRollout, asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutProgress, rolloutMarkup
+  shortImage, imageVersion, imageChangeWords, imagePlacementBlocker, UNCHANGED_BY_UPDATE, updateConcerns,
+  groupedConcerns, clusterHeaders, rolloutKey, rolloutBody, restartsHomestead, rolloutChanged,
+  IMAGE_REVIEW_OPEN, IMAGE_REVIEW, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, refreshAfterRollout,
+  asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutProgress, rolloutMarkup
 };

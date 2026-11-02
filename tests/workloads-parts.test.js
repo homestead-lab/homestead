@@ -42,7 +42,7 @@ test("every piece starts with one header line and ends with the Node-only export
   for (const file of PARTS) {
     const text = read(file);
     assert.match(text, /^\/\* [^\n]*\(#911\)[^\n]*\*\/\n/, `${file} header`);
-    assert.match(text, /\n\/\/ Node only \(tests\): [^\n]*\nif \(typeof module === "object" && module\.exports\) module\.exports = \{\n  [^\n]*\n\};\n$/, `${file} export`);
+    assert.match(text, /\n\/\/ Node only \(tests\): [^\n]*\nif \(typeof module === "object" && module\.exports\) module\.exports = \{\n(?:  [^\n]*\n)+\};\n$/, `${file} export`);
   }
   assert.ok(WL().length > 100000 && WL().startsWith("/* Containers, Deploy, App Store */"), "the old file is put back together from its pieces");
 });
