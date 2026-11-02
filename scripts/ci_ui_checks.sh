@@ -79,6 +79,7 @@ case "${1:-}" in
     ;;
   pages-live)
     node scripts/check_dashboard_stream.mjs
+    node scripts/check_icon_retries.mjs
     VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs
     node tests/integration/volume-files-cleanup.mjs
     node scripts/check_update_channels.mjs

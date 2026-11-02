@@ -322,12 +322,14 @@
     ...(body.containers || []).flatMap(c => [`      - name: ${c.name || c.original_name}`,
       ...(c.image ? [`        image: ${c.image}`] : []),
       ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
+  // Two cached app icons, so the paths run in the demo: one that answers, one that is gone (404).
+  const DEMO_ICON_OK = "/api/icons/" + "a".repeat(64) + ".png", DEMO_ICON_MISSING = "/api/icons/" + "b".repeat(64) + ".png";
   const workloads = [
-    { name: "frigate", ns: "lab", kind: "Deployment", update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
+    { name: "frigate", ns: "lab", kind: "Deployment", icon: DEMO_ICON_OK, update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
       images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
-    { name: "home-assistant", ns: "lab", kind: "Deployment", failover: "move", group: "Home", group_tier: "critical", desired: 1, ready: 1, uptime: 912400,
+    { name: "home-assistant", ns: "lab", kind: "Deployment", icon: DEMO_ICON_MISSING, failover: "move", group: "Home", group_tier: "critical", desired: 1, ready: 1, uptime: 912400,
       cpu: 0.31, mem_mb: 738, nodes: ["harvester-node1"], hardware: [],
       images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.0.2.215" }],
       pod_count: 1, container_count: 1, pods: [pod("home-assistant", "harvester-node1", "ghcr.io/home-assistant/home-assistant:stable")] },
@@ -3812,6 +3814,13 @@ ssh_pwauth: true
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
     const key = url.pathname === "/api/image-updates" ? "/api/image-updates" : url.pathname;
+    if (url.pathname.startsWith("/api/icons/")) {
+      (window.__iconRequests ||= []).push(url.pathname);   // for scripts/check_icon_retries.mjs: the demo answers in the page, so no network request shows
+      if (url.pathname === DEMO_ICON_MISSING) return new Response("not found", { status: 404, headers: { "Content-Type": "text/plain" } });
+      // A 1x1 grey PNG.
+      const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkaGj4DwAEOQJ/1hqoVQAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+      return new Response(png, { status: 200, headers: { "Content-Type": "image/png" } });
+    }
     if (key === "/api/auth/preferences/dashboard") {
       const storageKey = `homestead.demo.dashboard.${typeof ME === "string" ? ME : "demo"}`;
       let saved;try {saved=JSON.parse(localStorage.getItem(storageKey));}catch{}

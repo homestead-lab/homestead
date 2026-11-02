@@ -937,7 +937,7 @@ function workloadCard(w) {
       const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
       const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
       const updateError = update?.images?.find(x => x.error);
-  return `<div class="wcard card flat"${clusterAttr(w)}>
+  return `<div class="wcard card flat" data-mkey="${esc(workloadRowKey(w))}"${clusterAttr(w)}>
         <div class="between whead">
           <div class="row" style="gap:10px;min-width:0">
             ${appAvatar(w.name, w.icon)}
@@ -1016,7 +1016,7 @@ function workloadTableRows(rows) {
     const quiet = off && !update?.unchecked && !updateError && !update?.available && !pull && !blocked;
     const disclosure = collectionDisclosure({label:`Details for ${w.name}`,id:`wl-toggle-${encodeURIComponent(key)}`,controls:id,expanded:open,
       run:`workloadToggleDetails(${jsq(key)},this)`,bodyHtml:`${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span>`});
-    return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${open ? " wl-expanded" : ""}" data-row-key="${esc(key)}"${clusterAttr(w)}>
+    return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${open ? " wl-expanded" : ""}" data-row-key="${esc(key)}" data-mkey="row:${esc(key)}"${clusterAttr(w)}>
       <td class="wl-name" data-sort="${esc(w.name)}">${disclosure}
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `${UI.chip(`managed ${w.managed_nfs ? "NFS" : "SMB"}`, "info", { size: "slim" })} ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
@@ -1033,7 +1033,7 @@ function workloadTableRows(rows) {
       <td class="mono small nowrap wl-uptime" data-sm-hide data-sort="${uptime ?? ""}">${uptime === null ? "—" : esc(fmtUp(uptime))}</td>
       <td class="wl-actions" data-actions><div class="wacts">${workloadActions(w, update, off, true)}</div></td>
     </tr>
-    <tr class="wl-detail-row" data-detail-for="${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="8">
+    <tr class="wl-detail-row" data-detail-for="${esc(key)}" data-mkey="detail:${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="8">
       <div class="wl-inline-detail" id="${esc(id)}">
         ${blocked ? `<div class="wblocked">${esc(blocked)}</div>` : ""}${pull ? pullBar(pull) : ""}
         <div class="about-grid">
