@@ -953,7 +953,7 @@ class FailClosed(Base):
             with self.subTest(text=text[:40]):
                 self.assertEqual([m.span() for m in MASKS.TOKEN.finditer(text)], list(MASKS.tokens(text)))
 
-    def test_a_256_kb_text_is_checked_in_under_a_tenth_of_a_second(self):
+    def test_a_256_kb_text_is_checked_in_under_a_fifth_of_a_second_of_cpu(self):
         n = MASKS.MAX_TEXT
         texts = ["https://h.example.com/" + "a1" * (n // 2 - 12), "https://" + "@" * (n - 8), "https://h/?" + "a=1&" * (n // 4 - 3),
                  "https://h/" + "x/" * (n // 2 - 5), ("https://u:p@h.example.com/?token=t " * (n // 36))[:n],
@@ -965,7 +965,8 @@ class FailClosed(Base):
         for text in texts:
             self.assertLessEqual(len(text), n)
             best = min(_timed(lambda: MASKS.strip_url_secrets(text)) for _ in range(3))
-            self.assertLess(best, 0.1, text[:40])
+            # 0.2 s: ~0.045 s quiet, up to 0.085 s on a loaded host; a backtracking pattern takes seconds.
+            self.assertLess(best, 0.2, text[:40])
 
 
 ARGS_APP = "/apis/apps/v1/namespaces/lab/deployments/args"
