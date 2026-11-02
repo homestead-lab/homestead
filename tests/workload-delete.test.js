@@ -5,7 +5,7 @@ const between = require("./helpers/between");
 /* "Delete app" lists the Services it removes and the volumes it keeps. A
    failed read used to show as "none" and still offer the delete, which then
    removed the Services anyway. */
-const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+const source = require("./helpers/workloads-source")();
 const wlDelete = between(source, "window.wlDelete = async", "\nwindow.wlDeleteNow");
 
 async function review(answers) {

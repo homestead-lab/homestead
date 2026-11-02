@@ -15,7 +15,7 @@ test("the top bar's controls are buttons with names", () => {
 });
 
 test("port links and movable tags are buttons", () => {
-  assert.doesNotMatch(read("web/js/views-workloads.js"), /<span class="plink[^"]*"[^>]*onclick=/);
+  assert.doesNotMatch(require("./helpers/workloads-source")(), /<span class="plink[^"]*"[^>]*onclick=/);
   assert.doesNotMatch(read("web/js/views-overview.js"), /<span class="tag[^"]*movable[^"]*"[^>]*onclick=/);
 });
 

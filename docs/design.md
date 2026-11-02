@@ -618,7 +618,7 @@ file and line, when it finds:
 - a `UI.ack` sentence over 16 words;
 - a container or VM start that does not use `startReview`, an image update
   review that does not use `capacityHostTable`, or the older placement blocks
-  used outside `views-workloads.js`;
+  used outside `views-workloads*.js`;
 - more uses than today of older markup - `.note`, `.sec`, `deployCapacityHtml`,
   hand-written acknowledgement checkboxes and "I accept" wording, and
   hand-written `.pill`/`.tag` chips (`tests/chip-count.test.js`; use

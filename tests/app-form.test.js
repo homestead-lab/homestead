@@ -102,7 +102,7 @@ test("the page loads app-form.js after ui.js and before the views that use it", 
 });
 
 test("Deploy builds its sections from the shared list", () => {
-  const workloads = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const workloads = require("./helpers/workloads-source")();
   const deploy = between(workloads, "async function viewDeploy", "\n}\n");
   assert.match(deploy, /appFormSections\("deploy"/);
   assert.doesNotMatch(deploy, /later:/, "Placement is live in Deploy (#844)");
@@ -121,7 +121,7 @@ test("Review deployment names no field when another container's panel is not fou
   vm.createContext(c); require("./helpers/core-text")(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
+  vm.runInContext(require("./helpers/workloads-source")(), c);
   c.collect = () => ({ name: "a", workload_name: "a", container_name: "a", image: "a:1", target_mode: "new", volumes: [],
     additional_containers: [{ name: "b", image: "" }] });
   await c.window.doDeploy();

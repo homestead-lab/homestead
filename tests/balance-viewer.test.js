@@ -26,7 +26,7 @@ async function open(role) {
     api: async path => { asked.push(path); return path.startsWith("/api/workloads/") ? CONTAINERS : VOLUMES; } };
   c.window = c; vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-workloads.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", ...require("./helpers/workloads-source").paths()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   await c.balanceHosts();
   const panes = () => ["#balContainers", "#balVolumes", "#balReview"].map(id => field(id).innerHTML).join("\n");
   return { c, asked, body: () => body, panes, balance: () => vm.runInContext("BALANCE", c) };

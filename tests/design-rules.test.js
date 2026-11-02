@@ -174,10 +174,10 @@ test("start and update reviews use the shared review builders", () => {
   // design.md, Reviews: one host table and one start review, not a capacity
   // block written again for each dialog.
   const source = name => FILES.find(file => file.name === `web/js/${name}`).text;
-  assert.match(between(source("views-workloads.js"), "window.wlScale", "window.wlScaleGo"), /startReview\(/, "Start on a container uses startReview");
+  assert.match(between(require("./helpers/workloads-source")(), "window.wlScale", "window.wlScaleGo"), /startReview\(/, "Start on a container uses startReview");
   assert.match(between(source("views-vms.js"), "window.vmPowerReview", "window.vmPowerReviewReady"), /startReview\(/, "Start on a VM uses startReview");
-  assert.match(between(source("views-workloads.js"), "async function reviewImageActions", "window.imageReviewReady"), /capacityHostTable\(/, "the image update review uses capacityHostTable");
-  const outside = offences(/\b(?:capacityPlacementHtml|capacityHosts)\(/g, (_, file) => file.name !== "web/js/views-workloads.js");
+  assert.match(between(require("./helpers/workloads-source")(), "async function reviewImageActions", "window.imageReviewReady"), /capacityHostTable\(/, "the image update review uses capacityHostTable");
+  const outside = offences(/\b(?:capacityPlacementHtml|capacityHosts)\(/g, (_, file) => !file.name.startsWith("web/js/views-workloads"));
   assert.deepStrictEqual(outside, [], "new reviews use startReview or capacityHostTable, not the older placement blocks");
 });
 

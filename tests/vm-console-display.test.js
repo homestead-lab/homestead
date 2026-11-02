@@ -7,7 +7,7 @@ const source = fs.readFileSync("web/js/vm-console.js", "utf8");
 
 test("closing a console asks nothing: keys typed into the VM are not edits", () => {
   assert.match(source, /window\.__modalGuard = \(\) => "";/);
-  assert.match(fs.readFileSync("web/js/views-workloads.js", "utf8"), /window\.__modalGuard = \(\) => "";\n  if \(pods\.length\) consolePodChanged\(\);/);
+  assert.match(require("./helpers/workloads-source")(), /window\.__modalGuard = \(\) => "";\n  if \(pods\.length\) consolePodChanged\(\);/);
 });
 
 test("the screen says why it is black when the picture is on a passed-through GPU", () => {

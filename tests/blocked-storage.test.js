@@ -62,7 +62,7 @@ test("the image update check after sign-in still works with blocked storage", as
     paintUpdateBadge() {}, toast: (text, kind) => toasts.push([text, kind]) };
   ctx.window = ctx;
   vm.createContext(ctx);
-  const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const source = require("./helpers/workloads-source")();
   vm.runInContext(between(source, "async function loadImageUpdates(", "window.loadImageUpdates = loadImageUpdates;"), ctx);
   const report = await ctx.loadImageUpdates();
   assert.equal(report?.updates, 2);

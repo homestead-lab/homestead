@@ -3,7 +3,7 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 const between = require("./helpers/between");
 
 function load() {
-  const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "views-workloads.js"), "utf8");
+  const source = require("./helpers/workloads-source")();
   const ctx = { window: {} };
   vm.createContext(ctx);
   vm.runInContext(between(source, "const CAPACITY_ROUTINE", "window.capacityNotes = capacityNotes;") + "\nwindow.capacityNotes = capacityNotes;", ctx);

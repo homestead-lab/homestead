@@ -8,7 +8,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+const source = require("./helpers/workloads-source")();
 const dialog = between(source, "window.wlFailover = async () => {", "window.wlFailoverSave = ");
 
 async function failover(platform, capacity) {

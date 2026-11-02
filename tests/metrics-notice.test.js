@@ -7,7 +7,7 @@ const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
 const overview = fs.readFileSync("web/js/views-overview.js", "utf8");
-const workloads = fs.readFileSync("web/js/views-workloads.js", "utf8");
+const workloads = require("./helpers/workloads-source")();
 
 function notice(rows) {
   const ctx = { esc: s => String(s), fmtAgo: sec => `${Math.floor(sec / 60)}m ago`, document: {} };
