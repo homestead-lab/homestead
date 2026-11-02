@@ -3338,12 +3338,15 @@ ssh_pwauth: true
   };
   responses["/api/diagnostics/issue"] = () => ({ title: "Container restart fails", body: "### What happened\nRestart did not return the container to Ready.\n\n### Diagnostics\nHomestead demo. Identifiers anonymised. No logs attached.", url: "https://github.com/homestead-lab/homestead/issues/new?title=Container%20restart%20fails", comment_shortened: false });
   const original = window.fetch.bind(window);
-  /* Linked clusters: this one, a branch office that answers, and a DR site that is off. */
+  /* Linked clusters: this one, a branch office that answers, a DR site that is off,
+     and a lab this one is still asking for its summary (#1083). */
   const demoSites = [
-    { id: "a1f00d", handle: "main-site", name: "Main site", url: "http://192.0.2.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "" },
-    { id: "b2c0de", handle: "branch", name: "Branch office", url: "http://192.0.2.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "" },
+    { id: "a1f00d", handle: "main-site", name: "Main site", url: "http://192.0.2.242:8088", self: true, version: "2.8.200", reachable: true, compatible: true, error: "", checking: false, answered: true },
+    { id: "b2c0de", handle: "branch", name: "Branch office", url: "http://192.0.2.250:8088", self: false, version: "2.8.200", reachable: true, compatible: true, error: "", checking: false, answered: true },
     { id: "c3beef", handle: "dr-site", name: "DR site", url: "http://192.0.2.251:8088", self: false, version: "", reachable: false, compatible: true,
-      error: "no answer from http://192.0.2.251:8088" }];
+      error: "no answer from http://192.0.2.251:8088", checking: false, answered: true },
+    { id: "d4ab1e", handle: "lab", name: "Lab", url: "http://192.0.2.253:8088", self: false, version: "", reachable: false, compatible: true,
+      checking: true, answered: false, error: "still checking" }];
   const siteTag = id => { const s = demoSites.find(x => x.id === id); return { id: s.id, name: s.name, handle: s.handle, self: s.self }; };
   const branchNodes = ["branch-node1", "branch-node2"];
   const branchWorkloads = [
@@ -3370,7 +3373,7 @@ ssh_pwauth: true
     },
     "/api/fleet/legacy": [{ name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
     "/api/fleet/link-legacy": { ok: true, member: { name: "Staging" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
-    "/api/fleet/all/flow": () => ({clusters:[{...responses["/api/flow"],site:siteTag("a1f00d")},{...responses["/api/flow"],site:siteTag("b2c0de")}],missing:[{id:"c3beef",name:"DR site",error:"Not answering"}]}),
+    "/api/fleet/all/flow": () => ({clusters:[{...responses["/api/flow"],site:siteTag("a1f00d")},{...responses["/api/flow"],site:siteTag("b2c0de")}],missing:[{id:"c3beef",name:"DR site",error:"Not answering"},{id:"d4ab1e",name:"Lab",error:"has not answered yet",state:"waiting"}]}),
     "/api/fleet/all/workloads": () => [...mine(workloads), ...branch(branchWorkloads)],
     "/api/fleet/all/nodes": () => [...mine(nodes), ...branch(branchNodes.map((name, i) => ({ ...nodes[i], name })))],
     "/api/fleet/all/vms": () => [...mine(demoVms), ...branch([{ ...demoVms[0], name: "pfsense", node: branchNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
@@ -3689,7 +3692,7 @@ ssh_pwauth: true
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);
     const moves = responses["/api/move/moves"];
     responses["/api/move/moves"] = (...args) => moves(...args).filter(row => row.status !== "failed");
-    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.335-dev.2", error: "" });
+    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.335-dev.2", error: "", checking: false, answered: true });
     const mqtt = responses["/api/mqtt/preview"].states[0].payload;
     Object.assign(mqtt, { health: "healthy", vol_total: storage.volumes, vol_degraded: 0, vol_faulted: 0 });
   } else {

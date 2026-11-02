@@ -2581,6 +2581,10 @@ textarea{min-height:0}
 .fleet-via{padding:6px 9px 4px;font-size:11px;color:#9a9aa3}
 .fleet-dot{width:8px;height:8px;flex:0 0 auto;border-radius:50%;background:var(--dim)}
 .fleet-dot.ok{background:var(--ok)}.fleet-dot.warn{background:var(--med)}.fleet-dot.bad{background:var(--crit)}
+/* Still being checked (#1083): neutral, pulsing like the busy health pill; still when motion is off or reduced. */
+.fleet-dot.checking{animation:hpPulse 1.6s ease-in-out infinite}
+html[data-motion="off"] .fleet-dot.checking{animation:none}
+@media (prefers-reduced-motion:reduce){.fleet-dot.checking{animation:none}}
 .fleet-dot.all{width:10px;height:10px;background:conic-gradient(var(--ok) 0 33%,var(--low) 0 66%,var(--vio) 0)}
 .tag.cluster-tag{color:var(--vio);border-color:rgba(167,139,250,.3);background:rgba(167,139,250,.09);font-size:10px;padding:1px 6px;vertical-align:middle}
 .fleet-pick{display:grid;gap:8px}

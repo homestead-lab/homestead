@@ -683,6 +683,26 @@ class SummaryStragglerTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1.5, "the newcomer was asked on the request thread")
         row = next(m for m in view["members"] if m["id"] == garage)
         self.assertEqual((True, "still checking"), (row["checking"], row["error"]))
+        # The shape web/js/fleet.js reads as "still checking" rather than "not answering" (#1083).
+        self.assertEqual((False, "", False), (row["reachable"], row["version"], row["answered"]))
+
+    def test_a_member_whose_last_check_failed_keeps_that_answer_while_it_is_asked_again(self):
+        # The last answer wins (#1083): only a member never heard from is "still checking".
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        shed = self.b.fleet.self_id()
+        self.b.down = True
+        self.a.fleet._status.clear()
+        failed = next(m for m in self.a.fleet.summary()["members"] if m["id"] == shed)
+        self.assertEqual((False, False, True), (failed["reachable"], failed["checking"], failed["answered"]))
+        self.b.down = False
+        check, _ = self.slow_for(self.a.fleet, {shed})
+        with mock.patch.object(self.a.fleet, "check", check), mock.patch.object(self.a.fleet, "SUMMARY_WAIT", 0.1):
+            view = self.a.fleet.summary()
+        row = next(m for m in view["members"] if m["id"] == shed)
+        self.assertEqual((False, True, True), (row["reachable"], row["checking"], row["answered"]))
+        self.assertEqual(failed["error"], row["error"])
+        self.assertNotEqual("still checking", row["error"])
+        self.release.set()
 
     def test_a_check_still_running_is_not_started_again(self):
         self.a.fleet.join(self.b.url, "admin", "secret")

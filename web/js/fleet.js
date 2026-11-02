@@ -29,6 +29,15 @@ function setFleetMode(mode) {
 const fleetAll = () => fleetMode() === "all" && !!FLEET.view?.linked;
 window.fleetAll = fleetAll;
 
+/* A member this Homestead is still asking for its summary and has never heard
+   from is neither up nor down: a neutral dot and "still checking" (#1083).
+   The last answer wins: one that answered before, up or failed, keeps that
+   while it is asked again. A server without "answered" is taken as answered. */
+const fleetStillChecking = m => !m.self && !m.reachable && !!m.checking && m.answered === false;
+const fleetDot = (m, warn = true) => m.self || m.reachable ? (warn && m.compatible === false ? "warn" : "ok")
+  : fleetStillChecking(m) ? "checking" : "bad";
+const fleetAnswer = m => m.self || m.reachable ? `v${m.version}` : fleetStillChecking(m) ? "still checking" : "not answering";
+
 /* A row's cluster holds only on the page it was chosen on: after Back or a
    link to another page, requests go to this cluster, and so do the readers of
    FLEET.target (the file manager's headers). */
@@ -149,13 +158,13 @@ function fleetMenuHtml() {
   const item = (checked, onclick, iconName, title, sub, extra = "") => `<button type="button" role="menuitemradio"
     aria-checked="${checked}" class="${checked ? "on" : ""}" onclick="${onclick}">${iconName}
     <span class="fleet-item"><b>${esc(title)}</b><span>${sub}</span></span>${extra}</button>`;
-  const dot = m => `<span class="fleet-dot ${m.reachable ? (m.compatible === false ? "warn" : "ok") : "bad"}" aria-hidden="true"></span>`;
+  const dot = m => `<span class="fleet-dot ${fleetDot(m)}" aria-hidden="true"></span>`;
   return `${unread}${view.via ? `<div class="fleet-via">Through ${esc(view.via)}</div>` : ""}
     ${item(all, "fleetShowAll()", `<span class="fleet-dot all" aria-hidden="true"></span>`, "All clusters",
       FLEET.view ? `${view.members.length} together` : FLEET.menuUnread ? "not read" : "reading…")}
     <div class="fleet-sep"></div>
     ${view.members.map(m => item(!all && m.self, `fleetSwitch(${jsq(m.id)})`, dot(m), m.name,
-      esc(m.self ? `this one · v${m.version}` : m.reachable ? `v${m.version}` : "not answering"))).join("")}
+      esc(m.self ? `this one · v${m.version}` : fleetAnswer(m)))).join("")}
     <div class="fleet-sep"></div>
     <button type="button" data-need="admin" onclick="fleetMenuClose();fleetLink()">${icon("plus")}<span class="fleet-item"><b>Link a cluster</b></span></button>
     <button type="button" onclick="fleetOpenSettings()">${icon("gear")}<span class="fleet-item"><b>Manage clusters</b></span></button>`;
@@ -230,10 +239,10 @@ window.fleetManage = window.fleetOpenSettings;
 // One line each: the cluster, where it is and what it runs, and its button.
 function fleetMembersHtml(view) {
   return view.members.map(m => `<li>
-    <span class="fleet-dot ${m.self || m.reachable ? (m.compatible === false ? "warn" : "ok") : "bad"}" aria-hidden="true"></span>
+    <span class="fleet-dot ${fleetDot(m)}" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this one")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}${fleetPlain(m.url) ? ` <span title="Linking, and every key change, sends the clusters' key unencrypted at this address">${UI.chip("plain HTTP", "warn")}</span>` : ""}
       <span class="fleet-sub"${m.self || m.reachable ? "" : ` title="${esc(m.error || "")}"`}><span class="mono">${esc(m.url || "no address")}</span>
-        · ${m.self || m.reachable ? `v${esc(m.version)}` : "not answering"}</span></div>
+        · ${esc(fleetAnswer(m))}</span></div>
     <div class="row nowrap fleet-row-acts"><span class="fleet-out" id="fout_${esc(m.id)}"></span>
     ${m.self ? (view.linked ? UI.button("Leave", "fleetLeave()", { attrs: 'data-need="admin"' }) : "")
       : UI.button("Unlink", `fleetUnlink(${jsArg(m.id)},${jsArg(m.name)})`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
@@ -616,8 +625,8 @@ window.moveToCluster = (kind, name, sourceHandle = "", transferMode = "move", so
     ${UI.lead(`Choose the destination, then review the ${verb.toLowerCase()} there. Nothing stops until you confirm.`)}
     <div class="fleet-pick">${choices.map(m => `<button type="button" class="btn" ${m.reachable ? "" : "disabled"}
       onclick="moveToClusterGo(${jsq(m.id)},${jsq(from)},${jsq(kind)},${jsq(name)},${jsq(transferMode)},${jsq(sourceNamespace)})">
-      <span class="fleet-dot ${m.reachable ? "ok" : "bad"}"></span><b>${esc(m.name)}</b>
-      <span class="dim xs">${m.reachable ? `v${esc(m.version)}` : "not answering"}</span></button>`).join("")}</div>
+      <span class="fleet-dot ${fleetDot(m, false)}"></span><b>${esc(m.name)}</b>
+      <span class="dim xs">${esc(fleetAnswer(m))}</span></button>`).join("")}</div>
     ${UI.actions(UI.cancel())}</div>`, false, "operation-review");
 };
 
