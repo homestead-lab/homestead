@@ -13,6 +13,7 @@ Builds on tests/test_viewer_helm_values.py (the same objects on the shared fake)
 An admin and the reveal route see everything as before."""
 import base64
 import copy
+import gc
 import gzip
 import json
 import sys
@@ -1111,9 +1112,18 @@ class SecurityReview(unittest.TestCase):
 
 
 def _timed(work):
-    started = time.monotonic()
-    work()
-    return time.monotonic() - started
+    """CPU seconds work() took, with no collection inside: on a busy machine
+    the wall clock also counts the time other processes had the core, and a
+    collection is not the masking's own cost."""
+    was = gc.isenabled()
+    gc.disable()   # no collect per call: after a file that leaves 1.5 M objects, each costs 0.25 s
+    try:
+        started = time.process_time()
+        work()
+        return time.process_time() - started
+    finally:
+        if was:
+            gc.enable()
 
 
 if __name__ == "__main__":
