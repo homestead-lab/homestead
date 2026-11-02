@@ -19,7 +19,7 @@ function guide() {
   ctx.jsArg = s => JSON.stringify(String(s ?? ""));
   ctx.tip = () => "";
   // As index.html loads them: the storage views before the guide.
-  vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/storage-source")(), ctx);
   vm.runInContext(fs.readFileSync("web/js/welcome.js", "utf8"), ctx);
   return ctx;
 }

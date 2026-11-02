@@ -93,7 +93,7 @@ function askCall(source, from) {
 test("storage prompts that delete or remove something have a title and a button naming the result", () => {
   const dir = path.join(__dirname, "..", "web", "js");
   const checked = [], missing = [];
-  for (const name of ["views-storage.js", "views-protect.js", "longhorn-v2-setup.js"]) {
+  for (const name of [...require("./helpers/storage-source").names(), "views-protect.js", "longhorn-v2-setup.js"]) {
     const source = fs.readFileSync(path.join(dir, name), "utf8");
     for (const match of source.matchAll(/\bask\(\s*["'`](Delete|Remove|Erase|Disable)\b/g)) {
       const call = askCall(source, match.index + 3);

@@ -28,7 +28,7 @@ test("the SMB, NFS and host console add-ons switch with Enable and Disable butto
 
 test("Settings' own on/off settings are toggles", () => {
   assert.match(read("web/js/views-settings.js"), /<label class="toggle"><input id="set_smart_notify"/);
-  assert.match(read("web/js/views-storage.js"), /<label class="toggle"><input type="checkbox" id="lh_offline"/);
+  assert.match(require("./helpers/storage-source")(), /<label class="toggle"><input type="checkbox" id="lh_offline"/);
 });
 
 test("VM Edit holds only fields that go through Review; Logo and Monitoring stay in the VM's ⋯", () => {

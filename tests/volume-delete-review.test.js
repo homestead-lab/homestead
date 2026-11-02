@@ -32,7 +32,7 @@ function review(api) {
   context.window = context;
   vm.createContext(context);
   require("./helpers/load-ui")(context);
-  vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), context);
+  vm.runInContext(require("./helpers/storage-source")(), context);
   return {context, elements, html: () => html, replace: value => {body.innerHTML = value;},
     confirm: () => {selection = {value: "delete_data"}; elements["#vd_confirm"].value = target.pvc_name; context.volumeDeleteGate();}};
 }

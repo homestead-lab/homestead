@@ -11,7 +11,7 @@ function load(total, extra = {}) {
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
   ctx.CRON = ctx.window.CRON || ctx.CRON;
-  for (const file of ["web/js/views-protect.js", "web/js/views-storage.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
+  for (const file of ["web/js/views-protect.js", ...require("./helpers/storage-source").files()]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
   return ctx;
 }
 

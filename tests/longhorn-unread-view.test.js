@@ -7,7 +7,7 @@ const context = { window: {}, console, Set, Map, Promise, document: { addEventLi
   meter: pct => `<meter value="${pct}"></meter>`, tip: () => "?", toast() {} };
 vm.createContext(context);
 context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
-for (const f of ["web/js/ui.js", "web/js/views-storage.js", "web/js/views-overview.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), context);
+for (const f of ["web/js/ui.js", ...require("./helpers/storage-source").files(), "web/js/views-overview.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), context);
 
 test("a volume whose copies Longhorn couldn't read says copies unknown, not one copy", () => {
   const x = { name: "pvc-1", replicas: 2, copies: null };

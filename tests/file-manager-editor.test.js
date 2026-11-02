@@ -28,7 +28,7 @@ async function open() {
       return { revision: "r2", message: "saved" };
     } };
   ctx.window = ctx; vm.createContext(ctx);
-  for (const file of ["web/js/views-storage.js", "web/js/filemanager.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
+  for (const file of [...require("./helpers/storage-source").files(), "web/js/filemanager.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
   vm.runInContext(`FM.panes = [{ namespace: "apps", pvc: "data", path: "conf" }, { namespace: "apps", pvc: "data", path: "" }];`, ctx);
   await ctx.fmEdit(0, "app.conf");
   const view = vm.runInContext("({ FM })", ctx);

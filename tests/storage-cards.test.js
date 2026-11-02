@@ -4,7 +4,7 @@
 // forecast, old copies and other volumes fill in as they arrive.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
-const src = fs.readFileSync("web/js/views-storage.js", "utf8");
+const src = require("./helpers/storage-source")();
 
 const VOLUME = { name: "pvc-1", pvc_name: "paperless-data", namespace: "lab", state: "attached", robustness: "healthy",
   replicas: 2, copies: [], access_modes: ["ReadWriteOnce"], engine: "v1", size_gb: 10, actual_gb: 2 };

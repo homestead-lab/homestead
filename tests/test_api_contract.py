@@ -60,7 +60,8 @@ WRAPPERS = {
     "views-resources.js": {"resPost": Wrapper(0, "POST")},
     "views-settings.js": {"selfDataPost": Wrapper(0, "POST")},
     "views-stats.js": {"mqttPost": Wrapper(0, "POST")},
-    "views-storage.js": {"part": Wrapper(0, "GET"), "tagsSave": Wrapper(0, "POST")},
+    "views-storage-disks.js": {"tagsSave": Wrapper(0, "POST")},
+    "views-storage-volumes.js": {"part": Wrapper(0, "GET")},
     "views-vms.js": {"vmStorePost": Wrapper(0, "POST"), "uvmPost": Wrapper(0, "POST"), "part": Wrapper(0, "GET")},
 }
 

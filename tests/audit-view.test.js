@@ -6,7 +6,7 @@ const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 const loadUi = require("./helpers/load-ui");
 
-const SOURCE = fs.readFileSync("web/js/views-storage.js", "utf8");
+const SOURCE = require("./helpers/storage-source")();
 
 function load({ admin = true } = {}) {
   const calls = [], painted = [];

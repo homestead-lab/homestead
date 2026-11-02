@@ -21,7 +21,7 @@ test("Settings › Monitoring explains in tips, says amber, and says Recommended
 });
 
 test("the Longhorn storage card keeps its live figure and puts the consequence in a tip", () => {
-  const src = read("web/js/views-storage.js");
+  const src = require("./helpers/storage-source")();
   assert.doesNotMatch(src, /class="note"[^>]*>Past a node's limit/);
   assert.match(src, /across all hosts now/);
 });
@@ -37,7 +37,7 @@ test("the NFS server's recovery detail is in UI.more, like the SMB card", () => 
   const body = between(src, "window.nfsRecovery =", "\n};\n");
   assert.match(body, /UI\.more\(/);
   assert.doesNotMatch(body, /<details/);
-  assert.doesNotMatch(read("web/js/views-storage.js"), /<div class="dim xs"[^>]*>NFS is a separate opt-in container/);
+  assert.doesNotMatch(require("./helpers/storage-source")(), /<div class="dim xs"[^>]*>NFS is a separate opt-in container/);
 });
 
 test("a setup step doesn't repeat that Next leaves it unchecked; the intro says it once", () => {

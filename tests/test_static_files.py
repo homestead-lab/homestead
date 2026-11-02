@@ -317,7 +317,9 @@ class RealVendorTests(unittest.TestCase):
         self.assertTrue(all(str(f).startswith(str(base.resolve())) for f in seen))
 
     def test_the_page_loads_no_library_by_an_unversioned_path(self):
-        for name in ("vm-console.js", "views-storage.js", "views-overview.js"):
+        storage = sorted(p.name for p in (ROOT / "web" / "js").glob("views-storage-*.js"))
+        self.assertTrue(storage)
+        for name in ("vm-console.js", *storage, "views-overview.js"):
             text = (ROOT / "web" / "js" / name).read_text()
             with self.subTest(name=name):
                 self.assertNotRegex(text, r"""["'`]/vendor/(?:novnc|monaco)""")

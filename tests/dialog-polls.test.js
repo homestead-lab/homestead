@@ -233,7 +233,7 @@ test("a busy volume with a hidden tab makes no /api/volumes read in 60 s", async
     volumeBusy: x => !!x.rebuilding, CSS: { escape: String }, api: async path => { reads.push(path); return [{ name: "data", rebuilding: true }]; } };
   ctx.window = ctx;
   vm.createContext(ctx);
-  const src = fs.readFileSync("web/js/views-storage.js", "utf8");
+  const src = require("./helpers/storage-source")();
   vm.runInContext(between(src, "function volumeProgressWatch()", "/* Claims on classes that are not Longhorn"), ctx);
   vm.runInContext("volumeProgressWatch()", ctx);
   await clock.advance(8000);
