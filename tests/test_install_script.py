@@ -756,7 +756,12 @@ class InstallerFixTests(unittest.TestCase):
             children=$(pgrep -P "$job" | tr '\\n' ' ')
             [ -n "$children" ] || echo "no children seen"
             stop_tree "$job"; sleep 1
-            for pid in $job $children; do kill -0 "$pid" 2>/dev/null && echo "still running: $pid"; done
+            # A stopped child whose parent is gone waits as a zombie until PID 1
+            # reaps it, and kill -0 still finds a zombie. In a container whose
+            # PID 1 is the test's python, nothing reaps it: stopped all the same.
+            for pid in $job $children; do
+              kill -0 "$pid" 2>/dev/null && [ "$(ps -o stat= -p "$pid" | cut -c1)" != Z ] && echo "still running: $pid"
+            done
             echo checked''')
         self.assertIn("checked", out)
         self.assertNotIn("no children seen", out)
