@@ -1,0 +1,554 @@
+{
+ "upgradeGateAndStartOnce": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "toast",
+   "Confirm that the V2 volumes are backed up first.",
+   "bad"
+  ],
+  [
+   "state",
+   "without the backup tick",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "api",
+   "/api/cluster/components/upgrade",
+   {
+    "component": "longhorn",
+    "to": "v1.13.0",
+    "v2_mode": "live",
+    "confirm_backup": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "Updated",
+   "ok"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "op"
+   }
+  ],
+  [
+   "clusterComponentsPaint"
+  ],
+  [
+   "state",
+   "started",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ]
+ ],
+ "offlineBlockersAreDisabledAndEscaped": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "state",
+   "offline",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" >Live · volumes stay attached</option><option value=\"offline\" selected>Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"bad\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-x\"/></svg></span>\n      <div><div class=\"ui-check-title\">&lt;script&gt;bad&lt;/script&gt;</div></div></li></ul><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" disabled >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "state",
+   "after",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" >Live · volumes stay attached</option><option value=\"offline\" selected>Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"bad\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-x\"/></svg></span>\n      <div><div class=\"ui-check-title\">&lt;script&gt;bad&lt;/script&gt;</div></div></li></ul><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" disabled >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ]
+ ],
+ "theUpgradeCheckNeedsItsTick": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><section>Before you upgrade</section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "toast",
+   "Tick that you have read what this upgrade breaks first",
+   "bad"
+  ],
+  [
+   "state",
+   "no tick",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><section>Before you upgrade</section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "api",
+   "/api/cluster/components/upgrade",
+   {
+    "component": "longhorn",
+    "to": "v1.13.0",
+    "v2_mode": "live",
+    "confirm_backup": true,
+    "accept_check": true
+   }
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "Updated",
+   "ok"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "op"
+   }
+  ],
+  [
+   "clusterComponentsPaint"
+  ],
+  [
+   "state",
+   "started",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><section>Before you upgrade</section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ]
+ ],
+ "aRefusedStart": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "api",
+   "/api/cluster/components/upgrade",
+   {
+    "component": "longhorn",
+    "to": "v1.13.0",
+    "v2_mode": "live",
+    "confirm_backup": true
+   }
+  ],
+  [
+   "toast",
+   "refused",
+   "bad"
+  ],
+  [
+   "state",
+   "refused",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ],
+  [
+   "api",
+   "/api/cluster/components/upgrade",
+   {
+    "component": "longhorn",
+    "to": "v1.13.0",
+    "v2_mode": "live",
+    "confirm_backup": true
+   }
+  ],
+  [
+   "toast",
+   "refused",
+   "bad"
+  ],
+  [
+   "state",
+   "again",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.12.2</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   2
+  ]
+ ],
+ "statusViewPollsAndStops": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "state",
+   "status",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "state",
+   "polled",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "state",
+   "poll failed",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ],
+  [
+   "state",
+   "closed",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ]
+ ],
+ "statusReportFailure": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Could not check the upgrade</b><div class=\"ui-callout-body\">Longhorn is not answering</div></div>\n    </div>",
+   0
+  ]
+ ],
+ "settingsReviewApplyOnce": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "clearTimeout"
+  ],
+  [
+   "childModal",
+   "Enable V2 live upgrades",
+   "<p class=\"ui-lead\">Longhorn can upgrade V2 instance managers automatically after future manager upgrades. Check volume backups and replica health before each upgrade.</p><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeTimeout\">Host timeout (minutes)</label><input id=\"lhV2UpgradeTimeout\" type=\"number\" min=\"1\" max=\"1440\" value=\"60\"><div class=\"ui-help\">Changes also affect the current upgrade. Waiting for healthy volumes has no timeout.</div></div></div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"lhV2Upgrade()\" data-dialog-dismiss=\"true\">Back</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeSettingsReview(true)\" >Review settings</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade/review",
+   {
+    "enabled": true,
+    "timeout": 60
+   }
+  ],
+  [
+   "childModal",
+   "Apply V2 upgrade settings",
+   "<dl class=\"ui-facts\"><div><dt>Live upgrades</dt><dd>Enabled</dd></div><div><dt>Host timeout</dt><dd>60 minutes</dd></div></dl><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2SettingsAck\"><span>Turn on automatic V2 upgrades; backups are checked</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"lhV2Upgrade()\" data-dialog-dismiss=\"true\">Back</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeSettingsApply()\" >Apply settings</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div></dl><p class=\"ui-lead\">No V2 host upgrade is recorded.</p><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ],
+  [
+   "state",
+   "without the tick",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div></dl><p class=\"ui-lead\">No V2 host upgrade is recorded.</p><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade/settings",
+   {
+    "enabled": true,
+    "timeout": 60,
+    "capacity_token": "review-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Updated",
+   "ok"
+  ],
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "state",
+   "applied",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div></dl><p class=\"ui-lead\">No V2 host upgrade is recorded.</p><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   2
+  ]
+ ],
+ "settingsRefusedAndTimeoutOnly": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "clearTimeout"
+  ],
+  [
+   "childModal",
+   "V2 host upgrade timeout",
+   "<p class=\"ui-lead\">Longhorn can upgrade V2 instance managers automatically after future manager upgrades. Check volume backups and replica health before each upgrade.</p><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeTimeout\">Host timeout (minutes)</label><input id=\"lhV2UpgradeTimeout\" type=\"number\" min=\"1\" max=\"1440\" value=\"60\"><div class=\"ui-help\">Changes also affect the current upgrade. Waiting for healthy volumes has no timeout.</div></div></div><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"lhV2Upgrade()\" data-dialog-dismiss=\"true\">Back</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeSettingsReview(true)\" >Review settings</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade/review",
+   {
+    "enabled": true,
+    "timeout": 90
+   }
+  ],
+  [
+   "childModal",
+   "Apply V2 upgrade settings",
+   "<dl class=\"ui-facts\"><div><dt>Live upgrades</dt><dd>Enabled</dd></div><div><dt>Host timeout</dt><dd>90 minutes</dd></div></dl><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2SettingsAck\"><span>Turn on automatic V2 upgrades; backups are checked</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"lhV2Upgrade()\" data-dialog-dismiss=\"true\">Back</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeSettingsApply()\" >Apply settings</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade/settings",
+   {
+    "enabled": true,
+    "timeout": 90,
+    "capacity_token": "review-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "refused",
+   "bad"
+  ],
+  [
+   "state",
+   "refused",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div></dl><p class=\"ui-lead\">No V2 host upgrade is recorded.</p><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   2
+  ]
+ ],
+ "settingsReviewStopsAndDropsTheStatusView": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade/review",
+   {
+    "enabled": false,
+    "timeout": 60
+   }
+  ],
+  [
+   "childModal",
+   "Apply V2 upgrade settings",
+   "<dl class=\"ui-facts\"><div><dt>Live upgrades</dt><dd>Paused</dd></div><div><dt>Host timeout</dt><dd>60 minutes</dd></div></dl><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2SettingsAck\"><span>Pause them; the host being upgraded still finishes</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"lhV2Upgrade()\" data-dialog-dismiss=\"true\">Back</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeSettingsApply()\" >Apply settings</button></div></div>"
+  ],
+  [
+   "state",
+   "after the late status",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>",
+   1
+  ],
+  [
+   "state",
+   "polled",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>",
+   1
+  ]
+ ],
+ "oneSendBlocksTheOthers": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Upgrade Longhorn to v1.13.0",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade?to=v1.13.0"
+  ],
+  [
+   "api",
+   "/api/cluster/components/upgrade",
+   {
+    "component": "longhorn",
+    "to": "v1.13.0",
+    "v2_mode": "live",
+    "confirm_backup": true
+   }
+  ],
+  [
+   "state",
+   "blocked",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "Updated",
+   "ok"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "op"
+   }
+  ],
+  [
+   "clusterComponentsPaint"
+  ],
+  [
+   "state",
+   "done",
+   "<p class=\"ui-lead\">Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>Target</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div></dl><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"lhV2UpgradeMode\">Upgrade method</label><select id=\"lhV2UpgradeMode\" onchange=\"lhV2UpgradeMode(this.value)\"><option value=\"live\" selected>Live · volumes stay attached</option><option value=\"offline\" >Offline · detach V2 volumes</option></select></div></div><ul class=\"ui-checklist\"><li class=\"ok\"><span class=\"ui-check-mark\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-check\"/></svg></span>\n      <div><div class=\"ui-check-title\">Hosts and V2 replicas meet the live upgrade requirements.</div></div></li></ul><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"lhV2UpgradeBackup\"><span>I have backed up the V2 volumes before this upgrade.</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" onclick=\"lhV2UpgradeStart()\" >Upgrade to v1.13.0</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   1
+  ]
+ ],
+ "statusViewWithNoTargetCannotStart": [
+  [
+   "clearTimeout"
+  ],
+  [
+   "modal",
+   "Longhorn V2 live upgrade",
+   "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
+  ],
+  [
+   "api",
+   "/api/longhorn/v2/upgrade"
+  ],
+  [
+   "setTimeout"
+  ],
+  [
+   "state",
+   "nothing",
+   "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div></dl><p class=\"ui-lead\">No V2 host upgrade is recorded.</p><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
+   0
+  ]
+ ]
+}
