@@ -695,6 +695,23 @@ Jobs it started. **did not run** means a run it was due to start has not started
 15 minutes after its time. When the Jobs cannot be read the result is
 **unknown**, and the page says why; it is never shown as fine.
 
+**State** says how each job is doing, the worst that applies: **failed** (its
+last run failed, even if it is paused now), **did not run**, **unknown** (in
+amber: Homestead cannot tell how its runs went, or whether it missed one),
+**running**, **paused**, then **ok**; a job that has not been due yet says **not
+run yet**. A line above the table counts them ("6 jobs: 1 failed, 1 did not run,
+4 ok"). The image a job runs is under its name.
+
+The bar above the table is the one This week and the Timeline use: **CronJobs**
+and **System** (the CronJobs Longhorn keeps for its recurring jobs), each with
+its count, and an **App** menu when a job names its app - the one app that
+mounts a volume claim the job mounts, read for Homestead's own namespace only,
+since other namespaces' volumes are not shown. With an app chosen, a line says how
+many jobs in other namespaces may touch it, as Homestead can't see which app
+they touch. The kind is kept in the page's address; the app lasts while the
+browser tab stays open. Schedules has no Host menu: a host chosen on This week
+leaves its list as it is.
+
 Only the CronJobs Homestead made in its own namespace can be edited or deleted
 here, and Run now works in its own namespace only. The rest are read-only and say
 where they came from: **Applied by Flux**, **Longhorn recurring job**, or who

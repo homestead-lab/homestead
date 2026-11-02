@@ -45,32 +45,91 @@ function jobResult(j) {
     j.result === "failed" && j.result_reason ? `<div class="dim xs">${esc(j.result_reason)}</div>` : ""}${
     j.result !== "ok" && j.last_success ? `<div class="dim xs">last succeeded ${fmtWhen(j.last_success)}</div>` : ""}`;
 }
+/* State (#919): how the job is doing, the worst that applies - failed, did not
+   run, unknown, running, paused, ok. Unknown, in amber, when Homestead cannot
+   tell: its runs could not be read, or whether a run was missed. Never a guess. */
+const JOB_STATE = { failed: ["bad", "failed"], missed: ["warn", "did not run"], unknown: ["warn", "unknown"],
+  running: ["neutral", "running"], paused: ["neutral", "paused"], ok: ["ok", "ok"], waiting: ["neutral", "not run yet"] };
+function jobState(j) {
+  if (j.result === "failed") return "failed";
+  if (j.missed === true) return "missed";
+  // Paused jobs and Longhorn's own CronJobs are never judged for a missed run.
+  if (j.result === "unknown" || !j.result || (j.missed == null && !j.suspend && j.owner !== "longhorn")) return "unknown";
+  if (j.active || j.result === "running") return "running";
+  if (j.suspend) return "paused";
+  return j.result === "never" ? "waiting" : "ok";
+}
+const JOB_STATE_TIP = { unknown: "Homestead cannot tell how its runs went, or whether one was missed",
+  missed: "It was due to start a run that has not started", waiting: "It has not been due to run yet" };
+function jobStateChip(j) {
+  const key = jobState(j), [tone, word] = JOB_STATE[key];
+  return UI.chip(word, tone, { tip: key === "unknown" && j.result_reason ? j.result_reason : JOB_STATE_TIP[key] || "" });
+}
+/* A row of the bar: Longhorn's own CronJobs are System (#919); every other
+   one, an app's job applied by Flux too, is a CronJob. Its app from the claims it mounts. */
+const scheduleRow = (j, apps) => ({ ...j, type: j.owner === "longhorn" ? "system" : "cron",
+  app: window.ScheduleWeek ? window.ScheduleWeek.appOf(apps, j.ns, j.claims) : "", host: "",
+  // Another namespace's CronJob comes without its claims (#739): its app cannot be seen.
+  unseen: !!j.ns && !("claims" in j) });
+const scheduleKinds = () => ({ cron: window.ScheduleWeek.KINDS.cron, system: window.ScheduleWeek.KINDS.system });
+// What the page read, so a filter repaints without reading again.
+const schedulesPage = { jobs: [], rows: [], appsUnread: "", filter: null };
 // The generation of the job the editor opened ("" for a new one): the
 // server refuses the save if its spec changed, or it appeared, since.
 let jobEditing = "";
 // An alert's link (/schedules?find=ns/name) finds its CronJob's row.
 const jobFind = j => { try { return new URLSearchParams(location.search).get("find") === `${j.ns || ""}/${j.name}`; } catch { return false; } };
+// "4 jobs: 1 failed, 1 did not run, 2 ok", worst first.
+function schedulesSummary(rows) {
+  const n = {};
+  rows.forEach(j => { const key = jobState(j); n[key] = (n[key] || 0) + 1; });
+  const parts = Object.keys(JOB_STATE).filter(key => n[key]).map(key => `${n[key]} ${JOB_STATE[key][1]}`);
+  return `${rows.length} job${rows.length === 1 ? "" : "s"}${parts.length ? `: ${parts.join(", ")}` : ""}`;
+}
 async function viewSchedules() {
-  const js = await api("/api/schedules");
-  const unread = js.find(j => j.result === "unknown" && /could not be read/.test(j.result_reason || ""));
-  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} in every namespace · next runs in your time zone (${esc(yourZone())})`, `${UI.button("This week", "go('schedule-week')")} <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
-    ${unread ? `<div class="note" style="margin-bottom:14px">How each last run ended is unknown. ${esc(unread.result_reason)}</div>` : ""}
-    <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
-      <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
-      ${js.map(j => `<tr${jobFind(j) ? ' class="flash-find"' : ""} data-find="${esc(`${j.ns || ""}/${j.name}`)}">
-        <td><b>${esc(j.name)}</b>${jobOwner(j)}</td>
-        <td class="small">${jobWhen(j)}</td>
-        <td class="small">${jobNext(j)}</td>
-        <td class="mono small dim">${esc(j.image)}</td>
-        <td class="small dim">${jobResult(j)}</td>
-        <td>${j.suspend ? UI.chip("paused", "neutral")
-            : j.active ? UI.chip("running", "neutral") : UI.chip("active", "ok")}</td>
-        <td data-actions>${actionBar([...(j.runnable === false ? [] : [{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` }]),
-          ...(j.managed === false || j.editable === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
-          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
-    </tbody></table></div></div>`);
+  const [js, apps] = await Promise.all([api("/api/schedules"), api("/api/workloads").catch(e => ({ failed: e?.message || "could not be read" }))]);
+  const list = Array.isArray(apps) ? apps : [];
+  Object.assign(schedulesPage, { jobs: js, rows: js.map(j => scheduleRow(j, list)), appsUnread: Array.isArray(apps) ? "" : apps?.failed || "could not be read",
+    filter: window.ScheduleWeek.readFilter(scheduleKinds()) });
+  schedulesPaint();
   try { document.querySelector("tr.flash-find")?.scrollIntoView?.({ block: "center" }); } catch { /* no page to scroll */ }
 }
+function schedulesPaint() {
+  const { jobs: js, rows, filter: f } = schedulesPage;
+  const unread = js.find(j => j.result === "unknown" && /could not be read/.test(j.result_reason || ""));
+  // No row names a host, so Schedules filters on kind and App only: a Host
+  // chosen on This week (kept for the session) must not empty it (review, #919).
+  const byApp = { ...f, host: "" };
+  // A row an alert links to (?find=) shows whatever the filter.
+  const shown = rows.filter(j => window.ScheduleWeek.matches(j, byApp) || jobFind(j));
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} in every namespace · next runs in your time zone (${esc(yourZone())})`, `${UI.button("This week", "go('schedule-week')")} <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+    ${unread ? `<div class="note" style="margin-bottom:14px">How each last run ended is unknown. ${esc(unread.result_reason)}</div>` : ""}
+    <div class="dim small sched-line">${esc(schedulesSummary(shown))}${schedulesPage.appsUnread ? ` · Could not read the apps list, so no job names its app: ${esc(schedulesPage.appsUnread)}` : ""}</div>
+    ${window.ScheduleWeek.unseenLine(rows, byApp, "job", "jobs")}
+    ${window.Timeline.filterBar({ entries: rows, counts: rows.reduce((all, r) => ({ ...all, [r.type]: (all[r.type] || 0) + 1 }), {}),
+      filter: byApp, kinds: scheduleKinds(), call: "schedulesFilter", menus: [["app", "App", "All apps"]] })}
+    <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
+      <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
+      ${shown.map(j => `<tr${jobFind(j) ? ' class="flash-find"' : ""} data-find="${esc(`${j.ns || ""}/${j.name}`)}">
+        <td><b>${esc(j.name)}</b>${jobOwner(j)}${j.app ? `<div class="dim xs">${esc(j.app)}</div>` : ""}${j.image ? `<div class="mono xs dim">${esc(j.image)}</div>` : ""}</td>
+        <td class="small">${jobWhen(j)}</td>
+        <td class="small">${jobNext(j)}</td>
+        <td class="small dim">${jobResult(j)}</td>
+        <td data-sort="${Object.keys(JOB_STATE).indexOf(jobState(j))}">${jobStateChip(j)}</td>
+        <td data-actions>${actionBar([...(j.runnable === false ? [] : [{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` }]),
+          ...(j.managed === false || j.editable === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(schedulesPage.jobs.find(x => x.ns === j.ns && x.name === j.name) || j))})` },
+          { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("")
+        || `<tr><td colspan=6 class="empty">${rows.length ? "Nothing matches the filter." : "no schedules yet"}</td></tr>`}
+    </tbody></table></div></div>`);
+}
+window.schedulesFilter = (key, value) => {
+  const f = schedulesPage.filter;
+  // No Host here: a Host kept from This week stays kept, for This week.
+  if (!f || !["kind", "app"].includes(key)) return;
+  f[key] = key === "kind" && !Object.hasOwn(scheduleKinds(), value) ? "" : String(value || "");
+  window.ScheduleWeek.keepFilter(f, ["kind"]);
+  schedulesPaint();
+};
 window.jobEdit = (j) => {
   j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };
   jobEditing = j.generation ?? "";
@@ -108,5 +167,6 @@ window.jobDel = async name => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  jobUtc, jobWhen, jobNext, jobOwner, JOB_RESULT, jobResult, jobEditing, jobFind, viewSchedules
+  jobUtc, jobWhen, jobNext, jobOwner, JOB_RESULT, jobResult, JOB_STATE, jobState, JOB_STATE_TIP, jobStateChip, scheduleRow, scheduleKinds,
+  schedulesPage, jobEditing, jobFind, schedulesSummary, viewSchedules, schedulesPaint
 };

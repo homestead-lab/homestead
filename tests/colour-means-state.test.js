@@ -25,7 +25,8 @@ test("Image Cache: an image kept because a record could not be read is amber and
 
 test("Schedules and Import show a running or waiting job as neutral, not amber", () => {
   const src = require("./helpers/lifecycle-source")();
-  assert.match(src, /UI\.chip\("running", "neutral"\)/);
+  // Schedules' State (#919): running and paused neutral; amber only for a run that did not happen or an unknown.
+  assert.match(src, /running: \["neutral", "running"\], paused: \["neutral", "paused"\]/);
   assert.doesNotMatch(src, /UI\.chip\("running", "warn"\)/);
   assert.match(src, /j\.state === "failed" \? "bad" : "neutral"/);
 });
