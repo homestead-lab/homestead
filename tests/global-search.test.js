@@ -67,7 +67,7 @@ test("an empty search finds nothing", () => {
 test("the search box is a combobox over a listbox, moved through with the arrow keys", () => {
   const html = fs.readFileSync("web/index.html", "utf8"), app = fs.readFileSync("web/js/app.js", "utf8");
   assert.match(html, /<input id="globalSearch"[^>]*role="combobox"[^>]*aria-controls="searchResults"/);
-  assert.match(html, /<script src="\/js\/search\.js\?v=[^"]+"><\/script>/);
+  assert.match(html, /<script src="\/js\/search\.js\?v=[^"]+" defer><\/script>/);
   assert.match(html, /<div id="searchResults"[^>]*role="listbox"/);
   assert.match(app, /ArrowDown/);
   assert.match(app, /aria-activedescendant/);
