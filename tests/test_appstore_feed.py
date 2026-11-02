@@ -275,8 +275,13 @@ class BackgroundTests(unittest.TestCase):
             APPSTORE.fetch_appstore(wait=0)
         self.assertTrue(gate.opened.wait(5))
         missing = urllib.error.HTTPError("/api/v1", 404, "Not Found", {}, io.BytesIO(b"{}"))
+        # A save also sets standby taints (PLACEMODE.saved), through the client
+        # server.py bound at import, not KUBE_HELPERS: without its own fake it
+        # looks up the cluster, which on CI took 5 s, past the Gate's wait.
         with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=missing), \
              mock.patch.object(server.KUBE_HELPERS, "ksend"), \
+             mock.patch.object(server.PLACEMODE, "kget", return_value={"items": []}), \
+             mock.patch.object(server.PLACEMODE, "ksend"), \
              mock.patch.object(server.SETTINGS_HELPERS.CHECKS, "invalidate"), \
              mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
             for name in ("Barn", "Shed", "Loft"):
