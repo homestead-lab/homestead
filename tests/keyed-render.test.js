@@ -112,7 +112,9 @@ test("a page whose failed /api/icons/ icon is due a retry is painted again, so t
   assert.equal(t.calls.morphed, before + 1, "due: painted, so loadAppIcons asks again");
 });
 
-test("an app showing initials for an icon from elsewhere does not stop the same data being skipped", () => {
+// Only iconRetryDue is tested here (node has no MutationObserver, so no page watcher). In a browser a
+// broken external icon still repaints the page: its error handler removes the <img> outside paint().
+test("iconRetryDue: an app showing initials for an icon from elsewhere does not by itself force a repaint", () => {
   const t = paintOnly("", { querySelectorAll: sel => sel === ".appav" ? [{ querySelector: () => null }] : [] });
   t.ctx.ICON_FAILED = new Map(); t.ctx.ICON_RETRY_MS = 600000;
   const html = '<span class="appav"><img src="https://example.com/gone.png"></span>';

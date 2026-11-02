@@ -49,6 +49,19 @@ try {
   });
   assert.deepEqual(result, { order: "cab", a: true, b: true, c: true, focus: true }, "keyed rows keep their nodes and focus");
 
+  // The same data painted again does no DOM work, on every refresh, not every other one: the page
+  // watcher (a real MutationObserver, which node tests do not have) must not count paint's own marks.
+  const morphs = await page.evaluate(async () => {
+    await refresh(true); await new Promise(r => setTimeout(r, 50));   // let any change since settle once
+    const real = window.morph; let calls = 0;
+    const views = document.querySelector("#views");   // the page; the bell and widgets morph their own parts
+    window.morph = (...args) => { if (args[0] === views) calls++; return real(...args); };
+    try { for (let tick = 0; tick < 3; tick++) { await refresh(true); await new Promise(r => setTimeout(r, 50)); } }
+    finally { window.morph = real; }
+    return { calls, hash: !!document.querySelector("#views").dataset.hash };
+  });
+  assert.deepEqual(morphs, { calls: 0, hash: true }, "three refreshes of the same data morph the page not once");
+
   // An app that stops while its "…" menu is open: the open menu is left alone, and once it closes
   // the next refresh brings it up to date, though the data has not changed again since.
   const MENU = `#views .wl-row[data-mkey*='"frigate"'] details.actionmenu`;

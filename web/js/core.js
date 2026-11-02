@@ -986,7 +986,7 @@ function paint(html) {
   // nothing compared (#906). Not once a failed /api/icons/ icon on it is due its retry:
   // the paint is where loadAppIcons asks again. A different viewer is a different paint.
   const sig = paintSignature(html);
-  if (host.dataset.painted && host.dataset.hash === sig && !iconRetryDue(html)) return;
+  if (host.dataset.painted && host.dataset.hash === sig && !iconRetryDue(html)) { watcher?.takeRecords(); return; }
   host.dataset.hash = sig;
   if (!host.dataset.painted) {
     host.innerHTML = html;
@@ -1012,18 +1012,20 @@ function paint(html) {
   dropOrphanTooltip();
   watcher?.takeRecords();
 }
-/* The paint skip above compares with the last paint, so anything that changes the page between
-   paints - a sort that moves rows itself (sortRows), a menu lifted out, an icon that loads - must
-   make the next paint morph again: a watcher forgets the hash when the page changes outside
-   paint(). paint() drops the records of its own changes. */
+/* The paint skip above compares with the last paint, so content that changes between paints - a
+   sort that moves rows itself (sortRows), a menu lifted out, an icon taken away - must make the next
+   paint morph again: a watcher forgets the hash when nodes or text change outside paint(). paint()
+   drops the records of its own changes. Attributes are not watched: code that marks the page after
+   a paint (linkFieldLabels' data-wraps, a tabindex) would otherwise undo the skip on every refresh,
+   and a morph would only strip what it then adds back. */
 function changedOutside(host, records) {
-  return records.some(r => !(r.target === host && r.type === "attributes" && /^data-(hash|painted|sig)$/.test(r.attributeName)));
+  return records.length > 0;
 }
 function paintWatcher(host) {
   if (typeof MutationObserver === "undefined") return null;
   if (!host.paintWatcher) {
     host.paintWatcher = new MutationObserver(records => { if (changedOutside(host, records)) delete host.dataset.hash; });
-    host.paintWatcher.observe(host, { childList: true, subtree: true, attributes: true, characterData: true });
+    host.paintWatcher.observe(host, { childList: true, subtree: true, characterData: true });
   }
   return host.paintWatcher;
 }
