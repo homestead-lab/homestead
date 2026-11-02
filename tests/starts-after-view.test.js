@@ -12,7 +12,7 @@ function load(extra = {}) {
     fmtClock: v => new Date(v < 1e12 ? v * 1000 : v).toISOString().slice(11, 16), ...extra };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js", "web/js/views-storage.js"])
+  for (const f of ["web/js/ui.js", "web/js/views-workloads.js", ...require("./helpers/lifecycle-source").files(), "web/js/views-storage.js"])
     vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }

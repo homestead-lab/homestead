@@ -47,7 +47,7 @@ test("lists' rows put their buttons in an actionBar, not loose in the row (#506)
   // What is left is the list's own heading, note or footer buttons.
   const lists = [
     ["web/js/views-storage.js", /function volumeShortCell\(/, []],
-    ["web/js/views-lifecycle.js", /async function viewImages\(/, ["Scan every host", "Stop"]],
+    ["web/js/views-lifecycle-images.js", /async function viewImages\(/, ["Scan every host", "Stop"]],
     ["web/js/views-vms.js", /window\.vmStore = /, ["Check for newer builds"]],
     ["web/js/vm-hardware.js", /window\.vmIsoLibrary = /, ["＋ Folder", "Save", "↻ Refresh"]],
     ["web/js/views-helm.js", /function renderHelm\(/, ["＋ Install chart"]],

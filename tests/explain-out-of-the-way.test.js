@@ -7,7 +7,7 @@ const between = require("./helpers/between");
 const read = f => fs.readFileSync(f, "utf8");
 
 test("Image Cache explains how images are kept in a guide, not a note above the table", () => {
-  const src = read("web/js/views-lifecycle.js");
+  const src = require("./helpers/lifecycle-source")();
   assert.doesNotMatch(src, /<div class="note"[^>]*><b>Removing images\.<\/b>/);
   assert.match(src, /UI\.guide\("How images are kept"/);
 });

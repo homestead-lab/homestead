@@ -65,7 +65,7 @@ test("the VM hardware pane shows its concerns as one notice", () => {
 
 function vmContext(review) {
   const c = context(), shown = {}, body = { innerHTML: "" };
-  for (const file of ["views-lifecycle.js", "views-vms.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
+  for (const file of [...require("./helpers/lifecycle-source").names(), "views-vms.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
   c.api = async () => review;
   c.childModal = (title, html) => { shown.title = title; shown.html = html; body.innerHTML = html; };
   c.document.querySelector = id => id === "#mbody" ? body : id === "#vmEditLoading" ? {} : null;

@@ -29,7 +29,7 @@ function setup(plan, { role = "admin", removeFails = false } = {}) {
   vm.createContext(c); require("./helpers/core-text")(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);
+  vm.runInContext(require("./helpers/lifecycle-source")(), c);
   return { c, fields, sent, notices, fetched, steps, state, html: () => html };
 }
 const rows = [

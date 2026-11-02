@@ -23,7 +23,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
       return {job:"homestead-import-app"};
     }};
   ctx.window=ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(),ctx);
   ctx.viewImport=()=>{};
   return {ctx,calls,fields};
 }

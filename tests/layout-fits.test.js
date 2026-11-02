@@ -19,7 +19,7 @@ test("a VM or monitored name ends in an ellipsis, with the cluster tag on its ow
   assert.match(read("web/js/uptime.js"), /<b title="\$\{esc\(w\.name\)\}">/);
 });
 test("Remove container is hidden when there is one container, and sits clear of the first field", () => {
-  assert.match(read("web/js/views-lifecycle.js"), /\.hidden = cards\.length <= 1/);
+  assert.match(require("./helpers/lifecycle-source")(), /\.hidden = cards\.length <= 1/);
   assert.match(css, /\.edit-container-remove\{[^}]*margin-bottom/);
 });
 test("Node health stacks one host per row on a phone", () => {

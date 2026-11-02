@@ -16,7 +16,7 @@ function setup(answers) {
       const a = answers[path]; if (a instanceof Error) throw a; return a;
     } };
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq = value => ctx.esc(JSON.stringify(value));
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(), ctx);
   const fleet = fs.readFileSync("web/js/fleet.js", "utf8");
   vm.runInContext(between(fleet, "window.fleetMovesPaint = async", "\nwindow.fleetSetMode"), ctx);
   Object.assign(ctx, { moveSourceRow: () => "", moveSourceCheck() {}, fleetPendingMove() {} });

@@ -14,7 +14,7 @@ function lifecycle() {
     childModal: (title, html) => { shown.title = title; shown.html = html; }, defaultNamespace: () => "home" };
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(), ctx);
   return { ctx, shown };
 }
 
@@ -32,7 +32,7 @@ test("moving an app here starts on the install's namespace", () => {
 });
 
 test("no form in these files falls back to the literal lab namespace", () => {
-  for (const file of ["web/js/views-lifecycle.js", "web/js/views-vms.js"]) {
+  for (const file of [...require("./helpers/lifecycle-source").files(), "web/js/views-vms.js"]) {
     const source = fs.readFileSync(file, "utf8");
     const lab = source.split("\n").map((line, i) => [i + 1, line]).filter(([, line]) => /["']lab["']|ns=lab\b/.test(line));
     assert.deepEqual(lab.map(([n]) => `${file}:${n}`), [], "use defaultNamespace() instead");

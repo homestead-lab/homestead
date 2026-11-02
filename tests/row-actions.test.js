@@ -9,8 +9,8 @@ const fs = require("node:fs"), path = require("node:path");
 // would squeeze the text: each is left unmarked on purpose.
 const MIXED = [
   ["views-settings.js", "ns-kept", "a namespace's Delete, or why it is kept"],
-  ["views-lifecycle.js", "w.movable", "a move report's app: Move, or why it can't"],
-  ["views-lifecycle.js", "v.movable", "a move report's volume: Move, or why it can't"],
+  ["views-lifecycle-import.js", "w.movable", "a move report's app: Move, or why it can't"],
+  ["views-lifecycle-import.js", "v.movable", "a move report's volume: Move, or why it can't"],
 ];
 
 test("every table cell holding an actionBar is a data-actions cell", () => {

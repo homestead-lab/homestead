@@ -94,7 +94,7 @@ try {
     assert.equal(await card.isVisible(), true, "the card stays");
     assert.match(await card.innerText(), /Could not read the storage classes[\s\S]*timed out/);
 
-    // VMs and imports (views-lifecycle.js).
+    // VMs and imports (views-lifecycle-vms.js, views-lifecycle-import.js).
     const body = () => page.locator("#mbody").innerText();
     const close = () => page.evaluate(() => closeModal());
 

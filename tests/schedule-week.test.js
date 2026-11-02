@@ -228,7 +228,7 @@ test("the page is reachable: its address, its view, its script, the Schedules bu
   assert.match(fs.readFileSync("web/js/app.js", "utf8"), /"schedule-week": \["system", \(\) => viewScheduleWeek\(\), true\]/);
   const html = fs.readFileSync("web/index.html", "utf8");
   assert.ok(html.indexOf("/js/schedule-week.js") > html.indexOf("/js/cron.js"), "after cron.js, whose CRON it uses");
-  assert.match(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), /UI\.button\("This week", "go\('schedule-week'\)"\)/);
+  assert.match(require("./helpers/lifecycle-source")(), /UI\.button\("This week", "go\('schedule-week'\)"\)/);
   assert.match(fs.readFileSync("scripts/audit_pages.mjs", "utf8"), /\["schedules-week", "schedule-week"\]/);
 });
 

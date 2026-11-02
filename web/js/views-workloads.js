@@ -1450,7 +1450,7 @@ async function reservationsPlan() {
   if (go) go.disabled = !RESERVE.chosen.size || RESERVE.chosen.size > plan.max;
   window.applyRole?.();
 }
-/* A reservation in Edit's words (editCpuWords, editSpan in views-lifecycle.js).
+/* A reservation in Edit's words (editCpuWords, editSpan in views-lifecycle-edit-pod.js).
    What a container reserves now is what it reserves in effect: Kubernetes
    takes a limit as the request where none is set, and the review says so. */
 const reserveNow = (c, r) => {

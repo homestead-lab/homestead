@@ -22,7 +22,7 @@ function setup(jobs = []) {
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
   vm.runInContext(between(core, "const fmtUp", "const upChip"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(), ctx);
   return { ctx, out, fields: field };
 }
 

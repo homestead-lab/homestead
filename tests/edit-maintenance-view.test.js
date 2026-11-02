@@ -21,7 +21,7 @@ function setup(review) {
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/gitops.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);
+  vm.runInContext(require("./helpers/lifecycle-source")(), c);
   return { c, fields, sent, notices, html: () => html, fail: () => { fail = true; } };
 }
 const review = { capacity_token: "token", capacity: { blocked: false, requires_confirmation: true, candidates: [],

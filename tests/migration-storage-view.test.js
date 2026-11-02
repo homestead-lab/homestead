@@ -11,7 +11,7 @@ function setup() {
     childModal:(title,html)=>{ctx.modalTitle=title;ctx.modalHtml=html;},
     api:(path,opts)=> { calls.push({path,body:JSON.parse(opts.body)}); return new Promise(resolve=>replies.push(resolve)); }};
   ctx.window=ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq=value=>ctx.esc(JSON.stringify(value));
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(),ctx);
   return {ctx,fields,calls,replies};
 }
 
