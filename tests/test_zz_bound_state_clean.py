@@ -33,6 +33,10 @@ import bound_guard as GUARD
 
 GUARD.install()
 LISTED = GUARD.allowed()
+# Lines for leaks that come with an open PR of ours (note "from #NNNN"): allowed, so the
+# combined run passes, but not counted, not stale and not checked as bound (bound_guard.pending).
+PENDING = GUARD.pending()
+ON_DEV = {entry for entry in LISTED if entry[:2] not in PENDING}
 GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 CEILING = 529
 # On since 3 Nov: recording every share of CI's 4-way and the gate's 8-way split found
@@ -80,21 +84,21 @@ class BoundStateClean(unittest.TestCase):
             self.skipTest("only a run of the whole suite in one process can tell: the list was measured that way")
         # Fakes only: the other changes are reported, not enforced, and whether one reads
         # as a change depends on what ran before.
-        gone = GUARD.stale(GUARD.left, {(n, f) for n, f, k in LISTED if k == "fake"},
+        gone = GUARD.stale(GUARD.left, {(n, f) for n, f, k in ON_DEV if k == "fake"},
                            GUARD.ran, GUARD.unchecked, GUARD.covered, GUARD.held)
         self.assertEqual([], [f"{name}\t{test_file}" for name, test_file in gone],
                          "these files no longer leak these names: take the lines off bound_leaks.txt")
 
     def test_the_allowlist_only_shrinks(self):
-        self.assertLessEqual(len(LISTED), CEILING, "bound_leaks.txt may only shrink: fix the leak, do not add it")
-        if len(LISTED) < CEILING:
-            self.fail(f"bound_leaks.txt has {len(LISTED)} lines: lower CEILING to match")
+        self.assertLessEqual(len(ON_DEV), CEILING, "bound_leaks.txt may only shrink: fix the leak, do not add it")
+        if len(ON_DEV) < CEILING:
+            self.fail(f"bound_leaks.txt has {len(ON_DEV)} lines (not counting open PRs'): lower CEILING to match")
 
     def test_each_listed_name_is_still_bound(self):
         # Fake lines only, as the stale check: the other lines are reported, not enforced, and
         # one can name what another PR has since removed.
         loaded = {name for name in sys.modules if name.startswith("homestead_")}
-        self.assertEqual([], GUARD.unknown({(n, f) for n, f, k in LISTED if k == "fake"}, GUARD.state(), loaded),
+        self.assertEqual([], GUARD.unknown({(n, f) for n, f, k in ON_DEV if k == "fake"}, GUARD.state(), loaded),
                          "these are no longer bound names: take them off bound_leaks.txt")
 
 

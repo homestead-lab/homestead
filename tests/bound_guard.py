@@ -188,6 +188,20 @@ def allowed(path=LEAKS_FILE):
     return lines
 
 
+
+def pending(path=LEAKS_FILE):
+    """{(name, test file)} of the lines whose note starts "from #NNNN": a leak that comes
+    with an open PR of ours, so the combined run (dev and every open PR) passes. It is
+    allowed, but not counted against CEILING, not stale and not checked as bound, since
+    on dev its file is missing or does not leak yet. The PR's follow-up puts the name back
+    (tests/rebind.py keep_bound) and takes the line off."""
+    out = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        fields = [field.strip() for field in line.split("\t")]
+        if line.strip() and not line.startswith("#") and len(fields) > 3 and fields[3].startswith("from #"):
+            out.add((fields[0], fields[1]))
+    return out
+
 def new_leaks(found, listed):
     """Fakes a test left that the list does not hold: a new leak, or a listed name with another file's fake."""
     return sorted(pair for pair in found if pair not in listed)

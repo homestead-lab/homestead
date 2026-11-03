@@ -62,6 +62,22 @@ class Ratchet(unittest.TestCase):
         for line in ("self.addCleanup(f)", "keep_bound(self, A)", "self.restore_it()"):
             with self.subTest(line=line):
                 self.assertFalse(self.judge(f"def setUp(self):\n    {line}\n    A.bind(1)\n"))
+class FromOpenPrs(unittest.TestCase):
+    """A line for a leak that comes with an open PR of ours (its test file is not on dev
+    yet, or not in that form): allowed, never counted against the list, never stale."""
+
+    def test_a_line_from_an_open_pr_is_allowed_and_known_as_pending(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "leaks.txt"
+            path.write_text("# note\n"
+                            "homestead_addons.kget\ttest_addons\tfake\n"
+                            "homestead_revert.lh_call\ttest_revert_stop\tfake\t"
+                            "from #1100, not on dev yet: remove once it merges with a keep_bound there\n",
+                            encoding="utf-8")
+            self.assertEqual({("homestead_addons.kget", "test_addons", "fake"),
+                              ("homestead_revert.lh_call", "test_revert_stop", "fake")}, GUARD.allowed(path))
+            self.assertEqual({("homestead_revert.lh_call", "test_revert_stop")}, GUARD.pending(path))
 
 
 class Kinds(unittest.TestCase):
