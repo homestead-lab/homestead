@@ -23,6 +23,7 @@ admission and validation, namespace existence and termination, the
 $setElementOrder / $retainKeys strategic-merge directives, and subresources
 other than status and pod eviction (answer those with react())."""
 import base64
+import collections
 import contextlib
 import copy
 import io
@@ -30,6 +31,7 @@ import itertools
 import json
 import re
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -54,6 +56,15 @@ PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-att
           "nodemetrics": "nodes", "podmetrics": "pods"}
 
 
+_turned_away = []   # (test, method, path) of every request no_cluster() refused, this process
+
+
+def _running_test():
+    """The test running now, as tests/network_guard.py names it (None outside a test or without it)."""
+    guard = sys.modules.get("network_guard")
+    return guard._current["test"] if guard is not None else None
+
+
 def no_cluster():
     """No API server at all, said by the test rather than left to the machine: every
     request (kget, ksend, raw_get, ktable) fails at once, as one does on CI, where the
@@ -64,10 +75,31 @@ def no_cluster():
         def setUpModule():
             unittest.enterModuleContext(no_cluster())
 
-    Kube() inside it still answers, since it replaces transport in front of this."""
+    Kube() inside it still answers, since it replaces transport in front of this.
+
+    The trade-off: a file under it is no longer seen by the network guard, so a new
+    test whose code reads the cluster without a fake passes on the fallback path.
+    Each refused request is kept (no_cluster_reads) and scripts/run_tests.py prints
+    a summary, so a later sweep can find the reads a Kube() should answer."""
     def unreachable(method, path, *args, **kwargs):
+        _turned_away.append((_running_test(), method, path))
         raise socket.gaierror(socket.EAI_NONAME, f"no cluster in this test: {method} {path} (tests/fakes/kube.py no_cluster)")
     return mock.patch.object(K, "_request", unreachable)
+
+
+def no_cluster_reads():
+    """[(test, method, path)] of every request no_cluster() turned away in this process."""
+    return list(_turned_away)
+
+
+def summarise_reads(reads, top=3):
+    """One advisory line about what no_cluster() turned away ("" when nothing)."""
+    if not reads:
+        return ""
+    paths = collections.Counter(path for _, _, path in reads).most_common(top)
+    tests = {test for test, _, _ in reads}
+    return (f"no_cluster: {len(reads)} requests from {len(tests)} tests turned away (top: "
+            + ", ".join(f"{path} x{count}" for path, count in paths) + "); advisory, tests/fakes/kube.py")
 
 
 def plural(kind):

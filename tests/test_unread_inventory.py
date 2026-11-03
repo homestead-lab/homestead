@@ -31,10 +31,13 @@ from rebind import keep_bound
 
 
 def setUpModule():
+    # Both add to unittest's one process-wide list of module cleanups, which runs when
+    # this file's tests end, so calling the other file's setUpModule here is enough.
     SNAPSHOT.setUpModule()      # restart record off
     # No cluster here: a read on the way to what a test checks fails at once, as on CI,
     # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
     unittest.enterModuleContext(no_cluster())
+
 
 RAW_VMS = "/apis/kubevirt.io/v1/virtualmachines"
 

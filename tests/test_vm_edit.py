@@ -231,9 +231,11 @@ class ClusterFixtureTests(unittest.TestCase):
         before = _vms_bound()
         Cluster({"harvester": False, "cdi": True})
         self.assertNotEqual(before, _vms_bound())
+        # Running the module cleanups ends the file's no_cluster() too: put it back
+        # when this test ends, pass or fail, for the rest of the file.
+        self.addCleanup(lambda: unittest.enterModuleContext(no_cluster()))
         unittest.doModuleCleanups()
         self.assertEqual(before, _vms_bound())
-        unittest.enterModuleContext(no_cluster())  # that ended the file's no_cluster() too: the rest still need it
 
 
 if __name__ == "__main__":

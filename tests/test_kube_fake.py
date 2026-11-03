@@ -13,7 +13,10 @@ from unittest import mock
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
-from fakes.kube import Kube, no_cluster
+from fakes.kube import Kube, no_cluster, no_cluster_reads, summarise_reads
+import network_guard
+
+network_guard.install()   # names the running test, as in a run_tests.py run
 
 PODS = "/api/v1/namespaces/lab/pods"
 NODES = "/api/v1/nodes"
@@ -62,6 +65,25 @@ class NoClusterTests(unittest.TestCase):
                     call()
                 self.assertIn("no cluster in this test", str(caught.exception))
         self.assertEqual(lookups, [])
+
+    def test_each_read_it_turns_away_is_recorded_with_its_test(self):
+        # A file under no_cluster() is not seen by the network guard: what it turned
+        # away is kept instead, for run_tests.py's summary and a later sweep.
+        before = len(no_cluster_reads())
+        with no_cluster():
+            for call in (lambda: K.kget(PODS), lambda: K._ksend("DELETE", PODS + "/a")):
+                with self.assertRaises(OSError):
+                    call()
+        self.assertEqual([(self.id(), "GET", PODS)], no_cluster_reads()[before:before + 1])
+        self.assertEqual(self.id(), no_cluster_reads()[-1][0])
+
+    def test_the_summary_counts_reads_and_tests_and_names_the_top_paths(self):
+        reads = [("t.A.a", "GET", "/api/v1/nodes"), ("t.A.b", "GET", "/api/v1/nodes"),
+                 ("u.B.c", "GET", "/apis/scheduling.k8s.io/v1/priorityclasses"), ("u.B.c", "GET", "/api/v1/nodes")]
+        self.assertEqual("no_cluster: 4 requests from 3 tests turned away (top: /api/v1/nodes x3, "
+                         "/apis/scheduling.k8s.io/v1/priorityclasses x1); advisory, tests/fakes/kube.py",
+                         summarise_reads(reads))
+        self.assertEqual("", summarise_reads([]))
 
     def test_the_shared_fake_still_answers_inside_it(self):
         with no_cluster(), Kube(pod("a")):

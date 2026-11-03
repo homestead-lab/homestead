@@ -21,6 +21,28 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(RUN.shard(files, 2, 4), RUN.shard(list(reversed(files)), 2, 4))
 
 
+
+class NoClusterSummaryTests(unittest.TestCase):
+    """A file under no_cluster() is not seen by the network guard, so the run says
+    what no_cluster() turned away instead (advisory, like the guard)."""
+
+    def test_the_run_ends_with_what_no_cluster_turned_away(self):
+        import contextlib
+        import io
+        sys.path.insert(0, str(RUN.TESTS)); sys.path.insert(0, str(RUN.TESTS.parent / "server"))
+        import homestead_kube as K
+        from fakes.kube import no_cluster
+
+        def reads_the_cluster():
+            with no_cluster(), contextlib.suppress(OSError):
+                K.kget("/api/v1/nodes")
+        one = unittest.TestSuite([unittest.FunctionTestCase(reads_the_cluster)])
+        out = io.StringIO()
+        with mock.patch.object(RUN.unittest.defaultTestLoader, "loadTestsFromNames", lambda names: one), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertTrue(RUN.run([]))
+        self.assertRegex(out.getvalue(), r"(?m)^no_cluster: \d+ requests from \d+ tests turned away \(top: ")
+
 class GuardInEveryRunTests(unittest.TestCase):
     """The leak guard checks what the tests before it left bound, so every
     share runs it, last; a leak in a share without it went unseen (#1068)."""
