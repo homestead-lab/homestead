@@ -1,6 +1,7 @@
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -193,10 +194,66 @@ class ReplaceFailedDiskTests(unittest.TestCase):
         item = DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS())
         # jellyfin's copy on node1 fails after the review: node3's is its last.
         c.change_replica("r-else-1", failedAt="2026-09-29T00:00:00Z")
-        run(item)
-        deleted = [p.rsplit("/", 1)[1] for m, p, b in c.sent if m == "DELETE" and "/replicas/" in p]
-        self.assertEqual(["r-waits"], deleted)
-        self.assertIn("r-else", item["ref"]["keep"])
+        clock = [1000.0]
+        self.enterContext(mock.patch.object(DISKS, "_clock", lambda: clock[0]))
+        self.step(item, 3)
+        clock[0] += DISKS.UNCONFIRMED_WAIT + 1
+        item = run(item)
+        self.assertEqual(["r-waits"], self.deleted(c))
+        self.assertIn("r-else", item["ref"]["kept"])
+        self.assertIn("could not confirm another whole copy", item["message"])
+
+    def step(self, item, times=1):
+        for _ in range(times):
+            status, progress, message = DISKS.retire_step(item)
+            item.update(status=status, progress=progress, message=message)
+        return item
+
+    def node_ready(self, c, name, ready):
+        node = c.kube.object(f"/api/v1/nodes/{name}")
+        node["status"]["conditions"] = [{"type": "Ready", "status": "True" if ready else "False"}]
+        c.kube.add(node)
+
+    def deleted(self, c):
+        return [p.rsplit("/", 1)[1] for m, p, b in c.sent if m == "DELETE" and "/replicas/" in p]
+
+    def test_a_copy_elsewhere_that_cannot_be_confirmed_for_a_moment_is_asked_again(self):
+        # jellyfin's copy on node1 is whole, but node1 is NotReady for a moment.
+        c = Cluster(self)
+        clock = [1000.0]
+        self.enterContext(mock.patch.object(DISKS, "_clock", lambda: clock[0]))
+        item = DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS())
+        self.node_ready(c, "node1", False)
+        self.step(item, 3)
+        self.assertEqual("running", item["status"], item["message"])
+        self.assertIn("could not confirm another whole copy", item["message"])
+        self.assertNotIn("r-else", self.deleted(c), "its replica here stays while the copy elsewhere is unconfirmed")
+        self.assertNotIn("r-else", item["ref"].get("keep") or [], "not kept for good")
+        # node1 is back: the copy is confirmed and the failed replica here goes.
+        clock[0] += 60
+        self.node_ready(c, "node1", True)
+        item = run(item)
+        self.assertIn("r-else", self.deleted(c))
+        self.assertEqual("succeeded", item["status"])
+        # Only scratch, the only copy at review, is still named; jellyfin is not.
+        self.assertIn("1 volume had the only copy on it", item["message"])
+        self.assertNotIn("could not confirm", item["message"])
+        self.assertEqual(["r-only"], item["ref"]["kept"])
+
+    def test_a_copy_still_unconfirmed_after_half_an_hour_is_kept_and_said_so(self):
+        c = Cluster(self)
+        clock = [1000.0]
+        self.enterContext(mock.patch.object(DISKS, "_clock", lambda: clock[0]))
+        item = DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS())
+        self.node_ready(c, "node1", False)
+        self.step(item, 3)
+        clock[0] += DISKS.UNCONFIRMED_WAIT + 1
+        item = run(item)
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertNotIn("r-else", self.deleted(c))
+        # The reviewed only copy (scratch) and the unconfirmed one (jellyfin) are told apart.
+        self.assertIn("1 volume had the only copy on it", item["message"])
+        self.assertIn("Homestead could not confirm another whole copy of 1 volume", item["message"])
 
     def test_nothing_is_deleted_when_the_replicas_cannot_be_read(self):
         c = Cluster(self)

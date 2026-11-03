@@ -21,6 +21,7 @@ import json
 import posixpath
 import hashlib
 import re
+import time
 import urllib.error
 
 import homestead_kube as KUBE
@@ -738,6 +739,13 @@ def _bd_provisioned(bd):
     return bool((spec.get("fileSystem") or {}).get("provisioned"))
 
 
+# How long a retire waits to confirm another whole copy of a volume before it
+# keeps that volume's failed replica here (a host NotReady for a moment, a
+# copy still rebuilding). The clock is a seam for the tests.
+UNCONFIRMED_WAIT = 1800
+_clock = time.time
+
+
 def retire_step(item):
     """One step of retiring a failed disk. Each is safe to run again."""
     ref = item["ref"]
@@ -757,19 +765,21 @@ def retire_step(item):
     if phase == "replicas":
         uuid = status.get("diskUUID", "")
         scheduled = status.get("scheduledReplica") or {}
+        # keep: the only copies the review found, kept as reviewed.
         keep = set(ref.get("keep") or [])
         replicas = _replicas(strict=True)
         left = [r for r in replicas if _on_disk(r, node, disk, uuid, scheduled)
                 and r["metadata"]["name"] not in keep]
-        # Checked again at each step, not only at review: a volume whose other
-        # copies failed since then has its last one here, and it stays.
+        # Checked again at each step, not only at review: a replica here whose
+        # volume has no whole copy elsewhere just now (its host NotReady for a
+        # moment, a copy rebuilding, or failed since) is not let go. It is asked
+        # about again at the next step, not kept for good on one look.
+        unconfirmed = set()
         if not ref.get("force"):
             whole = _whole_copies()
-            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled, whole)]
-            if last:
-                keep |= {r["metadata"]["name"] for r in last}
-                ref["keep"] = sorted(keep)
-                left = [r for r in left if r["metadata"]["name"] not in keep]
+            unconfirmed = {r["metadata"]["name"] for r in left
+                           if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled, whole)}
+            left = [r for r in left if r["metadata"]["name"] not in unconfirmed]
         for replica in left:
             try:
                 ksend("DELETE", f"{LH}/replicas/{replica['metadata']['name']}")
@@ -779,12 +789,28 @@ def retire_step(item):
         ref["removed"] = sorted(set(ref.get("removed") or []) | {r["metadata"]["name"] for r in left})
         if left:
             return "running", 30, f"Letting go of {len(left)} failed replica{'' if len(left) == 1 else 's'}"
-        if keep:
+        plural = lambda n: f"{n} volume{'' if n == 1 else 's'}"
+        if unconfirmed:
+            since = ref.setdefault("unconfirmed_since", _clock())
+            if _clock() - since < UNCONFIRMED_WAIT:
+                return "running", 40, (
+                    f"Waiting: Homestead could not confirm another whole copy of {plural(len(unconfirmed))} (a copy "
+                    "may be rebuilding, or its host not Ready), so their replicas here stay; asking again")
+        else:
+            ref.pop("unconfirmed_since", None)
+        if keep or unconfirmed:
             ref["phase"] = "done"
+            ref["kept"] = sorted(keep | unconfirmed)
+            said = []
+            if keep:
+                said.append(f"{plural(len(keep))} had the only copy on it")
+            if unconfirmed:
+                said.append(f"Homestead could not confirm another whole copy of {plural(len(unconfirmed))} "
+                            f"within {UNCONFIRMED_WAIT // 60} minutes, so their replicas here stay")
             return "succeeded", 100, (
                 "Failed replicas removed, so their volumes rebuild from their healthy copies. The disk itself is "
-                f"kept: {len(keep)} volume{'' if len(keep) == 1 else 's'} had the only copy on it. Reconnect the "
-                "drive to get them back; if it is dead, restore them from a backup and replace the disk again.")
+                f"kept: {'; '.join(said)}. Reconnect the drive to get them back; if it is dead, restore them from "
+                "a backup and replace the disk again.")
         if [name for name in scheduled if name not in keep]:
             return "running", 45, f"Waiting for Longhorn to let go of {len(scheduled)} replica record(s)"
         ref["phase"] = "remove"
