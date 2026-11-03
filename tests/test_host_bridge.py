@@ -172,6 +172,50 @@ class HostLeaseTests(unittest.TestCase):
         self.assertFalse(host.changes)
 
 
+class TimedOutStartTests(unittest.TestCase):
+    """A move script still running at its limit may be mid-change: the job
+    keeps the host held and needs attention, rather than letting go."""
+
+    def start_timed_out(self):
+        import homestead_pod_exec as POD_EXEC
+        host, messages = Host(HostLeaseTests.GOOD), []
+        real = host.run
+
+        def run(node, script, timeout=60, change="", holder=""):
+            if "python3 -" in script and change:
+                raise POD_EXEC.ExecTimeout("The script on k3s did not finish within 120 seconds", "", "", 120)
+            return real(node, script, timeout, change, holder)
+
+        host.run = run
+        ops = Ops()
+        started = ops.start
+        ops.start = lambda kind, title, resource, href, ref, message="": (messages.append(message),
+                                                                          started(kind, title, resource, href, ref, message))[1]
+        BRIDGE.bind(host, lambda path: {"items": [{}]} if "nodes" in path else {"items": []}, lambda *a, **k: None)
+        op = BRIDGE.start("k3s", ops)
+        return host, ops, messages, op
+
+    def test_a_timed_out_move_keeps_the_host_held_and_needs_attention(self):
+        host, ops, messages, op = self.start_timed_out()
+        self.assertEqual([], host.let_go_of)
+        ref = ops.started[0]
+        self.assertEqual(("unconfirmed", "this-replica/1"), (ref["stage"], ref["lease"]))
+        self.assertTrue(op.get("unconfirmed"))
+        for message in (messages[0], BRIDGE.status({"ref": ref}, now=ref["since"] + 3600)[2]):
+            self.assertIn("needs attention", message)
+            self.assertIn("did not finish within 120 seconds", message)
+            self.assertIn("cannot tell whether", message)
+        self.assertEqual([], host.let_go_of)
+        self.assertGreaterEqual(len(host.holds), 2)
+
+    def test_cancelling_the_unconfirmed_job_lets_go_of_the_host(self):
+        host, ops, _, _ = self.start_timed_out()
+        item = {"kind": "host-bridge", "ref": ops.started[0]}
+        BRIDGE.register(BRIDGE.OPS)
+        BRIDGE.OPS.CANCELLERS["host-bridge"][1](item, {})
+        self.assertEqual([("k3s", "this-replica/1")], host.let_go_of)
+
+
 class JobTests(unittest.TestCase):
     def setUp(self):
         self.deleted = []

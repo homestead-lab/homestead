@@ -437,7 +437,8 @@ window.hostBondGo = async node => {
   try {
     const r = await api("/api/node/bond", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...HOST_BOND.pending, confirm: $("#hb_confirm").value.trim() }) });
-    toast(r.detail, "ok"); closeModal();
+    // ok: false is a change that needs attention (its job holds the host).
+    toast(r.detail, r.ok === false ? "bad" : "ok"); closeModal();
   } catch (e) {
     toast(e.message, "bad");
     if (go) { go.disabled = false; go.textContent = "Try again"; }
