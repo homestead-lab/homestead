@@ -11,7 +11,6 @@ module (the rest of #764) changes nothing here:
 """
 import json
 import sys
-import queue
 import threading
 import unittest
 from http.client import HTTPConnection
@@ -22,6 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tests"))
 import homestead_audit as AUDIT_LOG
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hook_queue import own_hook_queue
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
 import test_module_routes as MODULE_TESTS
@@ -103,12 +104,7 @@ class EndToEnd(unittest.TestCase):
         import server
         cls.server = server
         ROUTES.table()              # reads the modules, homestead_audit among them
-        # Its own after-request queue, so its own hook worker: a hook another file left
-        # running cannot hold this class's lines up (the audit's settings read waits
-        # 5 s for DNS on CI). And audit.file as a failed read leaves it, on, without
-        # the read: the hook path itself is the real one.
-        cls.enterClassContext(mock.patch.object(ROUTES, "_queue", queue.Queue(ROUTES.HOOK_QUEUE)))
-        cls.enterClassContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
+        own_hook_queue(cls)   # tests/hook_queue.py: earlier files' hooks drained, then its own queue
         cls.listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H)
         threading.Thread(target=cls.listener.serve_forever, daemon=True).start()
 

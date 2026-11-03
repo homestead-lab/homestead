@@ -3,7 +3,6 @@ its status and how long it took, after its slot is given back. A hook never
 changes the answer, and never sees a body, a query, a cookie, a session or
 what was answered unless it asks, by name, for the few fields it may have."""
 import json
-import queue
 import socket
 import sys
 import threading
@@ -17,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_http as HTTP
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hook_queue import own_hook_queue
 
 
 def until(check, seconds=3):
@@ -154,14 +155,7 @@ class ThroughServer(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import homestead_audit as AUDIT_LOG
-        import homestead_routes as ROUTES
-        # Its own after-request queue, so its own hook worker: a hook another file left
-        # running cannot hold this class's lines up (the audit's settings read waits
-        # 5 s for DNS on CI). And audit.file as a failed read leaves it, on, without
-        # the read: the hook path itself is the real one.
-        cls.enterClassContext(mock.patch.object(ROUTES, "_queue", queue.Queue(ROUTES.HOOK_QUEUE)))
-        cls.enterClassContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
+        own_hook_queue(cls)   # tests/hook_queue.py: earlier files' hooks drained, then its own queue
 
     def setUp(self):
         import server
