@@ -6,8 +6,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_network_inventory as INV
 import homestead_update_rollouts as ROLLOUTS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 PORTS = "0/1 nodes are available: 1 node(s) didn't have free ports for the requested pod ports. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod."
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class ExplainTests(unittest.TestCase):

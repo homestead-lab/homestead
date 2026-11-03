@@ -14,6 +14,14 @@ import server
 import homestead_deploy as DEPLOY
 import homestead_deploy_appstore as APPSTORE
 import homestead_vm_server as VM_SERVER
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def template(name, **fields):

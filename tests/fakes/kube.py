@@ -29,6 +29,7 @@ import io
 import itertools
 import json
 import re
+import socket
 import threading
 import time
 import urllib.error
@@ -51,6 +52,22 @@ CLUSTER_SCOPED = {"nodes", "namespaces", "persistentvolumes", "storageclasses", 
 # Resources whose name in the path is not the kind made plural.
 PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions",
           "nodemetrics": "nodes", "podmetrics": "pods"}
+
+
+def no_cluster():
+    """No API server at all, said by the test rather than left to the machine: every
+    request (kget, ksend, raw_get, ktable) fails at once, as one does on CI, where the
+    API server's name has no address. Without it such a test looks the name up for
+    real (tests/network_guard.py refuses that). A test that needs no cluster, or reads
+    one only on the way to what it checks, puts it on its module:
+
+        def setUpModule():
+            unittest.enterModuleContext(no_cluster())
+
+    Kube() inside it still answers, since it replaces transport in front of this."""
+    def unreachable(method, path, *args, **kwargs):
+        raise socket.gaierror(socket.EAI_NONAME, f"no cluster in this test: {method} {path} (tests/fakes/kube.py no_cluster)")
+    return mock.patch.object(K, "_request", unreachable)
 
 
 def plural(kind):

@@ -28,6 +28,8 @@ import homestead_longhorn_restore as RESTORE
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_volumes as VOLUMES
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 PARTS = (JOBS, VOLUMES, BACKUP_TARGET, BACKUPS, RESTORE)
 NAMES = ("homestead_longhorn_jobs", "homestead_longhorn_volumes", "homestead_longhorn_target",
@@ -40,6 +42,12 @@ BOUND = ("kget", "ksend", "_cache", "DEFAULT_NS")
 OWN = BOUND + ("LHNS", "API", "TASKS", "KEEPING", "JOB_LABEL", "GROUP_LABEL", "SAFE", "bind", "_bust",
                "JOB_CHANGED", "_Changed", "_plain", "_update", "PROTECTING", "overview", "run_job_now",
                "backup_now", "restore_reviewed", "ROUTES", "register")
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def moved(part):

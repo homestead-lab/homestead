@@ -6,6 +6,7 @@ import server
 import homestead_storage_classes as STORAGE_CLASSES
 from fakes.platform import plain_platform
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 CLASSES = {"items": [
@@ -22,6 +23,12 @@ CLASSES = {"items": [
         "harvesterhci.io/is-reserved-storageclass": "true"}},
      "provisioner": "driver.longhorn.io", "parameters": {"migratable": "true"}},
 ]}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class StorageClassTests(unittest.TestCase):

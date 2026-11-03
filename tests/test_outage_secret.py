@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_names as NAMES
 import homestead_outage as O
 import homestead_outage_secret as S
+from fakes.kube import Kube, no_cluster
 from rebind import keep_bound
 from fakes.kube import Kube
 from test_outage_formats import FakeCase, SECRET
@@ -29,6 +30,12 @@ VM = {"kind": "vm", "ns": "lab", "name": "frigate"}
 REAL = f"https://gotify.example.com/message?token={SECRET}"
 SECRETS = "/api/v1/namespaces/lab/secrets"
 KEY = NAMES.key(O.KEY)
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Cluster:

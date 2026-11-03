@@ -10,7 +10,8 @@ this file installs it too, for a plain `unittest discover` run, and checks the s
 
 network_offenders.txt is today's list, with what each file reaches: it may only
 shrink (CEILING). To take a file off it, fake the client the code really uses: the
-shared Kubernetes fake (tests/fakes/kube.py) or a patch of the module's own client.
+shared Kubernetes fake (tests/fakes/kube.py), no_cluster() from it for a test that needs
+no cluster, or a patch of the module's own client.
 """
 import socket
 import sys
@@ -23,11 +24,11 @@ import network_guard as NETWORK
 
 NETWORK.install()
 
-CEILING = 77
+CEILING = 7
 # The list's files, digested: a swap (one off, another on) keeps the count but not this.
 # "A listed file no longer offends" is not checked: which tests reach the network depends
 # on what ran before them, so a file can look clean in one order and offend in another.
-DIGEST = "54fb2d5a5120b66c"
+DIGEST = "360c17ef5880507f"
 
 
 class NetworkRefused(unittest.TestCase):

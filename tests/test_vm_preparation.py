@@ -12,12 +12,19 @@ import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
 import homestead_vm_create as VM_CREATE
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 try:
     import yaml
 except ImportError:
     yaml = None
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class EditPreparationTests(unittest.TestCase):

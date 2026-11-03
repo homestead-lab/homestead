@@ -13,10 +13,17 @@ import homestead_usage as usage
 import server
 import homestead_workload_edit as WORKLOAD_EDIT
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 DAY = 86400
 NOW = 1_760_000_000
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def pod(name, ns="lab", phase="Running", owner=("ReplicaSet", "web-5c6b7"), labels=None):

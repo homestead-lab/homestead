@@ -13,6 +13,7 @@ import urllib.error
 import homestead_imports as imports
 import homestead_image_cache as IMAGES
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
@@ -31,6 +32,12 @@ SERVED = {"pool.kubevirt.io": ["virtualmachinepools", "virtualmachinepools/statu
           "cdi.kubevirt.io": ["datavolumes", "dataimportcrons"]}
 ESPHOME = "sha256:" + "e" * 64
 BACKUP = "sha256:" + "f" * 64
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def ready(name, images):

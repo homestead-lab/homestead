@@ -10,10 +10,17 @@ import homestead_names as NAMES
 import server  # wires the modules first, so keep_bound puts them back to that wiring, not to bare defaults
 import homestead_outage as O
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 APP = {"kind": "app", "ns": "lab", "name": "frigate", "key": "lab/frigate",
        "actions": {"restart": {"after_min": 5, "max": 2}, "webhook": "https://hooks.example.com/x"}}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def down(since):

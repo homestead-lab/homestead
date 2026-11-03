@@ -24,9 +24,17 @@ import homestead_network_services as SVC
 import homestead_uptime as UP
 import homestead_vip_registry as REG
 import homestead_vm_create as VM_CREATE
-from fakes.kube import Kube
-from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
+from fakes.kube import Kube, no_cluster
+import test_page_snapshot as SNAPSHOT
+from test_page_snapshot import Cluster, clean_cache, clean_snapshot
 from rebind import keep_bound
+
+
+def setUpModule():
+    SNAPSHOT.setUpModule()      # restart record off
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 RAW_VMS = "/apis/kubevirt.io/v1/virtualmachines"
 

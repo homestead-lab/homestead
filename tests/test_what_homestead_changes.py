@@ -26,6 +26,7 @@ import unittest
 from pathlib import Path
 
 import source_scan as SS
+from fakes.kube import no_cluster
 
 ROOT = Path(__file__).resolve().parents[1]
 WIKI = ROOT / "docs" / "wiki"
@@ -56,6 +57,12 @@ INSTALL_FILES = ("deploy/*.yaml", "charts/homestead/templates/*.yaml", "scripts/
 LINKED_FROM = ("_Sidebar.md", "Installing-Homestead.md", "Installing-on-an-existing-cluster.md",
                "Installing-on-k3s.md", "Installing-on-RKE2.md", "Installing-on-Harvester.md")
 KIND_NAME = re.compile(r"[A-Z][A-Za-z0-9]+")
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def install_kinds(root=ROOT):

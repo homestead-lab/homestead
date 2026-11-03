@@ -17,10 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_capacity_review as review
 import homestead_deploy_server as DEPLOY_SERVER
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 import test_vm_power_admission as power
 
 DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/app"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def deployment():

@@ -23,12 +23,18 @@ import homestead_kube_metrics as M
 import server
 import test_flow_vms as FLOW_VMS
 import homestead_container_rebalance as C
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 import homestead_usage as usage
 import homestead_vmusage as VMUSAGE
 from rebind import keep_bound
 
 POD_METRICS = FLOW_VMS.API[M.PODS]["items"]
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def never_metrics(answers):

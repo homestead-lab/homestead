@@ -14,7 +14,15 @@ import homestead_objectstore as store
 import homestead_network_services as SVC
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_network_state as STATE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from fakes.storage_classes import storage_classes
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class ObjectStoreTests(unittest.TestCase):
