@@ -7,6 +7,7 @@ const fs = require("node:fs"), vm = require("node:vm");
    button waits for every tick, and the request names each one ticked. */
 function setup(plan, { role = "admin", removeFails = false } = {}) {
   let html = "";
+  const state = { plan };
   const sent = [], notices = [], fetched = [], steps = [], fields = { "#mbody": { insertAdjacentHTML(_where, body) { html += body; } } };
   const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields["#" + id] || null },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"),
@@ -16,7 +17,7 @@ function setup(plan, { role = "admin", removeFails = false } = {}) {
     childModal: (title, body) => { steps.push(`open ${title}`); html = body; }, modal: (_, body) => { html = body; },
     modalBack: () => { steps.push("back"); }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
     api: async (path, options) => {
-      if (path.startsWith("/api/node/power/plan")) { steps.push("plan"); fetched.push(path); return plan; }
+      if (path.startsWith("/api/node/power/plan")) { steps.push("plan"); fetched.push(path); return state.plan; }
       if (path === "/api/node/orphans/remove") {
         sent.push({ path, body: JSON.parse(options.body) });
         if (removeFails) throw new Error("HTTP 500");
@@ -29,7 +30,7 @@ function setup(plan, { role = "admin", removeFails = false } = {}) {
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), c);
-  return { c, fields, sent, notices, fetched, steps, html: () => html };
+  return { c, fields, sent, notices, fetched, steps, state, html: () => html };
 }
 const rows = [
   { id: "engine-orphans:host1", kind: "engine-orphans", what: "3 orphan records for engines that now run on host2",
@@ -123,14 +124,17 @@ test("each tick is keyed by its row's id, and the request names the ticks actual
   // A stale review brought back by Back: its two ticks are checked, but the
   // plan now holds a row the person never saw in place of the first one.
   const fresh = { id: "stuck-attachment:csi-pv-9", kind: "stuck-attachment", what: "Volume pv-9 is still attached", why: "w", fix: "f", can_remove: false, records: [] };
-  t.c.window.__nodePowerPlan = { ...plan, drain_blockers: [fresh, rows[1]] };
+  // A review opened again for another plan (the plan under review is the review's own).
+  t.state.plan = { ...plan, drain_blockers: [fresh, rows[1]] };
+  await t.c.window.nodePowerReview("host1", "reboot");
   t.c.window.nodePowerReady();
   assert.equal(t.fields["#pw_execute"].disabled, true, "a tick next to other text acknowledges nothing");
   await t.c.window.nodePower("host1", "reboot");
   assert.equal(t.sent.length, 0);
   assert.match(t.notices.join(" "), /drain anyway/i);
   // The current review: what is posted is the ids of the ticks checked.
-  t.c.window.__nodePowerPlan = plan;
+  t.state.plan = plan;
+  await t.c.window.nodePowerReview("host1", "reboot");
   t.fields["#pw_blocker_2"] = { checked: true, dataset: { drainAck: "stale:row" } };
   await t.c.window.nodePower("host1", "reboot");
   assert.equal(t.sent.length, 1);
