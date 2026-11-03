@@ -8,6 +8,9 @@ hands back the plain socket.
 """
 import hashlib
 import json
+import os
+import subprocess
+import tempfile
 import socket
 import sys
 import threading
@@ -142,9 +145,12 @@ class ExecTests(unittest.TestCase):
         self.addCleanup(release.set)
 
         def script(conn):
-            while not release.is_set():
+            for _ in range(50):          # at most 5 s: a run with no deadline ends, and fails below
+                if release.is_set():
+                    return
                 send(conn, 1, b".")
                 time.sleep(0.1)
+            status(conn, SUCCESS)
 
         self.serve(script)
         error = self.assert_times_out(2, timeout=0.6)
@@ -219,6 +225,40 @@ class ExecTests(unittest.TestCase):
         self.assertTrue(result.cut)
         self.assertEqual(0, result.exit_code)
 
+    def test_an_upgrade_that_never_comes_is_a_timeout_and_its_socket_is_closed(self):
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        accepted = []
+
+        def accept():
+            conn, _ = listener.accept()
+            accepted.append(conn)
+            conn.recv(65536)        # reads the request, never answers it
+
+        threading.Thread(target=accept, daemon=True).start()
+        api = urllib.parse.urlparse(f"https://127.0.0.1:{listener.getsockname()[1]}")
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=PlainContext()))
+        self.assert_times_out(3, timeout=0.5)
+        accepted[0].settimeout(2)
+        self.assertEqual(b"", accepted[0].recv(1), "the client closed its side")
+
+    def test_a_run_that_said_how_it_ended_is_not_a_timeout_at_the_deadline(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def script(conn):
+            got = 0
+            while got < 5:
+                got += len(read_frame(conn, require_mask=True)[2]) - 1
+            send(conn, 1, b"read it")
+            status(conn, EXIT_3)
+            release.wait(5)          # v4 with stdin: the server may not close
+
+        self.serve(script)
+        result, took = self.run_exec(stdin=b"hello", timeout=0.5)
+        self.assertEqual((b"read it", 3), (result.stdout, result.exit_code))
+        self.assertLess(took, 2)
+
     # The callers.
 
     def test_the_file_browser_runs_its_commands_through_it(self):
@@ -269,6 +309,76 @@ class ExecTests(unittest.TestCase):
         self.assertEqual(("done\n", ""), (out, err))
         self.assertEqual(3, result.exit_code)
 
+
+class RunningServer(ExecServer):
+    """Runs the command it is asked for, here, as the pod would: the file
+    browser's own scripts against a real folder."""
+
+    def __init__(self):
+        super().__init__(self._run)
+
+    def _run(self, conn):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.requests[-1].split(" ")[1]).query)
+        process = subprocess.Popen(query["command"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        while True:
+            chunk = process.stdout.read1(256 * 1024)
+            if not chunk:
+                break
+            send(conn, 1, chunk)
+        err = process.stderr.read()
+        if err:
+            send(conn, 2, err)
+        code = process.wait()
+        status(conn, SUCCESS if code == 0 else {"status": "Failure", "reason": "NonZeroExitCode",
+                                                 "details": {"causes": [{"reason": "ExitCode", "message": str(code)}]}})
+
+
+class BigFolders(unittest.TestCase):
+    """A folder of 60k entries, with names long enough that a full listing
+    would pass the 4 MiB cut, lists its first 500 - folders first - and says
+    it is truncated."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.big = os.path.join(cls.tmp.name, "big")
+        os.makedirs(cls.big)
+        for index in range(3):
+            os.mkdir(os.path.join(cls.big, f"zz-folder-{index}"))
+        for index in range(60000):
+            open(os.path.join(cls.big, f"file-{index:05d}-" + "n" * 90), "w").close()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def setUp(self):
+        server = RunningServer()
+        self.addCleanup(server.close)
+        api = urllib.parse.urlparse(f"https://127.0.0.1:{server.port}")
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=PlainContext()))
+        self.enterContext(mock.patch.object(FILES, "MOUNT", self.tmp.name))
+        self.enterContext(mock.patch.object(FILES, "_session", return_value=("lab", "helper")))
+        self.enterContext(mock.patch.object(FILES, "open_session", return_value={"namespace": "lab", "pod": "helper"}))
+
+    def check(self, listing):
+        self.assertTrue(listing["truncated"])
+        self.assertEqual(FILES.MAX_LIST, len(listing["entries"]))
+        self.assertEqual(["zz-folder-0", "zz-folder-1", "zz-folder-2"], [e["name"] for e in listing["entries"][:3]])
+
+    def test_the_file_manager_lists_the_first_entries_of_a_huge_folder(self):
+        start = time.monotonic()
+        self.check(FILES.list_entries("lab", "data", "big"))
+        self.assertLess(time.monotonic() - start, 30)
+
+    def test_the_file_list_lists_the_first_entries_of_a_huge_folder(self):
+        self.check(FILES.list_files("lab", "data", "big"))
+
+    def test_an_answer_cut_at_the_cap_is_refused_in_words(self):
+        cut = POD_EXEC.Output(b"half", "", 0, True)
+        with mock.patch.object(FILES, "_sh", return_value=cut):
+            with self.assertRaisesRegex(ValueError, "4 MiB"):
+                FILES._run("lab", "data", "true")
 
 class CutAnswers(unittest.TestCase):
     """A reader whose JSON answer went past the cap says so, rather than

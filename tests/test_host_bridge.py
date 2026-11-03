@@ -208,6 +208,30 @@ class TimedOutStartTests(unittest.TestCase):
         self.assertEqual([], host.let_go_of)
         self.assertGreaterEqual(len(host.holds), 2)
 
+    def test_the_cancel_review_of_an_unconfirmed_job_claims_nothing_about_the_host(self):
+        _, ops, _, _ = self.start_timed_out()
+        keeps = " ".join(BRIDGE.cancel_plan({"kind": "host-bridge", "ref": ops.started[0]})["keeps"])
+        self.assertIn("cannot tell how far the change got on k3s", keeps)
+        self.assertIn("check its network first", keeps)
+        self.assertNotIn("carries on", keeps)
+
+    def test_a_restart_that_times_out_may_have_been_scheduled_and_is_not_asked_again(self):
+        import homestead_pod_exec as POD_EXEC
+        host, ops = Host(HostLeaseTests.GOOD), Ops()
+        BRIDGE.bind(host, lambda path: {"items": [{}, {}]} if "nodes" in path else {"items": []}, lambda *a, **k: None)
+        BRIDGE.start("k3s", ops)
+        ref = dict(ops.started[0], stage="confirmed", services=["k3s"])
+        restarts = []
+
+        def run(node, script, timeout=60, change="", holder=""):
+            restarts.append(script)
+            raise POD_EXEC.ExecTimeout("The script on k3s did not finish within 45 seconds", "", "", 45)
+
+        host.run = run
+        self.assertEqual("running", BRIDGE.status({"ref": ref}, now=ref["since"] + 10)[0])
+        self.assertEqual("restarting", ref["stage"])
+        self.assertEqual(1, len(restarts))
+
     def test_cancelling_the_unconfirmed_job_lets_go_of_the_host(self):
         host, ops, _, _ = self.start_timed_out()
         item = {"kind": "host-bridge", "ref": ops.started[0]}

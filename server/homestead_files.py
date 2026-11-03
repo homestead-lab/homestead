@@ -347,10 +347,14 @@ def list_files(namespace, pvc, path=""):
     """One directory of the volume, directories first."""
     session = open_session(namespace, pvc)
     target = _full(path)
-    script = (f"cd {_quote(target)} 2>/dev/null || exit 3; "
-              "for entry in * .[!.]*; do [ -e \"$entry\" ] || continue; "
-              "if [ -d \"$entry\" ]; then printf 'd|0|%s\\n' \"$entry\"; "
-              "else printf 'f|%s|%s\\n' \"$(stat -c %s \"$entry\" 2>/dev/null || echo 0)\" \"$entry\"; fi; done")
+    # Folders first, and no more than MAX_LIST + 1 entries in all: a folder
+    # of 100k files answers in moments and within the output cap.
+    script = (f"cd {_quote(target)} 2>/dev/null || exit 3; n=0; "
+              "for entry in * .[!.]*; do [ -d \"$entry\" ] || continue; "
+              f"[ $n -le {MAX_LIST} ] || break; n=$((n+1)); printf 'd|0|%s\\n' \"$entry\"; done; "
+              "for entry in * .[!.]*; do [ -e \"$entry\" ] && [ ! -d \"$entry\" ] || continue; "
+              f"[ $n -le {MAX_LIST} ] || break; n=$((n+1)); "
+              "printf 'f|%s|%s\\n' \"$(stat -c %s \"$entry\" 2>/dev/null || echo 0)\" \"$entry\"; done")
     out, err = _sh(session["namespace"], session["pod"], script)
     if err and not out:
         raise ValueError(err[:200])
@@ -479,7 +483,10 @@ def _session(namespace, pvc):
 def _run(namespace, pvc, script, stdin=b"", timeout=60):
     """Run script in the claim's helper; its stderr, if it failed, as the error."""
     ns, pod = _session(namespace, pvc)
-    out, err = _sh(ns, pod, script + "; printf '\n%s' \"rc=$?\"", stdin=stdin, timeout=timeout)
+    answer = _sh(ns, pod, script + "; printf '\n%s' \"rc=$?\"", stdin=stdin, timeout=timeout)
+    out, err = answer
+    if getattr(answer, "cut", False):
+        raise ValueError("the helper's answer is larger than Homestead reads at once (4 MiB)")
     text, _, status = out.rpartition(b"\nrc=")
     if status.strip() != b"0":
         raise ValueError((err or "the helper could not do that")[:300])
@@ -505,9 +512,13 @@ def list_entries(namespace, pvc, path=""):
     """One folder, with what a file manager shows: size, permissions, owner,
     modified, and whether it is a link."""
     target = _full(path)
-    script = (f"cd {_quote(target)} 2>/dev/null || {{ echo 'no such folder' >&2; exit 3; }}; "
-              f"for e in * .[!.]* ..?*; do [ -e \"$e\" ] || [ -L \"$e\" ] || continue; "
-              f"stat -c {_quote(LIST_FORMAT)} \"$e\"; done")
+    # Folders first, and no more than MAX_LIST + 1 entries in all: a folder
+    # of 100k files answers in moments and within the output cap.
+    script = (f"cd {_quote(target)} 2>/dev/null || {{ echo 'no such folder' >&2; exit 3; }}; n=0; "
+              f"for e in * .[!.]* ..?*; do [ -d \"$e\" ] && [ ! -L \"$e\" ] || continue; "
+              f"[ $n -le {MAX_LIST} ] || break; n=$((n+1)); stat -c {_quote(LIST_FORMAT)} \"$e\"; done; "
+              f"for e in * .[!.]* ..?*; do {{ [ -e \"$e\" ] || [ -L \"$e\" ]; }} && ! {{ [ -d \"$e\" ] && [ ! -L \"$e\" ]; }} || continue; "
+              f"[ $n -le {MAX_LIST} ] || break; n=$((n+1)); stat -c {_quote(LIST_FORMAT)} \"$e\"; done")
     out = _run(namespace, pvc, script)
     rows = []
     for line in out.decode("utf-8", "replace").splitlines():

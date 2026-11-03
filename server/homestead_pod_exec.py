@@ -106,28 +106,54 @@ def _refused(sock, pod, status):
     return ExecRefused(f"Kubernetes refused to run a command in {pod} ({said})")
 
 
-def connect(namespace, pod, argv, stdin=False, container="files"):
+def _late(pod, timeout, stdout=b"", stderr=""):
+    return ExecTimeout(f"The command in {pod} did not finish within {timeout:g} seconds, so Homestead stopped "
+                       "waiting for it; what it did before then is not known, and it may still be running there",
+                       stdout, stderr, timeout)
+
+
+def connect(namespace, pod, argv, stdin=False, container="files", deadline=None, timeout=None):
     """An exec websocket, open and upgraded: the socket, for the caller to
-    stream over. Raises ExecRefused when Kubernetes would not open it."""
+    stream over. Raises ExecRefused when Kubernetes would not open it, and
+    ExecTimeout when the upgrade does not come by deadline (a monotonic
+    time; without one, CONNECT_SECONDS for each wait)."""
+    def wait():
+        if deadline is None:
+            return CONNECT_SECONDS
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise socket.timeout("deadline")
+        return min(CONNECT_SECONDS, left)
+
     query = [("container", container), ("stdout", "true"), ("stderr", "true")]
     if stdin:
         query.append(("stdin", "true"))
     query.extend(("command", part) for part in argv)
     path = (f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/pods/"
             f"{urllib.parse.quote(pod)}/exec?{urllib.parse.urlencode(query)}")
-    raw = socket.create_connection((API.hostname, API.port or 443), timeout=CONNECT_SECONDS)
-    sock = CTX.wrap_socket(raw, server_hostname=API.hostname)
-    key = base64.b64encode(secrets.token_bytes(16)).decode()
-    sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {API.netloc}\r\n"
-                  f"Authorization: Bearer {TOKEN}\r\nUpgrade: websocket\r\n"
-                  "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
-                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n").encode())
-    header = bytearray()
-    while not header.endswith(b"\r\n\r\n") and len(header) < 65536:
-        chunk = sock.recv(1)
-        if not chunk:
-            break
-        header.extend(chunk)
+    sock = None
+    try:
+        raw = socket.create_connection((API.hostname, API.port or 443), timeout=wait())
+        sock = CTX.wrap_socket(raw, server_hostname=API.hostname)
+        key = base64.b64encode(secrets.token_bytes(16)).decode()
+        sock.settimeout(wait())
+        sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {API.netloc}\r\n"
+                      f"Authorization: Bearer {TOKEN}\r\nUpgrade: websocket\r\n"
+                      "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n").encode())
+        header = bytearray()
+        while not header.endswith(b"\r\n\r\n") and len(header) < 65536:
+            sock.settimeout(wait())
+            chunk = sock.recv(1)
+            if not chunk:
+                break
+            header.extend(chunk)
+    except BaseException as error:
+        if sock is not None:
+            sock.close()
+        if isinstance(error, socket.timeout):
+            raise _late(pod, timeout if timeout is not None else CONNECT_SECONDS) from error
+        raise
     status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
     if " 101 " not in f"{status} ":
         raise _refused(sock, pod, status)
@@ -182,7 +208,7 @@ def run(namespace, pod, argv, stdin=b"", timeout=30, container="files", cap=MAX_
     """Run one command in a pod and read all of its output: Output, or
     ExecTimeout once timeout seconds have passed in all."""
     deadline = time.monotonic() + timeout
-    sock = connect(namespace, pod, argv, stdin=bool(stdin), container=container)
+    sock = connect(namespace, pod, argv, stdin=bool(stdin), container=container, deadline=deadline, timeout=timeout)
     out, err, code = _Kept(cap), _Kept(cap), None
 
     def remaining():
@@ -219,10 +245,9 @@ def run(namespace, pod, argv, stdin=b"", timeout=30, container="files", cap=MAX_
                     if not stdin:
                         break
         except socket.timeout as error:
-            raise ExecTimeout(f"The command in {pod} did not finish within {timeout:g} seconds, so Homestead "
-                              "stopped waiting for it; what it did before then is not known, and it may still "
-                              "be running there", bytes(out.data), bytes(err.data).decode("utf-8", "replace").strip(),
-                              timeout) from error
+            if code is None:
+                raise _late(pod, timeout, bytes(out.data), bytes(err.data).decode("utf-8", "replace").strip()) from error
+            # It said how it ended; only the close did not come (v4 with stdin).
     finally:
         close(sock)
     return Output(bytes(out.data), bytes(err.data).decode("utf-8", "replace").strip(), code, out.cut or err.cut)

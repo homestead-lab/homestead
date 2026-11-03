@@ -369,8 +369,11 @@ def _step(item, now=None):
             pass
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
         if service and _node_count() > 1:
-            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                        **_held(ref))
+            try:
+                hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                            **_held(ref))
+            except POD_EXEC.ExecTimeout:
+                pass    # it may have been scheduled: never twice; the Ready check below follows
             ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
             return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
         ref.update(stage="done")
@@ -408,6 +411,12 @@ def cancel_plan(item):
     """Stopping tracking it also lets go of the host, so other changes there
     need not wait for the hold to run out (#597)."""
     node = item["ref"]["node"]
+    if item["ref"].get("stage") == "unconfirmed":
+        # Its script ran past its limit and its helper was removed: how far it
+        # got, and whether a rollback was armed, is not known.
+        return {"mode": "forget", "needs": "admin",
+                "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
+                          f"Other changes on {node} can start again at once"]}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The move carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}
