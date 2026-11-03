@@ -609,6 +609,11 @@ def _tick(move):
                 return
         handler(move)
         move["failures"] = 0
+    except TARGET.JournalUnreadable as error:
+        # Only the backup-storage journal: the move waits, saying why, and
+        # nothing is borrowed or put back until it can be read.
+        move["failures"] = int(move.get("failures", 0)) + 1
+        move["message"] = f"Waiting: {str(error)[:300]}"
     except STATE.STORE_ERRORS:
         # The move store, not the move: stop this pass with nothing written
         # (a ValueError below would end the move as failed).
@@ -681,13 +686,16 @@ def tick_all():
 def _tick_all():
     with STATE._lock:
         rows = STATE._read()
-    journal = TARGET._target_journal()
+    try:
+        journal = TARGET._target_journal()
+    except TARGET.JournalUnreadable:
+        journal = None    # each move that needs it waits and says why; no orphan is released on a guess
     running = [m["id"] for m in rows if m.get("status") == "running"
                or (m.get("flags") or {}).get("target_cleanup_pending")
                or (m.get("flags") or {}).get("resource_cleanup_pending")
                or (m.get("status") in ("failed", "cancelled") and (m.get("flags") or {}).get("cancelling"))
                or (m.get("status") in ("succeeded", "cancelled") and m.get("transfer_target"))
-               or m["id"] == journal.get("owner")]
+               or m["id"] == (journal or {}).get("owner")]
     if journal and not any(m["id"] == journal["owner"] for m in rows):
         TARGET._release_target({"id": journal["owner"], "status": "cancelled"})
     for move_id in running:

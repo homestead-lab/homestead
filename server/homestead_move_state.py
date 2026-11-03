@@ -99,6 +99,8 @@ def recording(done, what="it", then=""):
     try:
         yield
     except STORE_ERRORS as error:
+        if getattr(error, "not_a_write", False):
+            raise    # a read before any change (homestead_move_target's journal): its own words are right
         text = done() if callable(done) else done
         raise NotRecorded(f"{text}, but Homestead could not record {what} on its data volume ({_why(error)})."
                           + (f" {then}" if then else "")) from error

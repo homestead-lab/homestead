@@ -237,3 +237,105 @@ class TargetStateTests(unittest.TestCase):
             self.assertTrue(BACKUP_TARGET.replace_backup_target_state(previous, desired))
             self.assertTrue(BACKUP_TARGET.replace_backup_target_state(desired, previous))
             self.assertEqual(previous, BACKUP_TARGET.backup_target_state())
+
+
+class UnreadableJournalTests(unittest.TestCase):
+    """move-backup-target.json says which transfer has borrowed this cluster's
+    backup storage, and what to put back. A file that is there but cannot be
+    read is never taken for "nobody has it", and never written over."""
+
+    setUp, move = TransferTargetTests.setUp, TransferTargetTests.move
+
+    def journal_path(self):
+        return str(Path(STATE.DATA_DIR) / TARGET.TARGET_STORE)
+
+    def broken(self, text):
+        Path(self.journal_path()).write_text(text, encoding="utf-8")
+        return Path(self.journal_path()).read_bytes()
+
+    def test_a_journal_that_cannot_be_read_raises_naming_it(self):
+        import homestead_shared as SHARED
+        for text in ('{"owner": "0123', "[]", "null"):
+            with self.subTest(text):
+                self.broken(text)
+                with self.assertRaisesRegex(SHARED.Unreadable, TARGET.TARGET_STORE):
+                    TARGET._target_journal()
+
+    def test_a_missing_journal_is_nobody_borrowing(self):
+        self.assertEqual({}, TARGET._target_journal())
+
+    def test_borrowing_never_writes_over_an_unreadable_journal(self):
+        import homestead_shared as SHARED
+        before = self.broken("[]")       # today: falsy, so taken for "nobody has it"
+        move = self.move()
+        with self.assertRaises(SHARED.Unreadable):
+            TARGET._borrow_target(move)
+        self.assertEqual(before, Path(self.journal_path()).read_bytes())
+        self.assertEqual(self.original, self.lh.backup_target_state(), "the backup storage is not touched")
+
+    def test_a_running_move_waits_and_says_why_rather_than_failing(self):
+        move = self.move()
+        move["phase"] = "quiescing"
+        STATE._store(move)
+        before = self.broken('{"owner": "0123')
+        PHASE.tick_all()
+        stored = STATE._find(move["id"])
+        self.assertEqual("running", stored["status"], stored.get("message"))
+        self.assertIn(TARGET.TARGET_STORE, stored["message"])
+        self.assertTrue(stored["message"].startswith("Waiting"))
+        self.assertEqual(before, Path(self.journal_path()).read_bytes())
+
+    def test_clearing_finished_moves_over_an_unreadable_journal_is_refused_in_words(self):
+        move = self.move()
+        move["status"] = "succeeded"
+        STATE._store(move)
+        before = self.broken("null")
+        with self.assertRaisesRegex(ValueError, TARGET.TARGET_STORE):
+            ACT.dismiss(move["id"])
+        self.assertEqual("succeeded", STATE._find(move["id"])["status"])
+        self.assertEqual(before, Path(self.journal_path()).read_bytes())
+
+    def test_a_cleanup_waiting_on_an_unreadable_journal_does_not_stop_other_moves(self):
+        done = self.move("aaaaaaaaaaaa")
+        done.update(status="succeeded", flags={"target_cleanup_pending": True}, transfer_target={"secret": ""})
+        STATE._store(done)
+        running = self.move("bbbbbbbbbbbb")
+        running["phase"] = "quiescing"
+        STATE._store(running)
+        before = self.broken("[]")
+        PHASE.tick_all()
+        done = STATE._find("aaaaaaaaaaaa")
+        self.assertIn("Backup storage cleanup is pending", done["message"])
+        self.assertTrue(done["flags"]["target_cleanup_pending"])
+        self.assertIn(TARGET.TARGET_STORE, STATE._find("bbbbbbbbbbbb")["message"], "the running move was still asked")
+        self.assertEqual(before, Path(self.journal_path()).read_bytes())
+
+    def test_a_retry_that_cannot_read_the_journal_says_so_and_claims_nothing(self):
+        move = self.move()
+        move.update(status="failed", phase="joining")
+        STATE._store(move)
+        before = self.broken('{"owner": "0123')
+        reply = client.answer(lambda: ACT.retry(move["id"]))
+        self.assertEqual(409, reply.code)
+        error = reply.body["error"]
+        self.assertIn(TARGET.TARGET_STORE, error)
+        self.assertIn("it is not valid JSON", error)
+        self.assertNotIn("releasing", error.lower())
+        self.assertNotIn("could not record", error)
+        self.assertEqual("failed", STATE._find(move["id"])["status"])
+        self.assertEqual(before, Path(self.journal_path()).read_bytes())
+
+    def test_a_pending_cleanup_says_the_journal_cannot_be_read_and_why(self):
+        done = self.move("aaaaaaaaaaaa")
+        done.update(status="succeeded", message="Arrived", flags={"target_cleanup_pending": True})
+        STATE._store(done)
+        self.broken("[]")
+        TARGET._cleanup_target(done)
+        self.assertIn(f"{TARGET.TARGET_STORE} on the data volume cannot be read", done["message"])
+        self.assertIn("does not hold", done["message"])
+        self.assertEqual(1, done["message"].count("Backup storage cleanup is pending"))
+        TARGET._cleanup_target(done)
+        self.assertEqual(1, done["message"].count("Backup storage cleanup is pending"), "said once")
+        Path(self.journal_path()).unlink()
+        TARGET._cleanup_target(done)
+        self.assertEqual("Arrived", done["message"], "gone once it can be read")
