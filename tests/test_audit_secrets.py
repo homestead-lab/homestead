@@ -2,6 +2,7 @@
 (#738): not on stdout, not in audit.jsonl - through a real server.H, with the
 requests that carry them."""
 import json
+import queue
 import sys
 import tempfile
 import threading
@@ -22,6 +23,15 @@ SECRETS = ("Pw-0123456789", "SETUP-4F7Q-9KZD", "Old-pw-0123456", "New-pw-6543210
 
 
 class NothingSecret(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Its own after-request queue, so its own hook worker: a hook another file left
+        # running cannot hold this class's lines up (the audit's settings read waits
+        # 5 s for DNS on CI). And audit.file as a failed read leaves it, on, without
+        # the read: the hook path itself is the real one.
+        cls.enterClassContext(mock.patch.object(ROUTES, "_queue", queue.Queue(ROUTES.HOOK_QUEUE)))
+        cls.enterClassContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
+
     def setUp(self):
         import homestead_http as HTTP
         import server

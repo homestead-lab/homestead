@@ -3,6 +3,7 @@ its status and how long it took, after its slot is given back. A hook never
 changes the answer, and never sees a body, a query, a cookie, a session or
 what was answered unless it asks, by name, for the few fields it may have."""
 import json
+import queue
 import socket
 import sys
 import threading
@@ -150,6 +151,17 @@ class HookPoint(unittest.TestCase):
 class ThroughServer(unittest.TestCase):
     """server.H on a real socket: what a hook sees of sign-in, setup, a password
     change and a new API key."""
+
+    @classmethod
+    def setUpClass(cls):
+        import homestead_audit as AUDIT_LOG
+        import homestead_routes as ROUTES
+        # Its own after-request queue, so its own hook worker: a hook another file left
+        # running cannot hold this class's lines up (the audit's settings read waits
+        # 5 s for DNS on CI). And audit.file as a failed read leaves it, on, without
+        # the read: the hook path itself is the real one.
+        cls.enterClassContext(mock.patch.object(ROUTES, "_queue", queue.Queue(ROUTES.HOOK_QUEUE)))
+        cls.enterClassContext(mock.patch.object(AUDIT_LOG, "_file_on", return_value=True))
 
     def setUp(self):
         import server
