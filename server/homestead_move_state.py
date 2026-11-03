@@ -45,8 +45,10 @@ VOLUME_PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring", "
 COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncing", "restoring",
                "creating", "starting", "done")
 KINDS = ("container", "vm", "volume")
-# Shared with any other Homestead replica on the same data volume.
-_lock = SHARED.SharedLock("moves")
+# Shared with any other Homestead replica on the same data volume. Strict: a
+# lock only this process honours would let two replicas each write back their
+# own copy of the moves and lose the other's.
+_lock = SHARED.SharedLock("moves", strict=True, directory=lambda: DATA_DIR)
 
 
 def _step_lock(move_id):
@@ -75,12 +77,10 @@ def _path():
 
 
 def _read():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            rows = json.load(handle)
-        return rows if isinstance(rows, list) else []
-    except (OSError, ValueError, TypeError):
-        return []
+    """Every move recorded here. A missing file is no moves (a fresh install);
+    one that is there but cannot be read raises SHARED.Unreadable, so it is
+    never taken for "no moves" and written back over the moves it holds."""
+    return SHARED.read_json(_path(), [])
 
 
 def _write(rows):

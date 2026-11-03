@@ -604,6 +604,10 @@ def _tick(move):
                 return
         handler(move)
         move["failures"] = 0
+    except SHARED.Unreadable:
+        # The move store, not the move: stop this pass with nothing written
+        # (a ValueError below would end the move as failed).
+        raise
     except STATE.CLIENT.Unreachable as error:
         _wait_or_give_up(move, str(error))
     except (ValueError, PermissionError) as error:
