@@ -10,10 +10,11 @@ Here, at the end. Failed, because none of these depends on CI's split:
 - the list may only grow smaller (CEILING), and its fake lines' names must still be bound;
 - in a run of the whole suite in one process (how the list is measured), a listed
   fake line whose file no longer leaks the name, so the list holds real leaks.
-Reported, not failed (for now, ENFORCE_FAKES below):
+Failed too (ENFORCE_FAKES below):
 - a name left holding a fake the test made (code from tests/, a Mock, or a path
   under the temp folder; credited to the test file that left it) that bound_leaks.txt
-  does not list with that file;
+  does not list with that file.
+Reported, not failed:
 - any other change (a name put back to its default, a server value, a fake another
   test made): whether it reads as a change depends on what ran before.
 Fakes bound in setUpClass/setUpModule run before any test, so the per-test recorder
@@ -33,14 +34,13 @@ import bound_guard as GUARD
 GUARD.install()
 LISTED = GUARD.allowed()
 GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
-CEILING = 533
-# Advisory for now: a fake a test made can still land in another name by order, through
-# a cleanup that restores by calling bind() again (bind(*saved), a module reset()), which
-# re-copies whatever another binding holds at that moment. test_smart_standby leaves its
-# fake in homestead_names.kget in one CI share and in homestead_smart.kget in a small run,
-# and in neither in the whole suite. Set True once those restores use keep_bound (wrap-up
-# gaps): then a fake not on bound_leaks.txt fails the run.
-ENFORCE_FAKES = False
+CEILING = 529
+# On since 3 Nov: recording every share of CI's 4-way and the gate's 8-way split found
+# no fake pair the whole-suite list lacks. (Advisory before that: test_smart_readings'
+# Base bound SMART, and through it NAMES, to its module-level probe_pods and kept it, so
+# whichever file ran a Base test first in an order was credited.) If a split shows a
+# pair this list lacks, that is an order-dependent leak to fix at its source, not to list.
+ENFORCE_FAKES = True
 # BOUND_LEAKS_RECORD=<file>: write the pairs this run found there (to measure the list).
 RECORD = os.environ.get("BOUND_LEAKS_RECORD")
 

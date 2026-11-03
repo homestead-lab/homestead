@@ -264,7 +264,6 @@ homestead_names.kget	test_schedule_jobs	fake
 homestead_names.kget	test_sessions	fake
 homestead_names.kget	test_shares	fake
 homestead_names.kget	test_smart	fake
-homestead_names.kget	test_smart_readings	fake
 homestead_names.kget	test_transfer_cleanup	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_cluster_address	other
@@ -441,10 +440,7 @@ homestead_shares.ksend	test_shares	fake
 homestead_signins.DATA_DIR	test_shared_logs	fake
 homestead_signins.DATA_DIR	test_signins	fake
 homestead_smart.kget	test_smart	fake
-homestead_smart.kget	test_smart_readings	fake
 homestead_smart.signing_key	test_smart	fake
-homestead_smart.signing_key	test_smart_readings	fake
-homestead_smart.signing_key	test_smart_standby	fake
 homestead_snapshot_delete.kget	test_snapshot_delete	fake
 homestead_snapshot_delete.ksend	test_snapshot_delete	fake
 homestead_updates.CHANNEL	test_image_pull_progress	other

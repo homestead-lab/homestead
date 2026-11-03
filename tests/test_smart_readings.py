@@ -16,10 +16,12 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_smart as SMART
+from rebind import keep_bound
 
 KEY = b"test-signing-key"
 ROWS = [{"name": "sda", "available": True, "health": "PASSED"},
@@ -63,6 +65,9 @@ class Helper:
 
 class Base(unittest.TestCase):
     def setUp(self):
+        # SMART.bind() binds homestead_names too: put both back after the test, or the
+        # next file reads its pods through this file's probe_pods.
+        keep_bound(self, SMART, SMART.NAMES)
         SMART.bind(probe_pods, "lab", lambda: KEY)
         SMART.reset()
         self.addCleanup(SMART.reset)
