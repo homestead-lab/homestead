@@ -37,9 +37,11 @@ v2_tasks = lambda: []
 # installs its check with add_guard(); bind() never clears one. Every disk
 # change below runs inside all of them, under the job store's lock, and is
 # refused while any is missing: a change nothing has checked is not made.
-# Every Longhorn disk write runs under them except the retire job's own steps
-# and its cancel: retire_start passed them, and while it runs none of their
-# jobs can start on that host (tests/test_disk_writes_guarded.py).
+# Every Longhorn disk write runs under them except those named, with why, in
+# tests/test_disk_writes_guarded.py: the retire job's own steps and its cancel
+# (retire_start passed them, and while it runs none of their jobs can start on
+# that host), the V2 preparation's own steps, the root-filesystem guard, and
+# removing a host.
 GUARDS = {}
 REQUIRED_GUARDS = ("disk_v2", "disk_allocation", "longhorn_runtime")
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
