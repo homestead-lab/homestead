@@ -19,7 +19,6 @@ import os
 import posixpath
 import re
 import secrets
-import socket
 import stat as STAT
 import tarfile
 import threading
@@ -27,7 +26,8 @@ import time
 import urllib.parse
 import zipfile
 
-from homestead_console import encode_frame, read_frame
+from homestead_console import read_frame
+import homestead_pod_exec as POD_EXEC
 import homestead_names as NAMES
 import homestead_routes as ROUTER
 
@@ -58,6 +58,7 @@ MAX_LIST = 500
 def bind(_kget, _ksend, api, token, ssl_context, system_namespaces):
     global kget, ksend, API, TOKEN, CTX, SYSTEM_NAMESPACES
     kget, ksend, API, TOKEN, CTX = _kget, _ksend, api, token, ssl_context
+    POD_EXEC.bind(api, token, ssl_context)
     SYSTEM_NAMESPACES = set(system_namespaces or ())
 
 
@@ -327,91 +328,14 @@ def cleanup(now=None):
 
 
 # --------------------------------------------------------------------- exec
-class ExecRefused(ConnectionError):
-    """Kubernetes would not open the exec: nothing ran in the pod. Right after
-    a host comes back the API server can answer for a Running pod while it
-    cannot reach that host's kubelet yet, so this one is worth trying again."""
-    retry = True
-
-
-def _refused(sock, pod, status):
-    """The API server's answer to an exec it would not open, for the error:
-    its status line and, from the body, its own message - "error dialing
-    backend", say, while a host just back has no tunnel to it yet."""
-    detail = ""
-    try:
-        sock.settimeout(2)
-        body = sock.recv(2048).decode("utf-8", "replace")
-        start = body.find("{")
-        if start >= 0:
-            try:
-                detail = json.loads(body[start:body.rfind("}") + 1]).get("message", "")
-            except ValueError:
-                detail = ""
-        detail = detail or body.strip().splitlines()[-1] if body.strip() else detail
-    except OSError:
-        pass
-    finally:
-        sock.close()
-    said = f"{status or 'no answer'}" + (f": {detail[:200]}" if detail else "")
-    return ExecRefused(f"Kubernetes refused to run a command in {pod} ({said})")
+# Every command runs through homestead_pod_exec: one deadline for the whole
+# run (ExecTimeout, with what it printed), output cut at 4 MiB, exit code kept.
+ExecRefused = POD_EXEC.ExecRefused
 
 
 def _exec(namespace, pod, argv, stdin=b"", timeout=30, container="files"):
     """Run one command in the helper pod and read all of its output."""
-    query = [("container", container), ("stdout", "true"), ("stderr", "true")]
-    if stdin:
-        query.append(("stdin", "true"))
-    query.extend(("command", part) for part in argv)
-    path = (f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/pods/"
-            f"{urllib.parse.quote(pod)}/exec?{urllib.parse.urlencode(query)}")
-    port = API.port or 443
-    raw = socket.create_connection((API.hostname, port), timeout=15)
-    sock = CTX.wrap_socket(raw, server_hostname=API.hostname)
-    key = base64.b64encode(secrets.token_bytes(16)).decode()
-    request = (f"GET {path} HTTP/1.1\r\nHost: {API.netloc}\r\n"
-               f"Authorization: Bearer {TOKEN}\r\nUpgrade: websocket\r\n"
-               "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
-               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n")
-    sock.sendall(request.encode())
-    header = bytearray()
-    while not header.endswith(b"\r\n\r\n") and len(header) < 65536:
-        chunk = sock.recv(1)
-        if not chunk:
-            break
-        header.extend(chunk)
-    status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
-    if " 101 " not in f"{status} ":
-        raise _refused(sock, pod, status)
-    out, err = bytearray(), bytearray()
-    try:
-        if stdin:
-            for index in range(0, len(stdin), 16384):
-                sock.sendall(encode_frame(b"\x00" + stdin[index:index + 16384], masked=True))
-        sock.settimeout(timeout)
-        while True:
-            try:
-                _, opcode, payload = read_frame(sock, require_mask=False)
-            except (EOFError, OSError, ValueError):
-                break
-            if opcode == 0x8:
-                break
-            if not payload:
-                continue
-            channel, data = payload[0], payload[1:]
-            if channel == 1:
-                out.extend(data)
-            elif channel == 2:
-                err.extend(data)
-            elif channel == 3 and not stdin:
-                break
-    finally:
-        try:
-            sock.sendall(encode_frame(b"", opcode=0x8, masked=True))
-        except Exception:
-            pass
-        sock.close()
-    return bytes(out), bytes(err).decode("utf-8", "replace").strip()
+    return POD_EXEC.run(namespace, pod, argv, stdin=stdin, timeout=timeout, container=container)
 
 
 def _sh(namespace, pod, script, stdin=b"", timeout=30):
@@ -661,63 +585,19 @@ def copy_within(namespace, pvc, paths, folder, move=False):
 
 
 # ---- streaming: downloads, zips and transfers between volumes
-def _mask(payload, key):
-    """A websocket mask over a whole frame at once; byte by byte is far too slow."""
-    if not payload:
-        return b""
-    repeated = (key * (len(payload) // 4 + 1))[:len(payload)]
-    return (int.from_bytes(payload, "big") ^ int.from_bytes(repeated, "big")).to_bytes(len(payload), "big")
-
-
-def _frame(payload):
-    key = secrets.token_bytes(4)
-    length = len(payload)
-    head = bytearray([0x82])
-    if length < 126:
-        head.append(0x80 | length)
-    elif length <= 0xFFFF:
-        head.append(0x80 | 126)
-        head.extend(length.to_bytes(2, "big"))
-    else:
-        head.append(0x80 | 127)
-        head.extend(length.to_bytes(8, "big"))
-    return bytes(head) + key + _mask(payload, key)
+_frame = POD_EXEC.frame
 
 
 def _open_exec(namespace, pod, argv, stdin=False, container="files"):
-    """An exec websocket, open: the socket, for streaming in either direction."""
-    query = [("container", container), ("stdout", "true"), ("stderr", "true")]
-    if stdin:
-        query.append(("stdin", "true"))
-    query.extend(("command", part) for part in argv)
-    path = (f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/pods/"
-            f"{urllib.parse.quote(pod)}/exec?{urllib.parse.urlencode(query)}")
-    raw = socket.create_connection((API.hostname, API.port or 443), timeout=15)
-    sock = CTX.wrap_socket(raw, server_hostname=API.hostname)
-    key = base64.b64encode(secrets.token_bytes(16)).decode()
-    sock.sendall((f"GET {path} HTTP/1.1\r\nHost: {API.netloc}\r\n"
-                  f"Authorization: Bearer {TOKEN}\r\nUpgrade: websocket\r\n"
-                  "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
-                  f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n").encode())
-    header = bytearray()
-    while not header.endswith(b"\r\n\r\n") and len(header) < 65536:
-        chunk = sock.recv(1)
-        if not chunk:
-            break
-        header.extend(chunk)
-    status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
-    if " 101 " not in f"{status} ":
-        raise _refused(sock, pod, status)
+    """An exec websocket, open: the socket, for streaming in either direction.
+    Each wait on it may take five minutes; a stream has no total deadline."""
+    sock = POD_EXEC.connect(namespace, pod, argv, stdin=stdin, container=container)
     sock.settimeout(300)
     return sock
 
 
 def _close_exec(sock):
-    try:
-        sock.sendall(encode_frame(b"", opcode=0x8, masked=True))
-    except Exception:
-        pass
-    sock.close()
+    POD_EXEC.close(sock)
 
 
 def _stdout(sock, errors):

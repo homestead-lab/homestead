@@ -19,6 +19,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_files as FILES
+import homestead_hostrun as HOSTRUN
+import homestead_pod_exec as POD_EXEC
 from homestead_console import encode_frame, read_frame
 
 SUCCESS = {"metadata": {}, "status": "Success"}
@@ -80,15 +82,24 @@ class ExecTests(unittest.TestCase):
         server = ExecServer(script)
         self.addCleanup(server.close)
         api = urllib.parse.urlparse(f"https://127.0.0.1:{server.port}")
-        self.enterContext(mock.patch.multiple(FILES, API=api, TOKEN="token", CTX=PlainContext()))
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=PlainContext()))
         return server
 
     def run_exec(self, **kwargs):
         start = time.monotonic()
-        result = FILES._exec("lab", "helper", ["sh", "-c", "true"], **kwargs)
+        result = POD_EXEC.run("lab", "helper", ["sh", "-c", "true"], **kwargs)
         return result, time.monotonic() - start
 
-    # Today's behaviour, pinned before anything changes.
+    def assert_times_out(self, took_less_than, **kwargs):
+        start = time.monotonic()
+        with self.assertRaises(POD_EXEC.ExecTimeout) as caught:
+            POD_EXEC.run("lab", "helper", ["sh", "-c", "true"], **kwargs)
+        self.assertLess(time.monotonic() - start, took_less_than)
+        self.assertIn("did not finish within", str(caught.exception))
+        self.assertIn("not known", str(caught.exception))
+        return caught.exception
+
+    # What does not change: a command that finishes.
 
     def test_stdout_and_stderr_of_a_command_that_finishes(self):
         def script(conn):
@@ -97,54 +108,81 @@ class ExecTests(unittest.TestCase):
             status(conn, SUCCESS)
 
         server = self.serve(script)
-        (out, err), _ = self.run_exec()
+        result, _ = self.run_exec()
+        out, err = result
         self.assertEqual((b"hello\n", "a warning"), (out, err))
+        self.assertEqual(0, result.exit_code)
+        self.assertFalse(result.cut)
         self.assertIn("GET /api/v1/namespaces/lab/pods/helper/exec?container=files&stdout=true&stderr=true"
                       "&command=sh&command=-c&command=true HTTP/1.1", server.requests[0])
         self.assertIn("Sec-WebSocket-Protocol: v4.channel.k8s.io", server.requests[0])
 
-    def test_a_nonzero_exit_reads_like_any_other_end(self):
+    def test_a_nonzero_exit_returns_its_code_and_is_not_an_error(self):
         def script(conn):
             send(conn, 1, b"some\n")
             status(conn, EXIT_3)
 
         self.serve(script)
-        (out, err), _ = self.run_exec()
-        self.assertEqual((b"some\n", ""), (out, err))
+        result, _ = self.run_exec()
+        self.assertEqual((b"some\n", ""), tuple(result))
+        self.assertEqual(3, result.exit_code)
 
-    def test_a_command_that_trickles_is_waited_for_past_its_timeout(self):
+    def test_a_status_without_an_exit_code_reads_as_none(self):
         def script(conn):
-            for _ in range(6):
-                send(conn, 1, b".")
-                time.sleep(0.25)
-            status(conn, SUCCESS)
+            status(conn, {"metadata": {}, "status": "Failure", "message": "executable file not found"})
 
         self.serve(script)
-        (out, _), took = self.run_exec(timeout=0.5)
-        self.assertEqual(b"......", out)
-        self.assertGreater(took, 1.2)
+        result, _ = self.run_exec()
+        self.assertIsNone(result.exit_code)
 
-    def test_a_command_that_goes_quiet_returns_what_it_had_as_if_it_had_finished(self):
+    # The deadline is for the whole run, and a timeout is an error.
+
+    def test_a_command_that_trickles_is_stopped_at_its_deadline(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def script(conn):
+            while not release.is_set():
+                send(conn, 1, b".")
+                time.sleep(0.1)
+
+        self.serve(script)
+        error = self.assert_times_out(2, timeout=0.6)
+        self.assertTrue(error.stdout and set(error.stdout) == {ord(".")}, error.stdout)
+
+    def test_a_command_that_goes_quiet_raises_with_what_it_had_printed(self):
         release = threading.Event()
         self.addCleanup(release.set)
 
         def script(conn):
             send(conn, 1, b"partial")
+            send(conn, 2, b"half a warning")
             release.wait(5)
 
         self.serve(script)
-        (out, err), took = self.run_exec(timeout=0.5)
-        self.assertEqual((b"partial", ""), (out, err))
-        self.assertLess(took, 3)
+        error = self.assert_times_out(2, timeout=0.5)
+        self.assertEqual((b"partial", "half a warning"), (error.stdout, error.stderr))
+        self.assertEqual(0.5, error.timeout)
 
-    def test_a_connection_that_closes_mid_frame_returns_what_came_before(self):
+    def test_stdin_that_cannot_be_sent_in_time_raises(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def script(conn):
+            release.wait(5)   # never reads: the send buffers fill
+
+        self.serve(script)
+        self.assert_times_out(3, timeout=0.5, stdin=b"x" * (64 * 1024 * 1024))
+
+    def test_a_connection_that_closes_mid_frame_returns_what_came_before_with_no_exit_code(self):
         def script(conn):
             send(conn, 1, b"before")
             conn.sendall(bytes([0x82, 100, 1]) + b"cut short")
 
         self.serve(script)
-        (out, err), _ = self.run_exec()
-        self.assertEqual((b"before", ""), (out, err))
+        result, _ = self.run_exec()
+        self.assertEqual((b"before", ""), tuple(result))
+        self.assertIsNone(result.exit_code)
 
     def test_two_hundred_kilobytes_of_stdin_arrive_whole(self):
         stdin = bytes(range(256)) * 800
@@ -159,22 +197,96 @@ class ExecTests(unittest.TestCase):
             status(conn, SUCCESS)
 
         server = self.serve(script)
-        (out, _), _ = self.run_exec(stdin=stdin)
-        self.assertEqual(hashlib.sha256(stdin).hexdigest().encode(), out)
+        result, _ = self.run_exec(stdin=stdin)
+        self.assertEqual(hashlib.sha256(stdin).hexdigest().encode(), result.stdout)
+        self.assertEqual(0, result.exit_code)
         self.assertIn("&stdin=true", server.requests[0])
 
-    def test_output_is_not_limited(self):
+    def test_output_past_four_mebibytes_is_cut_with_a_marker(self):
         piece = b"x" * (512 * 1024)
 
         def script(conn):
             for _ in range(10):
                 send(conn, 1, piece)
+                send(conn, 2, piece)
             status(conn, SUCCESS)
 
         self.serve(script)
-        (out, _), _ = self.run_exec()
-        self.assertEqual(10 * len(piece), len(out))
+        result, _ = self.run_exec()
+        self.assertEqual(4 * 1024 * 1024 + len(POD_EXEC.CUT), len(result.stdout))
+        self.assertTrue(result.stdout.endswith(POD_EXEC.CUT))
+        self.assertTrue(result.stderr.endswith(POD_EXEC.CUT.decode().strip()))
+        self.assertTrue(result.cut)
+        self.assertEqual(0, result.exit_code)
 
+    # The callers.
+
+    def test_the_file_browser_runs_its_commands_through_it(self):
+        def script(conn):
+            send(conn, 1, b"listed\n")
+            status(conn, SUCCESS)
+
+        server = self.serve(script)
+        out, err = FILES._sh("lab", "helper", "ls")
+        self.assertEqual((b"listed\n", ""), (out, err))
+        self.assertIn("command=sh&command=-c&command=ls", server.requests[0])
+
+    def test_a_host_script_that_times_out_says_so_and_its_helper_is_removed(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def script(conn):
+            send(conn, 1, b"STEP=half\n")
+            release.wait(5)
+
+        self.serve(script)
+        sent = []
+        running = {"status": {"phase": "Running"}}
+        with mock.patch.object(HOSTRUN, "ksend", side_effect=lambda *a, **k: sent.append(a[:2]) or {}), \
+                mock.patch.object(HOSTRUN, "kget", return_value=running), \
+                mock.patch.object(HOSTRUN, "exec_in", lambda *a, **k: POD_EXEC.run(*a, **k)), \
+                mock.patch.object(HOSTRUN, "_clear_ended"):
+            with self.assertRaises(POD_EXEC.ExecTimeout) as caught:
+                HOSTRUN.run("node-a", "echo hi", timeout=0.5)
+        self.assertIn("node-a", str(caught.exception))
+        self.assertIn("stays changed", str(caught.exception))
+        self.assertEqual("STEP=half\n", caught.exception.stdout)
+        self.assertEqual("DELETE", sent[-1][0])
+
+    def test_a_host_script_returns_its_exit_code(self):
+        def script(conn):
+            send(conn, 1, b"done\n")
+            status(conn, EXIT_3)
+
+        self.serve(script)
+        running = {"status": {"phase": "Running"}}
+        with mock.patch.object(HOSTRUN, "ksend", return_value={}), \
+                mock.patch.object(HOSTRUN, "kget", return_value=running), \
+                mock.patch.object(HOSTRUN, "exec_in", lambda *a, **k: POD_EXEC.run(*a, **k)), \
+                mock.patch.object(HOSTRUN, "_clear_ended"):
+            result = HOSTRUN.run("node-a", "exit 3", timeout=5)
+        out, err = result
+        self.assertEqual(("done\n", ""), (out, err))
+        self.assertEqual(3, result.exit_code)
+
+
+class CutAnswers(unittest.TestCase):
+    """A reader whose JSON answer went past the cap says so, rather than
+    failing to parse half of it."""
+
+    def test_a_snapshot_walk_cut_at_the_cap_is_refused_in_words(self):
+        import homestead_snapshot_restore as RESTORE
+        cut = POD_EXEC.Output(b'{"entries": [{"path": "a"', "", 0, True)
+        with mock.patch.object(RESTORE.POD_EXEC, "run", return_value=cut):
+            with self.assertRaisesRegex(ValueError, "4 MiB"):
+                RESTORE._walk("lab", "session", "", ["a"])
+
+    def test_a_snapshot_read_cut_at_the_cap_is_refused_in_words(self):
+        import homestead_snapshot_files as SNAPSHOT
+        cut = POD_EXEC.Output(b'{"entries": [', "", 0, True)
+        with mock.patch.object(SNAPSHOT, "_verified"), mock.patch.object(SNAPSHOT.POD_EXEC, "run", return_value=cut):
+            with self.assertRaisesRegex(ValueError, "4 MiB"):
+                SNAPSHOT.read("lab", "copy", "list", "folder")
 
 if __name__ == "__main__":
     unittest.main()

@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_files as FILES
+import homestead_pod_exec as POD_EXEC
 import homestead_hostrun as HOSTRUN
 import homestead_kube as K
 from fakes.kube import Kube
@@ -78,7 +79,7 @@ class RetryTests(unittest.TestCase):
                 return b'3f\r\n{"kind":"Status","message":"error dialing backend: no tunnel for node-2"}\r\n0\r\n\r\n'
             def close(self): self.closed = True
         sock = Sock()
-        error = FILES._refused(sock, "homestead-host-node-2", "HTTP/1.1 500 Internal Server Error")
+        error = POD_EXEC._refused(sock, "homestead-host-node-2", "HTTP/1.1 500 Internal Server Error")
         self.assertIsInstance(error, FILES.ExecRefused)
         self.assertIn("HTTP/1.1 500", str(error))
         self.assertIn("error dialing backend: no tunnel for node-2", str(error))
