@@ -354,6 +354,23 @@ class TimedOutStartTests(unittest.TestCase):
         self.assertEqual([], host.let_go_of, "still held while it needs attention")
         self.assertGreaterEqual(len(host.holds), 2, "the hold is renewed while it waits")
 
+    def test_a_change_that_never_reached_the_host_lets_go_and_starts_no_job(self):
+        import homestead_pod_exec as POD_EXEC
+        host, ops = Host(facts(), ""), Ops()
+        real = host.run
+
+        def run(node, script, timeout=60, change="", holder=""):
+            if script.startswith("set -e"):
+                raise POD_EXEC.ExecUnreached("Homestead could not reach homestead-host-h1 (timed out); the command never started")
+            return real(node, script, timeout, change, holder)
+
+        host.run = run
+        BONDS.hostrun = host
+        with self.assertRaisesRegex(ConnectionError, "never started"):
+            BONDS.start("h1", {"members": ["enp2s0"]}, ops)
+        self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
+        self.assertFalse(ops.started)
+
     def test_the_cancel_review_of_an_unconfirmed_job_claims_nothing_about_the_host(self):
         _, ops, _, _ = self.start_timed_out()
         keeps = " ".join(BONDS.cancel_plan({"kind": BONDS.KIND, "ref": ops.started[0][2]})["keeps"])

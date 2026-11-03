@@ -43,6 +43,11 @@ class ExecRefused(ConnectionError):
     retry = True
 
 
+class ExecUnreached(ExecRefused):
+    """The exec request never got to the API server - the connection or its
+    TLS handshake timed out first - so the command never started."""
+
+
 class ExecTimeout(TimeoutError):
     """The command did not finish by its deadline. Homestead stopped waiting;
     stdout and stderr hold what it had printed by then."""
@@ -116,7 +121,8 @@ def connect(namespace, pod, argv, stdin=False, container="files", deadline=None,
     """An exec websocket, open and upgraded: the socket, for the caller to
     stream over. Raises ExecRefused when Kubernetes would not open it, and
     ExecTimeout when the upgrade does not come by deadline (a monotonic
-    time; without one, CONNECT_SECONDS for each wait)."""
+    time; without one, CONNECT_SECONDS for each wait). A timeout before the
+    request is sent is ExecUnreached: the command never started."""
     def wait():
         if deadline is None:
             return CONNECT_SECONDS
@@ -131,7 +137,8 @@ def connect(namespace, pod, argv, stdin=False, container="files", deadline=None,
     query.extend(("command", part) for part in argv)
     path = (f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/pods/"
             f"{urllib.parse.quote(pod)}/exec?{urllib.parse.urlencode(query)}")
-    sock = None
+    raw = sock = None
+    sent = False
     try:
         raw = socket.create_connection((API.hostname, API.port or 443), timeout=wait())
         sock = CTX.wrap_socket(raw, server_hostname=API.hostname)
@@ -141,6 +148,7 @@ def connect(namespace, pod, argv, stdin=False, container="files", deadline=None,
                       f"Authorization: Bearer {TOKEN}\r\nUpgrade: websocket\r\n"
                       "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                       f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Protocol: v4.channel.k8s.io\r\n\r\n").encode())
+        sent = True
         header = bytearray()
         while not header.endswith(b"\r\n\r\n") and len(header) < 65536:
             sock.settimeout(wait())
@@ -149,9 +157,13 @@ def connect(namespace, pod, argv, stdin=False, container="files", deadline=None,
                 break
             header.extend(chunk)
     except BaseException as error:
-        if sock is not None:
-            sock.close()
+        for opened in (sock, raw):
+            if opened is not None:
+                opened.close()
         if isinstance(error, socket.timeout):
+            if not sent:
+                raise ExecUnreached(f"Homestead could not reach {pod} through the API server ({error or 'timed out'}); "
+                                    "the command never started") from error
             raise _late(pod, timeout if timeout is not None else CONNECT_SECONDS) from error
         raise
     status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()

@@ -242,6 +242,49 @@ class ExecTests(unittest.TestCase):
         accepted[0].settimeout(2)
         self.assertEqual(b"", accepted[0].recv(1), "the client closed its side")
 
+    def unreached(self, context, **kwargs):
+        api = urllib.parse.urlparse("https://127.0.0.1:9")
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=context))
+        with self.assertRaises(POD_EXEC.ExecUnreached) as caught:
+            POD_EXEC.run("lab", "helper", ["sh", "-c", "true"], **kwargs)
+        self.assertIn("could not reach helper", str(caught.exception))
+        self.assertIn("never started", str(caught.exception))
+        self.assertNotIn("may still be running", str(caught.exception))
+        self.assertTrue(caught.exception.retry, "nothing ran: worth trying again")
+        return caught.exception
+
+    def test_a_connection_that_times_out_before_the_request_never_started_the_command(self):
+        with mock.patch.object(POD_EXEC.socket, "create_connection", side_effect=socket.timeout("timed out")):
+            self.unreached(PlainContext(), timeout=0.5)
+
+    def test_a_tls_handshake_that_times_out_never_started_the_command_and_its_socket_is_closed(self):
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        raws = []
+
+        class StallingContext:
+            def wrap_socket(self, raw, server_hostname=None):
+                raws.append(raw)
+                raise socket.timeout("_ssl.c: The handshake operation timed out")
+
+        api = urllib.parse.urlparse(f"https://127.0.0.1:{listener.getsockname()[1]}")
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=StallingContext()))
+        with self.assertRaises(POD_EXEC.ExecUnreached):
+            POD_EXEC.run("lab", "helper", ["true"], timeout=0.5)
+        self.assertEqual(-1, raws[0].fileno(), "the plain socket is closed")
+
+    def test_a_stream_that_cannot_reach_its_pod_says_so(self):
+        class StallingContext:
+            def wrap_socket(self, raw, server_hostname=None):
+                raise socket.timeout("timed out")
+
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+        api = urllib.parse.urlparse(f"https://127.0.0.1:{listener.getsockname()[1]}")
+        self.enterContext(mock.patch.multiple(POD_EXEC, API=api, TOKEN="token", CTX=StallingContext()))
+        with self.assertRaisesRegex(POD_EXEC.ExecUnreached, "could not reach helper"):
+            POD_EXEC.connect("lab", "helper", ["cat", "x"])
+
     def test_a_run_that_said_how_it_ended_is_not_a_timeout_at_the_deadline(self):
         release = threading.Event()
         self.addCleanup(release.set)
