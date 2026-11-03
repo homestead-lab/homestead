@@ -8,7 +8,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_recovery as recovery
+from rebind import keep_bound, rebind
 import server
 
 WINDOW = {"days": [0, 1, 2, 3, 4, 5, 6], "start": "02:00", "duration_minutes": 120}
@@ -38,8 +40,7 @@ class TempData(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        recovery.bind(folder.name)
-        self.addCleanup(recovery.bind, "/data")
+        rebind(self, recovery, folder.name)   # every name its bind() sets comes back after the test
 
 
 class WindowTests(unittest.TestCase):
@@ -188,8 +189,7 @@ class TickTests(TempData):
             return {"moves": [{"id": "lab/db"}], "excluded": sorted(exclude)}
         self.start = mock.Mock(return_value={"id": "job"})
         jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: self.running)
-        bound = (recovery.read, recovery.settings, recovery.operations, recovery.plan, recovery.start, recovery.WAITS_FOR)
-        self.addCleanup(lambda: recovery.bind(recovery.DATA_DIR, *bound[:5], waits_for=bound[5]))
+        keep_bound(self, recovery)   # put back what recovery.bind() sets
         recovery.bind(recovery.DATA_DIR, lambda p: {"items": self.nodes} if p == "/api/v1/nodes" else api[p],
                       lambda: self.settings, jobs, plan, self.start, ("container-rebalance", "os-rollout"))
         patcher = mock.patch.object(recovery, "_planned", [0.0])

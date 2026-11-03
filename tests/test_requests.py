@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_requests as reserve
+from rebind import keep_bound
 
 
 def deployment(name, ns="lab", containers=(("app", {}),), labels=None, generation=1, settled=True):
@@ -57,6 +58,7 @@ class RequestsTests(unittest.TestCase):
         }
         SUGGEST[("lab", "settled", "app")] = ("20m", "64Mi")
         self.sent, self.node_memory = [], "16Gi"
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, lambda *a, **k: self.sent.append((a, k)), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
@@ -219,6 +221,7 @@ class RequestsTests(unittest.TestCase):
     def test_an_app_deleted_mid_job_is_skipped_and_the_rest_go_on(self):
         item = self.job(["lab/paperless", "lab/web"])
         gone = urllib.error.HTTPError("x", 404, "not found", {}, io.BytesIO())
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, mock.Mock(side_effect=[gone, None]), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         self.assertIn("Skipped lab/paperless", reserve.status(item)[2])
@@ -226,6 +229,7 @@ class RequestsTests(unittest.TestCase):
     def test_a_refused_change_skips_that_app_and_the_rest_go_on(self):
         item = self.job(["lab/paperless", "lab/web"])
         refuse = urllib.error.HTTPError("x", 422, "request above limit", {}, io.BytesIO())
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, mock.Mock(side_effect=[refuse, None]), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         state, _, message = reserve.status(item)
@@ -249,6 +253,7 @@ class RequestsTests(unittest.TestCase):
         self.node_list = list(nodes)
         get = self.kget
         self.kget = lambda path: {"items": copy.deepcopy(self.node_list)} if path == "/api/v1/nodes" else get(path)
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, lambda *a, **k: self.sent.append((a, k)), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
@@ -322,6 +327,7 @@ class RequestsTests(unittest.TestCase):
         item = self.job(["lab/paperless"])
         refuse = urllib.error.HTTPError("x", 422, "Unprocessable", {},
                                         io.BytesIO(b'{"message": "requests.memory: must be less than or equal to memory limit"}'))
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, mock.Mock(side_effect=[refuse]), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         self.assertIn("Kubernetes refused it (422: requests.memory: must be less than", reserve.status(item)[2])
@@ -334,6 +340,7 @@ class RequestsTests(unittest.TestCase):
                  "status": {"phase": "Running"}} for owner in ("paperless", "paperless-worker")]
         get = self.kget
         self.kget = lambda path: {"items": copy.deepcopy(pods)} if path == "/api/v1/pods" else get(path)
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, lambda *a, **k: self.sent.append((a, k)), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         self.node_memory = "700Mi"     # 300 free; 500 with paperless's own pod back; 700 had the worker's counted too
@@ -352,6 +359,7 @@ class RequestsTests(unittest.TestCase):
                  "suggest": {"cpu": "60m", "memory": "480Mi", "capped": [], "cpu_now_m": 2000, "memory_now_mi": 2048,
                              "lowers": True, "differs": True}}
         self.deps["lab/paperless"]["spec"]["template"]["spec"]["containers"][0]["resources"] = {"limits": {"cpu": "2", "memory": "2Gi"}}
+        keep_bound(self, reserve)   # put back what reserve.bind() sets
         reserve.bind(self.kget, lambda *a, **k: None, lambda *a, **k: found, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         app = next(a for a in reserve.plan()["apps"] if a["id"] == "lab/paperless")

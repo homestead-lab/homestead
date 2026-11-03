@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_proxmox_vms as PVE
 import homestead_unraid_vms as UVMS
+from rebind import keep_bound
 
 # A Windows 11 VM as Proxmox's `qm config` prints it: OVMF with enrolled keys,
 # a TPM, two disks on LVM-thin, the VirtIO driver ISO, a GPU and a detached disk.
@@ -188,6 +189,7 @@ class ImportTests(unittest.TestCase):
         self.imp.run_probe.return_value = listing_lines([("100", "stopped", WIN11)], FACTS)
         self.imp.SOURCE_SSH.setup.return_value = "# ssh setup\n"
         self.imp.SOURCE_SSH.command.side_effect = lambda src, cmd, compress=False: f"ssh {src['host']} {cmd!r}"
+        keep_bound(self, UVMS)   # put back what UVMS.bind() sets
         UVMS.bind(self.imp, mock.Mock(), mock.Mock(), mock.Mock())
 
     def test_a_proxmox_source_lists_its_vms(self):
@@ -227,6 +229,7 @@ class WrongTypeTests(unittest.TestCase):
         imp._source.return_value = {"name": "pve", "kind": "unraid", "host": "192.0.2.10"}
         imp._ssh_script.side_effect = lambda src, cmd: cmd
         imp.run_probe.return_value = ["NOVIRSH", "HASQM"]
+        keep_bound(self, UVMS)   # put back what UVMS.bind() sets
         UVMS.bind(imp, mock.Mock(), mock.Mock(), mock.Mock())
         found = UVMS.listing("pve")
         self.assertEqual((False, True), (found["virsh"], found["proxmox"]))
@@ -266,6 +269,7 @@ class RoomTests(unittest.TestCase):
             for i, room in enumerate(self.rooms)]}
         classes = lambda: [{"name": "longhorn-r3", "provisioner": "driver.longhorn.io", "replicas": "3",
                             "disk_tags": [], "node_tags": []}]
+        keep_bound(self, UVMS)   # put back what UVMS.bind() sets
         UVMS.bind(self.imp, self.kget, self.ksend, self.ops, storage=(classes, cap, lambda: "longhorn-r3"))
         self.addCleanup(UVMS.bind, self.imp, self.kget, self.ksend, self.ops, storage=(None, None, lambda: ""))
 
@@ -319,6 +323,7 @@ class StuckImportTests(unittest.TestCase):
             self.deleted.append(path)
             self.objects.pop(path, None)
             return {}
+        keep_bound(self, UVMS)   # put back what UVMS.bind() sets
         UVMS.bind(mock.Mock(), kget, ksend, OPS)
         UVMS.register(OPS)
         self.item = {"id": "op1", "kind": UVMS.KIND, "status": "running", "message": "Import paused: Import claim was replaced; its resources were preserved",

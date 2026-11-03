@@ -18,6 +18,7 @@ import homestead_vm_edit as VM_EDIT
 import homestead_vm_list as VM_LIST
 sys.path.insert(0, str(ROOT / "tests"))
 from test_vms import VM
+from rebind import keep_bound
 
 PARTS = (VM_LIST, VM_EDIT)
 
@@ -60,6 +61,7 @@ class VmModuleTests(unittest.TestCase):
         prepared = {"namespace": "lab", "name": "vm", "vm": {}, "to_create": [], "resize": [], "dropped": [],
                     "changed_hardware": False,
                     "effects": [{"kind": "secret", "path": "/api/v1/namespaces/lab/secrets/vm-ci", "identity": {}, "data": {}}]}
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         with mock.patch.object(VMS, "kget", VMS.kget), mock.patch.object(VMS, "ksend", VMS.ksend), \
                 mock.patch.object(VMS, "events_for", VMS.events_for), \
                 mock.patch.object(VMS, "display_icon", VMS.display_icon), \

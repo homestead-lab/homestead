@@ -48,6 +48,14 @@ class GuardInEveryRunTests(unittest.TestCase):
         self.assertIn(RUN.GUARD, RUN.test_files())
         self.assertLess(RUN.load_durations().get(RUN.GUARD.name, 0), 1.0)
 
+    def test_the_bound_state_guard_runs_once_just_before_it(self):
+        """test_zz_bound_state_clean checks every bound name the same way, so every run has it too."""
+        self.assertIn(RUN.BOUND_GUARD, RUN.test_files())
+        for argv in (["--shard", "1/4"], ["--shard", "4/4"], ["--shard", "3/8"], ["--changed", "dev"]):
+            files = self.planned(argv)
+            self.assertEqual([RUN.BOUND_GUARD, RUN.GUARD], files[-2:], argv)
+            self.assertEqual(1, files.count(RUN.BOUND_GUARD), argv)
+
 
 class TimedShardTests(unittest.TestCase):
     """Shares balanced by the seconds in tests/durations.json, with the file

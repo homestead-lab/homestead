@@ -16,6 +16,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_restore_test as RT
 from fakes.kube import Kube
+from rebind import keep_bound
 
 DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/paperless"
 
@@ -101,6 +102,7 @@ class Base(unittest.TestCase):
             return {"ok": True}
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, RT, name, getattr(RT, name))
+        keep_bound(self, RT)   # put back what RT.bind() sets
         RT.bind(K.kget, K.ksend, NAMES, lambda volume: backups.get(volume, []), restore,
                 lambda item: (self.c.restore_state, 100 if self.c.restore_state == "succeeded" else 40, "restoring"),
                 lambda: [], lambda: {"largest": {"1": 500, "2": 300, "3": 200}}, lambda target: self.c.answer, lambda: "lab")

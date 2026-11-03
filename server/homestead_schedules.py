@@ -42,11 +42,18 @@ _lock = threading.Lock()
 scheduled = save = None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"scheduled": scheduled, "save": save}
+
+
 def bind(data_dir="/data", items=None, setter=None):
     global DATA_DIR, scheduled, save
     DATA_DIR = data_dir
     if items is not None:
         scheduled, save = items, setter
+    else:
+        scheduled, save = _UNBOUND["scheduled"], _UNBOUND["save"]
 
 
 def _path():

@@ -48,6 +48,11 @@ guard = lambda dep, ns, role: None
 operations = None                # homestead_operations: the job is one of its jobs
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"is_leader": is_leader, "guard": guard}
+
+
 def bind(_kget, _ksend, _usage, _managed_by, _own, _system_ns, _is_leader=None, _guard=None, _operations=None):
     global kget, ksend, usage, managed_by, own, system_ns, is_leader, guard, operations
     kget, ksend, usage, managed_by, own, system_ns = _kget, _ksend, _usage, _managed_by, tuple(_own), frozenset(_system_ns)
@@ -56,10 +61,8 @@ def bind(_kget, _ksend, _usage, _managed_by, _own, _system_ns, _is_leader=None, 
         # Its jobs resume and cancel through the job list like every other.
         operations.RESOLVERS[KIND] = status
         operations.CANCELLERS[KIND] = (cancel_plan, cancel_run)
-    if _is_leader:
-        is_leader = _is_leader
-    if _guard:
-        guard = _guard
+    is_leader = _is_leader if _is_leader else _UNBOUND["is_leader"]
+    guard = _guard if _guard else _UNBOUND["guard"]
 
 
 def _deployments():

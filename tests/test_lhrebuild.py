@@ -18,6 +18,7 @@ import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 from fakes.kube import Kube
+from rebind import keep_bound
 
 LH = R.LH
 SERIAL = itertools.count(1)
@@ -86,6 +87,7 @@ class RebuildCase(unittest.TestCase):
     def bind(self, enabled=True):
         for name, value in (("kget", R.kget), ("ksend", R.ksend), ("_enabled", R._enabled)):
             self.addCleanup(setattr, R, name, value)
+        keep_bound(self, R)   # put back what R.bind() sets
         R.bind(K.kget, K.ksend, lambda: enabled)
 
 

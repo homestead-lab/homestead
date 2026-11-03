@@ -78,11 +78,15 @@ _state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mti
 save_setting = None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"save_setting": save_setting}
+
+
 def bind(data_dir="/data", setting=None):
     global DATA_DIR, save_setting
     DATA_DIR = data_dir
-    if setting is not None:
-        save_setting = setting
+    save_setting = setting if setting is not None else _UNBOUND["save_setting"]
     with _lock:
         _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None, closed={}, not_asked=set())
 

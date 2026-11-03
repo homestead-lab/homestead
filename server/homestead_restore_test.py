@@ -64,6 +64,11 @@ app_settings = lambda: {}                   # server.py's settings, where switch
 save_app_settings = dns_name = None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"workloads": workloads, "app_settings": app_settings, "save_app_settings": save_app_settings, "dns_name": dns_name}
+
+
 def bind(_kget, _ksend, _names, _backups, _restore, _restore_status, _csi_cleanup, _capacity, _ask, _self_namespace,
          _workloads=None, _settings=None, _save_settings=None, _dns_name=None):
     global kget, ksend, names, backups, restore, restore_status, csi_cleanup, capacity, ask, self_namespace
@@ -72,6 +77,9 @@ def bind(_kget, _ksend, _names, _backups, _restore, _restore_status, _csi_cleanu
     csi_cleanup, capacity, ask, self_namespace = _csi_cleanup, _capacity, _ask, _self_namespace
     if _workloads is not None:
         workloads, app_settings, save_app_settings, dns_name = _workloads, _settings, _save_settings, _dns_name
+    else:
+        workloads, app_settings, save_app_settings, dns_name = (
+            _UNBOUND[n] for n in ("workloads", "app_settings", "save_app_settings", "dns_name"))
 
 
 def _send(method, path, body=None):

@@ -47,11 +47,15 @@ CATEGORIES = {
 DEFAULT_CATEGORIES = ["outage", "degraded", "jobs", "joins", "agents"]
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"CONTACT": CONTACT}
+
+
 def bind(data_dir, contact=""):
     global DATA_DIR, CONTACT
     DATA_DIR = data_dir
-    if contact:
-        CONTACT = contact
+    CONTACT = contact if contact else _UNBOUND["CONTACT"]
 
 
 def _b64(data):

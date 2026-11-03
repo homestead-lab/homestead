@@ -28,13 +28,19 @@ _enabled = lambda: True     # Homestead's own preference, for Longhorn without t
 app_settings = save_app_settings = None     # server.py's settings, where that preference is kept
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"_enabled": _enabled, "app_settings": app_settings, "save_app_settings": save_app_settings}
+
+
 def bind(_kget, _ksend, enabled=None, settings=None, save_settings=None):
     global kget, ksend, _enabled, app_settings, save_app_settings
     kget, ksend = _kget, _ksend
-    if enabled is not None:
-        _enabled = enabled
+    _enabled = enabled if enabled is not None else _UNBOUND["_enabled"]
     if settings is not None:
         app_settings, save_app_settings = settings, save_settings
+    else:
+        app_settings, save_app_settings = _UNBOUND["app_settings"], _UNBOUND["save_app_settings"]
 
 
 def _items(path):

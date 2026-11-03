@@ -13,6 +13,7 @@ import homestead_networking as NET
 import homestead_network_state as STATE
 import homestead_vip_registry as REG
 from fakes.kube import Kube
+from rebind import keep_bound
 
 MAP = f"/api/v1/namespaces/lab/configmaps/{REG.VIP_MAP}"
 
@@ -25,10 +26,12 @@ def registry(rows=None, text=None):
 
 class VipRegistryWriteTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, NET)   # first, so it is put back last: after the partial NET.bind() below
         saved = STATE.kget, STATE.ksend, STATE.DEFAULT_NAMESPACE, STATE.SHARED_VIP, set(STATE.SYSTEM_NAMESPACES)
         self.addCleanup(lambda: NET.bind(saved[0], saved[1], saved[4], saved[2], saved[3]))
 
     def bind(self, send=None):
+        keep_bound(self, NET)   # put back what NET.bind() sets
         NET.bind(K.kget, send or K.send, {"kube-system"}, "lab", "")
 
     def stored(self, kube):

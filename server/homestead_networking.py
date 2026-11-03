@@ -36,14 +36,19 @@ guard_managed = lambda namespace, name: None
 node_probes = lambda: {}
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"guard_managed": guard_managed, "node_probes": node_probes}
+
+
 def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip, _guard_managed=None, _node_probes=None):
     global guard_managed, node_probes
     STATE.kget, STATE.ksend = _kget, _ksend
     STATE.SYSTEM_NAMESPACES = set(system_namespaces or ())
     STATE.DEFAULT_NAMESPACE = default_namespace
     STATE.SHARED_VIP = shared_vip
-    guard_managed = _guard_managed or guard_managed
-    node_probes = _node_probes or node_probes
+    guard_managed = _guard_managed or _UNBOUND["guard_managed"]
+    node_probes = _node_probes or _UNBOUND["node_probes"]
 
 
 def _create_service_route(request):

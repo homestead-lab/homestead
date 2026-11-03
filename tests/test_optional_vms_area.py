@@ -22,6 +22,7 @@ import homestead_vm_capacity as VM_CAPACITY
 import homestead_vm_create as VM_CREATE
 import homestead_vms as VMS
 import test_vms as VM_FIXTURES
+from rebind import keep_bound
 
 # Functions that may still compare a status with 404 themselves, and why.
 OWN_404 = {
@@ -203,6 +204,7 @@ class VmsReadTests(unittest.TestCase):
                     raise instance
                 return instance
             return cluster.get(path)
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(read, cluster.send, lambda *a: [])
         return cluster
 

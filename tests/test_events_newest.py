@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import homestead_cluster as CLUSTER
+from rebind import keep_bound
 import homestead_kube as K
 from fakes.kube import Kube
 
@@ -33,11 +34,10 @@ def at(minute):
 
 class NewestEvents(unittest.TestCase):
     def setUp(self):
-        bound = (CLUSTER.kget, CLUSTER.SYS_NS, CLUSTER.nodes_provider)
-        self.addCleanup(lambda: setattr(CLUSTER, "kget", bound[0]) or setattr(CLUSTER, "SYS_NS", bound[1])
-                        or setattr(CLUSTER, "nodes_provider", bound[2]))
+        keep_bound(self, CLUSTER)   # everything CLUSTER.bind() sets, overview included
 
     def read(self, *objects):
+        keep_bound(self, CLUSTER)   # put back what CLUSTER.bind() sets
         with Kube(*objects):
             CLUSTER.bind(K.kget, (), lambda: [])
             return CLUSTER.events()
@@ -70,6 +70,7 @@ class NewestEvents(unittest.TestCase):
     def test_an_event_with_no_time_it_can_read_sorts_last(self):
         # The fake stamps creation as the API server does; this one comes from a reader that did not.
         rows = [event("a", "undated", None), event("b", "garbled", "not a time"), event("c", "dated", at(1))]
+        keep_bound(self, CLUSTER)   # put back what CLUSTER.bind() sets
         CLUSTER.bind(lambda path: {"items": rows}, (), lambda: [])
         answer = CLUSTER.events()
         self.assertEqual(["dated", "undated", "garbled"], [r["obj"] for r in answer["events"]])
@@ -81,6 +82,7 @@ class NewestEvents(unittest.TestCase):
         self.assertEqual(["ev-2", "ev-1", "ev-0"], [r["obj"] for r in answer["events"]])
 
     def test_a_failed_read_says_so_instead_of_an_empty_list(self):
+        keep_bound(self, CLUSTER)   # put back what CLUSTER.bind() sets
         CLUSTER.bind(lambda path: (_ for _ in ()).throw(OSError("down")), (), lambda: [])
         answer = CLUSTER.events()
         self.assertEqual(([], 0), (answer["events"], answer["total"]))
@@ -99,9 +101,7 @@ class PagedRead(unittest.TestCase):
     """The list is read a page at a time, never whole (#988 review)."""
 
     def setUp(self):
-        bound = (CLUSTER.kget, CLUSTER.SYS_NS, CLUSTER.nodes_provider)
-        self.addCleanup(lambda: setattr(CLUSTER, "kget", bound[0]) or setattr(CLUSTER, "SYS_NS", bound[1])
-                        or setattr(CLUSTER, "nodes_provider", bound[2]))
+        keep_bound(self, CLUSTER)   # everything CLUSTER.bind() sets, overview included
         self.paths = []
 
     def reader(self, path, **options):
@@ -109,6 +109,7 @@ class PagedRead(unittest.TestCase):
         return K.kget(path, **options)
 
     def read(self, kube, **limits):
+        keep_bound(self, CLUSTER)   # put back what CLUSTER.bind() sets
         CLUSTER.bind(self.reader, (), lambda: [])
         if not limits:
             return CLUSTER.events()

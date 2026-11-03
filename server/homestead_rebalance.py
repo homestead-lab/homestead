@@ -40,11 +40,15 @@ kget = ksend = None
 is_leader = lambda: True
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"is_leader": is_leader}
+
+
 def bind(_kget, _ksend, _is_leader=None):
     global kget, ksend, is_leader
     kget, ksend = _kget, _ksend
-    if _is_leader:
-        is_leader = _is_leader
+    is_leader = _is_leader if _is_leader else _UNBOUND["is_leader"]
 
 
 def _items(path):

@@ -52,6 +52,7 @@ class ChownTests(unittest.TestCase):
             elif method == "DELETE":
                 self.jobs.pop(path.split("?")[0].rsplit("/", 1)[-1], None)
             return body or {}
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(get, send, lambda *a, **k: {}, lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
 
     def run_chown(self, pvc):
@@ -166,6 +167,7 @@ class DiskIdTests(unittest.TestCase):
 
 
 import homestead_lan as LAN
+from rebind import keep_bound
 
 
 class LanNetworkTests(unittest.TestCase):

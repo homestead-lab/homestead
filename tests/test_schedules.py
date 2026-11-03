@@ -9,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_names as NAMES
 import homestead_schedules as S
+from rebind import keep_bound
 
 UTC = datetime.timezone.utc
 
@@ -78,6 +79,7 @@ class DueTests(unittest.TestCase):
 class TickTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, S)   # put back what S.bind() sets
         S.bind(self.dir.name)
 
     def tearDown(self):
@@ -99,6 +101,7 @@ class TickTests(unittest.TestCase):
         items.append({"kind": "app", "ns": "lab", "name": "web", "schedule": {**NIGHTS, "start": ""}, "running": True})
         seven = at(2026, 10, 7, 7, 0) + 30
         dependencies_first = lambda starts: sorted(starts, key=lambda i: i["name"] != "db")
+        keep_bound(self, S)   # put back what S.bind() sets
         for arrange, expected in ((dependencies_first, ["db", "app-1"]), (None, ["app-1", "db"])):
             with self.subTest(arrange=bool(arrange)):
                 S.bind(tempfile.mkdtemp(dir=self.dir.name))
@@ -154,6 +157,7 @@ class TickTests(unittest.TestCase):
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, S)   # put back what S.bind() sets
         S.bind(self.dir.name)
 
     def tearDown(self):

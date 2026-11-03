@@ -7,6 +7,7 @@ import homestead_network_services as SVC
 import homestead_platform as PLATFORM
 import urllib.error
 import test_networking
+from rebind import keep_bound
 
 
 class ServiceLbTests(unittest.TestCase):
@@ -38,6 +39,7 @@ class ServiceLbTests(unittest.TestCase):
             if path not in base.objects:
                 raise urllib.error.HTTPError(path, 404, "missing", {}, None)
             return get(path)
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(strict, lambda m, p, b=None, **k: self.sent.append((m, p, b)) or b,
                         {"kube-system"}, "lab", "")  # no LB_IP, as a k3s install has
         patcher = mock.patch.object(PLATFORM, "detect", return_value={"load_balancer": "servicelb"})

@@ -69,11 +69,16 @@ _skip_ns = ()
 _is_leader, _beat = lambda: False, lambda *args, **kwargs: None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"_is_leader": _is_leader, "_beat": _beat}
+
+
 def bind(data_dir, cpu_cores, mem_bytes, read=None, owner=None, skip_ns=(), is_leader=None, beat=None):
     global DATA_DIR, _cpu, _mem, _read, _owner, _skip_ns, _is_leader, _beat
     DATA_DIR, _cpu, _mem = data_dir, cpu_cores, mem_bytes
     _read, _owner, _skip_ns = read, owner, skip_ns
-    _is_leader, _beat = is_leader or _is_leader, beat or _beat
+    _is_leader, _beat = is_leader or _UNBOUND["_is_leader"], beat or _UNBOUND["_beat"]
 
 
 def _helper(pod):

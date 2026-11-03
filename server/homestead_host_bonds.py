@@ -154,13 +154,17 @@ PY
 echo END""".replace("__BOND__", BOND)
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"platform": platform}
+
+
 def bind(_hostrun, _kget, _ksend, _platform=None):
     """The host runner and cluster; for the routes, the platform: Harvester
     makes its bonds itself."""
     global hostrun, kget, ksend, platform
     hostrun, kget, ksend = _hostrun, _kget, _ksend
-    if _platform is not None:
-        platform = _platform
+    platform = _platform if _platform is not None else _UNBOUND["platform"]
 
 
 def parse(out):

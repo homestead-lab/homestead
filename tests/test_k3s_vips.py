@@ -7,6 +7,7 @@ import homestead_networking as networking
 import homestead_network_services as SVC
 import homestead_platform as PLATFORM
 import test_networking
+from rebind import keep_bound
 
 K3S_KUBE_VIP = {"load_balancer": "kube-vip", "servicelb": True, "vip_class": "kube-vip.io/kube-vip-class",
                 "distribution": "k3s"}
@@ -97,6 +98,7 @@ class K3sVipServiceTests(unittest.TestCase):
             if path not in self.objects:
                 raise urllib.error.HTTPError(path, 404, "missing", {}, None)
             return get(path)
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(strict, lambda m, p, b=None, **k: self.sent.append((m, p, b)) or b, {"kube-system"}, "lab", "")
         patcher = mock.patch.object(PLATFORM, "detect", return_value=K3S_KUBE_VIP)
         patcher.start()

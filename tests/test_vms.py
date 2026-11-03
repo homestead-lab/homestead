@@ -19,6 +19,7 @@ from fakes.kube import Kube
 
 import homestead_vm_list as VM_LIST
 import homestead_vm_edit as VM_EDIT
+from rebind import keep_bound
 
 # The shape Harvester writes: runStrategy, limits, a multus network, a disk
 # claim and a cloud-init volume.
@@ -113,6 +114,7 @@ class VmTests(unittest.TestCase):
         self.c = Cluster(self, **kw)
         for name in ("kget", "ksend", "events_for"):
             self.addCleanup(setattr, VMS, name, getattr(VMS, name))
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(K.kget, K.ksend, lambda ns, name, uid="": [{"type": "Normal", "reason": "Started", "message": "", "last": ""}])
         return self.c
 
@@ -188,6 +190,7 @@ class VmTests(unittest.TestCase):
         self.assertEqual(("Deleting", []), (VM_LIST.list_vms()[0]["status"], VMS.detail("default", "win11")["actions"]))
 
     def test_failed_incomplete_or_malformed_instance_inventory_cannot_prove_off(self):
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         for inventory in (None, {}, {"items": None}, {"items": {}}, {"items": [{}]},
                           {"items": [], "metadata": {"continue": "next-page"}}):
             with self.subTest(inventory=inventory):
@@ -202,6 +205,7 @@ class VmTests(unittest.TestCase):
                 self.assertEqual("CrashLoopBackOff", VM_LIST.list_vms()[0]["status"])
 
     def test_only_not_found_proves_an_instance_is_absent_on_the_vm_page(self):
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         for code in (403, 404, 500):
             with self.subTest(code=code):
                 self.crashed()
@@ -360,6 +364,7 @@ class UnreadVmListTests(unittest.TestCase):
         kube.react("GET", "/apis/kubevirt.io/v1/virtualmachines", answer)
         for name in ("kget", "ksend", "events_for"):
             self.addCleanup(setattr, VMS, name, getattr(VMS, name))
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(K.kget, K.ksend, lambda *a, **k: [])
 
     def refuse(self, fail):

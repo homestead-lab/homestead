@@ -61,6 +61,11 @@ MOVES_OR_RESTARTS = ("host-os", "host-promote", "cluster-shutdown", "deployment"
 MOVE_WAIT = 600
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"read": read, "settings": settings, "operations": operations, "plan": plan, "start": start, "WAITS_FOR": WAITS_FOR, "is_leader": is_leader, "beat": beat, "managed_by": managed_by}
+
+
 def bind(data_dir, _read=None, _settings=None, _operations=None, _plan=None, _start=None, waits_for=None,
          _is_leader=None, _beat=None, _managed_by=None):
     global DATA_DIR, read, settings, operations, plan, start, WAITS_FOR, is_leader, beat, managed_by
@@ -68,10 +73,14 @@ def bind(data_dir, _read=None, _settings=None, _operations=None, _plan=None, _st
     if _read:
         read, settings, operations, plan, start = _read, _settings, _operations, _plan, _start
         WAITS_FOR = tuple(dict.fromkeys(tuple(waits_for or ()) + MOVES_OR_RESTARTS))
+    else:
+        read, settings, operations, plan, start, WAITS_FOR = (
+            _UNBOUND[n] for n in ("read", "settings", "operations", "plan", "start", "WAITS_FOR"))
     if _is_leader:
-        is_leader, beat = _is_leader, _beat or beat
-    if _managed_by:
-        managed_by = _managed_by
+        is_leader, beat = _is_leader, _beat or _UNBOUND["beat"]
+    else:
+        is_leader, beat = _UNBOUND["is_leader"], _UNBOUND["beat"]
+    managed_by = _managed_by if _managed_by else _UNBOUND["managed_by"]
 
 
 def _path():

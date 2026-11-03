@@ -26,6 +26,7 @@ import homestead_container_rebalance as C
 from fakes.kube import Kube
 import homestead_usage as usage
 import homestead_vmusage as VMUSAGE
+from rebind import keep_bound
 
 POD_METRICS = FLOW_VMS.API[M.PODS]["items"]
 
@@ -129,6 +130,7 @@ class VmUsageTests(Looping):
                                 "status": {"phase": "Running"}})
         self.enterContext(Kube(*objects))
         saved = (VMS.kget, VMS.ksend)
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(K.kget, K.ksend, lambda *a, **k: [])
         self.addCleanup(lambda: VMS.bind(*saved, lambda *a, **k: []))
         with mock.patch("time.time", return_value=now):
@@ -271,6 +273,7 @@ class WeeklyUsageTests(Looping):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.folder = Path(folder.name)
+        keep_bound(self, usage)   # put back what usage.bind() sets
         usage.bind(folder.name, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
         usage._taken.update(last_ok=None)
         self.addCleanup(usage.bind, "/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
@@ -322,6 +325,7 @@ class WeeklyUsageTests(Looping):
 
     def test_a_round_before_the_first_reading_is_tried_again_next_turn(self):
         rounds = []
+        keep_bound(self, usage)   # put back what usage.bind() sets
         usage.bind(str(self.folder), server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem, self.read,
                    server.FLOW._flow_owner, server.SYS_NS, lambda: True, lambda *a, **k: None)
         turns = iter([None, None])

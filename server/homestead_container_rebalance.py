@@ -64,14 +64,18 @@ standby = lambda: ()            # homestead_placement_mode.standby_hosts: never 
 is_leader = lambda: True
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"is_leader": is_leader}
+
+
 def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None,
          _operations=None, _standby=None):
     global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations, standby
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
     summaries, guard, operations = _summaries, _guard, _operations
     standby = _standby or (lambda: ())
-    if _is_leader:
-        is_leader = _is_leader
+    is_leader = _is_leader if _is_leader else _UNBOUND["is_leader"]
 
 
 def cpu(value):

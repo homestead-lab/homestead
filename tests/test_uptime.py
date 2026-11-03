@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_uptime as UP
+from rebind import keep_bound
 
 
 def app(name="sonarr", port=8989, desired=1, **extra):
@@ -27,6 +28,7 @@ SLOW = {"ok": True, "ms": 3500, "code": 200, "error": ""}
 class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, UP)   # put back what UP.bind() sets
         UP.bind(self.dir.name)
 
     def tearDown(self):
@@ -357,6 +359,7 @@ class ReportTests(Base):
         # Past midnight, hour by hour to the next, then the clock set back over
         # midnight (a round writes into a closed day), then two days ahead.
         steps = [60] * 15 + [3600] * 28 + [-4 * 3600] + [60] * 5 + [86400 * 2] + [60] * 3
+        keep_bound(self, UP)   # put back what UP.bind() sets
         for i, step in enumerate(steps):
             now += step
             peak = max(peak, now)
@@ -417,6 +420,7 @@ class WriteTests(Base):
         UP.observe([app()], now=1000, ask=lambda t: OK)
         path = Path(self.dir.name, "uptime.json")
         saved = path.read_text()
+        keep_bound(self, UP)   # put back what UP.bind() sets
         UP.bind(self.dir.name)               # a fresh process that does not check
         self.assertEqual("up", UP.report()["lab/sonarr"]["state"])
         path.write_text(saved.replace('"state":"up"', '"state":"down"'))

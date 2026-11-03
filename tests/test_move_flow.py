@@ -25,6 +25,7 @@ import homestead_transfer_cleanup as CLEANUP
 import homestead_move_source as source
 import homestead_storage_classes as STORAGE_CLASSES
 from fakes.storage_classes import storage_classes
+from rebind import keep_bound
 
 
 def merge(target, patch):
@@ -514,6 +515,7 @@ class EngineTests(unittest.TestCase):
 
         client.remote = remote
         self.addCleanup(setattr, client, "remote", real_remote)
+        keep_bound(self, engine)   # put back what engine.bind() sets
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     self.ops, self.tmp.name, "lab")
         # The destination's own endpoint for the bucket matches the source's, so
@@ -541,6 +543,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual("joining", STATE._find(move["id"])["phase"])
             self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"])
             self.assertNotIn("/api/move/source", self.remote_calls)
+        keep_bound(self, engine)   # put back what engine.bind() sets
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(), self.ops, self.tmp.name, "lab")
         finished = self.run_until_settled(move_id=move["id"])
         self.assertEqual("succeeded", finished["status"], finished["message"])
@@ -590,6 +593,7 @@ class EngineTests(unittest.TestCase):
     def test_retry_after_restart_replaces_failed_backup_and_restores_new_one(self):
         failed = self.fail_backup()
         old = self.lh.made[0]["name"]
+        keep_bound(self, engine)   # put back what engine.bind() sets
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     self.ops, self.tmp.name, "lab")
         ACT.retry(failed["id"])
@@ -602,6 +606,7 @@ class EngineTests(unittest.TestCase):
     def test_dismissed_activity_then_new_attempt_recovers_source_backup_references(self):
         import homestead_operations as operations
         operations.bind(self.cluster.get, self.tmp.name, lambda *args: {})
+        keep_bound(self, engine)   # put back what engine.bind() sets
         with mock.patch.object(STATE, "OPS", operations), \
              mock.patch.dict(operations.RESOLVERS, {"move": PLAN.op_state}):
             failed = self.fail_backup()

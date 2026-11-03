@@ -17,6 +17,7 @@ import homestead_move_phases as PHASE
 import homestead_move_actions as ACT
 import homestead_passthrough as passthrough
 from fakes.storage_classes import storage_classes
+from rebind import keep_bound
 
 
 class ClusterCopyTests(unittest.TestCase):
@@ -214,6 +215,7 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertEqual("Always", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
         self.assertEqual([], self.lh.restored)
         self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["domain"]["cpu"]["cores"] = 12
+        keep_bound(self, engine)   # put back what engine.bind() sets
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(), self.ops, self.tmp.name, "lab")
         self.assertEqual("succeeded", self.settle(move["id"])["status"])
         copied = self.cluster.get(self.vm_path("copied"))

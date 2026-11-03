@@ -60,13 +60,17 @@ DEFAULT_NS = "lab"
 set_logos = set_monitoring = None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"display_icon": display_icon, "DEFAULT_NS": DEFAULT_NS, "set_logos": set_logos, "set_monitoring": set_monitoring}
+
+
 def bind(_kget, _ksend, _events_for, _display_icon=None, default_ns=None, _set_logos=None, _set_monitoring=None):
     global kget, ksend, events_for, display_icon, DEFAULT_NS, set_logos, set_monitoring
     kget, ksend, events_for = _kget, _ksend, _events_for
-    if _display_icon:
-        display_icon = _display_icon
-    DEFAULT_NS = default_ns or DEFAULT_NS
-    set_logos, set_monitoring = _set_logos or set_logos, _set_monitoring or set_monitoring
+    display_icon = _display_icon if _display_icon else _UNBOUND["display_icon"]
+    DEFAULT_NS = default_ns or _UNBOUND["DEFAULT_NS"]
+    set_logos, set_monitoring = _set_logos or _UNBOUND["set_logos"], _set_monitoring or _UNBOUND["set_monitoring"]
 
 
 def _strategy(vm):
