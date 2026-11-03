@@ -604,7 +604,7 @@ def _tick(move):
                 return
         handler(move)
         move["failures"] = 0
-    except SHARED.Unreadable:
+    except STATE.STORE_ERRORS:
         # The move store, not the move: stop this pass with nothing written
         # (a ValueError below would end the move as failed).
         raise

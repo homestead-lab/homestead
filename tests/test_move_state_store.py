@@ -6,11 +6,14 @@ an NFS hiccup, a half-written file, a file that cannot be opened - must never
 be taken for "no moves" and written back: that would forget every other move.
 A missing file is a fresh install and reads as no moves.
 """
+import fcntl
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -26,7 +29,7 @@ import homestead_cancel as CANCEL
 
 def move(id, status="running", **extra):
     return {"id": id, "cluster": "oldcluster", "name": id, "kind": "container", "status": status,
-            "phase": "syncing", "created_at": id, **extra}
+            "phase": "syncing", "created_at": id, "namespace": "lab", **extra}
 
 
 class StoreTests(unittest.TestCase):
@@ -35,6 +38,8 @@ class StoreTests(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.enterContext(mock.patch.object(STATE, "DATA_DIR", self.dir.name))
         self.enterContext(mock.patch.object(STATE, "CLIENT", MOVE))
+        # Cancelling reads what the move made here before the source starts again: nothing is here.
+        self.enterContext(mock.patch.object(STATE, "kget", self.nothing_here))
         self.path = os.path.join(self.dir.name, STATE.STORE)
         self.rows = [move("aaaaaaaaaaaa", flags={"target_cleanup_pending": True}),
                      move("bbbbbbbbbbbb", "succeeded", flags={"resource_cleanup_pending": True}),
@@ -172,9 +177,145 @@ class StoreTests(unittest.TestCase):
         before = self.save(json.dumps(self.rows))
         with open(os.path.join(self.dir.name, ".locks"), "w", encoding="utf-8"):
             pass  # a file where the lock folder belongs: the lock cannot be made
-        with self.assertRaises(OSError):
+        with self.assertRaises(STATE.StoreUnavailable) as caught:
             STATE._store(move("dddddddddddd"))
+        self.assertIn(STATE.STORE, str(caught.exception))
         self.assertEqual(before, self.stored_bytes())
+
+    def test_a_busy_moves_lock_is_a_refusal_that_names_the_moves_store(self):
+        # Another replica holds it past the timeout: a 409 about moves, not a
+        # server error about the operations store.
+        before = self.save(json.dumps(self.rows))
+        os.makedirs(os.path.join(self.dir.name, ".locks"))
+        # A second open file description: flock treats it as another replica.
+        other = open(os.path.join(self.dir.name, ".locks", "moves.lock"), "a+b")
+        self.addCleanup(other.close)
+        fcntl.flock(other.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with mock.patch.object(STATE._lock, "timeout", 0.2):
+            reply = MOVE.answer(lambda: ACT.retry("aaaaaaaaaaaa"))
+        self.assertEqual(409, reply.code)
+        self.assertIn("moves", reply.body["error"])
+        self.assertNotIn("job store", reply.body["error"])
+        self.assertEqual(before, self.stored_bytes())
+
+    # One failed read, as a single EIO or ESTALE: the next read works again.
+
+    def test_one_failed_read_in_a_step_leaves_the_move_running_through_the_engine_pass(self):
+        running = move("aaaaaaaaaaaa", phase="syncing", op="op-1", flags={})
+        for what, error in (("unreadable", SHARED.Unreadable("could not read moves.json")),
+                            ("lock busy", STATE.StoreUnavailable("the moves store is busy"))):
+            with self.subTest(what):
+                self.save(json.dumps([running]))
+                with mock.patch.dict(PHASES.HANDLERS, {"syncing": mock.Mock(side_effect=[error])}), \
+                        mock.patch.object(PHASES.TARGET, "_borrow_target", return_value=True), \
+                        mock.patch.object(PHASES.ENGINE, "after_finish", None):
+                    with self.assertRaises(type(error)):
+                        PHASES.tick_all()
+                stored = STATE._find("aaaaaaaaaaaa")
+                self.assertEqual("running", stored["status"], stored.get("message"))
+
+    # After a change on a cluster, a failed write says what was done.
+
+    @staticmethod
+    def nothing_here(path, **_options):
+        if path.rsplit("/", 1)[-1].split("?")[0].endswith("aaaaaaaaaaaa"):
+            raise urllib.error.HTTPError(path, 404, "Not Found", {}, io.BytesIO(b""))
+        return {"items": []}
+
+    def assert_says_what_was_done(self, reply, *done):
+        self.assertEqual(409, reply.code)
+        error = reply.body["error"]
+        for words in done:
+            self.assertIn(words, error)
+        self.assertIn("could not record", error)
+        self.assertNotIn("changed nothing", error)
+        self.assertNotIn("no operation was started", error)
+
+    def test_removing_the_original_that_cannot_be_recorded_says_it_was_removed(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", "succeeded", claims=[])]))
+
+        def removed(*_args, **_kwargs):
+            self.save("[{\"id\":")  # the volume stops answering right after
+            return {"detail": "removed workload aaaaaaaaaaaa"}
+
+        with mock.patch.object(STATE.CLIENT, "remote", side_effect=removed):
+            reply = MOVE.answer(lambda: ACT.finish("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "Removed aaaaaaaaaaaa from oldcluster")
+
+    def test_putting_back_that_cannot_be_recorded_says_the_source_runs_again(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", flags={"quiesced": True}, claims=[])]))
+
+        def released(*_args, **_kwargs):
+            self.save("[{\"id\":")
+            return {"detail": "aaaaaaaaaaaa runs on oldcluster again"}
+
+        with mock.patch.object(STATE, "_source_action", side_effect=released):
+            reply = MOVE.answer(lambda: ACT.abandon("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "aaaaaaaaaaaa runs on oldcluster again", "next pass")
+
+    def test_a_retry_whose_activity_item_cannot_be_recorded_says_one_was_added(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", "failed", phase="syncing", flags={})]))
+
+        def operation(_current):
+            self.save("[{\"id\":")
+            return "op-1"
+
+        with mock.patch.object(PLAN, "_operation", side_effect=operation):
+            reply = MOVE.answer(lambda: ACT.retry("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "Activity item", "stays failed")
+
+    def test_a_cleanup_retry_that_cannot_be_recorded_says_cleanup_ran(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", "succeeded", flags={"resource_cleanup_pending": True})]))
+
+        def cleanup(_current):
+            self.save("[{\"id\":")
+
+        with mock.patch.object(PHASES, "_cleanup_resources", side_effect=cleanup):
+            reply = MOVE.answer(lambda: ACT.retry("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "cleaning up", "next pass")
+
+    def test_a_joining_retry_that_cannot_be_recorded_says_backup_storage_was_released(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", "failed", phase="joining", flags={})]))
+
+        def operation(_current):
+            self.save("[{\"id\":")
+            return "op-1"
+
+        with mock.patch.object(ACT.TARGET, "_release_target"), \
+                mock.patch.object(PLAN, "_operation", side_effect=operation):
+            reply = MOVE.answer(lambda: ACT.retry("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "backup storage", "Activity item")
+        self.assertEqual("Released the backup storage this move had borrowed; added an Activity item to retry "
+                         "aaaaaaaaaaaa, which ends as failed, but Homestead could not record the retry on its data "
+                         "volume (it is not valid JSON). The move stays failed; retry again once the data volume answers.",
+                         reply.body["error"])
+
+    def test_a_refused_removal_is_named_when_its_failure_cannot_be_recorded(self):
+        self.save(json.dumps([move("aaaaaaaaaaaa", flags={"quiesced": True}, claims=[])]))
+
+        def refused(_current):
+            self.save("[{\"id\":")
+            raise RuntimeError("Kubernetes refused it (HTTP 403): forbidden")
+
+        # What this move made here goes before the source starts again (dev's order):
+        # a refused removal leaves the source stopped, and the reply says how far it got.
+        with mock.patch.object(STATE, "_source_action", return_value={"detail": "aaaaaaaaaaaa runs on oldcluster again"}) as release, \
+                mock.patch.object(PHASES, "_remove_created", side_effect=refused):
+            reply = MOVE.answer(lambda: ACT.abandon("aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "Began removing what this move made here", "HTTP 403",
+                                       "aaaaaaaaaaaa stays stopped on oldcluster")
+        release.assert_not_called()
+
+    def test_a_started_move_whose_activity_item_cannot_be_recorded_says_it_will_run(self):
+        def operation(current):
+            current["op"] = "op-1"
+            self.save("[{\"id\":")
+
+        with mock.patch.object(PLAN, "plan", return_value={"ok": True, "storage_class": ""}), \
+                mock.patch.object(STATE, "_definition", return_value={"claims": [], "namespace": "lab"}), \
+                mock.patch.object(PLAN, "_add_operation", side_effect=operation):
+            reply = MOVE.answer(lambda: PLAN.start("oldcluster", "container", "aaaaaaaaaaaa"))
+        self.assert_says_what_was_done(reply, "recorded and will run")
 
 
 if __name__ == "__main__":

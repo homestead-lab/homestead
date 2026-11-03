@@ -7,6 +7,7 @@ Split out of homestead_move_engine (#623). Tests replace the bound clients
 here, not on homestead_move_engine.
 """
 import base64
+import contextlib
 import json
 import os
 import re
@@ -45,10 +46,62 @@ VOLUME_PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring", "
 COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncing", "restoring",
                "creating", "starting", "done")
 KINDS = ("container", "vm", "volume")
+
+
+class StoreUnavailable(ValueError):
+    """The moves store's lock could not be taken, so nothing was read or written."""
+
+
+class NotRecorded(ValueError):
+    """A change on a cluster was made, and the moves store could not record it."""
+
+
+# What a failed read or lock of the moves store raises; the engine stops its
+# pass on these instead of failing the move.
+STORE_ERRORS = (SHARED.Unreadable, StoreUnavailable)
+
+
+class _MovesLock(SHARED.SharedLock):
+    def _strict_acquire(self):
+        try:
+            super()._strict_acquire()
+        except TimeoutError as error:
+            raise StoreUnavailable(f"Another copy of Homestead has held the moves store ({STORE}) for over "
+                                   f"{self.timeout} s, so this was not done; try again shortly") from error
+        except OSError as error:
+            raise StoreUnavailable(f"Homestead could not lock the moves store ({STORE}) on its data volume "
+                                   f"({error.strerror or error}), so this was not done") from error
+
+
 # Shared with any other Homestead replica on the same data volume. Strict: a
 # lock only this process honours would let two replicas each write back their
 # own copy of the moves and lose the other's.
-_lock = SHARED.SharedLock("moves", strict=True, directory=lambda: DATA_DIR)
+_lock = _MovesLock("moves", strict=True, directory=lambda: DATA_DIR)
+
+
+def _why(error):
+    """Why the moves store failed, without its own "changed nothing"."""
+    if isinstance(error, StoreUnavailable):
+        cause = error.__cause__
+        return "its lock was busy" if isinstance(cause, TimeoutError) else \
+            f"it could not be locked: {getattr(cause, 'strerror', None) or cause}"
+    cause = error.__cause__
+    if isinstance(cause, OSError):
+        return cause.strerror or str(cause)
+    return "it is not valid JSON" if isinstance(cause, ValueError) else "it does not hold a list of moves"
+
+
+@contextlib.contextmanager
+def recording(done, what="it", then=""):
+    """Writes to the store after a change on a cluster was made: if the store
+    fails, say what was done and what was not recorded, never the store's own
+    "changed nothing". done is a string or a function giving one."""
+    try:
+        yield
+    except STORE_ERRORS as error:
+        text = done() if callable(done) else done
+        raise NotRecorded(f"{text}, but Homestead could not record {what} on its data volume ({_why(error)})."
+                          + (f" {then}" if then else "")) from error
 
 
 def _step_lock(move_id):

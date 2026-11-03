@@ -22,8 +22,10 @@ def _retry(move_id):
     if move.get("status") in ("failed", "cancelled") and move.get("flags", {}).get("cancelling"):
         return _abandon(move_id)
     if move.get("status") in ("succeeded", "cancelled") and move.get("flags", {}).get("resource_cleanup_pending"):
-        PHASE._cleanup_resources(move)
-        STATE._store(move)
+        with STATE.recording(f"Ran another round of cleaning up what the move of {move['name']} left behind",
+                             "what it cleaned up", "Cleanup stays pending, and Homestead tries again on its next pass."):
+            PHASE._cleanup_resources(move)
+            STATE._store(move)
         return STATE._public(move)
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
@@ -38,15 +40,27 @@ def _retry(move_id):
         move.setdefault("flags", {}).pop("started", None)
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
-    if move.get("phase") == "joining":
-        TARGET._release_target(move)
-        move.pop("transfer_target", None)
-        move.setdefault("flags", {}).pop("snapshot_wait_started", None)
-    move.update(status="running", failures=0, finished_at="",
-                message=f"Retrying from {move['phase']}", updated_at=STATE._now())
-    move["op"] = PLAN._operation(move)
-    STATE._store(move)
+    done = []
+    # Our own phrases, joined as one sentence: only its first letter is raised.
+    with STATE.recording(lambda: _sentence(done) or f"Began retrying {move['name']}", "the retry",
+                         "The move stays failed; retry again once the data volume answers."):
+        if move.get("phase") == "joining":
+            done.append("began releasing the backup storage this move had borrowed")
+            TARGET._release_target(move)
+            done[-1] = "released the backup storage this move had borrowed"
+            move.pop("transfer_target", None)
+            move.setdefault("flags", {}).pop("snapshot_wait_started", None)
+        move.update(status="running", failures=0, finished_at="",
+                    message=f"Retrying from {move['phase']}", updated_at=STATE._now())
+        move["op"] = PLAN._operation(move)
+        done.append(f"added an Activity item to retry {move['name']}, which ends as failed")
+        STATE._store(move)
     return STATE._public(move)
+
+
+def _sentence(phrases):
+    text = "; ".join(phrases)
+    return text[:1].upper() + text[1:]
 
 
 def abandon(move_id):
@@ -75,23 +89,31 @@ def _abandon(move_id):
     # source starts again: never two copies at once, nor one address announced
     # by both clusters. Until then the source stays stopped.
     name, cluster = move["name"], move["cluster"]
-    try:
-        _remember_selector(move)
-        removed = PHASE._remove_created(move)
-        running = _still_running_here(move)
-    except Exception:
-        move.update(status="failed", message=(
-            f"Removing what this move made here failed; {name} stays stopped on {cluster} until it is gone. "
-            "Retry cancellation" if stopped else
-            "Transfer cleanup failed; retry cleanup to remove its remaining destination objects"))
-        STATE._store(move)
-        raise
-    if stopped and (running or move["flags"].get("destination_deletion_pending")):
-        move.update(status="failed", message=(
-            f"{running or 'What this move made'} is still running here; {name} stays stopped on {cluster} until it "
-            "is gone. Homestead tries the cancellation again"))
-        STATE._store(move)
-        return STATE._public(move)
+    # From here a change on a cluster may have been made: a failed write says what.
+    done = ["began removing what this move made here"]
+    with STATE.recording(lambda: _sentence(done), "the cancellation",
+                         f"{name} stays stopped on {cluster}, and Homestead tries the cancellation again." if stopped else
+                         "The move stays cancelling, and Homestead tries again on its next pass."):
+        try:
+            _remember_selector(move)
+            removed = PHASE._remove_created(move)
+            running = _still_running_here(move)
+        except Exception as error:
+            if not isinstance(error, STATE.STORE_ERRORS):
+                done.append(f"removing them stopped: {str(error)[:200]}")
+            move.update(status="failed", message=(
+                f"Removing what this move made here failed; {name} stays stopped on {cluster} until it is gone. "
+                "Retry cancellation" if stopped else
+                "Transfer cleanup failed; retry cleanup to remove its remaining destination objects"))
+            STATE._store(move)
+            raise
+        done[-1] = f"removed {', '.join(removed)} here" if removed else "nothing of it was here to remove"
+        if stopped and (running or move["flags"].get("destination_deletion_pending")):
+            move.update(status="failed", message=(
+                f"{running or 'What this move made'} is still running here; {name} stays stopped on {cluster} until it "
+                "is gone. Homestead tries the cancellation again"))
+            STATE._store(move)
+            return STATE._public(move)
     # Nothing stopped there yet means nothing to start again there - and no
     # need for the source to answer before this move can be cancelled.
     try:
@@ -105,18 +127,23 @@ def _abandon(move_id):
         move.update(status="failed", message="Source recovery failed; retry cancellation to restore its running state")
         STATE._store(move)
         raise
-    if stopped or move.get("transfer_mode") == "copy":
-        move.setdefault("flags", {})["source_released"] = True
+    # The source runs again: a failed write says so.
+    if stopped:
+        done.append(released.get("detail") or f"{name} runs on {cluster} again")
+    with STATE.recording(lambda: _sentence(done), "everything",
+                         "The move stays cancelling, and Homestead tries again on its next pass."):
+        if stopped or move.get("transfer_mode") == "copy":
+            move.setdefault("flags", {})["source_released"] = True
+            STATE._store(move)
+        move.update(message=(released.get("detail") or "Running on the source again")
+                    + (f"; removed {', '.join(removed)} here" if removed else ""),
+                    finished_at=STATE._now())
+        move.pop("definition", None)
+        move.setdefault("flags", {})["resource_cleanup_pending"] = True
+        PHASE._cleanup_resources(move)
+        move["flags"].pop("cancelling", None)
+        TARGET._cleanup_target(move)
         STATE._store(move)
-    move.update(message=(released.get("detail") or "Running on the source again")
-                + (f"; removed {', '.join(removed)} here" if removed else ""),
-                finished_at=STATE._now())
-    move.pop("definition", None)
-    move.setdefault("flags", {})["resource_cleanup_pending"] = True
-    PHASE._cleanup_resources(move)
-    move["flags"].pop("cancelling", None)
-    TARGET._cleanup_target(move)
-    STATE._store(move)
     return STATE._public(move)
 
 
@@ -239,7 +266,9 @@ def _remove_source(move_id, volumes):
     move.update(source_removed=True, updated_at=STATE._now(),
                 message=f"{move['name']} lives here now; {done.get('detail', 'removed')} "
                         f"on {move['cluster']}")
-    STATE._store(move)
+    with STATE.recording(f"Removed {move['name']} from {move['cluster']}", "that",
+                         "This move may still offer to remove it; the original is gone there."):
+        STATE._store(move)
     return STATE._public(move)
 
 
