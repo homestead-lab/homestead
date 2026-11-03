@@ -273,17 +273,38 @@ class ConnectionReuseTests(unittest.TestCase):
             KUBE.transport("GET", "/api/v1/nodes", timeout=0.3)
         self.assertEqual([], KUBE._idle)
 
+    def test_two_idle_connections_even_when_one_reader_is_late(self):
+        # The helper below must not depend on its two readers overlapping by luck:
+        # on a busy machine the second one can come after the first has finished
+        # and given its connection back, and then takes that one (#TBD-kube-pool-test-race).
+        real_take, real_give_back, calls, first_done = KUBE._take, KUBE._give_back, [], threading.Event()
+
+        def take(timeout):
+            calls.append(1)
+            if len(calls) == 2:
+                first_done.wait(0.5)       # the second reader is late: the first is answered by now
+            return real_take(timeout)
+
+        def give_back(connection):
+            real_give_back(connection)
+            first_done.set()
+        self.enterContext(mock.patch.object(KUBE, "_take", take))
+        self.enterContext(mock.patch.object(KUBE, "_give_back", give_back))
+        self._two_idle()
+
     def _two_idle(self):
-        barrier = threading.Barrier(2)
+        # Two connections in the pool: the API server answers neither read until both
+        # are in, so they are on two connections at once however late one of them is.
+        self.api.gate = threading.Barrier(2)
 
         def read():
-            barrier.wait(5)
             KUBE.transport("GET", "/api/v1/pods")
         threads = [threading.Thread(target=read) for _ in range(2)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join(5)
+        self.api.gate = None
         self.assertEqual(2, len(KUBE._idle))
 
     def test_a_connection_the_server_dropped_still_drops_the_whole_pool(self):
