@@ -6,7 +6,6 @@ second erase. Unknown inventories and identities always stop the workflow.
 """
 import copy
 import hashlib
-import functools
 from contextlib import contextmanager
 import json
 import re
@@ -970,28 +969,7 @@ def protect_mutations(disks):
         with ops.transaction():
             mutation_guard(node, disk, device)
             yield
-    disks.mutation_scope = scope
-    def protect(fn, mode):
-        @functools.wraps(fn)
-        def guarded(*args, **kwargs):
-            if mode == 'config':
-                cfg = args[0] if args else kwargs.get('cfg', {})
-                node, disk, device = cfg.get('node'), cfg.get('disk'), cfg.get('device') or cfg.get('path')
-            else:
-                node = args[0] if args else kwargs.get('node')
-                disk = (args[1] if len(args) > 1 else kwargs.get('disk_id')) if mode == 'disk' else None
-                device = None
-            current_scope = disks.mutation_scope
-            if current_scope is None:
-                return fn(*args, **kwargs)
-            with current_scope(node, disk, device):
-                return fn(*args, **kwargs)
-        return guarded
-    for name in ('set_disk_tags', 'set_scheduling', 'evict', 'remove'):
-        setattr(disks, name, protect(getattr(disks, name), 'disk'))
-    disks.set_node_tags = protect(disks.set_node_tags, 'node')
-    for name in ('add', 'set_up', 'use_os_space', 'retire_start'):
-        setattr(disks, name, protect(getattr(disks, name), 'config'))
+    disks.add_guard('disk_v2', scope)
     disks.v2_tasks = tasks
 
 

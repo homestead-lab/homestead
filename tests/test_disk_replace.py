@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_disks as DISKS
 import homestead_kube as K
+from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
 
 GiB = 1024 ** 3
@@ -66,6 +67,7 @@ class Cluster:
         for item in replicas:
             self.kube.react("DELETE", self.kube.path_of(item), self._node_controller)
         self.probe = probe if probe is not None else {}
+        disk_guards(test)
         test.addCleanup(DISKS.bind, *(getattr(DISKS, name, None) for name in ("kget", "ksend", "temps")))
         DISKS.bind(K.kget, K.ksend, lambda: self.probe)
 
