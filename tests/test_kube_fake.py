@@ -3,6 +3,7 @@ it answers like the API server and plugs in at homestead_kube.transport, so
 reads go through kget and writes through WRITE_GUARDS like the real ones."""
 import json
 import os
+import socket
 import sys
 import unittest
 import urllib.error
@@ -12,7 +13,7 @@ from unittest import mock
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 
 PODS = "/api/v1/namespaces/lab/pods"
 NODES = "/api/v1/nodes"
@@ -46,6 +47,25 @@ class Recorder:
 
 def http_error(code):
     return urllib.error.HTTPError("/x", code, "error", {}, None)
+
+
+class NoClusterTests(unittest.TestCase):
+    """no_cluster(): a test that needs no cluster says so, and every request fails at
+    once as it does on CI (no API server name to look up), without a real lookup."""
+
+    def test_every_way_to_the_api_fails_at_once_without_a_lookup(self):
+        lookups = []
+        with no_cluster(), mock.patch.object(socket, "getaddrinfo", lambda *a, **k: lookups.append(a)):
+            for call in (lambda: K.kget(PODS), lambda: K.raw_get(PODS + "/a/log"), lambda: K.ktable(NODES),
+                         lambda: K.transport("GET", PODS)):
+                with self.assertRaises(OSError) as caught:
+                    call()
+                self.assertIn("no cluster in this test", str(caught.exception))
+        self.assertEqual(lookups, [])
+
+    def test_the_shared_fake_still_answers_inside_it(self):
+        with no_cluster(), Kube(pod("a")):
+            self.assertEqual(K.kget(PODS + "/a")["metadata"]["name"], "a")
 
 
 class TransportSeamTests(unittest.TestCase):
