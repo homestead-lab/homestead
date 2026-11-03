@@ -23,6 +23,8 @@ needs a restart, which Host actions does with its drain review.
 """
 import os
 import re
+import secrets
+import shlex
 import threading
 import time
 import urllib.error
@@ -30,6 +32,7 @@ import urllib.error
 import homestead_host_reads as READS
 import homestead_job_cadence as CADENCE
 import homestead_operations as OPS
+import homestead_pod_exec as POD_EXEC
 import homestead_shared as SHARED
 
 kget = hostrun = platform = None
@@ -463,13 +466,24 @@ def upgrade_begin(node, facts=None, ref=None):
     if facts.get("upgrading"):
         raise ValueError(f"{node} is installing updates already")
     command = UPGRADE[manager]
+    # This launch's own id goes into the result, so a result left by an
+    # earlier install is never read as this one's (upgrade_state(run=)).
+    run = secrets.token_hex(6)
+    unit = f"( {command} ) > {LOG} 2>&1; echo {run} $? > {STATUS}"
     script = (f"mkdir -p {os.path.dirname(STATUS)} && rm -f {STATUS} && "
-              f"systemd-run --unit={UNIT} --collect --quiet sh -c "
-              f"'( {command} ) > {LOG} 2>&1; echo $? > {STATUS}' && echo STARTED")
+              f"systemd-run --unit={UNIT} --collect --quiet sh -c {shlex.quote(unit)} && echo STARTED")
     what = _title(node, facts)
     lease = hostrun.hold(node, what, seconds=UPGRADE_HOLD)
     try:
         out, err = hostrun.run(node, script, timeout=60, change=what, holder=lease)
+    except POD_EXEC.ExecTimeout as error:
+        if ref is None:
+            hostrun.let_go(node, lease)
+            raise
+        # The launch may have started the install, detached: keep the host
+        # held and follow it; its result, or the two-hour limit, ends it.
+        ref.update(lease=lease, run=run, unconfirmed=error.timeout or 60)
+        return manager
     except Exception:
         hostrun.let_go(node, lease)
         raise
@@ -477,7 +491,7 @@ def upgrade_begin(node, facts=None, ref=None):
         hostrun.let_go(node, lease)
         raise ValueError(f"updates on {node} did not start: {(err or out)[-200:]}")
     if ref is not None:
-        ref["lease"] = lease
+        ref.update(lease=lease, run=run)
     return manager
 
 
@@ -487,17 +501,25 @@ def upgrade_done(node, ref):
         hostrun.let_go(node, ref.pop("lease"))
 
 
-def upgrade_state(node):
-    """{running, code, last}: whether node is still installing, and how it ended."""
+def upgrade_state(node, run=None):
+    """{running, code, last}: whether node is still installing, and how it ended.
+    With run, only a result written by that launch counts: one with another
+    id, or none (an older Homestead's), is not this launch's, so it is still
+    running as far as Homestead can tell."""
     out, _ = hostrun.run(node, f"systemctl is-active --quiet {UNIT} && echo RUNNING; "
                                f"[ -f {STATUS} ] && echo \"CODE $(cat {STATUS})\"; tail -n 1 {LOG} 2>/dev/null | cut -c1-160",
                          timeout=45)
     lines = out.splitlines()
-    code = next((line[5:].strip() for line in lines if line.startswith("CODE ")), None)
+    written = next((line[5:].split() for line in lines if line.startswith("CODE ")), None)
+    code = None
+    if written:
+        launch, code = (written[0], written[-1]) if len(written) > 1 else (None, written[0])
+        if run is not None and launch != run:
+            code = None
     last = next((line for line in reversed(lines) if line != "RUNNING" and not line.startswith("CODE ")), "")
     # No exit code written yet is still running, whatever systemd says: the
     # unit writes it as its last act.
-    return {"running": code is None, "code": code, "last": last}
+    return {"running": code is None, "code": code, "last": last, "active": "RUNNING" in lines}
 
 
 def upgrade_start(node, ops):
@@ -505,9 +527,17 @@ def upgrade_start(node, ops):
     facts = read(node)
     held = {}
     manager = upgrade_begin(node, facts, held)
-    return ops.start("host-os", _title(node, facts),
-                     {"kind": "Node", "name": node}, "/nodes", {"node": node, "since": time.time(), "manager": manager, **held},
-                     f"{manager} is installing updates on {node}")
+    ref = {"node": node, "since": time.time(), "manager": manager, **held}
+    return ops.start("host-os", _title(node, facts), {"kind": "Node", "name": node}, "/nodes", ref,
+                     _unconfirmed(ref) if ref.get("unconfirmed") else f"{manager} is installing updates on {node}")
+
+
+def _unconfirmed(ref):
+    node, manager = ref["node"], ref.get("manager") or "the package manager"
+    return (f"Installing updates on {node} needs attention: the launch did not finish within {ref['unconfirmed']:g} "
+            f"seconds, so Homestead cannot tell whether {manager} started. {node} stays held while Homestead looks for "
+            f"its result; with none within two hours the job fails and lets go. Check {LOG} on {node}, or cancel this "
+            f"job to let go of {node}")
 
 
 def status(item, now=None):
@@ -530,12 +560,16 @@ def _step(item, now=None):
     if now - ref.get("since", now) < 20:
         return "running", 10, f"Installing updates on {node}"
     # Past the 2 h limit, look again before calling it failed (never on an old answer).
-    now_state = CADENCE.look(item, "host-os", lambda: (upgrade_state(node),), now=now,
+    # A launch that timed out is read only by its own id (upgrade_state).
+    mine = {"run": ref.get("run", "")} if ref.get("unconfirmed") else {}
+    now_state = CADENCE.look(item, "host-os", lambda: (upgrade_state(node, **mine),), now=now,
                              force=now - ref.get("since", now) > 7200)[0]
     code = now_state["code"]
     if code is None:
         if now - ref.get("since", now) > 7200:
             return "failed", 100, f"No result from {node}'s update after two hours; see {LOG} there"
+        if ref.get("unconfirmed") and not now_state.get("active"):
+            return "running", 50, _unconfirmed(ref)
         last = now_state["last"]
         return "running", 50, f"Installing on {node}: {last}" if last else f"Installing updates on {node}"
     try:
@@ -621,6 +655,10 @@ def cancel_plan(item):
     the host for up to two hours more, with nothing on the page saying why,
     would block every other change there for no one to see (#597)."""
     node = item["ref"]["node"]
+    if item["ref"].get("unconfirmed"):
+        return {"mode": "forget", "needs": "admin",
+                "keeps": [f"Homestead cannot tell whether the updates started on {node}; check {LOG} there first",
+                          f"Other changes on {node} no longer wait: start one there only once you know no install is running"]}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The updates keep installing on {node}; Homestead only stops following them",
                       f"Other changes on {node} no longer wait for them: start one there only once the install has ended"]}

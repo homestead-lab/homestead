@@ -208,6 +208,22 @@ class TimedOutStartTests(unittest.TestCase):
         self.assertEqual([], host.let_go_of)
         self.assertGreaterEqual(len(host.holds), 2)
 
+    def test_a_hold_that_cannot_be_renewed_is_said_so(self):
+        host, ops, _, _ = self.start_timed_out()
+        ref = ops.started[0][2] if isinstance(ops.started[0], tuple) else ops.started[0]
+
+        def refused(node, what, seconds=60, holder=""):
+            raise RuntimeError("the API server did not answer")
+
+        host.hold = refused
+        message = BRIDGE.status({"ref": ref}, now=ref["since"] + 3600)[2]
+        self.assertNotIn("k3s stays held", message)
+        self.assertIn("could not renew its hold on k3s", message)
+        self.assertIn("the API server did not answer", message)
+        host.hold = lambda node, what, seconds=60, holder="": "this-replica/1"
+        message = BRIDGE.status({"ref": ref}, now=ref["since"] + 7200)[2]
+        self.assertIn("k3s stays held", message, "renewed again: held again")
+
     def test_the_cancel_review_of_an_unconfirmed_job_claims_nothing_about_the_host(self):
         _, ops, _, _ = self.start_timed_out()
         keeps = " ".join(BRIDGE.cancel_plan({"kind": "host-bridge", "ref": ops.started[0]})["keeps"])
