@@ -55,8 +55,8 @@ def state():
         if name.startswith("homestead_") and module is not None:
             if name not in _targets:
                 _targets[name] = REBIND.bound_targets(module)
-            for target in _targets[name]:
-                out[f"{name}.{target}"] = REBIND.get(module, target)
+            for target, value in REBIND.expand(module, _targets[name]):
+                out[f"{name}.{target}"] = value
     return out
 
 
@@ -116,6 +116,9 @@ def _run(self, result=None):
     test_id = unittest.TestCase.id(self)
     test_file = test_id.split(".", 1)[0]
     server_before = "server" in sys.modules
+    # The modules loaded now, not the ones with a name in state(): a module whose only
+    # target is a dict that is empty yet (homestead_api_v1's ctx) has no name there.
+    loaded = {name for name in sys.modules if name.startswith("homestead_")}
     before = state()
     try:
         return _installed["run"](self, result)
@@ -126,7 +129,11 @@ def _run(self, result=None):
         else:
             now = state()
             before_ids = {id(v) for v in before.values()}
-            for name, value in before.items():
+            # An entry the test added to a dict a bind() fills (rebind's "X[*]") is a change
+            # too; a name of a module first loaded during the test is not.
+            added = [(name, REBIND.MISSING) for name in now.keys() - before.keys()
+                     if name.split(".", 1)[0] in loaded]
+            for name, value in [*before.items(), *added]:
                 covered.add(name.split(".", 1)[0])
                 after = now.get(name, REBIND.MISSING)
                 if not same(value, after):

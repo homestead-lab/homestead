@@ -11,8 +11,10 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
+sys.path.insert(0, os.path.dirname(__file__))
 import homestead_logalerts as LA
 import homestead_logsearch as LOGSEARCH
+from rebind import keep_bound
 
 SECRET = "token=s3cr3t-value"
 
@@ -38,6 +40,7 @@ class Base(unittest.TestCase):
         self.logs, self.calls, self.leader = {}, [], [True]
         self.workloads = list(WL)
         self.withdrawn, self.noted = [], []
+        keep_bound(self, LA)   # bind() keeps its readers in LA._bound: put server's back after
         LA.bind(self.dir, workloads=lambda: self.workloads, read=self.read, is_leader=lambda: self.leader[0],
                 withdraw=lambda key, title, body: self.withdrawn.append((key, title, body)) or self.raised,
                 note=self.noted.append)
