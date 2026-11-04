@@ -1,0 +1,418 @@
+{
+ "items": [
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Replica",
+   "metadata": {
+    "creationTimestamp": "2026-10-05T16:12:00Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 44,
+    "labels": {
+     "longhorn.io/backing-image": "",
+     "longhorndiskuuid": "00000000-0000-4000-8000-000000000003",
+     "longhornnode": "node-b",
+     "longhornvolume": "vol-a"
+    },
+    "name": "vol-a-r-1",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-a",
+      "uid": "00000000-0000-4000-8000-000000000004"
+     }
+    ],
+    "resourceVersion": "24376341"
+   },
+   "spec": {
+    "active": true,
+    "backingImage": "",
+    "dataDirectoryName": "vol-a-00000004",
+    "dataEngine": "v1",
+    "desireState": "running",
+    "diskID": "00000000-0000-4000-8000-000000000003",
+    "diskPath": "/var/lib/longhorn-disk-1",
+    "engineName": "vol-a-e-0",
+    "evictionRequested": false,
+    "failedAt": "",
+    "hardNodeAffinity": "",
+    "healthyAt": "2026-11-01T08:54:27Z",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastFailedAt": "2026-11-01T08:43:39Z",
+    "lastHealthyAt": "2026-11-01T13:46:29Z",
+    "logRequested": false,
+    "migrationEngineName": "",
+    "nodeID": "node-b",
+    "rebuildRetryCount": 0,
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkDiskChainRemovedEnabled": false,
+    "volumeName": "vol-a",
+    "volumeSize": "10737418240"
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:02Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-29T03:00:56Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "RebuildFailed"
+     }
+    ],
+    "currentImage": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "currentState": "running",
+    "instanceManagerName": "instance-manager-00000000000000000000000000000005",
+    "ip": "192.0.2.234",
+    "logFetched": false,
+    "ownerID": "node-b",
+    "port": 10519,
+    "salvageExecuted": false,
+    "started": true,
+    "starting": false,
+    "storageIP": "192.0.2.234",
+    "uuid": "00000000-0000-4000-8000-000000000006"
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Replica",
+   "metadata": {
+    "creationTimestamp": "2026-10-06T08:10:57Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 43,
+    "labels": {
+     "longhorn.io/backing-image": "",
+     "longhorndiskuuid": "00000000-0000-4000-8000-000000000007",
+     "longhornnode": "node-a",
+     "longhornvolume": "vol-a"
+    },
+    "name": "vol-a-r-2",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-a",
+      "uid": "00000000-0000-4000-8000-000000000004"
+     }
+    ],
+    "resourceVersion": "24376343"
+   },
+   "spec": {
+    "active": true,
+    "backingImage": "",
+    "dataDirectoryName": "vol-a-00000007",
+    "dataEngine": "v1",
+    "desireState": "running",
+    "diskID": "00000000-0000-4000-8000-000000000007",
+    "diskPath": "/var/lib/longhorn-disk-1",
+    "engineName": "vol-a-e-0",
+    "evictionRequested": false,
+    "failedAt": "",
+    "hardNodeAffinity": "",
+    "healthyAt": "2026-11-01T09:07:47Z",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastFailedAt": "2026-11-01T09:03:39Z",
+    "lastHealthyAt": "2026-11-01T13:46:29Z",
+    "logRequested": false,
+    "migrationEngineName": "",
+    "nodeID": "node-a",
+    "rebuildRetryCount": 0,
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkDiskChainRemovedEnabled": false,
+    "volumeName": "vol-a",
+    "volumeSize": "10737418240"
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:10:57Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:10:57Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:10:57Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:10:58Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "RebuildFailed"
+     }
+    ],
+    "currentImage": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "currentState": "running",
+    "instanceManagerName": "instance-manager-00000000000000000000000000000008",
+    "ip": "192.0.2.136",
+    "logFetched": false,
+    "ownerID": "node-a",
+    "port": 10286,
+    "salvageExecuted": false,
+    "started": true,
+    "starting": false,
+    "storageIP": "192.0.2.136",
+    "uuid": "00000000-0000-4000-8000-000000000009"
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Replica",
+   "metadata": {
+    "creationTimestamp": "2026-10-07T11:11:42Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 357,
+    "labels": {
+     "longhorn.io/backing-image": "",
+     "longhorndiskuuid": "00000000-0000-4000-8000-000000000010",
+     "longhornnode": "node-a",
+     "longhornvolume": "vol-b"
+    },
+    "name": "vol-b-r-1",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-b",
+      "uid": "00000000-0000-4000-8000-000000000011"
+     }
+    ],
+    "resourceVersion": "25979660"
+   },
+   "spec": {
+    "active": true,
+    "backingImage": "",
+    "dataDirectoryName": "vol-b-00000001",
+    "dataEngine": "v1",
+    "desireState": "stopped",
+    "diskID": "00000000-0000-4000-8000-000000000010",
+    "diskPath": "/var/lib/longhorn-disk-2",
+    "engineName": "vol-b-e-0",
+    "evictionRequested": false,
+    "failedAt": "",
+    "hardNodeAffinity": "",
+    "healthyAt": "2026-11-01T09:10:24Z",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastFailedAt": "2026-11-01T09:05:05Z",
+    "lastHealthyAt": "2026-11-03T04:07:29Z",
+    "logRequested": false,
+    "migrationEngineName": "",
+    "nodeID": "node-a",
+    "rebuildRetryCount": 0,
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkDiskChainRemovedEnabled": false,
+    "volumeName": "vol-b",
+    "volumeSize": "2147483648"
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:24:23Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-18T04:09:51Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "RebuildFailed"
+     }
+    ],
+    "currentImage": "",
+    "currentState": "stopped",
+    "instanceManagerName": "",
+    "ip": "",
+    "logFetched": false,
+    "ownerID": "node-a",
+    "port": 0,
+    "salvageExecuted": false,
+    "started": false,
+    "starting": false,
+    "storageIP": ""
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Replica",
+   "metadata": {
+    "creationTimestamp": "2026-10-07T11:11:42Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 358,
+    "labels": {
+     "longhorn.io/backing-image": "",
+     "longhorndiskuuid": "00000000-0000-4000-8000-000000000003",
+     "longhornnode": "node-b",
+     "longhornvolume": "vol-b"
+    },
+    "name": "vol-b-r-2",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-b",
+      "uid": "00000000-0000-4000-8000-000000000011"
+     }
+    ],
+    "resourceVersion": "25979653"
+   },
+   "spec": {
+    "active": true,
+    "backingImage": "",
+    "dataDirectoryName": "vol-b-00000001",
+    "dataEngine": "v1",
+    "desireState": "stopped",
+    "diskID": "00000000-0000-4000-8000-000000000003",
+    "diskPath": "/var/lib/longhorn-disk-1",
+    "engineName": "vol-b-e-0",
+    "evictionRequested": false,
+    "failedAt": "",
+    "hardNodeAffinity": "",
+    "healthyAt": "2026-11-01T08:53:42Z",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastFailedAt": "2026-11-01T08:44:54Z",
+    "lastHealthyAt": "2026-11-03T04:07:29Z",
+    "logRequested": false,
+    "migrationEngineName": "",
+    "nodeID": "node-b",
+    "rebuildRetryCount": 0,
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkDiskChainRemovedEnabled": false,
+    "volumeName": "vol-b",
+    "volumeSize": "2147483648"
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:24:23Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-29T03:00:31Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "RebuildFailed"
+     }
+    ],
+    "currentImage": "",
+    "currentState": "stopped",
+    "instanceManagerName": "",
+    "ip": "",
+    "logFetched": false,
+    "ownerID": "node-b",
+    "port": 0,
+    "salvageExecuted": false,
+    "started": false,
+    "starting": false,
+    "storageIP": ""
+   }
+  }
+ ]
+}

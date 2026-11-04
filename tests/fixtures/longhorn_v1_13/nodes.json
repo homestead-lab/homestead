@@ -1,0 +1,84 @@
+{
+ "items": [
+  {
+   "apiVersion": "v1",
+   "kind": "Node",
+   "metadata": {
+    "name": "node-a"
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "lastHeartbeatTime": "2026-11-03T15:04:08Z",
+      "lastTransitionTime": "2026-11-01T09:06:26Z",
+      "message": "kubelet is posting ready status",
+      "reason": "KubeletReady",
+      "status": "True",
+      "type": "Ready"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Node",
+   "metadata": {
+    "name": "node-b"
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "lastHeartbeatTime": "2026-11-03T15:02:47Z",
+      "lastTransitionTime": "2026-11-01T08:45:54Z",
+      "message": "kubelet is posting ready status",
+      "reason": "KubeletReady",
+      "status": "True",
+      "type": "Ready"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Node",
+   "metadata": {
+    "name": "node-c"
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "lastHeartbeatTime": "2026-11-03T15:02:39Z",
+      "lastTransitionTime": "2026-10-09T17:04:31Z",
+      "message": "kubelet is posting ready status",
+      "reason": "KubeletReady",
+      "status": "True",
+      "type": "Ready"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "v1",
+   "kind": "Node",
+   "metadata": {
+    "name": "node-d"
+   },
+   "spec": {},
+   "status": {
+    "conditions": [
+     {
+      "lastHeartbeatTime": "2026-11-03T15:05:44Z",
+      "lastTransitionTime": "2026-11-01T06:53:14Z",
+      "message": "kubelet is posting ready status",
+      "reason": "KubeletReady",
+      "status": "True",
+      "type": "Ready"
+     }
+    ]
+   }
+  }
+ ]
+}
