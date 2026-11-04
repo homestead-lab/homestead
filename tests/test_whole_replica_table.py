@@ -156,7 +156,7 @@ SHAPES = {
 # Each place's answer for the copy on node-b: "whole", "not", or "-" where it
 # does not ask about that shape. app_copies and data_copies ask about the
 # volume ("a copy is rebuilding"): "rebuilding" or "-".
-PLACES = ("power", "rebalance._whole", "rebalance._built", "disk_v2._rw", "disks._healthy", "lhv2_upgrade",
+PLACES = ("power", "rebalance._whole", "rebalance._judge (was _built)", "disk_v2._rw", "disks._healthy", "lhv2_upgrade",
           "app_copies", "data_copies", "the rule")
 # Where a place disagrees with the rule it says "whole" and the rule "not":
 # moving that place onto the rule can only refuse or delay a power-off, move
@@ -167,18 +167,18 @@ EXPECTED = {
     #                                        power    _whole   _built   disk_v2  disks    upgrade  app_copies    data_copies   rule
     'healthy, attached': ('whole', 'whole', 'whole', 'whole', 'whole', 'whole', '-', '-', 'whole'),
     'stopped, detached volume': ('whole', 'whole', 'whole', 'not', 'whole', '-', '-', '-', 'whole'),
-    'rebuilding (WO), new copy': ('not', 'whole', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
-    'rebuilding (WO), healthyAt still set': ('not', 'whole', 'not', 'not', 'whole', 'not', 'rebuilding', 'rebuilding', 'not'),
+    'rebuilding (WO), new copy': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
+    'rebuilding (WO), healthyAt still set': ('not', 'not', 'not', 'not', 'whole', 'not', 'rebuilding', 'rebuilding', 'not'),
     'failed (failedAt)': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running, engine says ERR': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'running, not in the engine': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'stopped, attached volume': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'running RW, host NotReady': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running, engine says ERR': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running, not in the engine': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'stopped, attached volume': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running RW, host NotReady': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
     'running RW, host cordoned': ('whole', 'whole', 'whole', 'whole', 'whole', 'not', '-', '-', 'whole'),
-    'running RW, being deleted': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running RW, being deleted': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
     # Attached, but no engine running: Longhorn is not serving it.
-    'attached, engine stopped, map cleared': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'attached, engine stopped, map kept': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map cleared': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map kept': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
 }
 
 
@@ -210,11 +210,14 @@ class Places:
                               f"{REBALANCE.LH}/nodes": s["lh_nodes"], f"{REBALANCE.LH}/volumes": [s["volume"]]}[path])
 
     def rebalance_whole(self):
-        return "whole" if REBALANCE._whole(asked(self.shape)) else "not"
+        """Its review (inventory) and its steps ask the same judge."""
+        with mock.patch.object(REBALANCE, "_items", self._cluster):
+            return "whole" if REBALANCE._whole(asked(self.shape)) else "not"
 
     def rebalance_built(self):
+        """A step's "is the new copy built": the judge _built used to be, over one read."""
         with mock.patch.object(REBALANCE, "_items", self._cluster):
-            return "whole" if REBALANCE._built(self.shape["volume"], asked(self.shape)) else "not"
+            return "whole" if REBALANCE._judge()(asked(self.shape)) else "not"
 
     def disk_v2_rw(self):
         s = self.shape

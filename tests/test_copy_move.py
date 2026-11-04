@@ -30,7 +30,7 @@ class Longhorn:
                 "spec": {"allowScheduling": True, "tags": [], "disks": {
                     "default": {"path": "/var/lib/longhorn/", "tags": ["nvme", "os", "ssd"], "allowScheduling": True, "storageReserved": 10 * GIB},
                     "sda": {"path": "/mnt/sda", "tags": ["ssd"], "allowScheduling": True, "storageReserved": 0}}},
-                "status": {"diskStatus": {
+                "status": {"conditions": [{"type": "Ready", "status": "True"}], "diskStatus": {
                     "default": {"diskUUID": "u-nvme", "storageMaximum": 200 * GIB, "storageAvailable": 175 * GIB, "storageScheduled": 0},
                     "sda": {"diskUUID": "u-sda", "storageMaximum": 900 * GIB, "storageAvailable": 700 * GIB, "storageScheduled": 70 * GIB}}}}
         spec = {"numberOfReplicas": 1, "size": str(70 * GIB), "diskSelector": [], "nodeSelector": []}
@@ -45,11 +45,16 @@ class Longhorn:
                              "kubernetesStatus": {"namespace": "lab", "pvcName": "win-dev-disk"}}}
         setting = {"apiVersion": LONGHORN, "kind": "Setting", "metadata": {"namespace": "longhorn-system", "name": "offline-replica-rebuilding"},
                    "value": "false"}
-        self.kube = test.enterContext(Kube(node, volume, setting, self.replica("pvc-win-r-old", "u-sda", "/mnt/sda")))
-        # The engine reports each healthy copy as read-write, whatever copies there are now.
+        host = {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "k3s-test"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]}}
+        self.kube = test.enterContext(Kube(node, host, volume, setting, self.replica("pvc-win-r-old", "u-sda", "/mnt/sda")))
+        # The engine runs while the volume is attached and reports each running,
+        # healthy copy as read-write, whatever copies there are now.
         self.kube.react("GET", f"{LH}/engines", lambda method, path, body: {"items": [
             {"spec": {"volumeName": "pvc-win"},
-             "status": {"replicaModeMap": {r["metadata"]["name"]: "RW" for r in self.replicas if r["spec"].get("healthyAt")}}}]})
+             "status": {"currentState": "running" if self.volume["status"]["state"] == "attached" else "stopped",
+                        "replicaModeMap": {r["metadata"]["name"]: "RW" for r in self.replicas
+                                           if r["spec"].get("healthyAt") and r["status"]["currentState"] == "running"}}}]})
         # The shared fake runs the real write guards; the storage guard takes the job
         # store's lock, which lives under its DATA_DIR.
         test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
@@ -84,6 +89,12 @@ class Longhorn:
 
     def edit_volume(self, change):
         self.edit(f"{LH}/volumes/pvc-win", change)
+
+    def detach(self):
+        """As Longhorn detaches a volume: its copies stop, its engine stops."""
+        self.edit_volume(lambda volume: volume["status"].update(state="detached", robustness="unknown", currentNodeID=""))
+        for r in self.replicas:
+            self.edit(f"{LH}/replicas/{r['metadata']['name']}", lambda r: r["status"].update(currentState="stopped"))
 
     def edit_node(self, change):
         self.edit(f"{LH}/nodes/k3s-test", change)
@@ -163,14 +174,14 @@ class CopyMoveTests(unittest.TestCase):
         self.assertEqual(["pvc-win-r-old"], self.lh.names())
 
     def test_a_detached_volume_moves_with_offline_rebuilding_on_for_it(self):
-        self.lh.edit_volume(lambda volume: volume["status"].update(state="detached", robustness="unknown", currentNodeID=""))
+        self.lh.detach()
         item = self.job(M.plan("pvc-win", ["nvme"]))
         self.step(item)
         self.assertEqual("enabled", self.lh.volume["spec"]["offlineRebuilding"])
 
     def test_a_detached_volume_on_a_longhorn_without_offline_rebuilding_cannot_start(self):
         self.lh.edit_volume(lambda volume: volume["spec"].pop("offlineRebuilding"))
-        self.lh.edit_volume(lambda volume: volume["status"].update(state="detached", robustness="unknown", currentNodeID=""))
+        self.lh.detach()
         self.assertIn("detached", M.plan("pvc-win", ["nvme"])["blockers"][0])
 
     def test_a_move_starts_only_as_reviewed(self):

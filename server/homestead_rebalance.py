@@ -24,6 +24,7 @@ import urllib.error
 import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_routes as ROUTER
+import homestead_whole_copy as WHOLE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 KIND = "volume-rebalance"
@@ -60,9 +61,21 @@ def _setting(name, default=""):
         return default
 
 
-def _whole(replica):
-    spec, status = replica.get("spec") or {}, replica.get("status") or {}
-    return not spec.get("failedAt") and (status.get("currentState") == "running" or bool(spec.get("healthyAt")))
+def _judge(lh_nodes=None, k8s_nodes=None, volumes=None):
+    """Whole copies by the one rule (homestead_whole_copy), over one read of the
+    engines, the volumes and the hosts: a copy on a host that is not Ready does
+    not count, and a detached volume's stopped, healthy copies do."""
+    volumes = _items(f"{LH}/volumes") if volumes is None else volumes
+    lh_nodes = _items(f"{LH}/nodes") if lh_nodes is None else lh_nodes
+    k8s_nodes = ({(n.get("metadata") or {}).get("name"): n for n in _items("/api/v1/nodes")}
+                 if k8s_nodes is None else k8s_nodes)
+    return WHOLE.judge(_items(f"{LH}/engines"), detached_ok=True, volumes=volumes, nodes=k8s_nodes,
+                       lh_nodes={(n.get("metadata") or {}).get("name"): n for n in lh_nodes})
+
+
+def _whole(replica, judge=None):
+    """A whole copy; judge (from _judge) when asking about several."""
+    return (judge or _judge())(replica)
 
 
 def _app(volume):
@@ -82,6 +95,8 @@ def inventory():
     """Hosts that may take a copy, and each volume with where its copies are."""
     lh_nodes = _items(f"{LH}/nodes")
     k8s_nodes = {(n.get("metadata") or {}).get("name"): n for n in _items("/api/v1/nodes")}
+    all_volumes = _items(f"{LH}/volumes")
+    whole_copy = _judge(lh_nodes, k8s_nodes, all_volumes)
     skip_cordoned = _setting("disable-scheduling-on-cordoned-node", "true") == "true"
     offline = _setting("offline-replica-rebuilding", "false") == "true"
     hosts = {}
@@ -106,18 +121,18 @@ def inventory():
         spec = replica.get("spec") or {}
         replicas.setdefault(spec.get("volumeName"), []).append(replica)
     volumes = []
-    for volume in _items(f"{LH}/volumes"):
+    for volume in all_volumes:
         meta, spec, status = volume.get("metadata") or {}, volume.get("spec") or {}, volume.get("status") or {}
         name = meta.get("name", "")
         copies = replicas.get(name, [])
         size = int(status.get("actualSize") or 0)
         for replica in copies:
             host = (replica.get("spec") or {}).get("nodeID")
-            if host in hosts and _whole(replica):
+            if host in hosts and whole_copy(replica):
                 hosts[host]["load"] += size
         k8s = status.get("kubernetesStatus") or {}
         why = ""
-        whole = [r for r in copies if _whole(r)]
+        whole = [r for r in copies if whole_copy(r)]
         if status.get("state") == "attached" and status.get("robustness") != "healthy":
             why = "it is not healthy now"
         elif len(whole) != int(spec.get("numberOfReplicas") or 0) or len(copies) != len(whole):
@@ -268,19 +283,6 @@ def _replicas(name, count, keeps=None):
           ctype="application/merge-patch+json")
 
 
-def _built(volume, replica):
-    """A new copy is whole: Longhorn marked it healthy and, attached, its engine reads and writes it."""
-    if not _whole(replica) or not (replica.get("spec") or {}).get("healthyAt"):
-        return False
-    if (volume.get("status") or {}).get("state") != "attached":
-        return True
-    name = (replica.get("metadata") or {}).get("name")
-    for engine in _items(f"{LH}/engines"):
-        if (engine.get("spec") or {}).get("volumeName") == (volume.get("metadata") or {}).get("name"):
-            return ((engine.get("status") or {}).get("replicaModeMap") or {}).get(name) == "RW"
-    return False
-
-
 def status(item):
     """One step of the current move; the leader takes it, anyone may look."""
     ref = item["ref"]
@@ -311,10 +313,11 @@ def status(item):
             return skip("it no longer exists")
         raise
     copies = _copies(move["volume"])
+    whole_copy = _judge(volumes=[volume])
     hosts = {(r.get("spec") or {}).get("nodeID"): r for r in copies}
     spec = volume.get("spec") or {}
     if stage == "add":
-        whole = [r for r in copies if _whole(r)]
+        whole = [r for r in copies if whole_copy(r)]
         if move["from"] not in hosts or move["to"] in hosts or len(whole) != len(copies) \
                 or len(whole) != int(spec.get("numberOfReplicas") or 0):
             return skip("its copies changed since the review")
@@ -345,7 +348,7 @@ def status(item):
         limit = 3600 + 120 * move.get("size_gb", 0)
         if now - ref["started"] > limit:
             return skip("the new copy was not whole in time")
-        if not _built(volume, new[0]):
+        if not whole_copy(new[0]):
             return "running", progress, f"Building a copy of {label} on {host}"
         move["to"] = host
         ref["stage"] = "removing"
@@ -356,7 +359,7 @@ def status(item):
             # A copy that failed while the new one built: removing the old
             # one now would leave fewer whole copies than the volume asks
             # for. The count is still one over, so Longhorn rebuilds it.
-            if sum(1 for r in copies if r is not old and _built(volume, r)) < ref["original"]:
+            if sum(1 for r in copies if r is not old and whole_copy(r)) < ref["original"]:
                 if now - ref["started"] > 3600 + 120 * move.get("size_gb", 0):
                     return skip("another copy failed during the move; the old copy is kept")
                 return "running", progress, f"Waiting for Longhorn to rebuild a failed copy of {move['claim']} before removing the one on {move['from']}"
@@ -366,7 +369,7 @@ def status(item):
         ref.update(stage="settling", settle_from=now)
         return "running", progress, f"Removing the copy of {move['claim']} on {move['from']}"
     if stage == "settling":
-        whole = [r for r in copies if _whole(r)]
+        whole = [r for r in copies if whole_copy(r)]
         if len(copies) == len(whole) == int(spec.get("numberOfReplicas") or 0):
             _replicas(move["volume"], ref["original"])
             ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1, placed=False, gone_since=None)
