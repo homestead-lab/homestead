@@ -26,14 +26,13 @@ How each moves on depends on who put it there:
   managers retain control of their installations.
 """
 import calendar
-import json
 import re
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 
 import homestead_cache as CACHE
+import homestead_fetch as FETCH
 import homestead_forced as FORCED
 import homestead_helm as HELM
 import homestead_operations as OPS
@@ -112,10 +111,15 @@ def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None, _kt
     V2.bind(_kget, _ksend, _platform, longhorn_version, parse)
 
 
+# GitHub's release lists (rke2's 60 were 7.4 MB in Nov 2026) and the channel servers.
+RELEASES_MAX_BYTES = 32 << 20
+RELEASES_DEADLINE = 60
+
+
 def _get_json(url):
-    request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Homestead"})
-    with urllib.request.urlopen(request, timeout=12) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return FETCH.get_json(url, headers={"Accept": "application/json", "User-Agent": "Homestead"},
+                          limit=RELEASES_MAX_BYTES, seconds=RELEASES_DEADLINE, timeout=12,
+                          what=f"the release list from {url.split('/')[2]}")
 
 
 # ------------------------------------------------------------------ versions

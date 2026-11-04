@@ -17,7 +17,8 @@ import hmac
 import json
 import threading
 import time
-import urllib.request
+
+import homestead_fetch as FETCH
 
 TEAM = ""                 # https://<team>.cloudflareaccess.com
 AUDIENCES = set()         # the Access application's AUD tag(s)
@@ -25,6 +26,8 @@ CERT_TTL = 3600
 RETRY_AFTER = 60          # seconds between fetches after a failure or for an unknown key id
 RETRY_EMPTY = 10          # the same while there are no keys at all (a fetch at startup failed)
 FETCH_WAIT = 5.0          # how long a request with an unknown key id waits for a running fetch
+KEYS_MAX_BYTES = 64 << 10  # Cloudflare's answer is a few KB
+KEYS_DEADLINE = 10         # seconds for the whole answer
 _now = time.time
 _certs = {"at": 0.0, "keys": {}, "tried": 0.0}
 _lock = threading.Lock()
@@ -55,9 +58,8 @@ def _int(text):
 
 
 def _fetch_keys():
-    request = urllib.request.Request(f"{TEAM}/cdn-cgi/access/certs", headers={"User-Agent": "Homestead"})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        body = json.loads(response.read().decode())
+    body = FETCH.get_json(f"{TEAM}/cdn-cgi/access/certs", headers={"User-Agent": "Homestead"},
+                          limit=KEYS_MAX_BYTES, seconds=KEYS_DEADLINE, what="Cloudflare Access's signing keys")
     return {k["kid"]: (_int(k["n"]), _int(k["e"])) for k in body.get("keys", [])
             if k.get("kty") == "RSA" and k.get("kid")}
 
@@ -69,12 +71,16 @@ def _refresh(now, running):
         fresh = _fetch_keys()
         if fresh:
             with _lock:
-                _certs.update(keys=fresh, at=now)
+                # A fetch given up on can end after a newer one: its keys are older.
+                if now >= _certs["at"]:
+                    _certs.update(keys=fresh, at=now)
     except Exception:
         pass
     finally:
         with _lock:
-            _fetching = None
+            # Only the fetch running now clears it: one given up on may end later.
+            if _fetching is running:
+                _fetching = None
         running.set()
 
 
@@ -86,7 +92,8 @@ def _key(kid):
     refresh; one whose key is not waits for the fetch, but only up to FETCH_WAIT.
     A failed fetch keeps the keys there were and is not retried for RETRY_AFTER,
     and an unknown key id refetches at most that often too, so neither a slow key
-    endpoint nor made-up key ids hold requests up.
+    endpoint nor made-up key ids hold requests up. A fetch still running after
+    RETRY_AFTER is given up on, so one that never ends cannot stop the next.
     """
     global _fetching
     now = _now()
@@ -94,7 +101,8 @@ def _key(kid):
         known = kid in _certs["keys"]
         due = now - _certs["at"] > CERT_TTL or not known
         interval = RETRY_AFTER if _certs["keys"] else RETRY_EMPTY
-        start = due and _fetching is None and now - _certs["tried"] > interval
+        stuck = _fetching is not None and now - _certs["tried"] > RETRY_AFTER
+        start = due and (_fetching is None or stuck) and now - _certs["tried"] > interval
         if start:
             _certs["tried"] = now
             _fetching = threading.Event()

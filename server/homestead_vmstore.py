@@ -29,6 +29,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import homestead_fetch as FETCH
 import homestead_kube as KUBE
 import homestead_routes
 import homestead_value_masks as MASKS
@@ -130,6 +131,9 @@ CATALOG = [
 ]
 BY_ID = {entry["id"]: entry for entry in CATALOG}
 FEDORA = "https://fedoraproject.org/releases.json"
+FEDORA_MAX_BYTES = 1 << 20     # 180 KB in Nov 2026
+ALPINE_MAX_BYTES = 512 << 10   # 72 KB in Nov 2026
+LIST_DEADLINE = 30
 _fedora = {"at": 0.0, "value": {}}
 
 
@@ -144,9 +148,8 @@ def bind(_kget, _ksend, namespace, _platform, _hv_download, _images, _image_disk
 
 
 def _get_json(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "Homestead", "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return json.loads(response.read().decode())
+    return FETCH.get_json(url, headers={"User-Agent": "Homestead", "Accept": "application/json"},
+                          limit=FEDORA_MAX_BYTES, seconds=LIST_DEADLINE, timeout=20, what="Fedora's release list")
 
 
 def _head_request(url):
@@ -185,9 +188,8 @@ fetch_text = None        # url -> text
 
 
 def _get_text(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "Homestead"})
-    with urllib.request.urlopen(request, timeout=20) as response:
-        return response.read().decode("utf-8", "replace")
+    return FETCH.get_text(url, headers={"User-Agent": "Homestead"}, errors="replace", limit=ALPINE_MAX_BYTES,
+                          seconds=LIST_DEADLINE, timeout=20, what="Alpine's release listing")
 
 
 def _alpine_urls():

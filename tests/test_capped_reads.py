@@ -50,30 +50,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import source_scan as SS
 import unbounded_scan as SCAN
 
-HELPER = "homestead_fetch.read(response, limit, deadline)"
+HELPER = "homestead_fetch.get(url, limit=..., seconds=...), or homestead_fetch.read(response, limit, deadline)"
 
 # (file under server/, function) -> uncapped reads in it, when the guard came in.
 READS = {
-    # Trusted public hosts (GitHub, distribution mirrors), admin or background only.
-    ("homestead_addons.py", "_fetch"): 1,
-    ("homestead_components.py", "_get_json"): 1,
-    ("homestead_upgrades.py", "_github"): 1,
-    ("homestead_vmstore.py", "_get_json"): 1,
-    ("homestead_vmstore.py", "_get_text"): 1,
-    ("homestead_cfaccess.py", "_fetch_keys"): 1,
+    # Trusted public hosts (GitHub, distribution mirrors, Cloudflare Access) and the
+    # UniFi console and another Homestead (move): gone, read through homestead_fetch.get.
     # The API server and in-cluster peers (Longhorn, virt-handler, own probes).
     # homestead_kube._request: gone with #1047 / #1050 (read under the request deadline).
     # homestead_workloads.logs: capped at LOG_BYTES on dev since #986.
-    ("homestead_move.py", "_call"): 1,
     ("homestead_longhorn_jobs.py", "_backend"): 2,
     ("homestead_revert.py", "_backend"): 2,
     ("homestead_smart.py", "_request"): 2,
     ("homestead_vmusage.py", "_fetch"): 1,
     ("homestead_cluster_shutdown.py", "main.request"): 1,
     ("homestead_power_handoff.py", "main.request"): 1,
-    # A linked cluster and a UniFi controller the operator set up.
     # homestead_fleet._json: gone with #1051 (homestead_fetch.read).
-    ("homestead_ipam.py", "_unifi_get"): 1,
     # An error body (HTTPError), cut after reading.
     ("homestead_deploy_server.py", "compose_apply"): 1,
     ("homestead_lhcapacity.py", "_patch_setting"): 1,

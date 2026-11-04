@@ -238,6 +238,25 @@ class IpamTests(unittest.TestCase):
         self.assertEqual("infrastructure", self.row("192.0.2.1")["kind"])
         self.assertIsNotNone(IPAM.view()["unifi"]["last_sync"])
 
+    def test_unifi_paging_stops_at_the_page_limit_and_says_so(self):
+        IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "k", "site": "default"})
+        api = "https://192.0.2.1/proxy/network/integration/v1"
+        asked = []
+
+        def get(url):
+            asked.append(url)
+            if len(asked) > 1000:
+                raise AssertionError("the paging never stopped")
+            if url == f"{api}/sites":
+                return {"data": [{"id": "s1", "internalReference": "default", "name": "Default"}]}
+            # A controller whose count never matches what it hands out.
+            return {"totalCount": 10 ** 9, "data": [{"name": "c", "macAddress": "11:11:11:11:11:11"}]}
+        with self.assertRaisesRegex(ValueError, "^the controller listed more than 100 pages") as caught:
+            IPAM.sync_unifi(get=get)
+        self.assertNotIn("could not reach", str(caught.exception), "it was reached; it would not stop")
+        self.assertEqual(1 + IPAM.UNIFI_PAGES, len(asked), "the sites, then the page limit and no more")
+        self.assertIn("more than 100 pages", IPAM.view()["unifi"]["last_error"])
+
     def test_unifi_networks_fill_in_dhcp_ranges_and_devices_get_a_category(self):
         IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "k"})
         IPAM.save_subnets([{"cidr": "192.0.2.0/24"}])

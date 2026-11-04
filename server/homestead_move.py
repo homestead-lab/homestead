@@ -16,12 +16,11 @@ import base64
 import json
 import re
 import socket
-import ssl
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 
+import homestead_fetch as FETCH
 import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_routes as ROUTER
@@ -31,6 +30,9 @@ kget = ksend = None
 NS = "lab"
 VERSION = ""
 TIMEOUT = 20
+ANSWER_MAX_BYTES = 8 << 20    # as homestead_fleet's
+ANSWER_DEADLINE = 60
+ICON_DEADLINE = 20
 # What the two halves of a move say to each other. It goes up only when one
 # side would misread the other, so two different releases can still move
 # workloads between them while this number matches.
@@ -426,30 +428,27 @@ def _password(name):
         return ""
 
 
-def _open(request):
-    # Plain HTTP is the normal case on a LAN VIP. HTTPS is verified in the
-    # ordinary way: a move is not a reason to stop checking a certificate.
-    context = ssl.create_default_context() if request.full_url.startswith("https") else None
-    return urllib.request.urlopen(request, timeout=TIMEOUT, context=context)
-
-
 def _call(row, path, token="", body=None):
+    """(the answer's JSON, the answer: FETCH.Answer, with .headers). Signatures
+    and the session cookie go to that Homestead only, never on to a redirect
+    to another host."""
     data = json.dumps(body).encode() if body is not None else None
-    request = urllib.request.Request(row["url"] + path, data=data,
-                                     method="POST" if body is not None else "GET")
+    method = "POST" if body is not None else "GET"
+    url = row["url"] + path
+    headers = {}
     if row.get("fleet") and FLEET:
-        target = urllib.parse.urlparse(request.full_url)
-        for name, value in FLEET.sign(request.get_method(), target.path + (f"?{target.query}" if target.query else ""),
-                                      data or b"").items():
-            request.add_header(name, value)
-    request.add_header("Accept", "application/json")
+        target = urllib.parse.urlparse(url)
+        headers.update(FLEET.sign(method, target.path + (f"?{target.query}" if target.query else ""), data or b""))
+    headers["Accept"] = "application/json"
     if body is not None:
-        request.add_header("Content-Type", "application/json")
-        request.add_header("X-Homestead-Auth", "1")
+        headers["Content-Type"] = "application/json"
+        headers["X-Homestead-Auth"] = "1"
     if token:
-        request.add_header("Cookie", f"homestead_session={token}")
-    with _open(request) as response:
-        return json.loads(response.read().decode() or "{}"), response
+        headers["Cookie"] = f"homestead_session={token}"
+    # Plain HTTP is the normal case on a LAN VIP; HTTPS is verified as usual.
+    answer = FETCH.get(url, data=data, method=method, headers=headers, limit=ANSWER_MAX_BYTES,
+                       seconds=ANSWER_DEADLINE, timeout=TIMEOUT, what="the other Homestead's answer")
+    return json.loads(answer.body.decode() or "{}"), answer
 
 
 class Missing(ValueError):
@@ -536,13 +535,11 @@ def icon_bytes(name, reference, limit=256 * 1024):
     """
     if not re.fullmatch(r"/api/icons/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)", str(reference or "")):
         raise ValueError("not a cached icon reference")
-    request = urllib.request.Request(_cluster(name)["url"] + reference)
-    request.add_header("Accept", "image/*")
-    with _open(request) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError("icon is too large")
-    return data
+    try:
+        return FETCH.get(_cluster(name)["url"] + reference, headers={"Accept": "image/*"}, limit=limit,
+                         seconds=ICON_DEADLINE, timeout=TIMEOUT, what="the other Homestead's icon").body
+    except FETCH.TooLarge:
+        raise ValueError("icon is too large") from None
 
 
 def remote_inventory(name):
