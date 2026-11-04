@@ -226,11 +226,20 @@ class PagesTests(unittest.TestCase):
         self.assertEqual("unavailable", self.cluster.route("wl")[0]["metrics"]["state"])
 
     def test_the_loop_starts_with_the_node_probes(self):
+        import homestead_kubelet_stats as KSTATS
         import homestead_nodes as NODES
-        with mock.patch.object(NODES.PROBES, "start") as probes, mock.patch.object(M, "start") as metrics:
+        KSTATS.reset()
+        self.addCleanup(KSTATS.reset)
+        with mock.patch.object(NODES.PROBES, "start") as probes, mock.patch.object(M, "start") as metrics, \
+                mock.patch.object(KSTATS, "start") as kubelet_stats:
             NODES.start_probes()
         probes.assert_called_once()
         metrics.assert_called_once()
+        kubelet_stats.assert_called_once()
+        # start_probes() starts the kubelet loop too (#976): a real one left running reads
+        # every host a later test asks about, through whatever API that test has bound.
+        # (This check failed on the old test; with start patched it now guards the reset above.)
+        self.assertFalse(KSTATS.running(), "the kubelet-stats loop was left running")
 
 
 if __name__ == "__main__":
