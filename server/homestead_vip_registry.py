@@ -158,6 +158,105 @@ def remove_vip(ip):
 
 VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "kube-vip.io/leaseName",
             "metallb.universe.tf/loadBalancerIPs", "metallb.universe.tf/allow-shared-ip")
+MOVE_ATTEMPTS = 2       # one retry: kube-vip and servicelb write a Service's status as it moves
+
+
+class _KeptChanging(Exception):
+    """A Service answered 409 on every attempt."""
+
+
+def _put_service(path, change):
+    """change(service) PUT on the Service as read. The PUT names the
+    resourceVersion read, so a status write by kube-vip or servicelb in
+    between is a 409: then it is read again and changed once more."""
+    for _ in range(MOVE_ATTEMPTS):
+        service = STATE.kget(path)
+        change(service)
+        try:
+            return STATE.ksend("PUT", path, service)
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+            error.close()
+    raise _KeptChanging()
+
+
+def _readdress(service, annotations, frm, to):
+    """The Service's VIP annotations replaced by annotations, and a
+    loadBalancerIP of frm made to; its other annotations are kept."""
+    current = service.setdefault("metadata", {}).setdefault("annotations", {})
+    for key in VIP_KEYS:
+        current.pop(key, None)
+    current.update(annotations)
+    if (service.get("spec") or {}).get("loadBalancerIP") == frm:
+        service["spec"]["loadBalancerIP"] = to
+
+
+def _names(rows):
+    names = [f"{row['namespace']}/{row['name']}" for row in rows]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _service_path(row):
+    return f"/api/v1/namespaces/{row['namespace']}/services/{row['name']}"
+
+
+def _move_services(moving, old, new):
+    """Every Service in moving put on new. If one cannot be moved, the ones
+    moved before it are put back as they were, so nothing is left half-moved
+    and trying again starts from the old address; the move is refused in
+    words, and says which Service is where when the move back fails too."""
+    annotations = PLATFORM.vip_annotations(new)
+    moved = []          # (row, its VIP annotations before the move)
+    for row in moving:
+        was, read = {}, []
+
+        def move(service, was=was, read=read):
+            read.append(1)
+            was.clear()
+            was.update({k: v for k, v in ((service.get("metadata") or {}).get("annotations") or {}).items()
+                        if k in VIP_KEYS})
+            _readdress(service, annotations, old, new)
+        try:
+            _put_service(_service_path(row), move)
+        except Exception as error:
+            why = ("kept changing while it was being moved" if isinstance(error, _KeptChanging)
+                   else f"could not be moved ({str(error)[:160]})")
+            # A failure other than a 409 may have landed with its reply lost:
+            # this Service is put back too (a write of what it had, if not).
+            maybe = [(row, dict(was))] if read and not isinstance(error, _KeptChanging) else []
+            raise ValueError(_moved_back(f"{_names([row])} {why}", moved, moving, old, new, maybe)) from None
+        moved.append((row, dict(was)))
+
+
+def _moved_back(failed, moved, moving, old, new, maybe=()):
+    """The refusal once the Services in moved (and maybe: the one whose own
+    write failed, which may or may not have landed) are put back on old."""
+    stuck, unknown = [], []
+    for row, was in list(moved) + list(maybe):
+        try:
+            _put_service(_service_path(row), lambda service, was=was: _readdress(service, was, new, old))
+        except Exception:
+            (stuck if any(row is m for m, _ in moved) else unknown).append(row)
+    if not stuck and not unknown:
+        return (f"{failed}; nothing was moved"
+                + (f" ({_names([row for row, _ in moved])} moved back to {old})" if moved else "")
+                + "; try the move again")
+    rest = [row for row in moving if row not in stuck and row not in unknown]
+    where = []
+    if stuck:
+        where.append(f"{_names(stuck)} {_is(stuck)} still on {new}")
+    if unknown:
+        where.append(f"{_names(unknown)} may be on either address; check {'it' if len(unknown) == 1 else 'them'} in Edit")
+    if rest:
+        where.append(f"{_names(rest)} {_is(rest)} on {old}")
+    return (f"{failed}, and putting Services back on {old} failed: " + "; ".join(where)
+            + f". Your VIPs still names {old}. Do not try the move again until {_names(stuck + unknown)} "
+            f"{_is(stuck + unknown)} back on {old} (Edit on each)")
+
+
+def _is(rows):
+    return "is" if len(rows) == 1 else "are"
 
 
 def change_vip(old, new, apply=False):
@@ -193,18 +292,7 @@ def change_vip(old, new, apply=False):
                           "targets": row.get("targets") or []} for row in moving]}
     if not apply:
         return plan
-    annotations = PLATFORM.vip_annotations(new)
-    for row in moving:
-        path = f"/api/v1/namespaces/{row['namespace']}/services/{row['name']}"
-        service = STATE.kget(path)
-        meta = service.setdefault("metadata", {})
-        current = meta.setdefault("annotations", {})
-        for key in VIP_KEYS:
-            current.pop(key, None)
-        current.update(annotations)
-        if (service.get("spec") or {}).get("loadBalancerIP") == old:
-            service["spec"]["loadBalancerIP"] = new
-        STATE.ksend("PUT", path, service)
+    _move_services(moving, old, new)
     def move(rows):
         # The Services have moved: the registry follows, even if the entry
         # changed meanwhile (kept, with its new label or default).
