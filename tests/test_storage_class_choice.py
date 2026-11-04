@@ -1,4 +1,5 @@
 import sys, unittest
+from unittest import mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
@@ -50,7 +51,13 @@ class ClassChoiceTests(unittest.TestCase):
         server.storage_classes()
         self.assertEqual("longhorn-v1-1x", server.STORAGE_CLASS)
         self.assertEqual("longhorn-v1-1x", server.LC.STORAGE_CLASS)
-        self.assertEqual("longhorn-v1-1x", server.VM_ROUTES.vm_default_class())
+
+    def test_a_vm_disk_follows_the_one_rule(self):
+        # The install class while it is here (#1125); else the cluster's default.
+        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
+            self.assertEqual("longhorn-r2", server.VM_ROUTES.vm_default_class())
+        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", ""):
+            self.assertEqual("longhorn-v1-1x", server.VM_ROUTES.vm_default_class())
 
     def test_without_a_default_the_installed_class_stands(self):
         self.kube.add(klass("longhorn-v1-1x", numberOfReplicas="1"))

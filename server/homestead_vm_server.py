@@ -27,13 +27,14 @@ import homestead_network_inventory as INV
 import homestead_nodes as NODES
 import homestead_platform as PLATFORM
 import homestead_routes as MODULE_ROUTES
+import homestead_storage_classes as STORAGE_CLASSES
 import homestead_vm_hardware as VM_HARDWARE
 import homestead_vm_review as VM_REVIEW
 import homestead_vms as VMS
 import homestead_vmstore as VMSTORE
 import homestead_workloads as WORKLOADS
 
-ROUTE_NEEDS = ("beat", "cached", "class_selectable", "_dns_name", "kget", "ksend",
+ROUTE_NEEDS = ("beat", "cached", "_dns_name", "kget", "ksend",
                "selectable_storage_classes", "self_data_activity", "storage_class_facts",
                "storage_classes", "vm_network_details", "vm_networks", "vm_subnets")
 VALUES = ("DATA_DIR", "_cache")
@@ -272,14 +273,10 @@ def prepare_lan(cfg):
 
 
 def vm_default_class(rows=None):
-    """The class a new VM disk lands on: the cluster's default, else Longhorn's
-    usual one, else none named - the API server then applies its own default."""
-    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
-    for row in rows:
-        if row["default"]:
-            return row["name"]
-    names = [row["name"] for row in rows]
-    return next((name for name in ("longhorn-r2", "harvester-longhorn", "longhorn") if name in names), "")
+    """The class a new VM disk lands on: the one every new volume goes on
+    (homestead_storage_classes.default_class), else none named - the API
+    server then applies its own default."""
+    return STORAGE_CLASSES.default_class(rows if rows is not None else storage_classes())
 
 
 def vm_address_problem(ip):
