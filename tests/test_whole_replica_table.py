@@ -171,14 +171,14 @@ EXPECTED = {
     'rebuilding (WO), healthyAt still set': ('not', 'whole', 'not', 'not', 'whole', 'not', 'rebuilding', 'rebuilding', 'not'),
     'failed (failedAt)': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
     'running, engine says ERR': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'running, not in the engine': ('whole', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running, not in the engine': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
     'stopped, attached volume': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
     'running RW, host NotReady': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
     'running RW, host cordoned': ('whole', 'whole', 'whole', 'whole', 'whole', 'not', '-', '-', 'whole'),
-    'running RW, being deleted': ('whole', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running RW, being deleted': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
     # Attached, but no engine running: Longhorn is not serving it.
-    'attached, engine stopped, map cleared': ('whole', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'attached, engine stopped, map kept': ('whole', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map cleared': ('not', 'whole', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map kept': ('not', 'whole', 'whole', 'not', 'whole', 'not', '-', '-', 'not'),
 }
 
 
