@@ -156,7 +156,7 @@ SHAPES = {
 # Each place's answer for the copy on node-b: "whole", "not", or "-" where it
 # does not ask about that shape. app_copies and data_copies ask about the
 # volume ("a copy is rebuilding"): "rebuilding" or "-".
-PLACES = ("power", "rebalance._whole", "rebalance._judge (was _built)", "disk_v2._rw", "disks._healthy", "lhv2_upgrade",
+PLACES = ("power", "rebalance._whole", "rebalance._judge (was _built)", "disk_v2._rw", "disks._whole_copies (was _healthy)", "lhv2_upgrade",
           "app_copies", "data_copies", "the rule")
 # Where a place disagrees with the rule it says "whole" and the rule "not":
 # moving that place onto the rule can only refuse or delay a power-off, move
@@ -168,17 +168,17 @@ EXPECTED = {
     'healthy, attached': ('whole', 'whole', 'whole', 'whole', 'whole', 'whole', '-', '-', 'whole'),
     'stopped, detached volume': ('whole', 'whole', 'whole', 'not', 'whole', '-', '-', '-', 'whole'),
     'rebuilding (WO), new copy': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
-    'rebuilding (WO), healthyAt still set': ('not', 'not', 'not', 'not', 'whole', 'not', 'rebuilding', 'rebuilding', 'not'),
+    'rebuilding (WO), healthyAt still set': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
     'failed (failedAt)': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running, engine says ERR': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'running, not in the engine': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'stopped, attached volume': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'running RW, host NotReady': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running, engine says ERR': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
+    'running, not in the engine': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
+    'stopped, attached volume': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
+    'running RW, host NotReady': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
     'running RW, host cordoned': ('whole', 'whole', 'whole', 'whole', 'whole', 'not', '-', '-', 'whole'),
-    'running RW, being deleted': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'running RW, being deleted': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
     # Attached, but no engine running: Longhorn is not serving it.
-    'attached, engine stopped, map cleared': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
-    'attached, engine stopped, map kept': ('not', 'not', 'not', 'not', 'whole', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map cleared': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
+    'attached, engine stopped, map kept': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
 }
 
 
@@ -227,7 +227,12 @@ class Places:
         return "whole" if s["asked"] in names else "not"
 
     def disks_healthy(self):
-        return "whole" if DISKS._healthy(asked(self.shape)) else "not"
+        s = self.shape
+        reads = {f"{DISKS.LH}/engines": {"items": [s["engine"]]}, "/api/v1/nodes": {"items": s["nodes"]},
+                 f"{DISKS.LH}/volumes": {"items": [s["volume"]]}}
+        with mock.patch.object(DISKS, "kget", lambda path: copy.deepcopy(reads[path])), \
+                mock.patch.object(DISKS, "_lh_nodes", lambda: by_name(copy.deepcopy(s["lh_nodes"]))):
+            return "whole" if DISKS._whole_copies()(asked(self.shape)) else "not"
 
     def lhv2_upgrade(self):
         """The live V2 upgrade: two whole copies on eligible hosts. Its fixture's
