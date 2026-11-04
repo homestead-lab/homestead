@@ -325,7 +325,6 @@ homestead_os_rollout.set_cordon	test_os_rollout	fake
 homestead_os_rollout.set_cordon	test_os_rollout	other
 homestead_outage.DATA_DIR	test_outage	fake
 homestead_outage.DATA_DIR	test_outage_carry	other
-homestead_outage.DATA_DIR	test_outage_formats	fake
 homestead_outage.DATA_DIR	test_outage_secret	fake
 homestead_outage.DATA_DIR	test_outage_sweep	fake
 homestead_place.get_nodes	test_host_impact_fixes	fake
