@@ -32,6 +32,7 @@ import homestead_data_copies as DATA_COPIES
 import homestead_node_parity as NODE_PARITY
 import homestead_rebalance as REBALANCE
 import homestead_routes
+import homestead_whole_copy as WHOLE
 
 LOWERED_FROM = DATA_COPIES.LOWERED_FROM
 CACHE = "one-host-copies"
@@ -53,8 +54,7 @@ def _rebuilding():
     """The volumes with a copy being rebuilt (WO), from one read of every
     engine. Raises when the engines cannot be read: the caller offers nothing."""
     found = NODE_PARITY.kget(DATA_COPIES.ENGINES) or {}
-    return {(engine.get("spec") or {}).get("volumeName") for engine in found.get("items") or []
-            if "WO" in ((engine.get("status") or {}).get("replicaModeMap") or {}).values()}
+    return WHOLE.rebuilding(found.get("items") or [])
 
 
 def _lower(volumes):

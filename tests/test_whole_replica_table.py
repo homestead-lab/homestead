@@ -11,9 +11,7 @@ The replica asked about is always the copy on node-b. The volume's other copy,
 on node-a, stays whole, and node-a is the host each check is about (power off
 node-a: does a whole copy survive on node-b?).
 
-This pins what each place answers today, next to what the one rule
-(homestead_whole_copy) says in the last column. The commits that move each
-place onto the rule change only that place's column.
+Every place now asks homestead_whole_copy.whole_copy; the table is its answers.
 """
 import copy
 import json
@@ -30,7 +28,6 @@ import homestead_disks as DISKS
 import homestead_lhv2_upgrade as LHV2_UPGRADE
 import homestead_power as POWER
 import homestead_rebalance as REBALANCE
-import homestead_whole_copy as WHOLE
 import test_lhv2_upgrade as UPGRADE_FIXTURE
 import test_node_power_plan as POWER_FIXTURE
 
@@ -157,28 +154,32 @@ SHAPES = {
 # does not ask about that shape. app_copies and data_copies ask about the
 # volume ("a copy is rebuilding"): "rebuilding" or "-".
 PLACES = ("power", "rebalance._whole", "rebalance._judge (was _built)", "disk_v2._rw", "disks._whole_copies (was _healthy)", "lhv2_upgrade",
-          "app_copies", "data_copies", "the rule")
-# Where a place disagrees with the rule it says "whole" and the rule "not":
-# moving that place onto the rule can only refuse or delay a power-off, move
-# or retire that it allows today. disk_v2 says "not" for a detached volume's
-# stopped copy on purpose (the conversion needs it running); lhv2_upgrade
-# reads the cordon as "not eligible" on its own.
+          "app_copies", "data_copies")
+# Before #1126 these places disagreed; the cells that changed, all from "whole"
+# to "not" (each can only refuse or delay a power-off, move or retire). The two
+# "attached, engine stopped" rows were added in review: there power, rebalance
+# _whole and disks went from "whole" to "not", and _built with the map kept.
+# power: running but not in the engine, being deleted; rebalance _whole: both
+# rebuilding rows, ERR, not in the engine, stopped on an attached volume, host
+# NotReady, being deleted; rebalance _built: host NotReady, being deleted;
+# disks _healthy: rebuilding with healthyAt still set, ERR, not in the engine,
+# stopped on an attached volume, host NotReady, being deleted.
 EXPECTED = {
-    #                                        power    _whole   _built   disk_v2  disks    upgrade  app_copies    data_copies   rule
-    'healthy, attached': ('whole', 'whole', 'whole', 'whole', 'whole', 'whole', '-', '-', 'whole'),
-    'stopped, detached volume': ('whole', 'whole', 'whole', 'not', 'whole', '-', '-', '-', 'whole'),
-    'rebuilding (WO), new copy': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
-    'rebuilding (WO), healthyAt still set': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding', 'not'),
-    'failed (failedAt)': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running, engine says ERR': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running, not in the engine': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'stopped, attached volume': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running RW, host NotReady': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'running RW, host cordoned': ('whole', 'whole', 'whole', 'whole', 'whole', 'not', '-', '-', 'whole'),
-    'running RW, being deleted': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    # Attached, but no engine running: Longhorn is not serving it.
-    'attached, engine stopped, map cleared': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
-    'attached, engine stopped, map kept': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-', 'not'),
+    #                                        power    _whole   _built   disk_v2  disks    upgrade  app_copies    data_copies
+    'healthy, attached': ('whole', 'whole', 'whole', 'whole', 'whole', 'whole', '-', '-'),
+    'stopped, detached volume': ('whole', 'whole', 'whole', 'not', 'whole', '-', '-', '-'),
+    'rebuilding (WO), new copy': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding'),
+    'rebuilding (WO), healthyAt still set': ('not', 'not', 'not', 'not', 'not', 'not', 'rebuilding', 'rebuilding'),
+    'failed (failedAt)': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'running, engine says ERR': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'running, not in the engine': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'stopped, attached volume': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'running RW, host NotReady': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'running RW, host cordoned': ('whole', 'whole', 'whole', 'whole', 'whole', 'not', '-', '-'),
+    'running RW, being deleted': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    # Attached, but no engine running: no copy is whole anywhere (review of #1126).
+    'attached, engine stopped, map cleared': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
+    'attached, engine stopped, map kept': ('not', 'not', 'not', 'not', 'not', 'not', '-', '-'),
 }
 
 
@@ -272,17 +273,9 @@ class Places:
         with mock.patch.object(DATA_COPIES.NODE_PARITY, "kget", self._engines):
             return "rebuilding" if DATA_COPIES._rebuilding(self.volume_name) else "-"
 
-    def rule(self):
-        """homestead_whole_copy as power, rebalance and disk retire will ask it:
-        a detached volume's stopped copies count, and the hosts are read."""
-        s = self.shape
-        whole = WHOLE.judge([s["engine"]], detached_ok=True, volumes=[s["volume"]],
-                            nodes=by_name(s["nodes"]), lh_nodes=by_name(s["lh_nodes"]))
-        return "whole" if whole(asked(s)) else "not"
-
     def answers(self):
         calls = (self.power, self.rebalance_whole, self.rebalance_built, self.disk_v2_rw, self.disks_healthy,
-                 self.lhv2_upgrade, self.app_copies, self.data_copies, self.rule)
+                 self.lhv2_upgrade, self.app_copies, self.data_copies)
         return tuple(call() for call in calls)
 
 
