@@ -54,7 +54,7 @@ def state():
     for name, module in list(sys.modules.items()):
         if name.startswith("homestead_") and module is not None:
             if name not in _targets:
-                _targets[name] = REBIND.bound_targets(module)
+                _targets[name] = REBIND.bound_targets(module, resets=False)
             for target, value in REBIND.expand(module, _targets[name]):
                 out[f"{name}.{target}"] = value
     return out
