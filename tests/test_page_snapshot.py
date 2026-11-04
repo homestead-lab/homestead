@@ -431,6 +431,10 @@ class LoopTests(unittest.TestCase):
         # turn is late, and the part is still fresh.
         late = self.PAGES.read("ov")[0] + 21
         self.enterContext(mock.patch.object(self.PAGES.time, "time", lambda: late))
+        # The loop's twice-a-day update scan, as just made: not what this test is about,
+        # and the loop writes its time into _last_update_scan, which then kept every later
+        # alert loop in this process from scanning (test_alerts_unread_guard, reversed order).
+        self.enterContext(mock.patch.object(OV, "_last_update_scan", [late]))
         sources = OV._alert_sources()
         self.assertIsNotNone(sources["health"])
         self.assertIsNotNone(sources["capacity"])
