@@ -337,7 +337,6 @@ homestead_placement_mode.ksend	test_placement_mode	other
 homestead_placement_mode.settings	test_placement_mode	fake
 homestead_placement_mode.settings	test_placement_mode	other
 homestead_placement_mode.system_ns	test_placement_mode	other
-homestead_platform.kget	test_platform	other
 homestead_portal.icon_data	test_portal	fake
 homestead_portal.kget	test_portal	fake
 homestead_portal.ksend	test_portal	fake

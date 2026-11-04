@@ -6,8 +6,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import homestead_platform as PLATFORM
+from rebind import keep_bound
+
+
+def isolate(test):
+    """Start each test unbound with an empty cache, and put back afterwards the kget
+    and cache that were there before: server binds PLATFORM.kget once, at import, so
+    leaving it None fails every later test that detects the platform (the page
+    snapshot's, in a reversed-order run)."""
+    keep_bound(test, PLATFORM)
+    saved = dict(PLATFORM._cached)
+    test.addCleanup(lambda: (PLATFORM._cached.clear(), PLATFORM._cached.update(saved)))
+    PLATFORM.bind(None)
+    PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
 
 
 def fake(groups, kubelet, daemonsets=(), extra=None):
@@ -29,9 +43,8 @@ def fake(groups, kubelet, daemonsets=(), extra=None):
 
 
 class PlatformTests(unittest.TestCase):
-    def tearDown(self):
-        PLATFORM.bind(None)
-        PLATFORM._cached.update(at=0.0, value=None)
+    def setUp(self):
+        isolate(self)
 
     def use(self, *args, **kw):
         PLATFORM.bind(fake(*args, **kw))
@@ -155,9 +168,7 @@ class FailedReadTests(unittest.TestCase):
     LONGHORN_K3S = ({"helm.cattle.io", "longhorn.io", "kubevirt.io"}, "v1.31.4+k3s1")
 
     def setUp(self):
-        self.addCleanup(PLATFORM.bind, None)
-        self.addCleanup(PLATFORM._cached.update, at=0.0, value=None, failed_at=0.0)
-        PLATFORM._cached.update(at=0.0, value=None, failed_at=0.0)
+        isolate(self)
 
     def good(self):
         PLATFORM.bind(fake(*self.LONGHORN_K3S))
