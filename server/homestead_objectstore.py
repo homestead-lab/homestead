@@ -71,6 +71,7 @@ import homestead_longhorn_target as BACKUP_TARGET
 import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_routes
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 SINGLE_CLASS = "homestead-single-copy"
@@ -86,7 +87,12 @@ def single_copy_class():
     own class, so disks, engine and the rest match; "" where that class is
     not Longhorn's, or a class of this name exists that Homestead did not make.
     """
-    base = _get(f"{SC_PATH}/{LH.STORAGE_CLASS}")
+    try:
+        base_name = STORAGE_CLASSES.claim_class()
+    except Exception as error:
+        raise Unread("Homestead could not read the storage classes from Kubernetes, so it did not act on them: "
+                     f"{error}. Try again in a moment.") from error
+    base = _get(f"{SC_PATH}/{base_name}")
     if not base or base.get("provisioner") != "driver.longhorn.io":
         return ""
     parameters = dict(base.get("parameters") or {})
@@ -99,7 +105,7 @@ def single_copy_class():
     body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
             "metadata": {"name": SINGLE_CLASS,
                          "labels": {"app.kubernetes.io/managed-by": "homestead"},
-                         "annotations": {"homestead.io/base-storage-class": LH.STORAGE_CLASS,
+                         "annotations": {"homestead.io/base-storage-class": base_name,
                                          "homestead.io/purpose": "backup storage for moves: one copy"}},
             "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
             "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate", "parameters": parameters}

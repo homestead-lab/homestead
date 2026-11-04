@@ -14,10 +14,12 @@ import homestead_objectstore as store
 import homestead_network_services as SVC
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_network_state as STATE
+from fakes.storage_classes import storage_classes
 
 
 class ObjectStoreTests(unittest.TestCase):
     def setUp(self):
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         self.objects = {}
         self.sent = []
         self.claims = []
@@ -695,6 +697,16 @@ class ObjectStoreTests(unittest.TestCase):
     def test_an_unread_storage_class_does_not_put_the_store_on_another_class(self):
         self.failing["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"] = 1
         with self.assertRaisesRegex(Exception, self.UNREAD):
+            store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
+        self.assertEqual([], self.claims)
+        self.assertFalse([p for _, p, _ in self.sent if "storageclasses" in p or "/deployments" in p])
+
+    def test_an_unread_class_list_does_not_put_the_store_on_another_class(self):
+        # Which class is the default is read from the cluster's classes (#1125).
+        def unread():
+            raise urllib.error.URLError("timed out")
+        self.enterContext(mock.patch.object(store.STORAGE_CLASSES, "storage_classes", unread))
+        with self.assertRaisesRegex(store.Unread, "could not read the storage classes from Kubernetes"):
             store.deploy({"lb_ip": "192.0.2.243", "point_longhorn": False})
         self.assertEqual([], self.claims)
         self.assertFalse([p for _, p, _ in self.sent if "storageclasses" in p or "/deployments" in p])

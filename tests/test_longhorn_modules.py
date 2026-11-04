@@ -103,7 +103,7 @@ class LonghornModuleTests(unittest.TestCase):
         self.assertIn("K8S_LABEL", seen)
 
     def test_what_other_modules_read_is_on_homestead_longhorn_as_the_same_object(self):
-        self.assertIn("STORAGE_CLASS", read_elsewhere())
+        self.assertNotIn("STORAGE_CLASS", read_elsewhere())
         self.assertNotIn("move_snapshot_error", read_elsewhere())
         for name in sorted(read_elsewhere()):
             self.assertTrue(hasattr(LH, name), name)
