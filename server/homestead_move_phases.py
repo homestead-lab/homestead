@@ -18,6 +18,7 @@ import homestead_shared as SHARED
 import homestead_icons as ICONS
 import homestead_kube as KUBE
 import homestead_names as NAMES
+import homestead_storage_classes as STORAGE_CLASSES
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_transfer_devices as VM_DEVICES
 import homestead_transfer_cleanup as CLEANUP
@@ -176,21 +177,25 @@ def _image_ready(name):
 def _image_class():
     """A Longhorn storage class for a restored image to take its settings from.
 
-    Homestead's own class for new volumes when it has one here; otherwise the
-    cluster's default, Harvester's stock class, or any Longhorn class that is
-    not itself an image's (those carry a backingImage of their own).
+    The class new volumes go on (homestead_storage_classes.default_class)
+    when it is Longhorn's; otherwise a Longhorn class the cluster marks as
+    default, one of Longhorn's usual names, or any usable Longhorn class.
+    Never one Harvester keeps for itself or one made for an image or a
+    restore (those carry a backingImage or fromBackup of their own).
     """
     try:
         classes = STATE.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
-    except Exception:
-        classes = []
-    longhorn = [c for c in classes if c.get("provisioner") == "driver.longhorn.io"
-                and not (c.get("parameters") or {}).get("backingImage")]
-    names = [c["metadata"]["name"] for c in longhorn]
-    default = [c["metadata"]["name"] for c in longhorn
-               if ((c["metadata"].get("annotations") or {})
-                   .get("storageclass.kubernetes.io/is-default-class") == "true")]
-    for choice in [STATE.LH.STORAGE_CLASS] + default + ["harvester-longhorn", "longhorn"] + names:
+    except Exception as error:
+        # Not "no Longhorn class": a ValueError would end the move, and a read
+        # that failed is asked again on the next pass.
+        raise RuntimeError(f"Homestead could not read the storage classes, so it did not choose one "
+                           f"for the restored image: {error}") from error
+    rows = [STORAGE_CLASSES.class_row(c) for c in classes]
+    longhorn = [row for row in rows if row["provisioner"] == STORAGE_CLASSES.LONGHORN_PROVISIONER
+                and STORAGE_CLASSES.class_selectable(row)]
+    names = [row["name"] for row in longhorn]
+    marked = [row["name"] for row in longhorn if row["default"]]
+    for choice in [STORAGE_CLASSES.default_class(rows)] + marked + list(STORAGE_CLASSES.FALLBACK_CLASSES) + names:
         if choice and choice in names:
             return choice
     raise ValueError("this cluster has no Longhorn storage class to restore the image with")
