@@ -1215,14 +1215,14 @@
         "Delete the 2 replica records Longhorn keeps for it, so it rebuilds them from the remaining copies",
         "Finish its Cluster API machine's deletion if finalizers hold it",
         "Let 1 app pinned to it run on any host", "No volumes were kept on the host itself"],
-      machine: { name: "custom-8a1b2c3d", namespace: "fleet-local" }, disk_jobs: [] } : ({ node: url.searchParams.get("node"), ready: true, roles: ["control-plane", "etcd"],
+      machine: { name: "custom-8a1b2c3d", namespace: "fleet-local" }, disk_jobs: [], disk_jobs_stay: "" } : ({ node: url.searchParams.get("node"), ready: true, roles: ["control-plane", "etcd"],
       since: "", ok: false, lost_volumes: [], rebuilt_volumes: ["frigate-config"],
       blockers: [`${url.searchParams.get("node")} is Ready. A running node re-registers itself, so it is not removed from here: put it in maintenance mode in Harvester, run /opt/rke2/bin/rke2-uninstall.sh on it, power it off, and come back when it shows Not ready.`],
       warnings: ["1 volume will rebuild the copy it held, on the remaining nodes."],
       steps: ["Stop Longhorn scheduling new replicas to it", "Delete the Kubernetes node (RKE2 removes its etcd membership)",
         "Delete its Cluster API machine", "Delete Longhorn's record of it once it holds no replicas"],
       gone_steps: [], stuck: { pods: 0, vms: [], attachments: 0, replicas: 0 },
-      machine: { name: "custom-1", namespace: "fleet-local" }, disk_jobs: [] }),
+      machine: { name: "custom-1", namespace: "fleet-local" }, disk_jobs: [], disk_jobs_stay: "" }),
     "/api/cluster/remove-node": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, node: body.node, log: [

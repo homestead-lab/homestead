@@ -42,6 +42,48 @@ BLOCKING = "Longhorn upgrades, shutdown and OS rollouts"
 DISK_JOBS = {"disk-v2-convert": "V2 disk preparation", "disk-allocation": "storage allocation",
              "longhorn-runtime": "Longhorn runtime maintenance", "disk-retire": "disk retire",
              "longhorn-v2-cleanup": "V2 cleanup"}
+# Until when a job left on a removed host keeps blocking, by how it can end:
+# the three kinds that pin the host are ended from Jobs (homestead_host_gone);
+# a disk retire fails by itself once Longhorn's record of the host is gone
+# (retire_step reads it); a V2 cleanup's next round refuses on changed hosts and
+# lets go of the hosts it cordoned, but a RAM release it staged on a host keeps it
+# running until that host restarts, and only then does it fail. (singular, plural)
+UNTIL = {"end": ("until you end it from Jobs once the host is removed",
+                 "until you end them from Jobs once the host is removed"),
+         "disk-retire": ("until it stops; it fails by itself once Longhorn's record of the host is deleted",
+                         "until they stop; they fail by themselves once Longhorn's record of the host is deleted"),
+         "longhorn-v2-cleanup": ("until it ends: its next round refuses once the cluster's hosts change and lets go of "
+                                 "the hosts it cordoned; if it staged a RAM release on another host, it waits for that "
+                                 "host's restart before it fails",
+                                 "until they end: their next rounds refuse once the cluster's hosts change and let go of "
+                                 "the hosts they cordoned; one that staged a RAM release on another host waits for that "
+                                 "host's restart before it fails")}
+
+
+def _until(kind):
+    return "end" if kind not in UNTIL else kind
+
+
+def _listed(names):
+    """'a', 'a and b', 'a, b and c'."""
+    names = list(names)
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def stays(jobs):
+    """What leaving these saved jobs means, naming each way they end when the kinds are mixed."""
+    if not jobs:
+        return ""
+    groups = {}
+    for job in jobs:
+        groups.setdefault(_until(job["kind"]), []).append(job["kind"])
+    many = len(jobs) > 1
+    head = f"The saved job{'s stay' if many else ' stays'}, and keep{'' if many else 's'} blocking {BLOCKING}"
+    if len(groups) == 1:
+        return f"{head} {UNTIL[next(iter(groups))][many]}."
+    return f"{head}. " + " ".join(
+        f"The {_listed(dict.fromkeys(DISK_JOBS[kind] for kind in kinds))} job{'s do' if len(kinds) > 1 else ' does'} so "
+        f"{UNTIL[group][len(kinds) > 1]}." for group, kinds in groups.items())
 
 
 def bind(_kget, _ksend, namespace, operations=None):
@@ -86,10 +128,8 @@ def _require_no_disk_jobs(name, gone, accept_jobs):
         raise ValueError(" ".join(job["text"] for job in jobs))
     unnamed = [job for job in jobs if job["id"] not in set(accept_jobs or ())]
     if unnamed:
-        raise ValueError(" ".join(job["text"] for job in unnamed) + " To remove it anyway, confirm that " + (
-            f"the saved job stays, and keeps blocking {BLOCKING} until it is ended; Homestead can't end it yet."
-            if len(unnamed) == 1 else
-            f"the saved jobs stay, and keep blocking {BLOCKING} until they are ended; Homestead can't end them yet."))
+        stay = stays(unnamed)
+        raise ValueError(" ".join(job["text"] for job in unnamed) + " To remove it anyway, confirm that t" + stay[1:])
     return jobs
 
 
@@ -518,6 +558,7 @@ def removal_plan(name):
         f"Make {_plural(len(pinned_volumes), 'volume')} kept on it again, empty, so their apps can start elsewhere"
         if pinned_volumes else "No volumes were kept on the host itself",
     ]
+    jobs = _disk_jobs(name)
     return {"node": name, "ready": ready, "roles": roles, "since": since,
             "blockers": blockers, "warnings": warnings, "steps": steps, "gone_steps": gone_steps,
             "stuck": {"pods": len(pods), "vms": vm_names, "attachments": len(attachments),
@@ -525,7 +566,7 @@ def removal_plan(name):
             "lost_volumes": lost, "rebuilt_volumes": degraded,
             "lost_detail": _lost_detail(lost, workloads) if lost else [],
             "pinned_volumes": pinned_volumes, "pinned_workloads": pinned_workloads, "distribution": distribution,
-            "machine": {"name": machine, "namespace": machine_ns}, "disk_jobs": _disk_jobs(name), "ok": not blockers}
+            "machine": {"name": machine, "namespace": machine_ns}, "disk_jobs": jobs, "disk_jobs_stay": stays(jobs), "ok": not blockers}
 
 
 def _force_delete(path):
@@ -613,7 +654,7 @@ def remove_node(name, accept_loss=False, gone=False, accept_jobs=()):
             log.append(f"Longhorn kept its record of {name} for now: it still lists replicas there. "
                        f"Clean up again once they have rebuilt elsewhere, or force it if the host is gone for good.")
     log.extend(f"The saved {DISK_JOBS[job['kind']]} job {job['id']} ({job['title']}) stays, and keeps blocking "
-               f"{BLOCKING} until it is ended; Homestead can't end it yet" for job in left)
+               f"{BLOCKING} {UNTIL[_until(job['kind'])][0]}" for job in left)
     if OPS:
         OPS.start("cluster-cleanup", f"Removed {name}", {"kind": "Node", "name": name},
                   "/system/cluster", {"log": log}, "; ".join(log))

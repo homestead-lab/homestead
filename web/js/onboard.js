@@ -260,9 +260,7 @@ window.nodeRemoval = async name => {
     ${(plan.lost_volumes.length || (plan.pinned_volumes || []).length) && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_loss"
       onchange="nodeRemovalMode()"> <span id="rm_loss_text"></span></label>` : ""}
     ${(plan.disk_jobs || []).length && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_jobs"
-      onchange="nodeRemovalMode()"> <span>Remove it anyway. ${plan.disk_jobs.length === 1
-        ? "The saved job stays, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet."
-        : "The saved jobs stay, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet."}</span></label>` : ""}
+      onchange="nodeRemovalMode()"> <span>Remove it anyway. ${esc(plan.disk_jobs_stay || "")}</span></label>` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
       ${plan.ok ? `<button class="btn danger" id="rm_go" data-need="admin"
         onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}`)}`;
@@ -322,9 +320,8 @@ window.nodeRemovalMode = () => {
   // once the person accepts that.
   const jobs = (plan.disk_jobs || []).length, jobBox = $("#rm_jobs"), hint = $("#rm_jobs_hint");
   if (jobBox) jobBox.closest("label").hidden = !gone;
-  if (hint) hint.textContent = gone ? (jobs === 1
-    ? "Gone for good leaves it as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet."
-    : "Gone for good leaves them as they are. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet.")
+  // What leaving them means depends on their kinds; the server words it (disk_jobs_stay).
+  if (hint) hint.textContent = gone ? `${jobs === 1 ? "Gone for good leaves it as it is." : "Gone for good leaves them as they are."} ${plan.disk_jobs_stay || ""}`
     : "The standard way waits for them: open each job first, or choose It is gone for good.";
   if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked)
     || !!jobs && !(gone && jobBox?.checked);
