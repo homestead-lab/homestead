@@ -1676,6 +1676,29 @@ ssh_pwauth: true
         message:"Admin acknowledged an unknown outcome. No retry or rollback was sent; a late effect is still possible.",finished_at:new Date().toISOString()});
       return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
     },
+    "/api/operations/host-gone/preview": (url, init) => {
+      const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
+      if (!op?.host_gone_endable) throw new Error("There is no disk job left by a removed host with this id to end");
+      const node=op.resource?.name || "node-c";
+      return {capacity_token:"demo-host-gone-review",plan:{id,kind:op.kind,node,phase:"preparing",blocked:false,blockers:[],
+        evidence:{node:"missing",longhorn:"missing"},requires_confirmation:true,confirm:node,
+        left_on_host:["/dev/sdb (serial DEMO123, /dev/disk/by-id/ata-DEMO) may be partly erased: the erase helper may have started on it."],
+        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host: deleted when you end the job, only if it is still the same Job."],
+        released:["Longhorn upgrades, cluster shutdown and OS rollouts, which this job holds back cluster-wide.",
+          `Disk and host jobs on a host named ${node}.`,"Starting V2 cleanup (disabling Longhorn V2).",
+          "Storage jobs on the volumes it moved to other hosts: pvc-demo-photos."],
+        warnings:["Nothing on the host is changed. Homestead records the end and, if it is still the same Job, deletes the helper Job listed below. Cancelling stays refused.",
+          "The job's record stays in Jobs, with what it did, until you dismiss it."]}};
+    },
+    "/api/operations/host-gone/resolve": (url, init) => {
+      const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
+      const node=op?.resource?.name || "node-c";
+      if (!op?.host_gone_endable || body.capacity_token!=="demo-host-gone-review" || body.confirm!==node || !body.confirm_capacity || !body.acknowledge_host_gone)
+        throw new Error("Type the host's name and confirm that nothing on the host is changed. Nothing was ended.");
+      Object.assign(op,{status:"failed",host_gone_endable:false,cancellable:false,dismissible:true,finished_at:new Date().toISOString(),
+        message:`Ended: its host ${node} was removed. Nothing on the host was changed; the record lists what may remain there.`});
+      return {ok:true,detail:`Ended. ${node}'s job no longer holds anything back; nothing on the host was changed.`,operation:op};
+    },
     "/api/operations/vm-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
       if (!op?.mutation_recovery) throw new Error("This job has no incomplete save");

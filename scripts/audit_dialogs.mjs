@@ -52,6 +52,7 @@ const DIALOGS = [
   // The jobs entries own their jobs (#934): the demo answers every jobs read from window.__demoOps, so the
   // poll cannot swap its own in before the screenshot. Each entry starts with it reset (see audit()).
   ["jobs-running", "workloads", "STATE.data.operations=window.__demoOps=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
+  ["jobs-host-gone-end", "dash", "STATE.data.operations=window.__demoOps=[{id:'host-gone',kind:'disk-v2-convert',title:'Prepare /dev/sdb for Longhorn V2',resource:{kind:'Node',name:'node-c'},status:'failed',message:'The erase helper is missing',dismissible:false,host_gone_endable:true}];hostGoneReview('host-gone')"],
   ["jobs-recovery", "workloads", "STATE.data.operations=window.__demoOps=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
   ["jobs-empty", "workloads", "STATE.data.operations=window.__demoOps=[];jobsDialog()"],
   ["jobs-disconnected", "workloads", "STATE.data.operations=window.__demoOps=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
