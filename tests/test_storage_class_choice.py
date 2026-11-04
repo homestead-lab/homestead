@@ -61,6 +61,21 @@ class ClassChoiceTests(unittest.TestCase):
         self.kube.add(klass("longhorn-v1-1x", numberOfReplicas="1"))
         self.assertEqual("longhorn-r2", self.new_volume())
 
+    def homesteads(self):
+        """The class list's word on Homestead's own class: (name, why)."""
+        rows = STORAGE_CLASSES.storage_class_inventory()
+        return [(row["name"], row["homestead_reason"]) for row in rows if row.get("homestead_default")]
+
+    def test_the_class_list_says_which_class_homestead_uses_and_why(self):
+        # A chart install follows the cluster's default.
+        self.assertEqual([("longhorn-v1-1x", "default")], self.homesteads())
+        # An install class that is here wins, whatever the cluster marks.
+        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
+            self.assertEqual([("longhorn-r2", "install")], self.homesteads())
+        # Nothing marked: Longhorn's usual name.
+        self.kube.add(klass("longhorn-v1-1x", numberOfReplicas="1"))
+        self.assertEqual([("longhorn-r2", "fallback")], self.homesteads())
+
     def test_spent_restore_classes_are_removed_and_needed_ones_kept(self):
         self.kube.add(klass("homestead-restore-deee238ba869b8e0", fromBackup="s3://b/backups?volume=y"))
         self.claim("pending", {"phase": "Pending"}, spec={"storageClassName": "homestead-restore-deee238ba869b8e0"})

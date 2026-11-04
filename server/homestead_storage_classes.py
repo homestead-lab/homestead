@@ -171,8 +171,13 @@ def storage_class_usage():
 def storage_class_inventory():
     usage = storage_class_usage()
     rows = storage_classes()
+    # Which class Homestead puts new volumes on, and why, for the card beside
+    # Make default: an install class wins over the cluster's default (#1125).
+    chosen, reason = default_choice(rows)
     for row in rows:
         row["in_use"] = usage.get(row["name"], 0)
+        if row["name"] == chosen:
+            row.update(homestead_default=True, homestead_reason=reason)
     return rows
 
 
