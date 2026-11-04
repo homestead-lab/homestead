@@ -494,6 +494,15 @@ over TLS. **Turn off** removes the switches and buttons from Home Assistant
 and stops listening, and keeps what was picked for next time. The same
 actions are on the [API](API) for scripts.
 
+MQTT packets have a size limit: Homestead takes at most 64 KiB in one packet,
+far more than a command needs. A larger one is refused before it is read, the
+MQTT card shows its size, and Homestead reconnects after a pause that grows to
+5 minutes. Set the broker's own limit too (Mosquitto: `message_size_limit`),
+alongside the ACL above. If the card keeps showing a refused packet, a
+retained message on a `<base>/control/...` topic is the usual reason: the
+broker sends it again on every reconnect, so clear it on the broker
+(publish an empty retained message to that topic).
+
 With [linked clusters](Linked-clusters), each Homestead has its own
 MQTT settings and controls only its own containers and VMs: picking a cluster
 from the top bar shows that cluster's MQTT card and its own list. If two
