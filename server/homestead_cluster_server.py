@@ -474,7 +474,11 @@ def _removal_plan(request):
 
 def _remove_node(request):
     b = request.body
-    return _move_step(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")), bool(b.get("gone"))))
+    # The saved disk jobs a gone-for-good removal leaves, by id; anything else names none.
+    jobs = b.get("accept_jobs")
+    jobs = [j for j in jobs if isinstance(j, str)] if isinstance(jobs, list) else []
+    return _move_step(lambda: ONBOARD.remove_node(b.get("node"), bool(b.get("accept_loss")), bool(b.get("gone")),
+                                                  accept_jobs=jobs))
 
 
 def _cleanup_run(request):

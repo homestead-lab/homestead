@@ -234,6 +234,9 @@ window.nodeRemoval = async name => {
   $("#mbody").innerHTML = `
     ${plan.blockers.length ? `<div class="note bad"><b>Not now.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
     ${plan.warnings.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+    ${plan.ok && (plan.disk_jobs || []).length ? `<div class="note bad"><b>Saved disk ${plan.disk_jobs.length === 1 ? "job" : "jobs"} on ${esc(name)}.</b>
+      ${tip("These jobs hold this host's disks. Most can't be cancelled once started; a disk retire can be rolled back early. A host that may come back keeps them so they can resume; removing a host gone for good leaves them with nothing to finish on.")}
+      <ul>${plan.disk_jobs.map(j => `<li>${esc(j.text)}</li>`).join("")}</ul><span id="rm_jobs_hint"></span></div>` : ""}
     ${plan.ok ? `<div class="sec">Is it coming back?</div>
     <div class="removal-modes">
       <label class="removal-mode"><input type="radio" name="rm_mode" value="standard" checked onchange="nodeRemovalMode()">
@@ -256,6 +259,10 @@ window.nodeRemoval = async name => {
       rejoins; a host that still has its old install will try to register again.</p>
     ${(plan.lost_volumes.length || (plan.pinned_volumes || []).length) && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_loss"
       onchange="nodeRemovalMode()"> <span id="rm_loss_text"></span></label>` : ""}
+    ${(plan.disk_jobs || []).length && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_jobs"
+      onchange="nodeRemovalMode()"> <span>Remove it anyway. ${plan.disk_jobs.length === 1
+        ? "The saved job stays, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet."
+        : "The saved jobs stay, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet."}</span></label>` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
       ${plan.ok ? `<button class="btn danger" id="rm_go" data-need="admin"
         onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}`)}`;
@@ -311,7 +318,16 @@ window.nodeRemovalMode = () => {
     box.closest("label").hidden = !parts.length;
     text.textContent = `Remove it, losing ${parts.join(", and ")}`;
   }
-  if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked);
+  // A saved disk job: the standard way waits for it; gone for good leaves it,
+  // once the person accepts that.
+  const jobs = (plan.disk_jobs || []).length, jobBox = $("#rm_jobs"), hint = $("#rm_jobs_hint");
+  if (jobBox) jobBox.closest("label").hidden = !gone;
+  if (hint) hint.textContent = gone ? (jobs === 1
+    ? "Gone for good leaves it as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet."
+    : "Gone for good leaves them as they are. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet.")
+    : "The standard way waits for them: open each job first, or choose It is gone for good.";
+  if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked)
+    || !!jobs && !(gone && jobBox?.checked);
 };
 
 window.nodeRemove = async name => {
@@ -323,7 +339,9 @@ window.nodeRemove = async name => {
   if (button) { button.disabled = true; button.innerHTML = '<span class="spin2"></span> removing'; }
   try {
     const result = await api("/api/cluster/remove-node", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node: name, accept_loss: !!$("#rm_loss")?.checked, gone }) });
+      body: JSON.stringify({ node: name, accept_loss: !!$("#rm_loss")?.checked, gone,
+        // Jobs it leaves, by id, as the review listed them: one started since still refuses.
+        accept_jobs: gone && $("#rm_jobs")?.checked ? (window.__removalPlan?.disk_jobs || []).map(j => j.id) : [] }) });
     $("#mbody").innerHTML = `<div class="note good"><b>${esc(name)} is out of the cluster.</b></div>
       <ol class="removal-steps done">${result.log.map(l => `<li>${esc(l)}</li>`).join("")}</ol>
       <div class="sec">Anything left over</div><div id="rm_left"><div class="dim small"><span class="spin2"></span> checking</div></div>

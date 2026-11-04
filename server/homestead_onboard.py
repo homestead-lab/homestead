@@ -17,12 +17,14 @@ Secret that stops a rebuilt host of the same name joining; volumes kept on the
 host itself (k3s's local-path) die with it; apps pinned to it wait for it.
 """
 import calendar
+import contextlib
 import json
 import re
 import time
 import urllib.error
 
 import homestead_kube as KUBE
+import homestead_storage_conflicts as CONFLICTS
 
 kget = ksend = None
 NS = "lab"
@@ -31,11 +33,64 @@ OPS = None
 RELEASES = "https://releases.rancher.com/harvester"
 TOKEN_FILE = "/etc/rancher/rancherd/config.yaml"
 MANAGEMENT_ROLES = {"control-plane", "etcd", "master"}
+# Saved disk jobs that pin a host's identity (its node and Longhorn uids, its
+# disk, its boot): removing the host leaves them nothing to finish on, and most
+# cannot be cancelled once started (a disk retire can be rolled back early), so
+# they would block Longhorn upgrades, shutdowns and OS rollouts for good. The
+# same set the disk guards refuse on.
+BLOCKING = "Longhorn upgrades, shutdown and OS rollouts"
+DISK_JOBS = {"disk-v2-convert": "V2 disk preparation", "disk-allocation": "storage allocation",
+             "longhorn-runtime": "Longhorn runtime maintenance", "disk-retire": "disk retire",
+             "longhorn-v2-cleanup": "V2 cleanup"}
 
 
 def bind(_kget, _ksend, namespace, operations=None):
     global kget, ksend, NS, OPS
     kget, ksend, NS, OPS = _kget, _ksend, namespace, operations
+
+
+def _disk_jobs(name):
+    """The saved disk jobs still going on host `name`, read strictly: a store
+    that cannot be read refuses the removal rather than reading as empty."""
+    if OPS is None:
+        return []
+    found = []
+    for item in OPS.stored():
+        kind, ref = item.get("kind"), item.get("ref") or {}
+        if kind not in DISK_JOBS:
+            continue
+        here = (any(row.get("node") == name for row in ref.get("nodes") or []) if kind == "longhorn-v2-cleanup"
+                else ref.get("node") == name)
+        # A disk retire is done when its job is; the others by their saved phase.
+        going = item.get("status") not in OPS.TERMINAL if kind == "disk-retire" else CONFLICTS.unresolved(item)
+        if here and going:
+            # Most cannot be cancelled once started; a disk retire can be rolled
+            # back until it takes the disk out (homestead_cancel.disk_retire_plan).
+            first = ("Open that job and roll it back, or let it finish, first"
+                     if kind == "disk-retire" and ref.get("phase") not in ("remove", "cleanup") else "Open that job first")
+            found.append({"id": item.get("id", ""), "kind": kind, "title": item.get("title", ""),
+                          "text": f"{name} has a saved {DISK_JOBS[kind]} job ({item.get('title') or item.get('id')}). "
+                                  f"{first}; removing the host would leave it with nothing to finish on."})
+    return found
+
+
+def _require_no_disk_jobs(name, gone, accept_jobs):
+    """Called under the job lock (remove_node), so a job started since the
+    review still stops the removal. A host that might come back keeps its jobs'
+    chance to resume; one gone for good may leave them, but only those the
+    request names."""
+    jobs = _disk_jobs(name)
+    if not jobs:
+        return []
+    if not gone:
+        raise ValueError(" ".join(job["text"] for job in jobs))
+    unnamed = [job for job in jobs if job["id"] not in set(accept_jobs or ())]
+    if unnamed:
+        raise ValueError(" ".join(job["text"] for job in unnamed) + " To remove it anyway, confirm that " + (
+            f"the saved job stays, and keeps blocking {BLOCKING} until it is ended; Homestead can't end it yet."
+            if len(unnamed) == 1 else
+            f"the saved jobs stay, and keep blocking {BLOCKING} until they are ended; Homestead can't end them yet."))
+    return jobs
 
 
 # ------------------------------------------------------------ the guide
@@ -470,7 +525,7 @@ def removal_plan(name):
             "lost_volumes": lost, "rebuilt_volumes": degraded,
             "lost_detail": _lost_detail(lost, workloads) if lost else [],
             "pinned_volumes": pinned_volumes, "pinned_workloads": pinned_workloads, "distribution": distribution,
-            "machine": {"name": machine, "namespace": machine_ns}, "ok": not blockers}
+            "machine": {"name": machine, "namespace": machine_ns}, "disk_jobs": _disk_jobs(name), "ok": not blockers}
 
 
 def _force_delete(path):
@@ -483,12 +538,14 @@ def _force_delete(path):
         raise
 
 
-def remove_node(name, accept_loss=False, gone=False):
+def remove_node(name, accept_loss=False, gone=False, accept_jobs=()):
     """Removes a dead node in Harvester's documented order, reporting each step.
 
     `gone` is for a host that will never come back: what it still holds - pods,
     VMs, volume attachments, replica records, a machine held by finalizers - is
     let go of too, rather than left for controllers that wait on the host.
+    A saved disk job on the host refuses the standard removal; gone for good
+    needs each such job's id in `accept_jobs`, and leaves the jobs as they are.
     """
     plan = removal_plan(name)
     if plan["blockers"]:
@@ -498,27 +555,35 @@ def remove_node(name, accept_loss=False, gone=False):
     if gone and plan["pinned_volumes"] and not accept_loss:
         raise ValueError(f"{_plural(len(plan['pinned_volumes']), 'volume')} kept on {name} would be made again empty; "
                          f"confirm that first")
-    log = []
-    lh = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/{name}"
-    if KUBE.get_optional(lh, read=kget):
-        ksend("PATCH", lh, {"spec": {"allowScheduling": False}}, "application/merge-patch+json")
-        log.append(f"Longhorn stopped scheduling to {name}")
-    pods, vmis, attachments, replicas = _stuck_on(name) if gone else ([], [], [], [])
-    if gone:
-        stopped = sum(_force_delete(f"/apis/kubevirt.io/v1/namespaces/{v['metadata']['namespace']}/"
-                                    f"virtualmachineinstances/{v['metadata']['name']}") for v in vmis)
-        if stopped:
-            log.append(f"Force-stopped the {_plural(stopped, 'VM')} it was running")
-        deleted = sum(_force_delete(f"/api/v1/namespaces/{p['metadata']['namespace']}/pods/{p['metadata']['name']}")
-                      for p in pods)
-        if deleted:
-            log.append(f"Force-deleted {_plural(deleted, 'pod')} bound to {name}")
-        released = sum(_force_delete(f"/apis/storage.k8s.io/v1/volumeattachments/{a['metadata']['name']}")
-                       for a in attachments)
-        if released:
-            log.append(f"Released {_plural(released, 'volume attachment')}")
-    ksend("DELETE", f"/api/v1/nodes/{name}")
-    log.append(f"Deleted node {name}")
+    # The job lock is held from the recheck until the node DELETE is sent. Disk
+    # jobs that check the host when they start (allocation, V2 cleanup) do so
+    # under this lock, so none can be saved in between; afterwards the host is
+    # gone. If Longhorn's record is deleted below, a disk retire saved later
+    # fails on its first step; if the record is kept (replicas still listed), a
+    # later retire can still run, which is harmless.
+    with OPS.transaction() if OPS is not None else contextlib.nullcontext():
+        left = _require_no_disk_jobs(name, gone, accept_jobs)
+        log = []
+        lh = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/{name}"
+        if KUBE.get_optional(lh, read=kget):
+            ksend("PATCH", lh, {"spec": {"allowScheduling": False}}, "application/merge-patch+json")
+            log.append(f"Longhorn stopped scheduling to {name}")
+        pods, vmis, attachments, replicas = _stuck_on(name) if gone else ([], [], [], [])
+        if gone:
+            stopped = sum(_force_delete(f"/apis/kubevirt.io/v1/namespaces/{v['metadata']['namespace']}/"
+                                        f"virtualmachineinstances/{v['metadata']['name']}") for v in vmis)
+            if stopped:
+                log.append(f"Force-stopped the {_plural(stopped, 'VM')} it was running")
+            deleted = sum(_force_delete(f"/api/v1/namespaces/{p['metadata']['namespace']}/pods/{p['metadata']['name']}")
+                          for p in pods)
+            if deleted:
+                log.append(f"Force-deleted {_plural(deleted, 'pod')} bound to {name}")
+            released = sum(_force_delete(f"/apis/storage.k8s.io/v1/volumeattachments/{a['metadata']['name']}")
+                           for a in attachments)
+            if released:
+                log.append(f"Released {_plural(released, 'volume attachment')}")
+        ksend("DELETE", f"/api/v1/nodes/{name}")
+        log.append(f"Deleted node {name}")
     secret = _password_secret(name)
     if secret:
         _force_delete(secret)
@@ -547,6 +612,8 @@ def remove_node(name, accept_loss=False, gone=False):
         if error.code != 404:
             log.append(f"Longhorn kept its record of {name} for now: it still lists replicas there. "
                        f"Clean up again once they have rebuilt elsewhere, or force it if the host is gone for good.")
+    log.extend(f"The saved {DISK_JOBS[job['kind']]} job {job['id']} ({job['title']}) stays, and keeps blocking "
+               f"{BLOCKING} until it is ended; Homestead can't end it yet" for job in left)
     if OPS:
         OPS.start("cluster-cleanup", f"Removed {name}", {"kind": "Node", "name": name},
                   "/system/cluster", {"log": log}, "; ".join(log))

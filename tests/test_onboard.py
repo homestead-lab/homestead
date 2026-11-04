@@ -1,9 +1,12 @@
 """The guide to adding a host, and removing a dead one."""
+import contextlib
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -86,8 +89,16 @@ class Cluster:
 
 
 class Ops:
+    TERMINAL = OPS.TERMINAL
+
     def __init__(self):
         self.started = []
+
+    def stored(self):
+        return []   # no saved jobs
+
+    def transaction(self):
+        return contextlib.nullcontext()
 
     def start(self, kind, title, resource, href, ref, message=""):
         self.started.append((kind, title))
@@ -285,6 +296,230 @@ class RemovalTests(Base):
             onboard.cleanup("longhorn", "node1")
         with self.assertRaisesRegex(ValueError, "not a leftover"):
             onboard.cleanup("machine", "custom-1")
+
+
+def saved_job(kind, node="node3", status="running", job_id=None, **ref):
+    """A job as the store keeps it, for the host `node` (V2 cleanup: a row for it)."""
+    ref = {"nodes": [{"node": node, "uid": "u-" + node, "phase": "pending"}]} | ref if kind == "longhorn-v2-cleanup" \
+        else {"node": node} | ref
+    return {"id": job_id or f"{kind}-{node}", "kind": kind, "title": f"A {kind} job on {node}", "status": status,
+            "started_at": "2026-11-04T10:00:00Z", "updated_at": "2026-11-04T10:00:00Z",
+            "resource": {"kind": "Node", "name": node}, "href": f"/nodes/{node}", "ref": ref}
+
+
+# The kinds that strand a removed host's disk work, each still going.
+PENDING = {
+    "V2 disk preparation": saved_job("disk-v2-convert", phase="awaiting-erase"),
+    "storage allocation": saved_job("disk-allocation", phase="queued"),
+    "Longhorn runtime maintenance": saved_job("longhorn-runtime", phase="staged"),
+    "disk retire": saved_job("disk-retire", phase="stop"),
+    "V2 cleanup": saved_job("longhorn-v2-cleanup", phase="restart-required"),
+}
+
+
+class DiskJobRemovalTests(Base):
+    """A saved disk job pins the host's identity and most cannot be cancelled
+    once started, so removing the host under it strands the job - and the job then blocks
+    Longhorn upgrades, shutdowns and OS rollouts cluster-wide."""
+
+    def setUp(self):
+        super().setUp()
+        onboard.bind(K.kget, K.ksend, "lab", OPS)   # the real job store, in the test's DATA_DIR
+        self.cluster.edit(f"{NODES}/node3", lambda n: n["status"]["conditions"][0].update(status="Unknown"))
+
+    def save(self, *jobs):
+        with OPS.transaction() as tx:
+            tx.items.extend(jobs)
+            tx.save()
+
+    def test_a_saved_disk_job_on_the_host_blocks_a_standard_removal(self):
+        self.save(PENDING["V2 disk preparation"])
+
+        report = onboard.removal_plan("node3")
+
+        self.assertEqual(["disk-v2-convert-node3"], [job["id"] for job in report["disk_jobs"]])
+        self.assertIn("node3 has a saved V2 disk preparation job", report["disk_jobs"][0]["text"])
+        with self.assertRaisesRegex(ValueError, "saved V2 disk preparation job"):
+            onboard.remove_node("node3")
+        self.assertEqual([], self.cluster.sent, "refused before anything changed: no Longhorn PATCH, no DELETE")
+
+    def test_each_disk_job_kind_counts(self):
+        for label, job in PENDING.items():
+            with self.subTest(label):
+                with OPS.transaction() as tx:
+                    tx.save([job])
+
+                self.assertEqual([job["id"]], [j["id"] for j in onboard.removal_plan("node3")["disk_jobs"]])
+                with self.assertRaisesRegex(ValueError, f"saved {label} job"):
+                    onboard.remove_node("node3")
+                self.assertEqual([], self.cluster.sent)
+
+    def test_finished_or_other_host_jobs_do_not_block(self):
+        self.save(saved_job("disk-v2-convert", phase="complete", job_id="v2-done"),
+                  saved_job("disk-allocation", phase="cancelled", job_id="alloc-cancelled"),
+                  saved_job("longhorn-runtime", status="succeeded", phase="retired", job_id="runtime-retired"),
+                  saved_job("disk-retire", status="succeeded", phase="done", job_id="retire-done"),
+                  saved_job("longhorn-v2-cleanup", status="succeeded", phase="complete", job_id="cleanup-done"),
+                  saved_job("disk-v2-convert", node="node2", phase="awaiting-erase", job_id="v2-elsewhere"),
+                  saved_job("longhorn-v2-cleanup", node="node2", phase="restart-required", job_id="cleanup-elsewhere"),
+                  saved_job("node-power", phase="drain", job_id="not-a-disk-job"))
+
+        self.assertEqual([], onboard.removal_plan("node3")["disk_jobs"])
+        onboard.remove_node("node3")
+
+        order = [(m, p.split("/")[-1]) for m, p in self.cluster.sent]
+        self.assertEqual([("PATCH", "node3"), ("DELETE", "node3"), ("DELETE", "custom-3"), ("DELETE", "node3")], order)
+
+    def test_gone_for_good_with_a_saved_disk_job_needs_acknowledgement(self):
+        self.save(PENDING["storage allocation"])
+
+        with self.assertRaisesRegex(ValueError, "saved storage allocation job"):
+            onboard.remove_node("node3", gone=True)
+        self.assertEqual([], self.cluster.sent)
+
+        result = onboard.remove_node("node3", gone=True, accept_jobs=["disk-allocation-node3"])
+
+        self.assertIn(("DELETE", f"{NODES}/node3"), self.cluster.sent)
+        self.assertIn("The saved storage allocation job disk-allocation-node3 (A disk-allocation job on node3) stays, "
+                      "and keeps blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; "
+                      "Homestead can't end it yet", result["log"])
+        self.assertEqual(["disk-allocation-node3"], [i["id"] for i in OPS.stored() if i["kind"] == "disk-allocation"],
+                         "the job stays saved; ending it is a separate step")
+
+    def test_the_refusal_says_what_leaving_the_jobs_means(self):
+        self.save(PENDING["storage allocation"])
+        with self.assertRaisesRegex(ValueError, "To remove it anyway, confirm that the saved job stays, and keeps "
+                                    "blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; "
+                                    "Homestead can't end it yet."):
+            onboard.remove_node("node3", gone=True)
+        self.save(PENDING["disk retire"])
+        with self.assertRaisesRegex(ValueError, "To remove it anyway, confirm that the saved jobs stay, and keep "
+                                    "blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; "
+                                    "Homestead can't end them yet."):
+            onboard.remove_node("node3", gone=True)
+
+    def test_an_acknowledgement_covers_only_the_jobs_it_names(self):
+        self.save(PENDING["storage allocation"], PENDING["disk retire"])
+
+        with self.assertRaisesRegex(ValueError, "saved disk retire job"):
+            onboard.remove_node("node3", gone=True, accept_jobs=["disk-allocation-node3"])
+        self.assertEqual([], self.cluster.sent)
+
+    def test_the_standard_removal_is_refused_even_with_an_acknowledgement(self):
+        self.save(PENDING["V2 disk preparation"])
+
+        with self.assertRaisesRegex(ValueError, "saved V2 disk preparation job"):
+            onboard.remove_node("node3", accept_jobs=["disk-v2-convert-node3"])
+        self.assertEqual([], self.cluster.sent)
+
+    def test_the_check_runs_under_the_job_lock(self):
+        """A job started after the review, before the removal, still stops it:
+        the store is read again while the job lock is held."""
+        job = PENDING["Longhorn runtime maintenance"]
+
+        class LockedOps:
+            TERMINAL = OPS.TERMINAL
+            held = False
+
+            @contextlib.contextmanager
+            def transaction(self):
+                LockedOps.held = True
+                try:
+                    yield None
+                finally:
+                    LockedOps.held = False
+
+            def stored(self):
+                return [job] if LockedOps.held else []   # the job starts once the review has read the store
+
+            def start(self, *args, **kwargs):
+                raise AssertionError("nothing is recorded for a refused removal")
+
+        onboard.bind(K.kget, K.ksend, "lab", LockedOps())
+
+        with self.assertRaisesRegex(ValueError, "saved Longhorn runtime maintenance job"):
+            onboard.remove_node("node3")
+        self.assertEqual([], self.cluster.sent)
+
+    def starter(self):
+        """Another request starting a disk job the way allocation and V2 cleanup
+        do (homestead_disk_allocation.start, homestead_lhv2_cleanup.start): it
+        takes the job lock, then inspects the host before saving anything."""
+        saw = []
+
+        def start():
+            with OPS.transaction():
+                saw.append(K.get_optional(f"{NODES}/node3", read=K.kget) is not None)
+        return threading.Thread(target=start, daemon=True), saw
+
+    def remove_with_a_start_at(self, write, wait=0.2):
+        """Removes node3; when the removal sends `write`, another request starts
+        a disk job. Each write after it records whether that start still waits
+        after `wait` seconds (long enough to finish when nothing holds it)."""
+        thread, saw = self.starter()
+        waiting = []
+
+        def send(method, path, *args):
+            if (method, path) == write:
+                thread.start()
+            if thread.ident:
+                thread.join(wait)
+                waiting.append(((method, path.split("/")[-1]), thread.is_alive()))
+            return K.ksend(method, path, *args)
+
+        onboard.bind(K.kget, send, "lab", OPS)
+        onboard.remove_node("node3")
+        thread.join(10)
+        return waiting, saw
+
+    def test_a_disk_job_start_during_the_removal_waits_and_finds_the_host_gone(self):
+        """From the recheck until the node DELETE is sent, a start that checks
+        the host under the job lock waits; once it gets the lock, the host is
+        gone, so it cannot save a job for it."""
+        waiting, saw = self.remove_with_a_start_at(("PATCH", f"{LONGHORN}/nodes/node3"))
+
+        self.assertEqual([(("PATCH", "node3"), True), (("DELETE", "node3"), True)], waiting[:2],
+                         "the Longhorn PATCH and the node DELETE are both sent while the start waits")
+        self.assertEqual([False], saw, "the start sees no node3 once it has the lock")
+
+    def test_a_job_start_after_the_node_delete_is_not_held(self):
+        """The lock is let go once the node DELETE is sent: the machine and
+        Longhorn record deletes do not hold up other job starts."""
+        waiting, saw = self.remove_with_a_start_at(("DELETE", f"{MACHINES}/custom-3"), wait=5)
+
+        self.assertEqual([(("DELETE", "custom-3"), False), (("DELETE", "node3"), False)], waiting)
+        self.assertEqual([False], saw)
+
+    def test_a_disk_retire_can_be_rolled_back_says_so(self):
+        early = saved_job("disk-retire", phase="replicas", job_id="early")
+        late = saved_job("disk-retire", node="node3", phase="remove", job_id="late")
+        for job, rollback in ((early, True), (late, False)):
+            with self.subTest(job["ref"]["phase"]):
+                with OPS.transaction() as tx:
+                    tx.save([job])
+                text = onboard.removal_plan("node3")["disk_jobs"][0]["text"]
+                self.assertEqual(rollback, "roll it back" in text, text)
+
+
+class RemoveRouteTests(unittest.TestCase):
+    def removed_with(self, body):
+        import homestead_cluster_server as CLUSTER
+        calls = []
+        with mock.patch.object(CLUSTER.ONBOARD, "remove_node", lambda *a, **k: calls.append((a, k)) or {"ok": True}):
+            CLUSTER._remove_node(SimpleNamespace(body=body))
+        return calls
+
+    def test_the_route_passes_the_acknowledged_job_ids_on(self):
+        (args, kwargs), = self.removed_with({"node": "node3", "gone": True, "accept_jobs": ["j1", "j2"]})
+
+        self.assertEqual(("node3", False, True), args)
+        self.assertEqual(["j1", "j2"], kwargs["accept_jobs"])
+
+    def test_an_acknowledgement_that_is_not_a_list_of_ids_names_no_job(self):
+        for sent in ("j1", {"j1": True}, [1, None], True):
+            with self.subTest(sent=sent):
+                (_, kwargs), = self.removed_with({"node": "node3", "gone": True, "accept_jobs": sent})
+                self.assertEqual([], kwargs["accept_jobs"])
 
 
 if __name__ == "__main__":

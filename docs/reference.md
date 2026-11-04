@@ -622,7 +622,22 @@ force-stopped so they start on other hosts, its volume attachments are
 released so those volumes can attach elsewhere, the replica records Longhorn
 keeps for it are deleted so it rebuilds them from the remaining copies, and a
 Cluster API machine whose deletion hangs on the missing host has its finalizers
-cleared. The Cluster page also lists leftovers - machines with no node or stuck
+cleared.
+
+A saved disk job on the host - a V2 disk preparation, a storage allocation,
+Longhorn runtime maintenance, a disk retire still running, or a V2 cleanup with
+a row for it - is named in the check. Such a job holds the host's disks, and
+most of these can't be cancelled once started (a disk retire can be rolled
+back early), so the standard removal is refused while one is saved: a host
+that may come back keeps its job's chance to resume. Gone for good removes it
+only once the person ticks that the job stays, and will keep blocking Longhorn
+upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it
+yet. The job is not changed, and the removal's log says so. The check is made
+again under the job lock when the removal starts, and the lock is held until
+the node is deleted, so a job that checks the host when it starts cannot be
+saved in between.
+
+The Cluster page also lists leftovers - machines with no node or stuck
 deleting, Longhorn nodes with no host - to delete, or force, one at a time.
 
 Certificate monitoring is read-only. The supplied ClusterRole may list
