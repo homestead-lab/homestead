@@ -515,34 +515,10 @@ def _pvc_rows(namespace):
     return sorted(rows, key=lambda row: row["name"])
 
 
-# Harvester keeps these for VM images and VM state; they are not general
-# purpose storage and Harvester's own UI marks them internal.
-INTERNAL_STORAGE_CLASSES = {"longhorn-static", "vmstate-persistence"}
-
-
-def _internal_class(meta):
-    annotations = meta.get("annotations", {}) or {}
-    return (meta.get("name", "") in INTERNAL_STORAGE_CLASSES or
-            str(annotations.get("harvesterhci.io/is-reserved-storageclass", "")).lower() == "true")
-
-
-def _class_made_for(name, parameters):
-    """A class made for one thing, not for choosing: a Harvester image's
-    (its disks start as that image - named longhorn-image-* or lh-<uuid>,
-    with the image as its backing image) or a restore's (Homestead's
-    homestead-restore-*, reading one backup). Neither belongs in a picker."""
-    if name.startswith("homestead-restore-") or parameters.get("fromBackup"):
-        return "restore"
-    if parameters.get("backingImage") or name.startswith("longhorn-image-"):
-        return "image"
-    if name == NAMES.object_name("isos"):
-        # Homestead's ISO copies: one replica, not a class to put data on.
-        return "iso"
-    return ""
-
-
-def class_selectable(row):
-    return not row.get("internal") and not row.get("made_for")
+# Which classes are Harvester's own, made for one thing, or usable: homestead_storage_classes.
+INTERNAL_STORAGE_CLASSES = STORAGE_CLASSES.INTERNAL_STORAGE_CLASSES
+_internal_class, _class_made_for = STORAGE_CLASSES._internal_class, STORAGE_CLASSES._class_made_for
+class_selectable = STORAGE_CLASSES.class_selectable
 
 
 # Provisioners that can serve one volume to pods on several nodes at once.
