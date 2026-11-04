@@ -44,15 +44,9 @@ homestead_autoupdate.updates	test_autoupdate	fake
 homestead_autoupdate.updates	test_autoupdate	other
 homestead_autoupdate.uptime_report	test_autoupdate	fake
 homestead_baseline.DATA_DIR	test_self_address	fake
-homestead_baseline.addons	test_macvtap	other
 homestead_baseline.addons	test_self_address	other
-homestead_baseline.kget	test_macvtap	other
 homestead_baseline.kget	test_self_address	fake
-homestead_baseline.macvtap	test_macvtap	other
-homestead_baseline.platform	test_macvtap	other
 homestead_baseline.platform	test_self_address	fake
-homestead_baseline.probe	test_macvtap	other
-homestead_baseline.probe_version	test_macvtap	other
 homestead_capacity_review._key	test_container_rebalance	fake
 homestead_capacity_review._key	test_disk_region	fake
 homestead_capacity_review._key	test_metrics_readers	fake
@@ -109,10 +103,6 @@ homestead_host_console.DATA_DIR	test_host_console_settings	fake
 homestead_host_console.VERSION	test_host_console_settings	other
 homestead_host_console.hostrun	test_host_console_settings	fake
 homestead_host_console.kget	test_host_console_settings	fake
-homestead_host_limits.DATA_DIR	test_macvtap	fake
-homestead_host_limits.hostrun	test_macvtap	other
-homestead_host_limits.kget	test_macvtap	fake
-homestead_host_limits.platform	test_macvtap	fake
 homestead_host_os.DATA_DIR	test_host_os	fake
 homestead_host_os.hostrun	test_host_os	fake
 homestead_host_os.kget	test_host_os	fake

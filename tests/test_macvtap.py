@@ -14,6 +14,7 @@ import homestead_macvtap as MACVTAP
 import homestead_network_vms as VMNET
 import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
+from rebind import keep_bound
 import test_vm_network_create as network_fixture
 from fakes.kube import Kube
 
@@ -210,6 +211,10 @@ class ChartTests(unittest.TestCase):
 
 
 class HostLimitTests(unittest.TestCase):
+    def setUp(self):
+        import homestead_host_limits as LIMITS
+        keep_bound(self, LIMITS)
+
     def test_limits_are_raised_once_per_node_and_never_lowered(self):
         import homestead_host_limits as LIMITS
         tmp = tempfile.TemporaryDirectory()
@@ -269,8 +274,8 @@ class BaselineTests(unittest.TestCase):
 
         def get(path):
             return {"data": {"multus": "yes", "kube-vip": "yes"}}
+        keep_bound(self, BASELINE)
         BASELINE.bind(get, Addons, lambda force=False: self.platform, "lab", self.tmp.name, Macvtap)
-        self.addCleanup(BASELINE.bind, None, None, None)
 
     def test_macvtap_is_needed_only_where_vms_run_and_installed_once_they_can(self):
         self.assertEqual(["kube-vip", "multus"], [row["id"] for row in BASELINE.report()["parts"]])
