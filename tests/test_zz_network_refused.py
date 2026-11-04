@@ -15,6 +15,7 @@ no cluster, or a patch of the module's own client.
 """
 import socket
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -107,6 +108,94 @@ class NetworkRefused(unittest.TestCase):
             with socket.create_connection(server.getsockname(), timeout=2):
                 pass
         self.assertTrue(socket.getaddrinfo("localhost", 80))
+
+
+def _inner_test(body):
+    """A test of its own, to run inside one of these: what runs while another test is current."""
+    class Other(unittest.TestCase):
+        def test_other(self):
+            body()
+    return Other("test_other")
+
+
+class BlameTests(unittest.TestCase):
+    """A refused call is blamed on the test that started its thread, whichever test runs
+    when the call lands: a loop a test leaves running is pinned on that test's file."""
+
+    def lookup_later(self, host, go, done, caught):
+        def call():
+            go.wait(5)
+            try:
+                socket.getaddrinfo(host, 443)
+            except socket.gaierror as error:
+                caught.append(str(error))
+            done.set()
+        return call
+
+    def forget(self, *names):
+        for name in names:
+            NETWORK.seen.pop(name, None)
+
+    def test_a_thread_is_blamed_on_the_test_that_started_it_even_through_another_thread(self):
+        me = unittest.TestCase.id(self)
+        go, done, caught = threading.Event(), threading.Event(), []
+        call = self.lookup_later("starter.example.com", go, done, caught)
+
+        def loop():                                  # a loop the test starts, which starts its own worker
+            worker = threading.Thread(target=call, daemon=True)
+            worker.start()
+            worker.join(5)
+        threading.Thread(target=loop, daemon=True).start()
+        other = _inner_test(lambda: (go.set(), done.wait(5)))
+        other.run(unittest.TestResult())             # the call lands while this other test runs
+        try:
+            self.assertTrue(done.is_set())
+            self.assertEqual(["lookup of starter.example.com"], [what for what, _ in NETWORK.seen.get(me, [])])
+            self.assertNotIn(unittest.TestCase.id(other), NETWORK.seen)
+            self.assertIn(me, caught[0])
+            self.assertEqual(me, NETWORK._current["test"], "the outer test is current again after the inner one")
+        finally:
+            self.forget(me, unittest.TestCase.id(other), "(no test running)")
+
+    def test_a_thread_started_in_setupclass_is_blamed_on_its_file(self):
+        go, done, caught = threading.Event(), threading.Event(), []
+        call = self.lookup_later("fixture.example.com", go, done, caught)
+
+        class Fixture(unittest.TestCase):
+            @classmethod
+            def setUpClass(cls):
+                threading.Thread(target=call, daemon=True).start()
+
+            def test_it(self):
+                go.set()
+                done.wait(5)
+        inner = Fixture("test_it")
+        before = set(NETWORK.seen)
+        unittest.TestSuite([inner]).run(unittest.TestResult())
+        new = set(NETWORK.seen) - before
+        try:
+            self.assertTrue(done.is_set())
+            self.assertEqual({__name__}, new)
+            self.assertIn(f"during {__name__}", caught[0])
+        finally:
+            self.forget(*new)
+
+    def test_a_call_after_its_test_ended_is_late_and_names_the_starter(self):
+        go, done, caught = threading.Event(), threading.Event(), []
+        call = self.lookup_later("late.example.com", go, done, caught)
+        other = _inner_test(lambda: threading.Thread(target=call, daemon=True).start())
+        other.run(unittest.TestResult())             # starts the thread and ends without stopping it
+        starter = unittest.TestCase.id(other)
+        go.set()
+        done.wait(5)
+        try:
+            calls = NETWORK.seen.get(starter, [])
+            self.assertEqual(1, len(calls))
+            self.assertIn("late", calls[0][0])
+            self.assertIn("lookup of late.example.com", calls[0][0])
+            self.assertIn(f"late: {starter} had ended", caught[0])
+        finally:
+            self.forget(starter, unittest.TestCase.id(self), "(no test running)")
 
 
 if __name__ == "__main__":

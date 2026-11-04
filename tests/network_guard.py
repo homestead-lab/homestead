@@ -8,6 +8,12 @@ every lookup (getaddrinfo, gethostbyname, gethostbyaddr, getfqdn) and connect to
 anything but this machine fail at once, as a failed
 lookup does, and records which test made it and from where.
 
+Who is blamed: the test that started the calling thread, inherited down the
+thread tree (a loop's worker carries the loop's test), not whichever test runs
+when the call lands. A thread started in setUpClass or setUpModule is blamed on
+its file. A call made after its test ended is marked late, naming that test.
+tests/fakes/kube.py no_cluster() names its turned-away reads the same way (blame()).
+
 What stays allowed: loopback (127.0.0.0/8, ::1, "localhost"), the unspecified
 addresses (0.0.0.0, ::), Unix sockets, and any test that patches socket itself.
 The shared Kubernetes fake (tests/fakes/kube.py) replaces homestead_kube.transport,
@@ -41,7 +47,8 @@ ENFORCE = False
 _installed = {}
 _own = []          # this machine's own name, once read
 _lock = threading.Lock()
-_current = {"test": None}
+_current = {"test": None}   # the test running now; its module while setUpClass/setUpModule runs
+_ended = set()              # tests that have finished: a call from their threads after this is late
 seen = {}          # test id -> [(what, where), ...]: every refused lookup or connect
 
 
@@ -96,12 +103,32 @@ def _where():
     return "outside server/ and tests/"
 
 
+def origin():
+    """Who this thread speaks for: the test (or test module) that started it, or,
+    in a thread not started under the guard (the main one), the test running now."""
+    stamp = getattr(threading.current_thread(), "_network_origin", None)
+    return stamp[0] if stamp is not None else _current["test"]
+
+
+def blame():
+    """(name to blame, late): the starter of this thread, and whether it had already
+    ended when the call was made. None when no test or module started it."""
+    name = origin()
+    return name, name in _ended
+
+
 def _refuse(what):
     where = _where()
-    test = _current["test"] or "(no test running)"
+    name, late = blame()
+    test = name or "(no test running)"
+    if late:
+        what = f"late (thread {threading.current_thread().name} outlived its test): {what}"
+        when = f"late: {test} had ended; stop or join its thread in a cleanup, after its patches"
+    else:
+        when = f"during {test}"
     with _lock:
         seen.setdefault(test, []).append((what, where))
-    return f"refused in tests: {what} from {where} during {test} (tests/network_guard.py)"
+    return f"refused in tests: {what} from {where} {when} (tests/network_guard.py)"
 
 
 def _getaddrinfo(host, *args, **kwargs):
@@ -154,11 +181,32 @@ def _connect_ex(self, address):
 
 
 def _run(self, result=None):
-    _current["test"] = unittest.TestCase.id(self)
+    test, before = unittest.TestCase.id(self), _current["test"]
+    _current["test"] = test
     try:
         return _installed["run"](self, result)
     finally:
-        _current["test"] = None
+        _ended.add(test)
+        _current["test"] = before       # a test run inside another hands back to it
+
+
+def _fixture(name):
+    """setUpClass/setUpModule run outside any test: what they start is blamed on their file."""
+    def handle(self, test, result):
+        before = _current["test"]
+        _current["test"] = type(test).__module__
+        try:
+            return _installed[name](self, test, result)
+        finally:
+            _current["test"] = before
+    return handle
+
+
+def _start(self):
+    # Kept as a 1-tuple: a thread started outside any test is stamped None, not
+    # read as "the test running now" when its call lands.
+    self._network_origin = (origin(),)
+    return _installed["start"](self)
 
 
 def install():
@@ -167,7 +215,10 @@ def install():
         return
     _installed.update(getaddrinfo=socket.getaddrinfo, gethostbyname=socket.gethostbyname,
                       gethostbyaddr=socket.gethostbyaddr, getfqdn=socket.getfqdn,
-                      connect=socket.socket.connect, connect_ex=socket.socket.connect_ex, run=unittest.TestCase.run)
+                      connect=socket.socket.connect, connect_ex=socket.socket.connect_ex, run=unittest.TestCase.run,
+                      start=threading.Thread.start,
+                      _handleClassSetUp=unittest.suite.TestSuite._handleClassSetUp,
+                      _handleModuleFixture=unittest.suite.TestSuite._handleModuleFixture)
     socket.getaddrinfo = _getaddrinfo
     socket.gethostbyname = _gethostbyname
     socket.gethostbyaddr = _gethostbyaddr
@@ -175,6 +226,9 @@ def install():
     socket.socket.connect = _connect
     socket.socket.connect_ex = _connect_ex
     unittest.TestCase.run = _run
+    threading.Thread.start = _start
+    for name in ("_handleClassSetUp", "_handleModuleFixture"):
+        setattr(unittest.suite.TestSuite, name, _fixture(name))
 
 
 def offenders(allowed=None):

@@ -60,9 +60,10 @@ _turned_away = []   # (test, method, path) of every request no_cluster() refused
 
 
 def _running_test():
-    """The test running now, as tests/network_guard.py names it (None outside a test or without it)."""
+    """The test to name, as tests/network_guard.py blames a refused call: the one that
+    started this thread (None outside a test, or without the guard)."""
     guard = sys.modules.get("network_guard")
-    return guard._current["test"] if guard is not None else None
+    return guard.origin() if guard is not None else None
 
 
 def no_cluster():

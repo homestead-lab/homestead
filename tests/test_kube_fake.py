@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
@@ -76,6 +77,27 @@ class NoClusterTests(unittest.TestCase):
                     call()
         self.assertEqual([(self.id(), "GET", PODS)], no_cluster_reads()[before:before + 1])
         self.assertEqual(self.id(), no_cluster_reads()[-1][0])
+
+    def test_a_read_from_a_thread_is_recorded_with_the_test_that_started_it(self):
+        # The same lookup as tests/network_guard.py: a loop a test leaves running is
+        # pinned on that test, not on whichever test runs when its read lands.
+        go, done, before = threading.Event(), threading.Event(), len(no_cluster_reads())
+
+        def read():
+            go.wait(5)
+            with self.assertRaises(OSError):
+                K.kget(PODS)
+            done.set()
+        with no_cluster():
+            threading.Thread(target=read, daemon=True).start()
+
+            class Other(unittest.TestCase):
+                def test_other(self):
+                    go.set()
+                    done.wait(5)
+            Other("test_other").run(unittest.TestResult())
+        self.assertTrue(done.is_set())
+        self.assertEqual([(self.id(), "GET", PODS)], no_cluster_reads()[before:])
 
     def test_the_summary_counts_reads_and_tests_and_names_the_top_paths(self):
         reads = [("t.A.a", "GET", "/api/v1/nodes"), ("t.A.b", "GET", "/api/v1/nodes"),
