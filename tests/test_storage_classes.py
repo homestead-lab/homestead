@@ -182,6 +182,9 @@ class LonghornV2Tests(unittest.TestCase):
 
         server.KUBE_HELPERS.kget = get
         server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
+        # No node probe answers here (it would connect to a pod address): a test that
+        # wants probe readings patches node_temps itself.
+        self.enterContext(mock.patch.object(STORAGE_CLASSES, "node_temps", return_value={}))
 
     def test_quantities_read_in_mebibytes(self):
         self.assertEqual([2048, 1024, 0, 0], [STORAGE_CLASSES._quantity_mb(v) for v in ("2Gi", "1024Mi", "0", "bogus")])

@@ -25,11 +25,11 @@ import network_guard as NETWORK
 
 NETWORK.install()
 
-CEILING = 7
+CEILING = 0
 # The list's files, digested: a swap (one off, another on) keeps the count but not this.
 # "A listed file no longer offends" is not checked: which tests reach the network depends
 # on what ran before them, so a file can look clean in one order and offend in another.
-DIGEST = "360c17ef5880507f"
+DIGEST = "e3b0c44298fc1c14"
 
 
 class NetworkRefused(unittest.TestCase):

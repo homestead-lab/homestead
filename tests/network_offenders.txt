@@ -6,10 +6,5 @@
 # Plus the files only CI's 4-way split showed (3 Nov): which tests reach the network depends on order.
 # 3 Nov: 70 files that reached only the Kubernetes API now say no_cluster() (tests/fakes/kube.py) and are off.
 # What is left reaches something else: an HTTP client (urllib), a TLS handshake or a node's exporter.
-test_alerts_unread_guard	homestead_expiry.py (_peer_cert), homestead_update_registry.py (_open), homestead_upgrades.py (_github)
-test_cycle_readers	homestead_update_registry.py (_open)
-test_longhorn_unread	homestead_update_registry.py (_open), homestead_upgrades.py (_github)	(seen in CI's 4-way split on 3 Nov, not in one process)
-test_node_probes	homestead_node_probes.py (_read)
-test_objectstore	homestead_objectstore.py (_s3)
-test_unread_protection	homestead_node_probes.py (_read)	(seen in CI's 4-way split on 3 Nov, not in one process)
-test_vmstore	homestead_vmstore.py (_get_text)
+# 4 Nov: the last 7, and 5 more that offended only in some orders, are fixed (each fakes its own
+# outward client; test_page_snapshot.Cluster covers the overview's). The list is empty: keep it so.

@@ -40,7 +40,7 @@ class Cluster:
         STORE._fedora.update(at=0.0, value={})
         STORE.bind(K.kget, K.ksend, "lab", lambda force=False: {"harvester": self.harvester, "arch": ["amd64"]},
                    self.download, lambda: list(self.images), lambda: self.disks, self.delete,
-                   lambda url: FEDORA, lambda url: dict(self.builds[url]))
+                   lambda url: FEDORA, lambda url: dict(self.builds[url]), lambda url: ALPINE_INDEX)
 
     def download(self, url, display, reuse):
         name = f"image-{len(self.images) + 1}"
@@ -60,7 +60,6 @@ ALPINE_INDEX = ('<a href="alpine-3.24.1-x86_64-cloudinit-r0.qcow2">x</a><a href=
 class StoreTests(unittest.TestCase):
     def test_variants_minimal_among_them_and_alpine_resolved(self):
         c = Cluster(self)
-        STORE.fetch_text = lambda url: ALPINE_INDEX
         STORE._alpine.update(at=0.0, value={})
         ids = [e["id"] for e in STORE.CATALOG]
         self.assertIn("ubuntu-24.04-minimal", ids)

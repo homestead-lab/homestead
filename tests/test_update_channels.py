@@ -51,7 +51,8 @@ class ChannelTests(unittest.TestCase):
         dev = {"channel": "dev", "workloads": []}
         with mock.patch.object(updates, "CHANNEL", return_value="dev"), \
              mock.patch.object(CHECKS, "_LATEST", {"report": prod, "number": 1, "finished": time.time()}), \
-             mock.patch.object(CHECKS, "scan", return_value=dev) as scan:
+             mock.patch.object(CHECKS, "scan", return_value=dev) as scan, \
+             mock.patch.object(CHECKS, "reconcile_soon"):     # its thread would outlive the patches
             self.assertEqual(dev, CHECKS.report())
             scan.assert_called_once_with(False)
 

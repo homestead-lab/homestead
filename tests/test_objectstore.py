@@ -59,6 +59,9 @@ class ObjectStoreTests(unittest.TestCase):
         reads = mock.patch.object(STATE, "kget", side_effect=lambda path, **kw: self._get(path))
         reads.start()
         self.addCleanup(reads.stop)
+        # No object store answers in the tests: its S3 client fails at once, as an
+        # unreachable store does (a test that wants answers patches _s3 itself).
+        self.enterContext(mock.patch.object(store, "_s3", side_effect=urllib.error.URLError("no object store in the tests")))
 
     def _get(self, path):
         key = path.split("?")[0]
