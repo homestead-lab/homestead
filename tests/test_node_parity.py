@@ -50,6 +50,15 @@ def setting(value):
             "metadata": {"namespace": "longhorn-system", "name": PARITY.LONGHORN_SETTING.rsplit("/", 1)[1]}, "value": value}
 
 
+def setting_values(cluster):
+    """The values parity wrote to Longhorn's default-replica-count, each
+    sent with the resourceVersion it was worked out from."""
+    sent = [body for _, path, body in cluster.sent if path == PARITY.LONGHORN_SETTING]
+    for body in sent:
+        assert (body.get("metadata") or {}).get("resourceVersion"), f"no precondition: {body}"
+    return [body["value"] for body in sent]
+
+
 class Cluster:
     """The cluster on the shared fake API (tests/fakes/kube.py), started when a
     test binds it, so what a test changes first is what the fake starts with.
@@ -382,7 +391,10 @@ class NodeParityTests(unittest.TestCase):
         PARITY.tick()
         sent = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")
         self.assertIn("defaultReplicaCount: 3", sent["spec"]["valuesContent"])
-        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": "3"}), cluster.sent)
+        self.assertIn("3", setting_values(cluster))
+        for method, path, body in cluster.sent:
+            if path in (PARITY.LONGHORN_SETTING, f"{HELM}/longhorn"):
+                self.assertTrue(body["metadata"]["resourceVersion"], f"{path} written with no precondition")
 
     def test_copies_rise_again_as_more_nodes_join_and_never_fall(self):
         cluster = Cluster([node("a"), node("b")], [chart("longhorn", INSTALLER_LONGHORN), setting("1")])
@@ -405,7 +417,7 @@ class NodeParityTests(unittest.TestCase):
         self.bind(cluster)
         PARITY._seen_ready = None
         self.assertIn("keep 2 copies", PARITY.copies_tick())
-        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": '{"v1":"2","v2":"2"}'}), cluster.sent)
+        self.assertIn('{"v1":"2","v2":"2"}', setting_values(cluster))
         cluster.add_node("c")
         self.assertIn("keep 3 copies", PARITY.copies_tick())
         self.assertEqual({"v1": "3", "v2": "3"}, json.loads(cluster.object(PARITY.LONGHORN_SETTING)["value"]),
@@ -416,7 +428,7 @@ class NodeParityTests(unittest.TestCase):
         self.bind(cluster)
         PARITY._seen_ready = None
         PARITY.copies_tick()
-        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": '{"v1":"2","v2":"3"}'}), cluster.sent)
+        self.assertIn('{"v1":"2","v2":"3"}', setting_values(cluster))
 
     def setting_sent(self, value, state=None):
         """The PATCHes to the setting when two hosts store and it holds value."""
@@ -426,7 +438,7 @@ class NodeParityTests(unittest.TestCase):
             Path(PARITY._path()).write_text(json.dumps(state), encoding="utf-8")
         PARITY._seen_ready = None
         self.assertIn("keep 2 copies", PARITY.copies_tick(), "the chart still rises")
-        return [body for _, path, body in cluster.sent if path == PARITY.LONGHORN_SETTING]
+        return [{"value": value} for value in setting_values(cluster)]
 
     def test_a_setting_homestead_cannot_read_is_left_alone(self):
         for value in ('{"v1":"1"', '["1"]', '{}', "", '"1"'):
@@ -544,7 +556,7 @@ class NodeParityTests(unittest.TestCase):
         self.bind(cluster)
         PARITY._seen_ready = None
         self.assertIn("keep 2 copies", PARITY.copies_tick())
-        self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": "2"}), cluster.sent)
+        self.assertIn("2", setting_values(cluster))
 
     def test_a_host_longhorn_may_not_schedule_on_does_not_count(self):
         for unschedulable in (lh_node("c", schedulable=False), lh_node("c", disks=({"allowScheduling": False},)), lh_node("c", disks=()),
@@ -591,6 +603,85 @@ class NodeParityTests(unittest.TestCase):
         cluster = Cluster([node("a")])
         self.bind(cluster, platform=lambda force=False: {"harvester": True, "distribution": "rke2"}, hostrun=False)
         self.assertEqual([], PARITY.tick())
+
+    # Another writer between parity's read and its write (stale-writes) ------
+
+    SOMEONE_ELSES_KUBE_VIP = KUBE_VIP + "nodeSelector:\n  site: lab\n"
+
+    def race(self, cluster, path, change):
+        """The Helm page, the add-ons repair or an admin saves path once, just
+        before parity's first write to it: parity's read is then stale."""
+        real, left = PARITY.ksend, [1]
+
+        def ksend(method, target, body=None, **options):
+            if method == "PATCH" and target == path and left[0]:
+                left[0] -= 1
+                now = cluster.object(path)
+                change(now)
+                before = len(cluster.kube.writes)
+                cluster.kube("PUT", path, now)
+                del cluster.kube.writes[before:]
+            return real(method, target, body, **options)
+        self.enterContext(mock.patch.object(PARITY, "ksend", ksend))
+
+    def test_kube_vip_values_saved_meanwhile_are_not_reverted_by_the_unpin(self):
+        cluster = Cluster([node("a")], [chart("kube-vip", KUBE_VIP)],
+                          probes={"a": {"default_interface": "enp1s0"}, "b": {"default_interface": "eno1"}})
+        self.bind(cluster, longhorn=False)
+        self.race(cluster, f"{HELM}/kube-vip", lambda c: c["spec"].update(valuesContent=self.SOMEONE_ELSES_KUBE_VIP))
+        changes = PARITY.tick()
+        self.assertEqual(self.SOMEONE_ELSES_KUBE_VIP, cluster.object(f"{HELM}/kube-vip")["spec"]["valuesContent"],
+                         "the change saved meanwhile was reverted")
+        self.assertFalse(any("kube-vip" in note for _, note in changes), "nothing was changed, so nothing is said")
+
+    def test_kube_vip_values_saved_meanwhile_are_not_reverted_by_the_settings(self):
+        cluster = self.kube_vip_cluster(self.OLD_KUBE_VIP)
+        self.bind(cluster, longhorn=False)
+        self.race(cluster, f"{HELM}/kube-vip", lambda c: c["spec"].update(valuesContent=self.SOMEONE_ELSES_KUBE_VIP))
+        changes = PARITY.tick()
+        self.assertEqual(self.SOMEONE_ELSES_KUBE_VIP, cluster.object(f"{HELM}/kube-vip")["spec"]["valuesContent"])
+        self.assertFalse(any("kube-vip" in note for _, note in changes), changes)
+
+    def test_longhorn_values_saved_meanwhile_are_not_reverted(self):
+        theirs = INSTALLER_LONGHORN + "  backupTarget: s3://backups@example/\n"
+        cluster = Cluster([node("a"), node("b")], [chart("longhorn", INSTALLER_LONGHORN), setting("1")])
+        self.bind(cluster)
+        self.race(cluster, f"{HELM}/longhorn", lambda c: c["spec"].update(valuesContent=theirs))
+        PARITY._seen_ready = None
+        self.assertIsNone(PARITY.copies_tick(), "nothing is said for a raise that waits")
+        self.assertEqual(theirs, cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"])
+        PARITY.tick()
+        self.assertEqual(theirs, cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"],
+                         "values someone else wrote are left alone next time too")
+
+    def test_a_setting_raised_before_a_chart_conflict_still_rises_when_another_host_joins(self):
+        # The setting is raised to 2, the chart answers 409, and a third host
+        # joins before the next round: the 2 is Homestead's, so it rises to 3.
+        cluster = Cluster([node("a"), node("b")], [chart("longhorn", INSTALLER_LONGHORN), setting("1")])
+        self.bind(cluster)
+        self.race(cluster, f"{HELM}/longhorn", lambda c: c["metadata"].setdefault("labels", {}).update(touched="yes"))
+        PARITY._seen_ready = None
+        self.assertIsNone(PARITY.copies_tick())
+        self.assertEqual("2", cluster.object(PARITY.LONGHORN_SETTING)["value"])
+        self.assertIn("defaultReplicaCount: 1", cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"])
+        cluster.add_node("c")
+        self.assertIn("keep 3 copies", PARITY.copies_tick())
+        self.assertEqual("3", cluster.object(PARITY.LONGHORN_SETTING)["value"], "Homestead's own 2 was taken for someone's choice")
+        self.assertIn("defaultReplicaCount: 3", cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"])
+
+    def test_a_replica_count_chosen_meanwhile_is_kept_and_the_raise_waits_for_the_next_round(self):
+        cluster = Cluster([node("a"), node("b")], [chart("longhorn", INSTALLER_LONGHORN), setting("1")])
+        self.bind(cluster)
+        self.race(cluster, PARITY.LONGHORN_SETTING, lambda s: s.update(value="3"))
+        PARITY._seen_ready = None
+        self.assertIsNone(PARITY.copies_tick())
+        self.assertEqual("3", cluster.object(PARITY.LONGHORN_SETTING)["value"], "the count chosen meanwhile was reverted")
+        self.assertIn("defaultReplicaCount: 1", cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"],
+                      "nothing half-done: the chart waits with the setting")
+        PARITY.tick()
+        self.assertEqual("3", cluster.object(PARITY.LONGHORN_SETTING)["value"], "someone's count is never lowered")
+        self.assertIn("defaultReplicaCount: 2", cluster.object(f"{HELM}/longhorn")["spec"]["valuesContent"],
+                      "the next round raises the chart")
 
 
 if __name__ == "__main__":
