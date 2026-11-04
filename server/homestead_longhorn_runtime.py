@@ -98,13 +98,13 @@ def _inventory(node, disk, *, ref=None):
 
 def _pending(node):
     return next((item for item in ops.stored() if item.get('kind') == KIND and item.get('ref', {}).get('node') == node
-                 and item['ref'].get('phase') != 'retired'), None)
+                 and not CONFLICTS.settled(item)), None)
 
 
 def _conflicts(node):
     for item in ops.stored():
         if item.get('kind') == KIND:
-            if item.get('ref',{}).get('phase') != 'retired':raise ValueError('Finish the existing runtime maintenance job before starting on another host')
+            if not CONFLICTS.settled(item):raise ValueError('Finish the existing runtime maintenance job before starting on another host')
             continue
         ref = item.get('ref') or {}
         if (item.get('status') not in ops.TERMINAL or CONFLICTS.unresolved(item)) and (ref.get('node') == node or item.get('kind') in (
@@ -188,6 +188,7 @@ def _disabled(ref, retained=False):
 
 
 def _recheck(ref):
+    if ref.get('phase') == CONFLICTS.HOST_GONE: raise ValueError(CONFLICTS.ENDED)
     inv = _inventory(ref['node'], ref['disk'], ref=ref)
     if inv['spec'] not in (ref['original_disk'], _disabled(ref), _disabled(ref, True)):
         raise ValueError('Disk configuration changed outside this maintenance job')

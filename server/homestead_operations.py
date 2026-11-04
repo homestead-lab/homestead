@@ -433,6 +433,9 @@ def _public(item):
     fields = VIEWS.get(item.get("kind"))
     if fields:
         fields(item, out)
+    if item.get("kind") in STORAGE_CONFLICTS.HOST_GONE_KINDS:
+        # Its host may have been removed: a person can review ending it (homestead_host_gone).
+        out["host_gone_endable"] = STORAGE_CONFLICTS.unresolved(item)
     return out
 
 

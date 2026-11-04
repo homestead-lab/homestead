@@ -99,6 +99,9 @@ def reference_view(item):
     if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
         out.update(cancellable=False, cleanable=False, resumable=False,
                    storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") != "done")
+    # Added after #622, for the three disk job kinds a removed host can strand (homestead_host_gone).
+    if item.get("kind") in ("disk-v2-convert", "disk-allocation", "longhorn-runtime"):
+        out["host_gone_endable"] = OPS.STORAGE_CONFLICTS.unresolved(item)
     return out
 
 

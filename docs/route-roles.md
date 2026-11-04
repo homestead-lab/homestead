@@ -463,6 +463,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/operations/cancel` | operator |  | homestead_operations |
 | POST | `/api/operations/cancel-plan` | operator |  | homestead_operations |
 | POST | `/api/operations/dismiss` | operator |  | homestead_operations |
+| POST | `/api/operations/host-gone/preview` | admin |  | homestead_host_gone |
+| POST | `/api/operations/host-gone/resolve` | admin |  | homestead_host_gone |
 | GET | `/api/operations/log` | viewer |  | homestead_operations |
 | GET | `/api/operations/power-recovery/preview` | admin |  | homestead_route_policy |
 | POST | `/api/operations/power-recovery/preview` | admin |  | homestead_operations |

@@ -21,6 +21,7 @@ import homestead_disk_region as REGION
 import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
 import homestead_routes
+import homestead_storage_conflicts as CONFLICTS
 import homestead_whole_copy as WHOLE
 
 KIND = 'disk-v2-convert'
@@ -386,7 +387,7 @@ def review(body):
 
 def _active_for(node, disk):
     return next((i for i in ops.stored() if i.get('kind') == KIND and i.get('ref', {}).get('node') == node
-                 and i.get('ref', {}).get('disk') == disk and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')), None)
+                 and i.get('ref', {}).get('disk') == disk and not CONFLICTS.settled(i)), None)
 
 
 def _patch_disk(inv, value):
@@ -935,7 +936,7 @@ def mutation_guard(node, disk=None, device=None):
     with ops.transaction():
         for item in ops.stored():
             ref = item.get('ref') or {}
-            if (item.get('kind') == KIND and ref.get('node') == node and ref.get('phase') not in ('complete', 'cancelled')
+            if (item.get('kind') == KIND and ref.get('node') == node and not CONFLICTS.settled(item)
                     and (disk is None and device is None or disk is not None and disk in (ref.get('disk'), ref.get('v2_disk'))
                          or device is not None and device in (ref.get('hardware', {}).get('device'), ref.get('hardware', {}).get('by_id'), ref.get('hardware', {}).get('mountpoint'), *ref.get('hardware', {}).get('parents', [])))):
                 raise ValueError('This disk has a saved V2 preparation task; open that task before changing it')
@@ -944,7 +945,7 @@ def mutation_guard(node, disk=None, device=None):
 def tasks():
     with ops.transaction():
         return [{'id': i['id'], 'node': i['ref']['node'], 'disk': i['ref']['disk'], 'device': i['ref']['hardware']['device'],
-                 'phase': i['ref']['phase']} for i in ops.stored() if i.get('kind') == KIND and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')]
+                 'phase': i['ref']['phase']} for i in ops.stored() if i.get('kind') == KIND and not CONFLICTS.settled(i)]
 
 
 def logs(item):
