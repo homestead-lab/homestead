@@ -136,8 +136,8 @@ class StateCase(unittest.TestCase):
         """Start the cluster's fake API and bind Longhorn's module to it."""
         cluster.start(self)
         self.addCleanup(LH.bind, *(getattr(LH, name, None) for name in (
-            "kget", "ksend", "_cache", "STORAGE_CLASS", "DEFAULT_NS")))
-        LH.bind(K.kget, K.ksend, {}, "longhorn")
+            "kget", "ksend", "_cache", "DEFAULT_NS")))
+        LH.bind(K.kget, K.ksend, {})
         return cluster
 
     def state(self):

@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import server
 import homestead_deploy_manifests as MANIFESTS
 import homestead_deploy_appstore as APPSTORE
+from fakes.storage_classes import storage_classes
 
 # No VIP registry saved: these build manifests without a cluster to read it from.
 NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_value=[])
@@ -160,6 +161,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertNotIn("sub_path", vols["/movies"])
 
     def test_a_deploy_creates_each_new_volume_once(self):
+        storage_classes(self, "longhorn-r2")
         claims = server.new_claims([
             {"type": "pvc", "create": True, "source": "demo-appdata", "size_gb": 5},
             {"type": "pvc", "create": True, "source": "demo-appdata", "size_gb": 60, "sub_path": "data"},

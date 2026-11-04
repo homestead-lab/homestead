@@ -26,7 +26,7 @@ PVS = "/api/v1/persistentvolumes"
 
 class StateCase(unittest.TestCase):
     def setUp(self):
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)

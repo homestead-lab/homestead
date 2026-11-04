@@ -3,8 +3,8 @@ may ask for, and the restore classes Homestead makes and tidies.
 
 server.py keeps storage_classes() itself (every class, with the facts the
 pages show); it is bound here to read them. The class new volumes go on when
-none is chosen is decided here, by default_class(), from that read each time
-(#1125); server.py's own copy of it goes once its callers ask default_class().
+none is chosen is decided here, by default_class(), from that read each time:
+no module keeps a copy (#1125).
 """
 import json
 import os
@@ -36,7 +36,7 @@ FALLBACK_CLASSES = ("longhorn-r2", "harvester-longhorn", "longhorn")
 def bind(_kget, _ksend, _storage_classes, dns_name, _node_temps, cache, data_dir, default_namespace,
          _selectable=None, _shared=None, _facts=None):
     """_selectable, _shared and _facts are server.py's class pickers: they put
-    the class new volumes go on first, which server.py keeps."""
+    the class new volumes go on (default_class) first."""
     global kget, ksend, storage_classes, _dns_name, node_temps, _cache, DATA_DIR, DEFAULT_NS
     global selectable, shared, facts
     kget, ksend, storage_classes, _dns_name, node_temps = _kget, _ksend, _storage_classes, dns_name, _node_temps

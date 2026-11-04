@@ -30,9 +30,9 @@ class ObjectStoreTests(unittest.TestCase):
         self.addCleanup(vars(store).update, {name: getattr(store, name) for name in ("kget", "ksend", "create_pvc", "NS")})
         self.addCleanup(store.NAMES.bind, store.NAMES.kget)
         store.bind(self._get, self._send, self._create_pvc, "lab")
-        saved = (store.LH.kget, store.LH.ksend, store.LH._cache, store.LH.STORAGE_CLASS, store.LH.DEFAULT_NS)
+        saved = (store.LH.kget, store.LH.ksend, store.LH._cache, store.LH.DEFAULT_NS)
         self.addCleanup(lambda: store.LH.bind(*saved))   # put back what server.py bound
-        store.LH.bind(self._get, self._send, {}, "longhorn-r2")
+        store.LH.bind(self._get, self._send, {})
         # The shared client (homestead_kube) reads through the same fake.
         shared = mock.patch.object(KUBE, "kget", side_effect=lambda path, **kw: self._get(path))
         shared.start()

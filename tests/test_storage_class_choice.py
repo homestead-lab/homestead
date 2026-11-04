@@ -26,15 +26,13 @@ class ClassChoiceTests(unittest.TestCase):
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
             setattr(STORAGE_CLASSES, name, getattr(K, name))
-        self.saved = server.STORAGE_CLASS, server.LC.STORAGE_CLASS, server.LH.STORAGE_CLASS
+        # Installed with the Helm chart, which names no class (#1125).
+        self.enterContext(mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", ""))
         self.kube = self.enterContext(Kube(
             klass("longhorn-r2"), klass("longhorn-v1-1x", default=True, numberOfReplicas="1"),
             klass("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", backingImage="default-image-151065"),
             klass("longhorn-image-ubuntu", backingImage="default-image-ubuntu"),
             klass("homestead-restore-155ade32ea106399", fromBackup="s3://b/backups?volume=x")))
-
-    def tearDown(self):
-        server.STORAGE_CLASS, server.LC.STORAGE_CLASS, server.LH.STORAGE_CLASS = self.saved
 
     def claim(self, name, status, **meta):
         self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -47,22 +45,21 @@ class ClassChoiceTests(unittest.TestCase):
     def test_image_and_restore_classes_are_never_offered(self):
         self.assertEqual(["longhorn-v1-1x", "longhorn-r2"], server.selectable_storage_classes())
 
-    def test_the_clusters_default_is_homesteads_default(self):
-        server.storage_classes()
-        self.assertEqual("longhorn-v1-1x", server.STORAGE_CLASS)
-        self.assertEqual("longhorn-v1-1x", server.LC.STORAGE_CLASS)
+    def new_volume(self):
+        return server.new_claims([{"type": "pvc", "create": True, "source": "data"}])[0]["storage_class"]
 
-    def test_a_vm_disk_follows_the_one_rule(self):
-        # The install class while it is here (#1125); else the cluster's default.
+    def test_with_no_install_class_the_clusters_default_is_homesteads_default(self):
+        # Making a class the default in Volumes is how such an install says which.
+        self.assertEqual(("longhorn-v1-1x",) * 2, (self.new_volume(), server.VM_ROUTES.vm_default_class()))
+
+    def test_the_install_class_comes_before_the_clusters_default(self):
         with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
-            self.assertEqual("longhorn-r2", server.VM_ROUTES.vm_default_class())
-        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", ""):
-            self.assertEqual("longhorn-v1-1x", server.VM_ROUTES.vm_default_class())
+            self.assertEqual(("longhorn-r2",) * 2, (self.new_volume(), server.VM_ROUTES.vm_default_class()))
+            self.assertEqual(["longhorn-r2", "longhorn-v1-1x"], server.selectable_storage_classes())
 
-    def test_without_a_default_the_installed_class_stands(self):
+    def test_without_a_default_longhorns_usual_class_is_used(self):
         self.kube.add(klass("longhorn-v1-1x", numberOfReplicas="1"))
-        server.storage_classes()
-        self.assertEqual("longhorn-r2", server.STORAGE_CLASS)
+        self.assertEqual("longhorn-r2", self.new_volume())
 
     def test_spent_restore_classes_are_removed_and_needed_ones_kept(self):
         self.kube.add(klass("homestead-restore-deee238ba869b8e0", fromBackup="s3://b/backups?volume=y"))

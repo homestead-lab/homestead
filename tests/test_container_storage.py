@@ -69,8 +69,8 @@ class WorkloadEditFixture:
             return {"metadata": {"name": name}}
 
         # put back what server.py bound, or the next file's lifecycle reads go to this fake
-        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc", "STORAGE_CLASS")})
-        lifecycle.bind(get, send, set(), {}, lambda: FEATURES, create_pvc, "longhorn-r2")
+        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc")})
+        lifecycle.bind(get, send, set(), {}, lambda: FEATURES, create_pvc)
 
     def saved_spec(self):
         return self.sent[-1][2]["spec"]["template"]["spec"]

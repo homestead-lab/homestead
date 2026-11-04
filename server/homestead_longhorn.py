@@ -20,9 +20,8 @@ homestead_longhorn_jobs, volumes, groups and snapshots in
 homestead_longhorn_volumes, the backup target in homestead_longhorn_target,
 backups in homestead_longhorn_backups and restores in
 homestead_longhorn_restore. This module keeps what bind() sets (kget, ksend,
-_cache, STORAGE_CLASS, DEFAULT_NS: server.py sets STORAGE_CLASS here as it
-finds the cluster's default class, and other modules read kget and
-STORAGE_CLASS here), the helpers the parts share, the overview, the routes
+_cache, DEFAULT_NS; other modules read kget here; the class new volumes go
+on is homestead_storage_classes.default_class()), the helpers the parts share, the overview, the routes
 and their handlers. Read and replace a moved name in the module that defines
 it; this module offers only the few the move source and the move engine read
 through the LH their bind() is given (see the end of this file).
@@ -47,7 +46,6 @@ kget = ksend = None
 LHNS = "longhorn-system"
 API = "/apis/longhorn.io/v1beta2"
 _cache = {}
-STORAGE_CLASS = "longhorn-r2"
 DEFAULT_NS = "lab"           # where a restore goes when none is named
 
 TASKS = {
@@ -65,10 +63,9 @@ GROUP_LABEL = "recurring-job-group.longhorn.io/"
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 
 
-def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2", default_namespace=None):
-    global kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS
+def bind(_kget, _ksend, _cache_ref, default_namespace=None):
+    global kget, ksend, _cache, DEFAULT_NS
     kget, ksend, _cache = _kget, _ksend, _cache_ref
-    STORAGE_CLASS = storage_class
     DEFAULT_NS = default_namespace or DEFAULT_NS
     CSI_RESTORE.bind(_kget, _ksend)
 

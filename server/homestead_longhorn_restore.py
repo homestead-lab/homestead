@@ -8,6 +8,7 @@ and the routes stay there.
 import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_csi_restore as CSI_RESTORE
+import homestead_storage_classes as STORAGE_CLASSES
 import math
 import re
 
@@ -72,7 +73,7 @@ def restore_plan(backup, namespace, pvc_name):
         "suggested_name": suggested, "namespace": namespace, "pvc_name": pvc_name,
         "conflict": conflict, "ready": conflict is None,
         "target": status.get("backupTargetName", "default") or "default",
-        "storage_class": LH.STORAGE_CLASS,
+        "storage_class": STORAGE_CLASSES.claim_class(),
         "storage_classes": [c["metadata"]["name"] for c in LH.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
                             if c.get("provisioner") == "driver.longhorn.io"
                             and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage"))],
@@ -91,7 +92,7 @@ def restore_backup(cfg, discard_on_failure=False):
     access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
     if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-    base_name = str(cfg.get("storage_class") or LH.STORAGE_CLASS)
+    base_name = str(cfg.get("storage_class") or STORAGE_CLASSES.claim_class())
     if not _valid_k8s_name(base_name):
         raise ValueError("storage class name is invalid")
     base = LH.kget(f"/apis/storage.k8s.io/v1/storageclasses/{base_name}")

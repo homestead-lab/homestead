@@ -38,12 +38,12 @@ def form(**changes):
 
 class LonghornWriteTests(unittest.TestCase):
     def setUp(self):
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))
         self.bind()
 
     def bind(self, send=None):
-        LH.bind(K.kget, send or K.send, {}, "longhorn-r2", "lab")
+        LH.bind(K.kget, send or K.send, {}, "lab")
 
     def meanwhile(self, kube, path, change):
         """A send that lets another writer change the object at path just
@@ -138,7 +138,7 @@ class LonghornWriteTests(unittest.TestCase):
         with Kube(job()):
             for act in (lambda: JOBS.save_job(form()), lambda: JOBS.delete_job("daily")):
                 cache = {"lhov": {"jobs": []}, "lhjobs": [], "other": 1}
-                LH.bind(K.kget, K.send, cache, "longhorn-r2", "lab")
+                LH.bind(K.kget, K.send, cache, "lab")
                 act()
                 self.assertEqual({"other"}, set(cache))
 
