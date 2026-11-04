@@ -56,13 +56,6 @@ homestead_changes.DATA_DIR	test_read_json	fake
 homestead_changes.DATA_DIR	test_scale_write	fake
 homestead_changes.DATA_DIR	test_schedules	fake
 homestead_cluster.SYS_NS	test_cluster_admin	other
-homestead_components.addons	test_components	other
-homestead_components.fetch_json	test_components	fake
-homestead_components.helm_upgrade	test_components	other
-homestead_components.kget	test_components	other
-homestead_components.ksend	test_components	other
-homestead_components.ktext	test_components	other
-homestead_components.platform	test_components	other
 homestead_config_backup.PARTS	test_config_backup	other
 homestead_diagnostics.DIRECTORY	test_diagnostics	fake
 homestead_diagnostics.DIRECTORY	test_fleet_identities	fake
@@ -152,9 +145,6 @@ homestead_lhcapacity.kget	test_failover	fake
 homestead_lhcapacity.ksend	test_failover	fake
 homestead_lhcapacity.v2_status	test_data_copies	fake
 homestead_lhcapacity.v2_status	test_failover	fake
-homestead_lhv2_upgrade.kget	test_components	other
-homestead_lhv2_upgrade.ksend	test_components	other
-homestead_lhv2_upgrade.platform	test_components	other
 homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
 homestead_lifecycle.STORAGE_CLASS	test_env_secrets	other
 homestead_lifecycle.STORAGE_CLASS	test_storage_classes	other

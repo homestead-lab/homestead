@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_components as C
 import homestead_kube as K
+import homestead_lhv2_upgrade as V2
+from rebind import keep_bound
 from fakes.kube import Kube
 
 K3S_CHANNELS = {"data": [{"name": "stable", "latest": "v1.33.4+k3s1"}, {"name": "latest", "latest": "v1.34.1+k3s1"},
@@ -20,6 +22,9 @@ K3S_GITHUB = [{"tag_name": "v1.34.2-rc1+k3s1", "prerelease": True}, {"tag_name":
 
 
 class ChannelFallbackTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, C, V2)
+
     def releases(self, answer):
         C._releases.clear()
         C.bind(None, None, None, None, None, answer)
@@ -87,8 +92,7 @@ class Cluster:
         test.enterContext(mock.patch.object(C, "_save", lambda item: self.saved.append(
             (json_copy(item["ref"]), len(self.kube.writes)))))
         C._releases.clear()
-        test.addCleanup(C.bind, *(getattr(C, name, None) for name in (
-            "kget", "ksend", "platform", "helm_upgrade", "addons", "fetch_json", "ktext")))
+        keep_bound(test, C, V2)   # C.bind() also binds the Longhorn v2 upgrade module
         C.bind(K.kget, K.ksend, lambda force=False: self.platform, self.helm, Addons(),
                lambda url: K3S_CHANNELS if "k3s.io" in url else LONGHORN)
 
