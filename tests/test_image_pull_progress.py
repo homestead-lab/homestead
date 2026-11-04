@@ -3,6 +3,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -41,6 +42,10 @@ class ImagePullProgressTests(unittest.TestCase):
         keep_bound(self, updates)
         self.events = []
         self.dep = copy.deepcopy(DEPLOYMENT)
+        # server.py, once loaded by an earlier file, sets pull_progress to the pull
+        # watcher, which reads the node through the real client: these tests are
+        # about the events, so no byte progress, whichever files ran first.
+        self.enterContext(mock.patch.object(updates, "pull_progress", None))
 
         def get(path):
             if "/events" in path:
