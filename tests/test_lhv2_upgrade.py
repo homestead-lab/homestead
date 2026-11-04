@@ -52,7 +52,7 @@ class Cluster:
                 'nodeInfo': {'kubeletVersion': 'v1.34.2+k3s1'}, 'conditions': ready()}} for i in (1, 2, 3)],
             lh('Volume', 'test-disk', spec={'dataEngine': 'v2', 'frontend': 'blockdev'},
                status={'state': 'attached', 'robustness': 'healthy', 'currentNodeID': 'node-1'}),
-            *[lh('Replica', f'replica-{i}', spec={'volumeName': 'test-disk', 'nodeID': f'node-{i}'},
+            *[lh('Replica', f'replica-{i}', spec={'volumeName': 'test-disk', 'nodeID': f'node-{i}', 'healthyAt': '2026-10-01T00:00:00Z'},
                  status={'currentState': 'running'}) for i in (1, 2, 3)],
             lh('Engine', 'engine-1', spec={'volumeName': 'test-disk'}, status={
                 'currentState': 'running', 'replicaModeMap': {f'replica-{i}': 'RW' for i in (1, 2, 3)}}),

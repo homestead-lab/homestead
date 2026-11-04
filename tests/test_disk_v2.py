@@ -128,7 +128,8 @@ class Cluster:
             uid = self.lh_node(node)['status']['diskStatus']['data']['diskUUID']
             rname = name + '-' + node
             self.kube.add(lh('Replica', rname, spec={'volumeName': name, 'nodeID': node,
-                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB)}, status={'currentState': 'running'}))
+                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB),
+                'healthyAt': '2026-10-01T00:00:00Z', 'failedAt': ''}, status={'currentState': 'running'}))  # as recorded (fixtures/longhorn_v1_13)
             self.put(LHN(node), ('status', 'diskStatus', 'data', 'scheduledReplica', rname), size * GB)
             modes[rname] = 'RW'
         self.kube.add(lh('Engine', name + '-engine', spec={'volumeName': name},

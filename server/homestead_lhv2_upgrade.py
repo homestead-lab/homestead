@@ -10,6 +10,7 @@ from urllib.parse import quote
 import homestead_capacity_review as REVIEW
 import homestead_kube as KUBE
 import homestead_operations as OPS
+import homestead_whole_copy as WHOLE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 AUTO = "allow-instance-manager-automatic-upgrade"
@@ -193,14 +194,11 @@ def plan(target="", source=""):
                 live.append(f"{name}: wait for its migration or expansion to finish.")
             if st.get("state") == "detached":
                 continue
-            ve = [e for e in engines if e.get("spec", {}).get("volumeName") == name
-                  and e.get("status", {}).get("currentState") == "running"
-                  and not e.get("metadata", {}).get("deletionTimestamp")]
-            modes = {key: mode for e in ve for key, mode in (e.get("status", {}).get("replicaModeMap") or {}).items()}
+            # Whole copies by the one rule (homestead_whole_copy); the hosts
+            # are checked as "eligible" below.
+            whole = WHOLE.judge(engines, detached_ok=False)
             healthy_nodes = {r.get("spec", {}).get("nodeID") for r in replicas
-                             if r.get("spec", {}).get("volumeName") == name and modes.get(r["metadata"]["name"]) == "RW"
-                             and not r.get("spec", {}).get("failedAt") and r.get("status", {}).get("currentState") == "running"
-                             and not r.get("metadata", {}).get("deletionTimestamp")}
+                             if r.get("spec", {}).get("volumeName") == name and whole(r)}
             if st.get("state") != "attached" or st.get("robustness") != "healthy" or len(healthy_nodes & eligible) < 2:
                 live.append(f"{name}: needs a healthy attached volume and RW replicas on at least two eligible hosts.")
     obs = observation() if parse(installed) and parse(installed)[:3] >= (1, 13, 0) else {"enabled": False, "timeout": 60, "active": False, "nodes": [], "pending": False}

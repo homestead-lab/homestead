@@ -22,6 +22,7 @@ import homestead_disk_region as REGION
 import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
 import homestead_routes
+import homestead_whole_copy as WHOLE
 
 KIND = 'disk-v2-convert'
 LABEL = 'homestead.io/disk-v2-convert'
@@ -126,15 +127,10 @@ def _on_disk(replica, inv):
 
 
 def _rw(inv, volume):
-    modes = {name: mode for e in inv['engines'] if e.get('spec', {}).get('volumeName') == volume
-             and e.get('status', {}).get('currentState') == 'running' and not e.get('metadata', {}).get('deletionTimestamp')
-             for name, mode in (e.get('status', {}).get('replicaModeMap') or {}).items()}
-    def host_ready(replica):
-        node = replica.get('spec', {}).get('nodeID')
-        return ('kube' not in inv or _ready(inv['kube'].get(node, {}))) and ('lhs' not in inv or _ready(inv['lhs'].get(node, {})))
-    return [r for r in inv['replicas'] if r.get('spec', {}).get('volumeName') == volume
-            and not r.get('metadata', {}).get('deletionTimestamp') and not r.get('spec', {}).get('failedAt')
-            and host_ready(r) and r.get('status', {}).get('currentState') == 'running' and modes.get(r['metadata']['name']) == 'RW']
+    """The volume's whole copies (homestead_whole_copy): running RW on a Ready
+    host; a detached volume's stopped copies do not count here."""
+    whole = WHOLE.judge(inv['engines'], detached_ok=False, nodes=inv.get('kube'), lh_nodes=inv.get('lhs'))
+    return [r for r in inv['replicas'] if r.get('spec', {}).get('volumeName') == volume and whole(r)]
 
 
 def foreign_contents_message():
