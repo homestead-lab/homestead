@@ -45,12 +45,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 OFFENDERS_FILE = HERE / "network_offenders.txt"
-# Advisory for now: which tests reach the network depends on what ran before them
-# in the same process (a module left bound to a fake, or not), so a list measured
-# in one order is not complete in another. A refused call still fails at once, as
-# a failed lookup does; the run reports who made it. Set True once network_offenders.txt
-# holds steady across CI's splits: then a file not on it fails the run.
-ENFORCE = False
+# On (4 Nov 2026): network_offenders.txt is empty, and the 8-way split, CI's 4-way
+# split and a reversed-file-order run all showed no refused call. A refused call
+# still fails at once, as a failed lookup does; with ENFORCE its test's file (the
+# file of the test that started the calling thread) also fails the run at the end.
+ENFORCE = True
 
 _installed = {}
 _own = []          # this machine's own name, once read
