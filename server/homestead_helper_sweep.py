@@ -1,7 +1,7 @@
 """Finished helpers Homestead made, removed once their result has been read.
 
-Image clean-up, host power and cluster shutdown each start a bare pod, and a
-storage copy starts a Job; nothing removed them once they ended, so one more
+Image clean-up, host power, cluster shutdown and an import's source probe
+each start a bare pod, and a storage copy starts a Job; nothing removed them once they ended, so one more
 was left behind for every image, host action, shutdown and copy. The leader
 removes them here a while after they end: long enough that Recent jobs still
 shows their log (a day for an image clean-up, a week for anything that is
@@ -10,6 +10,9 @@ one, or one kept for inspection names it. Pull watchers that finished go
 too (homestead_pullwatch.sweep, which used to run only while a pull was being
 watched), and an import whose Job finished a week ago is removed the way its
 Remove button does it, so the workload keeps its proof of completion.
+
+"Back up now"'s local snapshot goes here too, once its backup completed and
+no unfinished job names the snapshot or its volume.
 
 Only Homestead's own objects: the task label and the name both have to be
 Homestead's, and each delete names the uid that was read."""
@@ -21,9 +24,11 @@ import urllib.parse
 
 import homestead_import_job as IMPORT_JOB
 import homestead_kube as KUBE
+import homestead_longhorn_backups as BACKUPS
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_pullwatch as PULLWATCH
+import homestead_storage_conflicts as STORAGE_CONFLICTS
 
 NS = "lab"              # where Homestead starts its bare helper pods
 HOUR, DAY = 3600, 86400
@@ -34,6 +39,9 @@ PODS = {
     "node-power": (7 * DAY, re.compile(r"homestead-(reboot|poweroff|handoff-reboot|handoff-poweroff)-[a-z0-9.-]*")),
     "cluster-shutdown": (7 * DAY, re.compile(r"homestead-shutdown-[0-9a-f]{16}-(coordinator|[0-9]+)")),
     "pull-watch": (HOUR, re.compile(r"homestead-pull-watch-[0-9a-f]{14}")),
+    # An import's source probe (homestead_imports.run_probe) removes its own
+    # pod; one left by a restart mid-probe ends at its deadline and stays.
+    "probe": (HOUR, re.compile(r"homestead-probe-[a-z0-9-]{1,30}-[0-9a-f]{10}")),
 }
 JOBS = {
     "restructure": (7 * DAY, re.compile(r"[a-z0-9.-]*-restructure-[0-9a-f]{6}")),
@@ -86,7 +94,89 @@ def sweep(now=None):
                                 propagationPolicy="Background")):
                 removed.append(meta["name"])
     removed += _old_imports(items, now, MAX_PER_ROUND - len(removed))
+    removed += _backup_snapshots(items, MAX_PER_ROUND - len(removed))
     return removed
+
+
+def _backup_snapshots(items, budget):
+    """"Back up now"'s local snapshot, once its backup completed (the backup
+    is the restore point) and nothing uses the snapshot or its volume: no
+    unfinished or unresolved job names either (a revert, a restore, a failed
+    revert awaiting recovery), and no file-browser session reads a clone of
+    the snapshot. Both are read again just before each delete; when either
+    cannot be read, nothing goes this round. One in use waits for a later
+    round. Asked once: a delete that fails is said and the snapshot stays."""
+    removed = []
+    for item in items:
+        if len(removed) >= budget:
+            break
+        ref = item.get("ref") if isinstance(item, dict) else None
+        if (not isinstance(ref, dict) or item.get("kind") != "backup" or item.get("status") != "succeeded"
+                or ref.get("snapshot_pending") is not True):
+            continue
+        found = _in_use()
+        if found is None:
+            return removed
+        held, browsed = found
+        volume = (item.get("resource") or {}).get("name")
+        if ref.get("snapshot") in held or ref.get("snapshot") in browsed or (volume and volume in held):
+            continue
+        if BACKUPS.drop_snapshot(ref["snapshot"], ref.get("snapshot_uid")):
+            removed.append(ref["snapshot"])
+        _released(item["id"])
+    return removed
+
+
+BROWSE = "/apis/snapshot.storage.k8s.io/v1/volumesnapshotcontents?labelSelector=" + urllib.parse.quote(
+    "homestead.io/snapshot-files=true")
+
+
+def _in_use():
+    """Every name an unfinished or unresolved job holds, and the snapshot of
+    every file-browser session (homestead_snapshot_files: a
+    VolumeSnapshotContent whose handle is snap://<volume>/<snapshot>). None
+    when either cannot be read."""
+    try:
+        jobs = OPS.stored()
+        sessions = KUBE.items(BROWSE, optional_group="snapshot.storage.k8s.io")
+    except Exception as error:
+        print(f"backup snapshots not removed, what uses them could not be read: {str(error)[:160]}", flush=True)
+        return None
+    held, browsed = set(), set()
+    for job in jobs:
+        if isinstance(job, dict) and (job.get("status") not in OPS.TERMINAL or STORAGE_CONFLICTS.unresolved(job)):
+            held |= _words(job.get("ref")) | _words(job.get("resource"))
+    for session in sessions:
+        handle = (((session.get("spec") or {}).get("source") or {}).get("snapshotHandle") or "") if isinstance(session, dict) else ""
+        if handle.startswith("snap://"):
+            browsed.add(handle.rsplit("/", 1)[-1])
+    return held, browsed
+
+
+def _released(ident):
+    """The backup job's snapshot is no longer waited on, gone or not."""
+    try:
+        with OPS.transaction() as t:
+            items = t.items
+            item = next((row for row in items if isinstance(row, dict) and row.get("id") == ident), None)
+            if item and isinstance(item.get("ref"), dict):
+                item["ref"]["snapshot_pending"] = False
+                t.save(items)
+    except Exception as error:
+        print(f"backup job {ident} not updated: {str(error)[:160]}", flush=True)
+
+
+def _words(value):
+    found = set()
+    if isinstance(value, str):
+        found.add(value)
+    elif isinstance(value, dict):
+        for inner in value.values():
+            found |= _words(inner)
+    elif isinstance(value, (list, tuple)):
+        for inner in value:
+            found |= _words(inner)
+    return found
 
 
 def removed_note(item, task, now=None):

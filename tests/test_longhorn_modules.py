@@ -98,7 +98,7 @@ class LonghornModuleTests(unittest.TestCase):
                 self.assertNotIn(name, seen, f"{name} is defined twice")
                 self.assertNotIn(name, OWN, f"{part.__name__}.{name} is homestead_longhorn's")
                 seen.add(name)
-        self.assertEqual(62, len(seen))
+        self.assertEqual(63, len(seen))
         self.assertIn("TRIM_JOB", seen)
         self.assertIn("K8S_LABEL", seen)
 

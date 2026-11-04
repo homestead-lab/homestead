@@ -192,7 +192,9 @@ def backup_now(b):
         result["operation"] = OPS.start(
             "backup", f"Back up {b['volume']}",
             {"kind": "Volume", "name": b["volume"], "namespace": "longhorn-system"},
-            "/data-protection", {"namespace": "longhorn-system", "name": result["backup"]})
+            "/data-protection", {"namespace": "longhorn-system", "name": result["backup"],
+                                 # Removed once the backup completes (operations' backup step).
+                                 "snapshot": result.get("snapshot", ""), "snapshot_uid": result.get("snapshot_uid", "")})
     return result
 
 

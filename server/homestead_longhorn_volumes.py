@@ -282,9 +282,10 @@ def create_snapshot(volume, name=None, annotations=None):
             "spec": {"volume": volume, "createSnapshot": True}}
     if annotations:
         body["metadata"]["annotations"] = dict(annotations)
-    LH.ksend("POST", f"{LH.API}/namespaces/{LH.LHNS}/snapshots", body)
+    made = LH.ksend("POST", f"{LH.API}/namespaces/{LH.LHNS}/snapshots", body)
     LH._bust("lhsnaps")
-    return {"ok": True, "snapshot": name, "volume": volume}
+    uid = ((made or {}).get("metadata") or {}).get("uid", "") if isinstance(made, dict) else ""
+    return {"ok": True, "snapshot": name, "volume": volume, "uid": uid}
 
 
 # Last, so that importing any of these modules first works: homestead_longhorn

@@ -445,6 +445,14 @@ def delete_if_present(path, body=None, send=_CLIENT, **options):
         return None
 
 
+def definite_refusal(code):
+    """A write answered with a status that says it was not made, so what was
+    made for it may go: the statuses a journaled VM write records as refused
+    (homestead_vm_write), but a 409 (one of that name is there, someone
+    else's). A 408, a 429, any other status, a 5xx or no answer never is."""
+    return isinstance(code, int) and code in (400, 401, 403, 404, 405, 422)
+
+
 # A ConfigMap or Secret by name: where update_json keeps its JSON.
 _JSON_HOLDER = re.compile(r"^(/api/v1/namespaces/([a-z0-9.-]+)/(configmaps|secrets))/([a-z0-9.-]+)$")
 
