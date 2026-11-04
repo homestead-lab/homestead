@@ -349,6 +349,10 @@ took. Opening a console or a host shell writes one line when it ends.
   `"detail"` says for how long it was missing).
 - **The pod log always has every line**, for Loki, Vector or anything else that
   reads pod logs.
+- **Lines are in the order they were written, not the order the requests came
+  in:** a request's line is written after its answer is sent, and `at` is when
+  the line was written, so two requests a few milliseconds apart can appear
+  swapped.
 - **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
   files of 10 MiB at most (about 60,000 lines). **Settings › About › Audit log**
   turns that off (admin); the pod log keeps writing.
