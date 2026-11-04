@@ -8,20 +8,10 @@
 # everything each module's bind() sets before and after every test. In such a run a line
 # whose file no longer leaks the name fails too. Each line is a leak to fix: make that
 # file restore the name (tests/rebind.py), delete the line and lower CEILING. Never add one, except for an open PR of ours (the block at the end).
-homestead_addons.fetch	test_addons	fake
-homestead_addons.fetch	test_addons	other
 homestead_addons.fetch	test_k3s_vips	other
-homestead_addons.kget	test_addons	fake
-homestead_addons.kget	test_addons	other
 homestead_addons.kget	test_k3s_vips	fake
-homestead_addons.ksend	test_addons	fake
-homestead_addons.ksend	test_addons	other
 homestead_addons.ksend	test_k3s_vips	fake
-homestead_addons.platform	test_addons	fake
-homestead_addons.platform	test_addons	other
 homestead_addons.platform	test_k3s_vips	fake
-homestead_addons.probes	test_addons	fake
-homestead_addons.probes	test_addons	other
 homestead_addons.probes	test_k3s_vips	fake
 homestead_agent_audit.DATA_DIR	test_mqtt_control	fake
 homestead_agent_audit.DATA_DIR	test_shared_logs	fake
@@ -159,15 +149,11 @@ homestead_ipam.kget	test_ipam	fake
 homestead_ipam.ksend	test_ipam	fake
 homestead_joblogs.kget	test_job_logs	fake
 homestead_joblogs.ktext	test_job_logs	fake
-homestead_k3scluster.check	test_addons	fake
 homestead_k3scluster.check	test_job_cancel	other
 homestead_k3scluster.check	test_vm_lan	fake
-homestead_k3scluster.create	test_addons	fake
 homestead_k3scluster.create	test_job_cancel	other
 homestead_k3scluster.create	test_vm_lan	fake
-homestead_k3scluster.kget	test_addons	other
 homestead_k3scluster.kget	test_vm_lan	fake
-homestead_k3scluster.remove	test_addons	other
 homestead_lan.kget	test_fitted_names	fake
 homestead_lan.ksend	test_fitted_names	fake
 homestead_leader.kget	test_replicas	fake
