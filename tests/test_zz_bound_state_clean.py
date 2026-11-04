@@ -40,7 +40,7 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # 524 -> 527 on 4 Nov: keep_bound and the recorder now see dict entries a bind() sets in a
 # loop or with .update(); the three homestead_agent_tools._bound lines from test_mcp were
 # there before, unseen (the commented block in bound_leaks.txt). Lower it as they are fixed.
-CEILING = 502
+CEILING = 486
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7
@@ -147,7 +147,6 @@ UNRESTORED_FILES = frozenset({
     "test_smart",
     "test_snapshot_delete",
     "test_vip_places",
-    "test_vm_hardware",
     "test_vm_lan",
     "test_vmstore",
     "test_volume_deletion",

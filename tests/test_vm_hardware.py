@@ -12,6 +12,7 @@ import homestead_isos as ISOS
 import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
+from rebind import keep_bound
 import homestead_vm_create as VM_CREATE
 import test_vm_edit as edit_fixtures
 
@@ -145,6 +146,7 @@ SHARE = {"name": "media", "pvc": "share-media", "sub_path": "", "access_modes": 
 
 class IsoTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, ISOS, imports, vms)
         self.objects, self.sent = {}, []
         self.listing = {"isos": [{"name": "debian.iso", "kind": "file", "size": 800 * 1024 ** 2},
                                  {"name": "notes.txt", "kind": "file", "size": 10}, {"name": "old", "kind": "dir", "size": 0}]}
@@ -233,6 +235,7 @@ class IsoTests(unittest.TestCase):
 
 class AttachTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, ISOS, imports, vms)
         self.cluster = edit_fixtures.Cluster({"harvester": True, "cdi": True})
 
     def test_device_only_edit_cannot_remove_last_gpu_without_changing_output(self):
@@ -292,6 +295,7 @@ class AttachTests(unittest.TestCase):
 
 class InstallTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, ISOS, imports, vms)
         self.sent = []
 
         def get(path):
