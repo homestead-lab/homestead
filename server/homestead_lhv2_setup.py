@@ -414,5 +414,5 @@ ROUTES = {
 
 def register(ops):
     """The job store's entry for preparing hosts for Longhorn V2 (#622)."""
-    ops.RESOLVERS["longhorn-v2-prepare"] = progress
+    ops.RESOLVERS["longhorn-v2-prepare"] = homestead_routes.drops_when_ended(progress, "disks")
     CLEANUP.register(ops)

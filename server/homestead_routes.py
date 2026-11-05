@@ -451,6 +451,23 @@ def forget(*keys):
     CACHE.forget_where(lambda key: key in keys)
 
 
+# A job tray resolver's answer whose job is over (homestead_operations.TERMINAL).
+ENDED = ("succeeded", "failed", "cancelled")
+
+
+def drops_when_ended(resolver, *keys):
+    """resolver, also forgetting keys on the round its job ends: for a page
+    whose answer changes when the job is over, not when it was asked for
+    (#978). The job tray asks an ended job no more, so this runs once."""
+    @functools.wraps(resolver)
+    def resolve(item):
+        answer = resolve.__wrapped__(item)
+        if answer and answer[0] in ENDED:
+            forget(*keys)
+        return answer
+    return resolve
+
+
 def forget_prefix(prefix):
     """Drop every key from server.py's cache that starts with prefix."""
     for key in [k for k in _store[0] if k.startswith(prefix)]:

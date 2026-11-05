@@ -336,5 +336,288 @@ class RestartOwnersTests(unittest.TestCase):
                                              tail=lambda *a: {}, outage=lambda: {}, sys_ns=frozenset()))
 
 
+# The alerts loop sleeps 20 s after each look, so a look comes every 20 s plus
+# what the look itself took.
+LOOK = 20
+
+
+class AlertReadingsTests(unittest.TestCase):
+    """The alert sources that keep a reading of their own (addresses, disks,
+    ports, CronJobs) take one made since the previous look began: each serves
+    its own look and at most the next one (#978)."""
+
+    def setUp(self):
+        clean_cache(self)
+        self.clock = Clock(self)
+        self.cluster = Cluster(self)
+        clean_snapshot(self)
+        self.OV = self.cluster.server.OVERVIEW_ROUTES
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.enterContext(mock.patch.object(self.OV.ALERTS, "DATA_DIR", folder.name))
+        self.enterContext(mock.patch.object(self.OV.CHECKS, "report", lambda: None))
+        self.enterContext(mock.patch.object(self.OV, "_looked", [0.0]))
+        # The Dashboard's build reads addresses and disks for the host cards
+        # with times of its own: not these readings.
+        self.enterContext(mock.patch.object(self.OV, "get_overview", lambda: {}))
+        self.reads = {}
+        self.disk_ready = True
+
+        def counted(name, value):
+            def read(*args, **kwargs):
+                self.reads[name] = self.reads.get(name, 0) + 1
+                return value()
+            return read
+        disks = lambda: {"nodes": {"node-a": [{"longhorn": [  # noqa: E731
+            {"id": "disk-1", "path": "/var/lib/longhorn", "ready": self.disk_ready}]}]}}
+        for module, name, value in ((self.OV.INV, "inventory", lambda: {"addresses": {"addresses": []}}),
+                                    (self.OV.DISKS, "inventory", disks),
+                                    (self.OV.NODES, "ports_report", lambda: {}),
+                                    (self.OV.CRONJOBS, "list_jobs", lambda: [])):
+            self.enterContext(mock.patch.object(module, name, counted(f"{module.__name__}.{name}", value)))
+
+    def look(self, took=1):
+        self.clock.now += LOOK + took
+        return self.OV._alert_sources()
+
+    def test_four_looks_read_each_source_twice(self):
+        for _ in range(4):
+            self.look()
+        self.assertEqual({"homestead_network_inventory.inventory": 2, "homestead_disks.inventory": 2,
+                          "homestead_nodes.ports_report": 2, "homestead_scheduled_jobs.list_jobs": 2}, self.reads)
+
+    def test_a_reading_never_serves_a_third_look_however_long_a_look_takes(self):
+        for took in range(0, 10):
+            clean_cache(self)
+            self.reads.clear()
+            for _ in range(3):
+                self.look(took)
+            self.assertEqual({2}, set(self.reads.values()), f"a look taking {took} s")
+
+    def raised_and_resolved(self, fresh, page_first=False):
+        """The looks at which a disk going not ready is raised and, once it is
+        ready again, resolved. fresh reads again on every look, as each of these
+        sources did while it kept its reading for less than a look. page_first:
+        the Disks page reads them a second before the look, and the disk
+        changes between the two."""
+        def look(change=None):
+            if page_first and change is not None:
+                self.clock.now += LOOK           # the look comes a second later
+                self.cluster.server.MODULE_ROUTES.table()[("GET", "/api/disks")].handler(None)
+                self.clock.now -= LOOK
+            if fresh:
+                ROUTER.forget("network", "disks", "ports", "cron")
+            if change is not None:
+                self.disk_ready = change
+            return [e["phase"] for e in self.OV.ALERTS.observe(self.look(), now=self.clock.now)
+                    if e["key"] == "disks:node-a:disk-1"]
+        self.disk_ready = True
+        look()
+        look()
+        raised = next(n for n in range(1, 20) if "raised" in look(False if n == 1 else None))
+        resolved = next(n for n in range(1, 20) if "resolved" in look(True if n == 1 else None))
+        return raised, resolved
+
+    def assert_at_most_one_look_later(self, page_first=False):
+        fresh = self.raised_and_resolved(fresh=True, page_first=page_first)
+        clean_cache(self)
+        Path(self.OV.ALERTS._path()).unlink()
+        kept = self.raised_and_resolved(fresh=False, page_first=page_first)
+        for phase, now, then in zip(("raised", "resolved"), kept, fresh):
+            self.assertLessEqual(now - then, 1, f"{phase}: after {now} looks, against {then}")
+        # The minute's hold takes three or four looks.
+        self.assertGreaterEqual(fresh[0], self.OV.ALERTS.HOLD // (LOOK + 1))
+
+    def test_a_disk_alert_is_raised_and_resolved_at_most_one_look_later(self):
+        self.assert_at_most_one_look_later()
+
+    def test_also_when_a_page_read_the_disks_just_before_the_look(self):
+        # A reading kept a fixed 30 s would serve this look and the next:
+        # two looks late.
+        self.assert_at_most_one_look_later(page_first=True)
+
+
+class PageRouteKeepTests(unittest.TestCase):
+    """Data protection, Helm, Flow and Disks refresh every 15 s: a reading is
+    kept PAGE_SECONDS, so every other refresh is served from the last one, and
+    a write Homestead makes to what the page shows drops it at once (#978)."""
+
+    ROUTES = (("/api/lh/overview", "homestead_longhorn", "overview", "lhov"),
+              ("/api/helm", "homestead_helm", "releases", "helm"),
+              ("/api/flow", "homestead_flow", "get_flow2", "flow2"),
+              ("/api/disks", "homestead_disks", "inventory", "disks"))
+
+    def setUp(self):
+        clean_cache(self)
+        self.clock = Clock(self)
+        self.cluster = Cluster(self)
+        clean_snapshot(self)
+        self.table = self.cluster.server.MODULE_ROUTES.table()
+
+    def get(self, path, module, name, read=lambda: {}):
+        with mock.patch.object(sys.modules[module], name, read):
+            return self.table[("GET", path)].handler(None)
+
+    def test_a_page_refresh_is_served_the_last_reading_and_the_next_one_reads(self):
+        for path, module, name, _key in self.ROUTES:
+            reads = []
+            for _ in range(3):
+                self.get(path, module, name, lambda: reads.append(1) or {})
+                self.clock.now += 15
+            self.assertEqual(2, len(reads), path)
+
+    def test_none_is_kept_longer_than_the_main_pages(self):
+        for path, module, name, key in self.ROUTES:
+            self.get(path, module, name)
+            self.clock.now += ROUTER.PAGE_SECONDS
+            self.get(path, module, name)
+            self.assertEqual(self.clock.now, CACHE.kept_at(key), path)
+
+    def test_a_write_to_an_app_service_or_volume_drops_the_flow_and_data_protection_pictures(self):
+        for path in ("/apis/apps/v1/namespaces/lab/deployments/web",
+                     "/api/v1/namespaces/lab/services/web",
+                     "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-1"):
+            self.get("/api/flow", "homestead_flow", "get_flow2")
+            self.get("/api/lh/overview", "homestead_longhorn", "overview")
+            K.fresh_reads("PATCH", path, {}, lambda: None)
+            self.assertEqual((None, None), (CACHE.kept_at("flow2"), CACHE.kept_at("lhov")), path)
+
+    def test_a_new_backup_target_drops_data_protection(self):
+        import homestead_longhorn as LH
+        self.get("/api/lh/overview", "homestead_longhorn", "overview")
+        LH._bust("lhtarget")
+        self.assertIsNone(CACHE.kept_at("lhov"))
+
+    def helm_job(self, status):
+        self.cluster.kube.add({"apiVersion": "batch/v1", "kind": "Job", "status": status,
+                               "metadata": {"namespace": "kube-system", "name": "helm-install-web"}})
+        self.get("/api/helm", "homestead_helm", "releases")
+        return self.cluster.server.OPS.RESOLVERS["helm"]({"ref": {"namespace": "kube-system", "name": "helm-install-web"}})
+
+    def test_a_helm_job_that_ends_drops_the_helm_page(self):
+        for status in ({"succeeded": 1}, {"failed": 1}):
+            self.helm_job(status)
+            self.assertIsNone(CACHE.kept_at("helm"), status)
+
+    def test_a_helm_job_still_running_keeps_the_helm_page(self):
+        self.helm_job({"active": 1})
+        self.assertIsNotNone(CACHE.kept_at("helm"))
+
+
+class WhatDropsTheKeptPagesTests(unittest.TestCase):
+    """Each change Homestead makes to what Data protection, Flow, Helm or
+    Disks show drops the reading those pages keep PAGE_SECONDS (#978)."""
+
+    def setUp(self):
+        clean_cache(self)
+        self.clock = Clock(self)
+        self.cluster = Cluster(self)
+        clean_snapshot(self)
+        self.table = self.cluster.server.MODULE_ROUTES.table()
+        self.OPS = self.cluster.server.OPS
+
+    def keep(self, *keys):
+        for key in keys:
+            CACHE.cached(key, ROUTER.PAGE_SECONDS, lambda: {})
+
+    def dropped(self, *keys):
+        return all(CACHE.kept_at(key) is None for key in keys)
+
+    def test_moving_or_switching_off_the_weekly_trim_drops_data_protection(self):
+        import homestead_weekly_trim as WT
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.enterContext(mock.patch.object(WT, "DATA_DIR", folder.name))
+        for body in ({"weekday": 2, "hour": 22}, {"enabled": False}):
+            self.keep("lhov")
+            WT.settings(body)
+            self.assertTrue(self.dropped("lhov"), body)
+
+    def test_leaving_a_volume_out_of_the_weekly_trim_drops_data_protection(self):
+        import homestead_weekly_trim as WT
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.enterContext(mock.patch.object(WT, "DATA_DIR", folder.name))
+        self.keep("lhov")
+        WT.leave_out({"volume": "pvc-1", "left_out": False})
+        self.assertTrue(self.dropped("lhov"))
+
+    def test_a_write_to_a_longhorn_node_drops_the_disks_page(self):
+        self.keep("disks")
+        K.fresh_reads("PATCH", "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/node-a", {}, lambda: None)
+        self.assertTrue(self.dropped("disks"))
+
+    def test_starting_a_disk_job_drops_the_disks_page(self):
+        import homestead_disk_allocation as ALLOCATION
+        import homestead_disk_v2 as DISK_V2
+        for module, name, path in ((DISK_V2, "start", "/api/disks/v2/start"),
+                                   (DISK_V2, "prepare", "/api/disks/v2/prepare"),
+                                   (ALLOCATION, "start", "/api/disks/allocation/start"),
+                                   (ALLOCATION, "finish", "/api/disks/allocation/finish")):
+            self.keep("disks")
+            with mock.patch.object(module, name, lambda body: {"ok": True}):
+                self.table[("POST", path)].handler(mock.Mock(body={}))
+            self.assertTrue(self.dropped("disks"), path)
+
+    def ended(self, kind, keys, answer=("succeeded", 100, "Done")):
+        resolver = self.OPS.RESOLVERS[kind]
+        inner = getattr(resolver, "__wrapped__", None)
+        self.assertIsNotNone(inner, f"{kind}: its resolver drops nothing when its job ends")
+        with mock.patch.object(resolver, "__wrapped__", lambda item: answer):
+            self.keep(*keys)
+            resolver({"id": "j1", "kind": kind, "ref": {}})
+        return self.dropped(*keys)
+
+    def test_a_disk_job_that_ends_drops_the_disks_page(self):
+        for kind in ("disk-retire", "disk-v2-convert", "disk-allocation", "longhorn-v2-prepare"):
+            self.assertTrue(self.ended(kind, ("disks",)), kind)
+            self.assertFalse(self.ended(kind, ("disks",), ("running", 50, "Working")), kind)
+
+    def test_a_job_that_changes_helm_releases_drops_the_helm_page_when_it_ends(self):
+        for kind in ("helm", "multus", "platform-upgrade"):
+            for status in ("succeeded", "failed"):
+                self.assertTrue(self.ended(kind, ("helm",), (status, 100, "Done")), (kind, status))
+            self.assertFalse(self.ended(kind, ("helm",), ("running", 40, "Helm is running")), kind)
+
+    def test_a_macvtap_chart_change_drops_the_helm_page(self):
+        import homestead_macvtap as MACVTAP
+        sent = []
+        chart = {"metadata": {"name": MACVTAP.CHART}, "spec": {}}
+        with mock.patch.object(MACVTAP, "kget", lambda path: copy.deepcopy(chart)), \
+                mock.patch.object(MACVTAP, "ksend", lambda *a, **k: sent.append(a)), \
+                mock.patch.object(MACVTAP, "platform", lambda *a: {}), \
+                mock.patch.object(MACVTAP, "addons", mock.Mock(chart_archive=lambda *a: "")), \
+                mock.patch.object(MACVTAP, "manifests", lambda *a: ""):
+            self.keep("helm")
+            MACVTAP.upgrade("v1.2.3")
+        self.assertTrue(sent)
+        self.assertTrue(self.dropped("helm"))
+
+    def test_a_pop_of_the_addresses_under_the_cache_s_lock_does_not_hang(self):
+        # The VIP loop pops "network" holding the cache's lock (a plain Lock):
+        # a pop listener must not take it again. A lock of the test's own, so
+        # a hang here leaves the real one free.
+        import threading
+        self.enterContext(mock.patch.object(CACHE, "_lock", threading.Lock()))
+        self.keep("network", "flow2")
+
+        def vip_loop():
+            with CACHE._lock:
+                CACHE._cache.pop("network", None)
+        thread = threading.Thread(target=vip_loop, daemon=True)
+        thread.start()
+        thread.join(3)
+        self.assertFalse(thread.is_alive(), "the pop waited on the lock its own thread holds")
+        self.assertIsNone(CACHE.kept_at("flow2"))
+
+    def test_a_change_of_addresses_drops_the_flow_picture_built_from_them(self):
+        self.keep("network", "flow2")
+        ROUTER.forget("network")
+        self.assertTrue(self.dropped("flow2"), "a forget")
+        self.keep("network", "flow2")
+        CACHE._cache.pop("network", None)
+        self.assertTrue(self.dropped("flow2"), "a pop")
+
+
 if __name__ == "__main__":
     unittest.main()

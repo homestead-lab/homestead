@@ -21,6 +21,7 @@ import homestead_disk_setup as SETUP
 import homestead_disk_region as REGION
 import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
+import homestead_routes
 
 KIND = 'disk-v2-convert'
 LABEL = 'homestead.io/disk-v2-convert'
@@ -994,18 +995,25 @@ def protect_mutations(disks):
     disks.v2_tasks = tasks
 
 
+def _disks_changed(result):
+    """The Disks page shows the job under way: kept PAGE_SECONDS, it is
+    dropped (#978)."""
+    homestead_routes.forget("disks")
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/disks/v2/status"): ("admin", lambda request: status(request.query.get("id", [""])[0])),
     ("POST", "/api/disks/v2/plan"): ("admin", lambda request: review(request.body)),
-    ("POST", "/api/disks/v2/start"): ("admin", lambda request: start(request.body)),
+    ("POST", "/api/disks/v2/start"): ("admin", lambda request: _disks_changed(start(request.body))),
     ("POST", "/api/disks/v2/prepare-review"): ("admin", lambda request: prepare_review(request.body.get("id", ""))),
-    ("POST", "/api/disks/v2/prepare"): ("admin", lambda request: prepare(request.body)),
+    ("POST", "/api/disks/v2/prepare"): ("admin", lambda request: _disks_changed(prepare(request.body))),
 }
 
 
 def register(ops):
     """The job store's entries for converting a disk to Longhorn V2 (#622)."""
-    ops.RESOLVERS[KIND] = progress
+    ops.RESOLVERS[KIND] = homestead_routes.drops_when_ended(progress, "disks")
     ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)
     ops.LOGGERS[KIND] = logs

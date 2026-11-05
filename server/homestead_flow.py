@@ -6,6 +6,7 @@ import homestead_hardware as HW
 import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
 import homestead_network_inventory as INV
+import homestead_cache as CACHE
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
@@ -324,10 +325,30 @@ def get_flow2():
     }
 
 
+def _network_forgotten(keys):
+    if "network" in keys:
+        CACHE.forget_where(lambda key: key == "flow2")
+
+
+def _network_popped(key, when):
+    # On the popping thread, maybe under the cache's lock (the VIP loop):
+    # a plain pop, which takes no lock.
+    if key == "network":
+        CACHE._cache.pop("flow2", None)
+
+
+# The picture is built from the addresses' reading (above): a change that
+# drops that reading drops the picture too, or a refresh between the two
+# would keep the old addresses for PAGE_SECONDS (#978).
+CACHE.on_forget(_network_forgotten)
+CACHE.on_pop(_network_popped)
+
+
 def view():
-    """The picture, kept eight seconds under server.py's key "flow2" - which it
-    drops when a Service or VIP changes."""
-    return homestead_routes.cached("flow2", 8, get_flow2)
+    """The picture, kept as long as the main pages under server.py's key
+    "flow2": a write to an app, a Service or a volume drops it
+    (homestead_kube.SHOWN_KEYS), as does a VIP's change (#978)."""
+    return homestead_routes.cached("flow2", homestead_routes.PAGE_SECONDS, get_flow2)
 
 
 # Its routes and who may use them (homestead_routes.py).

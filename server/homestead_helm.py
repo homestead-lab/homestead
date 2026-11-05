@@ -410,11 +410,14 @@ def job_status(item):
 ROUTES = {
     ("GET", "/api/helm/search"): ("viewer", lambda request: search((request.query.get("q") or [""])[0])),
     ("GET", "/api/helm/chart"): ("viewer", lambda request: chart((request.query.get("repo") or [""])[0], (request.query.get("name") or [""])[0])),
-    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached("helm", 10, releases)),
+    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached(
+        "helm", homestead_routes.PAGE_SECONDS, releases)),
     ("GET", "/api/helm/release"): ("viewer", lambda request: release((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }
 
 
 def register(ops):
     """The job store's entry for a Helm install or upgrade (#622)."""
-    ops.RESOLVERS["helm"] = job_status
+    # The release has its new revision once the job ends: the Helm page,
+    # kept PAGE_SECONDS, shows it on its next refresh (#978).
+    ops.RESOLVERS["helm"] = homestead_routes.drops_when_ended(job_status, "helm")
