@@ -45,6 +45,11 @@ class LonghornFixture(unittest.TestCase):
         DISKS = self.cluster.server.DISKS
         for name, value in (("kget", K.kget), ("ksend", K.ksend), ("temps", lambda: {})):
             self.enterContext(mock.patch.object(DISKS, name, value))
+        # homestead_longhorn too: the Backup check reads recurring jobs through
+        # it, and a file that bound it to its own fake made the overview unknown.
+        LH = self.cluster.server.LH
+        for name, value in (("kget", K.kget), ("ksend", K.ksend), ("_cache", self.cluster.server._cache)):
+            self.enterContext(mock.patch.object(LH, name, value))
         # V2 disk preparations live in the data dir, which these tests have none of.
         self.enterContext(mock.patch.object(self.cluster.server.DISKS, "v2_tasks", lambda: []))
         directory = tempfile.TemporaryDirectory()

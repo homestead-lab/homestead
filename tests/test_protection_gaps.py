@@ -570,6 +570,8 @@ class HarvesterTargetTests(unittest.TestCase):
             if path == BACKUP_TARGET.HARVESTER_TARGET:
                 return self.setting
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
 
     def test_nfs_and_s3_are_written_to_harvesters_setting(self):

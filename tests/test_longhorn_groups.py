@@ -106,6 +106,8 @@ class FakeLonghorn:
 class GroupTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 
     def labels(self, name):
@@ -165,6 +167,8 @@ class GroupTests(unittest.TestCase):
 class CoverageTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 
     def test_a_trim_alone_protects_nothing(self):
@@ -187,6 +191,8 @@ class CoverageTests(unittest.TestCase):
 class BackupTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 
     def test_backups_of_a_deleted_volume_are_listed(self):
