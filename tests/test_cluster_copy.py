@@ -17,12 +17,14 @@ import homestead_move_phases as PHASE
 import homestead_move_actions as ACT
 import homestead_passthrough as passthrough
 from fakes.storage_classes import storage_classes
+import homestead_names as NAMES
 from rebind import keep_bound
 
 
 class ClusterCopyTests(unittest.TestCase):
     def setUp(self):
         storage_classes(self, "longhorn-r2")   # the class new volumes go on here
+        keep_bound(self, source, NAMES)   # EngineTests.setUp binds the source module, which hands its reader to NAMES
         fixtures.EngineTests.setUp(self)
         self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["metadata"]["resourceVersion"] = "1"
 
