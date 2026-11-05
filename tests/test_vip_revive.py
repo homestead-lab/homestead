@@ -7,6 +7,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vips as VIPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 PLATFORM = {"load_balancer": "kube-vip", "vip_class": "kube-vip.io/kube-vip-class", "servicelb": True,
             "vip_service_election": True}
@@ -34,6 +36,7 @@ class ReviveTests(unittest.TestCase):
         self.deleted = []
         pods = {"items": [{"metadata": {"name": "kube-vip-24rxl", "ownerReferences": [{"kind": "DaemonSet"}]}},
                           {"metadata": {"name": "kube-vip-helm-install", "ownerReferences": [{"kind": "Job"}]}}]}
+        keep_bound(self, VIPS)
         VIPS.bind(lambda path: pods, lambda method, path, body=None, **k: self.deleted.append(path))
         VIPS._stranded_since.clear()
         VIPS._restarted[0] = 0.0
@@ -83,6 +86,7 @@ class UnreadLeasesTests(unittest.TestCase):
                 raise answer
             return answer if answer is not None else {"items": []}
 
+        keep_bound(self, VIPS)
         VIPS.bind(get, lambda method, path, body=None, **k: self.deleted.append(path) if method == "DELETE" else None)
         VIPS._restarted[0] = 0.0
         VIPS._stranded_since.clear()
@@ -124,6 +128,7 @@ class GlobalElectionTests(unittest.TestCase):
     def test_under_global_election_nothing_is_stranded_or_restarted(self):
         deleted = []
         pods = {"items": [{"metadata": {"name": "kube-vip-24rxl", "ownerReferences": [{"kind": "DaemonSet"}]}}]}
+        keep_bound(self, VIPS)
         VIPS.bind(lambda path: pods, lambda method, path, body=None, **k: deleted.append(path))
         VIPS._stranded_since.clear()
         VIPS._restarted[0] = 0.0

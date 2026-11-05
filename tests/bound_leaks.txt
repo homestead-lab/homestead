@@ -36,8 +36,6 @@ homestead_k3scluster.check	test_vm_lan	fake
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_vips.kget	test_vip_revive	fake
-homestead_vips.ksend	test_vip_revive	fake
 homestead_vms.display_icon	test_vm_edit	other
 homestead_vms.display_icon	test_vm_network_isolation	other
 homestead_vms.display_icon	test_vm_preparation	other
