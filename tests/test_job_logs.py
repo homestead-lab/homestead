@@ -10,6 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_joblogs as JL
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class HistoryTests(unittest.TestCase):
@@ -54,6 +56,7 @@ class HistoryTests(unittest.TestCase):
 
 class ReaderTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, JL)
         self.objects, self.logs = {}, {}
 
         def get(path):
