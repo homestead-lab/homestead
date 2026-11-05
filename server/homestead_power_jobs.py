@@ -3,7 +3,7 @@
 Host actions review a host's power change (homestead_power.plan); once the
 review is accepted the job cordons and drains the host, stops what waits for
 it, rechecks and sends the command, recording each phase so another replica
-can carry it on if the drain evicts this one. An OS update of every host
+can carry it on if the drain evicts this one. An OS update of the hosts
 (homestead_os_rollout) restarts each host the same way, with nobody there to
 accept a warning.
 

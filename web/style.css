@@ -2814,6 +2814,8 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 /* OS updates across the hosts (host-os.js). */
 .osu-days{display:flex;flex-wrap:wrap;gap:6px 14px;margin:8px 0}
 .osu-results{margin:8px 0 0;padding-left:18px}
+.osu-pick{display:inline-flex;align-items:center;margin-right:6px;vertical-align:middle;cursor:pointer}
+.osu-picked{display:flex;justify-content:flex-end;margin-top:8px}.osu-picked:has(> [hidden]){display:none}
 
 /* The first-run checklist (welcome.js) and Homestead's own address (views-network.js). */
 .welcome-steps{list-style:none;margin:0;padding:0;display:grid;gap:12px}
