@@ -1556,9 +1556,8 @@ class StopSaysWhatHappensTests(Waiting):
 
 
 class StopBeforeAnyStepTests(Runs):
-    """What the real-cluster check relies on (plans/2026-11-05-os-update-per-host.md):
-    rounds of holds with no step, Stop before the first tick, then a tick. Holds land
-    and are let go, and no host is asked to install, refresh or restart anything."""
+    """Rounds of holds with no step, Stop before the first tick, then a tick: holds
+    land and are let go, and no host is asked to install, refresh or restart anything."""
     def test_it_holds_and_lets_go_and_touches_no_package(self):
         reads = []
         real = self.hosts.read
