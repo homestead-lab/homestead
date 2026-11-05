@@ -7,7 +7,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_names as NAMES
+import server  # wires the modules first, so keep_bound puts them back to that wiring, not to bare defaults
 import homestead_outage as O
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 APP = {"kind": "app", "ns": "lab", "name": "frigate", "key": "lab/frigate",
        "actions": {"restart": {"after_min": 5, "max": 2}, "webhook": "https://hooks.example.com/x"}}
@@ -23,6 +26,7 @@ UP = {"lab/frigate": {"state": "up", "since": 0, "last": {}}}
 class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, O)
         O.bind(self.dir.name)
         self.restarts, self.sent = [], []
 
@@ -131,6 +135,7 @@ class PayloadTests(unittest.TestCase):
 class ServerTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, O)
         O.bind(self.dir.name)
 
     def tearDown(self):
