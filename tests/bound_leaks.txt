@@ -83,7 +83,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_ports.DATA_DIR	test_ports	fake
 homestead_power_hold.OWN	test_power_hold	other
 homestead_power_hold.OWN_POD	test_power_hold	other
 homestead_power_hold.kget	test_power_hold	fake
