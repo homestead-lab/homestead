@@ -89,8 +89,10 @@ class Store(unittest.TestCase):
 
 
 def guarded(module):
-    """A disks module stand-in whose mutation scope the job module wraps."""
+    """A disks module stand-in whose mutation scope is the job module's own check:
+    it wraps mutation_scope, or installs it with add_guard (fix/disk-guards-kept)."""
     disks = SimpleNamespace(mutation_scope=lambda node, disk, device: contextlib.nullcontext())
+    disks.add_guard = lambda name, scope: setattr(disks, "mutation_scope", scope)
     module.protect_mutations(disks)
     return disks
 
