@@ -52,9 +52,6 @@ homestead_names.kget	test_smart	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_setup.DATA_DIR	test_update_file	fake
-homestead_share_servers.default_class	test_shares_writes	other
-homestead_share_servers.shared_classes	test_shares_writes	other
-homestead_share_servers.storage_options	test_shares_writes	other
 homestead_signins.DATA_DIR	test_signins	fake
 homestead_smart.kget	test_smart	fake
 homestead_smart.signing_key	test_smart	fake
