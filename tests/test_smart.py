@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_smart as smart
 import server
+sys.path.insert(0, str(ROOT / "tests"))
+from rebind import keep_bound
 
 
 class _Response:
@@ -33,6 +35,7 @@ class SmartTests(unittest.TestCase):
                 "status": {"phase": "Running", "podIP": "10.42.0.9",
                            "containerStatuses": [{"name": "smart", "ready": True}]},
             }]}
+        keep_bound(self, smart, smart.NAMES)
         smart.bind(get, "lab", lambda: b"test-signing-key")
 
     def test_mutating_helper_request_is_timestamped_and_signed(self):
