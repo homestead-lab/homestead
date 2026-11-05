@@ -46,8 +46,6 @@ homestead_diagnostics.DIRECTORY	test_fleet_identities	fake
 homestead_diagnostics.JOBS	test_fleet_identities	fake
 homestead_diagnostics.READ	test_fleet_identities	fake
 homestead_diagnostics.VERSION	test_fleet_identities	other
-homestead_disks.mutation_scope	test_disk_replace	other
-homestead_disks.v2_tasks	test_disk_replace	other
 homestead_files.API	test_file_manager	other
 homestead_files.CTX	test_file_manager	other
 homestead_files.SYSTEM_NAMESPACES	test_file_manager	other
