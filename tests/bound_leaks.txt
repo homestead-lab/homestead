@@ -52,7 +52,6 @@ homestead_lifecycle.hardware_features	test_viewer_secret_values	fake
 homestead_lifecycle.kget	test_viewer_secret_values	fake
 homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_longhorn.STORAGE_CLASS	test_storage_classes	other
-homestead_names.kget	test_container_import	fake
 homestead_names.kget	test_smart	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
