@@ -50,8 +50,6 @@ homestead_longhorn.STORAGE_CLASS	test_storage_classes	other
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_setup.DATA_DIR	test_update_file	fake
-homestead_snapshot_delete.kget	test_snapshot_delete	fake
-homestead_snapshot_delete.ksend	test_snapshot_delete	fake
 homestead_updates.kget	test_storage_pending	fake
 homestead_upgrades.fetch	test_upgrades	fake
 homestead_upgrades.kget	test_upgrades	fake
