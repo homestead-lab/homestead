@@ -35,13 +35,6 @@ homestead_imports.ksend	test_vm_write_integration	fake
 homestead_k3scluster.check	test_vm_lan	fake
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
-homestead_lifecycle.STORAGE_CLASS	test_viewer_secret_values	other
-homestead_lifecycle.SYS_NS	test_viewer_secret_values	other
-homestead_lifecycle._cache	test_viewer_secret_values	other
-homestead_lifecycle.create_pvc	test_viewer_secret_values	fake
-homestead_lifecycle.hardware_features	test_viewer_secret_values	fake
-homestead_lifecycle.kget	test_viewer_secret_values	fake
-homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_vips.kget	test_vip_places	fake
 homestead_vips.kget	test_vip_revive	fake
