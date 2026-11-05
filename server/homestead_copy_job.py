@@ -3,11 +3,15 @@
 Never replay an uncertain mutation. No volume deletion or automatic rollback.
 The initial multi-object edit is not atomic; a failed setup remains inspectable.
 """
+import base64
 import copy
 import hashlib
 import json
+import urllib.error
 
 import homestead_capacity_review as REVIEW
+import homestead_names as NAMES
+import homestead_pod_resources as SIZE
 import homestead_restructure as COPY
 import homestead_rename as IDENT
 import homestead_rollout_capacity as ROLLOUT
@@ -15,6 +19,133 @@ import homestead_vm_power_job as LOCKS
 
 KIND = "workload-copy"
 MARKER = "homestead.io/storage-copy-job"
+# The Deployment's pod template and replicas from before the edit, kept in a
+# Secret beside it so a failed copy can undo the edit. Not on the Deployment,
+# whose annotations a viewer sees in full, and not in the journal: a template
+# can carry credentials in plain env values. The journal keeps the Secret's
+# name, uid and the record's digest, so a changed record is not applied. The
+# Secret is owned by the Deployment, so it goes with it, and is removed once
+# the copy succeeded or the edit was undone.
+EARLIER_PREFIX = "homestead-copy-earlier-"
+EARLIER_LABEL = "homestead.io/storage-copy-earlier"
+# How long a copy Job may run, pod scheduling and image pull included, before
+# Kubernetes stops it (activeDeadlineSeconds). A floor of 30 minutes covers a
+# slow pull and a small copy; each GiB to copy adds 2 minutes, about 8.5 MiB/s,
+# which a slow disk or a replicated network volume still manages. The 48-hour
+# ceiling (reached at about 1.4 TiB) bounds how long an app whose copy pod never
+# schedules stays stopped; a copy of unknown size gets the ceiling.
+DEADLINE_FLOOR = 30 * 60
+SECONDS_PER_GIB = 120
+DEADLINE_CEILING = 48 * 3600
+
+
+class KeptStopped(IDENT.Stopped):
+    """A failed copy whose app stays stopped; the message already says why and what was kept."""
+
+
+def deadline(gib):
+    """Seconds a copy of gib GiB may take; None is a size not known."""
+    if gib is None:
+        return DEADLINE_CEILING
+    return max(DEADLINE_FLOOR, min(DEADLINE_CEILING, DEADLINE_FLOOR + SECONDS_PER_GIB * max(0, int(gib))))
+
+
+def claim_gib(pvc):
+    """A claim's size in whole GiB (what it holds at most), or None when not known."""
+    return SIZE.storage_gib(pvc.get("status", {}).get("capacity", {}).get("storage") or
+                            pvc.get("spec", {}).get("resources", {}).get("requests", {}).get("storage")) or None
+
+
+def copy_gib(ns, moves, read):
+    """The data a copy carries, at most: each source claim it reads, once. None if any size is not known."""
+    sizes = [claim_gib(read(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}"))
+             for name in sorted({m["from"] for m in moves if m.get("data", True) is not False})]
+    return None if None in sizes else sum(sizes)
+
+
+def _duration(seconds):
+    if seconds < 3600:
+        return f"{-(-seconds // 60)} minutes"
+    hours = round(seconds / 3600, 1)
+    return f"{hours:g} hour" + ("" if hours == 1 else "s")
+
+
+def failure(job, gib=None):
+    """Why a failed copy Job failed, in words for the person whose app it is."""
+    for c in job.get("status", {}).get("conditions", []):
+        if c.get("type") == "Failed" and c.get("status") == "True":
+            if c.get("reason") == "DeadlineExceeded":
+                seconds = int(job.get("spec", {}).get("activeDeadlineSeconds") or 0)
+                size = f"{gib} GiB" if gib else "data of unknown size"
+                limit = f" within {_duration(seconds)}" if seconds else " within its time limit"
+                return f"Copying {size} did not finish{limit}: its pod could not be scheduled or the copy hung"
+            return "The copy failed" + (f" ({c['reason']})" if c.get("reason") else "")
+    return "The copy failed"
+
+
+def earlier(dep):
+    """The record a failed copy undoes the edit with: the template and replicas as JSON."""
+    return json.dumps({"template": dep["spec"]["template"], "replicas": dep["spec"].get("replicas", 1)},
+                      sort_keys=True, separators=(",", ":"))
+
+
+def earlier_name(uid):
+    return EARLIER_PREFIX + uid
+
+
+def _earlier_path(ref):
+    return f"/api/v1/namespaces/{ref['namespace']}/secrets/{ref['earlier_secret']}"
+
+
+def earlier_secret(ns, name, uid, text):
+    return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": earlier_name(uid), "namespace": ns,
+                         "labels": {EARLIER_LABEL: NAMES.fitted(name), "app.kubernetes.io/managed-by": "homestead"},
+                         "ownerReferences": [{"apiVersion": "apps/v1", "kind": "Deployment", "name": name, "uid": uid}]},
+            "data": {"earlier": base64.b64encode(text.encode()).decode()}}
+
+
+def read_earlier(ref, read):
+    """The recorded text, None when it is gone, replaced or does not match its digest."""
+    if not ref.get("earlier_secret") or not ref.get("earlier_uid"):
+        return None
+    try:
+        secret = read(_earlier_path(ref))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+    if IDENT.identity(secret)["uid"] != ref["earlier_uid"]:
+        return None
+    text = base64.b64decode((secret.get("data") or {}).get("earlier") or "").decode("utf-8", "replace")
+    return text if _sha(text) == ref.get("earlier_digest") else None
+
+
+def drop_earlier(ref, send):
+    """Remove the record once it is no longer needed; a note when that failed."""
+    if not ref.get("earlier_secret") or not ref.get("earlier_uid") or ref.get("earlier_dropped"):
+        return ""
+    try:
+        send("DELETE", _earlier_path(ref), {"apiVersion": "v1", "kind": "DeleteOptions",
+                                            "preconditions": {"uid": ref["earlier_uid"]}})
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            return (f" Its record of before, Secret {ref['earlier_secret']}, could not be removed "
+                    f"(HTTP {error.code}); delete it when you no longer need it.")
+    except Exception:
+        return (f" Its record of before, Secret {ref['earlier_secret']}, could not be removed; "
+                "delete it when you no longer need it.")
+    ref["earlier_dropped"] = True
+    return ""
+
+
+def _sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _removals(annotations):
+    return [{"op": "remove", "path": "/metadata/annotations/" + key.replace("~", "~0").replace("/", "~1")}
+            for key in (MARKER, COPY.HELD) if key in annotations]
 
 
 def _starter():
@@ -105,7 +236,10 @@ def helper_manifest(ns, name, moves):
             "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "template": job["spec"]["template"]}}
 
 
-def start(body, context, prepared, moves, read, ops, apply):
+def start(body, context, prepared, moves, read, ops, apply, send=None):
+    if send is None:
+        import homestead_kube as KUBE
+        send = KUBE.ksend
     if not REVIEW.valid(body, context) or body.get("confirm_capacity") is not True:
         raise ValueError("Review the storage copy before saving")
     ns, name = body["ns"], body["name"]
@@ -123,6 +257,9 @@ def start(body, context, prepared, moves, read, ops, apply):
            "phase": "preparing", "retain_resources": True, "claims": previous,
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0]), "started_by": _starter()}
+    record = earlier(current)
+    ref["earlier_digest"] = _sha(record)
+    not_started = ""
     operation = ops.start(KIND, f"Move {name}'s data", {"kind": "Deployment", "namespace": ns, "name": name},
                           "/containers", ref, "Recording storage edit; uncertain steps are never replayed")
     ident = operation["id"]
@@ -132,6 +269,17 @@ def start(body, context, prepared, moves, read, ops, apply):
             # Re-fence after the durable intent, before the multi-object edit.
             if IDENT.identity(read(path)) != source:
                 raise ValueError("Workload changed before the edit")
+            # The record of before is saved first: without it a failed copy
+            # could not undo the edit, so no copy starts.
+            try:
+                kept = send("POST", f"/api/v1/namespaces/{ns}/secrets", earlier_secret(ns, name, source["uid"], record))
+            except Exception:
+                not_started = (f"The storage copy did not start: Homestead could not save {name}'s configuration from "
+                               f"before the edit (Secret {earlier_name(source['uid'])}), which it needs to undo the edit "
+                               f"if the copy fails. Nothing was changed; {name} is still running as it was.")
+                raise
+            ops.record_phase(ident, "preparing", 5, "Configuration from before the edit recorded; saving the edit stopped",
+                             earlier_secret=kept["metadata"]["name"], earlier_uid=IDENT.identity(kept)["uid"])
             prepared["deployment"].setdefault("metadata", {}).setdefault("annotations", {})[MARKER] = ident
             result = apply()
             saved = result.pop("_held_receipt")
@@ -155,9 +303,11 @@ def start(body, context, prepared, moves, read, ops, apply):
             return result
         except Exception:
             try:
-                ops.record_phase(ident, "failed", 5, "Storage edit outcome is unverified. Inspect the workload and volumes; nothing was retried or rolled back.")
+                ops.record_phase(ident, "failed", 5, not_started or "Storage edit outcome is unverified. Inspect the workload and volumes; nothing was retried or rolled back.")
             except Exception:
                 pass
+            if not_started:
+                raise ValueError(not_started) from None
             raise ValueError(f"Storage edit stopped; inspect job {ident}. Configuration or new volumes may have been saved. No automatic rollback or cleanup was performed.") from None
 
 
@@ -219,6 +369,8 @@ def exclusive(ref, read):
 def resolve(item, read, send, ops, admission):
     ref, percent = item["ref"], item.get("progress", 0)
     phase = ref.get("phase")
+    if phase == "restore_intent":
+        return resumed_restore(item, read, send)
     if phase in ("preparing", "copy_intent", "release_intent", "recovery_intent"):
         return "running", percent, "A request may be unfinished. Inspect outcome; Homestead will not replay it."
     try:
@@ -231,7 +383,8 @@ def resolve(item, read, send, ops, admission):
                 state.get(key, 0) == count for key in ("replicas", "readyReplicas", "availableReplicas", "updatedReplicas"))
             if ready:
                 ref.update(phase="done", retain_resources=False)
-                return "succeeded", 100, "Copy finished; workload is ready" if count else "Copy finished; workload stays stopped as requested"
+                note = drop_earlier(ref, send)
+                return "succeeded", 100, ("Copy finished; workload is ready" if count else "Copy finished; workload stays stopped as requested") + note
             return "running", 90, "Copy finished; waiting for workload readiness (not an application-health check)"
         dep = held(item, read)
         if not quiet(dep, read):
@@ -239,13 +392,15 @@ def resolve(item, read, send, ops, admission):
         exclusive(ref, read)
         if phase == "stopping":
             job_name, body = COPY.job(ref["namespace"], ref["name"], ref["moves"])
+            gib = copy_gib(ref["namespace"], ref["moves"], read)
+            body["spec"]["activeDeadlineSeconds"] = deadline(gib)
             check = admission(helper_manifest(ref["namespace"], ref["name"], ref["moves"]))
             if check.get("blocked") is not False:
                 raise IDENT.Stopped("The copy helper cannot fit current placement or storage constraints")
             if not quiet(held(item, read), read):
                 return "running", 10, "Waiting for workload pods to terminate after the placement check"
             exclusive(ref, read)
-            ref.update(phase="copy_intent", job=job_name)
+            ref.update(phase="copy_intent", job=job_name, copy_gib=gib)
             ops._finish(item, "running", 20, f"Submitting copy Job {ref['namespace']}/{job_name}; an uncertain request will not be replayed")
             ops.checkpoint(item)  # before POST; never adopt a same-name Job on retry
             receipt = send("POST", f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs", body)
@@ -259,7 +414,7 @@ def resolve(item, read, send, ops, admission):
             raise IDENT.Stopped("Copy phase is unknown; inspect retained resources")
         complete, failed = copy_finished(ref, read)
         if failed:
-            raise IDENT.Stopped("Copy failed; the destination may contain partial data")
+            return restore(item, dep, read, send, ops, admission)
         if not complete:
             return "running", 45, "Waiting for the copy Job to finish and release its pods"
         proposed = unheld(dep)
@@ -275,9 +430,7 @@ def resolve(item, read, send, ops, admission):
         patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
                  {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
                  {"op": "add", "path": "/spec/replicas", "value": ref["replicas"]}]
-        for key in (MARKER, COPY.HELD):
-            if key in dep["metadata"].get("annotations", {}):
-                patch.append({"op": "remove", "path": "/metadata/annotations/" + key.replace("~", "~0").replace("/", "~1")})
+        patch += _removals(dep["metadata"].get("annotations", {}))
         ref.update(phase="release_intent", running_digest=digest(proposed["spec"]))
         ops._finish(item, "running", 75, "Copy completed and fresh placement checked; recording the restart request")
         ops.checkpoint(item)
@@ -288,12 +441,111 @@ def resolve(item, read, send, ops, admission):
         ref["phase"] = "starting"
         ops.checkpoint(item)
         return "running", 85, "Copy finished; restart accepted, checking readiness"
+    except KeptStopped as error:
+        ref["retain_resources"] = True
+        return "failed", percent, str(error)
     except Exception as error:
         reason = str(error) if isinstance(error, IDENT.Stopped) else "Copy step could not be verified"
         # Preserve intent phase when the response is uncertain; never infer
         # success from a same-name replacement or repeat the upstream request.
         ref["retain_resources"] = True
         return "failed", percent, reason + ". Inspect outcome before starting anything; volumes were retained and no rollback was attempted."
+
+
+KEPT = "The new volumes and the copy Job were kept for inspection."
+
+
+def undone(ref, dep):
+    """Whether dep is back as it was before the edit, with no copy hold left."""
+    return (IDENT.identity(dep)["uid"] == ref["deployment"]["uid"] and
+            digest(dep["spec"].get("template")) == ref.get("earlier_template_digest") and
+            dep["spec"].get("replicas") == ref.get("earlier_replicas") and
+            not any(key in dep["metadata"].get("annotations", {}) for key in (MARKER, COPY.HELD)))
+
+
+def _undone_message(ref):
+    count, name = ref["earlier_replicas"], ref["name"]
+    if count:
+        return (f"{ref['failure']}. The edit was undone: {name} was started again with {count} "
+                f"replica{'s' if count != 1 else ''} on its configuration and storage from before the edit, "
+                f"which the copy only read. {KEPT}")
+    return (f"{ref['failure']}. The edit was undone: {name} has its configuration and storage from before the "
+            f"edit back and stays stopped, as it was before. {KEPT}")
+
+
+def _unsure_message(ref):
+    return (f"{ref.get('failure') or 'The copy failed'}. Undoing the edit of {ref['name']} may not have been "
+            f"applied: check its pod template, its replica count and the {MARKER} mark before starting it. {KEPT}")
+
+
+def restore(item, dep, read, send, ops, admission):
+    """A copy that failed or ran out of time: the edit is undone. The pod
+    template and replicas from before it come back, so the app runs as it did,
+    on storage the copy only read. Anything that makes that unsafe or unsure
+    keeps the app stopped and says why. The new volumes and the Job are kept."""
+    ref = item["ref"]
+    why = failure(read(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}"), ref.get("copy_gib"))
+
+    def stay(reason):
+        raise KeptStopped(f"{why}. {ref['name']} stays stopped: {reason}. {KEPT}")
+    try:
+        dep = held(item, read)
+        if not quiet(dep, read):
+            stay("its pods changed while the copy ran; check them, then start it")
+        exclusive(ref, read)
+    except KeptStopped:
+        raise
+    except IDENT.Stopped as error:
+        stay(str(error).rstrip(".").lower() + "; check it, then start it")
+    try:
+        text = read_earlier(ref, read)
+    except Exception:
+        stay("its configuration from before the edit could not be read, so the edit cannot be undone; "
+             "edit it back, then start it")
+    if not text:
+        stay("its configuration from before the edit was not recorded, was removed or was changed, so the edit cannot be "
+             "undone; edit it back, then start it")
+    saved = json.loads(text)
+    written = {m["to"] for m in ref["moves"]}
+    used = {v.get("persistentVolumeClaim", {}).get("claimName") for v in saved["template"].get("spec", {}).get("volumes", [])}
+    if written & used:
+        stay(f"the copy also wrote to {', '.join(sorted(written & used))}, which it used before the edit; "
+             "check that data, then start it")
+    count = int(saved["replicas"] or 0)
+    proposed = unheld(dep)
+    proposed["spec"].update(template=saved["template"], replicas=count)
+    if count and admission(proposed).get("blocked") is not False:
+        stay("it no longer fits current placement or storage constraints as it was; free room, then start it")
+    meta = IDENT.identity(dep)
+    patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
+             {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
+             {"op": "add", "path": "/spec/template", "value": saved["template"]},
+             {"op": "add", "path": "/spec/replicas", "value": count}] + _removals(dep["metadata"].get("annotations", {}))
+    ref.update(phase="restore_intent", retain_resources=True, failure=why, earlier_replicas=count,
+               earlier_template_digest=digest(saved["template"]))
+    ops._finish(item, "running", item.get("progress", 45), f"{why}; undoing the edit of {ref['name']}")
+    ops.checkpoint(item)  # before PATCH; an uncertain undo is never replayed
+    path = IDENT.base(ref["namespace"]) + "/" + ref["name"]
+    try:
+        result = _as(ref.get("started_by"), lambda: send("PATCH", path, patch, ctype="application/json-patch+json"))
+    except Exception:
+        result = read(path)  # a lost reply: what the cluster has now decides
+    if not undone(ref, result):
+        raise KeptStopped(_unsure_message(ref))
+    ref["phase"] = "restored"
+    note = drop_earlier(ref, send)
+    ops.checkpoint(item)
+    return "failed", item.get("progress", 45), _undone_message(ref) + note
+
+
+def resumed_restore(item, read, send):
+    """Homestead stopped after recording the undo: look, never send it again."""
+    ref = item["ref"]
+    ref["retain_resources"] = True
+    if undone(ref, read(IDENT.base(ref["namespace"]) + "/" + ref["name"])):
+        ref["phase"] = "restored"
+        return "failed", item.get("progress", 45), _undone_message(ref) + drop_earlier(ref, send)
+    return "failed", item.get("progress", 45), _unsure_message(ref)
 
 
 def legacy_status(item):
@@ -348,12 +600,12 @@ def recovery_run(item, options, read, send, ops):
         if annotations.get(MARKER) == item["id"]:
             patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
                      {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]}]
-            patch += [{"op": "remove", "path": "/metadata/annotations/" + key.replace("~", "~0").replace("/", "~1")}
-                      for key in (MARKER, COPY.HELD) if key in annotations]
+            patch += _removals(annotations)
             # The generic canceller has durably recorded cancelling before
             # this metadata-only CAS. A retry cannot start or delete anything.
             result = send("PATCH", IDENT.base(ref["namespace"]) + "/" + ref["name"], patch, ctype="application/json-patch+json")
             if IDENT.identity(result)["uid"] != meta["uid"] or result["metadata"].get("annotations", {}).get(MARKER):
                 raise ValueError("Hold release was not confirmed; inspect before retrying")
         ref["retain_resources"] = False
-        return "Safety hold released; workload replicas, storage mappings, volumes and copy Job were not changed. Review the data before starting."
+        note = drop_earlier(ref, send)
+        return "Safety hold released; workload replicas, storage mappings, volumes and copy Job were not changed. Review the data before starting." + note

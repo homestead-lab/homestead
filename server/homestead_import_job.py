@@ -131,12 +131,17 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                     if (IDENT.identity(current)["uid"] != dep["metadata"]["uid"] or current["spec"] != dep["spec"] or
                             current["spec"].get("replicas") != 0 or current["metadata"].get("annotations", {}).get(GUARD.DISPATCH) != ident):
                         raise ValueError("Imported workload changed before copying")
+                # A copy pod that never schedules, or a copy that hangs, ends
+                # at a deadline sized from the volumes it fills.
+                sizes = [int(v["size_gb"]) if v.get("size_gb") else None for v in prepared["volumes"]]
+                gib = None if None in sizes else sum(sizes)
+                obj["spec"]["activeDeadlineSeconds"] = COPY.deadline(gib)
                 job = writer("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", obj)
                 if prepared.get("source_secret"):
                     # The copy waits for its password, then starts.
                     writer("POST", f"/api/v1/namespaces/{ns}/secrets", source_copy(prepared["source_secret"], ns, job, read))
                 ops.record_phase(ident, "writing", 30, "Copy Job identity confirmed", job=job["metadata"]["name"],
-                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]))
+                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]), copy_gib=gib)
                 if dep:
                     current = read(IDENT.base(ns) + "/" + name)
                     if IDENT.identity(current)["uid"] != dep["metadata"]["uid"] or current["spec"] != dep["spec"]:
@@ -174,7 +179,13 @@ def status(item, read):
         ref["claims"] = now
         complete, failed = COPY.copy_finished(ref, read)
         if failed:
-            raise ValueError("Copy failed")
+            why = COPY.failure(read(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}"),
+                               ref.get("copy_gib"))
+            ref.update(phase="failed", retain_resources=True)
+            app = (f" {ref['name']} was created stopped for this import and stays stopped, since its data is incomplete."
+                   if any(t.get("kind") == "Deployment" for t in ref.get("planned", [])) else "")
+            return "failed", item.get("progress", 0), (
+                f"{why}.{app} Its volumes and the copy Job were kept; remove the import and run it again.")
         if complete:
             ref.update(phase="done", retain_resources=False)
             return "succeeded", 100, "Copy completed; review capacity and start the application when ready"
