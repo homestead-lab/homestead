@@ -10,10 +10,12 @@ import homestead_vm_create as VM_CREATE
 import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_vm_write as journal
+from rebind import keep_bound
 
 
 class WriteIntegrationTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, vms)   # edit_fixtures.Cluster binds vms
         self.events, self.calls = [], []
         self.writer = journal.ResourceWriter(self.send, self.events.append)
 
