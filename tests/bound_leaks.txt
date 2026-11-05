@@ -46,10 +46,6 @@ homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
 homestead_history.DATA_DIR	test_mqtt_history	fake
-homestead_host_console.DATA_DIR	test_host_console_settings	fake
-homestead_host_console.VERSION	test_host_console_settings	other
-homestead_host_console.hostrun	test_host_console_settings	fake
-homestead_host_console.kget	test_host_console_settings	fake
 homestead_host_os.DATA_DIR	test_host_os	fake
 homestead_host_os.hostrun	test_host_os	fake
 homestead_host_os.kget	test_host_os	fake
@@ -138,7 +134,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_onboard.OPS	test_node_removal_k3s	other
 homestead_onboard.kget	test_node_removal_k3s	fake
 homestead_onboard.ksend	test_node_removal_k3s	fake
-homestead_operations.DATA_DIR	test_host_console_settings	fake
 homestead_operations.DATA_DIR	test_image_pull_progress	other
 homestead_operations.DATA_DIR	test_job_errors	fake
 homestead_operations.DATA_DIR	test_job_store_api	fake
@@ -146,7 +141,6 @@ homestead_operations.DATA_DIR	test_move_flow	fake
 homestead_operations.DATA_DIR	test_operations	fake
 homestead_operations.DATA_DIR	test_operations_memo	fake
 homestead_operations.DATA_DIR	test_set_restart	fake
-homestead_operations.deployment_progress	test_host_console_settings	fake
 homestead_operations.deployment_progress	test_image_progress	fake
 homestead_operations.deployment_progress	test_image_pull_progress	fake
 homestead_operations.deployment_progress	test_job_errors	fake
@@ -155,7 +149,6 @@ homestead_operations.deployment_progress	test_move_flow	fake
 homestead_operations.deployment_progress	test_operations	fake
 homestead_operations.deployment_progress	test_operations_memo	fake
 homestead_operations.deployment_progress	test_set_restart	fake
-homestead_operations.kget	test_host_console_settings	fake
 homestead_operations.kget	test_image_pull_progress	fake
 homestead_operations.kget	test_job_errors	other
 homestead_operations.kget	test_job_store_api	fake
