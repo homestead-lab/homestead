@@ -6,6 +6,8 @@ import homestead_update_registry as REGISTRY
 import homestead_imports as IMP
 import homestead_image_cache as IMAGES
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 A, B, C = "a" * 64, "b" * 64, "c" * 64
 LAYERS = [{"digest": f"sha256:{A}", "size": 100 * 1024 ** 2}, {"digest": f"sha256:{B}", "size": 50 * 1024 ** 2},
@@ -55,6 +57,7 @@ class WatchParseTests(unittest.TestCase):
                 return {"metadata": {"labels": {"kubernetes.io/arch": "amd64"}}}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         import tempfile
+        keep_bound(self, PULL)
         PULL.bind(kget, lambda m, p, b=None, **k: sent.append((m, p, b)), lambda p: "", lambda image, arch: LAYERS,
                   data_dir=tempfile.mkdtemp())
         PULL._LAYERS.clear()
@@ -79,6 +82,9 @@ class RegistryLayerTests(unittest.TestCase):
 
 
 class TrayMessageTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, OPS)
+
     def test_the_job_says_how_far_the_pull_has_got(self):
         OPS.deployment_progress = lambda ns, name: {
             "desired": 1, "ready": 0, "phase": "progressing",
@@ -93,6 +99,7 @@ class ScanTests(unittest.TestCase):
     """Kubernetes lists only each node's largest images."""
 
     def setUp(self):
+        keep_bound(self, IMP, IMP.NAMES)
         self.sent, self.pods, self.logs = [], [], {}
         node = {"metadata": {"name": "node1"}, "status": {"conditions": [{"type": "Ready", "status": "True"}],
                                                           "images": [{"names": ["big:1"], "sizeBytes": 10}]}}
