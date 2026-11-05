@@ -74,6 +74,11 @@ def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2", default_namespa
 
 
 def _bust(*keys):
+    """Drop the Longhorn answers these keys start with, after a write to them.
+    Data protection's picture ("lhov") is made of them all - volumes, jobs,
+    the backup target - so it goes too, whatever the write was: the page keeps
+    it PAGE_SECONDS (#978)."""
+    keys = keys and (*keys, "lhov")
     CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
@@ -225,7 +230,8 @@ ROUTES = {
     ("POST", "/api/lh/group"): ("operator", lambda request: VOLUMES.save_group(request.body)),
     ("POST", "/api/lh/group/delete"): ("admin", lambda request: VOLUMES.delete_group(request.body.get("name", ""))),
     ("POST", "/api/lh/backup/delete"): ("admin", lambda request: BACKUPS.delete_backup(request.body.get("name", ""))),
-    ("GET", "/api/lh/overview"): ("viewer", lambda request: homestead_routes.cached("lhov", 8, overview)),
+    ("GET", "/api/lh/overview"): ("viewer", lambda request: homestead_routes.cached(
+        "lhov", homestead_routes.PAGE_SECONDS, overview)),
     ("GET", "/api/lh/backupvolumes"): ("viewer", lambda request: homestead_routes.cached("lhbackupvols", 15, BACKUPS.backup_volumes)),
     ("POST", "/api/lh/assign"): ("operator", lambda request: VOLUMES.bulk_assign(request.body["volumes"], request.body["name"], request.body.get("kind", "group"), request.body.get("enabled", True))),
     ("POST", "/api/lh/target"): ("admin", lambda request: BACKUP_TARGET.set_backup_target(request.body["url"], request.body.get("secret", ""), request.body.get("poll", "5m"), request.body.get("keys"))),

@@ -138,8 +138,20 @@ _SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs
                     r"|services|persistentvolumeclaims|persistentvolumes|volumesnapshots|virtualmachines"
                     r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
                     r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
-SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods")
+# Flow ("flow2"), Data protection ("lhov") and Disks ("disks", Longhorn's
+# nodes) draw the same objects and are kept as long (#978), as are the Volumes
+# page's classes ("sc:classes", the claims on each), V2 engine ("lhv2", the
+# hosts' hugepages and Longhorn's nodes' disks) and old copies ("oldcopies",
+# backing volumes).
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods", "flow2", "lhov", "disks",
+              "sc:classes", "lhv2", "oldcopies")
 SHOWN_PREFIXES = ("node:", "impact:")
+# Writes the main pages do not draw, and the kept page readings that show
+# them (#978): any StorageClass (a class made, made the default or removed,
+# by Volumes, a restore's repair or the ISO copies), and the V2 engine's
+# switch, Longhorn's or Harvester's.
+_ALSO_SHOWN = ((re.compile(r"/storageclasses(/|\?|$)"), ("sc:classes",)),
+               (re.compile(r"/settings/(v2-data-engine|longhorn-v2-data-engine-enabled)$"), ("lhv2",)))
 
 
 def _shown(key):
@@ -148,8 +160,13 @@ def _shown(key):
 
 def fresh_reads(method, path, body, proceed):
     result = proceed()
-    if method != "GET" and _SHOWN.search(str(path).split("?", 1)[0]):
-        CACHE.forget_where(_shown)
+    if method != "GET":
+        path = str(path).split("?", 1)[0]
+        if _SHOWN.search(path):
+            CACHE.forget_where(_shown)
+        for written, keys in _ALSO_SHOWN:
+            if written.search(path):
+                CACHE.forget_where(lambda key, keys=keys: key in keys)
     return result
 
 
@@ -305,7 +322,18 @@ def _one_object(path):
     return len(rest) == 2
 
 
-def kget(path, timeout=None):
+# A list as metadata only (#980): each item's metadata, no spec or status - a
+# ReplicaSet list without its pod templates. A server that can't answer so
+# falls back to the whole list (",application/json"), so callers take both.
+METADATA = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json"
+
+
+def kget_metadata(path, timeout=None):
+    """kget for a list, asked metadata-only (METADATA)."""
+    return kget(path, timeout, accept=METADATA)
+
+
+def kget(path, timeout=None, accept=None):
     """A read, given OBJECT_TIMEOUT for one object in a request and LIST_TIMEOUT
     otherwise unless the caller says, at most what is left of the request's
     time for reads (homestead_read_deadline), and a 429 asked again only while
@@ -315,6 +343,8 @@ def kget(path, timeout=None):
         timeout = OBJECT_TIMEOUT if in_request and _one_object(path) else LIST_TIMEOUT
     for attempt in range(len(KGET_RETRY) + 1):
         try:
+            if accept:
+                return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed, accept=accept))
             return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
         except urllib.error.HTTPError as error:
             # A read is safe to ask again; a write's 429 (an eviction a
@@ -548,11 +578,14 @@ def _journal_write(path, body):
     return "/secrets" in path and (path.rstrip("/").endswith("/" + CLUSTER_SHUTDOWN.NAME) or name == CLUSTER_SHUTDOWN.NAME)
 
 
-def transport(method, path, body=None, ctype=None, timeout=15):
+def transport(method, path, body=None, ctype=None, timeout=15, accept=None):
     """One request to the API server: its JSON answer, or urllib's HTTPError.
     kget and _ksend reach the cluster only through here, after their own
-    checks, so it is the one place tests put a fake API (tests/fakes/kube.py)."""
+    checks, so it is the one place tests put a fake API (tests/fakes/kube.py).
+    accept: the Accept header, for a list asked metadata-only (METADATA)."""
     headers = {"Content-Type": ctype} if ctype else {}
+    if accept:
+        headers["Accept"] = accept
     data = json.dumps(body).encode() if body is not None else None
     raw = _request(method, path, data, headers, timeout).decode()
     # A write may answer with no body; a read always has one.
@@ -638,6 +671,10 @@ def _body(connection, response, max_bytes=None):
     sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
     pieces, size = [], 0
     while max_bytes is None or size <= max_bytes:
+        # http.client closes the answer once its whole body is in, and with
+        # it that socket: a timeout set on it then fails with EBADF (#1080).
+        if response.isclosed():
+            break
         left = DEADLINE.remaining()
         if left <= 0:
             raise DEADLINE.spent()

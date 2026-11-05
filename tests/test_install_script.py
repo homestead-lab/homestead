@@ -77,14 +77,14 @@ class InstallerTests(unittest.TestCase):
 
     def test_join_without_a_storage_path_asks_instead_of_guessing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
-                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1"})
+                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example-token", "HS_YES": "1"})
         self.assertNotEqual(0, code)
         self.assertIn("HS_LONGHORN_DATA_PATH", out)
         self.assertNotIn("bootstrap-k3s.sh agent", out)
 
     def test_custom_join_storage_stops_before_installing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
-                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1",
+                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example-token", "HS_YES": "1",
                        "HS_LONGHORN_DATA_PATH": "/custom/data"})
         self.assertNotEqual(0, code)
         self.assertIn("Custom storage folders need manual setup", out)
@@ -121,10 +121,32 @@ class InstallerTests(unittest.TestCase):
 
     def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
-                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1",
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "example-token", "HS_YES": "1",
                                                           "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn"})
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
         self.assertIn("--longhorn-data-path /var/lib/longhorn", out)
+
+    def test_a_work_folder_whose_name_holds_short_letters_still_reads_as_the_work_folder(self):
+        """The installer hides every copy of the token, so a token that can be
+        part of mktemp's random letters ("tok" in homestead.Ab12tokm, about 1 run
+        in 40 000) would cut the folder's name: these tests use one with a dash."""
+        bin_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+        work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, work, ignore_errors=True)
+        stand_in(bin_dir, "mktemp", 'd="$TMPDIR/homestead.Ab12tokm"; mkdir -p "$d" && echo "$d"')
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "example-token", "HS_YES": "1",
+                                                          "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn", "TMPDIR": work},
+                        path_extra=bin_dir)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
+
+    def test_every_token_here_has_a_character_mktemp_never_picks(self):
+        """The cause above, for the whole file: a token of letters and digits
+        only can turn up in the work folder's random suffix."""
+        tokens = re.findall(r'"HS_TOKEN": "([^"]*)"', Path(__file__).read_text(encoding="utf-8"))
+        self.assertTrue(tokens)
+        self.assertEqual([], [t for t in tokens if re.fullmatch(r"[A-Za-z0-9]*", t)])
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
@@ -141,7 +163,7 @@ class InstallerTests(unittest.TestCase):
 
     def test_a_joining_node_takes_the_version_given(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_SERVER": "10.0.0.5",
-                                                          "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1",
+                                                          "HS_TOKEN": "example-token", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1",
                                                           "HS_LONGHORN_DATA_PATH": "/mnt/longhorn-os"})
         self.assertIn("agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
 
@@ -734,7 +756,12 @@ class InstallerFixTests(unittest.TestCase):
             children=$(pgrep -P "$job" | tr '\\n' ' ')
             [ -n "$children" ] || echo "no children seen"
             stop_tree "$job"; sleep 1
-            for pid in $job $children; do kill -0 "$pid" 2>/dev/null && echo "still running: $pid"; done
+            # A stopped child whose parent is gone waits as a zombie until PID 1
+            # reaps it, and kill -0 still finds a zombie. In a container whose
+            # PID 1 is the test's python, nothing reaps it: stopped all the same.
+            for pid in $job $children; do
+              kill -0 "$pid" 2>/dev/null && [ "$(ps -o stat= -p "$pid" | cut -c1)" != Z ] && echo "still running: $pid"
+            done
             echo checked''')
         self.assertIn("checked", out)
         self.assertNotIn("no children seen", out)

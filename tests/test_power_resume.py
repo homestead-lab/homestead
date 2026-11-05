@@ -1,5 +1,5 @@
 """A host power job carries on when the drain evicts the Homestead replica
-running it.
+running it, or when that replica's container restarts in place.
 
 Rebooting k3s-1 drained it; the drain evicted the Homestead pod on k3s-1,
 which was the one running the job, and four minutes later the job was failed
@@ -28,14 +28,14 @@ def job(phase="draining", age=60, worker="homestead-old", plan=True):
 
 class ResolverTests(unittest.TestCase):
     def status(self, item, gone, resumes=True):
-        with mock.patch.object(POWER, "WORKER_GONE", lambda pod: gone), \
+        with mock.patch.object(POWER, "WORKER_GONE", lambda pod, restarts=None: gone), \
              mock.patch.object(POWER, "RESUME", mock.Mock(return_value=resumes)) as resume:
             return POWER.status(item), resume
 
     def test_a_job_whose_replica_was_evicted_is_carried_on(self):
         (state, _, message), resume = self.status(job(), gone=True)
         self.assertEqual("running", state)
-        self.assertIn("carrying on from another replica", message)
+        self.assertIn("carrying on", message)
         resume.assert_called_once()
 
     def test_a_live_worker_may_wait_on_longhorn_for_longer_than_four_minutes(self):
@@ -44,6 +44,15 @@ class ResolverTests(unittest.TestCase):
         resume.assert_not_called()
         (state, _, _), _ = self.status(job(age=2000), gone=False)
         self.assertEqual("failed", state, "a worker silent for half an hour has stopped")
+
+    def test_the_resolver_asks_about_the_count_the_job_recorded(self):
+        asked = []
+        item = job()
+        item["ref"]["worker_restarts"] = 4
+        with mock.patch.object(POWER, "WORKER_GONE", lambda pod, restarts=None: asked.append((pod, restarts)) or False), \
+             mock.patch.object(POWER, "RESUME", mock.Mock(return_value=True)):
+            POWER.status(item)
+        self.assertEqual([("homestead-old", 4)], asked)
 
     def test_older_jobs_without_a_named_worker_keep_the_old_limit(self):
         (state, _, _), resume = self.status(job(age=300, worker=None), gone=True)
@@ -70,6 +79,55 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(server.POWER_JOBS.POD_NAME, claim.call_args.kwargs["worker"], "the job now names this replica")
         server.POWER_JOBS._POWER_RESUMING.clear()
 
+    def test_the_claim_records_the_new_count_and_only_takes_a_job_not_yet_sent(self):
+        with mock.patch.object(server.LEADER, "is_leader", return_value=True), \
+             mock.patch.object(server.POWER_JOBS, "own_restarts", return_value=6), \
+             mock.patch.object(server.OPS, "record_phase") as claim, \
+             mock.patch.object(server.POWER_JOBS, "_power_in_background"):
+            server.POWER_JOBS._POWER_RESUMING.clear()
+            server.POWER_JOBS.resume_power_job(job())
+            for _ in range(50):
+                if claim.called: break
+                time.sleep(0.02)
+        server.POWER_JOBS._POWER_RESUMING.clear()
+        kwargs = claim.call_args.kwargs
+        self.assertEqual(6, kwargs["worker_restarts"])
+        self.assertEqual("homestead-old", kwargs["expect_worker"], "only while the job still names the worker that went")
+        self.assertEqual(POWER.BEFORE_SEND, kwargs["expect_phase"], "and only before power was sent")
+
+    def test_a_job_running_here_is_never_started_a_second_time_here(self):
+        # An OS-update reboot runs its power job in the leader's own tick, not in the background.
+        inside = []
+        def node_power(*args, progress=None, **kwargs):
+            inside.append(server.POWER_JOBS.resume_power_job(job()))
+            raise server.POWER_JOBS.PowerNotSent("stop here")
+        with mock.patch.object(server.LEADER, "is_leader", return_value=True), \
+             mock.patch.object(server.OPS, "record_phase"), \
+             mock.patch.object(NODE_ACTIONS, "node_power", side_effect=node_power), \
+             mock.patch.object(server.POWER_JOBS, "_power_in_background") as again:
+            server.POWER_JOBS._POWER_RESUMING.clear()
+            with self.assertRaises(server.POWER_JOBS.PowerNotSent):
+                server.POWER_JOBS.run_power_job("job-1", {"node": "k3s-1", "action": "reboot", "drain_pods": [],
+                                                          "planned_outage": False})
+        self.assertEqual([True], inside, "asked while it runs, it is the same run")
+        again.assert_not_called()
+        self.assertNotIn("job-1", server.POWER_JOBS._POWER_RESUMING, "and it is let go when the run ends")
+
+    def test_a_run_inside_a_background_run_leaves_the_mark_to_its_starter(self):
+        # The background runner marked the job; the run ending inside it must not
+        # free the mark before the runner has recorded how it ended.
+        def node_power(*args, progress=None, **kwargs):
+            raise server.POWER_JOBS.PowerNotSent("stop here")
+        with mock.patch.object(server.OPS, "record_phase"), \
+             mock.patch.object(NODE_ACTIONS, "node_power", side_effect=node_power):
+            server.POWER_JOBS._POWER_RESUMING.clear()
+            server.POWER_JOBS._POWER_RESUMING.add("job-1")
+            with self.assertRaises(server.POWER_JOBS.PowerNotSent):
+                server.POWER_JOBS.run_power_job("job-1", {"node": "k3s-1", "action": "reboot", "drain_pods": [],
+                                                          "planned_outage": False})
+            self.assertIn("job-1", server.POWER_JOBS._POWER_RESUMING)
+        server.POWER_JOBS._POWER_RESUMING.clear()
+
     def test_a_job_saved_without_its_plan_is_not_resumed(self):
         with mock.patch.object(server.LEADER, "is_leader", return_value=True):
             self.assertFalse(server.POWER_JOBS.resume_power_job(job(plan=False)))
@@ -86,6 +144,15 @@ class OneOwnerTests(unittest.TestCase):
             patch.start(); self.addCleanup(patch.stop)
         put(server.OPS, [{"id": "job-1", "kind": "node-power", "status": "running", "progress": 10, "message": "",
                             "history": [], "ref": {"node": "k3s-1", "phase": "draining", "worker": "homestead-new"}}])
+
+    def test_a_claim_refuses_a_job_another_worker_took_or_that_has_sent(self):
+        with self.assertRaises(server.OPS.Superseded):
+            server.OPS.record_phase("job-1", "draining", 10, "carrying on", expect_worker="homestead-old",
+                                    expect_phase=POWER.BEFORE_SEND)
+        server.OPS.record_phase("job-1", "sending", 20, "Submitting power helper", owner="homestead-new")
+        with self.assertRaises(server.OPS.Superseded):
+            server.OPS.record_phase("job-1", "sending", 20, "carrying on", expect_worker="homestead-new",
+                                    expect_phase=POWER.BEFORE_SEND)
 
     def test_a_superseded_worker_records_nothing_and_never_sends(self):
         plan = {"node": "k3s-1", "action": "reboot", "drain_pods": [], "planned_outage": False}
@@ -107,7 +174,7 @@ class OneOwnerTests(unittest.TestCase):
 
 
 class WorkerGoneTests(unittest.TestCase):
-    def gone(self, pod=None, node_ready=True, missing=False):
+    def gone(self, pod=None, node_ready=True, missing=False, restarts=None):
         import urllib.error
         def kget(path):
             if "/pods/" in path:
@@ -116,13 +183,41 @@ class WorkerGoneTests(unittest.TestCase):
                 return pod or {"metadata": {}, "spec": {"nodeName": "k3s-1"}, "status": {"phase": "Running"}}
             return {"status": {"conditions": [{"type": "Ready", "status": "True" if node_ready else "Unknown"}]}}
         with mock.patch.object(server.POWER_JOBS, "kget", kget):
-            return server.POWER_JOBS.power_worker_gone("homestead-old")
+            return server.POWER_JOBS.power_worker_gone("homestead-old", restarts)
 
     def test_evicted_deleted_or_on_a_host_that_stopped_answering(self):
         self.assertTrue(self.gone(missing=True))
         self.assertTrue(self.gone({"metadata": {"deletionTimestamp": "now"}, "spec": {}, "status": {}}))
         self.assertTrue(self.gone(node_ready=False), "a node shut down leaves its pods listed for minutes")
         self.assertFalse(self.gone())
+
+    def test_a_worker_whose_container_restarted_has_gone(self):
+        # Same pod, same name, Ready - but the process that ran the job died with its container.
+        pod = {"metadata": {}, "spec": {"nodeName": "k3s-1"},
+               "status": {"phase": "Running", "containerStatuses": [{"name": "homestead", "restartCount": 2}]}}
+        self.assertTrue(self.gone(pod, restarts=1))
+        self.assertFalse(self.gone(pod, restarts=2), "no restart since the job started")
+        self.assertFalse(self.gone(pod), "a job that recorded no count keeps the old check")
+
+    def test_only_homesteads_own_container_counts(self):
+        pod = {"metadata": {}, "spec": {"nodeName": "k3s-1"},
+               "status": {"phase": "Running", "containerStatuses": [{"name": "homestead", "restartCount": 1},
+                                                                    {"name": "mesh-proxy", "restartCount": 7}]}}
+        self.assertFalse(self.gone(pod, restarts=1), "a sidecar restarting is not the worker going")
+        no_homestead = {"metadata": {}, "spec": {"nodeName": "k3s-1"},
+                        "status": {"phase": "Running", "containerStatuses": [{"name": "other", "restartCount": 9}]}}
+        self.assertFalse(self.gone(no_homestead, restarts=0), "no homestead container: not judged by the count")
+
+    def test_the_worker_records_its_restart_count_when_it_starts(self):
+        pod = {"status": {"containerStatuses": [{"name": "homestead", "restartCount": 3}]}}
+        with mock.patch.object(server.POWER_JOBS, "kget", lambda path: pod), \
+             mock.patch.object(server.POWER_JOBS, "POD_NAME", "homestead-old"):
+            self.assertEqual(3, server.POWER_JOBS.own_restarts())
+        def unreadable(path):
+            raise OSError("no answer")
+        with mock.patch.object(server.POWER_JOBS, "kget", unreadable), \
+             mock.patch.object(server.POWER_JOBS, "POD_NAME", "homestead-old"):
+            self.assertIsNone(server.POWER_JOBS.own_restarts(), "unknown: the job keeps the old check")
 
 
 class ResumedDrainTests(unittest.TestCase):

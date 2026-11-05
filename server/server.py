@@ -1246,7 +1246,7 @@ class H(HTTP.LimitedHandler):
         return self.client_address[0] if self.client_address else ""
 
     def _file(self, path, ctype, cache=""):
-        return STATIC.serve(self, path, ctype, cache, HOMESTEAD_VERSION)
+        return STATIC.serve(self, path, ctype, cache, HOMESTEAD_VERSION, WEBROOT)
 
     def _icon(self, request_path):
         try:
@@ -1632,9 +1632,9 @@ class H(HTTP.LimitedHandler):
             if is_asset_path(p) and not is_icon_png(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if is_vendor_path(p):
-                # Vendored paths carry no version, so the browser checks back each time (a
-                # file named by its content is kept); the installed app's worker keeps them per release.
-                return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]], cache="no-cache")
+                # A vendored path without /@<version>/ is checked each time (a file named by its
+                # content is kept); with it, the file is kept (#982). The app's worker keeps them per release.
+                return self._file(f"{WEBROOT}{WEB_PATHS.split_vendor_version(p)[0]}", VENDOR_TYPES[os.path.splitext(p)[1]], cache="no-cache")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
             if p == "/sw.js":

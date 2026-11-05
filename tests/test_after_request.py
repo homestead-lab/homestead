@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_http as HTTP
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hook_queue import own_hook_queue
 
 
 def until(check, seconds=3):
@@ -150,6 +152,10 @@ class HookPoint(unittest.TestCase):
 class ThroughServer(unittest.TestCase):
     """server.H on a real socket: what a hook sees of sign-in, setup, a password
     change and a new API key."""
+
+    @classmethod
+    def setUpClass(cls):
+        own_hook_queue(cls)   # tests/hook_queue.py: earlier files' hooks drained, then its own queue
 
     def setUp(self):
         import server

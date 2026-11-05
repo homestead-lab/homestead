@@ -662,4 +662,4 @@ ROUTES = {
 
 def register(ops):
     """The job store's entry for installing Multus (#622)."""
-    ops.RESOLVERS["multus"] = multus_progress
+    ops.RESOLVERS["multus"] = homestead_routes.drops_when_ended(multus_progress, "helm")

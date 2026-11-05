@@ -12,6 +12,15 @@ Pages answer from that. A summary whose host missed its last read, or that
 is older than two rounds, is stale: the Hosts page shows that host's
 figures as unknown, and the volume list does not use it. Before the loop runs (and in tests) a caller reads in place, all hosts
 at the same time, as before but in parallel.
+
+A host the loop is not reading (never read, or nobody asked about it for
+WANTED_FOR and its summary is no longer fresh) is read in place too, all
+such hosts at once, so a page built only now and then (the follower
+replica, which mostly serves the leader's copy) does not show every host
+as unknown (#1076). That costs a build about one TIMEOUT for up to
+MAX_WORKERS hosts, once per lapse: a build that comes WANTED_FOR or more
+after the one before it waits that long for a kubelet that does not
+answer; builds closer together leave the host to the loop.
 """
 import threading
 import time
@@ -53,6 +62,8 @@ def _read_all(get, nodes, now=None):
     with _lock:
         for node, summary in found:
             entry = _state.setdefault(node, {"summary": None, "at": 0.0, "misses": 0, "before": None})
+            if now < entry["at"]:
+                continue     # a read that ended after a newer one (the loop's): keep the newer
             if summary is None:
                 entry["misses"] += 1
             else:
@@ -69,22 +80,32 @@ def readings(get, nodes, wait=True, now=None):
     """{node: {"summary", "at", "stale"}} for each of nodes with a summary
     under DROP_AFTER old, and the nodes noted as wanted for the loop.
 
-    With the loop running, nothing is read for a node the loop has read;
-    a node it has never read is read now when wait, or left to the loop's
-    next round. Without the loop, every node is read now, all at once."""
+    With the loop running, nothing is read for a node the loop is reading;
+    a node it has never read is read now, and with wait=False so is one the
+    loop stopped reading (nobody asked for WANTED_FOR) whose summary is no
+    longer fresh. Without the loop, every node is read now, all at once."""
     nodes = list(nodes)
     now = time.time() if now is None else now
     with _lock:
-        for node in nodes:
-            _wanted[node] = now
         if not running():
             missing = nodes
         elif wait:
             missing = [n for n in nodes if n not in _state]
         else:
-            missing = []
+            missing = [n for n in nodes if n not in _state or _lapsed(n, now)]
+        for node in nodes:
+            _wanted[node] = now
     _read_all(get, missing, now)
     return latest(nodes, now)
+
+
+def _lapsed(node, now):
+    """The loop is not reading node (nobody asked for WANTED_FOR) and its
+    summary is stale as latest() counts it: it missed its last read, or it
+    is older than FRESH. Called with _lock held."""
+    asked = _wanted.get(node)
+    entry = _state[node]
+    return (asked is None or now - asked > WANTED_FOR) and (bool(entry["misses"]) or now - entry["at"] > FRESH)
 
 
 def latest(nodes, now=None):

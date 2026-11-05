@@ -105,6 +105,8 @@ def tidy_unused():
         # Not knowing what is in use, keep every logo; the rest still runs.
         refs = {f"/api/icons/{os.path.basename(p)}" for p in _files("icons/*")}
     result = tidy(refs)
+    _scan_gen[0] += 1          # a scan already running began before this tidy: it must not be kept
+    _scan_kept[0] = None
     homestead_routes.forget("housekeeping")
     return result
 
@@ -150,8 +152,19 @@ def volume():
     return {"size": size, "used": used, "free": free, "pct": round(used / size * 100, 1) if size else None}
 
 
-def report():
-    """Each store: what it is, its size, how many files, how long it keeps."""
+SCAN_SECONDS = 600
+_scan_kept = [None]       # one entry: (data dir, taken at, wall time at start, rows)
+_scan_gen = [0]           # bumped by each tidy
+
+
+def _scan(last_at=0):
+    """The stores with their sizes. Walking the volume costs a round trip per
+    file on NFS or Longhorn, and the sizes move slowly: kept for SCAN_SECONDS,
+    or until a tidy (here, or the leader's, seen as last_at newer than the scan)."""
+    hit = _scan_kept[0]
+    if hit and hit[0] == DATA_DIR and time.monotonic() - hit[1] < SCAN_SECONDS and last_at < int(hit[2]):
+        return hit[3]
+    gen, wall = _scan_gen[0], time.time()
     claimed, rows = set(), []
     for label, patterns, kept in STORES:
         paths = sorted({p for pattern in patterns for p in _files(pattern)})
@@ -161,9 +174,17 @@ def report():
     other = [p for p in everything if p not in claimed]
     rows.append({"label": "Settings and other state", "size": _size(other), "files": len(other), "kept": "as long as it is needed"})
     rows.sort(key=lambda r: -r["size"])
+    if gen == _scan_gen[0]:
+        _scan_kept[0] = (DATA_DIR, time.monotonic(), wall, rows)
+    return rows
+
+
+def report():
+    """Each store: what it is, its size, how many files, how long it keeps."""
     # The tidy runs on the leader: another replica shows the leader's.
     shared, _ = LEADER_STATE.get("housekeeping")
     last = shared if isinstance(shared, dict) and shared.get("at", 0) > _last["at"] else _last
+    rows = [dict(r) for r in _scan(last["at"])]
     return {"volume": volume(), "stores": rows, "total": sum(r["size"] for r in rows),
             "last": last["result"], "last_at": last["at"], "pressure_pct": PRESSURE_PCT}
 

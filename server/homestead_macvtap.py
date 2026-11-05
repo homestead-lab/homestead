@@ -26,6 +26,7 @@ answer where that matters.
 import re
 
 import homestead_kubevirt_cr as KUBEVIRT_CR
+import homestead_routes
 
 VERSION = "v0.13.2"
 IMAGE = "quay.io/kubevirt/macvtap-cni"
@@ -261,6 +262,7 @@ def install(cfg=None):
         ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart)
     else:
         addons._post_chart(CHART, {"chartContent": content, "targetNamespace": NS})
+    homestead_routes.forget("helm")   # the Helm page shows the chart installing (#978)
     register_binding()
     return {"ok": True, "name": CHART, "job": f"helm-install-{CHART}", "version": version,
             "detail": f"macvtap {version} is being installed, and KubeVirt's macvtap binding registered"}
@@ -273,6 +275,7 @@ def upgrade(target):
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(
         "macvtap", target, manifests(p.get("distribution", ""), target), "")
     ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart)
+    homestead_routes.forget("helm")   # the Helm page shows the new version (#978)
     return f"macvtap is moving to {target}; running VMs keep their interfaces"
 
 

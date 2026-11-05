@@ -57,6 +57,10 @@ import homestead_shared as SHARED
 
 # The parts, by their routes' cache keys.
 PARTS = ("nodes", "wl", "vol", "stor", "lhcap", "ov")
+# The keys a write on one replica drops on the others: the parts, and the
+# pages kept as long as they are (#978) - Data protection, Flow, Helm, Disks,
+# and the Volumes page's classes, V2 engine and old copies.
+TOLD = PARTS + ("lhov", "flow2", "helm", "disks", "sc:classes", "lhv2", "oldcopies")
 # A part older than this is not served: three missed cycles.
 STALE_AFTER = 60
 # A woken cycle starts no sooner than this after the last one started, so a
@@ -134,21 +138,24 @@ def wake():
 
 
 def _note(key, when):
-    """A write here dropped key: tell the other replicas (tell()), and on
-    the leader run a cycle soon. Never blocks: it runs on the writer's
+    """A write here dropped key: tell the other replicas (tell()), and, for
+    a part, on the leader run a cycle soon. Never blocks: it runs on the writer's
     thread."""
     with _told_lock:
         _told["pending"][key] = max(_told["pending"].get(key, 0.0), when)
-    wake()
+    if key in PARTS:
+        wake()
+    else:
+        _wake.set()     # told on the next turn; no part to read again
 
 
 def _forgotten(keys):
-    for key in set(keys) & set(PARTS):
+    for key in set(keys) & set(TOLD):
         _note(key, CACHE.forgotten_at(key))
 
 
 def _popped(key, when):
-    if key in PARTS:
+    if key in TOLD:
         _note(key, when)
 
 
@@ -157,9 +164,9 @@ CACHE.on_pop(_popped)
 
 
 def _register():
-    """Each part's key known to the cache, so a forget_where() of it is heard
+    """Each told key known to the cache, so a forget_where() of it is heard
     though this replica never read it."""
-    for key in PARTS:
+    for key in TOLD:
         CACHE.epoch(key)
 
 
@@ -493,7 +500,7 @@ def hear(now=None):
     forgets = _told_forgets()
     _check_mine(forgets, now)
     for key, when in forgets.items():
-        if key not in PARTS:
+        if key not in TOLD:
             continue
         try:
             when = min(float(when), now)

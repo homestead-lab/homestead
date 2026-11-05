@@ -281,11 +281,27 @@ def _diagnostic_read(path, timeout=5):
 # ------------------------------------------------------------- alerts
 UPDATE_SCAN_EVERY = CHECKS.FRESH_FOR
 _last_update_scan = [0.0]
+# The loop looks every LOOK_SECONDS, and what a look takes.
+LOOK_SECONDS = 20
+# The sources that keep a reading of their own (addresses, disks, ports,
+# CronJobs) take one no older than the time since the previous look began,
+# counted back from each source's own read (so a little after that start),
+# and never older than KEPT_SECONDS: each reading serves its own look and at
+# most the next one, so an alert is raised or resolved at most one look later
+# than a fresh read would have it, against a HOLD of three looks (#978). The
+# first look as leader takes one up to KEPT_SECONDS old. Before, each kept its
+# reading 5-20 s, less than a look, and read again on every one.
+KEPT_SECONDS = 30
+_looked = [0.0]
 
 
 def _alert_sources():
     """What each source sees now; None where it could not look."""
     results = {}
+    now = time.time()
+    # + 1 ms: a reading made the moment the previous look began counts as
+    # made in it.
+    keep, _looked[0] = min(KEPT_SECONDS, now - _looked[0]) + 0.001, now
 
     def take(name, fn):
         try:
@@ -297,15 +313,15 @@ def _alert_sources():
     take("longhorn", lambda: ALERTS.longhorn_facts(MODULE_ROUTES.page("ov", get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
-    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, INV.inventory).get("addresses")))
+    take("addresses", lambda: VIPS.alert_facts(cached("network", keep, INV.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
-    take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
+    take("disks", lambda: DISKS.alert_facts(cached("disks", keep, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
-    take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
+    take("ports", lambda: PORTS.alert_facts(cached("ports", keep, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
-    take("cronjobs", CRONJOBS.cronjob_alert_facts)
+    take("cronjobs", lambda: CRONJOBS.cronjob_alert_facts(keep))
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
     take("starts-after", lambda: START_ORDER.alert_facts(cached("wl", 5, WORKLOADS.get_workloads)))
@@ -362,11 +378,11 @@ def _alerts_loop():
             try:
                 with self_data_activity():
                     push_alerts(ALERTS.observe(_alert_sources()))
-                beat("alerts", 20, leader_only=True)
+                beat("alerts", LOOK_SECONDS, leader_only=True)
             except Exception as error:
-                beat("alerts", 20, error, leader_only=True)
+                beat("alerts", LOOK_SECONDS, error, leader_only=True)
                 print(f"alerts: {str(error)[:160]}", flush=True)
-        time.sleep(20)
+        time.sleep(LOOK_SECONDS)
 
 
 def set_schedule(b):
@@ -709,7 +725,7 @@ def restart_workload(ns, name):
     require_workload_target(ns, name)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"spec": {"template": {"metadata": {"annotations":
-           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
+           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}}}},
           ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True}

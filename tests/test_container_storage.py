@@ -68,6 +68,8 @@ class WorkloadEditFixture:
             self.existing_pvcs.add(name)
             return {"metadata": {"name": name}}
 
+        # put back what server.py bound, or the next file's lifecycle reads go to this fake
+        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc", "STORAGE_CLASS")})
         lifecycle.bind(get, send, set(), {}, lambda: FEATURES, create_pvc, "longhorn-r2")
 
     def saved_spec(self):

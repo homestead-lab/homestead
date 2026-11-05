@@ -131,12 +131,17 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                     if (IDENT.identity(current)["uid"] != dep["metadata"]["uid"] or current["spec"] != dep["spec"] or
                             current["spec"].get("replicas") != 0 or current["metadata"].get("annotations", {}).get(GUARD.DISPATCH) != ident):
                         raise ValueError("Imported workload changed before copying")
+                # A copy pod that never schedules, or a copy that hangs, ends
+                # at a deadline sized from the volumes it fills.
+                sizes = [int(v["size_gb"]) if v.get("size_gb") else None for v in prepared["volumes"]]
+                gib = None if None in sizes else sum(sizes)
+                obj["spec"]["activeDeadlineSeconds"] = COPY.deadline(gib)
                 job = writer("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", obj)
                 if prepared.get("source_secret"):
                     # The copy waits for its password, then starts.
                     writer("POST", f"/api/v1/namespaces/{ns}/secrets", source_copy(prepared["source_secret"], ns, job, read))
                 ops.record_phase(ident, "writing", 30, "Copy Job identity confirmed", job=job["metadata"]["name"],
-                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]))
+                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]), copy_gib=gib)
                 if dep:
                     current = read(IDENT.base(ns) + "/" + name)
                     if IDENT.identity(current)["uid"] != dep["metadata"]["uid"] or current["spec"] != dep["spec"]:
@@ -174,7 +179,13 @@ def status(item, read):
         ref["claims"] = now
         complete, failed = COPY.copy_finished(ref, read)
         if failed:
-            raise ValueError("Copy failed")
+            why = COPY.failure(read(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}"),
+                               ref.get("copy_gib"))
+            ref.update(phase="failed", retain_resources=True)
+            app = (f" {ref['name']} was created stopped for this import and stays stopped, since its data is incomplete."
+                   if any(t.get("kind") == "Deployment" for t in ref.get("planned", [])) else "")
+            return "failed", item.get("progress", 0), (
+                f"{why}.{app} Its volumes and the copy Job were kept; remove the import and run it again.")
         if complete:
             ref.update(phase="done", retain_resources=False)
             return "succeeded", 100, "Copy completed; review capacity and start the application when ready"
@@ -204,12 +215,61 @@ def recovery_blockers(item, read):
 
 
 def cancel_plan(item):
-    return {"mode": "forget", "can": False, "why_not": "Inspect the import outcome instead; partial writes cannot safely be cancelled or forgotten",
-            "keeps": ["All imported data, resources and write receipts"], "needs": "admin"}
+    """While the copy runs it can be stopped. Read from the job alone: the job
+    tray asks on every poll."""
+    ref = item.get("ref") or {}
+    if ref.get("phase") != "copying" or not ref.get("job") or not ref.get("job_uid"):
+        return {"mode": "forget", "can": False, "needs": "admin",
+                "why_not": "Inspect the import outcome instead; its setup is not at a step that can be stopped, and partial writes cannot safely be forgotten",
+                "keeps": ["All imported data, resources and write receipts"]}
+    return {"mode": "stop", "action": "Stop the copy", "needs": "admin",
+            "undo": ["The copy Job is deleted, which ends its pod and the source password copy it owns",
+                     "The copy's log goes with the Job"],
+            "keeps": ["The new volumes keep whatever was copied so far; it is incomplete",
+                      "The imported application stays stopped: Start refuses it, since its copy did not finish"]}
 
 
-def cancel_run(item, options):
-    raise ValueError("Inspect the import outcome instead of cancelling its tracking")
+def cancel_run(item, options, read=None, send=None):
+    """Delete the copy Job this import created, by its UID, and nothing else.
+    Safe to run again: a Job already gone is the goal, a Job that is not ours or
+    has finished is refused so the import reports the real outcome."""
+    read, send = read or KUBE.kget, send or KUBE.ksend
+    ref = item["ref"]
+    ns, name, uid = ref["namespace"], ref.get("job"), ref.get("job_uid")
+    if ref.get("phase") != "copying" or not name or not uid:
+        raise ValueError("Inspect the import outcome instead of cancelling its tracking")
+    path = f"/apis/batch/v1/namespaces/{ns}/jobs/{name}"
+    for _ in range(3):
+        try:
+            job = read(path)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            break
+        if IDENT.identity(job)["uid"] != uid:
+            raise ValueError("The copy Job was replaced; it is not ours to delete. Inspect it in Kubernetes")
+        if any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
+               for c in job.get("status", {}).get("conditions", [])):
+            raise ValueError("The copy has finished already; wait for the import to report its outcome")
+        try:
+            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions",
+                                  "preconditions": {"uid": uid, "resourceVersion": job["metadata"]["resourceVersion"]},
+                                  "propagationPolicy": "Background"})
+            break
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                break
+            if error.code != 409:
+                raise
+            # The Job changed since the read: look again, so a copy that has
+            # just finished is not deleted and a status update is not a refusal.
+    else:
+        raise ValueError("The copy changed while it was being stopped; try again")
+    ref.update(phase="failed", retain_resources=True)
+    app = (f" {ref['name']} was created stopped for this import and stays stopped, since its data is incomplete."
+           if any(t.get("kind") == "Deployment" for t in ref.get("planned", [])) else "")
+    return ("Copy stopped; the Job was deleted and its pod is ending." + app +
+            f" Its volumes were kept, with whatever was copied so far. To import again, delete {ref['name']} and its volumes, then import again.")
 
 
 def journalled(ns, name, job, ops):

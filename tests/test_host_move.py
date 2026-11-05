@@ -3,6 +3,8 @@
 Frigate was moved to k3s-3 twice and restarted on k3s-1 both times: the move
 only preferred k3s-3, and k3s-1 already held its 2.2 GB image. On the shared
 fake API (tests/fakes/kube.py)."""
+import copy
+import json
 import sys
 import tempfile
 import unittest
@@ -15,6 +17,7 @@ import homestead_host_move as MOVE
 import homestead_image_cache as IMAGES
 import homestead_kube as K
 import homestead_operations as OPS
+import homestead_place as PLACE
 import homestead_workloads as W
 from fakes.kube import Kube
 
@@ -82,13 +85,170 @@ class HostMoveTests(unittest.TestCase):
         IMAGES.prepull.assert_not_called()
 
     def test_an_app_edited_while_its_image_was_pulled_is_not_moved(self):
-        item = self.move()
-        def conflict(*a, **k):
-            raise urllib.error.HTTPError("", 409, "conflict", {}, None)
-        with mock.patch.object(W, "ksend", side_effect=conflict, create=True):
-            state, _, message = MOVE.status(item)
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        edited = self.kube.object(path)
+        edited["spec"]["template"]["spec"]["containers"][0]["image"] = DIGEST
+        K.ksend("PUT", path, edited)
+        state, _, message = MOVE.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("nothing was moved", message)
+        self.assertIn("Homestead stopped", message)
+        self.assertEqual(DIGEST, self.kube.object(path)["spec"]["template"]["spec"]["containers"][0]["image"],
+                         "the edit made since the review stands")
+        self.assertNotIn("proposed", item["ref"])
+        self.assertNotIn("settled", item["ref"])
+
+    def test_a_job_stuck_by_the_old_bug_fails_with_a_message(self):
+        item = self.move()
+        self.kube.add(pull_daemonset(1))
+        item["ref"].pop("proposed")
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state)
+        self.assertIn("Review the move again", message)
+
+    def test_a_failed_put_keeps_the_reviewed_move_for_the_next_round(self):
+        item = self.move()
+        self.kube.add(pull_daemonset(1))
+        def broken(*a, **k):
+            raise urllib.error.HTTPError("", 500, "boom", {}, None)
+        with mock.patch.object(W, "ksend", side_effect=broken, create=True):
+            with self.assertRaises(urllib.error.HTTPError):
+                MOVE.status(item)
+        self.assertIn("proposed", item["ref"], "the reviewed manifest survives a failed PUT")
+        item["ref"]["settled"] = "s"
+        item = {"ref": json.loads(json.dumps(item["ref"]))}
+        self.assertIn("settled", item["ref"])
+        state, _, _ = MOVE.status(item)
+        self.assertEqual(("running", "PUT"), (state, self.kube.writes[0][0]))
+        self.assertNotIn("proposed", item["ref"])
+        self.assertEqual("rolling", item["ref"]["stage"])
+
+    def moved_to_k3s_3(self):
+        """A reviewed manifest that really changes the app: it asks for k3s-3."""
+        proposed = deployment()
+        proposed["spec"]["template"]["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "k3s-3"}
+        MOVE.start({}, proposed, {"move": {"node": "k3s-3", "mode": "pinned"}}, lambda: self.applied.append(True))
+        self.kube.add(pull_daemonset(1))
+        return {"ref": self.started[-1]["ref"]}
+
+    def test_a_put_that_landed_but_lost_its_reply_moves_on_to_rolling(self):
+        # On a real cluster a PUT can commit and its reply be lost (a timeout, a
+        # dropped connection, a 5xx after the write). The retry then sends the old
+        # resourceVersion and gets 409, though the app is rolling to the new host.
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        self.assertEqual({"kubernetes.io/hostname": "k3s-3"},
+                         self.kube.object(path)["spec"]["template"]["spec"].get("nodeSelector"), "the write stands")
+        item = {"ref": json.loads(json.dumps(item["ref"]))}
+        state, _, message = MOVE.status(item)
+        self.assertEqual("running", state, message)
+        self.assertNotIn("nothing was moved", message)
+        self.assertEqual("rolling", item["ref"]["stage"])
+        self.assertNotIn("proposed", item["ref"])
+
+    def test_a_lost_reply_on_a_manifest_reviewed_from_the_live_app_lands(self):
+        # The real caller (homestead_workloads.move_capacity_plan) reviews a deep
+        # copy of the live GET with only the placement changed, so every field the
+        # API server defaulted is in it. Here the live app carries such fields.
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        live = deployment()
+        live["spec"].update(replicas=1, revisionHistoryLimit=10, progressDeadlineSeconds=600,
+                            strategy={"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": "25%"}})
+        live["spec"]["template"]["spec"].update(restartPolicy="Always", dnsPolicy="ClusterFirst", schedulerName="default-scheduler")
+        live["spec"]["template"]["spec"]["containers"][0].update(imagePullPolicy="Always", terminationMessagePath="/dev/termination-log")
+        self.kube.add(live)
+        proposed = copy.deepcopy(self.kube.object(path))
+        mode = PLACE.apply_node_placement(proposed, "k3s-3")
+        MOVE.start({}, proposed, {"move": {"node": "k3s-3", "mode": mode}}, lambda: self.applied.append(True))
+        self.kube.add(pull_daemonset(1))
+        item = {"ref": json.loads(json.dumps(self.started[-1]["ref"]))}
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        self.assertIn("affinity", self.kube.object(path)["spec"]["template"]["spec"], "the write stands")
+        state, _, message = MOVE.status(item)
+        self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]), message)
+
+    def test_an_app_edited_another_way_after_a_lost_reply_is_not_moved(self):
+        item = self.moved_to_k3s_3()
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        edited = self.kube.object(path)
+        edited["spec"]["template"]["spec"]["containers"][0]["image"] = DIGEST
+        K.ksend("PUT", path, edited)
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state)
+        self.assertIn("changed while its image was being pulled", message)
+        self.assertIn("check where it runs now", message, "the reviewed move may have landed before the edit")
+        self.assertNotIn("nothing was moved", message)
+        self.assertNotIn("proposed", item["ref"])
+
+    APP = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+
+    def lost_reply_from_live(self):
+        """A pinned move reviewed from the live app (uid and all), whose PUT
+        landed and lost its reply; the job will try again next round."""
+        proposed = copy.deepcopy(self.kube.object(self.APP))
+        PLACE.apply_node_placement(proposed, "k3s-3", True)
+        MOVE.start({}, proposed, {"move": {"node": "k3s-3", "mode": "pinned"}}, lambda: self.applied.append(True))
+        self.kube.add(pull_daemonset(1))
+        item = {"ref": json.loads(json.dumps(self.started[-1]["ref"]))}
+        self.kube.fail(self.APP, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        return item, self.kube.object(self.APP)
+
+    def test_a_reread_that_fails_after_a_lost_reply_tries_again_next_round(self):
+        # Under load the re-read can answer 503 too: that says nothing about the app.
+        item, _ = self.lost_reply_from_live()
+        self.kube.fail(self.APP, 503, method="GET")
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            MOVE.status(item)
+        self.assertEqual(503, raised.exception.code)
+        self.assertIn("proposed", item["ref"], "the job keeps the reviewed move")
+        state, _, message = MOVE.status(item)
+        self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]), message)
+
+    def test_an_app_gone_on_the_reread_after_a_lost_reply_stops_the_move(self):
+        item, _ = self.lost_reply_from_live()
+        self.kube.fail(self.APP, 404, method="GET")
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state, message)
+        self.assertEqual("frigate was removed while its image was being pulled, so there is nothing left to move", message)
+        self.assertNotIn("proposed", item["ref"], "nothing is left to retry")
+
+    def test_an_app_scaled_after_a_lost_reply_still_rolls(self):
+        item, live = self.lost_reply_from_live()
+        live["spec"]["replicas"] = 3
+        K.ksend("PUT", self.APP, live)
+        state, _, message = MOVE.status(item)
+        self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]), message)
+
+    def test_an_app_recreated_after_a_lost_reply_is_not_moved(self):
+        item, live = self.lost_reply_from_live()
+        self.kube.discard(self.APP)
+        for field in ("uid", "resourceVersion", "creationTimestamp"):
+            live["metadata"].pop(field)
+        self.kube.add(live)
+        self.assertNotEqual(item["ref"]["proposed"]["metadata"]["uid"], self.kube.object(self.APP)["metadata"]["uid"])
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state, message)
+        self.assertIn("changed while its image was being pulled", message)
+
+    def test_an_app_being_deleted_after_a_lost_reply_is_not_moved(self):
+        item, live = self.lost_reply_from_live()
+        live["metadata"].update(deletionTimestamp="2026-11-01T00:00:00Z", finalizers=["example.com/hold"])
+        live["metadata"].pop("resourceVersion")
+        self.kube.add(live)
+        self.assertTrue(self.kube.object(self.APP)["metadata"].get("deletionTimestamp"))
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state, message)
+        self.assertIn("changed while its image was being pulled", message)
 
     def test_a_move_that_lands_elsewhere_fails_and_says_where(self):
         self.setUp(held=[IMAGE])

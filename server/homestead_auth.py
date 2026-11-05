@@ -20,6 +20,7 @@ Design notes, because the choices matter more than the code:
 import base64
 import copy
 import homestead_names as NAMES
+import homestead_read_deadline as DEADLINE
 import hashlib
 import hmac
 import json
@@ -82,6 +83,17 @@ MAX_USER_ATTEMPTS = 20
 ATTEMPT_WINDOW = 300
 MAX_TRACKED = 10000
 MAX_STALE_SECONDS = 30
+# After a failed read the last good copy is used, without asking the cluster
+# again, for this long - and never past MAX_STALE_SECONDS. A restarting API
+# server would otherwise hold every request for its own timeout.
+RETRY = 3
+# How long a request waits for a read another request began: as long as its own
+# read would be given (homestead_kube.OBJECT_TIMEOUT in a request, LIST_TIMEOUT
+# otherwise), and never past the request's own deadline (homestead_read_deadline).
+WAIT_IN_REQUEST = 5
+WAIT_OTHERWISE = 10
+_store_reads = threading.Lock()
+_store_read = None      # the read under way, which requests that find the copy expired wait for
 _rate_lock = threading.RLock()
 _password_slots = threading.BoundedSemaphore(4)
 
@@ -100,12 +112,21 @@ class StoreUnavailable(Exception):
     would replace every real account."""
 
 
+def _usable_stale():
+    """The last good read, while it is young enough to stand in for one."""
+    data = _store_cache["data"]
+    if data is not None and time.time() - _store_cache["at"] <= MAX_STALE_SECONDS:
+        return data
+    return None
+
+
 def _unavailable(error, allow_stale=True):
     # The last good read stands in while the cluster is slow to answer; its
-    # time is left alone, so the next request tries the cluster again.
-    if (allow_stale and _store_cache["data"] is not None and
-            time.time() - _store_cache["at"] <= MAX_STALE_SECONDS):
-        return _store_cache["data"]
+    # time is left alone, so it stops standing in MAX_STALE_SECONDS after it
+    # was read, and the cluster is asked again after RETRY (_load).
+    stale = _usable_stale() if allow_stale else None
+    if stale is not None:
+        return stale
     unavailable = StoreUnavailable("Homestead cannot read its accounts from the cluster right now. "
                                    "The Kubernetes API may be slow or unreachable.")
     unavailable.cause = unavailable_cause(error)
@@ -129,9 +150,93 @@ class StoreConflict(ValueError):
     """The accounts changed on another replica between reading and saving."""
 
 
+class _Read:
+    """One read of the Secret, shared by everyone who asked while it ran."""
+    def __init__(self, started):
+        self.started, self.done = started, threading.Event()
+        self.data = self.error = None
+
+
+def invalidate():
+    """Read the accounts afresh on the next request: the copy and any read
+    already under way are both forgotten (a restored configuration)."""
+    global _store_read
+    with _store_reads:
+        _store_cache.update(at=0, as_of=max(time.time(), _store_cache.get("as_of", 0)))
+        _store_read = None
+
+
+def _cached(max_age, allow_stale):
+    """The copy, when it may answer without a read; None otherwise."""
+    now, data = time.time(), _store_cache["data"]
+    if data is not None and now - _store_cache["at"] < max_age:
+        return data
+    # Within RETRY of a failed read the copy answers without a new read, while
+    # it is young enough to use; a caller that wants a copy younger than RETRY
+    # (API keys) always asks.
+    if allow_stale and max_age >= RETRY and now - _store_cache.get("failed_at", 0) < RETRY:
+        return _usable_stale()
+    return None
+
+
 def _load(force=False, max_age=10, allow_stale=True):
-    if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < max_age:
-        return _store_cache["data"]
+    global _store_read
+    left = DEADLINE.remaining()
+    wanted = WAIT_IN_REQUEST if left is not None else WAIT_OTHERWISE
+    cut = left is not None and left < wanted
+    until = DEADLINE.clock() + wanted
+    while True:
+        if not force:
+            data = _cached(max_age, allow_stale)
+            if data is not None:
+                return data
+        with _store_reads:
+            read = _store_read
+            # A read begun moments ago is as good as a copy dated when it began;
+            # one older than RETRY may be hung, so it gets a second read. A
+            # forced read never takes one: it must see what is there now.
+            joined = (not force and read is not None
+                      and time.time() - read.started < min(max_age, RETRY))
+            if not joined:
+                read = _store_read = _Read(time.time())
+        if not joined:
+            return _lead(read, allow_stale)
+        if not DEADLINE.wait(read.done, max(0, until - DEADLINE.clock())):
+            # Waited as long as this request's own read would have been given.
+            return _unavailable(DEADLINE.spent() if cut else TimeoutError("timed out"), allow_stale)
+        if read.data is not None:
+            return read.data
+        if not isinstance(read.error, DEADLINE.Spent):
+            return _unavailable(read.error, allow_stale)
+        # The request that read ran out of its own time, not the cluster:
+        # look again, and read for ourselves if nobody else is.
+
+
+def _lead(read, allow_stale):
+    global _store_read
+    try:
+        read.data = _read_store(read.started)
+    except BaseException as e:
+        read.error = e
+        if not isinstance(e, Exception):
+            raise
+    finally:
+        with _store_reads:
+            # Only the cluster failing holds off the next read; a request
+            # running out of its own time says nothing about the cluster, nor
+            # does a read older than one that has since succeeded.
+            if (read.error is not None and not isinstance(read.error, DEADLINE.Spent)
+                    and read.started >= _store_cache.get("as_of", 0)):
+                _store_cache["failed_at"] = time.time()
+            if _store_read is read:
+                _store_read = None
+        read.done.set()
+    if read.data is not None:
+        return read.data
+    return _unavailable(read.error, allow_stale)
+
+
+def _read_store(started):
     try:
         sec = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
         raw = base64.b64decode(sec.get("data", {}).get("store.json", "") or "e30=")
@@ -141,13 +246,18 @@ def _load(force=False, max_age=10, allow_stale=True):
         data["_rv"] = (sec.get("metadata") or {}).get("resourceVersion")
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            return _unavailable(e, allow_stale)
+            raise
         data = {}                       # no Secret yet: genuinely a fresh install
-    except Exception as e:
-        return _unavailable(e, allow_stale)
     data.setdefault("users", {})
     data.setdefault("signing_key", "")
-    _store_cache.update(at=time.time(), data=data)
+    with _store_reads:
+        # A read begun before a save here (or a newer read) answers its own
+        # caller but does not replace that copy: a sign-out everywhere must not
+        # come back because an older read finished after it.
+        # An emptied copy (a conflict, invalidate()) keeps its as_of, so a read
+        # begun before it stays out too, and as_of never moves back.
+        if started >= _store_cache.get("as_of", 0):
+            _store_cache.update(at=time.time(), data=data, failed_at=0, as_of=started)
     return data
 
 
@@ -165,11 +275,14 @@ def _save(data):
                       f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}" if data.get("_rv") else f"/api/v1/namespaces/{NS}/secrets", body)
     except urllib.error.HTTPError as e:
         if e.code == 409:
-            _store_cache.update(at=0, data=None)
+            with _store_reads:
+                _store_cache.update(at=0, data=None, as_of=max(time.time(), _store_cache.get("as_of", 0)))
             raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
         raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
-    _store_cache.update(at=time.time(), data=data)
+    with _store_reads:
+        _store_cache.update(at=time.time(), data=data, failed_at=0,
+                            as_of=max(time.time(), _store_cache.get("as_of", 0)))
 
 
 def _signing_key(data=None):

@@ -211,10 +211,12 @@ class ProbeLoopStandbyTests(Base):
 
     def test_the_loop_keeps_a_sleeping_drives_last_reading(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         first = ROWS[0]
         ROWS[0] = {"name": "sda", "available": True, "asleep": True, "health": "unknown"}
         self.addCleanup(ROWS.__setitem__, 0, first)
         PROBES.run_round(now=1000 + PROBES.SMART_EVERY, smart=True)
+        PROBES.smart_settled(5)
         row = PROBES._state["node-1"]["smart"]["sda"]
         self.assertTrue(row["asleep"])
         self.assertEqual("PASSED", row["health"])
@@ -222,6 +224,7 @@ class ProbeLoopStandbyTests(Base):
 
     def test_a_host_whose_probe_did_not_answer_is_not_asked_for_smart(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         self.assertEqual(1, self.helper.calls)
         real = self.helper.urlopen
 
@@ -231,10 +234,12 @@ class ProbeLoopStandbyTests(Base):
             return real(request, timeout)
         with mock.patch.object(SMART.urllib.request, "urlopen", down):
             PROBES.run_round(now=1000 + PROBES.SMART_EVERY, smart=True)
+            PROBES.smart_settled(5)
         self.assertEqual(1, self.helper.calls, "SMART was read on a host whose probe had just failed")
         self.assertFalse(PROBES._state["node-1"]["smart_stale"])
         # Back up: it is still due, and read at once.
         PROBES.run_round(now=1000 + PROBES.SMART_EVERY + PROBES.INTERVAL)
+        PROBES.smart_settled(5)
         self.assertEqual(2, self.helper.calls)
 
     def test_a_host_whose_temperature_read_fails_but_answers_is_still_read_for_smart(self):
@@ -246,6 +251,7 @@ class ProbeLoopStandbyTests(Base):
             return real(request, timeout)
         with mock.patch.object(SMART.urllib.request, "urlopen", broken):
             PROBES.run_round(now=1000, smart=True)
+            PROBES.smart_settled(5)
         self.assertEqual(1, self.helper.calls, "a host that answered was not read for SMART")
         self.assertIn("sda", PROBES._state["node-1"]["smart"])
 
@@ -389,18 +395,22 @@ class ProbeStoreTests(Base):
         ROWS[0] = dict(first, serial="OLD1")
         with mock.patch.object(SMART.urllib.request, "urlopen", probe):
             PROBES.run_round(now=1000, smart=True)
+            PROBES.smart_settled(5)
             self.assertEqual("PASSED", PROBES._state["node-1"]["smart"]["sda"]["health"])
             ROWS[0] = {"name": "sda", "available": True, "asleep": True}
             serial[0] = "NEW2"
             PROBES.run_round(now=1000 + PROBES.SMART_EVERY, smart=True)
+            PROBES.smart_settled(5)
         self.assertNotIn("health", PROBES._state["node-1"]["smart"]["sda"], "the new drive got the old one's reading")
 
     def test_a_host_gone_from_the_cluster_is_dropped_from_the_store(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         self.assertIn("node-1", json.load(open(SMART._store_path())))
         self.pods = lambda path: {"items": []}
         for step in range(PROBES.GONE_AFTER):
             PROBES.run_round(now=1100 + step * PROBES.INTERVAL)
+            PROBES.smart_settled(5)
         self.assertNotIn("node-1", json.load(open(SMART._store_path())))
 
 

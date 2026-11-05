@@ -94,6 +94,11 @@ class Cluster:
         self.server = server
         self.calls = []
         self.kube = test.enterContext(Kube(*objects()))
+        # The restart record's real thread outlives a test and writes
+        # restarts.json into the folder its cleanup is removing. setUpModule
+        # covers this file only; the files that just import Cluster need it
+        # here. The two tests about the record patch it themselves.
+        test.enterContext(mock.patch.object(RESTARTS, "observe_later", lambda pods: True))
         # Other test files bind homestead_lhcapacity to their own fakes and
         # leave it so: read through this cluster whatever ran before.
         LHCAP = server.LHCAP

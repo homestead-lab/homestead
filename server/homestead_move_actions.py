@@ -3,6 +3,8 @@ finish it by removing the source.
 
 Split out of homestead_move_engine (#623).
 """
+import urllib.parse
+import homestead_kube as KUBE
 import homestead_move_state as STATE
 import homestead_move_target as TARGET
 import homestead_move_plan as PLAN
@@ -25,6 +27,15 @@ def _retry(move_id):
         return STATE._public(move)
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
+    if move.get("flags", {}).get("released_on_give_up") or move.get("flags", {}).get("release_requested"):
+        # Its backups may be from before the source ran again (a lost reply
+        # still counts); resuming would bring old data here.
+        raise ValueError(f"{move['name']} may run again on {move['cluster']}, so this move's backups may be out of "
+                         "date; cancel it, then start a new move")
+    if move.get("phase") == "starting":
+        # A fresh start request and a fresh START_GRACE: the old one already ran
+        # out. start_requested stays: the source must not start once this one may have.
+        move.setdefault("flags", {}).pop("started", None)
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
     if move.get("phase") == "joining":
@@ -60,6 +71,27 @@ def _abandon(move_id):
     move.setdefault("flags", {})["cancelling"] = True
     move["flags"]["resource_cleanup_pending"] = True
     STATE._store(move)
+    # What this move made here goes first, and is confirmed gone, before the
+    # source starts again: never two copies at once, nor one address announced
+    # by both clusters. Until then the source stays stopped.
+    name, cluster = move["name"], move["cluster"]
+    try:
+        _remember_selector(move)
+        removed = PHASE._remove_created(move)
+        running = _still_running_here(move)
+    except Exception:
+        move.update(status="failed", message=(
+            f"Removing what this move made here failed; {name} stays stopped on {cluster} until it is gone. "
+            "Retry cancellation" if stopped else
+            "Transfer cleanup failed; retry cleanup to remove its remaining destination objects"))
+        STATE._store(move)
+        raise
+    if stopped and (running or move["flags"].get("destination_deletion_pending")):
+        move.update(status="failed", message=(
+            f"{running or 'What this move made'} is still running here; {name} stays stopped on {cluster} until it "
+            "is gone. Homestead tries the cancellation again"))
+        STATE._store(move)
+        return STATE._public(move)
     # Nothing stopped there yet means nothing to start again there - and no
     # need for the source to answer before this move can be cancelled.
     try:
@@ -68,7 +100,7 @@ def _abandon(move_id):
             # An unowned source still needs a version fence: an HTTP request
             # may have timed out before its stop patch was applied.
             stopped = status.get("source_uid") == move.get("source_uid") and status.get("transfer_owner") in ("", move["id"])
-        released = STATE._source_action(move, "release") if stopped else {"detail": f"Source on {move['cluster']} kept as it was"}
+        released = STATE._source_action(move, "release") if stopped else {"detail": f"Source on {cluster} kept as it was"}
     except Exception:
         move.update(status="failed", message="Source recovery failed; retry cancellation to restore its running state")
         STATE._store(move)
@@ -76,12 +108,6 @@ def _abandon(move_id):
     if stopped or move.get("transfer_mode") == "copy":
         move.setdefault("flags", {})["source_released"] = True
         STATE._store(move)
-    try:
-        removed = PHASE._remove_created(move)
-    except Exception:
-        move.update(status="failed", message="Transfer cleanup failed; retry cleanup to remove its remaining destination objects")
-        STATE._store(move)
-        raise
     move.update(message=(released.get("detail") or "Running on the source again")
                 + (f"; removed {', '.join(removed)} here" if removed else ""),
                 finished_at=STATE._now())
@@ -92,6 +118,41 @@ def _abandon(move_id):
     TARGET._cleanup_target(move)
     STATE._store(move)
     return STATE._public(move)
+
+
+def _remember_selector(move):
+    """Which pods are the app's here, read while its Deployment still exists."""
+    flags = move.setdefault("flags", {})
+    if move["kind"] != "container" or "destination_selector" in flags:
+        return
+    obj = KUBE.get_optional(STATE._object_path("container", move["namespace"], move["name"]), read=STATE.kget)
+    if obj and STATE._ours(obj, move["id"]):
+        flags["destination_selector"] = ((obj.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        STATE._store(move)
+
+
+def _still_running_here(move):
+    """What of the app this move made here still runs, after its objects were
+    deleted: a deleted Deployment's pods, or a VM's instance, go after it."""
+    namespace, name, flags = move["namespace"], move["name"], move.setdefault("flags", {})
+    if move["kind"] == "vm":
+        vmi = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{name}",
+                                read=STATE.kget)
+        return f"VM instance {name}" if vmi else ""
+    may_have_started = (flags.get("start_requested") or flags.get("started")
+                        or move.get("phase") in ("starting", "done"))
+    if move["kind"] != "container" or not may_have_started:
+        return ""
+    labels = flags.get("destination_selector") or {}
+    if labels:
+        selector = urllib.parse.quote(",".join(f"{k}={v}" for k, v in sorted(labels.items())))
+        pods = KUBE.items(f"/api/v1/namespaces/{namespace}/pods?labelSelector={selector}", read=STATE.kget)
+    else:
+        # No selector known: a Deployment's pods are named after it.
+        pods = [p for p in KUBE.items(f"/api/v1/namespaces/{namespace}/pods", read=STATE.kget)
+                if str((p.get("metadata") or {}).get("name", "")).startswith(f"{name}-")]
+    pods = [p for p in pods if (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")]
+    return ", ".join(f"pod {p['metadata']['name']}" for p in pods)
 
 
 DISMISSABLE = ("succeeded", "cancelled")

@@ -1,5 +1,6 @@
 """Each module registers its own kinds of job with register(ops), and
 server.py only calls it (#622 step 3)."""
+import inspect
 import os
 import sys
 import unittest
@@ -79,7 +80,7 @@ REST = [
     (HELM, {"helm"}, set()),
     (ADDONS, {"multus"}, set()),
     (AUTOUPDATE, {AUTOUPDATE.KIND}, set()),
-    (RESTORE_TEST, {RESTORE_TEST.KIND}, set()),
+    (RESTORE_TEST, {RESTORE_TEST.KIND}, {RESTORE_TEST.KIND}),
     (WEEKLY_TRIM, {WEEKLY_TRIM.KIND}, set()),
 ]
 REST_ALIASES = {VM_POWER_JOB: "VM_POWER_JOB", RENAME: "RENAME", IMPORT_JOB: "IMPORT_JOB", DISK_V2: "DISK_V2",
@@ -109,7 +110,8 @@ class HostKindTests(unittest.TestCase):
             with self.subTest(module=module.__name__):
                 ops = fake_ops()
                 module.register(ops)
-                self.assertEqual(resolves, ops.RESOLVERS)
+                # A resolver may be wrapped to drop a page's key when its job ends.
+                self.assertEqual(resolves, {kind: inspect.unwrap(f) for kind, f in ops.RESOLVERS.items()})
                 self.assertEqual(set(cancels), set(ops.CANCELLERS))
 
     def test_a_node_power_command_cannot_be_cancelled_once_sent(self):
@@ -123,7 +125,7 @@ class HostKindTests(unittest.TestCase):
         import server
         for module, resolves, cancels in HOSTS + STORAGE_APPS:
             for kind, resolve in resolves.items():
-                self.assertIs(resolve, server.OPS.RESOLVERS[kind], kind)
+                self.assertIs(resolve, inspect.unwrap(server.OPS.RESOLVERS[kind]), kind)
             for kind in cancels:
                 ops = fake_ops()
                 module.register(ops)
@@ -162,8 +164,8 @@ class RestKindTests(unittest.TestCase):
         self.assertEqual({RENAME.KIND}, ops.CLEANUPS)
         self.assertEqual({DISK_V2.KIND: DISK_V2.logs}, ops.LOGGERS)
         self.assertEqual({"disk-retire": DISKS.retire_resumable}, ops.RESUMABLE)
-        self.assertIs(DISK_V2.progress, ops.RESOLVERS[DISK_V2.KIND])
-        self.assertIs(DISKS.retire_step, ops.RESOLVERS["disk-retire"])
+        self.assertIs(DISK_V2.progress, inspect.unwrap(ops.RESOLVERS[DISK_V2.KIND]))
+        self.assertIs(DISKS.retire_step, inspect.unwrap(ops.RESOLVERS["disk-retire"]))
 
     def test_they_pass_what_server_py_passed(self):
         ops = fake_ops()
@@ -243,7 +245,7 @@ class LastKindTests(unittest.TestCase):
         s, ops = self.server, self.registered("storage", "cluster", "self-data")
         self.assertIs(s.STORAGE_ROUTES._restore_then_tidy, ops.RESOLVERS["volume-restore"])
         self.assertIs(s.COPY_JOB.legacy_status, ops.RESOLVERS["restructure"])
-        self.assertIs(s.STORAGE_ROUTES.storage_move_progress, ops.RESOLVERS["reclass"])
+        self.assertIs(s.STORAGE_ROUTES.storage_move_progress, inspect.unwrap(ops.RESOLVERS["reclass"]))
         self.assertIs(s.RECLASS.resumable, ops.RESUMABLE["reclass"])
         self.assertIs(s.SNAPSHOT_DELETE.resumable, ops.RESUMABLE["snapshot-delete"])
         self.assertEqual((s.CANCEL.reclass_plan, s.STORAGE_ROUTES.storage_legacy_cancel), ops.CANCELLERS["reclass"])

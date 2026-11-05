@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Narrow HTTP wrapper around smartctl for Homestead's optional helper."""
-import hashlib, hmac, json, os, re, subprocess, time
+import hashlib, hmac, json, os, re, subprocess, threading, time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from homestead_http import BoundedHTTPServer, LimitedHandler, deadline, BODY_SECONDS
@@ -278,6 +279,114 @@ def one(name):
         raise ValueError("disk was not found on this host")
     return report(*match)
 
+# The regular read of every drive (#974). The drives are read side by side, so
+# a host's read takes as long as its slowest drive rather than all of them in
+# turn, and each drive's reading is kept for KEEP_SECONDS: another Homestead
+# copy, or a page, asking within that time is answered from it and the drive
+# is not touched again. That is under the probe loop's five minutes, so one
+# copy on its own still gets a fresh reading every round. A reading is kept
+# only for the device node it came from (a drive swapped into the same slot is
+# a new node) and only when it says something: a drive running a self-test,
+# or one smartctl could not open, is read again next time. Starting or
+# aborting a test drops the drive's reading, and a read already under way when
+# that happens is not kept either.
+#
+# Drives behind one USB bridge are read one at a time: usb-storage runs their
+# commands in turn anyway, cheap bridges are where SMART pass-through
+# misbehaves, and a bridge that resets drops every drive behind it.
+KEEP_SECONDS = 240
+LOCK_SECONDS = 15        # how long a read waits for one already under way on the drive
+READERS = 8              # drives (or USB bridges) read at once on one host
+_clock = time.monotonic
+_kept = {}               # name -> (identity, _clock() when read, report)
+_kept_lock = threading.Lock()
+_drive_locks = {}        # name -> Lock: one regular smartctl run per drive at a time
+_drops = {}              # name -> how often its reading was dropped (a test started or ended)
+
+def identity(path):
+    """Which device node a path is now: a drive added again gets a new one."""
+    try:
+        info = os.stat(path)
+        return (info.st_rdev, info.st_ino)
+    except OSError:
+        return None
+
+def usb_bridge(name):
+    """The USB device on the root port a drive hangs off, or None when it is not on USB."""
+    parts = os.path.realpath(os.path.join(SYS, "class/block", name, "device")).split(os.sep)
+    for index, part in enumerate(parts[:-1]):
+        if re.fullmatch(r"usb\d+", part) and re.fullmatch(r"\d+-[\d.]+", parts[index + 1]):
+            return os.sep.join(parts[:index + 2])
+    return None
+
+def _drive_lock(name):
+    with _kept_lock:
+        return _drive_locks.setdefault(name, threading.Lock())
+
+def busy(name):
+    """A drive whose earlier read has not finished: said so, the other drives still answer."""
+    row = dict(asleep(name, "", ""), available=False,
+               unavailable_reason="This drive is still being read by an earlier request",
+               test={"active": False, "status": "No self-test running", "remaining_percent": None})
+    del row["asleep"]
+    return row
+
+def _worth_keeping(row):
+    if (row.get("test") or {}).get("active"):
+        return False
+    # smartctl could not open the drive at all: nothing to share, ask again.
+    return not (row.get("unavailable_reason") and not row.get("available")
+                and not (row.get("model") or row.get("serial") or row.get("protocol")))
+
+def regular(name, path):
+    """One drive's regular reading, the kept one while it is fresh. A caller
+    arriving while the drive is being read waits for that read and shares it."""
+    lock = _drive_lock(name)
+    if not lock.acquire(timeout=LOCK_SECONDS):
+        return busy(name)
+    try:
+        node = identity(path)
+        with _kept_lock:
+            kept, drops = _kept.get(name), _drops.get(name, 0)
+        if kept and node is not None and kept[0] == node and _clock() - kept[1] < KEEP_SECONDS:
+            return dict(kept[2])
+        row = report(name, path, wake=False)
+        with _kept_lock:
+            if _worth_keeping(row) and node is not None and _drops.get(name, 0) == drops:
+                _kept[name] = (node, _clock(), row)
+            else:
+                _kept.pop(name, None)
+        return dict(row)
+    finally:
+        lock.release()
+
+def every_drive():
+    found = disks()
+    names = {name for name, _ in found}
+    with _kept_lock:
+        for name in [name for name in _kept if name not in names]:
+            del _kept[name]
+        for name in [name for name, lock in _drive_locks.items()
+                     if name not in names and not lock.locked()]:
+            del _drive_locks[name]
+    if not found:
+        return []
+    groups = {}
+    for name, path in found:
+        groups.setdefault(usb_bridge(name) or ("", name), []).append((name, path))
+    with ThreadPoolExecutor(max_workers=min(READERS, len(groups)),
+                            thread_name_prefix="smart-read") as pool:
+        read = dict(row for rows in pool.map(
+            lambda drives: [(name, regular(name, path)) for name, path in drives],
+            groups.values()) for row in rows)
+    return [read[name] for name, _ in found]
+
+def drop_kept(name):
+    """A self-test started or ended on a drive: its next regular read is fresh."""
+    with _kept_lock:
+        _kept.pop(name, None)
+        _drops[name] = _drops.get(name, 0) + 1
+
 def signature_ok(raw, stamp, supplied):
     try:
         if abs(time.time() - int(stamp)) > 30:
@@ -312,10 +421,9 @@ class H(LimitedHandler):
             name = (parse_qs(urlparse(self.path).query).get("disk") or [""])[0]
             if name:
                 return self.send_json(200, {"node": NODE, "disk": one(name)})
-            # Every drive in turn is the regular read (the probe loop, a
-            # page): it leaves sleeping drives asleep.
-            return self.send_json(200, {"node": NODE,
-                "disks": [report(name, path, wake=False) for name, path in disks()]})
+            # Every drive is the regular read (the probe loop, a page): it
+            # leaves sleeping drives asleep and answers from kept readings.
+            return self.send_json(200, {"node": NODE, "disks": every_drive()})
         except Exception as error:
             return self.send_json(400, {"error": str(error)[:500]})
     def do_POST(self):
@@ -339,6 +447,7 @@ class H(LimitedHandler):
                 if not path:
                     raise ValueError("disk was not found on this host")
                 code, _, message = run(["-d", device_type(name), "-X", "-j", path], timeout=20)
+                drop_kept(name)
                 if code & 3:
                     raise ValueError(message or "smartctl could not abort the test")
                 return self.send_json(200, {"ok": True, "node": NODE, "disk": name,
@@ -353,6 +462,7 @@ class H(LimitedHandler):
             path = next(path for disk, path in disks() if disk == name)
             code, data, message = run(
                 ["-d", device_type(name), "-t", test, "-j", path], timeout=20)
+            drop_kept(name)
             if code & 3:
                 raise ValueError(message or "smartctl could not start the test")
             expected = int((before.get("expected_seconds") or {}).get(test, 0) or 0)

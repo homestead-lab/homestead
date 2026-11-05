@@ -83,10 +83,11 @@ def list_jobs():
     return sorted(out, key=lambda x: (x["ns"] != I.NS, x["ns"], x["name"]))
 
 
-def cronjob_alert_facts():
+def cronjob_alert_facts(keep=8):
     """The alerts loop's source: raises when the CronJobs could not be read,
-    so the alerts already raised are kept, not cleared."""
-    return HEALTH.alert_facts(homestead_routes.cached("cron", 8, list_jobs), time.time())
+    so the alerts already raised are kept, not cleared. keep: how old a
+    reading of them it takes (homestead_overview_server.KEPT_SECONDS)."""
+    return HEALTH.alert_facts(homestead_routes.cached("cron", keep, list_jobs), time.time())
 
 
 def _managed_job(name):

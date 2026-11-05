@@ -31,6 +31,7 @@ kube-vip's pod there restarts, and on a cluster of several hosts k3s or RKE2
 restarts so flannel follows - as after a bridge conversion. Under a bridge,
 or changing a bond, the name does not change and nothing restarts.
 """
+import calendar
 import hashlib
 import json
 import re
@@ -45,10 +46,15 @@ platform = lambda force=False: {}
 BOND = "bond0"
 ROLLBACK_SECONDS = 240
 LACP_WAIT = 60
+# How long the host has to be Ready again after k3s or RKE2 restarts on the
+# new interface. A host the new network cut off from the cluster never is, so
+# the job fails then, naming the host, instead of running (and holding every
+# other host's network change back) for ever.
+RESTART_SECONDS = 600
 # How long a change holds its host (homestead_hostrun.hold) if its job never
 # ends: past the rollback, the LACP wait and a k3s restart. The job lets go
 # when it ends (#597).
-HOLD_SECONDS = ROLLBACK_SECONDS + LACP_WAIT + 600
+HOLD_SECONDS = ROLLBACK_SECONDS + LACP_WAIT + RESTART_SECONDS
 BACKUP_ROOT = "/var/lib/homestead"
 KIND = "host-bond"
 UNIT = "homestead-bond-rollback"
@@ -552,6 +558,94 @@ def _held(ref):
     return {"change": ref.get("change") or f"Network change on {ref['node']}", "holder": ref.get("lease", "")}
 
 
+def _not_back(ref, interface):
+    """Why a change failed whose host was not Ready again in time after k3s or
+    RKE2 restarted on its new interface, and what to check on that host."""
+    node = ref["node"]
+    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
+    return (f"{node} was not Ready again {RESTART_SECONDS // 60} minutes after {service} restarted on {interface}. "
+            f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
+            "If it becomes Ready later, nothing more is needed: the new network is kept. "
+            f"The old configuration is in {ref['backup']}")
+
+
+# Proof the kubelet came back after k3s or RKE2 restarted. Ready alone stays
+# True about 40 s after the kubelet's last heartbeat, so a host the new network
+# cut off still reads Ready at first. When the restart is asked for, the step
+# keeps what the kubelet last reported (restart_baseline); it then needs a
+# Lease renewal more than BACK_AFTER seconds after that renewal, or a Ready
+# heartbeat or transition after that heartbeat. Both sides come from the host's
+# own clock, so a host clock ahead of or behind Homestead's changes nothing.
+# systemd-run restarts the service 2 s on, and the old kubelet may renew once
+# more (every 10 s) while it stops: that renewal is inside BACK_AFTER.
+BACK_AFTER = 15
+NODE_LEASE = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/{}"
+
+
+def kube_time(text):
+    """Seconds since the epoch of a Kubernetes Time or MicroTime
+    (2026-01-01T12:00:00Z, 2026-01-01T12:00:00.123456Z); None if none."""
+    text = str(text or "")
+    try:
+        whole = calendar.timegm(time.strptime(text[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+    fraction = re.match(r"\.(\d+)", text[19:])
+    return whole + (float("0." + fraction[1]) if fraction else 0)
+
+
+def _ready(read, node):
+    conditions = (read(f"/api/v1/nodes/{node}").get("status") or {}).get("conditions") or []
+    return next((c for c in conditions if c.get("type") == "Ready"), {})
+
+
+def _heard(ready):
+    """Ready's heartbeat and transition times that are there."""
+    return [t for t in (kube_time(ready.get("lastHeartbeatTime")), kube_time(ready.get("lastTransitionTime")))
+            if t is not None]
+
+
+def _renewed(read, node):
+    """When the host's kubelet last renewed its Lease, or None. Any failure
+    to read it (not found, forbidden, unreachable) gives None: the step then
+    goes by Ready's times, never by less."""
+    try:
+        return kube_time((read(NODE_LEASE.format(node)).get("spec") or {}).get("renewTime"))
+    except Exception:
+        return None
+
+
+def restart_baseline(read, node):
+    """What the host's kubelet last reported, read right after the restart
+    was asked for: renew0, its Lease's renewTime, and hb0, the later of
+    Ready's heartbeat and transition. None for what could not be read."""
+    try:
+        heard = _heard(_ready(read, node))
+    except Exception:
+        heard = []
+    return {"renew0": _renewed(read, node), "hb0": max(heard) if heard else None}
+
+
+def kubelet_back(read, node, ref):
+    """Whether node is Ready and its kubelet was heard from after the restart
+    the step asked for (ref: its renew0, hb0 and since). read is the caller's
+    bound kget; homestead_host_bridge uses this too."""
+    ready = _ready(read, node)
+    if ready.get("status") != "True":
+        return False
+    heard, renewed = _heard(ready), _renewed(read, node)
+    renew0, hb0 = ref.get("renew0"), ref.get("hb0")
+    if renew0 is not None and renewed is not None:
+        return renewed > renew0 + BACK_AFTER
+    if hb0 is not None:
+        return any(t > hb0 for t in heard)
+    # No baseline: nothing was readable when the restart was asked for, or the
+    # job began before Homestead kept one. Only then compare with when the step
+    # started, on Homestead's clock - a host clock far ahead can mislead this.
+    after = ref["since"] + BACK_AFTER
+    return any(t > after for t in heard) or (renewed is not None and renewed > after)
+
+
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
@@ -615,16 +709,16 @@ def _step(item, now=None):
         if service and _node_count() > 1:
             hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
                         **_held(ref))
-            ref.update(stage="restarting", since=now)
+            ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
             return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
         ref.update(stage="done")
         return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
     if ref["stage"] == "restarting":
-        node_obj = kget(f"/api/v1/nodes/{node}")
-        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node_obj.get("status") or {}).get("conditions") or [])
-        if ready and elapsed > 30:
+        if elapsed > 30 and kubelet_back(kget, node, ref):
             ref.update(stage="done")
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
+        if elapsed > RESTART_SECONDS:
+            return "failed", 100, _not_back(ref, ref["carries_on"])
         return "running", 92, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
 

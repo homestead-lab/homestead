@@ -146,26 +146,54 @@ def fit(days, capacity, now=None):
     return {"days_left": round(left, 1), "per_day": slope, "why": ""}
 
 
-def report(now=None):
-    """Every series with its forecast, soonest first."""
-    now = now or time.time()
+_kept = [None]            # one entry: (key, rows)
+
+
+def _file_version():
+    """Which file the cached report was made from: another copy of Homestead
+    (the leader) replaces it on the shared volume, so a copy that never calls
+    observe() sees the change here."""
+    try:
+        st = os.stat(_path())
+    except OSError:
+        return None
+    return (st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _fitted(now):
+    """Every series with its fit, soonest first, but not yet dated: the file
+    changes about hourly and the fit moves only with the day, so this is
+    kept until either does."""
+    # No lock for the key: a write that lands after this stat is seen by the next call, and the rows below are only replaced whole.
+    key = (_path(), _file_version(), _day(now))
+    hit = _kept[0]
+    if hit and hit[0] == key:
+        return hit[1]
     with _lock:
         series = _load().get("series", {})
     out = []
-    for key, entry in series.items():
+    for key_, entry in series.items():
         days = entry.get("days") or {}
         if not days:
             continue
         latest_day = max(days)
         capacity = int(entry.get("capacity") or 0)
         f = fit(days, capacity, now) if capacity else {"days_left": None, "per_day": None, "why": "no size known"}
-        out.append({"key": key, "kind": entry.get("kind", ""), "label": entry.get("label", key),
+        out.append({"key": key_, "kind": entry.get("kind", ""), "label": entry.get("label", key_),
                     "namespace": entry.get("namespace", ""), "volume": entry.get("volume", ""), "node": entry.get("node", ""),
                     "used": days[latest_day], "capacity": capacity,
                     "pct": round(days[latest_day] / capacity * 100, 1) if capacity else None,
-                    "days": len(days), "days_left": f["days_left"], "per_day": f["per_day"], "why": f["why"],
-                    "full_on": _day(now + f["days_left"] * 86400) if f["days_left"] is not None else ""})
-    return sorted(out, key=lambda r: (r["days_left"] is None, r["days_left"] if r["days_left"] is not None else 0, r["label"]))
+                    "days": len(days), "days_left": f["days_left"], "per_day": f["per_day"], "why": f["why"]})
+    out.sort(key=lambda r: (r["days_left"] is None, r["days_left"] if r["days_left"] is not None else 0, r["label"]))
+    _kept[0] = (key, out)
+    return out
+
+
+def report(now=None):
+    """Every series with its forecast, soonest first."""
+    now = now or time.time()
+    return [{**r, "full_on": _day(now + r["days_left"] * 86400) if r["days_left"] is not None else ""}
+            for r in _fitted(now)]
 
 
 def forecast_href(r):

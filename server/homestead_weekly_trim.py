@@ -29,6 +29,7 @@ import homestead_longhorn as LH
 import homestead_longhorn_jobs as LH_JOBS
 import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_routes
 import homestead_shared as SHARED
 
 KIND = "weekly-trim"
@@ -383,6 +384,7 @@ def leave_out(body, user=""):
             rows.pop(volume, None)
         state["left_out"] = rows
     _update(change)
+    homestead_routes.forget("lhov")     # This week and the clashes (#978)
     name = pvc or volume
     return {"ok": True, "volume": volume, "left_out": leave,
             "detail": f"{name} is left out of the weekly trim; Trim now still trims it" if leave
@@ -442,6 +444,7 @@ def settings(body):
                 state["tried"] = last_slot(time.time(), weekday, hour)
             state.update(weekday=weekday, hour=hour)
     state = _update(change)
+    homestead_routes.forget("lhov")     # This week and the clashes (#978)
     enabled = state.get("enabled", True) is not False
     weekday, hour = slot_of(state)
     return {"ok": True, "enabled": enabled, "weekday": weekday, "hour": hour,

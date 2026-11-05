@@ -173,9 +173,9 @@ def _vip_loop():
                 if now - last_full >= VIP_FULL or VIPS.missing(platform):
                     last_full = now
                     if VIPS.keep(platform):
-                        with _lock:
-                            _cache.pop("network", None)
-                            _cache.pop("flow2", None)
+                        # Outside the cache's lock: a pop is told to listeners.
+                        _cache.pop("network", None)
+                        _cache.pop("flow2", None)
                 beat("vips", VIP_FULL, leader_only=True)
             except Exception as error:
                 beat("vips", VIP_FULL, error, leader_only=True)

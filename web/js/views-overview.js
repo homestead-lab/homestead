@@ -1200,12 +1200,28 @@ function loadXterm() {
     el.onerror = () => { xtermLoading = null; reject(new Error("the terminal could not be loaded")); };
     document.head.appendChild(el);
   });
-  const v = `?v=${HOMESTEAD_VERSION}`;
+  const v = `?v=${assetVersion()}`;
   xtermLoading = Promise.all([
     load("link", { rel: "stylesheet", href: `/vendor/xterm/xterm.css${v}` }),
     load("script", { src: `/vendor/xterm/xterm.js${v}` }).then(() => load("script", { src: `/vendor/xterm/addon-fit.js${v}` })),
   ]);
   return xtermLoading;
+}
+
+/* The name the served page gives its own files (its release, or a hash for a CI or
+   plain docker build). Files loaded later by script ask for the same name, so the
+   browser keeps them for good instead of checking each one on every load (#982). */
+function assetVersion() {
+  try {
+    const own = document.querySelector('script[src*="/js/core.js?v="]');
+    return new URL(own.src, location.href).searchParams.get("v") || HOMESTEAD_VERSION;
+  } catch { return HOMESTEAD_VERSION; }
+}
+
+/* Where a vendored library is asked for: under the page's version, so every file it
+   imports by relative path (noVNC, Monaco) carries that version too. */
+function vendorBase() {
+  return window.HOMESTEAD_DEMO ? "/vendor" : `/vendor/@${assetVersion()}`;
 }
 
 window.nodeShell = async name => {

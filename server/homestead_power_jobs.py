@@ -72,7 +72,23 @@ def power_plan_with_job(power_plan):
 def run_power_job(operation_id, power_plan, force=False, resumed=False):
     """Cordon, drain, recheck and send a reviewed reboot or shutdown, recording
     each phase on the job. Cordon and drain may be repeated safely; the send is
-    guarded by the job's own receipts."""
+    guarded by the job's own receipts.
+
+    While it runs the job is marked as running here, however it was started
+    (in the background, or in the leader's own OS-update tick), so the leader
+    never resumes it a second time in this process."""
+    with _POWER_RESUME_LOCK:
+        mine = operation_id not in _POWER_RESUMING      # a background runner's mark stays its own to free
+        _POWER_RESUMING.add(operation_id)
+    try:
+        return _run_power_job(operation_id, power_plan, force, resumed)
+    finally:
+        if mine:
+            with _POWER_RESUME_LOCK:
+                _POWER_RESUMING.discard(operation_id)
+
+
+def _run_power_job(operation_id, power_plan, force=False, resumed=False):
     node, action = power_plan["node"], power_plan["action"]
     planned_outage = bool(power_plan.get("planned_outage")) and not force
     phase_state = {"phase": "reviewed"}
@@ -301,7 +317,7 @@ def send_reviewed_power(power_plan, force=False, background=False):
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
          # What a resumed job needs: the reviewed plan, and which replica runs it.
-         "plan": power_plan, "worker": POD_NAME,
+         "plan": power_plan, "worker": POD_NAME, "worker_restarts": own_restarts(),
          "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
@@ -315,8 +331,29 @@ def send_reviewed_power(power_plan, force=False, background=False):
     return {"operation": operation, "steps": [], "background": True}
 
 
-def power_worker_gone(pod):
-    """Whether the replica a power job named has gone - evicted by the drain."""
+def _restarts(pod):
+    """Homestead's own container's restart count in pod, or None without one:
+    a sidecar restarting is not the worker going."""
+    for status in ((pod or {}).get("status") or {}).get("containerStatuses") or []:
+        if status.get("name") == NAMES.BRAND:
+            return int(status.get("restartCount") or 0)
+    return None
+
+
+def own_restarts():
+    """How often this replica's Homestead container has restarted, recorded on a power
+    job when its worker starts it: a higher count later means the process
+    running the job died with its container, though the pod lives on. None
+    when it can't be read, and the job keeps the pod-only check."""
+    try:
+        return _restarts(kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(POD_NAME, safe='')}"))
+    except Exception:
+        return None
+
+
+def power_worker_gone(pod, restarts=None):
+    """Whether the replica a power job named has gone - evicted by the drain,
+    or its container restarted since the job recorded restarts."""
     try:
         found = kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(pod, safe='')}")
     except urllib.error.HTTPError as error:
@@ -325,6 +362,9 @@ def power_worker_gone(pod):
         return False  # unknown is not gone
     if (found.get("metadata") or {}).get("deletionTimestamp") or \
             (found.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+        return True
+    now = _restarts(found)
+    if restarts is not None and now is not None and now > restarts:
         return True
     # A host shut down or lost leaves its pods listed for minutes; one whose
     # node is not Ready is not running anything.
@@ -354,7 +394,8 @@ def resume_power_job(item):
     def claim_then_run():
         try:
             OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
-                             "Homestead moved while preparing this host; carrying on from another replica", worker=POD_NAME)
+                             "Homestead restarted or moved while preparing this host; carrying on", worker=POD_NAME,
+                             worker_restarts=own_restarts(), expect_worker=ref.get("worker"), expect_phase=POWER.BEFORE_SEND)
         except Exception:
             with _POWER_RESUME_LOCK:
                 _POWER_RESUMING.discard(item["id"])

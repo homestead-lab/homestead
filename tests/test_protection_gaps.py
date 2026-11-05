@@ -42,6 +42,12 @@ class RevertTests(unittest.TestCase):
                                                                                   "readyToUse": True}},
             f"{API}/replicas": {"items": [{"spec": {"volumeName": "pvc-1", "nodeID": "node2"},
                                            "status": {"currentState": "stopped"}}]},
+            # What starting again reads first (homestead_revert._start_again).
+            "/api/v1/namespaces/lab/persistentvolumeclaims/paperless-data": {
+                "metadata": {"uid": "claim-1"}, "spec": {"volumeName": "pvc-1"}},
+            "/apis/apps/v1/namespaces/lab/deployments/paperless": {
+                "metadata": {"uid": "app-1", "resourceVersion": "7"}, "spec": {"replicas": 0, "template": {"spec": {
+                    "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "paperless-data"}}]}}}},
         }
         self.reclass = FakeReclass(self)
         self.failing = {}       # Longhorn API action -> the error it raises
@@ -49,6 +55,9 @@ class RevertTests(unittest.TestCase):
         reach = mock.patch.object(REVERT.ACCESS, "reachable", return_value="")
         self.reachable = reach.start()
         self.addCleanup(reach.stop)
+        fits = mock.patch.object(REVERT, "_admission", return_value={"blocked": False})
+        fits.start()
+        self.addCleanup(fits.stop)
         pause = mock.patch.object(REVERT, "RETRY_AFTER", 0)
         pause.start()
         self.addCleanup(pause.stop)
@@ -74,6 +83,19 @@ class RevertTests(unittest.TestCase):
         chain["volume-head"] = {"parent": parent}
         self.objects[f"{API}/engines?labelSelector=longhornvolume%3Dpvc-1"] = {"items": [
             {"status": {"snapshots": chain}}]}
+
+    def until_done(self, item, rounds=10):
+        """Resolve until the job ends: a put-back tries a start again a few rounds."""
+        for _ in range(rounds):
+            status, progress, message = REVERT.resolve(item)
+            if status != "running":
+                break
+        return status, progress, message
+
+    def started(self):
+        """Each start of the app, as the writes Homestead sent."""
+        return [[path.rsplit("/", 1)[1]] for method, path, body in self.sent
+                if method == "PATCH" and "/deployments/" in path and ((body or {}).get("spec") or {}).get("replicas")]
 
     def actions(self):
         return [path.split("action=")[1] for path, _ in self.calls]
@@ -123,7 +145,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("snap-a", self.calls[2][1]["name"])
         self.state = "detached"
         REVERT.resolve(item)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         status, _, message = REVERT.resolve(item)
         self.assertEqual("succeeded", status)
         self.assertIn(item["ref"]["kept"], message)
@@ -132,10 +154,12 @@ class RevertTests(unittest.TestCase):
         item = {"ref": {"volume": "pvc-1", "snapshot": "snap-a", "namespace": "lab", "claim": "paperless-data",
                         "consumers": REVERT.plan("pvc-1", "snap-a")["consumers"], "phase": "stopping",
                         "since": time.time() - 3600}}
-        status, _, message = REVERT.resolve(item)
+        status, _, message = self.until_done(item)
         self.assertEqual("failed", status)
         self.assertIn("Nothing was changed", message)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([], self.started(), "never started beside its old pod, still on the volume")
+        self.assertIn("paperless-abc still uses paperless-data", message)
+        self.assertIn("Containers → paperless → Start with 1 replica", message)
         self.assertEqual([], self.calls)
 
     def test_an_unreachable_api_refuses_before_anything_stops(self):
@@ -153,12 +177,12 @@ class RevertTests(unittest.TestCase):
         item = self._stopped_and_detached()
         self.assertEqual("running", REVERT.resolve(item)[0])
         self.assertEqual("running", REVERT.resolve(item)[0])
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertIn("Connection refused", message)
         self.assertIn("Nothing was changed", message)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         self.assertEqual(3, self.actions().count("attach"))
         self.assertNotIn("snapshotCreate", self.actions())
         self.assertNotIn("detach", self.actions(), "the API is not answering: let go through Kubernetes")
@@ -183,7 +207,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("failed", status)
         self.assertEqual(["attach"], self.actions())
         self.assertIn("Nothing was changed", message)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
 
     def test_a_volume_with_no_attachment_record_is_not_reported_as_held(self):
         self.failing["attach"] = REVERT.Refused("Longhorn refused it: no")
@@ -203,7 +227,7 @@ class RevertTests(unittest.TestCase):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach"], self.actions())
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         self.assertIn(item["ref"]["kept"], message)
         self.assertIn("Nothing was rolled back", message)
 
@@ -217,7 +241,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("running", status)
         self.assertEqual("confirming", item["ref"]["phase"])
         self.assertNotIn("detach", self.actions(), "never let go while Longhorn may still be reverting")
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
         self.assertEqual("running", REVERT.resolve(item)[0])
         self.head_after("snap-a", known=[item["ref"]["kept"], "snap-a"])
         status, _, _ = REVERT.resolve(item)
@@ -235,7 +259,7 @@ class RevertTests(unittest.TestCase):
         item["ref"]["since"] = time.time() - 3600       # Longhorn's engine never said
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual([], self.reclass.started, "starting the app could meet a half-reverted volume")
+        self.assertEqual([], self.started(), "starting the app could meet a half-reverted volume")
         self.assertNotIn("detach", self.actions())
         self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
         for words in ("maintenance mode", "homestead-revert", "paperless", item["ref"]["kept"]):
@@ -255,7 +279,7 @@ class RevertTests(unittest.TestCase):
         item["ref"]["since"] = time.time() - 3600
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
         self.assertIn("maintenance mode", message)
 
     def test_a_revert_whose_answer_is_lost_and_did_not_happen_puts_the_app_back(self):
@@ -268,7 +292,7 @@ class RevertTests(unittest.TestCase):
         item["ref"]["since"] = time.time() - 3600
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         self.assertIn("Nothing was rolled back", message)
 
     def test_a_snapshot_made_before_its_answer_was_lost_is_kept(self):
@@ -295,7 +319,7 @@ class RevertTests(unittest.TestCase):
                          "one name, so a retry can't leave two")
         self.assertNotIn("snapshotRevert", self.actions())
         self.assertIn("Nothing was changed", message)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
 
     def test_put_back_still_starts_the_app_when_detach_fails(self):
         self.failing["snapshotCreate"] = REVERT.Refused("Longhorn refused it: busy")
@@ -305,7 +329,7 @@ class RevertTests(unittest.TestCase):
         self.state = "attached"
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         self.assertIn(("PATCH", f"{API}/volumeattachments/pvc-1",
                        {"spec": {"attachmentTickets": {"homestead-revert": None}}}), self.sent)
         self.assertIn("Nothing was changed", message)
@@ -324,7 +348,7 @@ class RevertTests(unittest.TestCase):
         REVERT.ksend = send
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         self.assertIn("homestead-revert", message)
 
     def test_put_back_finishes_and_says_so_when_the_app_cannot_be_started(self):
@@ -332,10 +356,13 @@ class RevertTests(unittest.TestCase):
         item = self._stopped_and_detached()
         REVERT.resolve(item)
         self.state = "attached"
-        def start(ns, ref):
-            raise urllib.error.HTTPError("/apis/apps", 409, "conflict", {}, None)
-        self.reclass._start = start
-        status, _, message = REVERT.resolve(item)
+        sent = self.send
+        def send(method, path, body=None, **kw):
+            if "/deployments/" in path:
+                raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
+            return sent(method, path, body, **kw)
+        REVERT.ksend = send
+        status, _, message = self.until_done(item)
         self.assertEqual("failed", status)
         self.assertIn("detach", self.actions())
         self.assertIn("could not start", message)
@@ -361,22 +388,25 @@ class RevertTests(unittest.TestCase):
         REVERT.resolve(item)
         self.assertEqual(["attach", "snapshotCreate", "snapshotRevert", "detach", "detach"], self.actions())
         self.assertFalse(item["ref"]["attached"])
-        self.assertEqual([], self.reclass.started, "nothing starts while the volume is still held for the rollback")
+        self.assertEqual([], self.started(), "nothing starts while the volume is still held for the rollback")
 
     def test_a_detach_that_keeps_failing_is_tried_three_times_then_starts_things_and_says_so(self):
         item = self._stopped_and_detached()
         REVERT.resolve(item)
         self.state = "attached"
         self.failing["detach"] = urllib.error.URLError("timed out")
+        sent = self.send
         def send(method, path, body=None, **kw):
-            raise urllib.error.URLError("timed out")
+            if "volumeattachments" in path:
+                raise urllib.error.URLError("timed out")
+            return sent(method, path, body, **kw)
         REVERT.ksend = send
         REVERT.resolve(item)                            # reverted; the first detach fails
         self.assertEqual("running", REVERT.resolve(item)[0])
         self.state = "detached"
         REVERT.resolve(item)
         self.assertEqual(3, self.actions().count("detach"))
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
         status, _, message = REVERT.resolve(item)
         self.assertEqual("succeeded", status)
         self.assertIn("homestead-revert", message)
@@ -395,7 +425,7 @@ class RevertTests(unittest.TestCase):
         status, _, _ = REVERT.resolve(item)
         self.assertEqual("running", status)
         self.assertEqual("confirming", item["ref"]["phase"])
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
 
     def test_a_connection_refused_before_the_revert_was_sent_puts_the_app_back(self):
         self.failing["snapshotRevert"] = urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
@@ -403,7 +433,7 @@ class RevertTests(unittest.TestCase):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertIn("Nothing was rolled back", message)
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
 
     def test_http_answers_are_told_apart(self):
         for code, kind in ((400, REVERT.Refused), (409, REVERT.Refused), (500, REVERT.ServerError), (503, REVERT.ServerError)):
@@ -425,14 +455,14 @@ class RevertTests(unittest.TestCase):
             REVERT.cancel_run(item, {})
         self.assertNotIn("detach", self.actions())
         self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
 
     def test_cancel_before_the_revert_still_puts_things_back(self):
         item = self._stopped_and_detached()
         REVERT.resolve(item)
         self.assertTrue(REVERT.cancel_plan(item).get("mode") == "rollback")
         REVERT.cancel_run(item, {})
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
 
     def test_the_revert_is_recorded_before_it_is_sent(self):
         item = self._to_the_revert()
@@ -487,7 +517,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual("confirming", resumed["ref"]["phase"])
         self.assertEqual([], self.calls)
         self.assertFalse([s for s in self.sent if "volumeattachments" in s[1]])
-        self.assertEqual([], self.reclass.started)
+        self.assertEqual([], self.started())
 
     def test_a_restart_while_the_snapshot_was_out_keeps_the_one_made(self):
         item = self._to_the_revert()
@@ -526,14 +556,17 @@ class RevertTests(unittest.TestCase):
     def test_a_detach_longhorn_refuses_is_not_tried_again(self):
         item = self._to_the_revert()
         self.failing["detach"] = REVERT.Refused("Longhorn refused it: no")
+        sent = self.send
         def send(method, path, body=None, **kw):
-            raise urllib.error.URLError("timed out")
+            if "volumeattachments" in path:
+                raise urllib.error.URLError("timed out")
+            return sent(method, path, body, **kw)
         REVERT.ksend = send
         REVERT.resolve(item)
         self.state = "detached"
         REVERT.resolve(item)
         self.assertEqual(1, self.actions().count("detach"))
-        self.assertEqual([["paperless"]], self.reclass.started)
+        self.assertEqual([["paperless"]], self.started())
 
     def test_homesteads_own_data_is_refused(self):
         self.reclass.consumers = lambda ns, claim: [{"kind": "Deployment", "name": "homestead", "replicas": 1}]
@@ -570,6 +603,8 @@ class HarvesterTargetTests(unittest.TestCase):
             if path == BACKUP_TARGET.HARVESTER_TARGET:
                 return self.setting
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {})
 
     def test_nfs_and_s3_are_written_to_harvesters_setting(self):

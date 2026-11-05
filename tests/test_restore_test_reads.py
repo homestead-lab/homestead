@@ -50,6 +50,11 @@ def backup(name, volume, created, state="Completed"):
                        "volumeSize": str(20 * 1073741824), "size": "1048576"}}
 
 
+# What RT.bind sets.
+RT_BOUND = ("kget", "ksend", "names", "backups", "restore", "restore_status", "csi_cleanup", "capacity", "ask",
+            "self_namespace", "workloads", "app_settings", "save_app_settings", "dns_name")
+
+
 class Reads(unittest.TestCase):
     def setUp(self):
         CACHE.forget_where(lambda key: True)
@@ -61,8 +66,11 @@ class Reads(unittest.TestCase):
         def kget(path, timeout=10):
             self.reads.append(path)
             return K.kget(path, timeout)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(kget, K.ksend, CACHE._cache)
         self.operations = []
+        self.addCleanup(vars(RT).update, {name: getattr(RT, name, None) for name in RT_BOUND})   # put back what server.py bound
         RT.bind(kget, K.ksend, NAMES, LHB.backups, lambda cfg: {}, lambda item: ("running", 0, ""),
                 lambda: [], lambda: {}, lambda target: {"ok": False}, lambda: "lab",
                 lambda: [{"ns": "lab", "name": app, "claims": [f"{app}-data", f"{app}-config"]} for app in APPS],
@@ -172,6 +180,8 @@ class OneVolume(unittest.TestCase):
         def kget(path, timeout=10):
             self.reads.append(path)
             return K.kget(path, timeout)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(kget, K.ksend, {})
 
     def test_one_volumes_backups_are_asked_for_by_label(self):

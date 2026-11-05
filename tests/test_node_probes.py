@@ -90,6 +90,11 @@ class Base(unittest.TestCase):
                       mock.patch.object(PROBES.SMART.SHARED, "DIR", store.name)):
             patch.start()
             self.addCleanup(patch.stop)
+        # Stop the loop, then let a SMART pass still running (its own thread,
+        # #974) end, while the fakes are in place: cleanups run last-added
+        # first, and a read after the fakes are gone waits out a real timeout.
+        self.addCleanup(PROBES.smart_settled, 5)
+        self.addCleanup(PROBES.stop)
 
     def misses(self, node):
         return PROBES.status()[node]["misses"]
@@ -180,7 +185,9 @@ class ProbeTests(Base):
 
     def test_smart_is_read_in_the_same_loop_and_kept_between_its_reads(self):
         PROBES.run_round(now=1000)
+        PROBES.smart_settled(5)
         PROBES.run_round(now=1015)
+        PROBES.smart_settled(5)
         self.assertEqual(3, len([url for url in self.cluster.calls if ":9100/" in url]),
                          "SMART is read once per host, not every round")
         disk = PROBES.node_temps(wait=False)["node1"]["disks"][0]
@@ -190,17 +197,21 @@ class ProbeTests(Base):
     def test_a_smart_helper_with_no_drives_is_available(self):
         self.cluster.smart_rows = []
         PROBES.run_round(now=1000)
+        PROBES.smart_settled(5)
         self.assertEqual({"available": True, "disks": 0}, PROBES.node_temps(wait=False)["node1"]["smart_helper"])
 
     def test_a_smart_read_that_fails_keeps_the_last_rows_marked_stale_and_retries_sooner(self):
         PROBES.run_round(now=1000)
+        PROBES.smart_settled(5)
         self.cluster.smart_down = {"192.0.2.1"}
         PROBES.run_round(now=1000 + PROBES.SMART_EVERY)
+        PROBES.smart_settled(5)
         self.assertEqual({"available": True, "disks": 1, "stale": True},
                          PROBES.node_temps(wait=False)["node1"]["smart_helper"])
         self.assertTrue(PROBES.node_temps(wait=False)["node1"]["disks"][0]["smart"]["passed"])
         reads = len([url for url in self.cluster.calls if "192.0.2.1:9100" in url])
         PROBES.run_round(now=1000 + PROBES.SMART_EVERY + PROBES.SMART_RETRY)
+        PROBES.smart_settled(5)
         self.assertEqual(reads + 1, len([url for url in self.cluster.calls if "192.0.2.1:9100" in url]),
                          "tried again after a minute, not five")
 
@@ -334,6 +345,7 @@ class FirstReadTests(unittest.TestCase):
             started = time.monotonic()
             NODES.node_temps()
             took = time.monotonic() - started
+            PROBES.smart_settled(5)          # its SMART pass, on its own thread (#974), still on the fakes
         self.assertLess(took, 1.5, f"took {took:.1f} s; one host after another, both reads, is 2.4 s")
         self.assertEqual(3, len([url for url in cluster.calls if ":9099/" in url]), "all three probe pods were found and read")
 

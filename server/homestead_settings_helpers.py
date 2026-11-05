@@ -102,7 +102,7 @@ def save_app_settings(value):
 def _config_restored(parts):
     """A restored part is read afresh everywhere it is cached."""
     _cache.clear()
-    AUTH._store_cache.update(at=0)
+    AUTH.invalidate()
     HW._cache.clear()
     IMP._cache.clear()
 
