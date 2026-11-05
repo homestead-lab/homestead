@@ -46,10 +46,6 @@ homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
 homestead_history.DATA_DIR	test_mqtt_history	fake
-homestead_host_os.DATA_DIR	test_host_os	fake
-homestead_host_os.hostrun	test_host_os	fake
-homestead_host_os.kget	test_host_os	fake
-homestead_host_os.platform	test_host_os	fake
 homestead_hostrun.exec_in	test_promote	fake
 homestead_hostrun.kget	test_promote	fake
 homestead_hostrun.ksend	test_promote	fake
