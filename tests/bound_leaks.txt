@@ -28,16 +28,6 @@ homestead_api_keys.DATA_DIR	test_read_json	fake
 homestead_api_keys.DATA_DIR	test_update_file	fake
 homestead_auth.kget	test_sessions	fake
 homestead_auth.ksend	test_sessions	fake
-homestead_autoupdate.kget	test_autoupdate	fake
-homestead_autoupdate.kget	test_autoupdate	other
-homestead_autoupdate.ksend	test_autoupdate	other
-homestead_autoupdate.longhorn_snapshot	test_autoupdate	fake
-homestead_autoupdate.longhorn_snapshot	test_autoupdate	other
-homestead_autoupdate.snapshot_list	test_autoupdate	fake
-homestead_autoupdate.snapshot_prune	test_autoupdate	fake
-homestead_autoupdate.updates	test_autoupdate	fake
-homestead_autoupdate.updates	test_autoupdate	other
-homestead_autoupdate.uptime_report	test_autoupdate	fake
 homestead_baseline.DATA_DIR	test_self_address	fake
 homestead_baseline.addons	test_self_address	other
 homestead_baseline.kget	test_self_address	fake
