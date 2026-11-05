@@ -36,9 +36,6 @@ homestead_config_backup.PARTS	test_config_backup	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
-homestead_hostrun.exec_in	test_promote	fake
-homestead_hostrun.kget	test_promote	fake
-homestead_hostrun.ksend	test_promote	fake
 homestead_imports._cache	test_vm_create	other
 homestead_imports._cache	test_vm_disk_import	other
 homestead_imports._cache	test_vm_lan	other
@@ -83,9 +80,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_promote.kget	test_promote	other
-homestead_promote.ksend	test_promote	other
-homestead_promote.own_node	test_promote	other
 homestead_push.DATA_DIR	test_push	fake
 homestead_push.DATA_DIR	test_read_json	fake
 homestead_reclass.OWN_NS	test_reclass	other
