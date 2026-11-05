@@ -75,6 +75,9 @@ class Cluster:
 
 
 class VmEditTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, VMS)   # Cluster binds VMS; its module cleanup only runs when the file ends
+
     def test_a_refused_disk_says_so_and_a_stopped_vm_is_not_a_problem(self):
         Cluster({"harvester": True, "cdi": True})
         row = VM_LIST._row(copy.deepcopy(VM), {})
