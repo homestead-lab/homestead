@@ -314,6 +314,35 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("succeeded", complete["status"])
         self.assertEqual(100, complete["progress"])
 
+    def test_volume_restore_recognizes_completed_detached_volume(self):
+        pvc_path = "/api/v1/namespaces/lab/persistentvolumeclaims/restored-data"
+        volume_path = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-restored"
+        engines_path = ("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
+                        "?labelSelector=longhornvolume%3Dlh-restored")
+        self.objects[pvc_path] = {"spec": {"volumeName": "pv-restored"}, "status": {"phase": "Bound"}}
+        self.objects["/api/v1/persistentvolumes/pv-restored"] = {
+            "spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": "lh-restored"}}}
+        volume = {"spec": {"fromBackup": "s3://example-backups@region/?backup=backup-123&volume=source"},
+                  "status": {"state": "detached", "robustness": "unknown",
+                             "restoreInitiated": True, "restoreRequired": False}}
+        self.objects[volume_path] = volume
+        self.objects[engines_path] = {"items": [{"status": {"restoreStatus": None, "lastRestoredBackup": ""}}]}
+        item = {"ref": {"namespace": "lab", "name": "restored-data", "backup": "backup-123"}}
+        self.assertEqual(("succeeded", 100), operations._volume_restore(item)[:2])
+        for field, value in [("restoreRequired", True), ("restoreRequired", None),
+                             ("restoreInitiated", False), ("state", "attaching")]:
+            with self.subTest(field=field, value=value):
+                original = volume["status"][field]
+                volume["status"][field] = value
+                self.assertEqual("running", operations._volume_restore(item)[0])
+                volume["status"][field] = original
+        item["ref"]["backup"] = "another-backup"
+        self.assertEqual("running", operations._volume_restore(item)[0])
+        item["ref"]["backup"] = "backup-123"
+        self.objects[engines_path]["items"][0]["status"]["restoreStatus"] = {
+            "replica-a": {"error": "restore failed", "progress": 30}}
+        self.assertEqual("failed", operations._volume_restore(item)[0])
+
     def test_volume_restore_surfaces_longhorn_scheduling_failure(self):
         operations.start(
             "volume-restore", "Restore restored-data",
