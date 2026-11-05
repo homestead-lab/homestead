@@ -12,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 JOB = {"id": "op-1", "kind": "deployment", "status": "running", "ref": {}, "title": "Deploy web",
        "resource": {}, "href": "", "message": "", "created": "2026-10-19T00:00:00Z", "updated": "2026-10-19T00:00:00Z"}
@@ -20,6 +22,7 @@ JOB = {"id": "op-1", "kind": "deployment", "status": "running", "ref": {}, "titl
 class StoreApiTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        keep_bound(self, OPS)
         OPS.bind(lambda path: {}, self.tmp.name, lambda *a, **k: None)
         self.addCleanup(self.tmp.cleanup)
 
