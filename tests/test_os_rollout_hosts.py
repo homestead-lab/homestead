@@ -410,5 +410,223 @@ class RefusedRestartInARunTests(Runs):
         self.assertIn("apps/app-0", note, "the last blocker is still named")
 
 
+class PreviewTests(Runs):
+    def preview(self, *names):
+        return ROLLOUT.ROUTES[("GET", "/api/os-updates/preview")][1](types.SimpleNamespace(query={"node": list(names)}, body={}))
+
+    def post(self, **body):
+        return ROLLOUT.ROUTES[("POST", "/api/os-updates/start")][1](types.SimpleNamespace(query={}, body=body))
+
+    def row(self, answer, name):
+        return next(h for h in answer["hosts"] if h["node"] == name)
+
+    def test_it_is_for_admins_like_the_start_it_reviews(self):
+        self.assertEqual("admin", ROLLOUT.ROUTES[("GET", "/api/os-updates/preview")][0])
+
+    def test_it_says_what_would_install_in_the_order_it_would_run(self):
+        self.hosts.facts["node-a"]["security"] = 1
+        answer = self.preview("node-a", "node-c")
+        self.assertEqual(["node-c", "node-a"], [h["node"] for h in answer["hosts"]], "its own host last")
+        mine = self.row(answer, "node-a")
+        self.assertEqual(["curl", "linux-image-6.8"], [u["name"] for u in mine["updates"]])
+        self.assertEqual(1, mine["security"])
+        self.assertTrue(mine["homestead_here"])
+        self.assertFalse(self.row(answer, "node-c")["homestead_here"])
+        self.assertEqual("", mine["restart_refusal"])
+        self.assertEqual("when-needed", answer["restart_policy"])
+        self.assertEqual("", answer["blocked"])
+
+    def test_it_starts_from_the_setting(self):
+        ROLLOUT.save_settings({"reboot": "never"})
+        self.assertEqual("never", self.preview("node-a")["restart_policy"])
+
+    def test_it_says_what_the_checks_would_refuse_today(self):
+        self.add(*orphans_on_node_a())
+        answer = self.preview("node-a", "node-b")
+        self.assertIn("3 Longhorn orphan records", self.row(answer, "node-a")["restart_refusal"])
+        self.assertEqual("", self.row(answer, "node-b")["restart_refusal"])
+        self.assertEqual("", answer["blocked"], "the update still goes ahead; only the restart waits")
+
+    def test_it_changes_nothing(self):
+        self.add(*orphans_on_node_a())
+        writes, saved, jobs = len(self.kube.writes), ROLLOUT._load(), ROLLOUT.OPS.stored()
+        self.preview("node-a", "node-b", "node-c")
+        self.assertEqual(writes, len(self.kube.writes))
+        self.assertEqual(saved, ROLLOUT._load())
+        self.assertEqual(jobs, ROLLOUT.OPS.stored())
+        self.assertEqual(([], []), (self.hosts.began, self.hosts.holds))
+        self.assertEqual([], self.sent)
+
+    def test_checks_that_could_not_be_read_are_said_apart_from_a_refusal(self):
+        with mock.patch.object(POWER_JOBS.POWER, "plan", side_effect=OSError("no route to host")):
+            answer = self.preview("node-a")
+        self.assertEqual("", self.row(answer, "node-a")["restart_refusal"])
+        self.assertIn("no route to host", self.row(answer, "node-a")["restart_unread"])
+        self.assertEqual("", answer["blocked"], "the install can go ahead; the restart is checked when it is due")
+
+    def assert_blocked(self, words, *names):
+        answer = self.preview(*names)
+        self.assertIn(words, answer["blocked"])
+        token = answer["review_token"]
+        with self.assertRaises(ValueError) as refused:
+            self.post(nodes=list(names), review_token=token)
+        self.assertIn(words, str(refused.exception))
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_a_job_on_the_host_blocks_it_and_is_named(self):
+        self.job("smart-test", "node-b")
+        self.assert_blocked("node-b has a job running: The smart-test job", "node-a", "node-b")
+
+    def test_a_job_on_another_host_does_not(self):
+        self.job("smart-test", "node-c")
+        self.assertEqual("", self.preview("node-a", "node-b")["blocked"])
+
+    def test_a_job_naming_the_host_in_a_list_of_rows_blocks_it(self):
+        # Longhorn's V2 clean-up keeps its hosts as rows.
+        self.job("some-kind", nodes=[{"node": "node-b", "phase": "x"}])
+        self.assert_blocked("node-b has a job running", "node-b")
+
+    def test_a_job_whose_list_is_not_a_list_is_not_matched_by_letters(self):
+        self.job("some-kind", nodes="not-node-b")
+        self.assertEqual("", self.preview("node-b")["blocked"])
+
+    def test_a_kind_nobody_listed_blocks_it(self):
+        self.job("a-kind-added-next-year", "node-b")
+        self.assert_blocked("a-kind-added-next-year", "node-b")
+
+    def test_an_ended_job_does_not(self):
+        self.job("smart-test", "node-b", status="succeeded")
+        self.assertEqual("", self.preview("node-b")["blocked"])
+
+    def test_a_job_across_the_cluster_blocks_every_host(self):
+        self.job("platform-upgrade")
+        self.assert_blocked("The platform-upgrade job is running", "node-b")
+
+    def test_balance_hosts_blocks_every_host(self):
+        self.job("container-rebalance")
+        self.assert_blocked("rebalanced", "node-b")
+
+    def test_a_host_that_is_not_ready_blocks_it(self):
+        self.kube.discard("/api/v1/nodes/node-b")
+        self.add(host("node-b", ready=False))
+        self.assert_blocked("node-b", "node-b")
+        self.assertFalse(self.row(self.preview("node-b"), "node-b")["ready"])
+
+    def test_a_run_going_blocks_it(self):
+        ROLLOUT.start("asked-hosts", only=["node-c"])
+        answer = self.preview("node-b")
+        self.assertIn("An OS update is running", answer["blocked"])
+        with self.assertRaises(ValueError):
+            self.post(nodes=["node-b"], review_token=answer["review_token"])
+        self.assertEqual(["node-c"], ROLLOUT._load()["rollout"]["nodes"])
+
+    def test_it_needs_hosts(self):
+        with self.assertRaises(ValueError):
+            self.preview()
+
+    def test_harvester_updates_its_own(self):
+        ROLLOUT.platform = lambda force=False: {"harvester": True, "distribution": "k3s"}
+        with self.assertRaises(ValueError):
+            self.preview("node-a")
+
+    # Starting from the review ---------------------------------------------
+
+    def test_the_reviewed_hosts_start_with_this_runs_answer(self):
+        token = self.preview("node-a", "node-b")["review_token"]
+        answer = self.post(nodes=["node-a", "node-b"], restart="never", review_token=token)
+        self.assertTrue(answer["ok"])
+        self.assertEqual(["node-b", "node-a"], answer["rollout"]["nodes"])
+        self.assertEqual("never", answer["rollout"]["restart"])
+        self.assertEqual("asked-hosts", answer["rollout"]["reason"])
+        self.assertEqual("os-rollout", answer["operation"]["kind"])
+        self.assertIn("2 hosts", answer["detail"])
+        self.run_it()
+        self.assertEqual([], self.sent)
+
+    def test_the_detail_names_one_host(self):
+        token = self.preview("node-b")["review_token"]
+        self.assertIn("node-b", self.post(nodes=["node-b"], review_token=token)["detail"])
+
+    def test_a_host_named_twice_runs_once(self):
+        token = self.preview("node-b")["review_token"]
+        answer = self.post(nodes=["node-b", "node-b"], review_token=token)
+        self.assertEqual(["node-b"], answer["rollout"]["nodes"])
+
+    def test_an_empty_or_bad_list_is_never_every_host(self):
+        for nodes in ([], None, "node-a", [""], [None], [1], {"node-a": True}):
+            with self.assertRaises(ValueError, msg=repr(nodes)):
+                self.post(nodes=nodes, review_token="any")
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_with_no_review_it_is_refused_like_a_stale_one(self):
+        reply = self.post(nodes=["node-b"])
+        self.assertEqual(409, reply.code)
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_a_stale_review_is_refused_with_a_fresh_one(self):
+        token = self.preview("node-b")["review_token"]
+        self.hosts.facts["node-b"] = host_facts(["curl", "openssl"])
+        reply = self.post(nodes=["node-b"], review_token=token)
+        self.assertEqual(409, reply.code)
+        self.assertIn("review", reply.body["error"])
+        self.assertEqual(["curl", "openssl"], [u["name"] for u in reply.body["preview"]["hosts"][0]["updates"]])
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_a_verdict_that_changed_makes_the_review_stale(self):
+        token = self.preview("node-a")["review_token"]
+        self.add(*orphans_on_node_a())
+        self.assertEqual(409, self.post(nodes=["node-a"], review_token=token).code)
+
+    def test_a_setting_that_changed_makes_the_review_stale(self):
+        token = self.preview("node-a")["review_token"]
+        ROLLOUT.save_settings({"reboot": "never"})
+        self.assertEqual(409, self.post(nodes=["node-a"], review_token=token).code)
+
+    def test_the_time_of_a_read_does_not(self):
+        self.hosts.facts["node-b"]["at"] = 1000
+        token = self.preview("node-b")["review_token"]
+        self.hosts.facts["node-b"]["at"] = 2000
+        self.assertTrue(self.post(nodes=["node-b"], review_token=token)["ok"])
+
+    def test_another_replica_answering_does_not(self):
+        token = self.preview("node-a", "node-b")["review_token"]
+        self.own = "node-b"
+        self.assertEqual(token, self.preview("node-a", "node-b")["review_token"])
+
+    def test_a_pod_staying_stuck_does_not(self):
+        self.add(*stuck_pod_on_node_a())
+        token = self.preview("node-a")["review_token"]
+        with mock.patch.object(BLOCKERS.time, "time", return_value=time.time() + 7200):
+            self.assertTrue(self.post(nodes=["node-a"], review_token=token)["ok"])
+
+    def test_a_job_starting_between_the_check_and_the_lock_still_refuses(self):
+        self.job("smart-test", "node-b")
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.assertIn("node-b has a job running", str(refused.exception))
+
+    def test_an_unreadable_job_list_starts_nothing(self):
+        token = self.preview("node-b")["review_token"]
+        with mock.patch.object(ROLLOUT.OPS, "stored", side_effect=OSError("damaged")):
+            with self.assertRaises(OSError):
+                self.post(nodes=["node-b"], review_token=token)
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_an_empty_body_is_still_every_host(self):
+        answer = self.post()
+        self.assertEqual(["node-b", "node-c", "node-a"], answer["rollout"]["nodes"])
+        self.assertEqual("asked", answer["rollout"]["reason"])
+        self.assertIn("3 hosts", answer["detail"])
+
+    def test_every_host_can_take_this_runs_answer_too(self):
+        answer = self.post(restart="never")
+        self.assertEqual("never", answer["rollout"]["restart"])
+
+    def test_every_host_now_still_starts_past_a_job_on_a_host(self):
+        # Refusing busy hosts is for the chosen hosts; the gap for the rest is listed.
+        self.job("smart-test", "node-b")
+        self.assertEqual(3, len(self.post()["rollout"]["nodes"]))
+
+
 if __name__ == "__main__":
     unittest.main()

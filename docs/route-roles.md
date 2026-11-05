@@ -489,6 +489,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/operations/vm-recovery/resolve` | admin |  | homestead_operations |
 | GET | `/api/os-updates` | viewer |  | homestead_os_rollout |
 | POST | `/api/os-updates/check` | admin |  | homestead_host_os |
+| GET | `/api/os-updates/preview` | admin |  | homestead_os_rollout |
 | POST | `/api/os-updates/settings` | admin |  | homestead_os_rollout |
 | POST | `/api/os-updates/start` | admin |  | homestead_os_rollout |
 | POST | `/api/os-updates/stop` | admin |  | homestead_os_rollout |

@@ -28,12 +28,15 @@ to let them go - on every Ready host while a rollout runs, the ones outside it
 too, and for good when the settings say Homestead manages updates.
 """
 import datetime
+import hashlib
+import json
 import os
 import time
 import urllib.error
 
 import homestead_history as HISTORY
 import homestead_operations as OPS
+import homestead_routes as ROUTER
 import homestead_shared as SHARED
 
 kget = platform = host_os = None
@@ -187,6 +190,11 @@ def _busy_cluster():
     return "Containers are being rebalanced; it has to end first" if _rebalancing() else ""
 
 
+def _in_rows(rows, name):
+    """Whether a job's list of hosts names this one: names, or rows with a node."""
+    return isinstance(rows, list) and any(row == name or isinstance(row, dict) and row.get("node") == name for row in rows)
+
+
 def _busy_host(name):
     """Why this host can't start: a job not ended that names it, of any kind, so
     that a kind added later is refused rather than run into. "" when none. The
@@ -195,7 +203,7 @@ def _busy_host(name):
         ref = item.get("ref") or {}
         resource = item.get("resource") or {}
         if (item.get("kind") != "os-rollout" and item.get("status") not in OPS.TERMINAL
-                and (ref.get("node") == name or name in (ref.get("nodes") or ())
+                and (ref.get("node") == name or _in_rows(ref.get("nodes"), name)
                      or (resource.get("kind") == "Node" and resource.get("name") == name))):
             return f"{name} has a job running: {item.get('title') or item.get('kind')}"
     return ""
@@ -594,15 +602,77 @@ def title(rollout):
     return f"Update {names[0]}'s OS" if len(names) == 1 else f"Update the OS of {len(names)} hosts"
 
 
-def start_asked():
-    rollout = start("asked")
+def _chosen(names):
+    """A list of hosts as asked for: at least one, each named. Only an absent
+    list means every host, never an empty or a broken one."""
+    if not isinstance(names, list) or not names or not all(isinstance(n, str) and n for n in names):
+        raise ValueError("Which hosts? Name at least one")
+    return list(dict.fromkeys(names))
+
+
+def preview(names):
+    """What an update of these hosts would do, for its review, and what the
+    restart checks would say today. Read only. Hosts in the order they would
+    run. blocked says why it can't start now; restart_refusal only means that
+    host would install and then wait for a person. The token follows what the
+    person would be agreeing to, not the time anything was read."""
+    names = _chosen(names)
+    p = platform(30) or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
+        raise ValueError("Homestead updates hosts' OS on k3s and RKE2; Harvester updates its own")
+    state = _load()
+    config = settings(state)
+    nodes, own = _nodes(), own_node()
+    hosts = []
+    for name in sorted(names, key=lambda name: (name == own, name)):
+        facts = host_os.stored(name) or {}
+        ready = name in nodes and _ready(nodes[name])
+        refusal, unread = "", ""
+        if ready:
+            try:
+                refusal = restart_check(name, config["single_copy"]) if restart_check else ""
+            except Exception as error:
+                unread = str(error)[:200]
+        hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
+                      "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
+                      "homestead_here": name == own, "restart_refusal": refusal, "restart_unread": unread,
+                      "busy": _busy_host(name)})
+    missing = [h["node"] for h in hosts if not h["ready"]]
+    blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \
+        or ("Not Ready, so left alone: " + ", ".join(missing) if missing else "") \
+        or next((h["busy"] for h in hosts if h["busy"]), "")
+    # Not who answered: with two replicas, that and the order differ between requests.
+    agreed = [[h["node"], sorted(u.get("name", "") for u in h["updates"]), h["security"], h["reboot"],
+               h["restart_refusal"], bool(h["restart_unread"]), h["busy"]] for h in sorted(hosts, key=lambda h: h["node"])]
+    token = hashlib.sha256(json.dumps([agreed, config["reboot"], config["single_copy"], blocked]).encode()).hexdigest()
+    return {"hosts": hosts, "restart_policy": config["reboot"], "single_copy": config["single_copy"], "blocked": blocked,
+            "review_token": token}
+
+
+def start_asked(body=None):
+    """Every host when no list is named; otherwise the hosts a person reviewed:
+    a review that no longer holds is refused (409) with a fresh one."""
+    body = body or {}
+    if "nodes" not in body:
+        rollout = start("asked", restart=body.get("restart"))
+        return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
+                "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it under Jobs"}
+    names = _chosen(body["nodes"])
+    review = preview(names)
+    if review["blocked"]:
+        raise ValueError(review["blocked"])
+    if body.get("review_token") != review["review_token"]:
+        return ROUTER.Reply(409, {"error": "Something changed since this was reviewed; review it again", "preview": review})
+    rollout = start("asked-hosts", only=names, restart=body.get("restart"))
+    which = rollout["nodes"][0] if len(rollout["nodes"]) == 1 else f"{len(rollout['nodes'])} hosts"
     return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-            "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it under Jobs"}
+            "detail": f"Updating {which}; follow it under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("POST", "/api/os-updates/start"): ("admin", lambda request: start_asked()),
+    ("POST", "/api/os-updates/start"): ("admin", lambda request: start_asked(request.body)),
+    ("GET", "/api/os-updates/preview"): ("admin", lambda request: preview(request.query.get("node"))),
     ("GET", "/api/os-updates"): ("viewer", lambda request: report()),
     ("POST", "/api/os-updates/settings"): ("admin", lambda request: {"ok": True, "settings": save_settings(request.body)}),
     ("POST", "/api/os-updates/stop"): ("admin", lambda request: {"ok": True, "rollout": stop(), "detail": "Stopping once the host being updated is done"}),
