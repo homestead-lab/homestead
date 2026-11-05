@@ -15,11 +15,14 @@ import homestead_longhorn_target as BACKUP_TARGET
 import homestead_vip_registry as REG
 import homestead_deploy_manifests as MANIFESTS
 import homestead_node_actions as NODE_ACTIONS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class SetupTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
+        keep_bound(self, SETUP)
         SETUP.bind(self.dir)
 
     def test_a_cluster_step_is_skipped_for_everyone_and_only_by_an_admin(self):
@@ -121,6 +124,7 @@ class ReplicaTests(unittest.TestCase):
         import os
         import homestead_routes as ROUTES
         folder = tempfile.mkdtemp()
+        keep_bound(self, SETUP)
         SETUP.bind(folder)
         keys = []
         route = ROUTES.find("GET", "/api/setup")
