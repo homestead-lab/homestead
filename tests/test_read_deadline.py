@@ -8,6 +8,7 @@ whose reads were cut short answers 503 (or the last complete copy kept in
 the cache), never a partial page as if it were complete. Background loops
 set no deadline and keep their own timeouts."""
 import contextlib
+import http.server
 import sys
 import threading
 import types
@@ -165,6 +166,9 @@ class TrickleTests(DeadlineCase):
                 # socket from the connection, and only the response holds it.
                 self.fp = types.SimpleNamespace(raw=types.SimpleNamespace(_sock=sock)) if sock_on_response else None
 
+            def isclosed(self):           # as http.client: once the whole body is in
+                return self.left == 0
+
             def read1(self, n=-1):
                 if self.left is None:       # hangs: the socket's timeout passes
                     clock.advance(sock.settimeout.call_args.args[0])
@@ -218,14 +222,15 @@ class TrickleTests(DeadlineCase):
         self.clock.advance(11)
         self.assertEqual(b"   ", K._request("GET", "/api/v1/pods", None, {}, 10))
         waits = [c.args[0] for c in self.opened.sock.settimeout.call_args_list]
-        self.assertEqual([4, 3, 2, 1], waits)
+        self.assertEqual([4, 3, 2], waits)
 
     def test_the_socket_of_an_answer_that_ends_the_connection_is_bounded_too(self):
         self.connection(pieces=3, seconds_each=1, sock_on_response=True)
         DEADLINE.begin(15)
         self.clock.advance(11)
         self.assertEqual(b"   ", K._request("GET", "/api/v1/pods", None, {}, 10))
-        self.assertEqual([4, 3, 2, 1], [c.args[0] for c in self.sock.settimeout.call_args_list])
+        # None once the body is in: http.client has closed that socket (#1080).
+        self.assertEqual([4, 3, 2], [c.args[0] for c in self.sock.settimeout.call_args_list])
 
     def test_a_cut_read_closes_its_connection_only(self):
         self.connection(pieces=100, seconds_each=1)
@@ -662,6 +667,69 @@ class HungApiServerTests(DeadlineCase):
         self.assertLessEqual(took, DEADLINE.SECONDS)
         self.assertEqual(200, again, again_body)
         self.assertEqual(0, again_took)
+
+
+class AnswerThatEndsTheConnectionTests(unittest.TestCase):
+    """An answer with `Connection: close` (the API server sends it while it
+    shuts down or restarts, and on its shutdown 429s), from a real HTTP/1.1
+    server over a real socket (#1080). http.client closes that socket as soon
+    as the body is in, so a timeout set on it afterwards failed with EBADF:
+    the answer was lost and a 429 was never asked again."""
+
+    def setUp(self):
+        answers = self.answers = []
+        self.requests = []
+        test = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_GET(self):
+                test.requests.append(self.path)
+                status, body, extra = answers.pop(0)
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Connection", "close")
+                for name, value in extra.items():
+                    self.send_header(name, value)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        api.daemon_threads = True
+        threading.Thread(target=api.serve_forever, daemon=True).start()
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        host, port = api.server_address
+        self.enterContext(mock.patch.object(K, "API", f"http://{host}:{port}"))
+        self.enterContext(mock.patch.object(K, "TOKEN", "t0ken"))
+        K.close_connections()
+        self.addCleanup(K.close_connections)
+        self.addCleanup(DEADLINE.end)
+        DEADLINE.begin(15)
+
+    def test_the_body_of_an_answer_that_ends_the_connection_is_returned(self):
+        self.answers.append((200, b'{"kind":"PodList","items":[]}', {}))
+        self.assertEqual(b'{"kind":"PodList","items":[]}', K._request("GET", "/api/v1/pods", None, {}, 10))
+
+    def test_a_429_that_ends_the_connection_is_an_http_error(self):
+        self.answers.append((429, b'{"kind":"Status","code":429}', {"Retry-After": "1"}))
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10)
+        self.assertEqual(429, caught.exception.code)
+        self.assertEqual(b'{"kind":"Status","code":429}', caught.exception.read())
+
+    def test_kget_asks_again_after_a_429_that_ends_the_connection(self):
+        self.answers.append((429, b'{"kind":"Status","code":429}', {"Retry-After": "1"}))
+        self.answers.append((200, b'{"kind":"PodList","items":[]}', {}))
+        sleep = self.enterContext(mock.patch.object(K.time, "sleep"))
+        self.assertEqual({"kind": "PodList", "items": []}, K.kget("/api/v1/pods"))
+        self.assertEqual(2, len(self.requests))
+        sleep.assert_called_once_with(1.0)
 
 
 if __name__ == "__main__":

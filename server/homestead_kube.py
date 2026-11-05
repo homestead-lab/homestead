@@ -671,6 +671,10 @@ def _body(connection, response, max_bytes=None):
     sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
     pieces, size = [], 0
     while max_bytes is None or size <= max_bytes:
+        # http.client closes the answer once its whole body is in, and with
+        # it that socket: a timeout set on it then fails with EBADF (#1080).
+        if response.isclosed():
+            break
         left = DEADLINE.remaining()
         if left <= 0:
             raise DEADLINE.spent()
