@@ -49,8 +49,12 @@ def node_action_check(node, action):
 
 
 def set_cordon(node, unschedulable):
+    # Cordoning or uncordoning here makes the cordon this caller's: a cluster
+    # upgrade's mark on it goes in the same patch, so the upgrade's end never
+    # undoes it (homestead_components.CORDON_MARK).
     L.ksend("PATCH", f"/api/v1/nodes/{node}",
-          {"spec": {"unschedulable": bool(unschedulable)}},
+          {"metadata": {"annotations": {NAMES.key("upgrade-cordon"): None}},
+           "spec": {"unschedulable": bool(unschedulable)}},
           ctype="application/merge-patch+json")
     L._bust("nodes", "ov", "node:", "impact:")
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}

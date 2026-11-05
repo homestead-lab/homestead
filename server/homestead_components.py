@@ -25,6 +25,7 @@ How each moves on depends on who put it there:
   management is enabled (the host installer marks new installs). External
   managers retain control of their installations.
 """
+import calendar
 import json
 import re
 import time
@@ -81,6 +82,25 @@ PLAN_NAMES = ("homestead-server", "homestead-agent")
 CONTROL_PLANE = "node-role.kubernetes.io/control-plane"
 CONTROLLER_WAIT = 15 * 60
 JOB_FINISH_WAIT = 10 * 60
+# No further node on the new version for this long: the upgrade has stalled.
+NODE_WAIT = 45 * 60
+# How long an ended upgrade waits for a host its job cordoned to be safe to uncordon.
+RELEASE_WAIT = 15 * 60
+# On a node: the cordon an upgrade job of this Homestead job made, so its end
+# uncordons that and nothing someone else cordoned. The value is the job's id.
+CORDON_MARK = NAMES.key("upgrade-cordon")
+# Jobs that work on a host (or on every host): a host one of them is on keeps its cordon.
+# The kinds of Homestead job that cordon a host, or hold one that is
+# cordoned, in one place: a host one of them is on keeps its cordon when an
+# upgrade ends. tests/test_components.py checks every module that cordons is
+# here. Exported for other modules that need the same list.
+HOST_CORDON_KINDS = ("node-power", "host-os", "os-rollout", "cluster-shutdown", "host-bond", "host-bridge",
+                     "host-promote", "longhorn-v2-cleanup", "longhorn-v2-prepare", "disk-v2-convert",
+                     "disk-retire", "platform-upgrade")
+# Of those, the ones that work across hosts in turn: every host counts as theirs.
+EVERY_HOST = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
+UNSCHEDULABLE_TAINT = "node.kubernetes.io/unschedulable"
+WRITE_ATTEMPTS = 4
 
 
 def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None, _ktext=None):
@@ -507,6 +527,7 @@ def plan_bodies(distribution, target):
     """The two Plans k3s and RKE2 document: servers one at a time, then agents,
     which wait for the servers' Plan first."""
     image = "rancher/k3s-upgrade" if distribution == "k3s" else "rancher/rke2-upgrade"
+    # cordon, never drain: _cordon_step looks for the controller's "cordon" init container.
     common = {"concurrency": 1, "cordon": True, "serviceAccountName": "system-upgrade",
               "upgrade": {"image": image}, "version": target}
     server = dict(common, nodeSelector={"matchExpressions": [
@@ -607,19 +628,348 @@ def _upgrade_jobs_running():
     return sorted(out)
 
 
-def _uncordon_upgraded(held):
-    """Removing the Plans removes their jobs, and a job removed before the
-    controller saw it end leaves its node cordoned. Uncordon the nodes the
-    Plans touched, except those someone had cordoned before the upgrade."""
-    freed = []
-    for node in _items("/api/v1/nodes"):
-        name, labels = node["metadata"]["name"], node["metadata"].get("labels") or {}
-        touched = any(f"plan.upgrade.cattle.io/{plan}" in labels for plan in PLAN_NAMES)
-        if touched and (node.get("spec") or {}).get("unschedulable") and name not in held:
-            ksend("PATCH", f"/api/v1/nodes/{name}", [{"op": "add", "path": "/spec/unschedulable", "value": False}],
-                  ctype="application/json-patch+json")
-            freed.append(name)
-    return freed
+def _strict_items(path):
+    """A list that must be read: a failed read raises instead of reading as empty."""
+    return (kget(path) or {}).get("items", [])
+
+
+def _when(stamp):
+    """An API timestamp in epoch seconds, or None."""
+    try:
+        return calendar.timegm(time.strptime(str(stamp or ""), "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+
+
+def _upgrade_runs():
+    """node -> [(started, ended or None, still running, cordon step done)] for
+    each upgrade job and pod of our Plans there (the last is always False for
+    a job). Read strictly - an unread list proves nothing."""
+    out = {}
+    for job in _strict_items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
+        labels = (job.get("metadata") or {}).get("labels") or {}
+        name = labels.get("upgrade.cattle.io/node")
+        if labels.get("upgrade.cattle.io/plan") not in PLAN_NAMES or not name:
+            continue
+        status = job.get("status") or {}
+        ends = [c for c in status.get("conditions") or [] if c.get("type") in ("Failed", "Complete") and c.get("status") == "True"]
+        ended = bool(status.get("succeeded") or ends)
+        end = _when(status.get("completionTime")) or (_when(ends[0].get("lastTransitionTime")) if ends else None)
+        out.setdefault(name, []).append((_when(status.get("startTime")), end if ended else None,
+                                         bool(status.get("active")) or not ended, False))
+    for pod in _strict_items(f"/api/v1/namespaces/{SUC_NS}/pods"):
+        labels = (pod.get("metadata") or {}).get("labels") or {}
+        name = (pod.get("spec") or {}).get("nodeName") or labels.get("upgrade.cattle.io/node")
+        if labels.get("upgrade.cattle.io/plan") not in PLAN_NAMES or not name:
+            continue
+        status = pod.get("status") or {}
+        running = status.get("phase") not in ("Succeeded", "Failed")
+        out.setdefault(name, []).append((_when(status.get("startTime")), None, running, _cordon_step(status)))
+    return out
+
+
+def _cordon_step(status):
+    """Whether an upgrade pod's own cordon step - the init container "cordon"
+    the controller adds for a Plan with cordon: true and no drain (as ours
+    are: with drain it is named "drain"), running kubectl cordon on the host
+    - finished successfully, in a pod that has not succeeded. Once its job
+    completes the controller uncordons the host itself, so a cordon there
+    after that is not this step's; a failed one's cordon is left in place."""
+    if status.get("phase") == "Succeeded":
+        return False
+    return any(container.get("name") == "cordon"
+               and ((container.get("state") or {}).get("terminated") or {}).get("exitCode") == 0
+               for container in status.get("initContainerStatuses") or [])
+
+
+def _upgrade_work(runs=None):
+    """node -> whether an upgrade job or pod of our Plans is still going there."""
+    runs = _upgrade_runs() if runs is None else runs
+    return {name: any(r[2] for r in rows) for name, rows in runs.items()}
+
+
+def _cordoned_by_upgrade(node, rows):
+    """Whether Kubernetes' own evidence ties this cordon to one of our
+    upgrade jobs or pods. The node lifecycle controller stamps the cordon's
+    taint with when it added it (timeAdded), and that must fall inside a run
+    there - after it started and, for a finished one, before it ended. A
+    taint with no time (added by hand, or by the kubelet for a node that
+    registered cordoned) - or no unschedulable taint at all yet, in the
+    moment before the controller adds it - is ours only when an upgrade pod
+    of ours on the host, not succeeded, shows its own cordon step done. A
+    cordon from before, or with neither to go by, is someone else's."""
+    added = next((_when(t.get("timeAdded")) for t in (node.get("spec") or {}).get("taints") or []
+                  if t.get("key") == UNSCHEDULABLE_TAINT), None)
+    if added is None:
+        return any(step for _start, _end, _running, step in rows)
+    return any(start is not None and start <= added and (running or (end is not None and added <= end))
+               for start, end, running, _step in rows)
+
+
+def _newest_upgrade_pod():
+    """When the newest pod of our Plans was made (epoch seconds), or 0."""
+    newest = 0
+    for pod in _items(f"/api/v1/namespaces/{SUC_NS}/pods"):
+        meta = pod.get("metadata") or {}
+        if (meta.get("labels") or {}).get("upgrade.cattle.io/plan") not in PLAN_NAMES:
+            continue
+        try:
+            newest = max(newest, calendar.timegm(time.strptime(meta.get("creationTimestamp") or "", "%Y-%m-%dT%H:%M:%SZ")))
+        except ValueError:
+            continue
+    return newest
+
+
+def _mid_upgrade():
+    """Which hosts were mid-upgrade, in words, for a stalled upgrade's message."""
+    try:
+        going = sorted(name for name, running in _upgrade_work().items() if running)
+    except Exception:
+        return "and Homestead could not read which host was mid-upgrade"
+    if not going:
+        return "and no host was mid-upgrade"
+    return f"{', '.join(going[:3])} {'was' if len(going) == 1 else 'were'} mid-upgrade"
+
+
+def _node(name):
+    """A fresh read of a node, or None once it no longer exists."""
+    try:
+        return kget(f"/api/v1/nodes/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def _ready(node):
+    return any(c.get("type") == "Ready" and c.get("status") == "True"
+               for c in (node.get("status") or {}).get("conditions") or [])
+
+
+def _busy_with(name, own):
+    """Another job working on this host, by its title, or "". Fails closed:
+    a job list that cannot be read says the host may be busy."""
+    try:
+        jobs = OPS.stored()
+    except Exception:
+        return "a job Homestead could not read"
+    for item in jobs:
+        kind, ref = item.get("kind"), item.get("ref") or {}
+        if item.get("id") == own or kind not in HOST_CORDON_KINDS or item.get("status") in OPS.TERMINAL:
+            continue
+        if kind == "platform-upgrade" and ref.get("component") != "cluster":
+            continue
+        nodes = [n.get("node") if isinstance(n, dict) else n for n in ref.get("nodes") or []]
+        if kind in EVERY_HOST or name in (ref.get("node"), (item.get("resource") or {}).get("name"), *nodes):
+            return item.get("title") or kind
+    return ""
+
+
+def _live_jobs():
+    """Ids of the jobs not yet ended, or None when the job list cannot be read."""
+    try:
+        return {item.get("id") for item in OPS.stored() if item.get("status") not in OPS.TERMINAL}
+    except Exception:
+        return None
+
+
+def _save(item):
+    """Save the job before a write it must not lose track of."""
+    OPS.checkpoint(item)
+
+
+def _mark_path():
+    return "/metadata/annotations/" + CORDON_MARK.replace("~", "~0").replace("/", "~1")
+
+
+def _guarded(node):
+    meta = node["metadata"]
+    return [{"op": "test", "path": "/metadata/uid", "value": meta.get("uid")},
+            {"op": "test", "path": "/metadata/resourceVersion", "value": meta.get("resourceVersion")}]
+
+
+def _patch_node(name, ops):
+    ksend("PATCH", f"/api/v1/nodes/{name}", ops, ctype="application/json-patch+json")
+
+
+def _retry(error):
+    # 409: changed under us; 422: a test op failed, so it changed since the read.
+    return isinstance(error, urllib.error.HTTPError) and error.code in (409, 422)
+
+
+def _claim(item, save, runs=None):
+    """Before the Plans (and with them their jobs) go: mark each host one of
+    their jobs cordoned, so the job's end can tell that cordon from anyone
+    else's. Each is recorded in the job before its mark is written, and
+    marked only while a fresh read still shows it cordoned, unmarked (or
+    marked by a job that has ended) and with no other job on it. Safe to
+    run again: a host already marked as ours is only recorded.
+    -> {host: why it was not taken}."""
+    ref, own = item["ref"], str(item.get("id") or "")
+    if not own:
+        return {}
+    held, skipped = set(ref.get("held") or []), {}
+    claimed = ref.setdefault("cordoned", {})
+    runs = _upgrade_runs() if runs is None else runs
+    for name in sorted(runs):
+        if name in held:
+            continue
+        for _ in range(WRITE_ATTEMPTS):
+            node = _node(name)
+            if node is None or not (node.get("spec") or {}).get("unschedulable"):
+                break
+            meta = node["metadata"]
+            mark = (meta.get("annotations") or {}).get(CORDON_MARK)
+            if mark == own:
+                claimed[name] = meta.get("uid")
+                break
+            if not _cordoned_by_upgrade(node, runs[name]):
+                skipped[name] = "it was not cordoned by this upgrade's own job"
+                break
+            live = _live_jobs() if mark else set()
+            if mark and (live is None or mark in live):
+                # Stale only when its job is known to have ended (or is gone).
+                skipped[name] = f"job {mark} marked its cordon"
+                break
+            busy = _busy_with(name, own)
+            if busy:
+                skipped[name] = f"{busy} is working on it"
+                break
+            claimed[name] = meta.get("uid")
+            save(item)
+            add = ([{"op": "test", "path": _mark_path(), "value": mark}, {"op": "replace", "path": _mark_path(), "value": own}]
+                   if mark else [{"op": "add", "path": _mark_path(), "value": own}] if meta.get("annotations") is not None
+                   else [{"op": "add", "path": "/metadata/annotations", "value": {CORDON_MARK: own}}])
+            try:
+                _patch_node(name, _guarded(node) + [{"op": "test", "path": "/spec/unschedulable", "value": True}] + add)
+                break
+            except Exception as error:
+                if not _retry(error):
+                    raise
+        else:
+            skipped[name] = "it kept changing while Homestead marked it"
+    for name in claimed:
+        skipped.pop(name, None)
+    return skipped
+
+
+def _release(item):
+    """Uncordon the hosts this job marked, each only from a fresh read that
+    shows the mark still ours on the same Node, cordoned, Ready, with no
+    upgrade still running there and no other job on it - in one patch that
+    tests all of that. A Node gone, or replaced, is released.
+    -> (uncordoned, {host: why it stays cordoned})."""
+    ref, own = item["ref"], str(item.get("id") or "")
+    claimed = dict(ref.get("cordoned") or {})
+    if not own:
+        return [], {}
+    freed, left = [], {}
+    try:
+        names = set(claimed) | {n["metadata"]["name"] for n in _strict_items("/api/v1/nodes")
+                                if ((n["metadata"].get("annotations") or {}).get(CORDON_MARK)) == own}
+        work = _upgrade_work()
+    except Exception as error:
+        return [], {name: f"Homestead could not read the cluster ({str(error)[:80]})" for name in claimed}
+    for name in sorted(names):
+        for _ in range(WRITE_ATTEMPTS):
+            try:
+                node = _node(name)
+            except Exception as error:
+                left[name] = f"Homestead could not read it ({str(error)[:80]})"
+                break
+            if node is None or (claimed.get(name) and node["metadata"].get("uid") != claimed[name]):
+                break  # gone, or a new Node by that name: nothing of ours to undo
+            meta = node["metadata"]
+            if (meta.get("annotations") or {}).get(CORDON_MARK) != own:
+                break  # someone has taken it over since
+            mark = [{"op": "test", "path": _mark_path(), "value": own}, {"op": "remove", "path": _mark_path()}]
+            cordoned = bool((node.get("spec") or {}).get("unschedulable"))
+            why = ("" if not cordoned else "its upgrade is still running" if work.get(name)
+                   else "it is not Ready yet" if not _ready(node) else "")
+            busy = cordoned and not why and _busy_with(name, own)
+            if why or busy:
+                left[name] = why or f"{busy} is working on it"
+                break
+            ops = _guarded(node) + mark
+            if cordoned:
+                ops = _guarded(node) + [{"op": "test", "path": "/spec/unschedulable", "value": True}] + mark + [
+                    {"op": "replace", "path": "/spec/unschedulable", "value": False}]
+            try:
+                _patch_node(name, ops)
+                if cordoned:
+                    freed.append(name)
+                break
+            except Exception as error:
+                if not _retry(error):
+                    left[name] = f"uncordoning it failed ({str(error)[:80]})"
+                    break
+        else:
+            left[name] = "it kept changing while Homestead uncordoned it"
+    return freed, left
+
+
+def _said(freed, left):
+    out = f"; uncordoned {', '.join(freed)}" if freed else ""
+    if left:
+        out += ". " + "; ".join(f"{name} stays cordoned: {why}" for name, why in sorted(left.items()))
+    return out
+
+
+def _left_word(left):
+    return (". Inspect each, and use Uncordon on the Hosts page once it is safe" if left else "")
+
+
+def _end(item, outcome):
+    """End a cluster upgrade - succeeded, failed or out of time: mark the hosts
+    its jobs cordoned, remove the Plans so nothing resumes it with no job
+    following, then uncordon those hosts. A host not yet safe is waited for,
+    up to RELEASE_WAIT; then the job ends, naming it and what to do."""
+    ref = item["ref"]
+    first = ref.get("phase") != "releasing"
+    # Every round while an upgrade job or pod of ours is still there: the
+    # controller can cordon a host (its pod's first step) after the last claim.
+    try:
+        runs = _upgrade_runs()
+        work = _upgrade_work(runs)
+        skipped = _claim(item, _save, runs)
+    except Exception as error:
+        if first:
+            raise  # nothing removed yet: the next round tries again
+        work, skipped = None, {}
+        unread = f"Homestead could not read the upgrade's jobs and pods ({str(error)[:80]})"
+    ref["skipped"] = {name: why for name, why in {**(ref.get("skipped") or {}), **skipped}.items()
+                      if name not in (ref.get("cordoned") or {})}
+    if first:
+        ref.update(phase="releasing", outcome=list(outcome), released_at=time.time())
+        _save(item)
+    remove_plans()  # every round: a restart may have come between the record and the removal
+    freed, left = _release(item)
+    ref["freed"] = sorted(set(ref.get("freed") or []) | set(freed))
+    status, progress, message = ref["outcome"]
+    try:
+        waited = time.time() - float(ref.get("released_at") or 0)
+    except (TypeError, ValueError):
+        waited = RELEASE_WAIT
+    if work is not None:
+        try:
+            work = _upgrade_work()  # after the Plans went: what still runs now
+        except Exception as error:
+            work, unread = None, f"Homestead could not read the upgrade's jobs and pods ({str(error)[:80]})"
+    going = ["(unread)"] if work is None else sorted(name for name, running in work.items() if running)
+    if (left or going) and waited < RELEASE_WAIT:
+        why = "; ".join(f"{name} ({why})" for name, why in sorted(left.items()))
+        if work is None:
+            why = "; ".join(filter(None, (why, unread)))
+        elif going and not left:
+            why = f"the upgrade's jobs to end on {', '.join(going[:3])}"
+        return "running", progress, (f"{message}. Waiting for {why}" if not left else
+                                     f"{message}. Waiting to uncordon {why}")[:500]
+    if work is None:
+        left = {**left, **{name: unread for name in (ref.get("cordoned") or {}) if name not in ref["freed"] and name not in left}}
+    elif going:
+        left = {**left, **{name: "its upgrade job or pod was still running" for name in going if name not in left}}
+    left = {**(ref.get("skipped") or {}), **left}
+    return status, progress, (message + _said(ref["freed"], left) + _left_word(left))[:500]
 
 
 def _elapsed(item):
@@ -701,6 +1051,8 @@ def status(item):
     ref = item["ref"]
     component, target = ref.get("component"), ref.get("to", "")
     if component == "cluster":
+        if ref.get("phase") == "releasing":
+            return _end(item, tuple(ref.get("outcome") or ("failed", 0, "The upgrade ended")))
         if ref.get("phase") == "controller":
             if not _plans_ready():
                 if _elapsed(item) > CONTROLLER_WAIT:
@@ -712,23 +1064,37 @@ def status(item):
                 return "failed", 5, str(error)
             ref["phase"] = "nodes"
         versions = node_versions()
+        done = sum(1 for v in versions.values() if v == target)
+        # A deadline on the node wait: one more node done restarts it.
+        if done > int(ref.get("done") or 0) or "done_at" not in ref:
+            ref.update(done=max(done, int(ref.get("done") or 0)), done_at=time.time())
+        # So is an upgrade pod the controller started since: a node being worked on.
+        started = _newest_upgrade_pod()
+        if started > float(ref.get("done_at") or 0):
+            ref["done_at"] = started
+        stalled = time.time() - float(ref.get("done_at") or time.time()) > NODE_WAIT
         if not versions:
+            if stalled:
+                return _end(item, ("failed", item.get("progress") or 5,
+                                   f"The cluster's API listed no nodes for {NODE_WAIT // 60} minutes"))
             # A server restarting on its new version: the API answers with
             # no nodes, or not at all, for a moment. Not a step of its own.
             return "running", item.get("progress") or 5, item.get("message") or "Waiting for the cluster's API while a server restarts"
-        done = sum(1 for v in versions.values() if v == target)
         if versions and done == len(versions):
             finishing = _upgrade_jobs_running()
             since = time.time() - ref.setdefault("versions_at", time.time())
             if finishing and since < JOB_FINISH_WAIT:
                 return "running", 98, f"Every node runs {target}; waiting for the upgrade job on {', '.join(finishing[:3])} to finish"
-            remove_plans()
-            freed = _uncordon_upgraded(set(ref.get("held") or []))
-            return "succeeded", 100, f"Every node runs {target}" + (f"; uncordoned {', '.join(freed)}" if freed else "")
+            return _end(item, ("succeeded", 100, f"Every node runs {target}"))
         failed = _failed_upgrade_job()
         if failed:
-            return "failed", int(100 * done / max(1, len(versions))), failed
+            return _end(item, ("failed", int(100 * done / max(1, len(versions))), failed))
         waiting = sorted(name for name, v in versions.items() if v != target)
+        if stalled:
+            return _end(item, ("failed", 5 + int(90 * done / max(1, len(versions))),
+                               f"No further node reached {target} in {NODE_WAIT // 60} minutes; "
+                               f"{', '.join(waiting[:3])} did not, {_mid_upgrade()}. "
+                               f"kubectl -n {SUC_NS} get jobs,pods shows where it stopped"))
         return ("running", 5 + int(90 * done / max(1, len(versions))),
                 f"{done} of {len(versions)} nodes on {target}; next {', '.join(waiting[:3])}")
     if component in CHART_INDEX:
@@ -774,8 +1140,11 @@ def cancel_plan(item):
                 "keeps": ["The manager upgrade and current host upgrade continue. No version is rolled back."],
                 "severity": "low", "needs": "admin"}
     if item["ref"].get("component") == "cluster":
-        return {"mode": "stop", "undo": ["The upgrade Plans are removed, so no further node is upgraded"],
-                "keeps": ["Nodes already upgraded stay on the new version; a node part-way through finishes"],
+        return {"mode": "stop", "undo": ["The upgrade Plans are removed, so no further node is upgraded",
+                                         "Hosts this upgrade cordoned are uncordoned once they are Ready"],
+                "keeps": ["Nodes already upgraded stay on the new version; a node part-way through finishes",
+                          "A host still restarting, or that another job is working on, stays cordoned; "
+                          "the job says which"],
                 "severity": "low", "needs": "admin"}
     return {"mode": "forget", "keeps": ["The new version is already being rolled out by its operator or Helm; "
                                         "it carries on and only stops showing here"]}
@@ -788,8 +1157,13 @@ def cancel_run(item, _options):
             V2._set(V2.AUTO, "false")
         return "Paused before the next V2 host; the manager and current host upgrade can still finish"
     if item["ref"].get("component") == "cluster":
+        # Marks first: removing the Plans removes the jobs that say which cordons are ours.
+        skipped = _claim(item, lambda _item: None) if item["ref"].get("phase") != "releasing" else {}
         remove_plans()
-        return "Stopped: no further node is upgraded"
+        freed, left = _release(item)
+        freed = sorted(set(item["ref"].get("freed") or []) | set(freed))
+        left = {**(item["ref"].get("skipped") or {}), **skipped, **left}
+        return ("Stopped: no further node is upgraded" + _said(freed, left) + _left_word(left))[:500]
     return ""
 
 
