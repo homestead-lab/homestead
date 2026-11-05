@@ -306,8 +306,15 @@ function osUpdatesStatusHtml(r) {
   const results = rollout => (rollout.results || []).map(x => `<li><b>${esc(x.node)}</b> · ${esc(x.note)}</li>`).join("");
   if (run) return `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)),
       { label: run.nodes.length === 1 ? `Updating ${run.nodes[0]}` : `Updating ${osuHosts(run.nodes.length)}, one at a time`, detail: run.message || "" })}
-    ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}`;
+    ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}
+    ${osUpdatesHoldsHtml(run)}`;
   return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>${esc(osUpdatesLastRun(last))}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}${osuSmaller(last) ? " · " : "<br>"}${esc(last.message || "")}</div>` : "";
+}
+// A hold that has kept failing during the run: that host could restart itself.
+function osUpdatesHoldsHtml(run) {
+  const failing = Object.entries(run.hold_failed || {}).filter(([, row]) => row.noted);
+  return failing.length ? `<div class="note bad small"><b>Automatic updates could not be held on ${esc(failing.map(([name]) => name).join(", "))}.</b>
+    ${failing.length === 1 ? "It" : "They"} could restart by ${failing.length === 1 ? "itself" : "themselves"} during this run; Homestead keeps trying. ${esc(failing[0][1].error || "")}</div>` : "";
 }
 // A run of the hosts someone chose, not of every host.
 const osuSmaller = run => run.reason === "asked-hosts" && (run.nodes || []).length;

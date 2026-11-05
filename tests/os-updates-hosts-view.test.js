@@ -344,6 +344,14 @@ test("a reason from the last run goes once the host has been restarted", async (
   assert.doesNotMatch(row(t.html(), "node-b"), /orphan records/);
 });
 
+test("a hold that keeps failing is said during the run; a moment's Busy is not", async () => {
+  const noted = await opened({ state: { rollout: { ...running, hold_failed: { "node-b": { since: 1, error: "Busy", noted: true } } } } });
+  assert.match(noted.html(), /Automatic updates could not be held on node-b/);
+  assert.match(noted.html(), /Busy/);
+  const brief = await opened({ state: { rollout: { ...running, hold_failed: { "node-b": { since: 1, error: "Busy" } } } } });
+  assert.doesNotMatch(brief.html(), /could not be held/);
+});
+
 test("a run of one has nothing to stop after, and says its host", async () => {
   const one = await opened({ state: { rollout: { ...running, nodes: ["node-a"] } } });
   assert.doesNotMatch(one.html(), /Stop after this host/);

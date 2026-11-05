@@ -20,6 +20,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import server
+import homestead_alerts as ALERTS
 import homestead_drain_blockers as BLOCKERS
 import homestead_kube as K
 import homestead_os_rollout as ROLLOUT
@@ -27,6 +29,7 @@ import homestead_power as power
 import homestead_power_jobs as POWER_JOBS
 from fakes.kube import Kube
 from test_drain_blockers import attachment, claim, engine, engine_orphan, instance_manager, pod
+from rebind import keep_bound
 from test_os_rollout import Hosts, facts as host_facts
 
 
@@ -49,14 +52,6 @@ def stuck_pod_on_node_a():
     return [pod(deleting_at=time.time() - 3600), claim(), attachment()]
 
 
-def keep_bound(test, module, *names):
-    """What bind() sets goes back when the test ends: the module is shared."""
-    for name in names:
-        patcher = mock.patch.object(module, name, getattr(module, name))
-        patcher.start()
-        test.addCleanup(patcher.stop)
-
-
 class FakeCluster(unittest.TestCase):
     """Three hosts on the fake, the real review, and a stand-in for sending
     power: what would be restarted is recorded, nothing else is stubbed."""
@@ -64,7 +59,7 @@ class FakeCluster(unittest.TestCase):
         self.kube = Kube(host("node-a"), host("node-b"), host("node-c"))
         self.kube.__enter__()
         self.addCleanup(self.kube.__exit__, None, None, None)
-        keep_bound(self, power, "kget", "impact", "quorum", "power_enabled")
+        keep_bound(self, power)
         power.bind(K.kget, lambda node: {"workloads": [], "stranded": []},
                    lambda: {"members": ["node-a", "node-b", "node-c"], "can_lose": 1}, lambda: True)
         self.sent = []
@@ -157,8 +152,9 @@ class Runs(FakeCluster):
                         mock.patch.object(ROLLOUT.OPS, "WRITE_GUARD", None)):
             patcher.start()
             self.addCleanup(patcher.stop)
-        keep_bound(self, ROLLOUT, "kget", "platform", "host_os", "reboot", "operation", "set_cordon", "own_node",
-                   "DATA_DIR", "announce", "power_job", "restart_check")
+        keep_bound(self, ROLLOUT)
+        keep_bound(self, ALERTS)
+        ALERTS.bind(self.data.name)
         self.hosts = Hosts({"node-a": host_facts(["curl", "linux-image-6.8"]), "node-b": host_facts(["curl"]),
                             "node-c": host_facts(["vim"])})
         self.own = "node-a"
@@ -626,6 +622,165 @@ class PreviewTests(Runs):
         # Refusing busy hosts is for the chosen hosts; the gap for the rest is listed.
         self.job("smart-test", "node-b")
         self.assertEqual(3, len(self.post()["rollout"]["nodes"]))
+
+
+class HeldEveryStepTests(Runs):
+    """Decision 7: every Ready host, until the run ends. Asserted again each step,
+    so a host that comes Ready at any point, and a hold that failed, are caught."""
+    def make_not_ready(self, name):
+        self.kube.discard(f"/api/v1/nodes/{name}")
+        self.add(host(name, ready=False))
+
+    def make_ready(self, name):
+        self.kube.discard(f"/api/v1/nodes/{name}")
+        self.add(host(name))
+
+    def test_a_host_ready_during_a_one_host_run_is_held(self):
+        self.make_not_ready("node-c")
+        self.hosts.codes["node-b"] = None    # still installing
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertEqual("installing", ROLLOUT._load()["rollout"]["phase"])
+        self.assertNotIn("node-c", self.holds(True))
+        self.make_ready("node-c")
+        ROLLOUT.tick(now=1020)
+        self.assertIn("node-c", self.holds(True), "held while the only host installs")
+        self.hosts.codes["node-b"] = "0"
+        self.run_it()
+        self.assertIn("node-c", self.holds(False), "let go at the end")
+
+    def test_a_host_ready_during_the_last_host_of_a_run_is_held(self):
+        self.make_not_ready("node-c")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-a", "node-b"])
+        for now in range(1000, 1100, 20):
+            ROLLOUT.tick(now=now)
+        self.assertEqual("node-b", ROLLOUT._load()["rollout"]["node"]["name"], "the last host")
+        self.make_ready("node-c")
+        ROLLOUT.tick(now=1200)
+        self.assertIn("node-c", self.holds(True))
+
+    def test_a_failed_hold_is_tried_again_and_the_run_goes_on(self):
+        self.hosts.hold_errors["node-c"] = TimeoutError("timed out")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertNotIn("node-c", self.holds(True))
+        self.assertEqual("installing", ROLLOUT._load()["rollout"]["phase"], "a hold on another host doesn't stop the run")
+        del self.hosts.hold_errors["node-c"]
+        ROLLOUT.tick(now=1000 + ROLLOUT.HOLD_RETRY)
+        self.assertIn("node-c", self.holds(True))
+        self.assertEqual({}, ROLLOUT._load()["rollout"].get("hold_failed") or {}, "no longer failing")
+
+    def test_a_host_that_keeps_failing_is_not_asked_every_step(self):
+        # set_hold can take 45 s of the rollout's lock each time.
+        calls = []
+        real = self.hosts.set_hold
+
+        def counted(name, hold):
+            if name == "node-c":
+                calls.append(hold)
+            return real(name, hold)
+        self.hosts.set_hold = counted
+        self.hosts.hold_errors["node-c"] = ValueError("Busy")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        for now in range(1000, 1000 + ROLLOUT.HOLD_RETRY, 20):
+            ROLLOUT.tick(now=now)
+        self.assertEqual(1, len(calls))
+        ROLLOUT.tick(now=1000 + ROLLOUT.HOLD_RETRY)
+        self.assertEqual(2, len(calls))
+
+    def test_a_host_never_read_is_read_and_then_held(self):
+        fresh = self.hosts.facts.pop("node-c")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertNotIn("node-c", self.holds(True))
+        self.assertIn("node-c", ROLLOUT._load()["rollout"]["hold_failed"], "not known to be held is said")
+        self.hosts.facts["node-c"] = fresh
+        ROLLOUT.tick(now=1000 + ROLLOUT.HOLD_RETRY)
+        self.assertIn("node-c", self.holds(True))
+
+    def test_a_host_with_nothing_to_hold_is_left_alone(self):
+        self.hosts.facts["node-c"] = host_facts(["vim"], auto=False)
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.run_it()
+        self.assertNotIn("node-c", self.holds(True))
+        self.assertEqual({}, ROLLOUT._load()["rollout"].get("hold_failed") or {})
+
+    def test_a_host_held_already_is_not_asked_again(self):
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        for now in range(1000, 1200, 20):
+            ROLLOUT.tick(now=now)
+        self.assertEqual(1, self.holds(True).count("node-c"))
+
+    def test_a_nodes_read_that_fails_does_not_fail_the_step(self):
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.kube.fail("/api/v1/nodes", 500, times=1)
+        ROLLOUT.tick(now=1020)
+        self.assertEqual("running", ROLLOUT._load()["rollout"]["status"])
+        self.assertNotIn("error_since", ROLLOUT._load()["rollout"])
+
+    def test_a_hold_that_stays_failed_reaches_a_person(self):
+        self.hosts.hold_errors["node-c"] = ValueError("Busy: a host change is running")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertEqual([], ALERTS.log(categories=["degraded"])["alerts"], "a moment's Busy is no news")
+        for now in range(1000, 1000 + ROLLOUT.HOLD_NOTICE + 100, 20):
+            ROLLOUT.tick(now=now)
+        row = ROLLOUT._load()["rollout"]["hold_failed"]["node-c"]
+        self.assertTrue(row["noted"], "the dialog shows it from here")
+        self.assertIn("Busy", row["error"])
+        alerts = ALERTS.log(categories=["degraded"])["alerts"]
+        self.assertEqual(1, len(alerts), "one alert, not one per retry")
+        self.assertIn("node-c", alerts[0]["title"])
+        self.hosts.codes["node-b"] = "0"
+        done = self.run_it()
+        self.assertIn("could not be held on node-c", done["message"], "Last run says so")
+        self.assertIn("could not be held on node-c", ROLLOUT._load()["last_rollout"]["message"])
+
+    def test_a_hold_that_failed_only_at_the_end_is_said_too(self):
+        self.hosts.hold_errors["node-c"] = TimeoutError("timed out")
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.assertIn("could not be held on node-c", self.run_it()["message"])
+
+    def test_a_host_that_went_away_is_not_reported_as_failing(self):
+        self.hosts.hold_errors["node-c"] = TimeoutError("timed out")
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.make_not_ready("node-c")
+        ROLLOUT.tick(now=1020)
+        self.assertEqual({}, ROLLOUT._load()["rollout"].get("hold_failed") or {})
+
+
+class RealWiringTests(unittest.TestCase):
+    """What server.py binds, not a copy of it."""
+    def test_the_review_asks_the_real_restart_checks(self):
+        with mock.patch.object(server.POWER_JOBS, "rollout_refusal", return_value="refused") as asked:
+            self.assertEqual("refused", server.OS_ROLLOUT.restart_check("node-a", True))
+        asked.assert_called_once_with("node-a", True)
+
+    def test_a_run_restarts_through_the_real_unattended_restart(self):
+        self.assertIs(server.POWER_JOBS.rollout_reboot, server.OS_ROLLOUT.reboot)
+
+    def test_the_job_gets_the_runs_own_title(self):
+        with mock.patch.object(server.OPS, "start", return_value={"id": "op"}) as start:
+            server.OS_ROLLOUT.announce({"id": "os-1", "nodes": ["node-a"], "reason": "asked-hosts"})
+        self.assertEqual(("os-rollout", "Update node-a's OS"), start.call_args.args[:2])
+
+
+class ChecksNotWiredTests(Runs):
+    def test_no_restart_check_is_unread_not_go_ahead(self):
+        ROLLOUT.restart_check = None
+        row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertEqual("", row["restart_refusal"])
+        self.assertTrue(row["restart_unread"])
 
 
 if __name__ == "__main__":

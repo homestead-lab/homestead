@@ -25,6 +25,9 @@ class Hosts:
 
     def __init__(self, facts):
         self.facts, self.began, self.holds, self.codes, self.held = facts, [], [], {}, set()
+        # What set_hold raises per host: the real one takes the host's lease
+        # through hostrun, so it can be Busy or time out.
+        self.hold_errors = {}
 
     def read(self, name, refresh=False):
         return self.facts[name]
@@ -56,6 +59,8 @@ class Hosts:
         return {"running": code is None, "code": code, "last": ""}
 
     def set_hold(self, name, hold):
+        if name in self.hold_errors:
+            raise self.hold_errors[name]
         self.holds.append((name, hold))
         self.facts[name]["auto"]["held"] = hold
 
