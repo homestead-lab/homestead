@@ -407,8 +407,19 @@ so Homestead:
 4. reverts to the snapshot, detaches, and starts everything again as it was.
 
 The job tray follows each step. If the volume will not let go, nothing is
-changed and everything starts again. Homestead's own data cannot be rolled
+changed and everything starts again, except an app whose own pod is still
+on the volume: that one is left stopped, named in the job. Homestead's own data cannot be rolled
 back from Homestead, as that would stop it part-way.
+
+Something that uses the volume and is already gone when the rollback stops
+it (Flux or Helm removed it) is left gone, and the rollback carries on with
+the rest. Before Homestead starts an app again it checks that the app is the
+same one it stopped, still uses the same claim on the same volume, is not
+held by a copy or an import, still fits on the hosts, and that no pod (a
+terminating one included) is still on the claim. If any of that is in doubt,
+or the start keeps failing, the app stays stopped: after five minutes the job
+ends and names each app left stopped, why, and how to start it from
+Homestead, for example **Containers → app → Start with 2 replicas**.
 
 Rolling back and **Trim now** go through Longhorn's own API
 (`longhorn-backend`, port 9500). Homestead checks that it answers before it
