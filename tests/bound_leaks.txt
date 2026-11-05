@@ -42,14 +42,9 @@ homestead_changes.DATA_DIR	test_scale_write	fake
 homestead_changes.DATA_DIR	test_schedules	fake
 homestead_cluster.SYS_NS	test_cluster_admin	other
 homestead_config_backup.PARTS	test_config_backup	other
-homestead_diagnostics.DIRECTORY	test_diagnostics	fake
 homestead_diagnostics.DIRECTORY	test_fleet_identities	fake
-homestead_diagnostics.JOBS	test_diagnostics	fake
 homestead_diagnostics.JOBS	test_fleet_identities	fake
-homestead_diagnostics.POD	test_diagnostics	other
-homestead_diagnostics.READ	test_diagnostics	fake
 homestead_diagnostics.READ	test_fleet_identities	fake
-homestead_diagnostics.VERSION	test_diagnostics	other
 homestead_diagnostics.VERSION	test_fleet_identities	other
 homestead_disks.mutation_scope	test_disk_replace	other
 homestead_disks.v2_tasks	test_disk_replace	other

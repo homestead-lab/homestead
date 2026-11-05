@@ -14,12 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_diagnostics as D
 import homestead_route_policy as POLICY
 from fakes.job_store import put
+from rebind import keep_bound
 
 
 class DiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        keep_bound(self, D)
         self.reads = []
         self.jobs = Mock()
         self.jobs.diagnostic_summaries.return_value = [{"id": "job-1", "kind": "restart", "title": "Restart photos", "status": "failed", "message": "password=job-secret"}]
