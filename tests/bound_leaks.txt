@@ -12,7 +12,6 @@ homestead_agent_requests.DATA_DIR	test_update_file	fake
 # Seen since keep_bound and the guard read dict entries a bind() sets with .update() or in a
 # loop (4 Nov): MCP.bind() hands test_mcp's fakes to homestead_agent_tools.bind(), which keeps
 # them in its _bound dict. Fix with keep_bound(self, MCP, TOOLS) in test_mcp's Base.setUp.
-homestead_alerts.DATA_DIR	test_trim_health	fake
 homestead_api_keys.DATA_DIR	test_update_file	fake
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
@@ -105,7 +104,6 @@ homestead_volumes.cache	test_volume_deletion	other
 homestead_volumes.kget	test_volume_deletion	fake
 homestead_volumes.ksend	test_volume_deletion	fake
 homestead_volumes.snapshots	test_volume_deletion	fake
-homestead_weekly_trim.DATA_DIR	test_trim_health	fake
 homestead_weekly_trim.DATA_DIR	test_weekly_trim_run	fake
 # From open PRs of ours (3 Nov), measured on dev with every open PR merged: the test file is
 # not on dev yet, or leaks only in the PR's form. Allowed so that combined run passes; not

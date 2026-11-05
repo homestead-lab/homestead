@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_alerts as ALERTS
 import homestead_overview_server as OV
 import homestead_weekly_trim as WT
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 FAILED = {"volume": "pvc-demo-c", "pvc": "data-c", "message": "Longhorn refused the trim: engine is not running"}
 
@@ -42,6 +44,7 @@ class TrimHealthTests(unittest.TestCase):
     def test_the_next_clean_run_clears_it(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
+        keep_bound(self, ALERTS)
         ALERTS.bind(temp.name)
         facts = lambda state: ALERTS.health_facts({"health_issues": OV.protection_issues([], {}, state)})
         with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set(), {"open": {}, "ran_out": {}, "ending": {}})):
@@ -66,6 +69,7 @@ class TrimHealthTests(unittest.TestCase):
     def test_last_state_reads_the_saved_result_and_is_empty_when_it_cannot(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
+        keep_bound(self, WT)
         WT.bind(temp.name)
         self.assertEqual({}, WT.last_state())
         with open(os.path.join(temp.name, WT.STATE), "w", encoding="utf-8") as handle:
