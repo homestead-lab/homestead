@@ -51,10 +51,10 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # 239 -> 120 on 5 Nov (sweep 4, up to test_setup): test files from test_node_probe_upgrade on, in name order,
 # skipping test_revert_stop (its lines are all in the open-PR block), plus two files cleared through shared
 # fixtures (test_outage_sweep, test_storage_initial), now keep what their bind() calls set.
-# 120 -> 52 on 5 Nov (sweep 5, up to test_vm_edit): test files from test_change_attribution on, in name order,
+# 120 -> 46 on 5 Nov (sweep 5, up to test_vm_lan): test files from test_change_attribution on, in name order,
 # plus the imports lines of test_vm_network_isolation and test_vm_write_integration, cleared through
 # test_vm_create's setUp, now keep what their bind() calls set.
-CEILING = 52
+CEILING = 46
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7
@@ -141,7 +141,6 @@ UNRESTORED_FILES = frozenset({
     "test_hostrun_retry",
     "test_iso_storage",
     "test_longhorn_tags",
-    "test_vm_lan",
     "test_vmstore",
     "test_volume_deletion",
     "test_volume_files",
