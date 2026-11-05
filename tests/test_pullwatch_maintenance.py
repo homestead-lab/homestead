@@ -138,6 +138,7 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
     def test_host_power_review_accepts_both_observers(self):
         fixture = power_fixtures.PowerPlanTests()
         fixture.setUp()
+        self.addCleanup(fixture.doCleanups)   # the fixture's keep_bound puts power's readers back
         fixture.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
         scan = self.scan()
         scan["spec"]["nodeName"] = "node1"

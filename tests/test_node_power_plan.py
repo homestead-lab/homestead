@@ -7,6 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power as power
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 HEALTHY = "2026-10-01T00:00:00Z"
@@ -46,6 +48,7 @@ class PowerPlanTests(unittest.TestCase):
                 {"metadata": {"namespace": "lab", "name": "vm1"}, "status": {"nodeName": "node1"}}]}}
         self.impact = {"workloads": [{"ns": "lab", "name": "app", "stranded": True, "eligible": []}],
                        "stranded": [{"ns": "lab", "name": "app", "stranded": True}]}
+        keep_bound(self, power)
         power.bind(self.get, lambda node: copy.deepcopy(self.impact),
                    lambda: {"members": ["node1", "node2", "node3"], "can_lose": 1}, lambda: True)
 
