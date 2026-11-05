@@ -49,10 +49,6 @@ homestead_diagnostics.VERSION	test_fleet_identities	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
-homestead_firewall.NS	test_firewall	other
-homestead_firewall.kget	test_firewall	fake
-homestead_firewall.ksend	test_firewall	fake
-homestead_firewall.platform	test_firewall	fake
 homestead_forecast.DATA_DIR	test_forecast	fake
 homestead_helm.fetch	test_helm	fake
 homestead_helm.fetch	test_helm	other

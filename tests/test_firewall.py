@@ -8,10 +8,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_firewall as F
 import homestead_route_policy as POLICY
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class FirewallTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, F)
         self.workload = {"metadata": {"namespace": "apps", "name": "web", "uid": "workload-1"},
                          "spec": {"selector": {"matchLabels": {"app": "web"}}, "template": {
                              "metadata": {"labels": {"app": "web"}}, "spec": {}}}}
