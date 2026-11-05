@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_history as HISTORY
+import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_leader as LEADER
 import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
@@ -534,15 +535,38 @@ def _system_host_path(row):
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
     nobody to accept its warnings - so what a person would have to accept
-    stops it, except a volume's only copy when the settings accept that.
-    Caveat: drain blockers (plan's drain_blockers) are not checked here yet,
-    though a person must acknowledge each one; whether a rollout refuses
-    them or drains anyway is an open decision."""
+    stops it, except a volume's only copy when the settings accept that."""
+    power_plan = _unattended_plan(node, allow_single_copy)
+    power_plan["reason"] = "OS update"
+    try:
+        return send_reviewed_power(power_plan)["operation"]["id"]
+    except PowerNotSent as e:
+        raise ValueError(str(e)) from e
+
+
+def rollout_refusal(node, allow_single_copy=False):
+    """What rollout_reboot would refuse with today, or "" if it would go ahead.
+    Read only. A read that fails raises: it is not an answer either way."""
+    try:
+        _unattended_plan(node, allow_single_copy)
+    except ValueError as error:
+        return str(error)
+    return ""
+
+
+def _unattended_plan(node, allow_single_copy):
+    """The plan a restart with nobody there may send; ValueError says what stops it."""
     power_plan = POWER.plan(node, "reboot")
     if power_plan.get("planned_outage"):
         raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
     if not power_plan["ready"]:
         raise ValueError("; ".join(power_plan["blockers"]))
+    if power_plan.get("requires_blocker_ack"):
+        # A person ticks each of these; with nobody there the drain would stall on
+        # them, so the host waits. Without the time a pod has been stuck: the same
+        # pod later is the same answer.
+        raise ValueError("Something would keep this host from draining: "
+                         + "; ".join(what for _, what in DRAIN_BLOCKERS.review(power_plan["drain_blockers"])))
     if power_plan["stranded"]:
         raise ValueError("some workloads have no other host to run on")
     hold = power_plan.get("hold") or []
@@ -570,11 +594,7 @@ def rollout_reboot(node, allow_single_copy=False):
             reasons.append("Longhorn's volumes could not be read")
         if reasons:
             raise ValueError("; ".join(reasons) + " (the settings do not accept that)")
-    power_plan["reason"] = "OS update"
-    try:
-        return send_reviewed_power(power_plan)["operation"]["id"]
-    except PowerNotSent as e:
-        raise ValueError(str(e)) from e
+    return power_plan
 
 
 def rollout_power_job(node, since):
