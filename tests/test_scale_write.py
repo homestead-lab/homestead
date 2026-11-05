@@ -29,6 +29,7 @@ import homestead_operations as OPS
 import homestead_schedules as SCHEDULES
 import homestead_self as SELF
 import homestead_workloads as WORKLOADS
+from rebind import keep_bound
 from fakes.job_store import put
 from fakes.kube import Kube
 
@@ -63,6 +64,7 @@ class ScaleTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
+        keep_bound(self, CH)
         CH.bind(directory.name)
         CH._known.clear()
         self.addCleanup(CH._known.clear)

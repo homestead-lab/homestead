@@ -25,7 +25,6 @@ homestead_baseline.platform	test_self_address	fake
 homestead_capacity_review._key	test_container_rebalance	fake
 homestead_capacity_review._key	test_disk_region	fake
 homestead_changes.DATA_DIR	test_change_attribution	fake
-homestead_changes.DATA_DIR	test_scale_write	fake
 homestead_changes.DATA_DIR	test_schedules	fake
 homestead_cluster.SYS_NS	test_cluster_admin	other
 homestead_config_backup.PARTS	test_config_backup	other
