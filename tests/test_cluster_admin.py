@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_cluster as cluster
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def node(name, roles, ready=True, pressure=None, os_image="Harvester v1.6.0"):
@@ -25,6 +27,7 @@ def pod(name, namespace="kube-system", ready=True):
 
 class ClusterAdministrationTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, cluster)
         cluster.SYS_NS = {"kube-system", "harvester-system", "longhorn-system"}
 
     def report(self, nodes, pods=None, events=None, csrs=None, now=1_800_000_000):
