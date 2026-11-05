@@ -27,7 +27,7 @@ class TransferTargetTests(unittest.TestCase):
         self.lh = FakeLonghorn(self.cluster)
         self.lh.target = {"configured": True, "url": "s3://local@us-east-1/",
                           "secret": "local-keys", "interval": "10m"}
-        keep_bound(self, engine)   # put back what engine.bind() sets
+        keep_bound(self, engine, engine.NAMES)   # put back what engine.bind() sets, and the names client
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     FakeOps(), self.tmp.name, "lab")
         self.there = {"url": "s3://source@us-east-1/", "endpoint": "http://192.0.2.211:9070",

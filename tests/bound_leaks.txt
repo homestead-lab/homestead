@@ -77,7 +77,6 @@ homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_longhorn.STORAGE_CLASS	test_storage_classes	other
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_move_target	fake
 homestead_names.kget	test_names	fake
 homestead_names.kget	test_node_probe_upgrade	fake
 homestead_names.kget	test_schedule_jobs	fake
