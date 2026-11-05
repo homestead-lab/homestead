@@ -100,11 +100,6 @@ homestead_reclass.ktext	test_storage_initial	fake
 homestead_reclass.storage_classes	test_reclass	fake
 homestead_reclass.storage_classes	test_reclass_review	fake
 homestead_reclass.storage_classes	test_storage_initial	fake
-homestead_revert.is_self	test_protection_gaps	fake
-homestead_revert.kget	test_protection_gaps	fake
-homestead_revert.ksend	test_protection_gaps	fake
-homestead_revert.lh_call	test_protection_gaps	fake
-homestead_revert.reclass	test_protection_gaps	fake
 homestead_root_guard.DATA_DIR	test_root_guard	fake
 homestead_root_guard.kget	test_root_guard	fake
 homestead_root_guard.ksend	test_root_guard	fake
