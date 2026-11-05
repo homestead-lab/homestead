@@ -11,6 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_shares as shares
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class ShareTests(unittest.TestCase):
@@ -154,6 +156,7 @@ class ShareTests(unittest.TestCase):
             }
             return self.objects[f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}"]
 
+        keep_bound(self, shares, shares.NAMES)
         shares.bind(get, send, create_pvc, "lab", {})
 
     def decoded_secret(self):

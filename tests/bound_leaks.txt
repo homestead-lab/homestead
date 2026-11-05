@@ -114,7 +114,6 @@ homestead_move_source.ksend	test_move_flow	fake
 homestead_move_source.ksend	test_transfer_cleanup	fake
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_host_fixes	fake
 homestead_names.kget	test_image_cache	fake
 homestead_names.kget	test_image_references	fake
 homestead_names.kget	test_import_mappings	fake
@@ -125,7 +124,6 @@ homestead_names.kget	test_names	fake
 homestead_names.kget	test_node_probe_upgrade	fake
 homestead_names.kget	test_schedule_jobs	fake
 homestead_names.kget	test_sessions	fake
-homestead_names.kget	test_shares	fake
 homestead_names.kget	test_smart	fake
 homestead_names.kget	test_transfer_cleanup	fake
 homestead_names.kget	test_unread_inventory	other
@@ -258,14 +256,6 @@ homestead_share_servers.shared_classes	test_shares_writes	other
 homestead_share_servers.storage_options	test_shares_writes	other
 homestead_shared.DIR	test_mqtt_history	fake
 homestead_shared.DIR	test_replicas	fake
-homestead_shares.CACHE	test_host_fixes	other
-homestead_shares.CACHE	test_shares	other
-homestead_shares.create_pvc	test_host_fixes	fake
-homestead_shares.create_pvc	test_shares	fake
-homestead_shares.kget	test_host_fixes	fake
-homestead_shares.kget	test_shares	fake
-homestead_shares.ksend	test_host_fixes	fake
-homestead_shares.ksend	test_shares	fake
 homestead_signins.DATA_DIR	test_shared_logs	fake
 homestead_signins.DATA_DIR	test_signins	fake
 homestead_smart.kget	test_smart	fake
