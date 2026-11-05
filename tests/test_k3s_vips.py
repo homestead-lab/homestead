@@ -20,6 +20,7 @@ class KubeVipAddonTests(unittest.TestCase):
         self.sent = []
         self.platform = {"distribution": "k3s", "harvester": False, "helm_controller": True, "servicelb": True,
                          "load_balancer": "servicelb", **(platform or {})}
+        keep_bound(self, ADDONS)
         ADDONS.bind(self.get, lambda m, p, b=None, **k: self.sent.append((m, p, b)) or b,
                     lambda force=False: dict(self.platform),
                     lambda: probes if probes is not None else {"n1": {"default_interface": "eth0"},
