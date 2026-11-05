@@ -48,10 +48,10 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # the open-PR ones, plus six files cleared through shared fixtures (test_shares, test_node_power_plan,
 # test_power_force, test_single_node_power, test_pullwatch_maintenance, test_transfer_cleanup), now keep what
 # their bind() calls set.
-# 239 -> 213 on 5 Nov (sweep 4, up to test_outage_secret): test files from test_node_probe_upgrade on, in name
+# 239 -> 206 on 5 Nov (sweep 4, up to test_placement_mode): test files from test_node_probe_upgrade on, in name
 # order, skipping test_revert_stop (its lines are all in the open-PR block), plus one file cleared through
 # shared fixtures (test_outage_sweep), now keep what their bind() calls set.
-CEILING = 213
+CEILING = 206
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7

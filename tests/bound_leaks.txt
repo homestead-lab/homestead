@@ -27,7 +27,6 @@ homestead_baseline.kget	test_self_address	fake
 homestead_baseline.platform	test_self_address	fake
 homestead_capacity_review._key	test_container_rebalance	fake
 homestead_capacity_review._key	test_disk_region	fake
-homestead_capacity_review._key	test_placement_mode	fake
 homestead_changes.DATA_DIR	test_change_attribution	fake
 homestead_changes.DATA_DIR	test_read_json	fake
 homestead_changes.DATA_DIR	test_scale_write	fake
@@ -84,12 +83,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_placement_mode.kget	test_placement_mode	other
-homestead_placement_mode.ksend	test_placement_mode	fake
-homestead_placement_mode.ksend	test_placement_mode	other
-homestead_placement_mode.settings	test_placement_mode	fake
-homestead_placement_mode.settings	test_placement_mode	other
-homestead_placement_mode.system_ns	test_placement_mode	other
 homestead_portal.icon_data	test_portal	fake
 homestead_portal.kget	test_portal	fake
 homestead_portal.ksend	test_portal	fake
