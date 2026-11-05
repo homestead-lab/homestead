@@ -84,7 +84,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_outage.DATA_DIR	test_outage_carry	other
 homestead_outage.DATA_DIR	test_outage_secret	fake
 homestead_outage.DATA_DIR	test_outage_sweep	fake
 homestead_placement_mode.kget	test_placement_mode	other
