@@ -122,11 +122,8 @@ homestead_manifests.DATA_DIR	test_host_fixes	fake
 homestead_manifests.hostrun	test_host_fixes	other
 homestead_manifests.kget	test_host_fixes	fake
 homestead_manifests.platform	test_host_fixes	fake
-homestead_move.VERSION	test_fleet	other
 homestead_move.VERSION	test_move	other
-homestead_move.kget	test_fleet	fake
 homestead_move.kget	test_move	fake
-homestead_move.ksend	test_fleet	fake
 homestead_move.ksend	test_move	fake
 homestead_move_source.LH	test_move_flow	fake
 homestead_move_source.LH	test_transfer_cleanup	fake
@@ -136,7 +133,6 @@ homestead_move_source.ksend	test_move_flow	fake
 homestead_move_source.ksend	test_transfer_cleanup	fake
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_fleet	fake
 homestead_names.kget	test_host_fixes	fake
 homestead_names.kget	test_image_cache	fake
 homestead_names.kget	test_image_references	fake
