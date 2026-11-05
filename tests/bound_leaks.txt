@@ -18,10 +18,6 @@ homestead_alerts.DATA_DIR	test_trim_health	fake
 homestead_api_keys.DATA_DIR	test_update_file	fake
 homestead_auth.kget	test_sessions	fake
 homestead_auth.ksend	test_sessions	fake
-homestead_baseline.DATA_DIR	test_self_address	fake
-homestead_baseline.addons	test_self_address	other
-homestead_baseline.kget	test_self_address	fake
-homestead_baseline.platform	test_self_address	fake
 homestead_capacity_review._key	test_container_rebalance	fake
 homestead_capacity_review._key	test_disk_region	fake
 homestead_changes.DATA_DIR	test_change_attribution	fake
@@ -71,10 +67,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_self_address._follow_fleet	test_self_address	other
-homestead_self_address.kget	test_self_address	other
-homestead_self_address.network	test_self_address	fake
-homestead_self_address.objects	test_self_address	fake
 homestead_set_restart.kget	test_set_restart	fake
 homestead_set_restart.ksend	test_set_restart	fake
 homestead_set_restart.ksend	test_set_restart	other
