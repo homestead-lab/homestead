@@ -8,11 +8,9 @@
 # everything each module's bind() sets before and after every test. In such a run a line
 # whose file no longer leaks the name fails too. Each line is a leak to fix: make that
 # file restore the name (tests/rebind.py), delete the line and lower CEILING. Never add one, except for an open PR of ours (the block at the end).
-homestead_agent_requests.DATA_DIR	test_update_file	fake
 # Seen since keep_bound and the guard read dict entries a bind() sets with .update() or in a
 # loop (4 Nov): MCP.bind() hands test_mcp's fakes to homestead_agent_tools.bind(), which keeps
 # them in its _bound dict. Fix with keep_bound(self, MCP, TOOLS) in test_mcp's Base.setUp.
-homestead_api_keys.DATA_DIR	test_update_file	fake
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
@@ -45,7 +43,6 @@ homestead_lifecycle.hardware_features	test_viewer_secret_values	fake
 homestead_lifecycle.kget	test_viewer_secret_values	fake
 homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_setup.DATA_DIR	test_update_file	fake
 homestead_upgrades.fetch	test_upgrades	fake
 homestead_upgrades.kget	test_upgrades	fake
 homestead_usage._beat	test_usage	other
