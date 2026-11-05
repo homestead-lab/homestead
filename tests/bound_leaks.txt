@@ -56,7 +56,6 @@ homestead_imports._cache	test_vm_lan	other
 homestead_imports._cache	test_vm_network_isolation	other
 homestead_imports._cache	test_vm_preparation	other
 homestead_imports._cache	test_vm_write_integration	other
-homestead_imports.kget	test_image_cache	fake
 homestead_imports.kget	test_image_progress	fake
 homestead_imports.kget	test_vm_create	fake
 homestead_imports.kget	test_vm_disk_import	fake
@@ -64,7 +63,6 @@ homestead_imports.kget	test_vm_lan	fake
 homestead_imports.kget	test_vm_network_isolation	fake
 homestead_imports.kget	test_vm_preparation	fake
 homestead_imports.kget	test_vm_write_integration	fake
-homestead_imports.ksend	test_image_cache	fake
 homestead_imports.ksend	test_image_progress	fake
 homestead_imports.ksend	test_vm_create	fake
 homestead_imports.ksend	test_vm_disk_import	fake
@@ -105,7 +103,6 @@ homestead_move_source.ksend	test_move_flow	fake
 homestead_move_source.ksend	test_transfer_cleanup	fake
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_image_cache	fake
 homestead_names.kget	test_image_references	fake
 homestead_names.kget	test_import_mappings	fake
 homestead_names.kget	test_move	fake
