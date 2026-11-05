@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_vm_create as VM_CREATE
 from fakes.storage_classes import storage_classes
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class VmDiskImportTests(unittest.TestCase):
@@ -28,6 +30,7 @@ class VmDiskImportTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
+        keep_bound(self, imports)
         imports.kget = get
         imports.ksend = send
         imports.NS = "lab"
