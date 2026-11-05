@@ -44,10 +44,11 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # test_macvtap and test_components now keep what their bind() calls set.
 # 452 -> 367 on 5 Nov (sweep 2): 19 test files (test_affinity through test_fleet_identities, in name order,
 # skipping the small ones) now keep what their bind() calls set.
-# 367 -> 255 on 5 Nov (sweep 3, up to test_move): test files from test_forecast on, in name order, skipping
-# the open-PR ones, plus five files cleared through shared fixtures (test_shares, test_node_power_plan,
-# test_power_force, test_single_node_power, test_pullwatch_maintenance), now keep what their bind() calls set.
-CEILING = 255
+# 367 -> 244 on 5 Nov (sweep 3, up to test_move_flow): test files from test_forecast on, in name order,
+# skipping the open-PR ones, plus six files cleared through shared fixtures (test_shares,
+# test_node_power_plan, test_power_force, test_single_node_power, test_pullwatch_maintenance,
+# test_transfer_cleanup), now keep what their bind() calls set.
+CEILING = 244
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7
