@@ -416,6 +416,20 @@ test("a skipped window is said beside Last run, or alone; not over a run going",
   }
 });
 
+test("while a host waits for its restart, Stop is offered, a run of one included, and follows the wait", async () => {
+  const one = { ...running, nodes: ["node-a"] };
+  const waiting = { ...one, node: { name: "node-a", waiting: true } };
+  const t = await opened({ state: { rollout: waiting } });
+  assert.match(t.html(), /Stop and leave this host to me/);
+  let state = report({ rollout: one });
+  const f = setup({ report: () => state });
+  await f.c.window.osUpdates();
+  assert.doesNotMatch(f.html(), /Stop/);
+  state = report({ rollout: waiting });
+  await f.timers.pop()();
+  assert.match(f.fields["#osu_run"].innerHTML, /Stop and leave this host to me/, "appears as the wait starts");
+});
+
 test("a run of one has nothing to stop after, and says its host", async () => {
   const one = await opened({ state: { rollout: { ...running, nodes: ["node-a"] } } });
   assert.doesNotMatch(one.html(), /Stop after this host/);

@@ -16,6 +16,7 @@ import threading
 import time
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -1162,6 +1163,135 @@ class HoldTimingTests(Runs):
         rollout = ROLLOUT._load()["rollout"]
         self.assertEqual("failed", rollout["status"])
         self.assertIn("no answer", rollout["results"][0]["note"])
+
+
+class StopDuringAWaitTests(Runs):
+    """Andreas, 5 Nov: Stop during any wait for a restart ends the run at once,
+    without restarting that host. It stays installed and waits for a person."""
+    def setUp(self):
+        super().setUp()
+        self.own = "node-c"
+
+    def waiting(self, only=("node-a",), now=1000):
+        ROLLOUT.start("asked-hosts", only=list(only), now=now)
+        for _ in range(12):
+            ROLLOUT.tick(now=now)
+            rollout = ROLLOUT._load()["rollout"]
+            if rollout.get("node", {}).get("waiting"):
+                return rollout
+        self.fail(f"it did not wait: {rollout.get('phase')} {rollout.get('message')}")
+
+    def assert_stopped_without_restart(self, now=1020):
+        ended = ROLLOUT._load()["rollout"]
+        self.assertEqual("stopped", ended["status"], ended["message"])
+        self.assertEqual([], self.sent)
+        row = ended["results"][0]
+        self.assertEqual("node-a", row["node"])
+        self.assertTrue(row["restart_needed"], "its row offers Restart…")
+        self.assertIn("Stopped while waiting", row["note"])
+        self.assertIn("needing a restart: node-a", ended["message"])
+        self.assertIn("node-a", self.hosts.began, "it stays installed")
+        return ended
+
+    def test_stop_during_longhorns_wait_ends_the_run_and_a_blocker_that_clears_does_not_restart(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting()
+        self.assertIn("Stopping after node-a", ROLLOUT.stop()["message"])
+        for obj in engines_elsewhere_on_node_a():
+            self.kube.discard(self.kube.path_of(obj))
+        ROLLOUT.tick(now=1020)
+        self.assert_stopped_without_restart()
+        ROLLOUT.tick(now=1040)
+        self.assertEqual([], self.sent)
+
+    def test_stop_during_a_read_error_wait(self):
+        self.kube.fail(BLOCKERS.ORPHANS, 503, times=100000)
+        self.waiting()
+        ROLLOUT.stop()
+        self.kube._failures.clear()
+        ROLLOUT.tick(now=1020)
+        self.assert_stopped_without_restart()
+
+    def test_stop_during_the_wait_for_copies(self):
+        ROLLOUT.reboot = mock.Mock(side_effect=BLOCKERS.MayClear("a volume has its only healthy copy on this host: lab/data (the settings do not accept that)"))
+        rollout = self.waiting()
+        self.assertIn("volume copies", rollout["message"])
+        ROLLOUT.stop()
+        calls = ROLLOUT.reboot.call_count
+        ROLLOUT.tick(now=1020)
+        self.assertEqual(calls, ROLLOUT.reboot.call_count, "not asked again")
+        self.assert_stopped_without_restart()
+
+    def test_stop_during_a_busy_api_wait(self):
+        ROLLOUT.reboot = mock.Mock(side_effect=urllib.error.HTTPError("/x", 503, "busy", {}, None))
+        self.waiting()
+        ROLLOUT.stop()
+        ROLLOUT.reboot = mock.Mock(return_value="op-too-late")
+        ROLLOUT.tick(now=1020)
+        ROLLOUT.reboot.assert_not_called()
+        self.assert_stopped_without_restart()
+
+    def test_stopping_is_not_overwritten_by_the_waiting_message(self):
+        self.add(*engines_elsewhere_on_node_a())
+        rollout = self.waiting()
+        self.assertIn("waiting up to 15 minutes", rollout["message"])
+        ROLLOUT.stop()
+        with mock.patch.object(ROLLOUT, "_finish", side_effect=lambda state, roll, now: None) as finish:
+            ROLLOUT.tick(now=1020)
+        self.assertTrue(finish.called)
+        self.assertIn("Stopping after node-a", ROLLOUT._load()["rollout"]["message"])
+
+    def test_the_hosts_after_it_are_not_touched(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting(only=("node-a", "node-b"))
+        ROLLOUT.stop()
+        ROLLOUT.tick(now=1020)
+        ended = ROLLOUT._load()["rollout"]
+        self.assertEqual("stopped", ended["status"])
+        self.assertEqual(["node-a"], self.hosts.began)
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(False), "holds let go")
+
+    def test_its_cordon_is_given_back(self):
+        cordons = []
+        ROLLOUT.set_cordon = lambda name, on: cordons.append((name, on))
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting()
+        ROLLOUT.stop()
+        ROLLOUT.tick(now=1020)
+        self.assertEqual([("node-a", False)], cordons)
+
+    def test_stop_set_when_a_refusal_would_start_a_wait_does_not_wait(self):
+        ROLLOUT.reboot = mock.Mock(side_effect=lambda *_: (_ for _ in ()).throw(BLOCKERS.MayClear("engines still listed")))
+        self.hosts.codes["node-a"] = None
+        ROLLOUT.start("asked-hosts", only=["node-a"], now=1000)
+        ROLLOUT.tick(now=1000)
+        ROLLOUT.stop()
+        self.hosts.codes["node-a"] = "0"
+        for now in (1020, 1040):
+            ROLLOUT.tick(now=now)
+        ended = ROLLOUT._load()["rollout"]
+        self.assertEqual("stopped", ended["status"])
+        self.assertEqual(1, ROLLOUT.reboot.call_count)
+        self.assertIn("engines still listed", ended["results"][0]["note"])
+
+    def test_stop_with_no_wait_still_finishes_the_host_in_hand(self):
+        # As before: only a wait ends at once.
+        self.hosts.codes["node-a"] = None
+        ROLLOUT.start("asked-hosts", only=["node-a"], now=1000)
+        ROLLOUT.tick(now=1000)
+        ROLLOUT.stop()
+        self.hosts.codes["node-a"] = "0"
+        for now in (1020, 1040):
+            ROLLOUT.tick(now=now)
+        self.assertEqual(["node-a"], self.sent)
+
+    def test_a_restart_already_under_way_is_followed_not_abandoned(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting()
+        ROLLOUT.power_job = lambda name, since: "op-adopted"
+        ROLLOUT.stop()
+        ROLLOUT.tick(now=1020)
+        self.assertNotIn("Stopped while waiting", str(ROLLOUT._load()["rollout"]["results"]))
 
 
 if __name__ == "__main__":

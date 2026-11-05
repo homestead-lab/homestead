@@ -324,9 +324,10 @@ function osUpdatesHoldsHtml(run) {
 // A run of the hosts someone chose, not of every host.
 const osuSmaller = run => run.reason === "asked-hosts" && (run.nodes || []).length;
 const osUpdatesLastRun = last => osuSmaller(last) ? `Last run: ${last.nodes.join(", ")}, ${last.status || "finished"}` : `Last run ${last.status || "finished"}`;
-// A run of one host has nothing to stop after.
+// A run of one host has nothing to stop after, unless it is waiting for its restart.
 const osUpdatesRunActions = run => run
-  ? (run.nodes.length === 1 ? "" : UI.actions(UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' })))
+  ? (run.node?.waiting ? UI.actions(UI.button("Stop and leave this host to me", "osUpdatesStop()", { attrs: 'data-need="admin"' }))
+    : run.nodes.length === 1 ? "" : UI.actions(UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' })))
   : UI.actions(UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }));
 
 /* The ticked hosts, and the button that takes them to their review. */
@@ -445,7 +446,7 @@ function osUpdatesFollow(run) {
     $("#osu_status").innerHTML = osUpdatesStatusHtml(r);
     $("#osu_hosts").innerHTML = osUpdatesHostsHtml(r, true);
     if (window.applyRole) applyRole();
-    if (!now !== !run) { $("#osu_run").innerHTML = osUpdatesRunActions(now); if (window.applyRole) applyRole(); }
+    if (!now !== !run || !now?.node?.waiting !== !run?.node?.waiting) { $("#osu_run").innerHTML = osUpdatesRunActions(now); if (window.applyRole) applyRole(); }
     if (!now) { osUpdatesCardPaint(); return; }
     osUpdatesFollow(now);
   }, 3000);

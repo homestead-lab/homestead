@@ -283,7 +283,8 @@ def start(reason="asked", now=None, only=None, restart=None):
 
 
 def stop():
-    """Stop after the host being worked on: nothing is cut off halfway."""
+    """Stop after the host being worked on: nothing is cut off halfway. A host
+    waiting for its restart ends at once, not restarted (step)."""
     with _lock:
         state = _load()
         rollout = state.get("rollout") or {}
@@ -507,6 +508,10 @@ def step(state, now=None):
             rollout["phase"], node["since"] = "restarting", now
             rollout["message"] = f"{name}: draining and restarting"
             return True
+        if rollout.get("stop") and node.get("waiting"):
+            # Stop during a wait ends the run at once (Andreas, 5 Nov): nobody asked
+            # for this host to restart later by itself, even if what held it clears.
+            return _stopped_waiting(rollout, node.get("wait_why") or "")
         # A person may have declared maintenance since this host's turn began.
         if not _not_in_maintenance(name):
             _result(rollout, True, "in maintenance, so not restarted", restart_needed=True)
@@ -515,13 +520,19 @@ def step(state, now=None):
         try:
             node["op"] = reboot(name, config["single_copy"])
         except Exception as error:
+            wait_why = str(error)[:NOTE_LIMIT]
             if _transient(error) and now - node.setdefault("busy_since", now) < TRANSIENT_WAIT:
+                if rollout.get("stop"):
+                    return _stopped_waiting(rollout, wait_why)
                 node["attempts"] -= 1
+                node["waiting"], node["wait_why"] = True, wait_why
                 rollout["message"] = f"{name}: the Kubernetes API is busy ({str(error)[:60]}); trying again"
                 return True
             copies = "only healthy copy" in str(error)
-            if ((copies or isinstance(error, DRAIN_BLOCKERS.MayClear))
-                    and now - node.setdefault("copies_since", now) < COPIES_WAIT):
+            if isinstance(error, DRAIN_BLOCKERS.MayClear) and now - node.setdefault("copies_since", now) < COPIES_WAIT:
+                if rollout.get("stop"):
+                    return _stopped_waiting(rollout, wait_why)
+                node["waiting"], node["wait_why"] = True, wait_why
                 # Copies on the hosts restarted before are still rebuilding, or a
                 # read or Longhorn may answer soon: wait rather than leave this
                 # host for a person. Once a tick: the review is many reads.
@@ -564,6 +575,15 @@ def step(state, now=None):
     return False
 
 
+def _stopped_waiting(rollout, why):
+    """Stop arrived while a host waited for its restart: it keeps what it installed
+    and waits for a person, and the run ends without restarting it."""
+    _uncordon(rollout)
+    rollout["stopped_waiting"] = True
+    _result(rollout, True, f"updates installed; restart not done: Stopped while waiting: {why}", restart_needed=True)
+    return True
+
+
 def _held_hosts(rollout):
     """The hosts this run holds. A run saved before it held them all has its own."""
     return rollout.get("held_hosts") or rollout["nodes"]
@@ -576,7 +596,7 @@ def _finish(state, rollout, now):
     restarted = sum(1 for r in results if r.get("restarted"))
     waiting = [r for r in results if r.get("restart_needed")]
     rollout["status"] = "failed" if rollout.get("failed") else "stopped" if rollout.get("stop") and \
-        rollout["index"] < len(rollout["nodes"]) else "succeeded"
+        (rollout["index"] < len(rollout["nodes"]) or rollout.get("stopped_waiting")) else "succeeded"
     rollout["finished"] = int(now)
     words = [f"{len(results)} host{'s' if len(results) != 1 else ''} done", f"{restarted} restarted"]
     if waiting:

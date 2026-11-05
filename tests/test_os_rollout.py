@@ -10,6 +10,7 @@ import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_os_rollout as ROLLOUT
 from rebind import keep_bound
@@ -92,7 +93,9 @@ class RolloutTests(unittest.TestCase):
     def bind(self, own="node-1"):
         def reboot(name, single_copy):
             if name in self.refuse:
-                raise ValueError(self.refuse[name])
+                # As the real one: a volume's only copy may clear, the rest won't.
+                may_clear = "only healthy copy" in self.refuse[name]
+                raise (DRAIN_BLOCKERS.MayClear if may_clear else ValueError)(self.refuse[name])
             self.restarts.append(name)
             self.ops[f"op-{name}-{len(self.restarts)}"] = {"id": f"op-{name}-{len(self.restarts)}", "status": "running"}
             return f"op-{name}-{len(self.restarts)}"
