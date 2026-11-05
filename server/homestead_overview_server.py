@@ -709,7 +709,7 @@ def restart_workload(ns, name):
     require_workload_target(ns, name)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"spec": {"template": {"metadata": {"annotations":
-           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
+           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}}}},
           ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True}

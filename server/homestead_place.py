@@ -686,7 +686,7 @@ def apply_node_placement(dep, node, pin=False):
 
     dep["spec"]["strategy"] = {"type": "Recreate"}
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
-        NAMES.key("movedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+        NAMES.key("movedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     return mode
 
 

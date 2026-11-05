@@ -506,10 +506,21 @@ def get_workloads(pods=None):
                            for c in st.get("conditions", []) or []
                            if c.get("type") == "Progressing" and c.get("status") == "False"]
         template_annotations = d["spec"].get("template", {}).get("metadata", {}).get("annotations", {}) or {}
-        rollout_at = (NAMES.read(template_annotations, "update-rollout-at") or
-                      NAMES.read(template_annotations, "restartedAt"))
-        if rollout_at:
-            transition_ages.append(age_secs(rollout_at))
+        timed_pods = bool(transition_ages)
+        # Every rollout stamp counts and the youngest wins: an old restart
+        # stays on the template beside a fresh move.
+        for stamp in ("update-rollout-at", "restartedAt", "movedAt"):
+            rollout_at = NAMES.read(template_annotations, stamp)
+            if rollout_at:
+                transition_ages.append(age_secs(rollout_at))
+        if not timed_pods:
+            # No pod to time (a Recreate rollout between its old and new pod, or
+            # an edit that left no stamp): unavailable since Available turned
+            # False. Progressing stays True through a rollout, so its time says nothing.
+            available = next((c for c in st.get("conditions", []) or []
+                              if c.get("type") == "Available"), {})
+            if available.get("status") == "False" and available.get("lastTransitionTime"):
+                transition_ages.append(age_secs(available["lastTransitionTime"]))
         if not transition_ages:
             transition_ages.append(age_secs(d["metadata"].get("creationTimestamp")))
         out.append({
