@@ -105,12 +105,18 @@ Longhorn volumes are healthy. Only then is the next host touched.
   to make, so a host with one waits, in **Update every host** and the weekly
   window too. Its row then offers **Restart…**, which opens the Host actions
   review.
+- What may clear by itself gets up to 15 minutes first, as copies rebuilding do:
+  a check that could not read, engines Longhorn still lists on a host they have
+  left, and orphan records being removed.
 - A failed install stops the run before the next host.
 - **Stop after this host** finishes the host in hand first.
 - The run is kept on disk, so it carries on if Homestead itself is moved off a
   host it drains; a restart cut short that way is tried once more.
 - **Restarts: Never** installs updates without restarting anything.
 - A run whose job can't be made - another job refuses it, say - does not start.
+  A weekly window that is skipped this way raises an alert, says **Window skipped
+  because…** beside **Last run**, naming the job, and looks again every 5 minutes
+  while its hour lasts.
 
 **One host, or a few.** Each row offers **Update…** when updates wait, or
 **Restart…** when only a restart does, and the host's name opens its page. Tick
@@ -128,7 +134,9 @@ there is one run at a time. **Last run** then names the hosts it covered.
 `unattended-upgrades` is on, and whether it restarts the host by itself
 (`Automatic-Reboot`) - which it does without a drain, and which is an alert.
 Homestead holds it off on every Ready host while any update runs, with
-`/etc/apt/apt.conf.d/99-homestead-hold`, and removes that file after. Choose
+`/etc/apt/apt.conf.d/99-homestead-hold`, and removes that file after. A hold that
+keeps failing is shown in the dialog and raises an alert; Homestead keeps trying and
+the run goes on. Choose
 **Who installs updates: Homestead** to keep it off for good, and let the
 weekly window install updates instead.
 

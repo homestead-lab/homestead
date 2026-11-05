@@ -183,9 +183,9 @@ function osUpdatesRowAction(name, f, r) {
   if (run) return (run.node?.name || run.nodes[run.index]) === name ? UI.chip("updating now", "info")
     : !run.stop && run.nodes.indexOf(name) > run.index ? UI.chip("next", "neutral") : "";
   if (f.upgrading) return UI.chip("installing now", "info");
-  if ((f.updates || []).length) return UI.button("Update…", `osUpdatesReview([${jsArg(name)}])`, { attrs: 'data-need="admin"' });
-  if (f.reboot) return UI.button("Restart…", `nodePowerReview(${jsArg(name)},"reboot")`, { attrs: 'data-need="admin"' });
-  return "";
+  // Both when both wait: a host the checks refused may have new updates by now.
+  return [(f.updates || []).length ? UI.button("Update…", `osUpdatesReview([${jsArg(name)}])`, { attrs: 'data-need="admin"' }) : "",
+    f.reboot ? UI.button("Restart…", `nodePowerReview(${jsArg(name)},"reboot")`, { attrs: 'data-need="admin"' }) : ""].join(" ").trim();
 }
 const osUpdatesRowPick = (name, f, r) => osUpdatesRunning(r) || f.upgrading || !(f.updates || []).length ? "" :
   `<label class="osu-pick" data-need="admin"><input type="checkbox" data-osu-pick="${esc(name)}" aria-label="${esc(`Select ${name}`)}" onchange="osUpdatesPicked()"></label>`;
@@ -364,7 +364,7 @@ function osUpdatesReviewHost(h, several, plain) {
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
     <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>`;
 }
-function osUpdatesReviewHtml(review) {
+function osUpdatesReviewHtml(review, restart) {
   const names = review.hosts.map(h => h.node), several = names.length > 1;
   const others = "Other hosts are not touched; their automatic updates wait until this ends.";
   return `<div class="ui-stack">
@@ -374,20 +374,22 @@ function osUpdatesReviewHtml(review) {
       : `Install what is waiting on <b>${esc(names[0])}</b>. ${others}`)}
     ${review.hosts.map(h => several ? UI.section(h.node, osUpdatesReviewHost(h, true, true)) : osUpdatesReviewHost(h, false, !!review.blocked)).join("")}
     <div class="f"><label for="osu_review_restart">After installing</label><select id="osu_review_restart" onchange="osUpdatesReviewRestart()">
-      <option value="when-needed"${review.restart_policy === "when-needed" ? " selected" : ""}>Restart ${several ? "a host" : "it"} if an update needs one, drained first</option>
-      <option value="never"${review.restart_policy === "never" ? " selected" : ""}>Do not restart; I will do it</option></select></div>
+      <option value="when-needed"${restart === "when-needed" ? " selected" : ""}>Restart ${several ? "a host" : "it"} if an update needs one, drained first</option>
+      <option value="never"${restart === "never" ? " selected" : ""}>Do not restart; I will do it</option></select></div>
     ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })
       + UI.button(OSU_REVIEW_TITLE(names), "osUpdatesReviewedApply()", { kind: "pri", id: "osu_review_go", attrs: 'data-need="admin"', disabled: !!review.blocked }))}
   </div>`;
 }
 let osuReviewFlow = null;
+// What the person chose for this run, kept across a redraw of the same review.
+let osuRestartChosen = null;
 const OSU_REVIEW = () => osuReviewFlow ||= UI.reviewFlow({
   // Reading again from the review itself redraws it, not another dialog on top.
-  loading: nodes => { if ($("#osu_review_go")) { $("#osu_review_go").disabled = true; $("#mbody").innerHTML = OSU_REVIEW_LOADING; } else childModal(OSU_REVIEW_TITLE(nodes), OSU_REVIEW_LOADING, true); },
+  loading: nodes => { osuRestartChosen = $("#osu_review_go") ? $("#osu_review_restart")?.value || null : null; if ($("#osu_review_go")) { $("#osu_review_go").disabled = true; $("#mbody").innerHTML = OSU_REVIEW_LOADING; } else childModal(OSU_REVIEW_TITLE(nodes), OSU_REVIEW_LOADING, true); },
   live: () => !!$("#osuReviewLoading") || !!$("#osu_review_go"),
   preview: nodes => api(`/api/os-updates/preview?${new URLSearchParams(nodes.map(node => ["node", node]))}`),
   render: review => {
-    $("#mbody").innerHTML = osUpdatesReviewHtml(review);
+    $("#mbody").innerHTML = osUpdatesReviewHtml(review, osuRestartChosen || review.restart_policy);
     if (window.applyRole) applyRole();
     osUpdatesReviewRestart();
     OSU_REVIEW().ready();
@@ -461,7 +463,7 @@ window.osUpdatesSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.osUpdatesStart = async () => {
-  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Apps and VMs move off each host while it restarts.",
+  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Apps and VMs move off each host while it restarts. A host whose restart the checks refuse keeps its updates and waits for you.",
     { title: "Update every host", ok: "Update every host" }))) return;
   try {
     const r = await api("/api/os-updates/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });

@@ -309,6 +309,53 @@ test("a refusal when sending says so and reads the review again; a review is sen
   assert.equal(t.sent.length, 1);
 });
 
+test("a redraw keeps the person's restart choice, whichever way it went", async () => {
+  const stale = Object.assign(new Error("review it again"), { status: 409 }), refused = Object.assign(new Error("no"), { status: 400 });
+  for (const [setting, chosen, other] of [["when-needed", "never", "when-needed"], ["never", "when-needed", "never"]]) {
+    for (const error of [stale, refused]) {
+      const t = await reviewed(preview([previewHost("node-a")], { restart_policy: setting }), { start: () => error });
+      assert.match(t.html(), new RegExp(`<option value="${setting}" selected>`), "it starts from the setting");
+      t.restart = chosen;
+      await reviewGo(t);
+      assert.match(t.html(), new RegExp(`<option value="${chosen}" selected>`), `${chosen} kept after a ${error.status}`);
+      assert.doesNotMatch(t.html(), new RegExp(`<option value="${other}" selected>`));
+      await t.c.window.osUpdatesReviewedApply();
+      assert.equal(t.sent.at(-1).restart, chosen, "and it is what is sent next");
+    }
+  }
+});
+
+test("a review opened afresh starts from the setting again", async () => {
+  const t = await reviewed(preview([previewHost("node-a")]), { start: () => Object.assign(new Error("again"), { status: 409 }) });
+  t.restart = "never";
+  await reviewGo(t);
+  delete t.fields["#osu_review_go"]; delete t.fields["#osu_review_restart"];    // Cancel: the review has gone
+  await t.c.window.osUpdatesReview(["node-a"]);
+  assert.match(t.html(), /<option value="when-needed" selected>/);
+});
+
+test("a host with updates and a restart waiting offers both", async () => {
+  const hosts = { "node-a": { ...HOSTS["node-a"], reboot: true } };
+  const r = { id: "os-2", status: "succeeded", reason: "asked-hosts", nodes: ["node-a"], message: "x",
+    results: [{ node: "node-a", ok: true, note: "updates installed; restart not done: no other host", restart_needed: true }] };
+  const t = await opened({ state: { hosts, rollout: r } });
+  const a = row(t.html(), "node-a");
+  assert.match(a, />Update…</);
+  assert.match(a, />Restart…</);
+  assert.match(a, /nodePowerReview\(&quot;node-a&quot;/);
+  assert.match(a, /no other host/);
+  assert.doesNotMatch(row((await opened({ state: { hosts, rollout: running } })).html(), "node-a"), />Restart…</, "not during a run");
+});
+
+test("Update every host's confirm says a host may wait", async () => {
+  const t = await opened();
+  let said = "";
+  t.c.ask = async text => { said = text; return false; };
+  await t.c.window.osUpdatesStart();
+  assert.match(said, /keeps its updates and waits for you/);
+  assert.equal(t.sent.length, 0);
+});
+
 test("a preview that fails says so in the dialog", async () => {
   const t = setup({ previews: () => new Error("HTTP 500") });
   await t.c.window.osUpdatesReview(["node-a"]);
@@ -350,6 +397,23 @@ test("a hold that keeps failing is said during the run; a moment's Busy is not",
   assert.match(noted.html(), /Busy/);
   const brief = await opened({ state: { rollout: { ...running, hold_failed: { "node-b": { since: 1, error: "Busy" } } } } });
   assert.doesNotMatch(brief.html(), /could not be held/);
+});
+
+test("a skipped window is said beside Last run, or alone; not over a run going", async () => {
+  const window_skip = { why: "Prepare disk is in the way (Finish disk preparation)", first: 1, last_try: 1 };
+  const last = { id: "os-2", status: "succeeded", reason: "asked", nodes: ["node-a"], message: "1 host done", results: [] };
+  const beside = await opened({ state: { window_skip, rollout: last } });
+  assert.match(beside.html(), /Last run succeeded[\s\S]*Window skipped because Prepare disk is in the way \(Finish disk preparation\)/);
+  assert.equal((beside.html().match(/class="note /g) || []).length, 1, "one notice");
+  const alone = await opened({ state: { window_skip } });
+  assert.match(alone.html(), /Window skipped because/);
+  const going = await opened({ state: { window_skip, rollout: running } });
+  assert.doesNotMatch(going.html(), /Window skipped/);
+  for (const rollout of [last, null]) {
+    const card = setup({ report: report({ window_skip, rollout }) });
+    await card.c.window.osUpdatesCardPaint();
+    assert.match(card.fields["#settingsHostUpdates"].innerHTML, /Window skipped because Prepare disk/);
+  }
 });
 
 test("a run of one has nothing to stop after, and says its host", async () => {

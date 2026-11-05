@@ -7,6 +7,7 @@ import {chromium} from 'playwright';
 const base = process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173';
 const screenshots = process.env.OS_UPDATES_SCREENSHOTS;
 if (screenshots) await fs.mkdir(screenshots, {recursive:true});
+const demo = await fs.readFile(new URL('../../web/js/demo.js', import.meta.url), 'utf8');
 const browser = await chromium.launch({headless:true});
 const row = (page, name) => page.locator('#osu_hosts tbody tr', {has:page.locator(`text=${name}`)});
 const noSideways = page => page.evaluate(() => [document.documentElement.scrollWidth, innerWidth,
@@ -16,6 +17,12 @@ try {
     const context = await browser.newContext({viewport:{width, height:900}}), page = await context.newPage();
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(() => { window.__osuNativeFetch = window.fetch.bind(window); });
+    await page.route('**/js/demo.js*', route => route.fulfill({contentType:'application/javascript', body:demo + `
+      (()=>{const demoFetch=window.fetch;window.fetch=(url,opts)=>
+        window.__osuRealFetch && typeof url==='string' && url.startsWith('/api/os-updates/start')
+          ? window.__osuNativeFetch(url,opts) : demoFetch(url,opts);})();
+    `}));
     const open = async () => {
       await page.evaluate(() => { window.__demoOsRun = null; closeModal(); osUpdates(); });
       await page.waitForSelector('#osu_hosts tbody tr');
@@ -67,6 +74,25 @@ try {
       assert.equal(await page.locator('.osu-verdict').first().isVisible(), false);
       await page.locator('#osu_review_restart').selectOption('when-needed');
       assert.equal(await page.locator('.osu-verdict').first().isVisible(), true);
+
+      // A 409 over real fetch, through the real api() and reviewFlow: the review
+      // redraws in place and keeps the choice. The demo transport hands this one
+      // call to the browser's own fetch; page.route answers it as the route would.
+      await open();
+      await page.evaluate(() => { window.__osuRealFetch = true; });
+      await page.route('**/api/os-updates/start', route => route.fulfill({status:409, contentType:'application/json',
+        body:JSON.stringify({error:'Something changed since this was reviewed; review it again', preview:{}})}));
+      await row(page, 'harvester-node3').getByRole('button', {name:'Update…'}).click();
+      await page.waitForSelector('#osu_review_go');
+      await page.locator('#osu_review_restart').selectOption('never');
+      const depth = await page.locator('#mback').innerText();
+      const [reply] = await Promise.all([page.waitForResponse('**/api/os-updates/start'), page.locator('#osu_review_go').click()]);
+      assert.equal(reply.status(), 409);
+      await page.waitForFunction(() => !document.querySelector('#osuReviewLoading') && document.querySelector('#osu_review_go')?.textContent === 'Update harvester-node3');
+      assert.equal(await page.locator('#osu_review_restart').inputValue(), 'never', 'the choice survives the redraw');
+      assert.equal(await page.locator('#mback').innerText(), depth, 'the same dialog, not another on top');
+      await page.unroute('**/api/os-updates/start');
+      await page.evaluate(() => { window.__osuRealFetch = false; });
 
       // One host's row: reviewed, started, and then the rows follow the run.
       await open();
