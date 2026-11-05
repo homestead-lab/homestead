@@ -12,6 +12,7 @@ import homestead_vms as vms
 import homestead_vm_edit as VM_EDIT
 import homestead_imports as imports
 import homestead_vm_create as VM_CREATE
+from rebind import keep_bound
 
 try:
     import yaml
@@ -21,6 +22,7 @@ except ImportError:
 
 class EditPreparationTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, vms)
         self.cluster = edit_fixtures.Cluster({"harvester": True, "cdi": True})
 
     def bound_disk(self):
@@ -201,6 +203,7 @@ class CreatePreparationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = create_fixtures.VmCreateTests()
         self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)   # the fixture's setUp keeps imports bound
         self.body = {"name": "new-vm", "password": "test-only-password", "memory": "2Gi", "network": "pod"}
 
     def test_invalid_network_after_disk_definition_does_not_create_disk(self):
