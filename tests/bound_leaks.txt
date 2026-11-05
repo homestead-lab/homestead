@@ -75,7 +75,6 @@ homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_longhorn.STORAGE_CLASS	test_storage_classes	other
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_node_probe_upgrade	fake
 homestead_names.kget	test_schedule_jobs	fake
 homestead_names.kget	test_sessions	fake
 homestead_names.kget	test_smart	fake
@@ -116,10 +115,6 @@ homestead_power_hold.OWN	test_power_hold	other
 homestead_power_hold.OWN_POD	test_power_hold	other
 homestead_power_hold.kget	test_power_hold	fake
 homestead_power_hold.ksend	test_power_hold	fake
-homestead_probe.VERSION	test_node_probe_upgrade	other
-homestead_probe._helper_key	test_node_probe_upgrade	other
-homestead_probe.kget	test_node_probe_upgrade	fake
-homestead_probe.ksend	test_node_probe_upgrade	fake
 homestead_promote.kget	test_promote	other
 homestead_promote.ksend	test_promote	other
 homestead_promote.own_node	test_promote	other
