@@ -16,7 +16,6 @@ homestead_agent_requests.DATA_DIR	test_update_file	fake
 homestead_alerts.DATA_DIR	test_smart_standby	fake
 homestead_alerts.DATA_DIR	test_trim_health	fake
 homestead_api_keys.DATA_DIR	test_update_file	fake
-homestead_capacity_review._key	test_disk_region	fake
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
