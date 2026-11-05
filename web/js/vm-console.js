@@ -78,7 +78,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
 
 async function vmConsoleScreen() {
   let RFB;
-  try { RFB = (await import("/vendor/novnc/core/rfb.js")).default; }
+  try { RFB = (await import(`${vendorBase()}/novnc/core/rfb.js`)).default; }
   catch (e) { return vmConsoleState("the VNC client could not load: " + e.message); }
   const target = $("#vmcScreen");
   if (!target) return;

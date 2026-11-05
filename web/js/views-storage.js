@@ -1139,7 +1139,7 @@ const fileSize = bytes => bytesText(bytes);
    opened rather than on page load, and never at all for the rest of the app.
    If it cannot load - offline, blocked, a stripped image - the editor falls
    back to the textarea that was here before, which still saves correctly. */
-const MONACO_BASE = "/vendor/monaco";
+const monacoBase = () => `${vendorBase()}/monaco`;
 let monacoLoading = null;
 
 function monacoLanguage(name) {
@@ -1156,16 +1156,16 @@ function loadMonaco() {
     const failed = message => { monacoLoading = null; reject(new Error(message)); };
     const style = document.createElement("link");
     style.rel = "stylesheet";
-    style.href = `${MONACO_BASE}/vs/editor/editor.main.css?v=${HOMESTEAD_VERSION}`;
+    style.href = `${monacoBase()}/vs/editor/editor.main.css`;
     document.head.appendChild(style);
     const script = document.createElement("script");
-    script.src = `${MONACO_BASE}/vs/loader.js?v=${HOMESTEAD_VERSION}`;
+    script.src = `${monacoBase()}/vs/loader.js`;
     script.onerror = () => failed("the editor could not be loaded");
     script.onload = () => {
       try {
-        window.require.config({ paths: { vs: `${MONACO_BASE}/vs` } });
+        window.require.config({ paths: { vs: `${monacoBase()}/vs` } });
         // Same origin, so the worker needs no blob shim.
-        window.MonacoEnvironment = { getWorkerUrl: () => `${MONACO_BASE}/vs/base/worker/workerMain.js` };
+        window.MonacoEnvironment = { getWorkerUrl: () => `${monacoBase()}/vs/base/worker/workerMain.js` };
         window.require(["vs/editor/editor.main"], () => resolve(window.monaco), () => failed("the editor could not start"));
       } catch (e) { failed(e.message); }
     };
