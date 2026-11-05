@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_bridge as BRIDGE
 import homestead_hostrun as HOSTRUN
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 try:
     import yaml
@@ -136,6 +138,9 @@ class HostLeaseTests(unittest.TestCase):
     GOOD = [(BRIDGE.INSPECT_SCRIPT, K3S), ("python3 -", "OK /var/lib/homestead/netplan-x\n"),
             ("CONFIRMED", "CONFIRMED\n"), ("ip -4", "ADDR\nPORT\nROUTE\nGATEWAY\nARMED\n")]
 
+    def setUp(self):
+        keep_bound(self, BRIDGE)
+
     def bind(self, host):
         BRIDGE.bind(host, lambda path: {"items": [{}]} if "nodes" in path else {"items": []}, lambda *a, **k: None)
 
@@ -258,6 +263,7 @@ class TimedOutStartTests(unittest.TestCase):
 
 class JobTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, BRIDGE)
         self.deleted = []
         self.nodes = 1
         self.item = {"ref": {"node": "k3s", "interface": "enp1s0", "address": "192.0.2.109/24", "bridge": "br0",
