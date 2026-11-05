@@ -41,7 +41,6 @@ homestead_imports.ksend	test_vm_write_integration	fake
 homestead_k3scluster.check	test_vm_lan	fake
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
-homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
 homestead_lifecycle.STORAGE_CLASS	test_storage_classes	other
 homestead_lifecycle.STORAGE_CLASS	test_viewer_secret_values	other
 homestead_lifecycle.SYS_NS	test_viewer_secret_values	other
