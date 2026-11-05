@@ -205,7 +205,6 @@ homestead_operations.DATA_DIR	test_move_flow	fake
 homestead_operations.DATA_DIR	test_operations	fake
 homestead_operations.DATA_DIR	test_operations_memo	fake
 homestead_operations.DATA_DIR	test_set_restart	fake
-homestead_operations.deployment_progress	test_cdi_import_cleanup	fake
 homestead_operations.deployment_progress	test_host_console_settings	fake
 homestead_operations.deployment_progress	test_image_progress	fake
 homestead_operations.deployment_progress	test_image_pull_progress	fake
@@ -223,7 +222,6 @@ homestead_operations.kget	test_move_flow	fake
 homestead_operations.kget	test_operations	fake
 homestead_operations.kget	test_operations_memo	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_operations.smart_progress	test_cdi_import_cleanup	other
 homestead_operations.smart_progress	test_operations	fake
 homestead_operations.smart_progress	test_operations	other
 homestead_outage.DATA_DIR	test_outage	fake
