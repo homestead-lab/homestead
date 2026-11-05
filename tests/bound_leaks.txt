@@ -49,7 +49,6 @@ homestead_history.DATA_DIR	test_mqtt_history	fake
 homestead_hostrun.exec_in	test_promote	fake
 homestead_hostrun.kget	test_promote	fake
 homestead_hostrun.ksend	test_promote	fake
-homestead_housekeeping.DATA_DIR	test_housekeeping	fake
 homestead_imports._cache	test_image_progress	other
 homestead_imports._cache	test_vm_create	other
 homestead_imports._cache	test_vm_disk_import	other
