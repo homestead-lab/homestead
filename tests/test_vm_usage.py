@@ -39,6 +39,7 @@ class UsageTests(unittest.TestCase):
             if "virt-handler" in path:
                 return {"items": [{"spec": {"nodeName": "n1"}, "status": {"phase": "Running", "podIP": "10.0.0.5"}}]}
             raise AssertionError(path)
+        keep_bound(self, U)
         U.bind(get)
         U._readings.clear()
 
@@ -103,6 +104,7 @@ class HandlerPoolTests(unittest.TestCase):
     def setUp(self):
         handlers = [{"spec": {"nodeName": f"node-{i}"}, "status": {"phase": "Running", "podIP": f"192.0.2.{i + 1}"}}
                     for i in range(3)]
+        keep_bound(self, U)
         U.bind(lambda path: {"items": handlers} if "virt-handler" in path else {"items": []})
         U._readings.clear()
 

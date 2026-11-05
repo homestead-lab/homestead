@@ -28,7 +28,6 @@ homestead_vmstore.hv_download	test_vmstore	fake
 homestead_vmstore.image_disks	test_vmstore	fake
 homestead_vmstore.images	test_vmstore	fake
 homestead_vmstore.platform	test_vmstore	fake
-homestead_vmusage.kget	test_vm_usage	fake
 homestead_volumes.SYSTEM_NAMESPACES	test_volume_deletion	other
 homestead_volumes.backups	test_volume_deletion	fake
 homestead_volumes.cache	test_volume_deletion	other
