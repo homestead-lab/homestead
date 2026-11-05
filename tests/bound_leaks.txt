@@ -45,7 +45,6 @@ homestead_config_backup.PARTS	test_config_backup	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
-homestead_forecast.DATA_DIR	test_forecast	fake
 homestead_helm.fetch	test_helm	fake
 homestead_helm.fetch	test_helm	other
 homestead_helm.fetch	test_helm_upgrade_stale	other
