@@ -33,6 +33,7 @@ import urllib.error
 import homestead_cache as CACHE
 import homestead_kube as KUBE
 import homestead_operations as OPS
+import homestead_value_masks as MASKS
 
 KIND = "restore-test"
 EVERY = 30 * 86400
@@ -258,6 +259,13 @@ def resolve(item, checkpoint, now=None):
         ref.update(changes, phase=next_phase, phase_at=now)
         checkpoint(item)
 
+    if ref.get("cancelled"):
+        left = _remove_made(item)
+        forget_plans()
+        if left:
+            return "running", item.get("progress", 0), "Cancelling: could not remove " + ", ".join(left) + " yet; trying again"
+        return "cancelled", 100, "Cancelled; the test's copy and its restored volumes were removed"
+
     if phase == "plan":
         dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
         if not dep:
@@ -305,8 +313,9 @@ def resolve(item, checkpoint, now=None):
         if not dep:
             return _finish(item, to, False, f"{name} was removed during the test")
         to("checking", copy_at=now, ports=_ports(dep), privileged=privileged(dep))
-        _send("POST", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", fence(item, ns))
-        _send("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", copy_of(dep, item, ref["rows"]))
+        why, final = _make_copy(item, ns, dep)
+        if why:
+            return _not_made(item, to, why, final, now)
         return "running", 70, "Copy started, cut off from the network; waiting for it to be ready"
     if phase == "checking":
         if not KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}", read=kget):
@@ -314,8 +323,9 @@ def resolve(item, checkpoint, now=None):
             dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
             if not dep:
                 return _finish(item, to, False, f"{name} was removed during the test")
-            _send("POST", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", fence(item, ns))
-            _send("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", copy_of(dep, item, ref["rows"]))
+            why, final = _make_copy(item, ns, dep)
+            if why:
+                return _not_made(item, to, why, final, now)
         pod = _pod(ns, item)
         ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in ((pod or {}).get("status") or {}).get("conditions") or [])
         if not ready:
@@ -341,13 +351,52 @@ def resolve(item, checkpoint, now=None):
     return "failed", item.get("progress", 0), f"Unknown step {phase}"
 
 
-def _finish(item, to, ok, why):
-    """Remove everything the test made, then record the result on the app."""
+def _make_copy(item, ns, dep):
+    """Put up the fence, then the copy: ("", False) once both are there, else
+    why not and whether that is final. Kubernetes refusing one (an admission
+    policy, a quota, a bad field: a 4xx other than a conflict or too many
+    requests) will refuse it again; anything else may pass on a later round."""
+    for what, path, body in (("network fence", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", lambda: fence(item, ns)),
+                             ("copy of the app", f"/apis/apps/v1/namespaces/{ns}/deployments",
+                              lambda: copy_of(dep, item, item["ref"]["rows"]))):
+        try:
+            _send("POST", path, body())
+        except urllib.error.HTTPError as error:
+            # 401: Homestead's own token was refused, not the object - try again.
+            if 400 <= error.code < 500 and error.code not in (401, 408, 429):
+                return f"Kubernetes refused the test's {what}: {_said(error)}", True
+            return f"the test's {what} could not be made yet: {_said(error)}", False
+        except (KeyError, TypeError) as error:      # the app's spec is not what a copy can be built from
+            return f"the test's {what} could not be built from the app ({type(error).__name__}: {error})"[:200], True
+        except (OSError, ValueError) as error:      # no answer, a timeout, a reply that was not JSON
+            return f"the test's {what} could not be made yet: {str(error)[:160] or type(error).__name__}", False
+    return "", False
+
+
+def _said(error):
+    """Kubernetes' own reason for refusing a write, or the HTTP status. An
+    admission policy's or webhook's message can quote the copy's fields, so
+    any address in it has its credentials masked before it is shown or kept."""
+    try:
+        said = json.loads(error.read() or b"{}").get("message") or str(error)
+    except Exception:
+        said = str(error)
+    return MASKS.strip_url_secrets(str(said))[:200]
+
+
+def _not_made(item, to, why, final, now):
+    """The copy could not be made: a refusal ends the test at once, freeing its
+    restored volumes for the next one; anything else is tried again until the
+    copy's READY_WAIT is up."""
+    if final or now - item["ref"]["copy_at"] > READY_WAIT:
+        return _finish(item, to, False, why)
+    return "running", 70, f"{why[:1].upper()}{why[1:]}; trying again"
+
+
+def _remove_made(item):
+    """Delete the copy, its fence and the restored claims; what could not be removed."""
     ref = item["ref"]
-    ns, name, now = ref["namespace"], ref["name"], time.time()
-    if ref.get("phase") != "cleanup":
-        to("cleanup", ok=ok, why=why)
-    left = []
+    ns, left = ref["namespace"], []
     for path in (f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}",
                  f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies/{_copy_name(item)}",
                  *[f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{r['restored']}" for r in ref.get("rows") or []]):
@@ -355,6 +404,34 @@ def _finish(item, to, ok, why):
             _send("DELETE", path)
         except Exception as error:
             left.append(f"{path.rsplit('/', 1)[-1]} ({str(error)[:60]})")
+    return left
+
+
+def cancel_plan(item):
+    return {"mode": "stop", "action": "Stop the restore test",
+            "undo": ["The test's copy of the app, its network fence and its restored volumes are removed"],
+            "keeps": ["The app itself is not touched, and no result is recorded on it"], "needs": "admin"}
+
+
+def cancel_run(item, chosen):
+    # Marked first: if something can't be removed the job store puts the job
+    # back to running, and the next round only finishes removing - the test
+    # is not carried on and records nothing on the app.
+    item["ref"]["cancelled"] = True
+    left = _remove_made(item)
+    forget_plans()
+    if left:
+        raise ValueError("could not remove " + ", ".join(left) + "; try again or remove them by hand")
+    return "Cancelled; the test's copy and its restored volumes were removed"
+
+
+def _finish(item, to, ok, why):
+    """Remove everything the test made, then record the result on the app."""
+    ref = item["ref"]
+    ns, name, now = ref["namespace"], ref["name"], time.time()
+    if ref.get("phase") != "cleanup":
+        to("cleanup", ok=ok, why=why)
+    left = _remove_made(item)
     forget_plans()
     took = int(now - ref.get("started", now))
     said = ", ".join(f"{r['claim']} from {r['backup']}" for r in ref.get("rows") or [])
@@ -466,3 +543,4 @@ ROUTES = {
 def register(ops):
     """The job store's entry for a restore test (#622)."""
     ops.RESOLVERS[KIND] = lambda item: resolve(item, ops.checkpoint)
+    ops.CANCELLERS[KIND] = (cancel_plan, cancel_run)
