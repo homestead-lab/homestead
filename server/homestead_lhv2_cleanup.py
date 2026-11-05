@@ -183,7 +183,8 @@ def _uncordon(item, row):
             {'op': 'test', 'path': '/metadata/resourceVersion', 'value': meta['resourceVersion']},
             {'op': 'test', 'path': _MARK, 'value': item['id']},
             {'op': 'remove', 'path': _MARK},
-            {'op': 'replace', 'path': '/spec/unschedulable', 'value': False}], ctype='application/json-patch+json')
+            # add, not replace: a host someone already uncordoned has no unschedulable field.
+            {'op': 'add', 'path': '/spec/unschedulable', 'value': False}], ctype='application/json-patch+json')
     except (ValueError, OSError) as error:
         return 'allowing scheduling failed (' + str(error)[:120] + ')'
     row['cordoned'] = False

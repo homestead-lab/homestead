@@ -210,6 +210,19 @@ class RefusalEndsTests(unittest.TestCase):
         power['status']='succeeded'
         self.assertEqual('failed',C.progress(item)[0]); self.assertFalse(self.cordoned('node-a')); self.assertIsNone(C.pending())
 
+    def test_a_host_someone_already_uncordoned_still_lets_the_job_end(self):
+        item=self.start_and_stop_v2()
+        power={'id':'power-1','kind':'node-power','status':'running','ref':{'node':'node-a','action':'drain'}}
+        def cordon(m,p,b):
+            if power not in self.saved: self.kube.add(self.hugepage_pod('node-a')); self.saved.append(power)
+        self.kube.react('PATCH','/api/v1/nodes/node-a',cordon)
+        self.assertEqual('running',C.progress(item)[0]); self.assertTrue(self.cordoned('node-a'))
+        # The person allows scheduling themselves: the API server drops the field, our mark stays.
+        K.ksend('PATCH','/api/v1/nodes/node-a',[{'op':'remove','path':'/spec/unschedulable'}],ctype='application/json-patch+json')
+        power['status']='succeeded'
+        self.assertEqual('failed',C.progress(item)[0]); self.assertFalse(self.cordoned('node-a'))
+        self.assertNotIn(C.CORDONED_BY,self.annotations('node-a')); self.assertIsNone(C.pending())
+
     def test_a_conflicting_uncordon_write_is_retried_not_given_up(self):
         item=self.start_and_stop_v2()
         self.kube.react('PATCH','/api/v1/nodes/node-a',lambda m,p,b:self.kube.add(self.hugepage_pod('node-a')) and None)
