@@ -14,14 +14,6 @@
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
-homestead_vmstore.delete_image	test_vmstore	fake
-homestead_vmstore.fetch_json	test_vmstore	fake
-homestead_vmstore.fetch_text	test_vmstore	fake
-homestead_vmstore.head	test_vmstore	fake
-homestead_vmstore.hv_download	test_vmstore	fake
-homestead_vmstore.image_disks	test_vmstore	fake
-homestead_vmstore.images	test_vmstore	fake
-homestead_vmstore.platform	test_vmstore	fake
 homestead_volumes.SYSTEM_NAMESPACES	test_volume_deletion	other
 homestead_volumes.backups	test_volume_deletion	fake
 homestead_volumes.cache	test_volume_deletion	other
