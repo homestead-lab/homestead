@@ -67,9 +67,6 @@ homestead_imports.ksend	test_vm_lan	fake
 homestead_imports.ksend	test_vm_network_isolation	fake
 homestead_imports.ksend	test_vm_preparation	fake
 homestead_imports.ksend	test_vm_write_integration	fake
-homestead_ipam.cluster_facts	test_ipam	fake
-homestead_ipam.kget	test_ipam	fake
-homestead_ipam.ksend	test_ipam	fake
 homestead_joblogs.kget	test_job_logs	fake
 homestead_joblogs.ktext	test_job_logs	fake
 homestead_k3scluster.check	test_job_cancel	other
