@@ -37,9 +37,9 @@ def host(name, ready=True):
                        "nodeInfo": {"bootID": f"boot-{name}"}}}
 
 
-def orphans_on_node_a():
-    """Three engine orphans on node-a whose engines now run on node-b."""
-    volumes = ["vol-a", "vol-b", "vol-c"]
+def orphans_on_node_a(count=3):
+    """Engine orphans on node-a whose engines now run on node-b."""
+    volumes = [f"vol-{'abcdefghijklmnopqrstuvwxyz'[n]}" for n in range(count)]
     return ([engine_orphan(volume, n) for n, volume in enumerate(volumes, 1)]
             + [engine(volume, "node-b") for volume in volumes]
             + [instance_manager("node-a", engines=[f"{v}-e-0" for v in volumes])])
@@ -145,6 +145,269 @@ class AskingTheChecksTests(FakeCluster):
         with mock.patch.object(POWER_JOBS.POWER, "plan", side_effect=OSError("no route to host")):
             with self.assertRaises(OSError):
                 POWER_JOBS.rollout_refusal("node-a")
+
+
+class Runs(FakeCluster):
+    """The engine as server.py binds it: the real review, the real job store."""
+    def setUp(self):
+        super().setUp()
+        self.data = tempfile.TemporaryDirectory()
+        self.addCleanup(self.data.cleanup)
+        for patcher in (mock.patch.object(ROLLOUT.OPS, "DATA_DIR", self.data.name),
+                        mock.patch.object(ROLLOUT.OPS, "WRITE_GUARD", None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        keep_bound(self, ROLLOUT, "kget", "platform", "host_os", "reboot", "operation", "set_cordon", "own_node",
+                   "DATA_DIR", "announce", "power_job", "restart_check")
+        self.hosts = Hosts({"node-a": host_facts(["curl", "linux-image-6.8"]), "node-b": host_facts(["curl"]),
+                            "node-c": host_facts(["vim"])})
+        self.own = "node-a"
+        self.bind()
+
+    def bind(self):
+        ROLLOUT.bind(K.kget, lambda force=False: {"distribution": "k3s"}, self.hosts, POWER_JOBS.rollout_reboot,
+                     lambda op: {"id": op, "status": "succeeded"} if op else None, lambda name, on: None,
+                     lambda: self.own, self.data.name,
+                     lambda rollout: ROLLOUT.OPS.start("os-rollout", ROLLOUT.title(rollout), {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]},
+                                                       "/nodes", {"rollout": rollout["id"]}, "Starting"),
+                     POWER_JOBS.rollout_power_job, POWER_JOBS.rollout_refusal)
+
+    def run_it(self, limit=80):
+        for _ in range(limit):
+            ROLLOUT.tick(now=1000)
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if rollout.get("status") != "running":
+                return rollout
+        self.fail("the run did not finish")
+
+    def job(self, kind, node="", status="running", **ref):
+        """A job in the real store, as another feature would have left it."""
+        items = ROLLOUT.OPS.stored()
+        items.append({"id": f"{kind}-{len(items)}", "kind": kind, "title": f"The {kind} job", "status": status, "progress": 1,
+                      "message": "", "history": [], "resource": {"kind": "Node" if node else "", "name": node, "namespace": ""},
+                      "ref": {"node": node, **ref} if node else ref})
+        ROLLOUT.OPS._write(items)
+
+    def holds(self, on):
+        return sorted(name for name, hold in self.hosts.holds if hold is on)
+
+
+class ChosenHostsTests(Runs):
+    def test_only_the_named_hosts_run_with_its_own_host_last(self):
+        rollout = ROLLOUT.start("asked-hosts", only=["node-a", "node-c"])
+        self.assertEqual(["node-c", "node-a"], rollout["nodes"])
+        done = self.run_it()
+        self.assertEqual("succeeded", done["status"])
+        self.assertEqual(["node-c", "node-a"], self.hosts.began)
+        self.assertEqual(["node-a"], self.sent, "the kernel update restarts its host")
+
+    def test_a_host_that_is_not_ready_refuses_the_whole_run(self):
+        self.kube.discard("/api/v1/nodes/node-b")
+        self.add(host("node-b", ready=False))
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start("asked-hosts", only=["node-a", "node-b"])
+        self.assertIn("node-b", str(refused.exception))
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_a_host_no_cluster_knows_refuses_it(self):
+        with self.assertRaises(ValueError):
+            ROLLOUT.start("asked-hosts", only=["node-z"])
+
+    def test_this_runs_answer_can_say_do_not_restart(self):
+        ROLLOUT.start("asked-hosts", only=["node-a"], restart="never")
+        done = self.run_it()
+        self.assertEqual([], self.sent)
+        self.assertIn("needs a restart", done["results"][0]["note"])
+        self.assertEqual("when-needed", ROLLOUT.settings()["reboot"], "the setting is not touched")
+
+    def test_this_runs_answer_can_restart_when_the_setting_says_never(self):
+        ROLLOUT.save_settings({"reboot": "never"})
+        ROLLOUT.start("asked-hosts", only=["node-a"], restart="when-needed")
+        self.run_it()
+        self.assertEqual(["node-a"], self.sent)
+        self.assertEqual("never", ROLLOUT.settings()["reboot"])
+
+    def test_with_no_answer_it_follows_the_setting(self):
+        ROLLOUT.save_settings({"reboot": "never"})
+        ROLLOUT.start("asked-hosts", only=["node-a"])
+        self.run_it()
+        self.assertEqual([], self.sent)
+
+    def test_only_the_two_answers_are_taken(self):
+        with self.assertRaises(ValueError):
+            ROLLOUT.start("asked-hosts", only=["node-a"], restart="always")
+
+    def test_a_second_run_is_refused_in_words_for_any_run(self):
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start()
+        self.assertIn("An OS update is running", str(refused.exception))
+        self.run_it()
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.stop()
+        self.assertIn("No OS update is running", str(refused.exception))
+
+    def test_the_job_says_which_hosts(self):
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        titles = [i["title"] for i in ROLLOUT.OPS.stored() if i["kind"] == "os-rollout"]
+        self.assertEqual(["Update node-b's OS"], titles)
+        self.run_it()
+        ROLLOUT.start("asked-hosts", only=["node-a", "node-c"], now=2000)
+        self.assertEqual("Update the OS of 2 hosts", ROLLOUT.title(ROLLOUT._load()["rollout"]))
+        self.assertEqual("Update every host's OS (3 hosts)", ROLLOUT.title({"nodes": ["a", "b", "c"], "reason": "asked"}))
+        self.assertEqual("Update every host's OS (3 hosts)", ROLLOUT.title({"nodes": ["a", "b", "c"], "reason": "schedule"}))
+
+    def test_last_run_keeps_which_hosts_and_the_kind_of_run(self):
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.run_it()
+        last = ROLLOUT._load()["last_rollout"]
+        self.assertEqual((["node-b"], "asked-hosts", "succeeded"), (last["nodes"], last["reason"], last["status"]))
+
+
+class HoldsTests(Runs):
+    def test_every_ready_host_is_held_for_a_smaller_run_and_let_go_at_its_end(self):
+        self.kube.discard("/api/v1/nodes/node-c")
+        self.add(host("node-c", ready=False))
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertEqual(["node-a", "node-b"], self.holds(True), "node-c is not Ready, so it can't be reached")
+        self.assertEqual([], self.holds(False))
+        self.run_it()
+        self.assertEqual(["node-a", "node-b"], self.holds(False))
+
+    def test_a_host_that_becomes_ready_during_a_run_is_held_and_let_go_too(self):
+        self.kube.discard("/api/v1/nodes/node-c")
+        self.add(host("node-c", ready=False))
+        ROLLOUT.start("asked-hosts", only=["node-a", "node-b"])
+        ROLLOUT.tick(now=1000)
+        self.assertNotIn("node-c", self.holds(True))
+        self.kube.discard("/api/v1/nodes/node-c")
+        self.add(host("node-c"))
+        self.run_it()
+        self.assertIn("node-c", self.holds(True))
+        self.assertIn("node-c", self.holds(False))
+
+    def test_a_stopped_run_lets_go_of_the_hosts_outside_it_too(self):
+        ROLLOUT.start("asked-hosts", only=["node-b", "node-c"])
+        ROLLOUT.tick(now=1000)
+        ROLLOUT.stop()
+        self.assertEqual("stopped", self.run_it()["status"])
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(False))
+
+    def test_a_failed_run_lets_go_of_the_hosts_outside_it_too(self):
+        self.hosts.codes["node-b"] = "100"
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.assertEqual("failed", self.run_it()["status"])
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(False))
+
+    def test_when_homestead_manages_updates_the_holds_stay(self):
+        ROLLOUT.save_settings({"manage": "homestead"})
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.run_it()
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(True))
+        self.assertEqual([], self.holds(False))
+
+    def test_a_run_saved_by_the_version_before_keeps_its_own_hosts(self):
+        # An upgrade of Homestead during a run: its saved run has no held_hosts yet.
+        ROLLOUT.start()
+        with ROLLOUT._lock:
+            state = ROLLOUT._load()
+            state["rollout"].pop("held_hosts")
+            ROLLOUT._save(state)
+        self.run_it()
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(False))
+
+
+class NoJobNoRunTests(Runs):
+    def refusing_job(self):
+        self.job("disk-allocation", "node-b")
+
+    def test_a_run_whose_job_is_refused_does_not_start(self):
+        for start in (lambda: ROLLOUT.start(), lambda: ROLLOUT.start("asked-hosts", only=["node-c"])):
+            self.refusing_job()
+            with self.assertRaises(ValueError) as refused:
+                start()
+            self.assertIn("Finish disk preparation", str(refused.exception))
+            self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+            self.assertIsNone(ROLLOUT.tick(now=1000), "nothing moves")
+            self.assertEqual([], self.hosts.began)
+            self.assertEqual([], self.holds(True))
+            ROLLOUT.OPS._write([])
+
+    def test_the_last_run_stays_as_it_was(self):
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        self.run_it()
+        before = ROLLOUT._load()["rollout"]
+        self.refusing_job()
+        with self.assertRaises(ValueError):
+            ROLLOUT.start(now=5000)
+        self.assertEqual(before, ROLLOUT._load()["rollout"])
+
+    def test_any_failure_making_the_job_counts(self):
+        ROLLOUT.announce = mock.Mock(side_effect=OSError("disk full"))
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start()
+        self.assertIn("disk full", str(refused.exception))
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_a_window_whose_job_is_refused_can_start_later_in_its_hour(self):
+        self.refusing_job()
+        with self.assertRaises(ValueError):
+            ROLLOUT.start("schedule", now=5000)
+        self.assertNotIn("last_scheduled", ROLLOUT._load())
+        ROLLOUT.OPS._write([])
+        ROLLOUT.start("schedule", now=5001)
+        self.assertEqual(5001, ROLLOUT._load()["last_scheduled"])
+
+    def test_the_job_finds_its_run_saved(self):
+        # The job tray may read the job the moment it exists.
+        seen = []
+
+        def announce(rollout):
+            seen.append(ROLLOUT._load()["rollout"]["id"])
+            return {"id": "op"}
+        ROLLOUT.announce = announce
+        rollout = ROLLOUT.start()
+        self.assertEqual([rollout["id"]], seen)
+        self.assertEqual({"id": "op"}, rollout["operation"])
+
+
+class RefusedRestartInARunTests(Runs):
+    def test_every_host_update_refuses_a_drain_blocker_and_goes_on(self):
+        self.own = "node-c"
+        self.add(*orphans_on_node_a())
+        ROLLOUT.start()
+        done = self.run_it()
+        self.assertEqual("succeeded", done["status"], "a refused restart does not stop the run")
+        self.assertEqual(["node-a", "node-b", "node-c"], self.hosts.began, "the next hosts still update")
+        self.assertEqual([], self.sent)
+        row = done["results"][0]
+        self.assertEqual("node-a", row["node"])
+        self.assertTrue(row["restart_needed"])
+        self.assertIn("3 Longhorn orphan records", row["note"])
+        self.assertIn("needing a restart: node-a", done["message"])
+        self.assertIn("3 Longhorn orphan records", done["message"], "the summary says why")
+
+    def test_a_chosen_host_waits_the_same_way(self):
+        self.add(*orphans_on_node_a())
+        ROLLOUT.start("asked-hosts", only=["node-a"])
+        done = self.run_it()
+        self.assertEqual("succeeded", done["status"])
+        self.assertEqual([], self.sent)
+        self.assertTrue(done["results"][0]["restart_needed"])
+
+    def test_it_does_not_wait_for_the_copies_rebuilding(self):
+        self.add(*orphans_on_node_a())
+        ROLLOUT.start("asked-hosts", only=["node-a"])
+        for _ in range(40):
+            ROLLOUT.tick(now=1000)
+        self.assertEqual("succeeded", ROLLOUT._load()["rollout"]["status"], "all at one instant: no time to wait out")
+
+    def test_a_long_list_of_blockers_is_not_cut_short(self):
+        self.add(*orphans_on_node_a(count=20), *stuck_pod_on_node_a())
+        ROLLOUT.start("asked-hosts", only=["node-a"])
+        note = self.run_it()["results"][0]["note"]
+        self.assertIn("apps/app-0", note, "the last blocker is still named")
 
 
 if __name__ == "__main__":

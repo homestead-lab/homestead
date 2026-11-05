@@ -1,8 +1,8 @@
 """Host OS updates across a k3s or RKE2 cluster: one host at a time, now or
 in a weekly window, and who else may update the hosts meanwhile.
 
-A rollout takes the Ready hosts in turn - the one Homestead's leader runs on
-last - and for each: refreshes its package lists, installs what is waiting
+A rollout takes the Ready hosts in turn, or the ones a person chose - the one
+Homestead's leader runs on last - and for each: refreshes its package lists, installs what is waiting
 (homestead_host_os, detached on the host), and, when an update asks for a
 restart and the settings allow one, restarts it the way Host actions does:
 the reviewed plan, cordon, drain through disruption budgets, reboot, and a
@@ -12,7 +12,7 @@ then is the next host touched.
 
 A host whose restart the review refuses - running VMs, the cluster's only
 etcd member, a volume with its only copy there (unless the settings accept
-that) - keeps its updates and is reported as needing a restart; the rollout
+that), anything that would keep it from draining - keeps its updates and is reported as needing a restart; the rollout
 goes on. A failed install stops it: something is wrong with that host's
 packages, and the next host would likely fail the same way.
 
@@ -24,8 +24,8 @@ before it could send the reboot - is tried once more.
 Ubuntu's own automatic updates (unattended-upgrades) run on their own timer,
 and with Automatic-Reboot set restart hosts on their own. Homestead holds
 them off - a file in /etc/apt/apt.conf.d switching them off, removed again
-to let them go - on every host while a rollout runs, and for good when the
-settings say Homestead manages updates.
+to let them go - on every Ready host while a rollout runs, the ones outside it
+too, and for good when the settings say Homestead manages updates.
 """
 import datetime
 import os
@@ -41,6 +41,7 @@ reboot = None           # (node, allow_data_risk) -> operation id; raises with t
 operation = None        # operation id -> the job-tray item, or None
 set_cordon = None       # (node, bool)
 power_job = None        # (node, since epoch) -> id of a power job for it not failed, or ""
+restart_check = None    # (node, allow_data_risk) -> what the review would refuse with today, or ""
 own_node = lambda: ""
 announce = lambda rollout: None   # rollout -> its job-tray entry
 DATA_DIR = "/data"
@@ -59,16 +60,18 @@ ERROR_GAP = 5 * 60
 COPIES_WAIT = 15 * 60
 # An API server busy with a host rejoining answers 429 or 5xx for a while.
 TRANSIENT_WAIT = 10 * 60
+# A refused restart's note names what refused it, every drain blocker included.
+NOTE_LIMIT = 2000
 _lock = SHARED.SharedLock("os-rollout")
 
 
 def bind(_kget, _platform, _host_os, _reboot, _operation, _set_cordon, _own_node, data_dir="/data", _announce=None,
-         _power_job=None):
-    global kget, platform, host_os, reboot, operation, set_cordon, own_node, DATA_DIR, announce, power_job
+         _power_job=None, _restart_check=None):
+    global kget, platform, host_os, reboot, operation, set_cordon, own_node, DATA_DIR, announce, power_job, restart_check
     kget, platform, host_os, reboot, operation, set_cordon = _kget, _platform, _host_os, _reboot, _operation, _set_cordon
     own_node, DATA_DIR = _own_node, data_dir
     announce = _announce or (lambda rollout: None)
-    power_job = _power_job
+    power_job, restart_check = _power_job, _restart_check
 
 
 def _transient(error):
@@ -159,6 +162,11 @@ def _nodes():
     return {n["metadata"]["name"]: n for n in (kget("/api/v1/nodes") or {}).get("items", [])}
 
 
+RUNNING = "An OS update is running already; it has to end first"
+# Jobs across the cluster that a smaller run waits for, as they restart or stop hosts.
+CLUSTER_JOBS = ("cluster-shutdown", "platform-upgrade", "harvester-upgrade", "k3s-cluster")
+
+
 def _rebalancing():
     """Whether Balance hosts is moving containers: an update window's
     rollout drains and reboots the hosts it is moving them to, so the
@@ -169,18 +177,56 @@ def _rebalancing():
         return False
 
 
-def start(reason="asked", now=None):
-    """Begin a rollout over every Ready host. Returns it."""
+def _busy_cluster():
+    """Why no chosen host can start: a job across the cluster, or Balance hosts
+    moving containers onto the hosts this would drain. "" when none. An
+    unreadable job list raises: it is no proof that nothing runs."""
+    for item in OPS.stored():
+        if item.get("kind") in CLUSTER_JOBS and item.get("status") not in OPS.TERMINAL:
+            return f"{item.get('title') or item.get('kind')} is running; it has to end first"
+    return "Containers are being rebalanced; it has to end first" if _rebalancing() else ""
+
+
+def _busy_host(name):
+    """Why this host can't start: a job not ended that names it, of any kind, so
+    that a kind added later is refused rather than run into. "" when none. The
+    install would otherwise fail inside the run and wait out its error limit."""
+    for item in OPS.stored():
+        ref = item.get("ref") or {}
+        resource = item.get("resource") or {}
+        if (item.get("kind") != "os-rollout" and item.get("status") not in OPS.TERMINAL
+                and (ref.get("node") == name or name in (ref.get("nodes") or ())
+                     or (resource.get("kind") == "Node" and resource.get("name") == name))):
+            return f"{name} has a job running: {item.get('title') or item.get('kind')}"
+    return ""
+
+
+def start(reason="asked", now=None, only=None, restart=None):
+    """Begin a rollout over every Ready host, or the hosts in only, all or
+    none. restart ("when-needed" or "never") is this run's own answer, over the
+    settings. Returns it. A run whose job can't be made does not start: what was
+    saved goes back, and as the lock is held all the while nothing has moved."""
     p = platform(True) or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         raise ValueError("Homestead updates hosts' OS on k3s and RKE2; Harvester updates its own")
+    if restart not in (None, "when-needed", "never"):
+        raise ValueError("restart is when-needed or never")
     with _lock:
         state = _load()
         current = state.get("rollout") or {}
         if current.get("status") == "running":
-            raise ValueError("an update of every host is running already")
+            raise ValueError(RUNNING)
         own = own_node()
-        names = sorted(name for name, item in _nodes().items() if _ready(item))
+        ready = sorted(name for name, item in _nodes().items() if _ready(item))
+        names = ready
+        if only is not None:
+            names = [name for name in ready if name in only]
+            missing = [name for name in only if name not in ready]
+            if missing:
+                raise ValueError("Not Ready, so left alone: " + ", ".join(missing))
+            why = _busy_cluster() or next(filter(None, (_busy_host(name) for name in names)), "")
+            if why:
+                raise ValueError(why)
         # The host Homestead's leader runs on goes last: draining it moves Homestead.
         names.sort(key=lambda name: name == own)
         if not names:
@@ -188,15 +234,25 @@ def start(reason="asked", now=None):
         now = now or time.time()
         rollout = {"id": f"os-{int(now)}", "reason": reason, "started": int(now), "nodes": names, "index": 0,
                    "phase": "hold", "status": "running", "results": [], "message": "Holding automatic updates off",
-                   "stop": False, "node": {}}
+                   "stop": False, "node": {},
+                   # Not only the run's hosts: another host's own automatic update
+                   # must not restart it while this one is drained.
+                   "held_hosts": ready}
+        if restart:
+            rollout["restart"] = restart
+        before = {key: state[key] for key in ("rollout", "last_scheduled") if key in state}
         state["rollout"] = rollout
         if reason == "schedule":
             state["last_scheduled"] = int(now)
         _save(state)
-    try:
-        rollout["operation"] = announce(rollout)
-    except Exception as error:
-        print(f"OS updates: the job tray entry was not made: {str(error)[:120]}", flush=True)
+        try:
+            rollout["operation"] = announce(rollout)
+        except Exception as error:
+            state.pop("rollout", None)
+            state.pop("last_scheduled", None)
+            state.update(before)
+            _save(state)
+            raise ValueError(str(error)[:300]) from error
     return rollout
 
 
@@ -206,7 +262,7 @@ def stop():
         state = _load()
         rollout = state.get("rollout") or {}
         if rollout.get("status") != "running":
-            raise ValueError("no update of every host is running")
+            raise ValueError("No OS update is running")
         rollout["stop"] = True
         rollout["message"] = "Stopping after " + (rollout.get("node", {}).get("name") or "this host")
         _save(state)
@@ -278,16 +334,24 @@ def step(state, now=None):
     if rollout.get("status") != "running":
         return False
     config = settings(state)
+    if rollout.get("restart"):
+        config["reboot"] = rollout["restart"]
     phase, node = rollout["phase"], rollout.get("node") or {}
     if phase == "hold":
-        _holds(state, True, rollout["nodes"])
+        _holds(state, True, _held_hosts(rollout))
         rollout["phase"], rollout["message"] = "next", "Starting with " + rollout["nodes"][0]
         return True
     if phase == "next":
         if rollout.get("stop") or rollout["index"] >= len(rollout["nodes"]):
             return _finish(state, rollout, now)
         name = rollout["nodes"][rollout["index"]]
-        item = _nodes().get(name)
+        nodes = _nodes()
+        # A host that came back or joined during the run is held like the others.
+        came = sorted(n for n, i in nodes.items() if _ready(i) and n not in _held_hosts(rollout))
+        if came:
+            rollout["held_hosts"] = _held_hosts(rollout) + came
+            _holds(state, True, came)
+        item = nodes.get(name)
         rollout["node"] = {"name": name, "attempts": 0}
         if not item or not _ready(item):
             _result(rollout, False, "not Ready, so left alone")
@@ -373,7 +437,7 @@ def step(state, now=None):
             # Refused by the review, or stopped before power was sent: the
             # host keeps its updates and waits for someone.
             _uncordon(rollout)
-            _result(rollout, True, f"updates installed; restart not done: {str(error)[:220]}", restart_needed=True)
+            _result(rollout, True, f"updates installed; restart not done: {str(error)[:NOTE_LIMIT]}", restart_needed=True)
             return True
         rollout["phase"], node["since"] = "restarting", now
         rollout["message"] = f"{name}: draining and restarting"
@@ -405,9 +469,14 @@ def step(state, now=None):
     return False
 
 
+def _held_hosts(rollout):
+    """The hosts this run holds. A run saved before it held them all has its own."""
+    return rollout.get("held_hosts") or rollout["nodes"]
+
+
 def _finish(state, rollout, now):
     if settings(state)["manage"] != "homestead":
-        _holds(state, False, rollout["nodes"])
+        _holds(state, False, _held_hosts(rollout))
     results = rollout["results"]
     restarted = sum(1 for r in results if r.get("restarted"))
     waiting = [r for r in results if r.get("restart_needed")]
@@ -425,7 +494,7 @@ def _finish(state, rollout, now):
         words.append(f"{failed[-1]['node']}: {failed[-1]['note']}")
     rollout["message"] = "; ".join(words)
     rollout["phase"] = "done"
-    state["last_rollout"] = {k: rollout.get(k) for k in ("id", "status", "finished", "message", "reason")}
+    state["last_rollout"] = {k: rollout.get(k) for k in ("id", "status", "finished", "message", "reason", "nodes")}
     return True
 
 
@@ -515,6 +584,14 @@ def report():
     return {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
             "settings": settings(state), "rollout": state.get("rollout"), "last": state.get("last_rollout"),
             **{k: v for k, v in host_os.report().items() if k in ("hosts", "every_s", "checking")}}
+
+
+def title(rollout):
+    """The job tray's name for a rollout."""
+    names = rollout["nodes"]
+    if rollout.get("reason") != "asked-hosts":
+        return f"Update every host's OS ({len(names)} hosts)"
+    return f"Update {names[0]}'s OS" if len(names) == 1 else f"Update the OS of {len(names)} hosts"
 
 
 def start_asked():
