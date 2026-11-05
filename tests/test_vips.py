@@ -15,6 +15,8 @@ import homestead_operations as OPS
 import homestead_vip_registry as REG
 from fakes.kube import Kube
 from fakes.platform import plain_platform
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-vips"
 NODE = {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "node1"},
@@ -31,9 +33,7 @@ def cluster(test, vips=None, services=()):
     # The shared fake runs the real write guards; the storage guard takes the job
     # store's lock, which lives under its DATA_DIR.
     test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
-    saved = (STATE.kget, STATE.ksend, STATE.SYSTEM_NAMESPACES, STATE.DEFAULT_NAMESPACE, STATE.SHARED_VIP,
-             NET.guard_managed, NET.node_probes)
-    test.addCleanup(lambda: NET.bind(*saved))
+    keep_bound(test, NET)
     NET.bind(K.kget, K.ksend, {"kube-system"}, "lab", "192.0.2.242")
     return kube
 
