@@ -21,6 +21,8 @@ import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_vms as VMS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 from fakes.job_store import put, store_writes
 from fakes.kube import Kube
 
@@ -322,6 +324,7 @@ class K3sClusterTests(Store):
                 raise ValueError("no room")
             made.append(vm["name"])
             return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": "made-uid", "resourceVersion": "1"}}
+        keep_bound(self, K3SC)
         K3SC.bind(lambda path: {}, create, lambda ip: "", lambda ns, node: removed.append(node["name"]))
         try:
             with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation receipt"):

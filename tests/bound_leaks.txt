@@ -69,9 +69,7 @@ homestead_imports.ksend	test_vm_preparation	fake
 homestead_imports.ksend	test_vm_write_integration	fake
 homestead_joblogs.kget	test_job_logs	fake
 homestead_joblogs.ktext	test_job_logs	fake
-homestead_k3scluster.check	test_job_cancel	other
 homestead_k3scluster.check	test_vm_lan	fake
-homestead_k3scluster.create	test_job_cancel	other
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
 homestead_leader.kget	test_replicas	fake
