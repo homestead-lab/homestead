@@ -76,16 +76,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_reclass.capacity	test_reclass_review	fake
-homestead_reclass.capacity	test_storage_initial	fake
-homestead_reclass.kget	test_reclass_review	fake
-homestead_reclass.kget	test_storage_initial	fake
-homestead_reclass.ksend	test_reclass_review	fake
-homestead_reclass.ksend	test_storage_initial	fake
-homestead_reclass.ktext	test_reclass_review	fake
-homestead_reclass.ktext	test_storage_initial	fake
-homestead_reclass.storage_classes	test_reclass_review	fake
-homestead_reclass.storage_classes	test_storage_initial	fake
 homestead_root_guard.DATA_DIR	test_root_guard	fake
 homestead_root_guard.kget	test_root_guard	fake
 homestead_root_guard.ksend	test_root_guard	fake

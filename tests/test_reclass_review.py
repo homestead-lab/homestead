@@ -9,10 +9,12 @@ import homestead_reclass as rc
 import homestead_operations as ops
 import homestead_capacity_review as review
 from fakes.job_store import put, store_writes
+from rebind import keep_bound
 
 
 class ReviewTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, rc)
         self.cluster=Cluster();self.ops=OPS()
         for mapping in (self.cluster.pvcs,self.cluster.pvs,self.cluster.deps):
             for name,obj in mapping.items():obj['metadata'].update(uid=name+'-uid',resourceVersion='1')
