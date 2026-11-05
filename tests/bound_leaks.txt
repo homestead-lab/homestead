@@ -81,9 +81,6 @@ homestead_names.kget	test_smart	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_cluster_address	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_onboard.OPS	test_node_removal_k3s	other
-homestead_onboard.kget	test_node_removal_k3s	fake
-homestead_onboard.ksend	test_node_removal_k3s	fake
 homestead_operations.DATA_DIR	test_operations	fake
 homestead_operations.DATA_DIR	test_operations_memo	fake
 homestead_operations.DATA_DIR	test_set_restart	fake
