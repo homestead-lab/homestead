@@ -12,6 +12,8 @@ sys.path.insert(0, str(ROOT / "server"))
 import homestead_history as HISTORY
 import homestead_mqtt as MQTT
 import homestead_shared as SHARED
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 SNAP = {"cluster": {"nodes_ready": 2, "nodes_total": 3, "nodes_notready": 1, "vol_total": 4, "vol_degraded": 0,
                     "vol_faulted": 0, "pods_system": 50, "pods_workload": 6, "pods_sys_bad": 0, "pods_wl_bad": 1,
@@ -97,6 +99,7 @@ def overview(cpu, ready=3, node2_ready=True):
 
 class HistoryTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, HISTORY, SHARED)
         self.dir = tempfile.TemporaryDirectory()
         HISTORY.bind(self.dir.name)
         SHARED.bind(self.dir.name)

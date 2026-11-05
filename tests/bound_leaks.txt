@@ -37,7 +37,6 @@ homestead_config_backup.PARTS	test_config_backup	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
-homestead_history.DATA_DIR	test_mqtt_history	fake
 homestead_hostrun.exec_in	test_promote	fake
 homestead_hostrun.kget	test_promote	fake
 homestead_hostrun.ksend	test_promote	fake
@@ -167,7 +166,6 @@ homestead_setup.DATA_DIR	test_update_file	fake
 homestead_share_servers.default_class	test_shares_writes	other
 homestead_share_servers.shared_classes	test_shares_writes	other
 homestead_share_servers.storage_options	test_shares_writes	other
-homestead_shared.DIR	test_mqtt_history	fake
 homestead_shared.DIR	test_replicas	fake
 homestead_signins.DATA_DIR	test_shared_logs	fake
 homestead_signins.DATA_DIR	test_signins	fake
