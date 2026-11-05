@@ -6,6 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_vips as VIPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NOW = 1_800_000_000
 STAMP = "2027-01-15T08:00:00.000000Z"  # NOW, as a Kubernetes MicroTime
@@ -124,6 +126,9 @@ class CrashedApp(unittest.TestCase):
 
 
 class Keeping(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, VIPS)
+
     def test_records_what_the_answering_node_serves(self):
         fixes = VIPS.repairs(k3s_test(), [lease(SHARED, "k3s")], K3S, now=NOW)
         self.assertEqual(sorted(f["name"] for f in fixes), ["homestead-objectstore", "homestead-vip", "plex"])
