@@ -7,8 +7,15 @@ from homestead_http import BoundedHTTPServer, LimitedHandler
 SYS = "/host/sys"
 DEV = "/host/dev"
 PROC = "/host/proc"
-_DISK_PREV = {}
+# Disk rates are counted between one caller's requests (#974): each Homestead
+# copy keeps its own window, so a second copy does not shorten the first one's.
+# A caller is its address; one gone quiet for CALLER_SECONDS is forgotten, and
+# at most CALLERS are kept.
+_DISK_PREV = {}          # caller -> (_clock() of its last request, {disk: (t, read, written)})
 _DISK_LOCK = threading.Lock()
+CALLERS = 16
+CALLER_SECONDS = 600
+_clock = time.monotonic
 
 # USB devices worth naming, so "Coral" shows up as Coral rather than a hex pair
 KNOWN_USB = {
@@ -152,15 +159,15 @@ def devices():
         pass
     return out
 
-def disk_activity():
-    """Return physical whole-disk throughput calculated between requests.
+def disk_activity(caller=""):
+    """Return physical whole-disk throughput calculated between this caller's requests.
 
     Linux diskstats sectors are always 512 bytes, independently of a
     device's logical block size. Partitions and virtual devices are left
     out so the node page shows each physical host disk exactly once.
     """
     raw = _read(os.path.join(PROC, "diskstats")) or ""
-    now = time.monotonic()
+    now = _clock()
     current = {}
     disks = []
     for line in raw.splitlines():
@@ -207,9 +214,12 @@ def disk_activity():
         })
 
     with _DISK_LOCK:
-        previous = dict(_DISK_PREV)
-        _DISK_PREV.clear()
-        _DISK_PREV.update(current)
+        _, previous = _DISK_PREV.pop(caller, (None, {}))
+        for old in [key for key, (seen, _) in _DISK_PREV.items() if now - seen > CALLER_SECONDS]:
+            del _DISK_PREV[old]
+        while len(_DISK_PREV) >= CALLERS:
+            del _DISK_PREV[min(_DISK_PREV, key=lambda key: _DISK_PREV[key][0])]
+        _DISK_PREV[caller] = (now, current)
 
     for disk in disks:
         before = previous.get(disk["name"])
@@ -576,7 +586,7 @@ def cpu_model():
     return ""
 
 
-def payload():
+def payload(caller=""):
     t, hw = thermal(), hwmon()
     allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
     # Which sensor the hottest reading is: a number alone says nothing of where.
@@ -597,7 +607,7 @@ def payload():
             "thermal": t, "hwmon": hw,
             "sensors": len(t) + len(hw),
             "devices": devices(),
-            "disks": disk_activity(),
+            "disks": disk_activity(caller),
             "mounts": mounts(),
             "uptime_s": uptime(),
             # Hardware virtualisation, which KubeVirt runs VMs with; without
@@ -613,7 +623,7 @@ class H(LimitedHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a): pass
     def do_GET(self):
-        b = json.dumps(payload()).encode()
+        b = json.dumps(payload(self.client_address[0])).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(b)))
