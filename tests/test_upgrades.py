@@ -13,7 +13,9 @@ import homestead_cluster_server as CLUSTER_ROUTES
 import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_upgrades as UPGRADES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fakes.kube import Kube
+from rebind import keep_bound
 
 RELEASES = [
     {"tag_name": "v1.5.1", "prerelease": False, "published_at": "2026-08-01T00:00:00Z", "html_url": "u151"},
@@ -46,6 +48,7 @@ class UpgradeTests(unittest.TestCase):
         def get(path):
             return {"items": self.upgrades if path.endswith("/upgrades") else self.versions}
 
+        keep_bound(self, UPGRADES)
         UPGRADES._releases.update(at=0.0, value=[], error="")
         UPGRADES.bind(get, fetch)
 
@@ -202,6 +205,7 @@ class UnreadUpgradesTests(unittest.TestCase):
             return {"items": [UPGRADE] if path.endswith("/upgrades") else
                     [{"metadata": {"name": "v1.5.1"}, "spec": {"releaseDate": "20260801"}}]}
 
+        keep_bound(self, UPGRADES)
         UPGRADES._releases.update(at=0.0, value=[], error="")
         UPGRADES.bind(get, lambda url: RELEASES)
 

@@ -43,8 +43,6 @@ homestead_lifecycle.hardware_features	test_viewer_secret_values	fake
 homestead_lifecycle.kget	test_viewer_secret_values	fake
 homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_upgrades.fetch	test_upgrades	fake
-homestead_upgrades.kget	test_upgrades	fake
 homestead_usage._beat	test_usage	other
 homestead_usage._is_leader	test_usage	other
 homestead_usage._owner	test_usage	other
