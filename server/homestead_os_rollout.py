@@ -67,8 +67,10 @@ ERROR_GAP = 5 * 60
 COPIES_WAIT = 15 * 60
 # An API server busy with a host rejoining answers 429 or 5xx for a while.
 TRANSIENT_WAIT = 10 * 60
-# A hold that failed is tried again after this long: each try can take up to 45 s
-# (hostrun's timeout) with the rollout's lock held, and Busy clears by itself.
+# A hold that failed is tried again this long after that try ended. A try can take
+# well over a minute (hostrun: up to 60 s for its helper, 45 s for the script, up to
+# 90 s more on a refused exec), as can reading a host not read yet, so tries run
+# outside the rollout's lock and at most one host fails per step (_hold_round).
 HOLD_RETRY = 60
 # Failing this long, a hold is news: the dialog says so and an alert goes out.
 HOLD_NOTICE = 3 * 60
@@ -78,6 +80,7 @@ HOLD_NOTICE = 3 * 60
 WINDOW_RETRY = 5 * 60
 # A refused restart's note names what refused it, every drain blocker included.
 NOTE_LIMIT = 2000
+clock = time.monotonic
 _lock = SHARED.SharedLock("os-rollout")
 
 
@@ -308,38 +311,68 @@ def _holds(state, want_hold, names):
     return done
 
 
-def _keep_held(rollout, now):
-    """Every step of a run: automatic updates held on every Ready host, so one
-    that comes back at any point is caught, and a hold that failed or a host not
-    read yet is tried again. A host already held costs no command. A run goes on
-    without a hold, as it did: a hold keeps a host from restarting itself, which
-    is a risk to name, not a reason to stop the host in hand."""
+def _hold_round(now):
+    """Before every step of a run: automatic updates held on every Ready host, so
+    one that comes back at any point is caught, and a hold that failed or a host
+    not read yet is tried again. A host already held costs no command. A run goes
+    on without a hold: a hold keeps a host from restarting itself, which is a risk
+    to name, not a reason to stop the host in hand.
+
+    The tries are outside the lock, so Stop, a start and Save settings don't wait
+    on a host that doesn't answer. That is safe because tick is the one place that
+    moves a run, one step after another on the leader, and what a try found is
+    written back to a fresh read of the state, for the same run only. A hold that
+    lands after its run ended (a leader that moved meanwhile) is let go by the next
+    tick, as with any hold a run leaves. The first host to fail ends the round."""
+    with _lock:
+        rollout = _load().get("rollout") or {}
+    if rollout.get("status") != "running":
+        return
     try:
         ready = sorted(name for name, item in _nodes().items() if _ready(item))
     except Exception:
         return    # the node list is read again next step
-    rollout["held_hosts"] = _held_hosts(rollout) + [name for name in ready if name not in _held_hosts(rollout)]
+    base = now or time.time()
     failed = {name: row for name, row in (rollout.get("hold_failed") or {}).items() if name in ready}
-    for name in ready:
-        if name in failed and now < failed[name].get("retry_at", 0):
-            continue
+    # Those not failing first, so that a host that keeps failing doesn't keep them waiting.
+    todo = [name for name in ready if name not in failed] + [name for name in ready if name in failed and base >= failed[name].get("retry_at", 0)]
+    started, held, failure = clock(), [], None
+    for name in todo:
         try:
             auto = (host_os.stored(name) or host_os.read(name) or {}).get("auto") or {}
             if auto.get("tool") == "unattended-upgrades" and not auto.get("held"):
                 host_os.set_hold(name, True)
-            failed.pop(name, None)
+            held.append(name)
         except Exception as error:
-            row = failed.setdefault(name, {"since": now})
-            row.update(error=" ".join(str(error).split())[:200], retry_at=now + HOLD_RETRY)
-            print(f"OS updates: {name}: could not hold unattended-upgrades: {row['error']}", flush=True)
-    for name, row in failed.items():
-        if now - row["since"] >= HOLD_NOTICE and not row.get("noted"):
-            row["noted"] = True
-            _alert({"key": f"os-update-hold:{rollout.get('id')}:{name}", "category": "degraded", "severity": "degraded", "event": True,
-                    "title": f"Automatic updates could not be held on {name} during an OS update",
-                    "body": f"{row['error']}. Its automatic updates could restart it while another host is drained. Homestead keeps trying.",
-                    "href": "/nodes"})
-    rollout["hold_failed"] = failed
+            failure = (name, " ".join(str(error).split())[:200])
+            print(f"OS updates: {name}: could not hold unattended-upgrades: {failure[1]}", flush=True)
+            break
+    spent = clock() - started
+    with _lock:
+        state = _load()
+        current = state.get("rollout") or {}
+        if current.get("id") != rollout.get("id") or current.get("status") != "running":
+            return
+        before = json.dumps([current.get("held_hosts"), current.get("hold_failed") or {}, current.get("error_last")], sort_keys=True)
+        current["held_hosts"] = _held_hosts(current) + [name for name in ready if name not in _held_hosts(current)]
+        failed = {name: row for name, row in (current.get("hold_failed") or {}).items() if name in ready and name not in held}
+        if failure:
+            row = failed.setdefault(failure[0], {"since": base})
+            row.update(error=failure[1], retry_at=base + int(spent) + HOLD_RETRY)
+        if isinstance(current.get("error_last"), (int, float)):
+            # Time here is not time the step's errors stopped: an error after a slow
+            # try is the same streak, not "Homestead was down" (ERROR_GAP).
+            current["error_last"] += spent
+        for name, row in failed.items():
+            if base + spent - row["since"] >= HOLD_NOTICE and not row.get("noted"):
+                row["noted"] = True
+                _alert({"key": f"os-update-hold:{current.get('id')}:{name}", "category": "degraded", "severity": "degraded", "event": True,
+                        "title": f"Automatic updates could not be held on {name} during an OS update",
+                        "body": f"{row['error']}. Its automatic updates could restart it while another host is drained. Homestead keeps trying.",
+                        "href": "/nodes"})
+        current["hold_failed"] = failed
+        if json.dumps([current.get("held_hosts"), failed, current.get("error_last")], sort_keys=True) != before:
+            _save(state)
 
 
 def _alert(fact):
@@ -401,7 +434,6 @@ def step(state, now=None):
     config = settings(state)
     if rollout.get("restart"):
         config["reboot"] = rollout["restart"]
-    _keep_held(rollout, now)
     phase, node = rollout["phase"], rollout.get("node") or {}
     if phase == "hold":
         rollout["phase"], rollout["message"] = "next", "Starting with " + rollout["nodes"][0]
@@ -660,6 +692,7 @@ def tick(now=None):
         _open_window(state, now or time.time())
     moved = False
     for _ in range(4):
+        _hold_round(now)
         with _lock:
             state = _load()
             try:

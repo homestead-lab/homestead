@@ -12,6 +12,7 @@ real job store over the shared fake API server (tests/fakes/kube.py). The host
 itself is the one stand-in, as nothing here can run a package manager."""
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -1022,6 +1023,145 @@ class WindowSkippedTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-b"], now=SUNDAY - 60)
         ROLLOUT.tick(now=SUNDAY)
         self.assertEqual("", self.line())
+
+
+class HoldTimingTests(Runs):
+    """A real set_hold can take well over a minute (hostrun: up to 60 s for its
+    helper, 45 s for the script, more on a refused exec). The stand-in moves the
+    clock on as a real try would."""
+    def setUp(self):
+        super().setUp()
+        self.t = 0
+        patcher = mock.patch.object(ROLLOUT, "clock", lambda: self.t)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.tries = []
+        self.hosts.codes["node-b"] = None    # still installing: the run stays on one step a tick
+
+    def slow_failure(self, seconds=150, *names):
+        real = self.hosts.set_hold
+
+        def set_hold(name, hold):
+            if hold and name in names:
+                self.tries.append(name)
+                self.t += seconds
+                raise TimeoutError("timed out")
+            return real(name, hold)
+        self.hosts.set_hold = set_hold
+
+    def test_the_wait_counts_from_when_the_try_ended(self):
+        self.slow_failure(150, "node-c")
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        ROLLOUT.tick(now=1000)
+        self.assertEqual(["node-c"], self.tries)
+        self.assertEqual(1000 + 150 + ROLLOUT.HOLD_RETRY, ROLLOUT._load()["rollout"]["hold_failed"]["node-c"]["retry_at"])
+        for now in (1150, 1170, 1209):
+            ROLLOUT.tick(now=now)
+        self.assertEqual(1, len(self.tries), "not tried again as soon as the last try ended")
+        ROLLOUT.tick(now=1210)
+        self.assertEqual(2, len(self.tries))
+
+    def test_at_most_one_host_fails_per_step(self):
+        self.slow_failure(150, "node-a", "node-c")
+        log = self.tries
+        real_step = ROLLOUT.step
+        with mock.patch.object(ROLLOUT, "step", side_effect=lambda *a, **k: log.append("step") or real_step(*a, **k)):
+            ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+            for now in range(1000, 2000, 20):
+                ROLLOUT.tick(now=now)
+        for one, two in zip(log, log[1:]):
+            self.assertFalse(one != "step" and two != "step", log[:20])
+        self.assertIn("node-a", log)
+        self.assertIn("node-c", log, "one failing host doesn't keep the next from being tried")
+
+    def test_a_host_read_for_an_unread_host_is_spaced_the_same(self):
+        self.hosts.facts.pop("node-c")
+        real = self.hosts.read
+
+        def read(name, refresh=False):
+            if name == "node-c":
+                self.tries.append(name)
+                self.t += 150
+            return real(name, refresh)
+        self.hosts.read = read
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        ROLLOUT.tick(now=1000)
+        ROLLOUT.tick(now=1150)
+        self.assertEqual(1, len(self.tries))
+        ROLLOUT.tick(now=1210)
+        self.assertEqual(2, len(self.tries))
+
+    def test_a_try_does_not_hold_the_lock_stop_needs(self):
+        real, stopped = self.hosts.set_hold, []
+
+        def set_hold(name, hold):
+            if hold and not stopped:
+                # Another thread, as a request on another replica: the lock is
+                # re-entrant for this one.
+                other = threading.Thread(target=lambda: stopped.append(ROLLOUT.stop()), daemon=True)
+                other.start()
+                other.join(5)
+                stopped.append(None) if not stopped else None
+            return real(name, hold)
+        self.hosts.set_hold = set_hold
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        ROLLOUT.tick(now=1000)
+        self.assertTrue(stopped[0], "Stop got through while a hold was being tried")
+        self.assertTrue(ROLLOUT._load()["rollout"]["stop"], "and what the try wrote afterwards kept it")
+
+    def test_a_try_does_not_hold_the_lock_settings_need_and_keeps_them(self):
+        real, saved = self.hosts.set_hold, []
+
+        def set_hold(name, hold):
+            if hold and not saved:
+                other = threading.Thread(target=lambda: saved.append(ROLLOUT.save_settings({"single_copy": True})), daemon=True)
+                other.start()
+                other.join(5)
+                saved.append(None) if not saved else None
+            raise TimeoutError("timed out")
+        self.hosts.set_hold = set_hold
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        ROLLOUT.tick(now=1000)
+        self.assertTrue(saved[0])
+        self.assertTrue(ROLLOUT.settings()["single_copy"], "the failure's save didn't put the old settings back")
+
+    def test_a_try_that_outlives_its_run_writes_nothing_to_the_next_one(self):
+        real = self.hosts.set_hold
+
+        def set_hold(name, hold):
+            if hold and name == "node-c":
+                self.hosts.set_hold = real
+                with ROLLOUT._lock:
+                    state = ROLLOUT._load()
+                    state["rollout"]["id"] = "os-another"
+                    ROLLOUT._save(state)
+                raise TimeoutError("timed out")
+            return real(name, hold)
+        self.hosts.set_hold = set_hold
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        ROLLOUT.tick(now=1000)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("os-another", rollout["id"])
+        self.assertEqual({}, rollout.get("hold_failed") or {})
+
+    def test_slow_tries_do_not_reset_the_failure_streak(self):
+        # A step that keeps raising ends the run after ERROR_LIMIT. Time spent in a
+        # hold's try between two errors must not read as "Homestead was down".
+        self.assertGreater(400, ROLLOUT.ERROR_GAP)
+        self.slow_failure(400, "node-c")
+        real = self.hosts.read
+        self.hosts.read = lambda name, refresh=False: (_ for _ in ()).throw(ConnectionError("no answer")) if name == "node-b" else real(name, refresh)
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        # The leader's tick reads the real time at each step: it passes no now.
+        with mock.patch.object(ROLLOUT, "time", types.SimpleNamespace(time=lambda: 1000 + self.t)):
+            for _ in range(200):
+                ROLLOUT.tick()
+                self.t += 20
+                if ROLLOUT._load()["rollout"]["status"] != "running":
+                    break
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("failed", rollout["status"])
+        self.assertIn("no answer", rollout["results"][0]["note"])
 
 
 if __name__ == "__main__":
