@@ -29,6 +29,7 @@ import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_pullwatch as PULLWATCH
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+import homestead_vm_mutation_job as MUTATION
 
 NS = "lab"              # where Homestead starts its bare helper pods
 HOUR, DAY = 3600, 86400
@@ -52,12 +53,17 @@ IMPORT_NAME = re.compile(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}")
 
 
 def tick(now=None):
-    """The leader's minute: finished pull watchers, then the other helpers."""
+    """The leader's minute: finished pull watchers, a refused VM create's
+    clean-up that was cut off, then the other helpers."""
     now = time.time() if now is None else now
     try:
         PULLWATCH.sweep(now)
     except Exception as error:
         print(f"finished pull watchers not removed: {str(error)[:160]}", flush=True)
+    try:
+        MUTATION.resume_cleanups(OPS, KUBE.ksend)
+    except Exception as error:
+        print(f"refused VM creates not cleaned up: {str(error)[:160]}", flush=True)
     sweep(now=now)
 
 

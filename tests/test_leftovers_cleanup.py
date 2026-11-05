@@ -1,7 +1,8 @@
 """What Homestead leaves behind is cleaned up, and only what it made: a
 Longhorn "Run now" Job ends with a TTL, a finished import probe pod is swept,
 a disk read that is cut off unmounts, "Back up now" removes its own local
-snapshot."""
+snapshot, and a VM create the cluster refuses removes the claims, Secrets
+and ROM ConfigMaps it made for it."""
 import shutil
 import subprocess
 import sys
@@ -15,12 +16,17 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_disk_setup as DISK_SETUP
 import homestead_helper_sweep as SWEEP
+import homestead_imports as IMPORTS
 import homestead_kube as KUBE
 import homestead_longhorn as LH
 import homestead_longhorn_backups as BACKUPS
 import homestead_longhorn_jobs as JOBS
 import homestead_longhorn_target as TARGET
 import homestead_operations as OPS
+import homestead_vm_create as VM_CREATE
+import homestead_vm_mutation_job as MUTATION
+import homestead_vm_write as WRITE
+import homestead_unraid_vms as UVMS
 from fakes.kube import Kube
 
 NOW = 1_800_000_000
@@ -472,6 +478,314 @@ class BackUpNowTests(BoundToFake):
         self.assertEqual([result["snapshot"]], self.snapshots())
         self.assertEqual(1, sum(1 for m, p, *_ in kube.writes if m == "DELETE" and "/snapshots/" in p))
         self.assertEqual("succeeded", self.job(item["id"])["status"])
+
+
+# ---------------------------------------------------------- failed VM create
+K3S_BARE = {"harvester": False, "cdi": False}
+VMS = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"
+CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/web-disk"
+ROM = "/api/v1/namespaces/lab/configmaps/web-vbios"
+
+
+class VmCreateBase(unittest.TestCase):
+    def setUp(self):
+        saved = (IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS._cache)
+        self.addCleanup(lambda: setattr(IMPORTS, "kget", saved[0]) or setattr(IMPORTS, "ksend", saved[1])
+                        or setattr(IMPORTS, "NS", saved[2]) or setattr(IMPORTS, "_cache", saved[3]))
+        IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS._cache = KUBE.kget, KUBE.ksend, "lab", {}
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube())
+
+    def prepared(self):
+        prepared = VM_CREATE.prepare_vm({"name": "web", "password": "a-long-password"}, K3S_BARE, "")
+        # A GPU's ROM, as PASSTHROUGH.edit_vm adds it.
+        prepared["effects"].append({"kind": "configmap", "path": ROM, "body": {
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "web-vbios", "namespace": "lab"},
+            "binaryData": {"rom": "AA=="}}})
+        return prepared
+
+    def made(self):
+        prepared = self.prepared()
+        paths = [CLAIM, ROM] + [f"/api/v1/namespaces/lab/secrets/{s['metadata']['name']}" for s in prepared["secrets"]]
+        self.assertTrue(prepared["secrets"] and prepared["claims"], "the case needs a claim and a Secret")
+        return prepared, paths
+
+    def left(self, paths):
+        return [path for path in paths if self.kube.object(path) is not None]
+
+    def clear(self):
+        secrets = [f"/api/v1/namespaces/lab/secrets/{row['metadata']['name']}"
+                   for row in self.kube("GET", "/api/v1/namespaces/lab/secrets")["items"]]
+        for path in [f"{VMS}/web", CLAIM, ROM] + secrets:
+            self.kube.discard(path)
+
+
+class FailedVmCreateTests(VmCreateBase):
+    """A VM made without a job (a k3s cluster's VMs, a finished Unraid import)."""
+
+    def test_a_vm_the_cluster_refuses_removes_what_its_create_made_and_the_name_can_be_used_again(self):
+        for code in (400, 403, 422):
+            with self.subTest(code=code):
+                self.clear()
+                prepared, paths = self.made()
+                self.kube.fail(VMS, code, method="POST")
+                with self.assertRaises(urllib.error.HTTPError) as raised:
+                    VM_CREATE.commit_vm(prepared)
+                self.assertEqual(code, raised.exception.code, "the refusal is still what the caller sees")
+                self.assertEqual([], self.left(paths))
+                VM_CREATE.commit_vm(self.prepared())
+                self.assertIsNotNone(self.kube.object(f"{VMS}/web"))
+
+    def test_a_vm_create_with_no_definite_answer_keeps_what_it_made(self):
+        # A 5xx or a time-out may have made the VM, and the VM then uses the
+        # claims and Secrets; a 409 is a VM of that name someone else made.
+        for failure, applied in ((500, False), (503, True), (TimeoutError("timed out"), True),
+                                 (ConnectionResetError("reset"), False), (409, False), (408, False)):
+            with self.subTest(failure=failure):
+                self.clear()
+                self.kube.writes.clear()
+                prepared, paths = self.made()
+                self.kube.fail(VMS, failure, method="POST", applied=applied)
+                with self.assertRaises(Exception):
+                    VM_CREATE.commit_vm(prepared)
+                self.assertEqual(paths, self.left(paths))
+                self.assertFalse(any(m == "DELETE" for m, *_ in self.kube.writes))
+
+    def test_a_claim_made_again_since_is_not_removed(self):
+        prepared, paths = self.made()
+
+        def refuse(method, path, body):
+            # Between the claim's POST and the refusal it was removed and made
+            # again by something else: that one is not this create's.
+            again = self.kube.object(CLAIM)
+            self.kube.discard(CLAIM)
+            again["metadata"].pop("uid")
+            self.kube.add(again)
+            raise Kube._error(422, "Invalid", "spec.template: invalid", path)
+        self.kube.react("POST", VMS, refuse)
+        with self.assertRaises(urllib.error.HTTPError):
+            VM_CREATE.commit_vm(prepared)
+        self.assertEqual([CLAIM], self.left(paths))
+
+
+class ReviewedVmCreateTests(VmCreateBase):
+    """The Create VM page's path: each write is journaled in its job, which
+    used to keep everything and hold the name until an admin released it."""
+
+    def dispatch(self, prepared, kind="vm-create"):
+        # Each review has its own approval: a retry is a new review.
+        self.reviews = getattr(self, "reviews", 0) + 1
+        body = {"capacity_token": f"{int(time.time()) + 600}.leftovers-test-{self.reviews}"}
+        return MUTATION.dispatch(kind, body, "lab", "web", None, OPS, KUBE.ksend,
+                                 lambda send: VM_CREATE.commit_vm(prepared, send=send))
+
+    def job(self):
+        return next(i for i in reversed(OPS.stored()) if i.get("kind") == "vm-create" and i.get("status") == "failed")
+
+    def test_a_refused_vm_removes_what_its_create_made_and_frees_the_name(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 422, method="POST")
+        with self.assertRaisesRegex(ValueError, "refused"):
+            self.dispatch(prepared)
+        self.assertEqual([], self.left(paths))
+        job = self.job()
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["ref"]["retain_resources"], job["message"])
+        self.assertIn("removed", job["message"])
+        self.assertEqual("succeeded", self.dispatch(self.prepared())["operation"]["status"],
+                         "a retry with the same name works")
+
+    def test_a_vm_create_answered_with_a_5xx_keeps_everything(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 500, method="POST")
+        with self.assertRaisesRegex(ValueError, "Inspect job"):
+            self.dispatch(prepared)
+        self.assertEqual(paths, self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"])
+
+    def test_a_vm_create_that_timed_out_keeps_everything(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, TimeoutError("timed out"), method="POST", applied=True)
+        with self.assertRaisesRegex(ValueError, "Inspect job"):
+            self.dispatch(prepared)
+        self.assertEqual(paths, self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"])
+
+    def test_a_claim_made_again_since_is_not_removed(self):
+        prepared, paths = self.made()
+
+        def refuse(method, path, body):
+            again = self.kube.object(CLAIM)
+            self.kube.discard(CLAIM)
+            again["metadata"].pop("uid")
+            self.kube.add(again)
+            raise Kube._error(422, "Invalid", "spec.template: invalid", path)
+        self.kube.react("POST", VMS, refuse)
+        with self.assertRaises(ValueError):
+            self.dispatch(prepared)
+        self.assertEqual([CLAIM], self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"], "a claim is still there to inspect")
+
+    def test_a_vm_of_that_name_made_meanwhile_keeps_everything(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 409, method="POST")
+        with self.assertRaisesRegex(ValueError, "Inspect job"):
+            self.dispatch(prepared)
+        self.assertEqual(paths, self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"])
+
+    def test_a_vm_create_answered_408_keeps_everything(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 408, method="POST")
+        with self.assertRaisesRegex(ValueError, "Inspect job"):
+            self.dispatch(prepared)
+        self.assertEqual(paths, self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"])
+
+    def test_each_delete_is_in_the_job_before_it_is_sent(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 422, method="POST")
+        seen = []
+
+        def journaled(method, path, body):
+            steps = self.job()["ref"]["cleanup"]["steps"]
+            seen.append(next(step["phase"] for step in steps if step["resource"]["name"] == "web-disk"))
+            return None
+        self.kube.react("DELETE", CLAIM, journaled)
+        with self.assertRaises(ValueError):
+            self.dispatch(prepared)
+        self.assertEqual(["intent"], seen)
+
+    def test_a_cleanup_cut_off_midway_is_finished_by_the_next_round(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 422, method="POST")
+        # Homestead stops after the ROM ConfigMap went and while the claim's
+        # delete is on its way.
+        self.kube.fail(CLAIM, SystemExit("stopped"), method="DELETE")
+        with self.assertRaises(SystemExit):
+            self.dispatch(prepared)
+        self.assertEqual([CLAIM] + paths[2:], self.left(paths))
+        self.assertTrue(self.job()["ref"]["retain_resources"], "half done holds the name")
+        MUTATION.resume_cleanups(OPS, KUBE.ksend)
+        self.assertEqual([], self.left(paths))
+        job = self.job()
+        self.assertFalse(job["ref"]["retain_resources"], job["message"])
+        self.assertEqual("succeeded", self.dispatch(self.prepared())["operation"]["status"])
+
+    def test_the_leaders_round_resumes_cut_off_cleanups(self):
+        with mock.patch.object(SWEEP.PULLWATCH, "sweep"), mock.patch.object(SWEEP, "sweep"), \
+                mock.patch.object(SWEEP.MUTATION, "resume_cleanups") as resume:
+            SWEEP.tick(now=NOW)
+        resume.assert_called_once_with(SWEEP.OPS, KUBE.ksend)
+
+    def test_a_delete_answered_with_a_5xx_keeps_that_object_and_the_hold(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 422, method="POST")
+        self.kube.fail(CLAIM, 500, method="DELETE")
+        with self.assertRaises(ValueError):
+            self.dispatch(prepared)
+        self.assertEqual([CLAIM], self.left(paths))
+        job = self.job()
+        self.assertTrue(job["ref"]["retain_resources"])
+        self.assertIn("web-disk", job["message"])
+
+    def test_what_is_not_this_vms_alone_stays_and_keeps_the_hold(self):
+        # A Harvester image keeps downloading for a later VM.
+        secret = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "web-cloudinit", "namespace": "lab"}}
+        image = {"apiVersion": "harvesterhci.io/v1beta1", "kind": "VirtualMachineImage",
+                 "metadata": {"name": "image-web", "namespace": "lab"}}
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "web", "namespace": "lab"}}
+
+        def commit(send):
+            send("POST", "/api/v1/namespaces/lab/secrets", secret)
+            send("POST", "/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages", image)
+            send("POST", VMS, vm)
+        self.kube.fail(VMS, 422, method="POST")
+        with self.assertRaises(ValueError):
+            MUTATION.dispatch("vm-create", {"capacity_token": f"{int(time.time()) + 600}.kept-kind"}, "lab", "web",
+                              None, OPS, KUBE.ksend, commit)
+        self.assertIsNone(self.kube.object("/api/v1/namespaces/lab/secrets/web-cloudinit"))
+        self.assertIsNotNone(self.kube.object("/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages/image-web"))
+        job = self.job()
+        self.assertTrue(job["ref"]["retain_resources"])
+        self.assertIn("image-web", job["message"])
+
+    def test_a_cleanup_an_admin_resolved_meanwhile_is_left_as_resolved(self):
+        prepared, paths = self.made()
+        self.kube.fail(VMS, 422, method="POST")
+        self.kube.fail(CLAIM, SystemExit("stopped"), method="DELETE")
+        with self.assertRaises(SystemExit):
+            self.dispatch(prepared)
+        ident = self.job()["id"]
+        # As homestead_vm_mutation_recovery.resolve leaves it.
+        with OPS.transaction() as t:
+            items = t.items
+            row = next(i for i in items if i["id"] == ident)
+            row["ref"].update(phase="resolved-unknown", retain_resources=False)
+            OPS._finish(row, "failed", row.get("progress", 0), "admin inspected it")
+            t.save(items)
+        before = next(i for i in OPS.stored() if i["id"] == ident)
+        self.kube.writes.clear()
+        MUTATION.resume_cleanups(OPS, KUBE.ksend)
+        after = next(i for i in OPS.stored() if i["id"] == ident)
+        self.assertEqual((before["ref"], before["message"]), (after["ref"], after["message"]))
+        self.assertFalse(any(m == "DELETE" for m, *_ in self.kube.writes), "nothing more is removed")
+
+    def test_a_job_store_row_that_is_not_an_object_is_skipped(self):
+        with mock.patch.object(OPS, "stored", return_value=["not a job", None]):
+            MUTATION.resume_cleanups(OPS, KUBE.ksend)
+
+
+class WriteReceiptTests(unittest.TestCase):
+    """What a refused create may clean up is what its journaled receipt calls
+    refused, but a 409: the plain path and the Create VM page agree."""
+
+    def phase(self, failure):
+        events = []
+        writer = WRITE.ResourceWriter(mock.Mock(side_effect=failure), events.append)
+        with self.assertRaises(ValueError):
+            writer("POST", "/api/v1/namespaces/lab/secrets", {"metadata": {"name": "web"}})
+        return events[-1]["phase"]
+
+    def test_a_definite_refusal_is_a_refused_receipt_but_a_409(self):
+        for code in (400, 401, 403, 404, 405, 408, 409, 410, 413, 422, 429, 500, 503):
+            with self.subTest(code=code):
+                refused = self.phase(Kube._error(code, "x", "x", "/x")) == "refused"
+                self.assertEqual(refused and code != 409, KUBE.definite_refusal(code))
+        self.assertFalse(KUBE.definite_refusal(None), "no answer")
+
+
+class UnraidImportVmRefusedTests(unittest.TestCase):
+    """The last step of an Unraid or Proxmox import makes the VM from the
+    copied disks; a refusal there ends the import, keeping the disks."""
+
+    def setUp(self):
+        saved = (UVMS.IMP, UVMS.kget, UVMS.ksend, UVMS.OPS, UVMS.platform)
+        self.addCleanup(lambda: UVMS.bind(*saved))
+
+    def status(self, failure):
+        imp = mock.Mock()
+        imp.commit_vm.side_effect = failure
+        dv = {"status": {"phase": "Succeeded"}}
+        # Its own platform: importing server binds UNRAID_VMS's platform to
+        # PLATFORM.detect(), which raises ValueError in the hermetic container,
+        # and the test must not rely on the module's default one.
+        UVMS.bind(imp, lambda path: dv, mock.Mock(), mock.Mock(), lambda: {"harvester": False, "cdi": True})
+        self.imp = imp
+        ref = {"namespace": "lab", "phase": "convert", "name": "win", "vm": "Win", "source": "nas",
+               "vm_cfg": {"name": "win"}, "disks": [{"dv": "win-disk", "bytes": 1}]}
+        return UVMS.status({"ref": ref}), ref
+
+    def test_a_refused_vm_fails_the_import_and_keeps_its_disks(self):
+        (state, _, message), ref = self.status(Kube._error(422, "Invalid", "spec: invalid", VMS))
+        self.assertEqual(("failed", "failed"), (state, ref["phase"]))
+        self.assertIn("win-disk", message)
+        self.assertIn("refused it (HTTP 422)", message)
+        self.imp.commit_vm.assert_called_once()
+
+    def test_a_vm_with_no_definite_answer_is_asked_again_as_before(self):
+        with self.assertRaises(urllib.error.HTTPError):
+            self.status(Kube._error(503, "Unavailable", "try later", VMS))
 
 
 if __name__ == "__main__":
