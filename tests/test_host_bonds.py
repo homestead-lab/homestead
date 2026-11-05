@@ -1,4 +1,4 @@
-import json, os, subprocess, sys, tempfile, unittest
+import json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_bonds as BONDS
@@ -13,6 +13,20 @@ except ImportError:          # the edit runs on the host, which has it; CI's ima
 def nic(name, carrier=True, master="", mac=None, speed=1000):
     return {"name": name, "mac": mac or f"52:54:00:00:00:{name[-2:]}", "carrier": carrier, "master": master,
             "speed": speed if carrier else None}
+
+
+class Kubelet:
+    """The host's kubelet as its Node shows it: Ready, last heard from at
+    `beat` (seconds, on the host's clock). A test moves `beat` past the
+    restart to say the kubelet came back."""
+
+    def __init__(self, beat=0):
+        self.beat = beat
+
+    def node(self):
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.beat))
+        return {"status": {"conditions": [{"type": "Ready", "status": "True", "lastHeartbeatTime": stamp,
+                                           "lastTransitionTime": stamp}]}}
 
 
 def facts(kind="nic", iface="enp1s0", nics=None, files=None, bond=None, ports=None, **extra):
@@ -222,8 +236,9 @@ class HostLeaseTests(unittest.TestCase):
     or rolls back (#597)."""
 
     def setUp(self):
+        self.kubelet = Kubelet()
         BONDS.bind(None, lambda path: {"items": [{"metadata": {"name": "kube-vip-x"}}]} if "pods" in path else
-                   {"items": [{}, {}]} if path == "/api/v1/nodes" else {"status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+                   {"items": [{}, {}]} if path == "/api/v1/nodes" else self.kubelet.node(),
                    lambda verb, path, *a, **k: None)
 
     def test_the_host_is_held_from_the_change_until_the_job_ends(self):
@@ -241,6 +256,7 @@ class HostLeaseTests(unittest.TestCase):
         BONDS.status(item, now=ref["since"] + 31)
         self.assertEqual({"this-replica/1"}, {holder for _, _, holder in host.changes},
                          "the change, confirm and restart all run inside the hold")
+        self.kubelet.beat = ref["since"] + 20  # k3s is back: its kubelet posts status
         self.assertEqual("succeeded", BONDS.status(item, now=ref["since"] + 80)[0])
         self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
         self.assertNotIn("lease", ref)
@@ -301,8 +317,9 @@ class HostLeaseTests(unittest.TestCase):
 class JobTests(unittest.TestCase):
     def setUp(self):
         self.deleted = []
+        self.kubelet = Kubelet()
         BONDS.bind(None, lambda path: {"items": [{"metadata": {"name": "kube-vip-x"}}]} if "pods" in path else
-                   {"items": [{}, {}]} if path == "/api/v1/nodes" else {"status": {"conditions": [{"type": "Ready", "status": "True"}]}},
+                   {"items": [{}, {}]} if path == "/api/v1/nodes" else self.kubelet.node(),
                    lambda verb, path, *a, **k: self.deleted.append(path))
 
     def start(self, check, req=None):
@@ -322,6 +339,8 @@ class JobTests(unittest.TestCase):
         self.assertIn("rollback is disarmed", message)
         self.assertIn(BONDS.CONFIRM_SCRIPT, host.ran)
         self.assertIn("Restarting k3s", BONDS.status(item, now=ref["since"] + 31)[2])
+        self.assertEqual("running", BONDS.status(item, now=ref["since"] + 45)[0], "not until its kubelet is heard from")
+        self.kubelet.beat = ref["since"] + 20  # k3s is back: its kubelet posts status
         self.assertTrue(any("kube-vip-x" in path for path in self.deleted))
         self.assertEqual("succeeded", BONDS.status(item, now=ref["since"] + 80)[0])
 
