@@ -118,12 +118,7 @@ homestead_smart.kget	test_smart	fake
 homestead_smart.signing_key	test_smart	fake
 homestead_snapshot_delete.kget	test_snapshot_delete	fake
 homestead_snapshot_delete.ksend	test_snapshot_delete	fake
-homestead_updates.CHANNEL	test_real_answers	other
-homestead_updates.DATA_DIR	test_real_answers	fake
-homestead_updates.SYSTEM_NAMESPACES	test_real_answers	other
-homestead_updates.kget	test_real_answers	fake
 homestead_updates.kget	test_storage_pending	fake
-homestead_updates.ksend	test_real_answers	fake
 homestead_upgrades.fetch	test_upgrades	fake
 homestead_upgrades.kget	test_upgrades	fake
 homestead_usage._beat	test_usage	other

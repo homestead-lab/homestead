@@ -40,6 +40,8 @@ import homestead_vmstore as VMSTORE
 import homestead_update_checks as CHECKS
 import homestead_update_registry as REGISTRY
 import homestead_updates as UPDATES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 # What each reader is tested with below. A module that starts reading through
 # homestead_fetch belongs here, with a test that reads a real answer.
@@ -272,6 +274,7 @@ class RegistryTests(Served):
                "status": {"phase": "Running",
                           "containerStatuses": [{"name": "app", "imageID": f"{self.host}/lab/app@{OLD}"}]}}
         with tempfile.TemporaryDirectory() as data:
+            keep_bound(self, UPDATES)
             UPDATES.bind(lambda path: {"imagePullSecrets": []}, lambda *a, **k: {}, "lab", data)
             report = CHECKS._check_deployment(dep, [pod], force=True, persist=False)
         image_report = report["images"][0]
