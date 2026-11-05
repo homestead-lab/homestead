@@ -544,41 +544,42 @@ def rollout_reboot(node, allow_single_copy=False):
         raise ValueError(str(e)) from e
 
 
-def rollout_refusal(node, allow_single_copy=False):
-    """What rollout_reboot would refuse with today, or "" if it would go ahead.
-    Read only. A read that fails raises: it is not an answer either way."""
+def rollout_check(node, allow_single_copy=False):
+    """What rollout_reboot would refuse with today, or "", and whether that may
+    clear by itself (the rollout then waits first). Read only. A read that fails
+    raises: it is not an answer either way."""
     try:
         _unattended_plan(node, allow_single_copy)
+    except DRAIN_BLOCKERS.MayClear as error:
+        return str(error), True
     except ValueError as error:
-        return str(error)
-    return ""
+        return str(error), False
+    return "", False
 
 
 def _unattended_plan(node, allow_single_copy):
-    """The plan a restart with nobody there may send; ValueError says what stops it."""
+    """The plan a restart with nobody there may send; ValueError says what stops
+    it, all of it. MayClear only when nothing in it stays until a person acts."""
     power_plan = POWER.plan(node, "reboot")
     if power_plan.get("planned_outage"):
         raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
-    if not power_plan["ready"]:
-        raise ValueError("; ".join(power_plan["blockers"]))
+    stays, may_clear = list(power_plan["blockers"]) if not power_plan["ready"] else [], []
     if power_plan.get("requires_blocker_ack"):
         # A person ticks each of these; with nobody there the drain would stall on
         # them, so the host waits. Without the time a pod has been stuck: the same
         # pod later is the same answer.
         rows = power_plan["drain_blockers"]
-        may_clear = all(row["kind"] in DRAIN_BLOCKERS.CLEARS_BY_ITSELF for row in rows)
-        raise (DRAIN_BLOCKERS.MayClear if may_clear else ValueError)(
-            "Something would keep this host from draining: " + "; ".join(what for _, what in DRAIN_BLOCKERS.review(rows)))
-    if power_plan["stranded"]:
-        raise ValueError("some workloads have no other host to run on")
+        said = "Something would keep this host from draining: " + "; ".join(what for _, what in DRAIN_BLOCKERS.review(rows))
+        (may_clear if all(row["kind"] in DRAIN_BLOCKERS.CLEARS_BY_ITSELF for row in rows) else stays).append(said)
+    if power_plan.get("stranded"):
+        stays.append("some workloads have no other host to run on")
     hold = power_plan.get("hold") or []
     if any(i["kind"] == "VirtualMachine" for i in hold):
-        raise ValueError("Running VMs are on this host; migrate or stop them and review again")
+        stays.append("Running VMs are on this host; migrate or stop them and review again")
     waits = [f"{i['ns']}/{i['name']}" for i in hold if i["default"] != "move"]
     if waits:
-        raise ValueError("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
-    power_plan["choices"] = HOLD.choose(hold, None)
-    if power_plan["requires_data_ack"] and not allow_single_copy:
+        stays.append("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
+    if power_plan.get("requires_data_ack") and not allow_single_copy:
         # What a person would have to accept, said as it is. A pod's emptyDir
         # is scratch space every drain deletes - on a k3s host metrics-server
         # and Traefik have one - and is no reason to leave a host unrestarted.
@@ -595,8 +596,11 @@ def _unattended_plan(node, allow_single_copy):
         if power_plan.get("storage_unknown"):
             reasons.append("Longhorn's volumes could not be read")
         if reasons:
-            # Unread volumes can answer next time; data kept on the host won't go by itself.
-            raise (ValueError if kept else DRAIN_BLOCKERS.MayClear)("; ".join(reasons) + " (the settings do not accept that)")
+            # Copies can rebuild and a read can answer; data kept on the host won't go by itself.
+            (stays if kept else may_clear).append("; ".join(reasons) + " (the settings do not accept that)")
+    if stays or may_clear:
+        raise (ValueError if stays else DRAIN_BLOCKERS.MayClear)("; ".join(stays + may_clear))
+    power_plan["choices"] = HOLD.choose(hold, None)
     return power_plan
 
 

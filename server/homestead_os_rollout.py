@@ -47,7 +47,7 @@ reboot = None           # (node, allow_data_risk) -> operation id; raises with t
 operation = None        # operation id -> the job-tray item, or None
 set_cordon = None       # (node, bool)
 power_job = None        # (node, since epoch) -> id of a power job for it not failed, or ""
-restart_check = None    # (node, allow_data_risk) -> what the review would refuse with today, or ""
+restart_check = None    # (node, allow_data_risk) -> (what the review would refuse with today or "", may it clear by itself)
 own_node = lambda: ""
 announce = lambda rollout: None   # rollout -> its job-tray entry
 DATA_DIR = "/data"
@@ -672,27 +672,52 @@ def _open_window(state, now):
     skip = state.get("window_skip") or {}
     if now - skip.get("last_try", 0) < WINDOW_RETRY:
         return
+    blip = False
     try:
         why = _in_the_way()
-        if not why:
+    except Exception as error:
+        why, blip = f"the job list could not be read: {str(error)[:200]}", True
+    if not why:
+        try:
             start("schedule", now)
             return
-    except ValueError as error:
-        why = str(error)
-    except Exception as error:
-        why = f"the job list could not be read: {str(error)[:200]}"
+        except ValueError as error:
+            why = str(error)
+        except Exception as error:    # a read that failed, say: the next look may run
+            why, blip = f"Homestead could not start it: {str(error)[:200]}", True
     print(f"OS updates: the window opened but {why}", flush=True)
     new_window = now - skip.get("first", 0) > 20 * 3600
-    first = now if new_window else skip["first"]
+    alerted = skip.get("alerted", False) and not new_window
     with _lock:
         fresh = _load()
-        fresh["window_skip"] = {"why": why[:400], "first": int(first), "last_try": int(now)}
+        fresh["window_skip"] = {"why": why[:400], "first": int(now if new_window else skip["first"]), "last_try": int(now),
+                                "blip": blip, "alerted": alerted or not blip}
         _save(fresh)
-    if new_window:
-        _alert({"key": f"os-update-window:{int(first)}", "category": "degraded", "severity": "degraded", "event": True,
-                "title": "The weekly OS update window is being skipped",
-                "body": f"{why}. It looks again every {WINDOW_RETRY // 60} minutes until its hour ends, then in its next window.",
-                "href": "/nodes"})
+    if not alerted and not blip:
+        _window_alert(fresh["window_skip"])
+
+
+def _window_alert(skip):
+    _alert({"key": f"os-update-window:{skip['first']}", "category": "degraded", "severity": "degraded", "event": True,
+            "title": "The weekly OS update window is being skipped",
+            "body": f"{skip['why']}. It looks again every {WINDOW_RETRY // 60} minutes until its hour ends, then in its next window.",
+            "href": "/nodes"})
+
+
+def _window_lost(state, now):
+    """The window's hour ended on a read that kept failing: that was no blip after all."""
+    skip = state.get("window_skip") or {}
+    if not skip.get("blip") or due(state, now):
+        return
+    with _lock:
+        fresh = _load()
+        current = fresh.get("window_skip") or {}
+        if not current.get("blip"):
+            return
+        current["blip"], alert, current["alerted"] = False, not current.get("alerted"), True
+        _save(fresh)
+    if alert:
+        _window_alert(current)
 
 
 def tick(now=None):
@@ -710,6 +735,8 @@ def tick(now=None):
         _save(state)
     if not running and due(state, now):
         _open_window(state, now or time.time())
+    elif not running:
+        _window_lost(state, now)
     moved = False
     for _ in range(4):
         _hold_round(now)
@@ -783,17 +810,17 @@ def preview(names):
     for name in sorted(names, key=lambda name: (name == own, name)):
         facts = host_os.stored(name) or {}
         ready = name in nodes and _ready(nodes[name])
-        refusal, unread = "", ""
+        refusal, may_clear, unread = "", False, ""
         if ready:
             try:
                 if restart_check is None:
                     raise ValueError("the restart checks are not available")
-                refusal = restart_check(name, config["single_copy"])
+                refusal, may_clear = restart_check(name, config["single_copy"])
             except Exception as error:
                 unread = str(error)[:200]
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
                       "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
-                      "homestead_here": name == own, "restart_refusal": refusal, "restart_unread": unread,
+                      "homestead_here": name == own, "restart_refusal": refusal, "restart_may_clear": may_clear, "restart_unread": unread,
                       "busy": _busy_host(name)})
     missing = [h["node"] for h in hosts if not h["ready"]]
     blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \
@@ -801,7 +828,7 @@ def preview(names):
         or next((h["busy"] for h in hosts if h["busy"]), "")
     # Not who answered: with two replicas, that and the order differ between requests.
     agreed = [[h["node"], sorted(u.get("name", "") for u in h["updates"]), h["security"], h["reboot"],
-               h["restart_refusal"], bool(h["restart_unread"]), h["busy"]] for h in sorted(hosts, key=lambda h: h["node"])]
+               h["restart_refusal"], h["restart_may_clear"], bool(h["restart_unread"]), h["busy"]] for h in sorted(hosts, key=lambda h: h["node"])]
     token = hashlib.sha256(json.dumps([agreed, config["reboot"], config["single_copy"], blocked]).encode()).hexdigest()
     return {"hosts": hosts, "restart_policy": config["reboot"], "single_copy": config["single_copy"], "blocked": blocked,
             "review_token": token}

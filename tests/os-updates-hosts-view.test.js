@@ -204,6 +204,26 @@ test("a restart the checks would refuse: the review offers no restart, and says 
   assert.doesNotMatch(button(html, "osu_review_go"), /\bdisabled\b/, "the update itself goes ahead");
 });
 
+test("what may clear by itself says it may wait first, not that it won't restart", async () => {
+  const hosts = [previewHost("node-a", { restart_refusal: "Something would keep this host from draining: engines still listed", restart_may_clear: true })];
+  const t = await reviewed(preview(hosts));
+  assert.match(t.html(), /may wait up to 15 minutes first/);
+  assert.match(t.html(), /engines still listed/);
+  assert.doesNotMatch(t.html(), /will not do it by itself/);
+  const several = await reviewed(preview([...hosts, previewHost("node-b")]));
+  assert.match(several.html(), /may wait up to 15 minutes first/);
+});
+
+test("a window that may still run says so; one that was lost says skipped", async () => {
+  const blip = { why: "Homestead could not start it (HTTP 503)", first: 1, last_try: 1, blip: true };
+  const t = await opened({ state: { window_skip: blip } });
+  assert.match(t.html(), /Window not started yet: Homestead could not start it \(HTTP 503\)/);
+  assert.match(t.html(), /looks again/);
+  assert.doesNotMatch(t.html(), /Window skipped/);
+  const lost = await opened({ state: { window_skip: { ...blip, blip: false } } });
+  assert.match(lost.html(), /Window skipped because Homestead could not start it/);
+});
+
 test("checks that could not be read are not called a refusal", async () => {
   const t = await reviewed(preview([previewHost("node-a", { restart_unread: "no route to host" })]));
   assert.match(t.html(), /could not be read/);

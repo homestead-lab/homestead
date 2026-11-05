@@ -699,7 +699,7 @@ OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, opera
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
                                           "In the weekly window" if rollout["reason"] == "schedule" else "Starting"),
-                lambda node, since: POWER_JOBS.rollout_power_job(node, since), lambda node, risk: POWER_JOBS.rollout_refusal(node, risk))
+                lambda node, since: POWER_JOBS.rollout_power_job(node, since), lambda node, risk: POWER_JOBS.rollout_check(node, risk))
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect)

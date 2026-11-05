@@ -109,7 +109,9 @@ Longhorn volumes are healthy. Only then is the next host touched.
   a check that could not read, engines Longhorn still lists on a host they have
   left, and orphan records being removed.
 - A failed install stops the run before the next host.
-- **Stop after this host** finishes the host in hand first.
+- **Stop after this host** finishes the host in hand first. A host waiting for its
+  restart isn't restarted: the run ends at once, and that host keeps what it
+  installed and waits for you.
 - The run is kept on disk, so it carries on if Homestead itself is moved off a
   host it drains; a restart cut short that way is tried once more.
 - **Restarts: Never** installs updates without restarting anything.
@@ -118,8 +120,9 @@ Longhorn volumes are healthy. Only then is the next host touched.
   because…** beside **Last run**, naming the job, and looks again every 5 minutes
   while its hour lasts.
 
-**One host, or a few.** Each row offers **Update…** when updates wait, or
-**Restart…** when only a restart does, and the host's name opens its page. Tick
+**One host, or a few.** Each row offers **Update…** when updates wait and
+**Restart…** when a restart does, both when both do, and the host's name opens
+its page. Tick
 several hosts to update them together, with one review; Homestead's own host
 still goes last. The review shows what would install, whether a restart is
 likely and what the restart checks say today, before anything starts. It starts

@@ -115,15 +115,15 @@ class UnattendedRestartTests(FakeCluster):
     def test_the_refusal_is_not_taken_for_copies_still_rebuilding(self):
         # The rollout waits 15 minutes on that phrase; a blocker waits for a person.
         self.add(*orphans_on_node_a())
-        self.assertNotIn("only healthy copy", POWER_JOBS.rollout_refusal("node-a"))
+        self.assertNotIn("only healthy copy", POWER_JOBS.rollout_check("node-a")[0])
 
 
 class AskingTheChecksTests(FakeCluster):
     def test_it_answers_as_the_restart_would_and_changes_nothing(self):
-        self.assertEqual("", POWER_JOBS.rollout_refusal("node-a"))
+        self.assertEqual("", POWER_JOBS.rollout_check("node-a")[0])
         self.add(*orphans_on_node_a())
         before = len(self.kube.writes)
-        answer = POWER_JOBS.rollout_refusal("node-a")
+        answer = POWER_JOBS.rollout_check("node-a")[0]
         self.assertIn("3 Longhorn orphan records", answer)
         with self.assertRaises(ValueError) as refused:
             POWER_JOBS.rollout_reboot("node-a")
@@ -133,15 +133,15 @@ class AskingTheChecksTests(FakeCluster):
 
     def test_the_answer_does_not_change_as_a_pod_stays_stuck(self):
         self.add(*stuck_pod_on_node_a())
-        first = POWER_JOBS.rollout_refusal("node-a")
+        first = POWER_JOBS.rollout_check("node-a")[0]
         self.assertIn("apps/app-0", first)
         with mock.patch.object(BLOCKERS.time, "time", return_value=time.time() + 7200):
-            self.assertEqual(first, POWER_JOBS.rollout_refusal("node-a"))
+            self.assertEqual(first, POWER_JOBS.rollout_check("node-a")[0])
 
     def test_a_failed_read_is_not_an_answer(self):
         with mock.patch.object(POWER_JOBS.POWER, "plan", side_effect=OSError("no route to host")):
             with self.assertRaises(OSError):
-                POWER_JOBS.rollout_refusal("node-a")
+                POWER_JOBS.rollout_check("node-a")[0]
 
 
 class Runs(FakeCluster):
@@ -168,7 +168,7 @@ class Runs(FakeCluster):
                      lambda: self.own, self.data.name,
                      lambda rollout: ROLLOUT.OPS.start("os-rollout", ROLLOUT.title(rollout), {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]},
                                                        "/nodes", {"rollout": rollout["id"]}, "Starting"),
-                     POWER_JOBS.rollout_power_job, POWER_JOBS.rollout_refusal)
+                     POWER_JOBS.rollout_power_job, POWER_JOBS.rollout_check)
 
     def run_it(self, limit=80):
         for _ in range(limit):
@@ -757,8 +757,8 @@ class HeldEveryStepTests(Runs):
 class RealWiringTests(unittest.TestCase):
     """What server.py binds, not a copy of it."""
     def test_the_review_asks_the_real_restart_checks(self):
-        with mock.patch.object(server.POWER_JOBS, "rollout_refusal", return_value="refused") as asked:
-            self.assertEqual("refused", server.OS_ROLLOUT.restart_check("node-a", True))
+        with mock.patch.object(server.POWER_JOBS, "rollout_check", return_value=("refused", False)) as asked:
+            self.assertEqual(("refused", False), server.OS_ROLLOUT.restart_check("node-a", True))
         asked.assert_called_once_with("node-a", True)
 
     def test_a_run_restarts_through_the_real_unattended_restart(self):
@@ -889,7 +889,7 @@ class ClearsByItselfTests(Runs):
 
     def test_the_review_says_it_today_as_the_restart_would(self):
         self.add(*engines_elsewhere_on_node_a())
-        self.assertIn("still lists engine", POWER_JOBS.rollout_refusal("node-a"))
+        self.assertIn("still lists engine", POWER_JOBS.rollout_check("node-a")[0])
 
 
 SUNDAY = 1794106800   # 2026-11-08 03:00 UTC, a Sunday
@@ -1292,6 +1292,158 @@ class StopDuringAWaitTests(Runs):
         ROLLOUT.stop()
         ROLLOUT.tick(now=1020)
         self.assertNotIn("Stopped while waiting", str(ROLLOUT._load()["rollout"]["results"]))
+
+
+class MixedRefusalTests(FakeCluster):
+    """A blocker that may clear beside anything that won't: refused at once, all named."""
+    def plan(self, **extra):
+        return {**power.plan("node-a", "reboot"), **extra}
+
+    def refused(self, plan):
+        with mock.patch.object(POWER_JOBS.POWER, "plan", return_value=plan):
+            with self.assertRaises(ValueError) as refused:
+                POWER_JOBS.rollout_reboot("node-a")
+        return refused.exception
+
+    def setUp(self):
+        super().setUp()
+        self.add(*engines_elsewhere_on_node_a())
+
+    def test_alone_it_may_clear(self):
+        self.assertIsInstance(self.refused(self.plan()), BLOCKERS.MayClear)
+
+    def test_beside_workloads_with_nowhere_to_go(self):
+        error = self.refused(self.plan(stranded=[{"ns": "apps", "name": "db"}]))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("still lists engine", str(error))
+        self.assertIn("no other host", str(error))
+
+    def test_beside_running_vms(self):
+        error = self.refused(self.plan(hold=[{"kind": "VirtualMachine", "ns": "vms", "name": "win", "default": "move", "id": "v"}]))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("still lists engine", str(error))
+        self.assertIn("Running VMs", str(error))
+
+    def test_beside_apps_that_would_wait(self):
+        error = self.refused(self.plan(hold=[{"kind": "Deployment", "ns": "apps", "name": "web", "default": "wait", "id": "w"}]))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("apps/web", str(error))
+        self.assertIn("still lists engine", str(error))
+
+    def test_beside_data_kept_on_the_host(self):
+        error = self.refused(self.plan(requires_data_ack=True, volumes=[], maintenance={"local_storage": [
+            {"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"}]}))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("apps/db", str(error))
+        self.assertIn("still lists engine", str(error))
+
+    def test_beside_a_stop_the_review_itself_has(self):
+        error = self.refused(self.plan(ready=False, blockers=["The host boot ID is unavailable"]))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("boot ID", str(error))
+        self.assertIn("still lists engine", str(error))
+
+    def test_an_only_copy_beside_data_kept_is_refused_at_once(self):
+        error = self.refused(self.plan(requires_data_ack=True, drain_blockers=[], requires_blocker_ack=False,
+                                       volumes=[{"claim": "lab/data", "risk": "single-copy"}],
+                                       maintenance={"local_storage": [{"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"}]}))
+        self.assertNotIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("lab/data", str(error))
+
+    def test_a_person_accepting_only_copies_in_settings_leaves_the_blocker(self):
+        error = self.refused(self.plan(requires_data_ack=True, volumes=[{"claim": "lab/data", "risk": "single-copy"}], maintenance={}))
+        self.assertIsInstance(error, BLOCKERS.MayClear)
+        self.assertIn("lab/data", str(error))
+        self.assertIn("still lists engine", str(error))
+
+
+class MayWaitInTheReviewTests(Runs):
+    def test_the_review_says_what_may_clear_apart_from_what_wont(self):
+        self.add(*engines_elsewhere_on_node_a())
+        row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertIn("still lists engine", row["restart_refusal"])
+        self.assertTrue(row["restart_may_clear"])
+        self.add(*stuck_pod_on_node_a())
+        row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertFalse(row["restart_may_clear"])
+
+    def test_nothing_in_the_way_is_not_may_clear(self):
+        row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertEqual(("", False), (row["restart_refusal"], row["restart_may_clear"]))
+
+    def test_may_clear_changing_makes_the_review_stale(self):
+        self.add(*engines_elsewhere_on_node_a())
+        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", True)):
+            first = ROLLOUT.preview(["node-a"])["review_token"]
+        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", False)):
+            self.assertNotEqual(first, ROLLOUT.preview(["node-a"])["review_token"])
+
+
+class WindowBlipTests(Runs):
+    """A read that failed hasn't lost the window: it says so, looks again, and only
+    raises the alert if the hour ends with the window lost."""
+    def setUp(self):
+        super().setUp()
+        ROLLOUT.save_settings({"schedule": {"enabled": True, "days": ["sun"], "hour": 3, "tz": "UTC"}})
+
+    def alerts(self):
+        return ALERTS.log(categories=["degraded"])["alerts"]
+
+    def skip(self):
+        return ROLLOUT.report().get("window_skip") or {}
+
+    def blip(self, now=SUNDAY):
+        # The tick's own node read passes; start's fails.
+        self.kube.fail("/api/v1/nodes", 503, times=1, skip=1)
+        ROLLOUT.tick(now=now)
+        self.kube._failures.clear()
+
+    def test_a_503_from_start_says_what_it_was_not_the_job_list(self):
+        self.blip()
+        self.assertNotIn("job list", self.skip()["why"])
+        self.assertIn("503", self.skip()["why"])
+        self.assertTrue(self.skip()["blip"])
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+
+    def test_it_raises_no_alert_and_runs_at_its_next_look(self):
+        self.blip()
+        self.assertEqual([], self.alerts())
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertEqual("schedule", ROLLOUT._load()["rollout"]["reason"])
+        self.assertEqual({}, self.skip())
+        self.assertEqual([], self.alerts(), "the window was never lost")
+
+    def test_a_job_list_that_cant_be_read_says_that_and_raises_no_alert_yet(self):
+        with mock.patch.object(ROLLOUT.OPS, "stored", side_effect=OSError("damaged")):
+            ROLLOUT.tick(now=SUNDAY)
+        self.assertIn("job list could not be read", self.skip()["why"])
+        self.assertTrue(self.skip()["blip"])
+        self.assertEqual([], self.alerts())
+
+    def test_an_hour_that_ends_on_a_blip_has_lost_the_window_so_says_so_once(self):
+        self.blip()
+        ROLLOUT.tick(now=SUNDAY + 3600 + 60)
+        alerts = self.alerts()
+        self.assertEqual(1, len(alerts))
+        self.assertIn("503", alerts[0]["body"])
+        self.assertFalse(self.skip()["blip"], "no longer 'looking again'")
+        ROLLOUT.tick(now=SUNDAY + 3600 + 120)
+        self.assertEqual(1, len(self.alerts()))
+
+    def test_a_job_in_the_way_after_a_blip_alerts_at_once(self):
+        self.blip()
+        self.job("disk-allocation", "node-b")
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertFalse(self.skip()["blip"])
+        self.assertEqual(1, len(self.alerts()))
+
+    def test_a_blip_after_a_job_in_the_way_does_not_alert_twice(self):
+        self.job("disk-allocation", "node-b")
+        ROLLOUT.tick(now=SUNDAY)
+        ROLLOUT.OPS._write([])
+        self.blip(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        ROLLOUT.tick(now=SUNDAY + 3600 + 60)
+        self.assertEqual(1, len(self.alerts()))
 
 
 if __name__ == "__main__":

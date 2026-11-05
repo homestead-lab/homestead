@@ -313,8 +313,9 @@ function osUpdatesStatusHtml(r) {
     : r.window_skip ? `<div class="note small">${osUpdatesSkipLine(r)}</div>` : "";
 }
 // The weekly window something was in the way of, until a window or every host runs.
-const osUpdatesSkipLine = (r, before = "") => r.window_skip
-  ? `${before}<b>Window skipped because ${esc(r.window_skip.why)}</b> · ${esc(hostOsAge(r.window_skip.last_try))}` : "";
+const osUpdatesSkipLine = (r, before = "") => !r.window_skip ? "" : r.window_skip.blip
+  ? `${before}<b>Window not started yet: ${esc(r.window_skip.why)}.</b> It looks again every few minutes while its hour lasts.`
+  : `${before}<b>Window skipped because ${esc(r.window_skip.why)}</b> · ${esc(hostOsAge(r.window_skip.last_try))}`;
 // A hold that has kept failing during the run: that host could restart itself.
 function osUpdatesHoldsHtml(run) {
   const failing = Object.entries(run.hold_failed || {}).filter(([, row]) => row.noted);
@@ -349,9 +350,12 @@ const OSU_REVIEW_LOADING = '<div id="osuReviewLoading" class="empty"><span class
 /* One notice per dialog: a lone host's verdict is the notice, while several
    hosts', or one under "can't start", are plain lines. */
 function osUpdatesVerdict(h, plain) {
+  const said = text => esc(text.replace(/^./, c => c.toUpperCase()).replace(/\.$/, ""));
   const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install; a restart is checked again when it is due.`]
+    : h.restart_refusal && h.restart_may_clear ? ["info", "If this host needs a restart, Homestead may wait up to 15 minutes first.",
+      `${said(h.restart_refusal)}. This can clear by itself. If it hasn't by then, the updates stay installed and the host waits for you: its row then offers Restart….`]
     : h.restart_refusal ? ["warn", "If this host needs a restart, Homestead will not do it by itself today.",
-      `${esc(h.restart_refusal.replace(/^./, c => c.toUpperCase()).replace(/\.$/, ""))}. The updates install and the host waits for you: its row then offers Restart…, where you can accept this.`]
+      `${said(h.restart_refusal)}. The updates install and the host waits for you: its row then offers Restart…, where you can accept this.`]
     : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is cordoned and drained through disruption budgets, restarted, and given back once Ready with healthy volumes."];
   return plain ? `<p class="small"><b>${esc(title)}</b>${body ? ` ${body}` : ""}</p>` : UI.callout(kind, title, body);
 }
