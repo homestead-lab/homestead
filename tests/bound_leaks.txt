@@ -8,7 +8,6 @@
 # everything each module's bind() sets before and after every test. In such a run a line
 # whose file no longer leaks the name fails too. Each line is a leak to fix: make that
 # file restore the name (tests/rebind.py), delete the line and lower CEILING. Never add one, except for an open PR of ours (the block at the end).
-homestead_agent_audit.DATA_DIR	test_mqtt_control	fake
 homestead_agent_audit.DATA_DIR	test_shared_logs	fake
 homestead_agent_requests.DATA_DIR	test_read_json	fake
 homestead_agent_requests.DATA_DIR	test_update_file	fake
