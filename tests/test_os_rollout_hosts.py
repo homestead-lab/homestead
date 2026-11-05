@@ -1165,9 +1165,7 @@ class HoldTimingTests(Runs):
         self.assertIn("no answer", rollout["results"][0]["note"])
 
 
-class StopDuringAWaitTests(Runs):
-    """Andreas, 5 Nov: Stop during any wait for a restart ends the run at once,
-    without restarting that host. It stays installed and waits for a person."""
+class Waiting(Runs):
     def setUp(self):
         super().setUp()
         self.own = "node-c"
@@ -1181,6 +1179,10 @@ class StopDuringAWaitTests(Runs):
                 return rollout
         self.fail(f"it did not wait: {rollout.get('phase')} {rollout.get('message')}")
 
+
+class StopDuringAWaitTests(Waiting):
+    """Andreas, 5 Nov: Stop during any wait for a restart ends the run at once,
+    without restarting that host. It stays installed and waits for a person."""
     def assert_stopped_without_restart(self, now=1020):
         ended = ROLLOUT._load()["rollout"]
         self.assertEqual("stopped", ended["status"], ended["message"])
@@ -1444,6 +1446,139 @@ class WindowBlipTests(Runs):
         self.blip(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
         ROLLOUT.tick(now=SUNDAY + 3600 + 60)
         self.assertEqual(1, len(self.alerts()))
+
+
+class AfterAWaitTests(Waiting):
+    """Once a wait is over the host isn't waiting: the dialog's Stop goes back to
+    what it was, on the state the server really leaves."""
+    def test_a_cleared_wait_leaves_no_trace_in_restarting(self):
+        self.add(*engines_elsewhere_on_node_a())
+        ROLLOUT.operation = lambda op: {"id": op, "status": "running", "message": "draining"}
+        self.waiting()
+        for obj in engines_elsewhere_on_node_a():
+            self.kube.discard(self.kube.path_of(obj))
+        ROLLOUT.tick(now=1020)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("restarting", rollout["phase"])
+        self.assertEqual(["node-a"], self.sent)
+        self.assertNotIn("waiting", rollout["node"])
+        self.assertNotIn("wait_why", rollout["node"])
+        # tests/os-updates-hosts-view.test.js paints this state.
+        self.assertEqual(["attempts", "copies_since", "cordoned_before", "name", "op", "security", "since", "updates"],
+                         sorted(k for k in rollout["node"] if k != "lease"))
+
+    def test_an_adopted_job_clears_it_too(self):
+        self.add(*engines_elsewhere_on_node_a())
+        ROLLOUT.operation = lambda op: {"id": op, "status": "running"}
+        self.waiting()
+        ROLLOUT.power_job = lambda name, since: "op-adopted"
+        ROLLOUT.tick(now=1020)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("restarting", rollout["phase"])
+        self.assertNotIn("waiting", rollout["node"])
+        self.assertNotIn("wait_why", rollout["node"])
+
+
+class StoppedJobEndsTests(Runs):
+    """A stopped run is over: its job has to end too, or it holds up what waits
+    for os-rollout jobs (a host's promotion, a disk conversion)."""
+    def setUp(self):
+        super().setUp()
+        keep = dict(ROLLOUT.OPS.RESOLVERS)
+        self.addCleanup(lambda: (ROLLOUT.OPS.RESOLVERS.clear(), ROLLOUT.OPS.RESOLVERS.update(keep)))
+        ROLLOUT.register(ROLLOUT.OPS)
+
+    def stopped_run(self):
+        ROLLOUT.start("asked-hosts", only=["node-b", "node-c"], now=1000)
+        ROLLOUT.stop()
+        done = self.run_it()
+        self.assertEqual("stopped", done["status"], "the run itself still says stopped")
+        return done
+
+    def job(self):
+        return next(i for i in ROLLOUT.OPS.list_operations() if i["kind"] == "os-rollout")
+
+    def test_its_job_ends_with_the_runs_message(self):
+        done = self.stopped_run()
+        item = next(i for i in ROLLOUT.OPS.list_operations() if i["kind"] == "os-rollout")
+        self.assertIn(item["status"], ROLLOUT.OPS.TERMINAL)
+        self.assertEqual("cancelled", item["status"])
+        self.assertEqual(done["message"], item["message"])
+        self.assertTrue(next(i for i in ROLLOUT.OPS.stored() if i["kind"] == "os-rollout")["finished_at"])
+
+    def test_nothing_waiting_on_os_rollout_jobs_sees_it_running(self):
+        import homestead_storage_conflicts as CONFLICTS
+        self.stopped_run()
+        self.job()   # the job loop's round
+        self.assertEqual([], [o for o in ROLLOUT.OPS.snapshot() if o.get("status") not in ROLLOUT.OPS.TERMINAL],
+                         "homestead_promote's list of jobs still running")
+        CONFLICTS.require_clear(ROLLOUT.OPS.stored(), "disk-allocation", {"node": "node-b"}, {"kind": "Node", "name": "node-b"})
+
+    def test_a_run_replaced_since_still_ends_its_job(self):
+        self.stopped_run()
+        first = self.job()["id"]
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=2000)
+        item = next(i for i in ROLLOUT.OPS.list_operations() if i["id"] == first)
+        self.assertEqual("cancelled", item["status"])
+
+    def test_a_job_read_while_its_run_goes_is_not_ended(self):
+        ROLLOUT.start("asked-hosts", only=["node-b", "node-c"], now=1000)
+        self.assertNotIn(self.job()["status"], ROLLOUT.OPS.TERMINAL)
+
+    def test_a_finished_run_keeps_succeeded_and_a_failed_one_failed(self):
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=1000)
+        self.run_it()
+        self.assertEqual("succeeded", self.job()["status"])
+        ROLLOUT.OPS._write([])
+        self.hosts.codes["node-c"] = "100"
+        ROLLOUT.start("asked-hosts", only=["node-c"], now=2000)
+        self.run_it()
+        self.assertEqual("failed", self.job()["status"])
+
+
+class StopSaysWhatHappensTests(Waiting):
+    def stop_route(self):
+        return ROLLOUT.ROUTES[("POST", "/api/os-updates/stop")][1](types.SimpleNamespace(query={}, body={}))["detail"]
+
+    def test_stopping_during_a_wait_says_the_host_wont_restart(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting()
+        said = self.stop_route()
+        self.assertIn("node-a", said)
+        self.assertIn("will not restart", said)
+        self.assertNotIn("once the host being updated is done", said)
+
+    def test_stopping_with_no_wait_says_what_it_did(self):
+        self.hosts.codes["node-a"] = None
+        ROLLOUT.start("asked-hosts", only=["node-a"], now=1000)
+        ROLLOUT.tick(now=1000)
+        self.assertIn("once the host being updated is done", self.stop_route())
+
+
+class StopBeforeAnyStepTests(Runs):
+    """What the real-cluster check relies on (plans/2026-11-05-os-update-per-host.md):
+    rounds of holds with no step, Stop before the first tick, then a tick. Holds land
+    and are let go, and no host is asked to install, refresh or restart anything."""
+    def test_it_holds_and_lets_go_and_touches_no_package(self):
+        reads = []
+        real = self.hosts.read
+        self.hosts.read = lambda name, refresh=False: reads.append((name, refresh)) or real(name, refresh)
+        self.hosts.facts.pop("node-c")
+        self.hosts.facts["node-c"] = host_facts(["vim"])
+        ROLLOUT.start("asked-hosts", only=["node-a"], restart="never", now=1000)
+        for now in (1000, 1060):
+            ROLLOUT._hold_round(now)
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(True))
+        self.assertEqual("hold", ROLLOUT._load()["rollout"]["phase"], "no step ran")
+        ROLLOUT.stop()
+        ROLLOUT.tick(now=1120)
+        ended = ROLLOUT._load()["rollout"]
+        self.assertEqual("stopped", ended["status"])
+        self.assertEqual(["node-a", "node-b", "node-c"], self.holds(False))
+        self.assertEqual([], self.hosts.began, "nothing installed")
+        self.assertEqual([], self.sent, "nothing restarted")
+        self.assertEqual([], [r for r in reads if r[1]], "no package lists refreshed")
+        self.assertEqual([], ended["results"])
 
 
 if __name__ == "__main__":

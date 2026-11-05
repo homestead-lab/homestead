@@ -505,6 +505,8 @@ def step(state, now=None):
         existing = power_job(name, rollout.get("started", 0)) if power_job else ""
         if existing:
             node["op"] = existing
+            node.pop("waiting", None)
+            node.pop("wait_why", None)
             rollout["phase"], node["since"] = "restarting", now
             rollout["message"] = f"{name}: draining and restarting"
             return True
@@ -545,6 +547,8 @@ def step(state, now=None):
             _uncordon(rollout)
             _result(rollout, True, f"updates installed; restart not done: {str(error)[:NOTE_LIMIT]}", restart_needed=True)
             return True
+        node.pop("waiting", None)
+        node.pop("wait_why", None)
         rollout["phase"], node["since"] = "restarting", now
         rollout["message"] = f"{name}: draining and restarting"
         return True
@@ -755,17 +759,23 @@ def tick(now=None):
     return (state.get("rollout") or {}) if moved else None
 
 
+# A stopped run is over, so its job has to end: "stopped" is no job status (OPS.TERMINAL),
+# and a job that doesn't end holds up what waits for os-rollout jobs. It stays "stopped"
+# on the run itself, which the OS updates dialog shows.
+JOB_STATUS = {"stopped": "cancelled"}
+
+
 def status(item):
     """The job-tray line for a rollout: (status, progress, message)."""
     rollout = _load().get("rollout") or {}
     if rollout.get("id") != (item.get("ref") or {}).get("rollout"):
         last = _load().get("last_rollout") or {}
         if last.get("id") == (item.get("ref") or {}).get("rollout"):
-            return last.get("status") or "succeeded", 100, last.get("message") or ""
+            return JOB_STATUS.get(last.get("status"), last.get("status") or "succeeded"), 100, last.get("message") or ""
         return "failed", item.get("progress", 0), "this rollout's record is gone"
     total = max(1, len(rollout.get("nodes") or []))
     progress = min(99, int(rollout.get("index", 0) * 100 / total)) if rollout.get("status") == "running" else 100
-    return rollout.get("status", "running"), progress, rollout.get("message", "")
+    return JOB_STATUS.get(rollout.get("status"), rollout.get("status", "running")), progress, rollout.get("message", "")
 
 
 def report():
@@ -783,6 +793,14 @@ def title(rollout):
     if rollout.get("reason") != "asked-hosts":
         return f"Update every host's OS ({len(names)} hosts)"
     return f"Update {names[0]}'s OS" if len(names) == 1 else f"Update the OS of {len(names)} hosts"
+
+
+def stop_asked():
+    rollout = stop()
+    node = rollout.get("node") or {}
+    return {"ok": True, "rollout": rollout,
+            "detail": (f"Stopping now: {node.get('name')} will not restart by itself; it keeps its updates and waits for you"
+                       if node.get("waiting") else "Stopping once the host being updated is done")}
 
 
 def _chosen(names):
@@ -860,7 +878,7 @@ ROUTES = {
     ("GET", "/api/os-updates/preview"): ("admin", lambda request: preview(request.query.get("node"))),
     ("GET", "/api/os-updates"): ("viewer", lambda request: report()),
     ("POST", "/api/os-updates/settings"): ("admin", lambda request: {"ok": True, "settings": save_settings(request.body)}),
-    ("POST", "/api/os-updates/stop"): ("admin", lambda request: {"ok": True, "rollout": stop(), "detail": "Stopping once the host being updated is done"}),
+    ("POST", "/api/os-updates/stop"): ("admin", lambda request: stop_asked()),
 }
 
 

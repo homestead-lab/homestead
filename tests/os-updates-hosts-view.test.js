@@ -450,6 +450,23 @@ test("while a host waits for its restart, Stop is offered, a run of one included
   assert.match(f.fields["#osu_run"].innerHTML, /Stop and leave this host to me/, "appears as the wait starts");
 });
 
+test("once the wait is over and the restart is under way, the wait's Stop has gone", async () => {
+  // The node as test_os_rollout_hosts' test_a_cleared_wait_leaves_no_trace_in_restarting pins it.
+  const node = { name: "node-a", attempts: 1, copies_since: 1000, cordoned_before: false, op: "op-node-a", security: 0, since: 1020, updates: 2 };
+  const one = await opened({ state: { rollout: { ...running, nodes: ["node-a"], phase: "restarting", node } } });
+  assert.doesNotMatch(one.html(), /Stop and leave this host to me/);
+  assert.doesNotMatch(one.html(), /Stop after this host/, "a run of one has nothing to stop after");
+  const two = await opened({ state: { rollout: { ...running, phase: "restarting", node } } });
+  assert.doesNotMatch(two.html(), /Stop and leave this host to me/);
+  assert.match(two.html(), /Stop after this host/);
+  let state = report({ rollout: { ...running, nodes: ["node-a"], node: { ...node, waiting: true } } });
+  const f = setup({ report: () => state });
+  await f.c.window.osUpdates();
+  state = report({ rollout: { ...running, nodes: ["node-a"], phase: "restarting", node } });
+  await f.timers.pop()();
+  assert.doesNotMatch(f.fields["#osu_run"].innerHTML, /Stop/, "and the button goes as the wait ends");
+});
+
 test("a run of one has nothing to stop after, and says its host", async () => {
   const one = await opened({ state: { rollout: { ...running, nodes: ["node-a"] } } });
   assert.doesNotMatch(one.html(), /Stop after this host/);
