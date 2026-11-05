@@ -152,6 +152,34 @@ def _put_reviewed(proposed, settled, retries=3):
             meta.pop("managedFields", None)
 
 
+class Gone(Exception):
+    """The app was removed: there is nothing left to move."""
+
+
+def _landed(proposed):
+    """Whether the app already carries the reviewed spec: an earlier PUT that
+    committed but lost its reply (a timeout, a dropped connection) makes the
+    retry conflict on the old resourceVersion. A whole-spec comparison holds
+    because the reviewed manifest is a copy of a live read with only its
+    placement changed (homestead_workloads.move_capacity_plan), so the API
+    server's defaults are in it. replicas is left out, as an autoscaler may
+    have written it since."""
+    kget, _ = _api()
+    meta = proposed["metadata"]
+    try:
+        fresh = kget(f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}")
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            raise Gone() from error
+        raise    # says nothing about the app: the next round asks again
+    now = fresh.get("metadata") or {}
+    if now.get("deletionTimestamp") or (meta.get("uid") and now.get("uid") != meta.get("uid")):
+        return False
+    def spec(obj):
+        return {key: value for key, value in (obj.get("spec") or {}).items() if key != "replicas"}
+    return spec(fresh) == spec(proposed)
+
+
 def status(item):
     ref = item["ref"]
     ns, name, node = ref["namespace"], ref["name"], ref.get("node", "")
@@ -162,13 +190,26 @@ def status(item):
         if waited >= PULL_WAIT:
             ref["pull_note"] = f"its image was still being pulled onto {node} after {PULL_WAIT // 60} minutes"
         _clear(ref.get("pulls") or [])
-        proposed = ref.pop("proposed")
+        # Keep both until the PUT lands: a failed one leaves the job to try again.
+        if "proposed" not in ref:
+            return "failed", 100, f"{name} has no reviewed move left to apply; nothing was moved. Review the move again"
         try:
-            _put_reviewed(proposed, ref.pop("settled", None))
+            _put_reviewed(ref["proposed"], ref.get("settled"))
         except urllib.error.HTTPError as error:
-            if error.code == 409:
-                return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"
-            raise
+            if error.code != 409:
+                raise
+            try:
+                landed = _landed(ref["proposed"])
+            except Gone:
+                ref.pop("proposed", None)
+                ref.pop("settled", None)
+                return "failed", 100, f"{name} was removed while its image was being pulled, so there is nothing left to move"
+            if not landed:
+                ref.pop("proposed", None)
+                ref.pop("settled", None)
+                return "failed", 100, f"{name} changed while its image was being pulled, so Homestead stopped; check where it runs now, then review the move again"
+        ref.pop("proposed", None)
+        ref.pop("settled", None)
         ref["stage"] = "rolling"
         return "running", 10, f"Image on {node}; moving {name}"
     state, progress, message = OPS._deployment(item)
