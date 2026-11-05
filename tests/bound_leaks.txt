@@ -42,10 +42,6 @@ homestead_changes.DATA_DIR	test_scale_write	fake
 homestead_changes.DATA_DIR	test_schedules	fake
 homestead_cluster.SYS_NS	test_cluster_admin	other
 homestead_config_backup.PARTS	test_config_backup	other
-homestead_diagnostics.DIRECTORY	test_fleet_identities	fake
-homestead_diagnostics.JOBS	test_fleet_identities	fake
-homestead_diagnostics.READ	test_fleet_identities	fake
-homestead_diagnostics.VERSION	test_fleet_identities	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
 homestead_files.kget	test_volume_files	fake
 homestead_files.ksend	test_volume_files	fake
