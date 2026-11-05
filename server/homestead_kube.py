@@ -305,7 +305,18 @@ def _one_object(path):
     return len(rest) == 2
 
 
-def kget(path, timeout=None):
+# A list as metadata only (#980): each item's metadata, no spec or status - a
+# ReplicaSet list without its pod templates. A server that can't answer so
+# falls back to the whole list (",application/json"), so callers take both.
+METADATA = "application/json;as=PartialObjectMetadataList;g=meta.k8s.io;v=v1,application/json"
+
+
+def kget_metadata(path, timeout=None):
+    """kget for a list, asked metadata-only (METADATA)."""
+    return kget(path, timeout, accept=METADATA)
+
+
+def kget(path, timeout=None, accept=None):
     """A read, given OBJECT_TIMEOUT for one object in a request and LIST_TIMEOUT
     otherwise unless the caller says, at most what is left of the request's
     time for reads (homestead_read_deadline), and a 429 asked again only while
@@ -315,6 +326,8 @@ def kget(path, timeout=None):
         timeout = OBJECT_TIMEOUT if in_request and _one_object(path) else LIST_TIMEOUT
     for attempt in range(len(KGET_RETRY) + 1):
         try:
+            if accept:
+                return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed, accept=accept))
             return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
         except urllib.error.HTTPError as error:
             # A read is safe to ask again; a write's 429 (an eviction a
@@ -548,11 +561,14 @@ def _journal_write(path, body):
     return "/secrets" in path and (path.rstrip("/").endswith("/" + CLUSTER_SHUTDOWN.NAME) or name == CLUSTER_SHUTDOWN.NAME)
 
 
-def transport(method, path, body=None, ctype=None, timeout=15):
+def transport(method, path, body=None, ctype=None, timeout=15, accept=None):
     """One request to the API server: its JSON answer, or urllib's HTTPError.
     kget and _ksend reach the cluster only through here, after their own
-    checks, so it is the one place tests put a fake API (tests/fakes/kube.py)."""
+    checks, so it is the one place tests put a fake API (tests/fakes/kube.py).
+    accept: the Accept header, for a list asked metadata-only (METADATA)."""
     headers = {"Content-Type": ctype} if ctype else {}
+    if accept:
+        headers["Accept"] = accept
     data = json.dumps(body).encode() if body is not None else None
     raw = _request(method, path, data, headers, timeout).decode()
     # A write may answer with no body; a read always has one.

@@ -9,6 +9,7 @@ homestead_storage_classes.
 import calendar
 import concurrent.futures
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -219,15 +220,18 @@ def claim_references(pods=None):
         return ((obj.get("spec") or {}).get("template") or {}).get("spec")
     made = (
             ("Job", "/apis/batch/v1/jobs", made_template),
-            ("ReplicaSet", "/apis/apps/v1/replicasets", made_template),
+            ("ReplicaSet", REPLICASETS, made_template),
             ("ReplicationController", "/api/v1/replicationcontrollers", made_template),
             ("Pod", "/api/v1/pods", lambda o: o.get("spec")))
     vms = "/apis/kubevirt.io/v1/virtualmachines"
     claims_path = "/api/v1/persistentvolumeclaims"
     # The lists do not depend on each other: read at the same time (#705),
     # then judged in this order, so what counts as unread is as before.
-    fetched = _read_all([path for _, path, _ in kinds] + [vms, claims_path]
-                        + [path for _, path, _ in made if pods is None or path != "/api/v1/pods"])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as one:
+        replica_sets = one.submit(_replica_sets)        # read beside the others, not after them
+        fetched = _read_all([path for _, path, _ in kinds] + [vms, claims_path]
+                            + [path for _, path, _ in made if (pods is None or path != "/api/v1/pods") and path != REPLICASETS])
+        fetched[REPLICASETS] = replica_sets.result()
     if pods is not None:
         fetched["/api/v1/pods"] = pods
     for kind, path, spec_of in kinds:
@@ -269,6 +273,68 @@ def claim_references(pods=None):
     if unread:
         refs[UNREAD] = unread
     return refs
+
+
+REPLICASETS = "/apis/apps/v1/replicasets"
+# Each ReplicaSet's pod template's volumes, by uid and generation (#980). The
+# ReplicaSet list is the largest list Homestead reads (a whole pod template
+# each, ten old ones per Deployment). A Deployment never changes its
+# ReplicaSets' templates, but a person can edit one by hand, and any spec
+# change raises metadata.generation: so the list is read metadata-only, and in
+# full only when a uid or generation not kept yet appears. Kept per
+# transport, so one test's cluster is not another's.
+_RS = {"key": None, "specs": {}}
+_rs_lock = threading.Lock()
+
+
+def _replica_sets():
+    """The ReplicaSet list as claim_references reads it - each row's metadata
+    and, from what is kept, its template's volumes - or the error reading it.
+    A reader bound in place of the Kubernetes client reads the whole list."""
+    if kget is not KUBE.kget:
+        return _or_error(lambda: kget(REPLICASETS))
+    meta = _or_error(lambda: KUBE.kget_metadata(REPLICASETS))
+    rows = meta.get("items") if isinstance(meta, dict) else None
+    if not isinstance(rows, list) or not isinstance(meta.get("metadata"), dict) or meta["metadata"].get("continue") \
+            or any(not isinstance(row, dict) for row in rows):
+        return meta                     # an error, or a list claim_references will find not whole
+    uids = [((row.get("metadata") or {}).get("uid"), (row.get("metadata") or {}).get("generation")) for row in rows]
+    with _rs_lock:
+        if _RS["key"] is not KUBE.transport:
+            _RS.update(key=KUBE.transport, specs={})
+        specs = _RS["specs"]
+        whole = any("spec" in row for row in rows)           # a server that answered the whole list
+        if not whole and all(uid[0] and uid in specs for uid in uids):
+            _RS["specs"] = {uid: specs[uid] for uid in uids}  # what is gone is forgotten
+            return {"metadata": meta["metadata"],
+                    "items": [{"metadata": row["metadata"], **({"spec": {"template": {"spec": specs[uid]}}}
+                                                               if specs[uid] is not None else {})}
+                              for row, uid in zip(rows, uids)]}
+    full = meta if whole else _or_error(lambda: kget(REPLICASETS))
+    items = full.get("items") if isinstance(full, dict) else None
+    if isinstance(items, list) and all(isinstance(row, dict) for row in items):
+        kept = {}
+        for row in items:
+            row_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            spec, template = row.get("spec"), None
+            if isinstance(spec, dict) and isinstance(spec.get("template"), dict):
+                template = spec["template"].get("spec")
+            # Kept only what is plainly a template, or plainly none: anything
+            # else is read in full each time, where it leaves ReplicaSets unread.
+            if row_meta.get("uid") and (isinstance(template, dict) or template is None and not (
+                    isinstance(spec, dict) and "template" in spec and spec["template"] is not None)):
+                kept[(row_meta["uid"], row_meta.get("generation"))] = \
+                    {"volumes": template.get("volumes") or []} if isinstance(template, dict) else None
+        with _rs_lock:
+            _RS.update(key=KUBE.transport, specs=kept)
+    return full
+
+
+def _or_error(read):
+    try:
+        return read()
+    except Exception as error:      # handed back, judged by claim_references as before
+        return error
 
 
 # claim_references' key for the kinds it could not read.
