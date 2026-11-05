@@ -46,13 +46,8 @@ homestead_diagnostics.DIRECTORY	test_fleet_identities	fake
 homestead_diagnostics.JOBS	test_fleet_identities	fake
 homestead_diagnostics.READ	test_fleet_identities	fake
 homestead_diagnostics.VERSION	test_fleet_identities	other
-homestead_files.API	test_file_manager	other
-homestead_files.CTX	test_file_manager	other
-homestead_files.SYSTEM_NAMESPACES	test_file_manager	other
 homestead_files.SYSTEM_NAMESPACES	test_volume_files	other
-homestead_files.kget	test_file_manager	fake
 homestead_files.kget	test_volume_files	fake
-homestead_files.ksend	test_file_manager	fake
 homestead_files.ksend	test_volume_files	fake
 homestead_firewall.NS	test_firewall	other
 homestead_firewall.kget	test_firewall	fake
