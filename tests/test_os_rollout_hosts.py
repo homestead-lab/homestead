@@ -890,5 +890,139 @@ class ClearsByItselfTests(Runs):
         self.assertIn("still lists engine", POWER_JOBS.rollout_refusal("node-a"))
 
 
+SUNDAY = 1794106800   # 2026-11-08 03:00 UTC, a Sunday
+WEEK = 7 * 24 * 3600
+
+
+class WindowSkippedTests(Runs):
+    """Andreas, 5 Nov: a window whose job can't be made doesn't run, and says why:
+    an alert, and a line beside Last run naming the job. It tries again now and
+    then, not at every tick, and without a forced detection or two saves each time."""
+    def setUp(self):
+        super().setUp()
+        ROLLOUT.save_settings({"schedule": {"enabled": True, "days": ["sun"], "hour": 3, "tz": "UTC"}})
+        self.job("disk-allocation", "node-b")
+
+    def alerts(self):
+        return ALERTS.log(categories=["degraded"])["alerts"]
+
+    def line(self):
+        return (ROLLOUT.report().get("window_skip") or {}).get("why", "")
+
+    def rollout(self):
+        return ROLLOUT._load().get("rollout") or {}
+
+    def test_it_does_not_run_and_names_the_job(self):
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual({}, self.rollout())
+        self.assertIn("The disk-allocation job", self.line())
+        self.assertIn("Finish disk preparation", self.line())
+        self.assertEqual([], self.hosts.holds)
+
+    def test_it_raises_one_alert_for_the_window(self):
+        for now in range(SUNDAY, SUNDAY + 3000, 20):
+            ROLLOUT.tick(now=now)
+        alerts = self.alerts()
+        self.assertEqual(1, len(alerts))
+        self.assertIn("The disk-allocation job", alerts[0]["body"])
+
+    def test_it_tries_again_every_few_minutes_not_every_tick(self):
+        ROLLOUT.tick(now=SUNDAY)
+        ROLLOUT.OPS._write([])
+        ROLLOUT.tick(now=SUNDAY + 20)
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY - 20)
+        self.assertEqual({}, self.rollout(), "not yet")
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertEqual("schedule", self.rollout()["reason"], "the job has ended, so the window runs")
+        self.assertEqual("", self.line())
+        self.assertEqual(SUNDAY + ROLLOUT.WINDOW_RETRY, ROLLOUT._load()["last_scheduled"])
+
+    def test_retries_force_no_detection_and_no_extra_saves(self):
+        forced = []
+        ROLLOUT.platform = lambda force=False: forced.append(force) or {"distribution": "k3s"}
+        with mock.patch.object(ROLLOUT, "_save", wraps=ROLLOUT._save) as saves:
+            ROLLOUT.tick(now=SUNDAY - 3600)     # the hour before: an idle tick
+            idle = saves.call_count
+            saves.reset_mock()
+            ticks = int(ROLLOUT.WINDOW_RETRY / 20) * 3     # three retries' worth
+            for n in range(ticks):
+                ROLLOUT.tick(now=SUNDAY + n * 20)
+        self.assertNotIn(True, forced)
+        self.assertEqual(idle * ticks + 3, saves.call_count, "one more save per retry, none per tick")
+
+    def test_the_line_stays_after_the_hour_with_no_more_tries(self):
+        ROLLOUT.tick(now=SUNDAY)
+        first = ROLLOUT.report()["window_skip"]["last_try"]
+        ROLLOUT.tick(now=SUNDAY + 3600 + 600)
+        self.assertEqual(first, ROLLOUT.report()["window_skip"]["last_try"])
+        self.assertIn("The disk-allocation job", self.line())
+
+    def test_a_skip_carries_on_into_the_next_week_and_ends_when_a_window_runs(self):
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual(1, len(self.alerts()))
+        ROLLOUT.tick(now=SUNDAY + WEEK)
+        self.assertEqual({}, self.rollout(), "still in the way a week on")
+        self.assertEqual(2, len(self.alerts()), "a new window, a new alert")
+        self.assertEqual(SUNDAY + WEEK, ROLLOUT.report()["window_skip"]["first"])
+        ROLLOUT.OPS._write([])
+        ROLLOUT.tick(now=SUNDAY + WEEK + ROLLOUT.WINDOW_RETRY)
+        self.assertEqual("schedule", self.rollout()["reason"])
+        self.assertEqual("", self.line())
+
+    def test_the_line_names_whichever_job_is_in_the_way_now(self):
+        ROLLOUT.tick(now=SUNDAY)
+        ROLLOUT.OPS._write([])
+        self.job("container-rebalance")
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertIn("The container-rebalance job", self.line())
+        self.assertEqual({}, self.rollout())
+
+    def test_another_refusal_is_said_the_same_way(self):
+        ROLLOUT.OPS._write([])
+        ROLLOUT.announce = mock.Mock(side_effect=ValueError("the job store said no"))
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual({}, self.rollout())
+        self.assertIn("the job store said no", self.line())
+
+    def test_an_unreadable_job_list_skips_and_says_so(self):
+        with mock.patch.object(ROLLOUT.OPS, "stored", side_effect=OSError("damaged")):
+            ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual({}, self.rollout())
+        self.assertIn("damaged", self.line())
+
+    def test_update_every_host_ends_the_line_and_a_smaller_run_does_not(self):
+        ROLLOUT.tick(now=SUNDAY)
+        ROLLOUT.OPS._write([])
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=SUNDAY + 60)
+        self.assertIn("disk-allocation", self.line(), "the other hosts still missed their window")
+        self.run_it()
+        ROLLOUT.start(now=SUNDAY + 120)
+        self.assertEqual("", self.line())
+
+    def test_a_refused_start_keeps_the_line(self):
+        ROLLOUT.tick(now=SUNDAY)
+        with self.assertRaises(ValueError):
+            ROLLOUT.start(now=SUNDAY + 60)
+        self.assertIn("disk-allocation", self.line())
+
+    def test_with_the_window_off_there_is_no_line(self):
+        ROLLOUT.tick(now=SUNDAY)
+        ROLLOUT.save_settings({"schedule": {"enabled": False}})
+        self.assertEqual("", self.line())
+
+    def test_asking_for_a_run_still_refuses_with_the_reason(self):
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.ROUTES[("POST", "/api/os-updates/start")][1](types.SimpleNamespace(query={}, body={}))
+        self.assertIn("Finish disk preparation", str(refused.exception))
+        self.assertEqual([], self.alerts(), "someone is looking at this one")
+
+    def test_a_run_going_when_the_window_opens_is_no_skip(self):
+        ROLLOUT.OPS._write([])
+        self.hosts.codes["node-b"] = None
+        ROLLOUT.start("asked-hosts", only=["node-b"], now=SUNDAY - 60)
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual("", self.line())
+
+
 if __name__ == "__main__":
     unittest.main()

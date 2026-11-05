@@ -237,7 +237,8 @@ window.osUpdatesCardPaint = async () => {
       `<div class="ui-stack">
         ${run ? UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, (run.nodes || []).length)),
           {label: "Updating hosts one at a time", detail: run.message || ""}) : ""}
-        ${last ? UI.callout(last.status === "failed" ? "bad" : "info", osUpdatesLastRun(last), esc(last.message || "")) : ""}
+        ${last ? UI.callout(last.status === "failed" ? "bad" : "info", osUpdatesLastRun(last), `${esc(last.message || "")}${osUpdatesSkipLine(r, "<br>")}`)
+          : !run && r.window_skip ? UI.callout("warn", "", osUpdatesSkipLine(r)) : ""}
         ${check.running ? UI.progress(Math.round(check.done.length * 100 / Math.max(1, check.hosts.length)),
           { label: "Reading every host again", detail: `${check.done.length} of ${check.hosts.length} · each refreshes its package lists first` }) : ""}
         ${osUpdatesHostsHtml(r)}
@@ -308,8 +309,12 @@ function osUpdatesStatusHtml(r) {
       { label: run.nodes.length === 1 ? `Updating ${run.nodes[0]}` : `Updating ${osuHosts(run.nodes.length)}, one at a time`, detail: run.message || "" })}
     ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}
     ${osUpdatesHoldsHtml(run)}`;
-  return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>${esc(osUpdatesLastRun(last))}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}${osuSmaller(last) ? " · " : "<br>"}${esc(last.message || "")}</div>` : "";
+  return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>${esc(osUpdatesLastRun(last))}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}${osuSmaller(last) ? " · " : "<br>"}${esc(last.message || "")}${osUpdatesSkipLine(r, "<br>")}</div>`
+    : r.window_skip ? `<div class="note small">${osUpdatesSkipLine(r)}</div>` : "";
 }
+// The weekly window something was in the way of, until a window or every host runs.
+const osUpdatesSkipLine = (r, before = "") => r.window_skip
+  ? `${before}<b>Window skipped because ${esc(r.window_skip.why)}</b> · ${esc(hostOsAge(r.window_skip.last_try))}` : "";
 // A hold that has kept failing during the run: that host could restart itself.
 function osUpdatesHoldsHtml(run) {
   const failing = Object.entries(run.hold_failed || {}).filter(([, row]) => row.noted);

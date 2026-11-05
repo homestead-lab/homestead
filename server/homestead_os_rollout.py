@@ -40,6 +40,7 @@ import homestead_history as HISTORY
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
+import homestead_storage_conflicts as STORAGE_CONFLICTS
 
 kget = platform = host_os = None
 reboot = None           # (node, allow_data_risk) -> operation id; raises with the review's reason
@@ -71,6 +72,10 @@ TRANSIENT_WAIT = 10 * 60
 HOLD_RETRY = 60
 # Failing this long, a hold is news: the dialog says so and an alert goes out.
 HOLD_NOTICE = 3 * 60
+# A weekly window something is in the way of looks again this often while its
+# hour lasts. Five minutes: such jobs take minutes or more, and each look is a
+# read of the job store, a save and a line in the log.
+WINDOW_RETRY = 5 * 60
 # A refused restart's note names what refused it, every drain blocker included.
 NOTE_LIMIT = 2000
 _lock = SHARED.SharedLock("os-rollout")
@@ -256,16 +261,18 @@ def start(reason="asked", now=None, only=None, restart=None):
                    "held_hosts": ready}
         if restart:
             rollout["restart"] = restart
-        before = {key: state[key] for key in ("rollout", "last_scheduled") if key in state}
+        before = {key: state[key] for key in ("rollout", "last_scheduled", "window_skip") if key in state}
         state["rollout"] = rollout
+        if reason != "asked-hosts":
+            state.pop("window_skip", None)    # every host is getting what the window would have done
         if reason == "schedule":
             state["last_scheduled"] = int(now)
         _save(state)
         try:
             rollout["operation"] = announce(rollout)
         except Exception as error:
-            state.pop("rollout", None)
-            state.pop("last_scheduled", None)
+            for key in ("rollout", "last_scheduled", "window_skip"):
+                state.pop(key, None)
             state.update(before)
             _save(state)
             raise ValueError(str(error)[:300]) from error
@@ -586,6 +593,56 @@ def _failing(state, error, now=None):
     return _finish(state, rollout, now)
 
 
+def _in_the_way():
+    """The job that would refuse a rollout's job, named, or "". Asked without
+    making anything, one job at a time so that the answer can name it, so a
+    window can look every few minutes at the cost of one read."""
+    conflicts = OPS.CONFLICTS.get("os-rollout")
+    ref = {"rollout": "window"}
+    for item in OPS.stored():
+        if item.get("kind") == "container-rebalance" and item.get("status") not in OPS.TERMINAL:
+            return f"{item.get('title') or item.get('kind')} is running"
+        try:
+            why = conflicts([item], "os-rollout", ref, None) if conflicts else ""
+            if not why:
+                STORAGE_CONFLICTS.require_clear([item], "os-rollout", ref)
+        except ValueError as error:
+            why = str(error)
+        if why:
+            return f"{item.get('title') or item.get('kind')} is in the way ({why})"
+    return ""
+
+
+def _open_window(state, now):
+    """The weekly window is open: start, or say why not. A skip is kept beside
+    Last run until a window or an update of every host runs, into later weeks
+    too, and each window that is skipped raises one alert."""
+    skip = state.get("window_skip") or {}
+    if now - skip.get("last_try", 0) < WINDOW_RETRY:
+        return
+    try:
+        why = _in_the_way()
+        if not why:
+            start("schedule", now)
+            return
+    except ValueError as error:
+        why = str(error)
+    except Exception as error:
+        why = f"the job list could not be read: {str(error)[:200]}"
+    print(f"OS updates: the window opened but {why}", flush=True)
+    new_window = now - skip.get("first", 0) > 20 * 3600
+    first = now if new_window else skip["first"]
+    with _lock:
+        fresh = _load()
+        fresh["window_skip"] = {"why": why[:400], "first": int(first), "last_try": int(now)}
+        _save(fresh)
+    if new_window:
+        _alert({"key": f"os-update-window:{int(first)}", "category": "degraded", "severity": "degraded", "event": True,
+                "title": "The weekly OS update window is being skipped",
+                "body": f"{why}. It looks again every {WINDOW_RETRY // 60} minutes until its hour ends, then in its next window.",
+                "href": "/nodes"})
+
+
 def tick(now=None):
     """Keep holds as the settings say, start a due window, move a rollout on."""
     p = platform() or {}
@@ -600,12 +657,7 @@ def tick(now=None):
             _holds(state, config["manage"] == "homestead", ready)
         _save(state)
     if not running and due(state, now):
-        try:
-            if _rebalancing():
-                raise ValueError("containers are being rebalanced; it waits for that to finish")
-            start("schedule", now)
-        except ValueError as error:
-            print(f"OS updates: the window opened but {error}", flush=True)
+        _open_window(state, now or time.time())
     moved = False
     for _ in range(4):
         with _lock:
@@ -641,6 +693,7 @@ def report():
     p = platform(30) or {}
     return {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
             "settings": settings(state), "rollout": state.get("rollout"), "last": state.get("last_rollout"),
+            "window_skip": state.get("window_skip") if settings(state)["schedule"]["enabled"] else None,
             **{k: v for k, v in host_os.report().items() if k in ("hosts", "every_s", "checking")}}
 
 

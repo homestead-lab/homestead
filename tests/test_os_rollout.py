@@ -3,6 +3,7 @@ import functools
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import urllib.error
@@ -122,7 +123,7 @@ class RolloutTests(unittest.TestCase):
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
                 mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
-            ROLLOUT.tick()
+            ROLLOUT.tick(now=time.time() + ROLLOUT.WINDOW_RETRY)   # its next look
             start.assert_called_once()
 
     @own_history
