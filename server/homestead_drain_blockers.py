@@ -119,6 +119,17 @@ def _names(items):
     return ", ".join(items)
 
 
+# What can be gone in a few minutes with nobody doing anything: a read that failed
+# can answer next time, and Longhorn records engines that moved and finishes
+# removing orphans by itself. The others stay until a person acts.
+CLEARS_BY_ITSELF = ("unread", "engines-elsewhere", "removing-orphans")
+
+
+class MayClear(ValueError):
+    """A restart with nobody there refused for something that may clear by itself:
+    worth waiting a while before leaving the host for a person."""
+
+
 def _row(id, kind, what, why, fix, can_remove=False, records=None):
     return {"id": id, "kind": kind, "what": what, "why": why, "fix": fix,
             "can_remove": can_remove, "records": records or []}

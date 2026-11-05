@@ -35,6 +35,7 @@ import time
 import urllib.error
 
 import homestead_alerts as ALERTS
+import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_operations as OPS
 import homestead_routes as ROUTER
@@ -60,7 +61,8 @@ ERROR_LIMIT = 30 * 60
 # An error this long after the one before starts a new streak (Homestead was down).
 ERROR_GAP = 5 * 60
 # The hosts restarted before this one leave their copies of volumes rebuilding
-# for a while; meanwhile this host can hold a volume's only healthy copy.
+# for a while; meanwhile this host can hold a volume's only healthy copy. A drain
+# check's failed read and what Longhorn clears by itself get the same wait.
 COPIES_WAIT = 15 * 60
 # An API server busy with a host rejoining answers 429 or 5xx for a while.
 TRANSIENT_WAIT = 10 * 60
@@ -478,12 +480,16 @@ def step(state, now=None):
                 node["attempts"] -= 1
                 rollout["message"] = f"{name}: the Kubernetes API is busy ({str(error)[:60]}); trying again"
                 return True
-            if "only healthy copy" in str(error) and now - node.setdefault("copies_since", now) < COPIES_WAIT:
-                # Copies on the hosts restarted before are still rebuilding:
-                # wait for them rather than leave this host unrestarted.
+            copies = "only healthy copy" in str(error)
+            if ((copies or isinstance(error, DRAIN_BLOCKERS.MayClear))
+                    and now - node.setdefault("copies_since", now) < COPIES_WAIT):
+                # Copies on the hosts restarted before are still rebuilding, or a
+                # read or Longhorn may answer soon: wait rather than leave this
+                # host for a person. Once a tick: the review is many reads.
                 node["attempts"] -= 1
-                rollout["message"] = f"{name}: waiting for volume copies to finish rebuilding before restarting it"
-                return True
+                rollout["message"] = (f"{name}: waiting for volume copies to finish rebuilding before restarting it" if copies
+                                      else f"{name}: waiting up to 15 minutes before restarting it: {str(error)[:160]}")
+                return False
             # Refused by the review, or stopped before power was sent: the
             # host keeps its updates and waits for someone.
             _uncordon(rollout)

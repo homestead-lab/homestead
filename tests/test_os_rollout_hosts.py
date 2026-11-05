@@ -392,13 +392,6 @@ class RefusedRestartInARunTests(Runs):
         self.assertEqual([], self.sent)
         self.assertTrue(done["results"][0]["restart_needed"])
 
-    def test_it_does_not_wait_for_the_copies_rebuilding(self):
-        self.add(*orphans_on_node_a())
-        ROLLOUT.start("asked-hosts", only=["node-a"])
-        for _ in range(40):
-            ROLLOUT.tick(now=1000)
-        self.assertEqual("succeeded", ROLLOUT._load()["rollout"]["status"], "all at one instant: no time to wait out")
-
     def test_a_long_list_of_blockers_is_not_cut_short(self):
         self.add(*orphans_on_node_a(count=20), *stuck_pod_on_node_a())
         ROLLOUT.start("asked-hosts", only=["node-a"])
@@ -781,6 +774,120 @@ class ChecksNotWiredTests(Runs):
         row = ROLLOUT.preview(["node-a"])["hosts"][0]
         self.assertEqual("", row["restart_refusal"])
         self.assertTrue(row["restart_unread"])
+
+
+def engines_elsewhere_on_node_a():
+    """node-a's instance-manager still lists an engine that now runs on node-b,
+    with no orphan record yet: Longhorn records these by itself within minutes."""
+    return [engine("vol-x", "node-b"), instance_manager("node-a", engines=["vol-x-e-0"])]
+
+
+def removing_orphan_on_node_a():
+    orphan = engine_orphan("vol-y", 9)
+    orphan["metadata"]["deletionTimestamp"] = "2026-11-05T10:00:00Z"
+    return [orphan, instance_manager("node-a", engines=[])]
+
+
+class ClearsByItselfTests(Runs):
+    """Andreas, 5 Nov: a read that failed, or a blocker Longhorn clears by itself,
+    gets the same 15 minutes as copies rebuilding. Still there: refused and named,
+    and the host waits for a person. What won't clear is refused at once."""
+    def setUp(self):
+        super().setUp()
+        self.own = "node-c"
+        ROLLOUT.save_settings({})
+
+    def until_restart_phase(self, now=1000):
+        ROLLOUT.start("asked-hosts", only=["node-a"], now=now)
+        for _ in range(12):
+            ROLLOUT.tick(now=now)
+            rollout = ROLLOUT._load()["rollout"]
+            if rollout.get("status") != "running" or rollout["node"].get("copies_since"):
+                break
+        return ROLLOUT._load()["rollout"]
+
+    def assert_waits_then_refuses(self, words):
+        rollout = self.until_restart_phase()
+        self.assertEqual("running", rollout["status"], "waits, not refused")
+        self.assertEqual("restart", rollout["phase"])
+        self.assertIn("waiting", rollout["message"])
+        self.assertEqual([], self.sent)
+        ROLLOUT.tick(now=1000 + ROLLOUT.COPIES_WAIT - 60)
+        self.assertEqual("running", ROLLOUT._load()["rollout"]["status"])
+        for now in (1000 + ROLLOUT.COPIES_WAIT, 1000 + ROLLOUT.COPIES_WAIT + 20):
+            ROLLOUT.tick(now=now)
+        done = ROLLOUT._load()["rollout"]
+        self.assertEqual("succeeded", done["status"], "the host waits for a person; the run ends")
+        self.assertTrue(done["results"][0]["restart_needed"])
+        self.assertIn(words, done["results"][0]["note"])
+        self.assertEqual([], self.sent)
+
+    def test_a_drain_check_read_that_keeps_failing_waits_then_refuses_naming_it(self):
+        self.kube.fail(BLOCKERS.ORPHANS, 503, times=100000)
+        self.assert_waits_then_refuses("couldn't check")
+
+    def test_a_drain_check_read_that_recovers_restarts_the_host(self):
+        self.kube.fail(BLOCKERS.ORPHANS, 500, times=100000)
+        rollout = self.until_restart_phase()
+        self.assertEqual("restart", rollout["phase"])
+        self.kube._failures.clear()
+        ROLLOUT.tick(now=1300)
+        ROLLOUT.tick(now=1320)
+        self.assertEqual(["node-a"], self.sent, "the check answered: on with the restart")
+
+    def test_engines_that_run_elsewhere_wait(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.assert_waits_then_refuses("still lists engine")
+
+    def test_engines_elsewhere_that_clear_restart_the_host(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.until_restart_phase()
+        self.assertEqual([], self.sent)
+        for obj in engines_elsewhere_on_node_a():
+            self.kube.discard(self.kube.path_of(obj))
+        ROLLOUT.tick(now=1300)
+        self.assertEqual(["node-a"], self.sent)
+
+    def test_orphans_being_removed_wait(self):
+        self.add(*removing_orphan_on_node_a())
+        self.assert_waits_then_refuses("being removed")
+
+    def test_a_blocker_that_will_not_clear_is_refused_at_once(self):
+        self.add(*orphans_on_node_a())
+        rollout = self.until_restart_phase()
+        self.assertEqual("succeeded", rollout["status"])
+        self.assertTrue(rollout["results"][0]["restart_needed"])
+        self.assertNotIn("copies_since", rollout["results"][0])
+
+    def test_one_that_will_not_clear_beside_one_that_would_is_refused_at_once(self):
+        self.add(*stuck_pod_on_node_a(), *engines_elsewhere_on_node_a())
+        rollout = self.until_restart_phase()
+        self.assertEqual("succeeded", rollout["status"])
+        self.assertIn("apps/app-0", rollout["results"][0]["note"])
+        self.assertIn("still lists engine", rollout["results"][0]["note"], "both named")
+
+    def test_longhorn_volumes_that_could_not_be_read_wait_too(self):
+        plan = power.plan("node-a", "reboot")
+        unknown = {**plan, "requires_data_ack": True, "storage_unknown": True, "volumes": [], "maintenance": {"local_storage": []}}
+        with mock.patch.object(POWER_JOBS.POWER, "plan", return_value=unknown):
+            with self.assertRaises(BLOCKERS.MayClear):
+                POWER_JOBS.rollout_reboot("node-a")
+        kept = {**unknown, "maintenance": {"local_storage": [{"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"}]}}
+        with mock.patch.object(POWER_JOBS.POWER, "plan", return_value=kept):
+            with self.assertRaises(ValueError) as refused:
+                POWER_JOBS.rollout_reboot("node-a")
+        self.assertNotIsInstance(refused.exception, BLOCKERS.MayClear, "data on the host won't clear")
+
+    def test_waiting_does_not_read_the_review_four_times_a_tick(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.until_restart_phase()
+        with mock.patch.object(POWER_JOBS.POWER, "plan", wraps=POWER_JOBS.POWER.plan) as plan:
+            ROLLOUT.tick(now=1020)
+        self.assertEqual(1, plan.call_count)
+
+    def test_the_review_says_it_today_as_the_restart_would(self):
+        self.add(*engines_elsewhere_on_node_a())
+        self.assertIn("still lists engine", POWER_JOBS.rollout_refusal("node-a"))
 
 
 if __name__ == "__main__":

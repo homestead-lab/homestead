@@ -565,8 +565,10 @@ def _unattended_plan(node, allow_single_copy):
         # A person ticks each of these; with nobody there the drain would stall on
         # them, so the host waits. Without the time a pod has been stuck: the same
         # pod later is the same answer.
-        raise ValueError("Something would keep this host from draining: "
-                         + "; ".join(what for _, what in DRAIN_BLOCKERS.review(power_plan["drain_blockers"])))
+        rows = power_plan["drain_blockers"]
+        may_clear = all(row["kind"] in DRAIN_BLOCKERS.CLEARS_BY_ITSELF for row in rows)
+        raise (DRAIN_BLOCKERS.MayClear if may_clear else ValueError)(
+            "Something would keep this host from draining: " + "; ".join(what for _, what in DRAIN_BLOCKERS.review(rows)))
     if power_plan["stranded"]:
         raise ValueError("some workloads have no other host to run on")
     hold = power_plan.get("hold") or []
@@ -593,7 +595,8 @@ def _unattended_plan(node, allow_single_copy):
         if power_plan.get("storage_unknown"):
             reasons.append("Longhorn's volumes could not be read")
         if reasons:
-            raise ValueError("; ".join(reasons) + " (the settings do not accept that)")
+            # Unread volumes can answer next time; data kept on the host won't go by itself.
+            raise (ValueError if kept else DRAIN_BLOCKERS.MayClear)("; ".join(reasons) + " (the settings do not accept that)")
     return power_plan
 
 
