@@ -118,6 +118,17 @@ def claim_class(rows=None):
     return default_class(rows) or INSTALL_CLASS or FALLBACK_CLASSES[0]
 
 
+def read_claim_class(what):
+    """claim_class() for a request that names no class, with a failed read
+    said as such (as a move says it), not as the raw client error: what is
+    what it was choosing a class for."""
+    try:
+        return claim_class()
+    except Exception as error:
+        raise RuntimeError(f"Homestead could not read the storage classes, so it did not choose one for {what}: "
+                           f"{error}. Try again in a moment.") from error
+
+
 def cleanup_restore_classes():
     """Remove unused restore classes, retaining those needed for PVC expansion.
 

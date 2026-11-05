@@ -104,7 +104,7 @@ def import_vm_disk(cfg, ops=OPS):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
     source = _http_disk_source(cfg)
     # None named: the one class every new volume goes on (#1125).
-    storage_class = _required_name(cfg.get("storage_class") or STORAGE_CLASSES.claim_class(), "storage class")
+    storage_class = _required_name(cfg.get("storage_class") or STORAGE_CLASSES.read_claim_class("the disk"), "storage class")
     body = {
         "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
         "metadata": {

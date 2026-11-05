@@ -1,6 +1,7 @@
 import sys
 import contextlib
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -74,6 +75,17 @@ class VmDiskImportTests(unittest.TestCase):
         VM_CREATE.import_vm_disk({"namespace": "lab", "name": "server-disk",
                                   "source_url": "https://images.example.test/server.qcow2"}, ops=self.ops)
         self.assertEqual("harvester-longhorn", self.sent[-1][2]["spec"]["storage"]["storageClassName"])
+
+    def test_an_unread_class_list_is_said_and_nothing_is_sent(self):
+        def unread():
+            raise urllib.error.URLError("connection refused")
+        storage_classes(self)
+        self.enterContext(mock.patch.object(VM_CREATE.STORAGE_CLASSES, "storage_classes", unread))
+        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes, so it did not "
+                                                  "choose one for the disk: .*connection refused"):
+            VM_CREATE.import_vm_disk({"namespace": "lab", "name": "server-disk",
+                                      "source_url": "https://images.example.test/server.qcow2"}, ops=self.ops)
+        self.assertEqual([], self.sent)
 
     def test_import_rejects_unsafe_source_and_bad_checksum(self):
         with self.assertRaisesRegex(ValueError, "HTTP or HTTPS"):

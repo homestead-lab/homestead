@@ -11,6 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
 import homestead_container_import as CONTAINER_IMPORT
+import homestead_storage_classes as STORAGE_CLASSES
+import urllib.error
 from fixtures_source import source
 from fakes.storage_classes import storage_classes
 
@@ -88,6 +90,43 @@ class ContainerImportStorageTests(unittest.TestCase):
         self.assertEqual([], self.created)
         self.assertEqual("longhorn-rwx", result["storage_class"])
         self.assertEqual("ReadWriteMany", result["access_mode"])
+
+    def reads(self, fail=None):
+        """Count the storage-class reads; fail makes each one fail."""
+        rows, count = STORAGE_CLASSES.storage_classes(), []
+
+        def read():
+            count.append(1)
+            if fail:
+                raise fail
+            return rows
+        self.enterContext(mock.patch.object(STORAGE_CLASSES, "storage_classes", read))
+        return count
+
+    def test_a_reuse_only_import_does_not_read_the_storage_classes(self):
+        """A borrowed claim keeps its own class: nothing to choose, so no read
+        and no new way to fail."""
+        count = self.reads(fail=AssertionError("a reuse-only import read the storage classes"))
+        result = CONTAINER_IMPORT.import_container(self.config(pvc_name="shared-appdata", reuse_existing=True, size_gb=1))
+        self.assertEqual([], count)
+        self.assertEqual("longhorn-rwx", result["storage_class"])
+
+    def test_new_volumes_with_no_class_read_the_classes_once(self):
+        count = self.reads()
+        CONTAINER_IMPORT.import_container(self.config(volumes=[
+            {"name": "example-config", "create": True, "size_gb": 10},
+            {"name": "example-clips", "create": True, "size_gb": 500},
+            {"name": "shared-appdata", "create": False}]))
+        self.assertEqual(1, len(count), "one read for the whole import, not one per volume or per pass")
+        self.assertEqual(["longhorn-r2", "longhorn-r2"], [row[3] for row in self.created])
+
+    def test_an_unread_class_list_is_said_and_nothing_is_made(self):
+        self.reads(fail=urllib.error.URLError("connection refused"))
+        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes, so it did not "
+                                                  "choose one for the imported volumes: .*connection refused"):
+            CONTAINER_IMPORT.import_container(self.config(pvc_name="example-config", size_gb=10))
+        self.assertEqual([], self.created)
+        self.assertEqual([], self.sent)
 
 
 if __name__ == "__main__":

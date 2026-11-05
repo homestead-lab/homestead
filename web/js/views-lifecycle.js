@@ -2012,7 +2012,9 @@ window.vmDiskImport = () => {
     return;
   }
   const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
-  const classes = STATE.data.importStorageClasses || ["longhorn-r2"];
+  // /api/storageclasses lists the class Homestead puts new volumes on first (#1125);
+  // with no list, the server picks that class for a disk that names none.
+  const classes = STATE.data.importStorageClasses || [];
   modal("Import VM disk", `
     <div class="note"><b>CDI handles the conversion.</b> Provide a directly downloadable HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image. The source is streamed into a new Longhorn PVC; an existing disk is never overwritten.</div>
     <div class="f2" style="margin-top:16px">
@@ -2022,7 +2024,7 @@ window.vmDiskImport = () => {
     <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. URLs containing embedded usernames or passwords are rejected; use a Kubernetes Secret for authenticated endpoints.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
     <div class="f2">
       <div class="f"><label>Capacity (GiB) ${tip("Must be at least as large as the image's virtual disk capacity. CDI expands the converted disk to fit this PVC.")}</label><input type="number" min="1" max="16384" id="vd_size" value="20"></div>
-      <div class="f"><label>Storage class</label><select id="vd_sc">${classes.map(s => `<option value="${esc(s)}" ${s === "longhorn-r2" ? "selected" : ""}>${esc(s)}</option>`).join("")}</select></div>
+      <div class="f"><label>Storage class</label><select id="vd_sc">${classes.length ? classes.map((s, i) => `<option value="${esc(s)}" ${i === 0 ? "selected" : ""}>${esc(s)}</option>`).join("") : '<option value="" selected>Homestead\'s default class</option>'}</select></div>
     </div>
     <div class="f2">
       <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several hosts to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>

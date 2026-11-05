@@ -1076,7 +1076,7 @@ window.uvmImport = async (source, id) => {
       UI.field("Memory", `<input id="uvm_mem" value="${esc(vm.memory)}" oninput="uvmPicture()">`))}
     ${settingRow("Firmware", `As on ${kind}; change it later under the VM's Hardware.`, `<span class="mono small">${esc(hw)}</span>`)}`;
   const disks = `
-    ${UI.field("Storage class", `<select id="uvm_sc" onchange="uvmRoom()">${classes.map(c => `<option value="${esc(c)}" ${facts[c]?.default ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
+    ${UI.field("Storage class", `<select id="uvm_sc" onchange="uvmRoom()">${classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
       { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
       `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
