@@ -48,7 +48,6 @@ homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_setup.DATA_DIR	test_update_file	fake
-homestead_updates.kget	test_storage_pending	fake
 homestead_upgrades.fetch	test_upgrades	fake
 homestead_upgrades.kget	test_upgrades	fake
 homestead_usage._beat	test_usage	other
