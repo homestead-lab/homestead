@@ -835,6 +835,14 @@ def _set(state, detail="", error=""):
 _restart = threading.Event()
 
 
+def _pause(seconds):
+    """The backoff after a failure; saving the settings ends it early. A
+    wake-up left by the connection that just failed does not."""
+    _restart.clear()
+    if _restart.wait(seconds):
+        _restart.clear()
+
+
 def run():
     """Publishes while enabled and leading; reconnects after any failure."""
     client, announced, backoff = None, {}, 5
@@ -899,7 +907,7 @@ def run():
             if client:
                 client.close(gracefully=False)
                 client = None
-            time.sleep(backoff)
+            _pause(backoff)
             backoff = min(backoff * 2, 300)
 
 
