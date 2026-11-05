@@ -81,17 +81,12 @@ homestead_names.kget	test_smart	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_cluster_address	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_operations.DATA_DIR	test_operations	fake
 homestead_operations.DATA_DIR	test_operations_memo	fake
 homestead_operations.DATA_DIR	test_set_restart	fake
-homestead_operations.deployment_progress	test_operations	fake
 homestead_operations.deployment_progress	test_operations_memo	fake
 homestead_operations.deployment_progress	test_set_restart	fake
-homestead_operations.kget	test_operations	fake
 homestead_operations.kget	test_operations_memo	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_operations.smart_progress	test_operations	fake
-homestead_operations.smart_progress	test_operations	other
 homestead_outage.DATA_DIR	test_outage	fake
 homestead_outage.DATA_DIR	test_outage_carry	other
 homestead_outage.DATA_DIR	test_outage_secret	fake

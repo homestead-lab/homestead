@@ -10,7 +10,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as KUBE
 import homestead_operations as operations
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fakes.kube import Kube
+from rebind import keep_bound
 
 
 class OperationTests(unittest.TestCase):
@@ -38,6 +40,7 @@ class OperationTests(unittest.TestCase):
         def progress(namespace, name):
             return self.objects[(namespace, name)]
 
+        keep_bound(self, operations)
         operations.bind(get, self.tmp.name, progress)
         # Importing server.py (another test may) wraps this resolver with one
         # that reads through server's own Kubernetes client.
