@@ -106,8 +106,6 @@ homestead_k3scluster.check	test_vm_lan	fake
 homestead_k3scluster.create	test_job_cancel	other
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
-homestead_lan.kget	test_fitted_names	fake
-homestead_lan.ksend	test_fitted_names	fake
 homestead_leader.kget	test_replicas	fake
 homestead_leader.ksend	test_replicas	fake
 homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
@@ -138,7 +136,6 @@ homestead_move_source.ksend	test_move_flow	fake
 homestead_move_source.ksend	test_transfer_cleanup	fake
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
-homestead_names.kget	test_fitted_names	fake
 homestead_names.kget	test_fleet	fake
 homestead_names.kget	test_host_fixes	fake
 homestead_names.kget	test_image_cache	fake
@@ -157,8 +154,6 @@ homestead_names.kget	test_transfer_cleanup	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_cluster_address	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_nodeshell.kget	test_fitted_names	fake
-homestead_nodeshell.ksend	test_fitted_names	fake
 homestead_onboard.OPS	test_node_removal_k3s	other
 homestead_onboard.kget	test_node_removal_k3s	fake
 homestead_onboard.ksend	test_node_removal_k3s	fake
