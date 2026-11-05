@@ -359,6 +359,20 @@ class FollowerPagesTests(unittest.TestCase):
         self.assertEqual([], self.cluster.calls)
         self.assertEqual(json.loads(json.dumps(on_leader)), on_follower)
 
+    def test_a_cycle_on_the_shared_fake_cluster_leaves_no_restart_record_behind(self):
+        """The restart record's real thread would outlive the test and write
+        restarts.json into the folder its cleanup is removing ("Directory not
+        empty"): the shared Cluster keeps it from starting."""
+        import threading
+        # Only threads this tick started: one an earlier file left running is not this test's.
+        earlier = {t for t in threading.enumerate() if t.name == "restart-record"}
+        self.PAGES.tick(LEADER, self.OV.page_inputs(), self.OV.page_builders(), now=100)
+        started = [t for t in threading.enumerate() if t.name == "restart-record" and t not in earlier]
+        for thread in started:
+            thread.join(10)
+        self.assertEqual([], [t.name for t in started])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "restarts.json")))
+
 
 if __name__ == "__main__":
     unittest.main()

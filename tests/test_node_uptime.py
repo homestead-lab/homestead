@@ -342,7 +342,7 @@ class DayStripTests(UptimeCase):
             self.assertEqual(want, H.uptime(now), f"case {case}")
 
     def test_it_is_several_times_quicker_than_the_full_computation(self):
-        import json, os, time
+        import gc, json, os, time
         names = [f"node-{i}" for i in range(8)]
         now = self.start + 13 * 3600
         coarse = [{"t": now - now % 3600 - back * 3600, "n": 12, "nodes": {n: [1.0, 2.0, 1] for n in names}}
@@ -352,12 +352,22 @@ class DayStripTests(UptimeCase):
                         "reason": "OS update", "outcome": "ended"} for i in range(1, 13)]
         with open(os.path.join(self.tmp.name, H.FILE), "w", encoding="utf-8") as handle:
             json.dump({"fine": fine, "coarse": coarse, "maintenance": maintenance}, handle)
-        started = time.process_time()
-        want = _reference_uptime(H._read(), now)
-        before = time.process_time() - started
-        started = time.process_time()
-        got = H.uptime(now)
-        after = time.process_time() - started
+        # A full collection inside one timed call costs it a few tenths of a second
+        # once earlier test files have left ~1.5 M objects alive (source_scan keeps
+        # every parsed file): collect first, and time neither call with GC on.
+        was = gc.isenabled()
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.process_time()
+            want = _reference_uptime(H._read(), now)
+            before = time.process_time() - started
+            started = time.process_time()
+            got = H.uptime(now)
+            after = time.process_time() - started
+        finally:
+            if was:
+                gc.enable()
         self.assertEqual(want, got)
         # Relative, so a busy machine slows both alike: 20 nodes took 0.8 s before #979.
         # A generous ratio: about 6 times on a quiet machine, never under 3 seen on a loaded one.

@@ -297,9 +297,19 @@ class JobStepsTests(unittest.TestCase):
 
     def test_a_step_that_raises_beats_its_error_and_the_loop_keeps_its_pace(self):
         op = self.host_job("node-1")
-        with mock.patch.object(OPS, "_resolve_outside", side_effect=RuntimeError("store unreadable")), \
-                mock.patch("builtins.print"):
+        # The step raises only once the first round has returned: left free, it
+        # could raise before that round reads the errors, which then beats it and
+        # leaves the next round nothing to tell.
+        go = threading.Event()
+        self.addCleanup(go.set)
+
+        def fails(*args, **kwargs):
+            go.wait(60)
+            raise RuntimeError("store unreadable")
+        with mock.patch.object(OPS, "_resolve_outside", fails), mock.patch("builtins.print"):
             self.tick()
+            self.assertEqual([None], self.beats, "the round that started the step had nothing to tell")
+            go.set()
             # On a loaded machine the failing step can take longer than a few
             # seconds to be scheduled: wait for it, and say so if it never ends.
             self.assertTrue(STEPS.wait(60), "the failing step never finished")

@@ -13,6 +13,7 @@ Builds on tests/test_viewer_helm_values.py (the same objects on the shared fake)
 An admin and the reveal route see everything as before."""
 import base64
 import copy
+import gc
 import gzip
 import json
 import sys
@@ -952,7 +953,7 @@ class FailClosed(Base):
             with self.subTest(text=text[:40]):
                 self.assertEqual([m.span() for m in MASKS.TOKEN.finditer(text)], list(MASKS.tokens(text)))
 
-    def test_a_256_kb_text_is_checked_in_under_a_tenth_of_a_second(self):
+    def test_a_256_kb_text_is_checked_in_under_a_fifth_of_a_second_of_cpu(self):
         n = MASKS.MAX_TEXT
         texts = ["https://h.example.com/" + "a1" * (n // 2 - 12), "https://" + "@" * (n - 8), "https://h/?" + "a=1&" * (n // 4 - 3),
                  "https://h/" + "x/" * (n // 2 - 5), ("https://u:p@h.example.com/?token=t " * (n // 36))[:n],
@@ -964,7 +965,8 @@ class FailClosed(Base):
         for text in texts:
             self.assertLessEqual(len(text), n)
             best = min(_timed(lambda: MASKS.strip_url_secrets(text)) for _ in range(3))
-            self.assertLess(best, 0.1, text[:40])
+            # 0.2 s: ~0.045 s quiet, up to 0.085 s on a loaded host; a backtracking pattern takes seconds.
+            self.assertLess(best, 0.2, text[:40])
 
 
 ARGS_APP = "/apis/apps/v1/namespaces/lab/deployments/args"
@@ -1111,9 +1113,18 @@ class SecurityReview(unittest.TestCase):
 
 
 def _timed(work):
-    started = time.monotonic()
-    work()
-    return time.monotonic() - started
+    """CPU seconds work() took, with no collection inside: on a busy machine
+    the wall clock also counts the time other processes had the core, and a
+    collection is not the masking's own cost."""
+    was = gc.isenabled()
+    gc.disable()   # no collect per call: after a file that leaves 1.5 M objects, each costs 0.25 s
+    try:
+        started = time.process_time()
+        work()
+        return time.process_time() - started
+    finally:
+        if was:
+            gc.enable()
 
 
 if __name__ == "__main__":

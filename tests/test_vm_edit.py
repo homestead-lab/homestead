@@ -39,6 +39,12 @@ class Cluster:
         self.vm = copy.deepcopy(VM)
         self.sent = []
         self.secret = {"userdata": base64.b64encode(b"#cloud-config\n").decode()}
+        # Six test files share this fixture. What it replaces is put back when the
+        # file's tests end (module cleanups run last first, so the first Cluster's
+        # restore wins): a later file that reads VMs through server.py's binding,
+        # once server has been imported, must not get this fake's 404s.
+        saved = {name: getattr(VMS, name) for name in ("kget", "ksend", "events_for", "platform", "images")}
+        unittest.addModuleCleanup(lambda: [setattr(VMS, name, value) for name, value in saved.items()])
         VMS.bind(self.get, self.send, lambda *a, **k: [])
         VMS.platform = lambda: platform
         VMS.images = lambda: [{"name": "image-ubuntu", "namespace": "default", "display": "ubuntu", "size_gb": 3.5,
@@ -197,6 +203,22 @@ class VmEditTests(unittest.TestCase):
         VM_EDIT.edit("lab", "web", {"cloud_init": {"user_data": "#cloud-config\nhostname: web\n", "network_data": ""}})
         patch = next(b for m, p, b in c.sent if m == "PATCH" and p.endswith("/secrets/web-ci"))
         self.assertEqual("#cloud-config\nhostname: web\n", base64.b64decode(patch["data"]["userdata"]).decode())
+
+
+def _vms_bound():
+    return VMS.kget, VMS.ksend, VMS.events_for, VMS.platform, VMS.images
+
+
+class ClusterFixtureTests(unittest.TestCase):
+    """Cluster binds homestead_vms to its fake for the file's tests; when the file
+    ends, the next file reads VMs through server.py's binding again."""
+
+    def test_the_cluster_puts_back_what_it_bound_when_its_file_ends(self):
+        before = _vms_bound()
+        Cluster({"harvester": False, "cdi": True})
+        self.assertNotEqual(before, _vms_bound())
+        unittest.doModuleCleanups()
+        self.assertEqual(before, _vms_bound())
 
 
 if __name__ == "__main__":
