@@ -71,6 +71,8 @@ class EditSaveMovesAPlainOneWordPassword(unittest.TestCase):
         path = "/apis/apps/v1/namespaces/lab/deployments/tunnel"
         store.objects[path] = FIXTURES.deployment([{"name": "DBPASS", "value": "legacy"}, {"name": "TZ", "value": "UTC"}])
         before = copy.deepcopy(store.objects[path])
+        # put back what server.py bound, or the next file's lifecycle reads go to this fake
+        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc", "STORAGE_CLASS")})
         lifecycle.bind(store.read, store.send, set(), {}, lambda: [], lambda *a, **k: None, "longhorn-r2")
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"DBPASS": "legacy", "TZ": "UTC"}}]})
