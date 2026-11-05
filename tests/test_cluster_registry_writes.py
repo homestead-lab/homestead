@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_move as move
 from fakes.kube import Kube
+from rebind import keep_bound
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-clusters"
 
@@ -28,8 +29,8 @@ def row(name):
 
 class ClusterRegistryWriteTests(unittest.TestCase):
     def setUp(self):
-        saved = move.kget, move.ksend, move.NS, move.VERSION, move.FLEET
-        self.addCleanup(lambda: (move.bind(*saved[:4]), setattr(move, "FLEET", saved[4])))
+        keep_bound(self, move, move.NAMES)
+        self.addCleanup(setattr, move, "FLEET", move.FLEET)
         move.FLEET = None
 
     def bind(self, send=None):
