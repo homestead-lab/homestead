@@ -14,6 +14,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_audit as AUDIT_LOG
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hook_queue import own_hook_queue
 import homestead_routes as ROUTES
 import homestead_shared as SHARED
 
@@ -22,6 +24,10 @@ SECRETS = ("Pw-0123456789", "SETUP-4F7Q-9KZD", "Old-pw-0123456", "New-pw-6543210
 
 
 class NothingSecret(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        own_hook_queue(cls)   # tests/hook_queue.py: earlier files' hooks drained, then its own queue
+
     def setUp(self):
         import homestead_http as HTTP
         import server
