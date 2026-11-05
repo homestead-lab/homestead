@@ -15,6 +15,8 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_kube as K
 import homestead_operations as OPS
 from fakes.kube import Kube
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 GI = 1024 ** 3
 METRICS = "/apis/metrics.k8s.io/v1beta1"
@@ -75,6 +77,7 @@ class Hosts:
         # The shared fake runs the real write guards, and an app edited while it is
         # moved reaches one: a temporary DATA_DIR for the job store's lock.
         test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
+        keep_bound(test, C, CAPACITY_REVIEW)
         saved = {name: getattr(C, name) for name in ("kget", "requirements", "satisfies", "apply", "own", "is_leader",
                                                       "summaries", "guard", "operations", "standby")}
         test.addCleanup(lambda: [setattr(C, name, value) for name, value in saved.items()])
@@ -288,6 +291,7 @@ class PlanTests(unittest.TestCase):
         # is a dict, so given one every host was refused and nothing moved.
         import homestead_place as PLACE
         c = Hosts(self)
+        CAPACITY_REVIEW.bind(lambda: b"test-key")   # the key bind() above uses; Hosts puts it back
         summary = lambda: [{"name": n, "status": "Ready", "labels": {}, "allocatable": {}, "schedulable": True, "hardware": {}}
                            for n in ("k1", "k2", "k3")]
         C.bind(K.kget, lambda dep: {"devices": [], "features": [], "resources": {}, "labels": {}},
@@ -478,6 +482,7 @@ class RoleTests(unittest.TestCase):
 
     def setUp(self):
         self.c = Hosts(self)
+        CAPACITY_REVIEW.bind(lambda: b"test-key")   # the key bind() above uses; Hosts puts it back
         self.asked = []
 
         def guard(dep, ns, role):
@@ -570,6 +575,7 @@ class RealGuardTests(unittest.TestCase):
     def setUp(self):
         import homestead_host_access as HOSTACCESS
         self.c = Hosts(self)
+        CAPACITY_REVIEW.bind(lambda: b"test-key")   # the key bind() above uses; Hosts puts it back
         self.c.edit_dep("frigate", lambda dep: dep["spec"]["template"]["spec"].update(serviceAccountName="frigate-sa"))
         C.bind(K.kget, lambda dep: {}, lambda n, r: (True, []), self.c.apply, ("lab", "homestead"), lambda: True,
                None, HOSTACCESS.require_target_as)
