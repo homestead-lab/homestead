@@ -74,11 +74,6 @@ homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
 homestead_operations.DATA_DIR	test_set_restart	fake
 homestead_operations.deployment_progress	test_set_restart	fake
 homestead_operations.kget	test_set_restart	fake
-homestead_root_guard.DATA_DIR	test_root_guard	fake
-homestead_root_guard.kget	test_root_guard	fake
-homestead_root_guard.ksend	test_root_guard	fake
-homestead_root_guard.platform	test_root_guard	fake
-homestead_root_guard.probes	test_root_guard	fake
 homestead_self_address._follow_fleet	test_self_address	other
 homestead_self_address.kget	test_self_address	other
 homestead_self_address.network	test_self_address	fake
