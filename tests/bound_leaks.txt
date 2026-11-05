@@ -128,7 +128,6 @@ homestead_leader.kget	test_replicas	fake
 homestead_leader.ksend	test_replicas	fake
 homestead_lhcapacity.kget	test_failover	fake
 homestead_lhcapacity.ksend	test_failover	fake
-homestead_lhcapacity.v2_status	test_data_copies	fake
 homestead_lhcapacity.v2_status	test_failover	fake
 homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
 homestead_lifecycle.STORAGE_CLASS	test_env_secrets	other
@@ -184,10 +183,6 @@ homestead_names.kget	test_transfer_cleanup	fake
 homestead_names.kget	test_unread_inventory	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_cluster_address	other
 homestead_networking.STATE.SYSTEM_NAMESPACES	test_vips	other
-homestead_node_parity.DATA_DIR	test_data_copies	fake
-homestead_node_parity.hostrun	test_data_copies	other
-homestead_node_parity.platform	test_data_copies	fake
-homestead_node_parity.probes	test_data_copies	fake
 homestead_nodeshell.kget	test_fitted_names	fake
 homestead_nodeshell.ksend	test_fitted_names	fake
 homestead_onboard.OPS	test_node_removal_k3s	other
