@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_names as NAMES
 import homestead_outage as O
 import homestead_outage_secret as S
+from rebind import keep_bound
 from fakes.kube import Kube
 from test_outage_formats import FakeCase, SECRET
 
@@ -93,6 +94,7 @@ class Base(FakeCase):
         import server  # noqa: F401  (binds this module to the real client once; put back after each test)
         saved = dict(O._bound)
         self.addCleanup(lambda: (O._bound.clear(), O._bound.update(saved)))
+        keep_bound(self, O)
         self.bind()
         O._tests.clear()
         O._unmovable.clear()
