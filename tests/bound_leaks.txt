@@ -99,10 +99,6 @@ homestead_lifecycle.hardware_features	test_viewer_secret_values	fake
 homestead_lifecycle.kget	test_viewer_secret_values	fake
 homestead_lifecycle.ksend	test_viewer_secret_values	fake
 homestead_longhorn.STORAGE_CLASS	test_storage_classes	other
-homestead_manifests.DATA_DIR	test_host_fixes	fake
-homestead_manifests.hostrun	test_host_fixes	other
-homestead_manifests.kget	test_host_fixes	fake
-homestead_manifests.platform	test_host_fixes	fake
 homestead_move.VERSION	test_move	other
 homestead_move.kget	test_move	fake
 homestead_move.ksend	test_move	fake
