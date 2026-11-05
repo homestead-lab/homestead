@@ -19,7 +19,9 @@ import homestead_helm as HELM
 import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_yaml as YAML
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fakes.kube import Kube
+from rebind import keep_bound
 
 MANIFEST = """---
 # Source: grafana/templates/service.yaml
@@ -924,6 +926,7 @@ class HelmTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 404, "NotFound", None, None)
             raise AssertionError(path)
 
+        keep_bound(self, HELM)
         HELM.bind(get, lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body)
 
     def test_every_release_is_read_from_helms_own_secrets(self):
