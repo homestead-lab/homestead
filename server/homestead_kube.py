@@ -139,9 +139,19 @@ _SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs
                     r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
                     r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
 # Flow ("flow2"), Data protection ("lhov") and Disks ("disks", Longhorn's
-# nodes) draw the same objects and are kept as long (#978).
-SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods", "flow2", "lhov", "disks")
+# nodes) draw the same objects and are kept as long (#978), as are the Volumes
+# page's classes ("sc:classes", the claims on each), V2 engine ("lhv2", the
+# hosts' hugepages and Longhorn's nodes' disks) and old copies ("oldcopies",
+# backing volumes).
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods", "flow2", "lhov", "disks",
+              "sc:classes", "lhv2", "oldcopies")
 SHOWN_PREFIXES = ("node:", "impact:")
+# Writes the main pages do not draw, and the kept page readings that show
+# them (#978): any StorageClass (a class made, made the default or removed,
+# by Volumes, a restore's repair or the ISO copies), and the V2 engine's
+# switch, Longhorn's or Harvester's.
+_ALSO_SHOWN = ((re.compile(r"/storageclasses(/|\?|$)"), ("sc:classes",)),
+               (re.compile(r"/settings/(v2-data-engine|longhorn-v2-data-engine-enabled)$"), ("lhv2",)))
 
 
 def _shown(key):
@@ -150,8 +160,13 @@ def _shown(key):
 
 def fresh_reads(method, path, body, proceed):
     result = proceed()
-    if method != "GET" and _SHOWN.search(str(path).split("?", 1)[0]):
-        CACHE.forget_where(_shown)
+    if method != "GET":
+        path = str(path).split("?", 1)[0]
+        if _SHOWN.search(path):
+            CACHE.forget_where(_shown)
+        for written, keys in _ALSO_SHOWN:
+            if written.search(path):
+                CACHE.forget_where(lambda key, keys=keys: key in keys)
     return result
 
 

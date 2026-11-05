@@ -1017,8 +1017,14 @@ def _remove_old_copy_route(pv):
     return remove_old_copy(pv, OPS)
 
 
+# The Volumes page asks for them on every refresh: kept as long as its main
+# reads, and dropped by a write to a backing volume or a claim (homestead_kube)
+# and by a move that ends (#978).
+OLD_COPIES_KEY = "oldcopies"
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/volumes/old-copies"): ("viewer", lambda request: old_copies()),
+    ("GET", "/api/volumes/old-copies"): ("viewer", lambda request: homestead_routes.cached(
+        OLD_COPIES_KEY, homestead_routes.PAGE_SECONDS, old_copies)),
     ("POST", "/api/volumes/old-copies/remove"): ("admin", lambda request: _remove_old_copy_route(request.body.get("pv", ""))),
 }

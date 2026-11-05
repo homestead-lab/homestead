@@ -58,8 +58,9 @@ import homestead_shared as SHARED
 # The parts, by their routes' cache keys.
 PARTS = ("nodes", "wl", "vol", "stor", "lhcap", "ov")
 # The keys a write on one replica drops on the others: the parts, and the
-# pages kept as long as they are (#978) - Data protection, Flow, Helm, Disks.
-TOLD = PARTS + ("lhov", "flow2", "helm", "disks")
+# pages kept as long as they are (#978) - Data protection, Flow, Helm, Disks,
+# and the Volumes page's classes, V2 engine and old copies.
+TOLD = PARTS + ("lhov", "flow2", "helm", "disks", "sc:classes", "lhv2", "oldcopies")
 # A part older than this is not served: three missed cycles.
 STALE_AFTER = 60
 # A woken cycle starts no sooner than this after the last one started, so a

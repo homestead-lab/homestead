@@ -40,6 +40,7 @@ import homestead_restore_swap as RESTORE_SWAP
 import homestead_restore_test as RESTORE_TEST
 import homestead_revert as REVERT
 import homestead_root_guard as ROOT_GUARD
+import homestead_routes
 import homestead_self as SELF
 import homestead_share_servers as SHARE_SERVERS
 import homestead_shares as SHARES
@@ -670,7 +671,9 @@ def register(ops):
     ops.RESOLVERS[COPY_JOB.KIND] = lambda item: COPY_JOB.resolve(item, KUBE.kget, KUBE.ksend, ops, copy_admission)
     ops.CANCELLERS[COPY_JOB.KIND] = (lambda item: COPY_JOB.recovery_plan(item, KUBE.kget, ops),
                                      lambda item, options: COPY_JOB.recovery_run(item, options, KUBE.kget, KUBE.ksend, ops))
-    ops.RESOLVERS["reclass"] = storage_move_progress
+    # The original is an old copy once the move ends: Volumes shows it on its
+    # next refresh (#978).
+    ops.RESOLVERS["reclass"] = homestead_routes.drops_when_ended(storage_move_progress, "oldcopies")
     ops.RESUMABLE["reclass"] = RECLASS.resumable
     ops.CANCELLERS["reclass"] = (CANCEL.reclass_plan, storage_legacy_cancel)
     ops.RESOLVERS["snapshot-revert"] = lambda item: storage_volume_action(item["ref"]["volume"], lambda: REVERT.resolve(item))
