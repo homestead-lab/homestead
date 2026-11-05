@@ -6,6 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_volumes as volumes
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class VolumeDeletionTests(unittest.TestCase):
@@ -28,6 +30,7 @@ class VolumeDeletionTests(unittest.TestCase):
             self.sent.append((method, path, body, ctype))
             return {}
 
+        keep_bound(self, volumes)
         volumes.bind(get, send, lambda name: self.snapshot_rows,
                      lambda name: self.backup_rows, self.cache,
                      {"kube-system", "longhorn-system"}, "lab")
