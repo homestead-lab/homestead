@@ -16,8 +16,9 @@ def row(name, provisioner, default=False):
 
 class DefaultClassTests(unittest.TestCase):
     def chosen(self, rows, env="longhorn-r2"):
+        # _note_default_class sets the class on LC and LH too: put all three back.
         with mock.patch.object(server, "ENV_STORAGE_CLASS", env), mock.patch.object(server, "STORAGE_CLASS", "unset"), \
-                mock.patch.object(server.LH, "STORAGE_CLASS", "unset"):
+                mock.patch.object(server.LH, "STORAGE_CLASS", "unset"), mock.patch.object(server.LC, "STORAGE_CLASS", "unset"):
             server._note_default_class(rows)
             return server.STORAGE_CLASS, server.LH.STORAGE_CLASS
 
