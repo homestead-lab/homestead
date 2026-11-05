@@ -198,6 +198,7 @@ class BalancePlanTests(Looping):
         saved = {name: getattr(C, name) for name in ("kget", "requirements", "satisfies", "apply", "own", "is_leader",
                                                       "summaries", "guard", "operations", "standby")}
         self.addCleanup(lambda: [setattr(C, name, value) for name, value in saved.items()])
+        keep_bound(self, CAPACITY_REVIEW)
         CAPACITY_REVIEW.bind(lambda: b"test-key")
         C.bind(never_metrics(lambda path: K.kget(path)), lambda dep: {}, lambda n, r: (True, []),
                lambda ns, name, to: None, ("lab", "homestead"), lambda: True)

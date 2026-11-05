@@ -28,7 +28,6 @@ homestead_baseline.kget	test_self_address	fake
 homestead_baseline.platform	test_self_address	fake
 homestead_capacity_review._key	test_container_rebalance	fake
 homestead_capacity_review._key	test_disk_region	fake
-homestead_capacity_review._key	test_metrics_readers	fake
 homestead_capacity_review._key	test_placement_mode	fake
 homestead_changes.DATA_DIR	test_change_attribution	fake
 homestead_changes.DATA_DIR	test_read_json	fake
