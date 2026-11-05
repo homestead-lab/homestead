@@ -9,6 +9,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_files as files
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class PathSafetyTests(unittest.TestCase):
@@ -77,6 +79,7 @@ class SessionPodTests(unittest.TestCase):
                     "spec": body["spec"], "status": {"phase": "Running"}}
             return body or {}
 
+        keep_bound(self, files)
         files.bind(get, send, None, "", None, {"kube-system"})
 
     def test_the_helper_pod_mounts_the_claim_and_expires_itself(self):
@@ -212,6 +215,7 @@ class CleanupTests(unittest.TestCase):
                      "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]},
             "status": {"phase": "Running"}}
         self.pods = [self.pod]
+        keep_bound(self, files)
         files.bind(lambda path: {"items": self.pods},
                    lambda method, path, body: self.sent.append((method, path, body)),
                    None, "", None, {"kube-system"})
