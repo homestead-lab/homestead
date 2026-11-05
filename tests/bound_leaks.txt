@@ -8,10 +8,8 @@
 # everything each module's bind() sets before and after every test. In such a run a line
 # whose file no longer leaks the name fails too. Each line is a leak to fix: make that
 # file restore the name (tests/rebind.py), delete the line and lower CEILING. Never add one, except for an open PR of ours (the block at the end).
-# Seen since keep_bound and the guard read dict entries a bind() sets with .update() or in a
-# loop (4 Nov): MCP.bind() hands test_mcp's fakes to homestead_agent_tools.bind(), which keeps
-# them in its _bound dict. Fix with keep_bound(self, MCP, TOOLS) in test_mcp's Base.setUp.
-homestead_weekly_trim.DATA_DIR	test_weekly_trim_run	fake
+# Empty since 5 Nov 2026 (sweep 5, CEILING 0): every test file in today's suite puts back what
+# its bind() calls set. A fake a test leaves now fails the run: fix it at its source, do not list it.
 # From open PRs of ours (3 Nov), measured on dev with every open PR merged: the test file is
 # not on dev yet, or leaks only in the PR's form. Allowed so that combined run passes; not
 # counted against CEILING and never stale (tests/bound_guard.py pending). Remove each once its PR

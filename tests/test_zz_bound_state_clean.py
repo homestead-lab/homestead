@@ -51,10 +51,10 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # 239 -> 120 on 5 Nov (sweep 4, up to test_setup): test files from test_node_probe_upgrade on, in name order,
 # skipping test_revert_stop (its lines are all in the open-PR block), plus two files cleared through shared
 # fixtures (test_outage_sweep, test_storage_initial), now keep what their bind() calls set.
-# 120 -> 1 on 5 Nov (sweep 5, up to test_volume_files): test files from test_change_attribution on, in name
-# order, plus the imports lines of test_vm_network_isolation and test_vm_write_integration, cleared through
-# test_vm_create's setUp, now keep what their bind() calls set.
-CEILING = 1
+# 120 -> 0 on 5 Nov (sweep 5, test_change_attribution to test_weekly_trim_run): the last 39 test files on the
+# list now keep what their bind() calls set. The list of today's suite is empty: at 0, any line added there
+# fails this check, and a fake a test leaves fails the fake check (ENFORCE_FAKES).
+CEILING = 0
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7

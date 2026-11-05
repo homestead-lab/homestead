@@ -20,6 +20,7 @@ import homestead_longhorn_jobs as LH_JOBS
 import homestead_operations as OPS
 import homestead_weekly_trim as WT
 from fakes.kube import Kube
+from rebind import keep_bound
 
 VOLS = f"{LH.API}/namespaces/{LH.LHNS}/volumes"
 JOBS = f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs"
@@ -129,6 +130,7 @@ class StateCase(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, WT)
         WT.bind(self.dir.name)
         self.checkpoints = []
 
