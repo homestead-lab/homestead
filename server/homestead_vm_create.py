@@ -22,6 +22,7 @@ import homestead_pod_resources as RESOURCES
 import homestead_operations as OPS
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_network as VMNETWORK
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 # --------------------------------------------------------------- VMs
@@ -101,8 +102,9 @@ def import_vm_disk(cfg, ops=OPS):
     access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
     if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-    storage_class = _required_name(cfg.get("storage_class") or "longhorn-r2", "storage class")
     source = _http_disk_source(cfg)
+    # None named: the one class every new volume goes on (#1125).
+    storage_class = _required_name(cfg.get("storage_class") or STORAGE_CLASSES.claim_class(), "storage class")
     body = {
         "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
         "metadata": {

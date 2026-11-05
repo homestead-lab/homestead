@@ -19,6 +19,7 @@ import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
 import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 # --------------------------------------------------------------- import job
@@ -280,7 +281,8 @@ def import_volumes(cfg):
         access_mode = str(item.get("access_mode") or "ReadWriteOnce")
         if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
             raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-        storage_class = str(item.get("storage_class") or "longhorn-r2").strip()
+        # None named: the one class every new volume goes on (#1125).
+        storage_class = str(item.get("storage_class") or STORAGE_CLASSES.claim_class()).strip()
         if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
             raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
         rows.append({"name": claim, "create": create, "size_gb": size,

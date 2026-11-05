@@ -12,10 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_container_import as CONTAINER_IMPORT
 from fixtures_source import source
+from fakes.storage_classes import storage_classes
 
 
 class ContainerImportStorageTests(unittest.TestCase):
     def setUp(self):
+        # A volume named with no class goes on the one default class (#1125).
+        storage_classes(self, "longhorn-r2")
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         journal = mock.patch.object(imports.OPS, "DATA_DIR", temporary.name)
