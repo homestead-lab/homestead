@@ -8,6 +8,7 @@ import homestead_lhcapacity as LHCAP
 import homestead_operations as OPS
 import homestead_deploy_manifests as MANIFESTS
 from fakes.kube import Kube
+from rebind import keep_bound
 
 UNREACHABLE, NOT_READY = FAILOVER.KEYS
 GPU = {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
@@ -84,6 +85,7 @@ class LonghornPolicyTests(unittest.TestCase):
     unless Longhorn lets go of the dead node's pods."""
 
     def setUp(self):
+        keep_bound(self, LHCAP)
         self.values = {LHCAP.NODE_DOWN: "do-nothing", LHCAP.OVER: "100", LHCAP.MINIMAL: "25"}
         self.sent = []
 

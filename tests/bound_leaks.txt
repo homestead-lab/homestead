@@ -119,9 +119,6 @@ homestead_lan.kget	test_fitted_names	fake
 homestead_lan.ksend	test_fitted_names	fake
 homestead_leader.kget	test_replicas	fake
 homestead_leader.ksend	test_replicas	fake
-homestead_lhcapacity.kget	test_failover	fake
-homestead_lhcapacity.ksend	test_failover	fake
-homestead_lhcapacity.v2_status	test_failover	fake
 homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
 homestead_lifecycle.STORAGE_CLASS	test_storage_classes	other
 homestead_lifecycle.STORAGE_CLASS	test_viewer_secret_values	other
