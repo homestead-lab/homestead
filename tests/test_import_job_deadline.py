@@ -1,4 +1,4 @@
-"""An import's copy Job ends at a deadline, and its failure says why (on the shared fake)."""
+"""An import's copy Job ends at a deadline, and its failure says why; it can also be cancelled (on the shared fake)."""
 import sys
 import tempfile
 import unittest
@@ -61,6 +61,7 @@ class ImportDeadlineTests(unittest.TestCase):
     def start(self):
         result = flow.dispatch(self.body, self.prepared, self.context, K.kget, K.ksend, ops, self.create_claim, self.admission)
         self.assertEqual("running", result["operation"]["status"])
+        self.ident = result["operation"]["id"]
         return self.kube.object(JOB)
 
     def finish(self, job, condition, reason=""):
@@ -105,6 +106,107 @@ class ImportDeadlineTests(unittest.TestCase):
         job = self.start()
         self.finish(job, "Complete")
         self.assertEqual("succeeded", ops.list_operations()[0]["status"])
+
+    def item(self):
+        return ops.list_operations()[0]
+
+    def cancel(self):
+        return ops.cancel(self.ident, {}, "")
+
+    def test_a_running_import_copy_can_be_cancelled_and_says_what_it_keeps(self):
+        self.start()
+        plan = ops.cancel_plan(self.ident)
+        self.assertTrue(plan["can"], plan.get("why_not"))
+        self.assertEqual("stop", plan["mode"])
+        self.assertEqual("admin", plan["needs"])
+        self.assertIn("volumes", " ".join(plan["keeps"]))
+        self.assertIn("Start refuses", " ".join(plan["keeps"]))
+        self.assertIn("log goes with the Job", " ".join(plan["undo"]))
+
+    def test_cancelling_removes_the_copy_job_and_keeps_volumes_and_the_stopped_app(self):
+        self.start()
+        self.cancel()
+        result = self.item()
+        self.assertEqual("cancelled", result["status"])
+        self.assertIsNone(self.kube.object(JOB))
+        self.assertEqual(0, self.kube.object(DEP)["spec"]["replicas"])
+        self.assertTrue(guard.pending(self.kube.object(DEP), "lab", K.kget), "data is incomplete: the app stays held")
+        self.assertIn("stays stopped", result["message"])
+        self.assertIn("delete app and its volumes, then import again", result["message"])
+        self.assertTrue(self.kube.object("/api/v1/namespaces/lab/persistentvolumeclaims/data"))
+
+    def test_cancelling_twice_after_the_job_is_gone_still_finishes(self):
+        self.start()
+        self.kube.discard(JOB)
+        self.cancel()
+        self.assertEqual("cancelled", self.item()["status"])
+
+    def test_a_replaced_copy_job_is_not_deleted_by_a_cancel(self):
+        job = self.start()
+        other = dict(job, metadata=dict(job["metadata"], uid="someone-elses"))
+        self.kube.add(other)
+        with self.assertRaises(ValueError):
+            self.cancel()
+        self.assertEqual("someone-elses", self.kube.object(JOB)["metadata"]["uid"])
+        self.assertEqual("running", ops.snapshot()[0]["status"])
+
+    def test_a_copy_that_already_finished_is_not_cancelled(self):
+        job = self.start()
+        self.finish(job, "Complete")
+        with self.assertRaises(ValueError):
+            self.cancel()
+        self.assertIsNotNone(self.kube.object(JOB))
+        ops.list_operations()
+        self.assertEqual("succeeded", self.item()["status"])
+
+    def bumping(self, condition=None, times=1):
+        """A read that finds the Job changed by someone else just after it, as the API server does."""
+        calls = []
+
+        def read(path):
+            got = K.kget(path)
+            if path == JOB and len(calls) < times:
+                calls.append(1)
+                changed = self.kube.object(JOB)
+                changed["metadata"]["resourceVersion"] = str(999990 + len(calls))
+                if condition:
+                    self.finish(changed, condition)
+                else:
+                    self.kube.add(changed)
+            return got
+        return read
+
+    def run_cancel(self, read):
+        stored = next(i for i in ops.stored() if i["id"] == self.ident)
+        return flow.cancel_run(stored, {}, read=read)
+
+    def test_a_copy_that_completes_between_the_read_and_the_delete_is_not_deleted(self):
+        self.start()
+        with self.assertRaisesRegex(ValueError, "finished already"):
+            self.run_cancel(self.bumping("Complete"))
+        self.assertIsNotNone(self.kube.object(JOB))
+
+    def test_a_status_update_between_the_read_and_the_delete_does_not_stop_the_cancel(self):
+        self.start()
+        self.run_cancel(self.bumping())
+        self.assertIsNone(self.kube.object(JOB))
+
+    def test_a_job_that_keeps_changing_ends_in_a_plain_sentence(self):
+        self.start()
+        with self.assertRaises(ValueError) as caught:
+            self.run_cancel(self.bumping(times=9))
+        self.assertEqual("The copy changed while it was being stopped; try again", str(caught.exception))
+        self.assertIsNotNone(self.kube.object(JOB))
+
+    def test_setup_before_the_copy_job_exists_still_cannot_be_cancelled(self):
+        self.start()
+        ident = self.ident
+        with ops.transaction() as t:   # the journal as it stands mid-setup
+            t.items[0]["ref"].update(phase="writing", job_uid="")
+            t.save(t.items)
+        self.assertFalse(ops.cancel_plan(ident)["can"])
+        with self.assertRaises(ValueError):
+            ops.cancel(ident, {}, "")
 
 
 if __name__ == "__main__":
