@@ -14,6 +14,7 @@ import homestead_kube as K
 import homestead_helm as HELM
 from fakes.kube import Kube
 from test_helm import secret
+from rebind import keep_bound
 
 CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/app"
 
@@ -33,6 +34,7 @@ class HelmUpgradeStaleTests(unittest.TestCase):
         self.kube = Kube(helmchart(), release)
         self.kube.__enter__()
         self.addCleanup(self.kube.__exit__, None, None, None)
+        keep_bound(self, HELM)
         HELM.bind(K.kget, K.ksend)
 
     def opened(self):
