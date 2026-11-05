@@ -12,6 +12,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_auth as auth
 import homestead_api_keys as keys
+import homestead_names as NAMES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 DAY = 86400
 
@@ -19,6 +22,7 @@ DAY = 86400
 class KeyTests(unittest.TestCase):
     def setUp(self):
         self.store = {"users": {}, "signing_key": "k" * 48}
+        keep_bound(self, auth, keys, NAMES)   # auth.bind() also hands its reader to NAMES
         auth.bind(self._get, self._send, "lab")
         auth._store_cache.update(at=0, data=None)
         auth._attempts.clear()

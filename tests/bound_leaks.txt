@@ -24,12 +24,9 @@ homestead_alerts.DATA_DIR	test_logalerts	fake
 homestead_alerts.DATA_DIR	test_push	fake
 homestead_alerts.DATA_DIR	test_smart_standby	fake
 homestead_alerts.DATA_DIR	test_trim_health	fake
-homestead_api_keys.DATA_DIR	test_api_keys	fake
 homestead_api_keys.DATA_DIR	test_read_json	fake
 homestead_api_keys.DATA_DIR	test_update_file	fake
-homestead_auth.kget	test_api_keys	fake
 homestead_auth.kget	test_sessions	fake
-homestead_auth.ksend	test_api_keys	fake
 homestead_auth.ksend	test_sessions	fake
 homestead_autoupdate.kget	test_autoupdate	fake
 homestead_autoupdate.kget	test_autoupdate	other
@@ -179,7 +176,6 @@ homestead_move_source.kget	test_transfer_cleanup	fake
 homestead_move_source.ksend	test_cluster_copy	fake
 homestead_move_source.ksend	test_move_flow	fake
 homestead_move_source.ksend	test_transfer_cleanup	fake
-homestead_names.kget	test_api_keys	fake
 homestead_names.kget	test_cluster_copy	fake
 homestead_names.kget	test_cluster_registry_writes	other
 homestead_names.kget	test_container_import	fake
