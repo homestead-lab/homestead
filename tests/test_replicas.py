@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_leader as LEADER
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 import homestead_shared as SHARED
 
 T0 = datetime.datetime(2026, 9, 24, 12, 0, 0, tzinfo=datetime.timezone.utc)
@@ -43,6 +45,7 @@ class FakeLeases:
 class LeaderTests(unittest.TestCase):
     def setUp(self):
         self.store = FakeLeases()
+        keep_bound(self, LEADER)
         LEADER.bind(self.store.get, self.store.send, "lab")
         LEADER._state.update(leader=False, holder="")
 
@@ -185,6 +188,7 @@ class SharedLockTests(unittest.TestCase):
 
     def test_the_lock_is_reentrant_within_a_thread(self):
         with tempfile.TemporaryDirectory() as data:
+            keep_bound(self, SHARED)
             SHARED.bind(data)
             lock = SHARED.SharedLock("nested")
             with lock:

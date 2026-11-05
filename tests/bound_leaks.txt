@@ -53,8 +53,6 @@ homestead_imports.ksend	test_vm_write_integration	fake
 homestead_k3scluster.check	test_vm_lan	fake
 homestead_k3scluster.create	test_vm_lan	fake
 homestead_k3scluster.kget	test_vm_lan	fake
-homestead_leader.kget	test_replicas	fake
-homestead_leader.ksend	test_replicas	fake
 homestead_lifecycle.STORAGE_CLASS	test_default_storage_class	other
 homestead_lifecycle.STORAGE_CLASS	test_storage_classes	other
 homestead_lifecycle.STORAGE_CLASS	test_viewer_secret_values	other
@@ -93,7 +91,6 @@ homestead_setup.DATA_DIR	test_update_file	fake
 homestead_share_servers.default_class	test_shares_writes	other
 homestead_share_servers.shared_classes	test_shares_writes	other
 homestead_share_servers.storage_options	test_shares_writes	other
-homestead_shared.DIR	test_replicas	fake
 homestead_signins.DATA_DIR	test_shared_logs	fake
 homestead_signins.DATA_DIR	test_signins	fake
 homestead_smart.kget	test_smart	fake
