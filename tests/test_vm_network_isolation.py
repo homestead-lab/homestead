@@ -8,10 +8,12 @@ import homestead_vm_list as VM_LIST
 import homestead_vm_edit as VM_EDIT
 import homestead_vm_create as VM_CREATE
 import homestead_vm_network as NETWORK
+from rebind import keep_bound
 
 
 class VMNetworkIsolationTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, edit_fixtures.VMS)
         self.cluster = edit_fixtures.Cluster({"harvester": False, "cdi": False})
 
     def spec(self):
