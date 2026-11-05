@@ -20,6 +20,7 @@ import re
 import secrets
 import socket
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 import time
 import urllib.error
 import urllib.parse
@@ -39,6 +40,8 @@ BUILTIN = ("router", "switch", "wifi", "firewall", "nas", "server", "printer", "
 _status = {"at": 0.0, "value": {}}
 _status_lock = threading.Lock()
 STATUS_TTL = 30
+WORKERS = 16
+STATUS_WAIT = 12            # the whole check never waits longer than this
 # A forced link check (TCP probes only) runs at most this often.
 FORCED_INTERVAL = 10
 CHANGED = "The portal links were changed elsewhere since you opened them; open Edit links again to see them"
@@ -237,11 +240,17 @@ def _probe():
     def check(row):
         result[row["id"]] = _reachable(row["url"])
 
-    threads = [threading.Thread(target=check, args=(row,), daemon=True) for row in rows if row.get("url")]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(3)
+    work = [row for row in rows if row.get("url")]
+    if work:
+        # At most WORKERS hosts asked at once, not one thread per link (#979);
+        # each ends within its 1.5 s timeout, so the wait is one 3 s window per
+        # wave, up to STATUS_WAIT. A link not asked by then has no answer yet.
+        pool = ThreadPoolExecutor(max_workers=min(WORKERS, len(work)), thread_name_prefix="portal")
+        futures = [pool.submit(check, row) for row in work]
+        wait(futures, timeout=min(3 * -(-len(work) // WORKERS), STATUS_WAIT))
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=False)
     with _status_lock:
         _status["value"], _status["at"] = result, time.monotonic()
     return result

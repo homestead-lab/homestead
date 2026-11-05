@@ -1,7 +1,10 @@
 import json
 import socket
 import sys
+import threading
+import time
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -101,3 +104,23 @@ class PortalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StatusPoolTests(unittest.TestCase):
+    """The link check asks at most WORKERS hosts at once, not one thread per link (#979)."""
+    def test_forty_links_are_checked_sixteen_at_a_time_and_all_answer(self):
+        lock, state = threading.Lock(), {"now": 0, "most": 0}
+        def reachable(url, timeout=1.5):
+            with lock:
+                state["now"] += 1
+                state["most"] = max(state["most"], state["now"])
+            time.sleep(0.02)
+            with lock:
+                state["now"] -= 1
+            return {"up": True, "ms": 1}
+        rows = [{"id": f"l{i}", "url": f"http://192.0.2.{i + 1}"} for i in range(40)]
+        with mock.patch.object(PORTAL, "stored", return_value=rows), mock.patch.object(PORTAL, "_reachable", reachable):
+            result = PORTAL._probe()
+        self.assertEqual({f"l{i}" for i in range(40)}, set(result))
+        self.assertLessEqual(state["most"], PORTAL.WORKERS)
+        self.assertGreater(state["most"], 1)

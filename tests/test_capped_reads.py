@@ -101,7 +101,6 @@ CACHES = {
 # (file under server/, function) -> join-in-a-loop sites in it, when the guard came in.
 JOINS = {
     # homestead_fleet.summary and homestead_uptime.observe: one deadline since #1051.
-    ("homestead_portal.py", "_probe"): 1,    # join(3) per app; each thread is a 1.5 s connect
 }
 
 
