@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import urllib.error
 import homestead_imports as imports
 import homestead_image_cache as IMAGES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
 POOLS = "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"
@@ -44,6 +46,7 @@ def api_group(name, version):
 
 class Fixture(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, imports.NAMES)
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = imports.SCAN_DIR, dict(IMAGES._SCANS), IMAGES._SCAN_STARTED[0]
         imports.SCAN_DIR = self.tmp.name
