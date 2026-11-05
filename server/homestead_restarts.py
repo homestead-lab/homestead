@@ -159,22 +159,31 @@ def _rollout_reason(old, new, ns, name, outage):
     return "Its settings changed"
 
 
-def _add(state, app, record, now):
+def _add(state, app, record, now, dirty=None):
+    if dirty is not None:
+        dirty[0] = True
     entry = state["apps"].setdefault(app, {"records": []})
     entry["records"] = ([record] + entry["records"])[:KEEP]
     entry["updated"] = now
 
 
-def _trim(state, now):
+def _trim(state, now, dirty=None):
+    """Drops what is too old or too many. Sets dirty[0] when it dropped anything."""
+    dirty = dirty if dirty is not None else [False]
     cutoff = now - KEEP_DAYS * 86400
     for app in list(state["apps"]):
-        records = [r for r in state["apps"][app]["records"] if (_at(r.get("at")) or 0) >= cutoff]
+        before = state["apps"][app]["records"]
+        records = [r for r in before if (_at(r.get("at")) or 0) >= cutoff]
         if records:
+            if len(records) != len(before):
+                dirty[0] = True
             state["apps"][app]["records"] = records
         else:
+            dirty[0] = True
             del state["apps"][app]
     extra = len(state["apps"]) - MAX_APPS
     if extra > 0:
+        dirty[0] = True
         for app in sorted(state["apps"], key=lambda a: state["apps"][a].get("updated", 0))[:extra]:
             del state["apps"][app]
 
@@ -303,8 +312,13 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
         # leader's thread finishing late - would put counts and templates
         # back; it changes nothing.
         if now < state.get("looked", 0):
-            return 0
-        was = json.dumps(state, sort_keys=True)
+            return SHARED.Unchanged(0)
+        # What changed is told without serialising the whole record (#980): the
+        # app records, by far the biggest part, change only in _add and _trim,
+        # which mark `dirty`; the small rest (seen, templates) is compared.
+        dirty = [any(k not in state for k in ("since", "seen", "templates", "apps"))]
+        small = ("since", "seen", "templates")
+        was = json.dumps({k: state.get(k) for k in small}, sort_keys=True)
         first = "since" not in state
         state.setdefault("since", now)
         seen, templates = state.setdefault("seen", {}), state.setdefault("templates", {})
@@ -313,7 +327,7 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
 
         def add(key, record):
             if not first:
-                _add(state, key, {"at": _iso(now), **record}, now)
+                _add(state, key, {"at": _iso(now), **record}, now, dirty)
                 written[0] += 1
 
         # The app's template changes when a running pod shows one not seen for
@@ -412,10 +426,11 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
         apps_now = {k for k, _ in current.values()}
         for key in [k for k in templates if k not in apps_now and k not in state["apps"]]:
             templates.pop(key, None)
-        _trim(state, now)
-        if json.dumps(state, sort_keys=True) != was:
+        _trim(state, now, dirty)
+        if dirty[0] or json.dumps({k: state.get(k) for k in small}, sort_keys=True) != was:
             state["looked"] = now
-        return written[0]
+            return written[0]
+        return SHARED.Unchanged(written[0])   # a quiet look writes nothing, and serialises nothing more
 
     try:
         return SHARED.update_file(_path(), change, _lock, {})
