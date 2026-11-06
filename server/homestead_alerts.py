@@ -5,17 +5,22 @@ finding. New signals, higher severity or worse measurements re-arm an incident.
 Source failures retain prior observations; only confirmed absence resolves it.
 """
 import hashlib
+import http.client
 import json
 import os
+import re
 import time
+import urllib.error
 import homestead_history as HISTORY
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 HOLD = 60
-# Longhorn not answering for this long is news of its own (#1002 follow-up).
-# Longhorn's manager restarts in a minute or three on an upgrade or a node
-# reboot; ten minutes is well past that, and well before held alerts go stale.
+# Longhorn's volumes not read for this long is news of its own (#1002 follow-up).
+# The read fails when the cluster's API does not answer (the volumes are
+# custom resources the API server serves itself, #1082): a slow or restarting
+# API server, an upgrade or a reboot settles within minutes; ten minutes is
+# well past that, and well before held alerts go stale.
 LONGHORN_QUIET = 600
 # An alert held this long because its source could not be read says it is
 # the last known state. It stays open: only a read that no longer finds it
@@ -391,15 +396,71 @@ def health_facts(overview):
     return facts
 
 
+# What an error may carry that a notification channel must not (#1082):
+# addresses, URLs and token-shaped strings, each with what names it.
+_PLAIN = [
+    (re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I), "<address>"),
+    (re.compile(r"\b(host|server|address)=(['\"])[^'\"]*\2", re.I), r"\1=<address>"),
+    (re.compile(r"(['\"])[a-z0-9-]+(?:\.[a-z0-9-]+)+\1", re.I), "<address>"),     # 'kube.example.com'
+    (re.compile(r"(?<![\w.-])[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{1,5}\b", re.I), "<address>"),  # kube.internal:6443
+    (re.compile(r"\bport=\d+", re.I), "port=<hidden>"),
+    (re.compile(r"\bBearer\s+\S+", re.I), "Bearer <hidden>"),
+    (re.compile(r"\[[0-9a-f:.]*:[0-9a-f:.]*\](?::\d+)?", re.I), "<address>"),
+    (re.compile(r"(?<![\w:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}(?![\w:])"
+                r"|(?<![\w:])(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?(?![\w:])", re.I), "<address>"),
+    (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"), "<address>"),
+    (re.compile(r"(?<![A-Za-z0-9+_=-])(?=[A-Za-z0-9+_=-]*\d)[A-Za-z0-9+_=-]{20,}"), "<hidden>"),
+]
+
+
+def plain_error(text, limit=160):
+    """An error as it may go to a notification channel: one short line,
+    addresses, URLs and token-shaped strings replaced, cut at limit."""
+    text = " ".join(str(text or "").split())
+    for pattern, word in _PLAIN:
+        text = pattern.sub(word, text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+# Failures that mean the API server did not answer: on this path every
+# OSError is the network's - a timeout, a connection refused, reset or closed
+# early, a host or network that cannot be reached (homestead_kube passes a
+# socket's OSError on as it is), a name not found, a TLS error - and so is a
+# broken HTTP answer.
+_NO_ANSWER = (OSError, http.client.HTTPException)
+
+
+def read_failure(error):
+    """What a failed read of the cluster says, for an alert: whether the
+    cluster's API did not answer, answered with an error, or the read failed
+    otherwise (a list cut short, an answer not understood), with the error
+    made plain. error may be the read's own or one raised from it."""
+    cause = error.__cause__ or error
+    if isinstance(cause, urllib.error.HTTPError):
+        said = f"the cluster's API answered {cause.code} {plain_error(cause.reason)}".rstrip()
+        return said + (": Homestead may be missing a permission" if cause.code == 403 else "")
+    text = str(cause)
+    if not text or isinstance(cause, KeyError):
+        text = f"{type(cause).__name__} {text}".strip()
+    if isinstance(cause, _NO_ANSWER):                   # URLError is an OSError too
+        return f"the cluster's API did not answer ({plain_error(text)})"
+    return f"the read failed ({plain_error(text)})"
+
+
 def longhorn_facts(overview):
-    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET."""
+    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET.
+    It says what is known: the read failed, with its error. Longhorn itself
+    may well be running (#1082)."""
     if not overview.get("volumes_unread"):
         return []
+    # Already plain from read_failure; made plain again for an overview an
+    # older copy of Homestead wrote.
+    reason = plain_error(overview.get("volumes_unread_reason"), limit=240) or "the read failed"
     return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
-             "title": "Longhorn is not answering", "resolved": "Longhorn is answering again",
-             "body": ("Homestead has not been able to read Longhorn's volumes for at least "
-                      f"{LONGHORN_QUIET // 60} minutes. Volume and disk alerts keep their last known state "
-                      "until it answers."),
+             "title": "Longhorn's volumes can't be read", "resolved": "Longhorn's volumes can be read again",
+             "body": (f"Homestead has not been able to read Longhorn's volumes for at least {LONGHORN_QUIET // 60} "
+                      f"minutes: {reason}. Volume and disk alerts keep their last known state until the volumes "
+                      "can be read again."),
              "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 

@@ -757,6 +757,18 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
 # What the snapshot hands get_overview when its volumes part failed, so the
 # overview neither reads Longhorn again nor takes the failure for no volumes.
 VOLUMES_UNREAD = object()
+_volumes_failed = {"reason": ""}    # why the last read of Longhorn's volumes here failed, plain (no address)
+
+
+def _volumes(**pods):
+    """STORAGE.get_volumes, keeping why it failed for the overview to say (#1082)."""
+    try:
+        vols = STORAGE.get_volumes(**pods)
+    except Exception as error:
+        _volumes_failed["reason"] = ALERTS.read_failure(error)
+        raise
+    _volumes_failed["reason"] = ""
+    return vols
 
 
 def _jobs_read():
@@ -799,7 +811,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     wl = WORKLOADS.get_workloads() if wl is None else wl
     if vols is None:
         try:
-            vols = STORAGE.get_volumes()
+            vols = _volumes()
         except Exception:
             vols = VOLUMES_UNREAD
     # Longhorn that did not answer is not a cluster with no volume issues: the
@@ -851,6 +863,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
         "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "volumes_unread": volumes_unread,
+        "volumes_unread_reason": _volumes_failed["reason"] if volumes_unread else "",
         "protection_unread": protection_unread,
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
@@ -887,7 +900,7 @@ def page_builders():
     volumes are read once, for the Volumes page, the hosts' duties, storage
     and the overview."""
     return [
-        ("vol", lambda got: STORAGE.get_volumes(pods=got.get("pods"))),
+        ("vol", lambda got: _volumes(pods=got.get("pods"))),
         ("nodes", lambda got: NODES.get_nodes(pods=got["pods"], vols=got.get("vol"))),
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),

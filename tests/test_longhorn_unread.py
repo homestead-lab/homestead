@@ -303,10 +303,15 @@ class NodeImpactTests(LonghornFixture):
         self.assertIsNone(p["counts"]["at_risk"])
 
 
-class NotAnsweringTests(LonghornFixture):
-    """While Longhorn cannot be read its alerts are held. After ten minutes
-    an alert says Longhorn is not answering; after an hour the held alerts
-    say they are the last known state, not the current one."""
+class VolumesUnreadAlertTests(LonghornFixture):
+    """While Longhorn's volumes cannot be read its alerts are held. After ten
+    minutes an alert says the volumes can't be read; after an hour the held
+    alerts say they are the last known state, not the current one.
+
+    The read fails when the cluster's API does not answer: Longhorn's volumes
+    are custom resources the API server serves itself, readable while
+    longhorn-manager is down (#1082). So the alert names the failed read and
+    its error, not Longhorn."""
     KEY = "disks:node-a:d1"
 
     def sources(self):
@@ -332,7 +337,7 @@ class NotAnsweringTests(LonghornFixture):
         self.assertIn(self.KEY, ALERTS._load()["active"])
         return read
 
-    def test_longhorn_not_answering_is_raised_after_ten_minutes_not_before(self):
+    def test_volumes_unread_is_raised_after_ten_minutes_not_before(self):
         self.assertEqual(600, ALERTS.LONGHORN_QUIET)
         self.break_read(VOLUMES)
         unread = self.sources()
@@ -341,10 +346,10 @@ class NotAnsweringTests(LonghornFixture):
         for at in (1000, 1000 + ALERTS.HOLD, 1000 + ALERTS.LONGHORN_QUIET - 1):
             fresh += ALERTS.observe(unread, now=at)
         self.assertEqual([], self.longhorn(fresh))
-        self.assertEqual([("raised", "Longhorn is not answering")],
+        self.assertEqual([("raised", "Longhorn's volumes can't be read")],
                          self.longhorn(ALERTS.observe(unread, now=1000 + ALERTS.LONGHORN_QUIET)))
 
-    def test_longhorn_answering_again_clears_the_alert(self):
+    def test_volumes_read_again_clears_the_alert(self):
         self.break_read(VOLUMES)
         unread = self.sources()
         ALERTS.observe(unread, now=1000)
@@ -353,7 +358,77 @@ class NotAnsweringTests(LonghornFixture):
         read = self.sources()
         self.assertEqual([], read["longhorn"])
         fresh = ALERTS.observe(read, now=2000) + ALERTS.observe(read, now=2000 + ALERTS.HOLD)
-        self.assertEqual([("resolved", "Longhorn is answering again")], self.longhorn(fresh))
+        self.assertEqual([("resolved", "Longhorn's volumes can be read again")], self.longhorn(fresh))
+
+    def test_the_alert_says_what_the_cluster_s_api_answered(self):
+        self.cluster.kube.fail(VOLUMES, 429, times=999)
+        fact, = self.sources()["longhorn"]
+        self.assertIn("the cluster's API answered 429", fact["body"])
+        self.assertNotIn("Longhorn is", fact["title"] + fact["body"] + fact["resolved"])
+
+    def test_the_reason_is_cleared_once_the_volumes_are_read(self):
+        self.break_read(VOLUMES)
+        self.assertIn("500", self.OV.get_overview()["volumes_unread_reason"])
+        self.assertIn("500", self.OV._volumes_failed["reason"])
+        self.mend()
+        done = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.assertTrue(done["vol"])
+        self.assertEqual("", self.OV._volumes_failed["reason"], "a read that worked leaves no reason behind")
+        self.assertEqual("", self.PAGES.read("ov")[1]["volumes_unread_reason"])
+
+    def test_the_snapshot_s_overview_carries_the_error_to_the_alert(self):
+        """The leader's page snapshot reads the volumes once, in its own part;
+        the overview it builds, which every replica serves, says why."""
+        self.cluster.kube.fail(VOLUMES, 429, times=999)
+        done = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.assertFalse(done["vol"])
+        overview = self.PAGES.read("ov")[1]
+        self.assertIn("429", overview["volumes_unread_reason"])
+        self.assertIn("429", ALERTS.longhorn_facts(overview)[0]["body"])
+
+    def test_a_read_volumes_overview_has_no_reason(self):
+        self.assertEqual("", self.OV.get_overview()["volumes_unread_reason"])
+
+    def test_the_alert_s_error_has_no_address_url_or_token(self):
+        """Alerts go to notification channels: the error is kept short, with
+        addresses, URLs and token-shaped strings taken out (#1082)."""
+        token = "eyJhbGciOi" + "JSUzI1NiIs" + "InR5cCI6Ik" + "pXVCJ9"      # built in pieces: push protection
+        cases = {
+            "HTTPSConnectionPool(host='192.0.2.10', port=6443): Read timed out. (read timeout=15)":
+                ("Read timed out", ["192.0.2.10", "6443"]),
+            "<urlopen error https://198.51.100.7:6443/apis/longhorn.io/v1beta2/volumes?token=" + token + ">":
+                ("urlopen error", ["198.51.100.7", "https://", "token=", token]),
+            "connect to [2001:db8::1]:6443 refused; also fe80:0:0:0:1:2:3:4 and 2001:db8::5":
+                ("refused", ["2001:db8", "fe80", "6443"]),
+            "HTTP Error 401: Bearer " + token + " is not valid":
+                ("HTTP Error 401", [token, "Bearer e"]),
+            "HTTPSConnectionPool(host='kube.example.com', port=6443): Max retries exceeded":
+                ("Max retries exceeded", ["kube.example.com", "6443"]),
+        }
+        for raw, (kept, gone) in cases.items():
+            with self.subTest(raw=raw):
+                text = ALERTS.plain_error(raw)
+                self.assertIn(kept, text)
+                for part in gone:
+                    self.assertNotIn(part, text)
+                body = ALERTS.longhorn_facts({"volumes_unread": True, "volumes_unread_reason": raw})[0]["body"]
+                for part in gone:
+                    self.assertNotIn(part, body)
+        self.assertLessEqual(len(ALERTS.plain_error("Read timed out " * 40)), 160)
+
+    def test_a_plain_error_passes_through_unchanged(self):
+        for plain in ("429 Too Many Requests", "read timed out after 15 s", "HTTP Error 500: Internal Server Error",
+                      "HTTPSConnectionPool", "at 12:30:45 the list was cut short",
+                      "list /apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas was cut short"):
+            with self.subTest(plain=plain):
+                self.assertEqual(plain, ALERTS.plain_error(plain))
+
+    def test_the_overview_s_reason_is_already_plain(self):
+        with mock.patch.object(self.STORAGE, "get_volumes", side_effect=RuntimeError(
+                "HTTPSConnectionPool(host='192.0.2.10', port=6443): Read timed out")):
+            reason = self.OV.get_overview()["volumes_unread_reason"]
+        self.assertIn("Read timed out", reason)
+        self.assertNotIn("192.0.2.10", reason)
 
     def test_a_cluster_without_longhorn_has_no_longhorn_alert(self):
         self.cluster.kube.absent_groups.add("longhorn.io")
