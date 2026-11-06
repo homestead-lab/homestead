@@ -273,9 +273,9 @@ def _land(key, flight):
 
 def _fly(key, fn, flight, background=False):
     """Compute key for everyone waiting on flight. In the background it is
-    data activity of its own, as the request was (a computation may write
-    under /data, the overview's live history): a data move's freeze waits
-    for it, and while one holds it does not run."""
+    data activity of its own, as a POST is (a computation may write under
+    /data, the overview's live history): a data move's freeze waits for it,
+    and while one holds it does not run."""
     flight.owner = threading.get_ident()
     try:
         if background:

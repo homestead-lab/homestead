@@ -28,6 +28,11 @@ LONGHORN_QUIET = 600
 STALE = 3600
 LOG_SIZE = 300
 WITHDRAWN_KEEP = 600            # seconds a withdrawn key outranks facts taken before it
+# Writers change alerts.json under this lock, which also waits for and is
+# refused by a data move (write_scope). Readers take neither (#906): every
+# write replaces the file whole (write_json: a temporary file, fsync, a
+# rename), so a reader sees the old file or the new one, never part of one,
+# and the alert list stays readable while Homestead's data is moved.
 _lock = SHARED.SharedLock("alerts")
 SEVERITY = {"info": 0, "degraded": 1, "critical": 2}
 # Log lines meant for one device (a test) or one person (their summary, #921):
@@ -52,8 +57,7 @@ def _load(strict=False):
         state = SHARED.read_json(_path(), {})
     else:
         try:
-            with open(_path(), encoding="utf-8") as handle:
-                state = json.load(handle)
+            state = SHARED.load_json(_path())
             if not isinstance(state, dict):
                 raise ValueError("Invalid alert state")
         except (OSError, ValueError):
@@ -293,24 +297,22 @@ def note(fact, now=None):
         return entry
 
 
+# The readers below take no lock: see _lock.
 def log(after=0, categories=None, limit=50, strict=False):
-    with _lock:
-        state = _load(strict)
+    state = _load(strict)
     rows = [e for e in state["log"] if e["id"] > after and (categories is None or e["category"] in categories)]
     return {"latest": state["seq"], "alerts": rows[-limit:] if limit else []}
 
 
 def for_user(entries, user):
-    with _lock:
-        state = _load()
+    state = _load()
     return [e for e in entries if not e.get("key") or e.get("event") or e.get("phase") == "resolved"
             or not _acknowledged(state, user, state["active"].get(e["key"], e))]
 
 
 def active(categories=None, user=None, now=None):
     now = time.time() if now is None else now
-    with _lock:
-        state = _load()
+    state = _load()
     rows = []
     for row in state["active"].values():
         if row.get("event") or (categories is not None and row["category"] not in categories):

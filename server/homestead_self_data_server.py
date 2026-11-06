@@ -11,6 +11,7 @@ ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
 (server.MOVED), in the module it moved to, so a test that patches it there
 reaches it here too; each name in VALUES is server.py's own value."""
 from contextlib import nullcontext
+from functools import wraps
 import copy
 import os
 import re
@@ -64,6 +65,48 @@ def self_data_file_scope(path):
         require_self_data_write()
         return self_data_activity()
     return nullcontext()
+
+
+# GETs that open a session (each a WebSocket upgrade) and stay data activity
+# for as long as it is open: a data move's freeze waits for an open one up
+# to its timeout, then the move is refused; a new one during a freeze is
+# refused at the door, with 503 before any upstream connection or 101. So
+# the audit records of a session's start and end are always written to the
+# data it ran on, never lost to a move between them. _guard uses it too.
+LONG_GETS = frozenset(("/api/console", "/api/node/shell", "/api/vm/console"))
+
+
+def request_scope(method, boot_pending):
+    """An /api/ request as data activity: a data move's freeze waits for it to
+    finish, and while one holds the request is refused with 503.
+
+    A plain GET is not activity of its own (#906): it reads, and its reads go
+    on while the data is moved. Each write it causes still is - write_json,
+    a SharedLock and a Kubernetes write each enter write_scope - so a write is
+    waited for and refused exactly as a POST's is. A read across several files
+    can see a move's freeze between two writes; each lock's block stays whole.
+    The sessions in LONG_GETS stay activity: see there."""
+    @wraps(method)
+    def guarded(handler):
+        path = urllib.parse.urlparse(handler.path).path
+        # Destination's explicitly read-only boot routes have their own guard;
+        # they must not create activity/feature lock files on the copied data.
+        get = getattr(handler, "command", "") == "GET"
+        progress = get and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)
+        if boot_pending() or not path.startswith("/api/") or progress or path in ("/api/auth/state", "/api/self/data/abandon"):
+            return method(handler)
+        try:
+            with nullcontext() if get and path not in LONG_GETS else self_data_activity():
+                return method(handler)
+        except SELF_DATA_FENCE.Held as error:
+            return held_reply(handler, error)
+    return guarded
+
+
+def held_reply(handler, error):
+    """A request a data move held (MoveHeld): 503 with data_handoff."""
+    handler._extra_headers = []
+    return handler._send(503, {"error": str(error), "data_handoff": True})
 
 
 def self_stop_warning():

@@ -10,7 +10,6 @@ import homestead_api_errors as API_ERRORS
 import homestead_route_policy as ROUTE_POLICY
 import homestead_version as RELEASE
 from contextlib import nullcontext
-from functools import wraps
 
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
@@ -220,21 +219,7 @@ def self_data_activity():
 
 
 def self_data_request(method):
-    @wraps(method)
-    def guarded(handler):
-        path = urllib.parse.urlparse(handler.path).path
-        # Destination's explicitly read-only boot routes have their own guard;
-        # they must not create activity/feature lock files on the copied data.
-        progress = getattr(handler, "command", "") == "GET" and re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)
-        if _self_data_boot_pending or not path.startswith("/api/") or progress or path in ("/api/auth/state", "/api/self/data/abandon"):
-            return method(handler)
-        try:
-            with self_data_activity():
-                return method(handler)
-        except SELF_DATA_FENCE.Held as error:
-            handler._extra_headers = []
-            return handler._send(503, {"error": str(error), "data_handoff": True})
-    return guarded
+    return SELF_DATA_ROUTES.request_scope(method, lambda: _self_data_boot_pending)
 
 
 def self_data_file_write(path):
@@ -1341,7 +1326,7 @@ class H(HTTP.LimitedHandler):
             if not recovery_action and (self.command != "GET" or not re.fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path)):
                 self._send(503, {"error": "Homestead is verifying its new data volume. Wait for the move to finish before changing anything.", "data_handoff": True})
                 return True
-        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/readyz", "/api/auth/state", "/api/console", "/api/node/shell", "/api/vm/console")):
+        if path != "/api/self/data/abandon" and (self.command in ("POST", "PUT", "PATCH", "DELETE") or path in ("/healthz", "/readyz", "/api/auth/state") or path in SELF_DATA_ROUTES.LONG_GETS):
             try:
                 require_self_data_write()
             except SELF_DATA_FENCE.Held as error:
@@ -1618,6 +1603,8 @@ class H(HTTP.LimitedHandler):
             if p == "/healthz":
                 return self._send(200, {"ok": True})
             return self._send(404, {"error": "no route"})
+        except SELF_DATA_FENCE.MoveHeld as e:     # a write this GET caused, held by a data move
+            return SELF_DATA_ROUTES.held_reply(self, e)
         except PermissionError as e:
             return self._send(403, {"error": str(e)})
         except ValueError as e:

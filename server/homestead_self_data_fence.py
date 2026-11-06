@@ -27,6 +27,21 @@ from homestead_storage_journal import Held, identity, shape
 MARKER = ".self-data-handoff-v1.json"
 
 
+class MoveHeld(Held):
+    """Held because Homestead's own data is being moved: refused by the fence
+    (require_write) or the activity barrier. A request answers 503 with
+    data_handoff for this one alone; any other Held keeps its own reply."""
+
+
+def _as_move(step):
+    try:
+        return step()
+    except MoveHeld:
+        raise
+    except Held as error:
+        raise MoveHeld(str(error)) from None
+
+
 class WriteBarrier:
     """Shared activity locks drain all upgraded replicas before publication.
 
@@ -61,25 +76,26 @@ class WriteBarrier:
 
     @contextmanager
     def activity(self):
+        # Its own refusals are MoveHeld; a Held from the work inside is not.
         if getattr(self.local, "depth", 0):
-            self.check()
+            _as_move(self.check)
             self.local.depth += 1
             try:
                 yield
             finally:
                 self.local.depth -= 1
             return
-        self.check()
-        fd = self._open()
+        _as_move(self.check)
+        fd = _as_move(self._open)
         try:
             try:
                 fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise Held("Homestead is finishing current work for its data move. Wait before making changes") from None
+                raise MoveHeld("Homestead is finishing current work for its data move. Wait before making changes") from None
             except OSError:
-                raise Held("The shared data activity lock is unavailable; no change was authorized") from None
+                raise MoveHeld("The shared data activity lock is unavailable; no change was authorized") from None
             self.local.depth = 1
-            self.check()  # Fence may have been published while opening the lock.
+            _as_move(self.check)  # Fence may have been published while opening the lock.
             yield
         finally:
             self.local.depth = 0
@@ -446,7 +462,11 @@ class Fence:
         A normal boot with no marker needs no extra API read on every write.
         Setup must durably publish the marker on the shared source BEFORE it
         authorizes stopping writers. Once observed, removing it is a hard hold.
+        Every refusal is a MoveHeld.
         """
+        _as_move(self._require_write)
+
+    def _require_write(self):
         marker = read_marker(self.directory)
         if self.checked and self.completed_checked and marker in (None, self.completed_marker):
             return  # Verified destination retirement; a new move's marker revokes this.
