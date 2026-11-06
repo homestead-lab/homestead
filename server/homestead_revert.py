@@ -149,7 +149,7 @@ def plan(volume, snapshot):
             blockers.append(f"{user['name']} is a DaemonSet, which cannot be stopped for this; remove its claim first")
         if user.get("deletes_claims_on_scale_down"):
             blockers.append(f"StatefulSet {user['name']} can delete its volumes when stopped; change its scale-down "
-                            "retention policy to Retain before rolling back")
+                            "retention policy (whenScaled) to Retain before rolling back")
         if is_self(ns, user["name"]):
             blockers.append("this is Homestead's own data: rolling it back would stop Homestead part-way")
     known = {user["name"] for user in users}

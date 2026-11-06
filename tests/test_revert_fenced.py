@@ -261,6 +261,26 @@ class ChangedAfterTheReview(Base):
         self.assertEqual(before, len(self.kube.writes))
 
 
+class GivingUp(Base):
+    def test_a_stop_that_keeps_losing_to_the_fence_does_not_say_it_looks_again_once_it_has_ended(self):
+        item = self.begin()
+
+        def beat_it(method, path, body):
+            current = self.kube.object(A)
+            current["metadata"]["resourceVersion"] = str(int(current["metadata"]["resourceVersion"]) + 1000)
+            self.kube.add(current)
+        self.kube.react("PATCH", A, beat_it)
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("running", status, message)
+        self.assertIn("trying again", message)
+        self.late()
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertIn("app-a changed as it was being stopped", message)
+        self.assertNotIn("looking", message)
+        self.assertNotIn("trying again", message)
+
+
 class OurOwnMarks(Base):
     """A mark is an annotation, so on a real Deployment our own write moves the
     generation (the fake models it). That must never read as someone's change."""
@@ -276,6 +296,20 @@ class OurOwnMarks(Base):
         before = self.generation(path)
         K.ksend("PATCH", path, {"metadata": {"annotations": {"example.com/note": "x"}}}, ctype=MERGE)
         self.assertEqual(before, self.generation(path))
+
+    def test_a_deployments_status_write_with_an_annotation_does_not_move_it(self):
+        """The controller's revision annotation goes through /status: only the resourceVersion moves."""
+        before, version = self.generation(), self.kube.object(A)["metadata"]["resourceVersion"]
+        K.ksend("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
+        self.assertEqual(before, self.generation())
+        self.assertNotEqual(version, self.kube.object(A)["metadata"]["resourceVersion"])
+
+    def test_that_revision_write_after_the_start_holds_the_app_again(self):
+        item = self.begin()
+        K.ksend("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("running", status, message)
+        self.assertEqual(0, self.replicas(A))
 
     def test_an_annotation_after_the_review_on_a_deployment_is_refused(self):
         token = self.review()

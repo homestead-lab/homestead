@@ -313,7 +313,8 @@ class Kube:
         current = self._objects[self._key(req)]
         # As the API server: a Deployment's generation also moves on an annotation change
         # (seen on a real cluster, 6 Nov 2026: 1 -> 2; a StatefulSet's and a CronJob's stay).
-        noted = new.get("kind") == "Deployment" and meta.get("annotations") != current["metadata"].get("annotations")
+        noted = (new.get("kind") == "Deployment" and req["sub"] is None
+                 and meta.get("annotations") != current["metadata"].get("annotations"))
         if new.get("spec") != current.get("spec") or noted:
             meta["generation"] = int(current["metadata"].get("generation") or 1) + 1
         self._rv += 1

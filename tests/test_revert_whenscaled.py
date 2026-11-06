@@ -74,6 +74,7 @@ class RollingBackAStatefulSet(unittest.TestCase):
         self.assertFalse(plan["ready"])
         self.assertEqual(1, len(plan["blockers"]))
         self.assertIn("StatefulSet db can delete its volumes when stopped", plan["blockers"][0])
+        self.assertIn("whenScaled", plan["blockers"][0])
         self.assertIn("Retain", plan["blockers"][0])
 
     def test_starting_anyway_is_refused_and_writes_nothing(self):
@@ -187,6 +188,7 @@ class AJobFromTheReleaseBefore(Job):
         K.ksend("PATCH", DB, {"spec": {"replicas": 0}}, ctype=MERGE)
         message = REVERT.cancel_run(self.job(sent=True), {})
         self.assertEqual(1, self.replicas())
+        self.assertIn("The volume was not changed", message)
         self.assertIn("starting again", message)
 
     def test_a_stop_that_went_out_and_never_landed_gets_no_write(self):
