@@ -10,6 +10,7 @@ import time
 import urllib.error
 import homestead_names as NAMES
 import homestead_maintenance as MAINTENANCE
+import homestead_drain_blockers as BLOCKERS
 
 
 # --------------------------------------------------------------- node guards
@@ -98,6 +99,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     targets = dict(sorted(targets.items(), key=lambda row: (MAINTENANCE.longhorn_instance_manager(row[1]), row[0])))
     frozen = MAINTENANCE.pod_snapshot([p for p in pods if (p.get("spec") or {}).get("nodeName") == node])
     started = time.monotonic()
+    budgets = {}        # identity: [first refused at, refusal] of a budget whose copies are starting
+    stale_since = None  # since when only engines that run elsewhere hold the instance-manager
     while targets:
         retrying = []
         for identity, p in targets.items():
@@ -114,6 +117,17 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             except urllib.error.HTTPError as e:
                 if wait and e.code == 429 and MAINTENANCE.longhorn_instance_manager(p):
                     retrying.append(identity)
+                elif wait and e.code == 429:
+                    # A budget whose copies are not yet healthy, or whose
+                    # status is behind an eviction just made, lets go once
+                    # it catches up: waited on. One with nothing pending
+                    # never will: refused now, naming it.
+                    why = BLOCKERS.refusal(e, p, read=L.kget)
+                    if why["passing"]:
+                        retrying.append(identity)
+                        budgets[identity] = [budgets.get(identity, [None])[0], why]
+                    else:
+                        skipped.append(f"{identity} (HTTP 429: {why['why']})")
                 elif wait and e.code == 404:
                     # It may have left between LIST and POST. The next complete
                     # inventory must confirm that before power can be sent.
@@ -140,18 +154,54 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         if not targets:
             break
         waiting = [name for name in retrying if name in targets]
-        reason = ("Longhorn still prevents eviction" if waiting else "Pods have not left the host")
-        names = ", ".join(sorted(waiting or targets)[:6])
-        # Longhorn lets its instance managers go once their engines have
-        # moved off; V2 engines take longer than V1. When nothing but those
-        # is left, waiting longer is safe - it never forces anything.
-        limit = LONGHORN_DRAIN_WAIT if waiting and len(waiting) == len(targets) else 120
-        if time.monotonic() >= started + limit:
+        held = [name for name in waiting if name in budgets]
+        storage = [name for name in waiting if name not in budgets]
+        for name in list(budgets):
+            if name not in held:
+                del budgets[name]
+        now = time.monotonic()
+        if storage:
+            # The instance-manager's budget is 0 while it runs engines, and
+            # it is refused a moment after its consumers leave: engines it
+            # lists that still run here are progress. Once only engines that
+            # run elsewhere (or their orphan records) hold it, nothing more
+            # will let go, and the drain says what does.
+            state = BLOCKERS.engines_here(node, read=L.kget)
+            stale = state is not None and not state[0] and state[1]
+            stale_since = (stale_since if stale_since is not None else now) if stale else None
+            if stale and now >= stale_since + BLOCKERS.STALE_GRACE:
+                raise ValueError(f"Host remains cordoned; Longhorn still prevents eviction: {', '.join(sorted(storage)[:6])}, "
+                                 f"and only engines that no longer run on {node} keep it. "
+                                 f"Power was not sent; {BLOCKERS.say(node, state[1])}")
+        for name in held:
+            budgets[name][0] = now if budgets[name][0] is None else budgets[name][0]
+        # Each has its own deadline, and the first one passed ends the
+        # drain. Longhorn lets its instance managers go once their engines
+        # have moved off; V2 engines take longer than V1, so when nothing
+        # but those is left, waiting longer is safe - it never forces
+        # anything. A budget whose copies are starting is waited on from its
+        # first refusal. Anything else that has not left has two minutes.
+        others = [name for name in targets if name not in waiting]
+        deadlines = ([(started + 120, 120, "Pods have not left the host", others)] if others else []) + \
+            ([(started + LONGHORN_DRAIN_WAIT, LONGHORN_DRAIN_WAIT, "Longhorn still prevents eviction", storage)]
+             if storage else []) + \
+            [(budgets[name][0] + BLOCKERS.BUDGET_WAIT, BLOCKERS.BUDGET_WAIT,
+              "It was still waiting for " + budgets[name][1]["why"], [name]) for name in sorted(held)]
+        deadline, limit, reason, late = min(deadlines, key=lambda row: row[0])
+        names = ", ".join(sorted(late)[:6])
+        if now >= deadline:
+            stall = BLOCKERS.stall_reason(node, read=L.kget) or BLOCKERS.GENERAL_ADVICE
             raise ValueError(f"Host remains cordoned; drain timed out after {limit // 60} minutes. {reason}: {names}. "
-                             "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
+                             f"Power was not sent; {stall}")
         if progress:
-            progress("draining", 10, ("Waiting for Longhorn to allow storage pod eviction: " if waiting else
-                                     "Waiting for drained pods to leave: ") + names + "; power has not been sent")
+            if held:
+                said = "Waiting for " + "; ".join(budgets[name][1]["why"] for name in sorted(held)[:3]) + ": "
+                names = ", ".join(sorted(held)[:6])
+            elif storage:
+                said = "Waiting for Longhorn to allow storage pod eviction: "
+            else:
+                said = "Waiting for drained pods to leave: "
+            progress("draining", 10, said + names + "; power has not been sent")
         time.sleep(2)
     L._bust("wl", "ov", "nodes", "flow", "impact:")
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
@@ -218,7 +268,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
             raise ValueError("Host remains cordoned; drain was refused for " + ", ".join(refused[:6]) +
-                             ". Resolve the pod or disruption budget before retrying power control")
+                             ". Power was not sent; resolve the pod or disruption budget before retrying power control")
 
     # A long drain can outlive the reviewed quorum, VM and replica state.
     report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")

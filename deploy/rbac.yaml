@@ -130,6 +130,11 @@ rules:
   - apiGroups: ["longhorn.io"]
     resources: [replicas]
     verbs: [get, list, watch, delete]
+  # A host restart's review removes Longhorn's leftover engine-instance orphan
+  # records on that host whose engine already runs elsewhere (drain blockers).
+  - apiGroups: ["longhorn.io"]
+    resources: [orphans]
+    verbs: [delete]
   # A removed host's Longhorn record is deleted once it holds no replicas;
   # Longhorn only allows that after scheduling to it has been turned off.
   - apiGroups: ["longhorn.io"]

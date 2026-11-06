@@ -300,6 +300,8 @@ const DIALOGS = [
   ["node-power-disconnected-details", "nodes", "modal('Host maintenance',nodePowerProgressMarkup({status:'running',progress:8,message:'Waiting for apps to stop; power has not been sent',power:{phase:'holding',planned_outage:true,direct:true,holds:true,action:'reboot'}},true),true)", "document.querySelector('#mbody .ui-more').open=true"],
   ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
+  ["node-reboot-before-draining", "nodes", "nodePowerReview('harvester-node1','reboot')", "UI.selectSection('hostPower','drain')"],
+  ["node-remove-orphans", "nodes", "nodePowerReview('harvester-node1','reboot')", "nodePowerRemoveOrphans(0)"],
   ["node-promote", "nodes", "nodePromoteReview('harvester-node1')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],

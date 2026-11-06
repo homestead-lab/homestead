@@ -1,0 +1,46 @@
+{
+  "_source": [
+    "Shape of an all-in-one v1 InstanceManager as Longhorn v1.13.0 stores it, built from Longhorn's own code at tag v1.13.0:",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/k8s/pkg/apis/longhorn/v1beta2/instancemanager.go (InstanceManagerSpec json keys nodeID, type, dataEngine, image; InstanceManagerStatus currentState and instanceEngines / instanceReplicas: maps keyed by instance name to InstanceProcess {spec: {name, dataEngine}, status: {state, type, uuid, ...}}; InstanceTypeEngine = \"engine\", InstanceManagerTypeAllInOne = \"aio\")",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/types/types.go (GetInstanceManagerLabels: component, instance-manager-type, node, data-engine)",
+    "Names, uids and timestamps are placeholders."
+  ],
+  "object": {
+    "apiVersion": "longhorn.io/v1beta2",
+    "kind": "InstanceManager",
+    "metadata": {
+      "name": "instance-manager-0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "namespace": "longhorn-system",
+      "uid": "44444444-4444-4444-8444-444444444444",
+      "resourceVersion": "5004",
+      "labels": {
+        "longhorn.io/managed-by": "longhorn-manager",
+        "longhorn.io/component": "instance-manager",
+        "longhorn.io/instance-manager-type": "aio",
+        "longhorn.io/node": "node-a",
+        "longhorn.io/data-engine": "v1"
+      }
+    },
+    "spec": {
+      "nodeID": "node-a",
+      "type": "aio",
+      "dataEngine": "v1",
+      "image": "longhornio/longhorn-instance-manager:v1.13.0"
+    },
+    "status": {
+      "ownerID": "node-a",
+      "currentState": "running",
+      "dataEngine": "v1",
+      "ip": "192.0.2.10",
+      "instanceEngines": {
+        "vol-e-0": {
+          "spec": {"name": "vol-e-0", "dataEngine": "v1"},
+          "status": {"state": "running", "type": "engine", "uuid": "5e4d3c2b-1a09-4f8e-8d7c-6b5a49382716",
+                     "errorMsg": "", "conditions": {}, "listen": "", "portStart": 10000, "portEnd": 10000,
+                     "targetPortStart": 0, "targetPortEnd": 0, "resourceVersion": 0}
+        }
+      },
+      "instanceReplicas": {}
+    }
+  }
+}

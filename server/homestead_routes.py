@@ -95,6 +95,7 @@ MODULES = (
     "homestead_disk_allocation",
     "homestead_longhorn_runtime",
     "homestead_disks",
+    "homestead_drain_blockers",
     "homestead_expiry",
     "homestead_files",
     "homestead_firewall",

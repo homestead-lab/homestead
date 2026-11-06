@@ -739,7 +739,7 @@ class CatalogueTests(unittest.TestCase):
             "/api/disks/v2/plan", "/api/disks/v2/prepare", "/api/disks/v2/prepare-review", "/api/disks/v2/start",
             "/api/node/bond", "/api/node/bond/inspect", "/api/node/bond/preview", "/api/node/bridge",
             "/api/node/bridge/inspect", "/api/node/cordon", "/api/node/drain", "/api/node/hardware",
-            "/api/node/os/check", "/api/node/os/upgrade", "/api/node/power", "/api/node/probe/allocation",
+            "/api/node/orphans/remove", "/api/node/os/check", "/api/node/os/upgrade", "/api/node/power", "/api/node/probe/allocation",
             "/api/node/probe/install", "/api/node/probe/remove", "/api/node/promote", "/api/node/smart/test",
             "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
             "/api/passthrough/vbios/capture", "/api/hardware/features", "/api/cluster/remove-node",

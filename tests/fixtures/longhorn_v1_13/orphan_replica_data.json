@@ -1,0 +1,46 @@
+{
+  "_source": [
+    "Shape of a replica-data Orphan (an orphaned replica directory on a disk) as Longhorn v1.13.0 creates it, built from Longhorn's own code at tag v1.13.0:",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/k8s/pkg/apis/longhorn/v1beta2/orphan.go (OrphanTypeReplicaData = \"replica\" - the orphanType VALUE is \"replica\", not \"replica-data\"; parameter keys OrphanDataName = \"DataName\", OrphanDiskName = \"DiskName\", OrphanDiskUUID = \"DiskUUID\", OrphanDiskPath = \"DiskPath\", OrphanDiskType = \"DiskType\"; DataCleanable condition)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/controller/node_controller.go (NodeController.createOrphan: NodeID = node.Name, Type = OrphanTypeReplicaData, Parameters DataName = the replica directory, DiskName, DiskUUID, DiskPath, DiskType)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/controller/orphan_controller.go (deleting a replica-data orphan deletes the replica directory named by DataName on that disk)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/types/types.go (GetOrphanLabelsForOrphanedDirectory)",
+    "Names, uids and timestamps are placeholders."
+  ],
+  "object": {
+    "apiVersion": "longhorn.io/v1beta2",
+    "kind": "Orphan",
+    "metadata": {
+      "name": "orphan-1f2e3d4c5b6a79881726354a5b6c7d8e9f0a1b2c3d4e5f60718293a4b5c6d7e8",
+      "namespace": "longhorn-system",
+      "uid": "33333333-3333-4333-8333-333333333333",
+      "resourceVersion": "5003",
+      "creationTimestamp": "2026-11-01T09:00:00Z",
+      "finalizers": ["longhorn.io"],
+      "labels": {
+        "longhorn.io/managed-by": "longhorn-manager",
+        "longhorn.io/component": "orphan",
+        "longhorn.io/orphan-type": "replica",
+        "longhornnode": "node-a"
+      }
+    },
+    "spec": {
+      "nodeID": "node-a",
+      "orphanType": "replica",
+      "parameters": {
+        "DataName": "vol-d-9f8e7d6c",
+        "DiskName": "default-disk-0123456789ab",
+        "DiskUUID": "4c3b2a19-0817-4f6e-9d5c-4b3a29180716",
+        "DiskPath": "/var/lib/longhorn/",
+        "DiskType": "filesystem"
+      }
+    },
+    "status": {
+      "ownerID": "node-a",
+      "conditions": [
+        {"type": "DataCleanable", "status": "True", "reason": "", "message": "", "lastProbeTime": "", "lastTransitionTime": "2026-11-01T09:00:00Z"},
+        {"type": "Error", "status": "False", "reason": "", "message": "", "lastProbeTime": "", "lastTransitionTime": "2026-11-01T09:00:00Z"}
+      ]
+    }
+  }
+}

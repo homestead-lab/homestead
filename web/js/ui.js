@@ -162,8 +162,9 @@ const UI = (() => {
 
   /* The one checkbox a risky action needs. Keep the sentence short: what the
      person accepts, not everything that could happen. */
+  // attrs: extra attributes for the checkbox, escaped by the caller.
   const ack = (id, sentence, { onchange = "", attrs = "" } = {}) => `<label class="ui-ack">
-    <input type="checkbox" id="${text(id)}"${onchange ? ` onchange="${text(onchange)}"` : ""}${attrs ? ` ${attrs.trim()}` : ""}><span>${text(sentence)}</span></label>`;
+    <input type="checkbox" id="${text(id)}"${attrs ? ` ${attrs.trim()}` : ""}${onchange ? ` onchange="${text(onchange)}"` : ""}><span>${text(sentence)}</span></label>`;
 
   const fields = (...html) => `<div class="ui-fields">${html.join("")}</div>`;
   /* The typed confirmation before an action that can't be undone (#489):

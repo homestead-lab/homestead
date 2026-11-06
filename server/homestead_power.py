@@ -3,6 +3,7 @@ import hashlib
 import json
 import time
 import urllib.error
+import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as KUBE
 import homestead_maintenance as MAINTENANCE
@@ -196,6 +197,16 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     if action == "reboot" and not boot_id:
         blockers.append("The host boot ID is unavailable; reboot completion cannot be verified")
     drain_pods = MAINTENANCE.pod_snapshot(pods_here)
+    # What would keep the drain from finishing, said before anything is
+    # cordoned: each one is acknowledged ("drain anyway"), never a stop here.
+    # Force and a planned outage send no drain; after the drain they are not
+    # compared - what the drain got past does not stop power.
+    drain_blockers = []
+    if not (force or planned_outage or after_drain):
+        try:
+            drain_blockers = DRAIN_BLOCKERS.for_host(node, read=kget)
+        except Exception as error:  # a check that failed is said, as unread
+            drain_blockers = [DRAIN_BLOCKERS.failed(error)]
     review = {"node": node, "node_uid": node_uid, "action": action, "boot_id": boot_id,
               "workloads": sorted((w.get("ns", ""), w.get("name", ""), bool(w.get("stranded")))
                                   for w in place.get("workloads", [])),
@@ -206,6 +217,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
               "hold": [(i["id"], i["options"]) for i in hold],
               "maintenance": maintenance,
               "drain_pods": drain_pods,
+              "drain_blockers": DRAIN_BLOCKERS.review(drain_blockers),
               "quorum": control.get("can_lose", 0), "force": bool(force), "planned_outage": planned_outage}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
     return {"node": node, "node_uid": node_uid, "action": action, "review_token": token, "boot_id": boot_id,
@@ -215,6 +227,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
             "hold": hold,
             "maintenance": maintenance,
             "drain_pods": drain_pods,
+            "drain_blockers": drain_blockers, "requires_blocker_ack": bool(drain_blockers),
             "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
             "blockers": blockers, "warnings": warnings, "ready": not blockers,
             "overridable": soft, "hard_blockers": hard, "force": bool(force), "planned_outage": planned_outage,
