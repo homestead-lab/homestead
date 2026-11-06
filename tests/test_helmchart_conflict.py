@@ -24,24 +24,8 @@ def chart(name, **spec):
             "spec": {"chart": name, **spec}}
 
 
-class Writes(unittest.TestCase):
-    """The same cases at each site that PUTs a chart it read a moment ago: here the
-    Multus repair, and below the others, which override what differs."""
-    NAME = "multus"
-    CHANGED = "valuesContent"
-
-    def objects(self):
-        old = ADDONS.K3S_MULTUS_VALUES.replace("    multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d\n", "")
-        return [chart("multus", chart="rke2-multus", repo=ADDONS.RKE2_CHARTS, targetNamespace="kube-system",
-                      version="v4.3.102", valuesContent=old)]
-
-    def bind(self):
-        self.kube.groups.add("k8s.cni.cncf.io")
-        self.enterContext(mock.patch.multiple(ADDONS, kget=K.kget, ksend=K.ksend,
-                                              platform=lambda *a: {"distribution": "k3s", "helm_controller": True}))
-
-    def write(self):
-        ADDONS.repair_multus()
+class Chart:
+    """A chart on the fake API, and what can happen to it around a PUT."""
 
     def setUp(self):
         self.kube = self.enterContext(Kube(*self.objects()))
@@ -58,6 +42,48 @@ class Writes(unittest.TestCase):
         self.kube.react("PUT", self.path, answer)
 
     STATUS = {"status": {"jobName": "helm-install"}}
+
+    def refused(self):
+        with self.assertRaises(ValueError) as caught:
+            self.write()
+        self.assertEqual(1, self.puts(), "the retry writes nothing")
+        return str(caught.exception)
+
+    def puts(self):
+        return len([w for w in self.kube.writes if w[0] == "PUT"])
+
+    def on_put_do(self, action):
+        done = []
+
+        def answer(method, path, body):
+            if not done:
+                done.append(True)
+                action()
+                raise self.kube._error(409, "Conflict", "the object has been modified", path)
+        self.kube.react("PUT", self.path, answer)
+
+
+class Multus(Chart):
+    NAME = "multus"
+    CHANGED = "valuesContent"
+
+    def objects(self):
+        old = ADDONS.K3S_MULTUS_VALUES.replace("    multusAutoconfigDir: /var/lib/rancher/k3s/agent/etc/cni/net.d\n", "")
+        return [chart("multus", chart="rke2-multus", repo=ADDONS.RKE2_CHARTS, targetNamespace="kube-system",
+                      version="v4.3.102", valuesContent=old)]
+
+    def bind(self):
+        self.kube.groups.add("k8s.cni.cncf.io")
+        self.enterContext(mock.patch.multiple(ADDONS, kget=K.kget, ksend=K.ksend,
+                                              platform=lambda *a: {"distribution": "k3s", "helm_controller": True}))
+
+    def write(self):
+        ADDONS.repair_multus()
+
+
+class Writes(Multus, unittest.TestCase):
+    """The same cases at each site that PUTs a chart it read a moment ago: here the
+    Multus repair, and below the others, which override what differs."""
 
     def test_a_status_write_in_between_is_not_a_conflict(self):
         self.on_put(self.STATUS)
@@ -76,26 +102,28 @@ class Writes(unittest.TestCase):
         self.assertEqual("9.9.9", saved["spec"]["version"])
 
     def test_status_writes_that_keep_coming_are_said_in_words(self):
+        before = self.kube.object(self.path)["spec"]
         self.on_put(self.STATUS, {"status": {"jobName": "again"}})
         with self.assertRaises(ValueError) as caught:
             self.write()
         self.assertIn(self.NAME, str(caught.exception))
+        self.assertIn("kept being updated", str(caught.exception))
+        self.assertEqual(2, self.puts(), "one try, and one more")
+        self.assertEqual(before, self.kube.object(self.path)["spec"], "nothing was written")
 
-    def refused(self):
-        with self.assertRaises(ValueError) as caught:
-            self.write()
-        self.assertEqual(1, len([w for w in self.kube.writes if w[0] == "PUT"]), "the retry writes nothing")
-        return str(caught.exception)
-
-    def on_put_do(self, action):
-        done = []
-
-        def answer(method, path, body):
-            if not done:
-                done.append(True)
-                action()
-                raise self.kube._error(409, "Conflict", "the object has been modified", path)
-        self.kube.react("PUT", self.path, answer)
+    def test_what_others_wrote_on_the_chart_survives_the_second_try(self):
+        self.on_put({"metadata": {"labels": {"example.com/label": "theirs"},
+                                  "annotations": {"example.com/note": "theirs"},
+                                  "finalizers": ["example.com/hold"]},
+                     **self.STATUS})
+        self.write()
+        saved = self.kube.object(self.path)
+        self.assertEqual("theirs", saved["metadata"]["labels"]["example.com/label"])
+        self.assertEqual("true", saved["metadata"]["labels"]["homestead.io/managed"])
+        self.assertEqual("theirs", saved["metadata"]["annotations"]["example.com/note"])
+        self.assertIn("example.com/hold", saved["metadata"]["finalizers"])
+        self.assertEqual(2, self.puts(), "and it took the second try")
+        self.assertIn(self.CHANGED, saved["spec"], "the change went in with them")
 
     def test_a_chart_deleted_and_made_again_is_not_written_over(self):
         def replaced():
@@ -124,6 +152,28 @@ class Writes(unittest.TestCase):
         self.on_put(self.STATUS)
         self.assertIn("changed", self.refused())
 
+    def test_a_uid_that_cannot_be_read_is_not_taken_as_unchanged(self):
+        stored = self.kube.object(self.path)
+        stored["metadata"]["uid"] = None   # the fake leaves out what is given as None
+        self.kube.add(stored)
+        self.on_put(self.STATUS)
+        self.assertIn("changed", self.refused())
+
+    def test_a_read_that_fails_after_the_conflict_is_not_said_as_gone(self):
+        self.on_put_do(lambda: self.kube.fail(self.path, 500, method="GET"))
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.write()
+        self.assertEqual(500, caught.exception.code)
+        self.assertEqual(1, self.puts())
+
+    def test_a_second_try_that_fails_otherwise_is_not_said_as_more_updates(self):
+        self.on_put(self.STATUS)
+        self.kube.fail(self.path, 500, method="PUT", skip=1)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self.write()
+        self.assertEqual(500, caught.exception.code)
+        self.assertEqual(2, self.puts())
+
     def test_any_other_error_is_left_alone(self):
         self.kube.fail(self.path, 500, method="PUT")
         with self.assertRaises(urllib.error.HTTPError) as caught:
@@ -136,7 +186,40 @@ def disown(test):
     test.on_put({"metadata": {"labels": {"homestead.io/managed": None}, "annotations": {"example.com/owner": "another"}}})
 
 
-class MultusRepair(Writes):
+class MultusRepair(Multus, unittest.TestCase):
+    """What only the Multus repair does. Its shared cases are Writes' own."""
+
+    def test_the_multus_crd_chart_it_just_made_does_not_refuse_its_own_second_try(self):
+        """The values are right already and only the NAD API is missing: the repair
+        makes the multus-crd chart, which is one of the things its first check asks
+        about, so that check can't be asked again after it."""
+        stored = self.kube.object(self.path)
+        stored["spec"]["valuesContent"] = ADDONS.K3S_MULTUS_VALUES
+        self.kube.add(stored)
+        self.kube.absent_groups.add("k8s.cni.cncf.io")
+        self.on_put(self.STATUS)
+        self.write()
+        self.assertIn("multus-crd", ADDONS._helmcharts())
+        self.assertEqual(2, self.puts(), "it took the second try")
+
+    def test_a_chart_that_is_not_ours_is_refused_before_anything_is_written(self):
+        stored = self.kube.object(self.path)
+        stored["metadata"]["labels"] = {}
+        self.kube.add(stored)
+        with self.assertRaises(ValueError) as caught:
+            self.write()
+        self.assertIn("Only the original Homestead", str(caught.exception))
+        self.assertEqual([], self.kube.writes)
+
+    def test_custom_values_are_refused_before_anything_is_written(self):
+        stored = self.kube.object(self.path)
+        stored["spec"]["valuesContent"] = "custom: true\n"
+        self.kube.add(stored)
+        with self.assertRaises(ValueError) as caught:
+            self.write()
+        self.assertIn("Only the original Homestead", str(caught.exception))
+        self.assertEqual([], self.kube.writes)
+
     def test_a_chart_no_longer_ours_is_not_repaired_on_the_second_try(self):
         disown(self)
         self.assertIn("Only the original Homestead", self.refused())
@@ -192,6 +275,15 @@ class OperatorUpgrade(Writes):
 
     def write(self):
         COMPONENTS._start_operator("kubevirt", "v1.2.3")
+
+    def test_a_chart_someone_else_manages_is_refused_before_anything_is_written(self):
+        stored = self.kube.object(self.path)
+        stored["metadata"]["labels"] = {}
+        self.kube.add(stored)
+        with self.assertRaises(ValueError) as caught:
+            self.write()
+        self.assertIn("managed by", str(caught.exception))
+        self.assertEqual([], self.kube.writes)
 
     def test_a_chart_no_longer_ours_is_not_upgraded_on_the_second_try(self):
         disown(self)

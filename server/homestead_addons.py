@@ -358,10 +358,15 @@ def _ensure_multus_crd():
 def repair_multus(cfg=None):
     p = _can_install("Multus")
     chart = _helmcharts().get(CHARTS["multus"])
+    refusal = "Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page"
+    if not _repairable_multus(chart, p):
+        raise ValueError(refusal)
     def still_ours(found):
-        if not _repairable_multus(found, p):
-            raise ValueError("Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page")
-    still_ours(chart)
+        # At the same generation the spec is the one checked above, so only the label
+        # can have moved. Not that whole check again: _ensure_multus_crd below can make
+        # the chart it asks about, and this repair would then refuse itself.
+        if NAMES.label_of(found.get("metadata"), "managed") != "true":
+            raise ValueError(refusal)
     # Keep all fields, including the version and resourceVersion concurrency check.
     if not chart["spec"].get("version"):
         ds = kget(f"{MULTUS.DAEMONSETS}/multus")

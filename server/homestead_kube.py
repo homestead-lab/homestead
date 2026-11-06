@@ -453,9 +453,9 @@ def put_past_status(path, body, read, write, still_allowed=None):
     Otherwise it is refused in words, with nothing written. For kinds with a status
     subresource, whose generation only spec changes move.
 
-    still_allowed(fresh) is the caller's own check on what it read first, run again:
-    labels, annotations and owners don't move the generation, so whose object this is
-    can have changed. It raises ValueError to refuse."""
+    still_allowed(fresh) is the caller's check of whose object this is now: labels,
+    annotations and owners don't move the generation, so that can have changed. It
+    raises ValueError to refuse."""
     meta = body.get("metadata") or {}
     name = meta.get("name", "it")
     try:
