@@ -106,6 +106,12 @@ def plan(ns, dep, backups_of=None):
         if csi.get("driver") != "driver.longhorn.io":
             without.append({"claim": claim, "why": "not a Longhorn volume"})
             continue
+        klass = (pvc.get("spec") or {}).get("storageClassName")
+        sc = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{klass}", read=kget) if klass else None
+        if (sc or {}).get("volumeBindingMode") == "WaitForFirstConsumer":
+            # A restore waits for its claim to bind, which this class does only once something mounts it.
+            without.append({"claim": claim, "why": "its storage class makes a volume only once an app mounts it"})
+            continue
         found = [b for b in backups_of(csi.get("volumeHandle") or pv_name) if b.get("restorable")]
         if not found:
             without.append({"claim": claim, "why": "no completed backup"})
@@ -272,7 +278,8 @@ def resolve(item, checkpoint, now=None):
             return "failed", 0, f"{name} no longer exists"
         rows, without = plan(ns, dep)
         if not rows:
-            return "succeeded", 100, f"Nothing to test: {name} has no Longhorn volume with a completed backup"
+            why = "; ".join(f"{w['claim']}: {w['why']}" for w in without) or "it has no volumes"
+            return "succeeded", 100, f"Nothing to test on {name} ({why})"
         for i, row in enumerate(rows):
             row["restored"] = _restored_name(item, i)
         size = sum(r["size_gb"] for r in rows)

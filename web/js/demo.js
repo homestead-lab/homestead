@@ -598,7 +598,7 @@
       volume_size_bytes: 21474836480, minimum_size_gb: 20,
       suggested_name: "pvc-demo-frigate-restore", namespace: ns, pvc_name: name,
       conflict, ready: !conflict, target: "default", storage_class: "longhorn-r2",
-      storage_classes: ["longhorn-r2", "longhorn-fast"] };
+      storage_classes: ["longhorn-r2", "longhorn-fast"], refused_classes: {} };
   };
   const volumeDeletePlan = url => {
     const name = url.searchParams.get("name") || "scratch-test", released = url.searchParams.get("pv");
@@ -3012,18 +3012,22 @@ ssh_pwauth: true
     "/api/restore-tests/run": () => ({ ok: true, operation: { id: "demo-restore-test", kind: "restore-test", status: "queued" } }),
     // Restore into an app (views-protect.js, #743): frigate's config volume from
     // its backup; window.__demoRestoreGitops shows the Flux-managed review.
-    "/api/restore-swap/plan": () => {
+    "/api/restore-swap/plan": url => {
       const flux = !!window.__demoRestoreGitops;
       window.__demoRestoreGitops = false;    // the audit's Flux review is shown once
+      const late = !!window.__demoRestoreLateClass;    // the same, for a class a restore cannot use
+      window.__demoRestoreLateClass = false;
+      const lateWhy = "longhorn-late makes a volume only once an app mounts it, and a restore has to finish before anything mounts it";
       return { app: { namespace: "lab", name: "frigate", kind: "Deployment", replicas: 1 }, claim: "frigate-config",
         mount: { volume: "config", containers: [{ name: "frigate", path: "/config" }] },
         backup: lhBackups[0].name, created: lhBackups[0].created, new_claim: "frigate-config-restore",
-        storage_class: "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-fast"], size_gb: 20, minimum_size_gb: 20,
+        storage_class: late ? "longhorn-late" : url.searchParams.get("storage_class") || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-fast"],
+        refused_classes: late ? { "longhorn-late": lateWhy } : {}, size_gb: 20, minimum_size_gb: 20,
         steps: ["restore", "stop", "swap", "start", "watch"], check: "uptime", keep_days: demoState.keepDays ?? 7,
         expires_preview: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
         managed: flux ? { by: "Flux", source: "Kustomization flux-system/apps", detected: true } : {},
         notices: flux ? ["frigate is applied by Flux (Kustomization flux-system/apps): its next sync puts frigate-config back. Change the claim where Flux reads it too."] : [],
-        blockers: [], digest: "demo-restore-swap", ready: true };
+        blockers: late ? [`${lateWhy}; choose another storage class`] : [], digest: "demo-restore-swap", ready: !late };
     },
     "/api/restore-swap": () => ({ ok: true, name: "frigate-config-restore", detail: "Restoring into frigate-config-restore; frigate keeps running until the data is ready",
       operation: { id: "demo-restore-swap", kind: "restore-swap", status: "queued" } }),

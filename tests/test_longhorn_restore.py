@@ -2,16 +2,85 @@ import sys
 import unittest
 import urllib.error
 import copy
+from unittest import mock
 from unittest.mock import patch
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as KUBE
 import homestead_longhorn as longhorn
 import homestead_longhorn_backups as BACKUPS
 import homestead_longhorn_restore as RESTORE
 import homestead_csi_restore as CSI_RESTORE
+from fakes.kube import Kube
 from fakes.storage_classes import storage_classes
+
+
+class RestoreClassTests(unittest.TestCase):
+    """A class that makes a volume only once an app mounts it cannot take a
+    restore: the claim is left Pending, and a restore has to finish before
+    anything mounts it. The review says so and asks for another class."""
+    BACKUP = "backup-123"
+
+    def setUp(self):
+        storage_classes(self, "longhorn-r2")
+        self.kube = self.enterContext(Kube(groups=("longhorn.io", "storage.k8s.io")))
+        self.enterContext(mock.patch.multiple(longhorn, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.kube.add({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "lab"}})
+        for name, mode in (("longhorn-r2", "Immediate"), ("longhorn-late", "WaitForFirstConsumer"), ("longhorn-plain", None)):
+            self.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": name},
+                           "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2"},
+                           **({"volumeBindingMode": mode} if mode else {})})
+        self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
+                       "metadata": {"name": self.BACKUP, "namespace": "longhorn-system"},
+                       "status": {"state": "Completed", "url": "nfs://backup/vol?backup=backup-123", "volumeName": "source-vol",
+                                  "volumeSize": str(5 * 1024 ** 3), "backupCreatedAt": "2026-09-20T01:02:03Z"}})
+
+    def test_the_review_offers_only_classes_a_restore_can_use_and_says_why_not_the_others(self):
+        plan = RESTORE.restore_plan(self.BACKUP, "lab", "restored-data")
+        self.assertEqual({"longhorn-r2", "longhorn-plain"}, set(plan["storage_classes"]))
+        self.assertIn("once an app mounts it", plan["refused_classes"]["longhorn-late"])
+
+    def test_a_restore_onto_it_is_refused_before_anything_is_made(self):
+        with self.assertRaisesRegex(ValueError, "longhorn-late.*once an app mounts it.*choose another storage class"):
+            RESTORE.restore_backup({"backup": self.BACKUP, "namespace": "lab", "name": "restored-data",
+                                    "storage_class": "longhorn-late"})
+        self.assertEqual([], self.kube.writes)
+
+    def test_a_cross_cluster_move_keeps_its_own_refusal(self):
+        late = KUBE.kget("/apis/storage.k8s.io/v1/storageclasses/longhorn-late")
+        with self.assertRaisesRegex(ValueError, "Migrated volumes need an Immediate"):
+            RESTORE.validate_restore_class(late, migration=True)
+
+    def test_the_refusal_for_a_volume_mode_names_a_migratable_class_for_filesystem_only(self):
+        self.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "longhorn-rwx"},
+                       "provisioner": "driver.longhorn.io", "parameters": {"migratable": "true"}})
+        migratable = KUBE.kget("/apis/storage.k8s.io/v1/storageclasses/longhorn-rwx")
+        self.assertIn("migratable disabled", RESTORE.class_refusal(migratable, "Filesystem"))
+        self.assertEqual("", RESTORE.class_refusal(migratable, "Block"))
+        with self.assertRaisesRegex(ValueError, "migratable disabled"):
+            RESTORE.validate_restore_class(migratable, "Filesystem")
+
+    def agent_plan(self):
+        import homestead_agent_tools as TOOLS
+        answer = lambda method, path, query, **_: RESTORE.restore_plan(query["backup"], query["ns"], query["name"])
+        with mock.patch.object(TOOLS, "call", answer), mock.patch.object(TOOLS, "_as", lambda ctx: {}):
+            return TOOLS, TOOLS._plan_restore({"backup": self.BACKUP, "namespace": "lab", "name": "restored-data"}, {})
+
+    def test_the_agent_tool_says_so_at_plan_time_when_the_default_class_is_refused(self):
+        storage_classes(self, "longhorn-late")
+        import homestead_agent_tools as TOOLS
+        with self.assertRaisesRegex(TOOLS.ToolError, "longhorn-late.*once an app mounts it"):
+            self.agent_plan()
+
+    def test_the_agent_tool_plans_a_restore_on_a_default_class_that_can_take_it(self):
+        _, (shown, _body) = self.agent_plan()
+        self.assertEqual("longhorn-r2", shown["plan"]["storage_class"])
+
+    def test_a_class_that_binds_at_once_is_not_refused(self):
+        for name in ("longhorn-r2", "longhorn-plain"):
+            RESTORE.validate_restore_class(KUBE.kget(f"/apis/storage.k8s.io/v1/storageclasses/{name}"))
 
 
 class LonghornRestoreTests(unittest.TestCase):

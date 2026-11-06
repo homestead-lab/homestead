@@ -430,6 +430,9 @@ def _plan_restore(args, ctx):
     plan = call("GET", "/api/lh/restore/plan", {"backup": backup, "ns": ns, "name": name}, **_as(ctx))
     if plan.get("conflict"):
         raise ToolError((plan["conflict"] or {}).get("message") or "something with that name is already there")
+    refused = (plan.get("refused_classes") or {}).get(plan.get("storage_class"))
+    if refused:
+        raise ToolError(f"it cannot be restored on the default class: {refused}")
     return ({"action": f"Restore the backup {backup} as the volume {ns}/{name}", "plan": plan},
             {"backup": backup, "namespace": ns, "name": name})
 

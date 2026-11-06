@@ -894,7 +894,8 @@ window.lhRestore = async (backup, label = "") => {
       </div>
       <div class="f"><label>Storage class ${tip("The restored PVC uses this configured class. Replica count, disk tags and other storage settings come from it.")}</label>
         <select id="lr_sc" onchange="lhRestoreCheck()">${(plan.storage_classes || []).map(name => `<option value="${esc(name)}" ${name === plan.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>
-        <div class="dim small">The restored volume keeps this class and its storage settings.</div></div>
+        <div class="dim small">The restored volume keeps this class and its storage settings.</div>
+        ${Object.values(plan.refused_classes || {}).map(why => `<div class="dim small">${esc(why)}; ${(plan.storage_classes || []).length ? "choose another storage class" : "there is no other class to choose"}</div>`).join("")}</div>
       ${UI.actions(`<button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
           onclick="lhRestoreStart(this.dataset.backup)" disabled>${icon("rollback")}Start restore</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
@@ -1207,14 +1208,16 @@ window.restoreTestRun = async (ns, name) => {
    The backup goes into a new volume and the app is moved onto it; if it does
    not come up it is swapped back on its own. The volume it left is kept as
    its previous volume until it expires (Keep stops that). */
-const RESTORE_INTO = { plan: null };
+const RESTORE_INTO = { plan: null, chosen: "" };
 const keptFor = days => days ? `kept ${days} days, then deleted with a day's notice` : "kept until you delete it";
-window.lhRestoreInto = async backup => {
+window.lhRestoreInto = async (backup, storageClass = "") => {
   modal("Restore into app", '<div class="empty"><span class="spin2"></span> checking the app and its volume</div>', true);
   let p;
-  try { p = await api(`/api/restore-swap/plan?backup=${encodeURIComponent(backup)}`); }
-  catch (e) { return void ($("#mbody").innerHTML = UI.error(e, { retry: `lhRestoreInto(${jsArg(backup)})`, dialog: true })); }
-  RESTORE_INTO.plan = p;
+  try { p = await api(`/api/restore-swap/plan?backup=${encodeURIComponent(backup)}${storageClass ? `&storage_class=${encodeURIComponent(storageClass)}` : ""}`); }
+  catch (e) { return void ($("#mbody").innerHTML = UI.error(e, { retry: `lhRestoreInto(${jsArg(backup)},${jsArg(storageClass)})`, dialog: true })); }
+  RESTORE_INTO.plan = p; RESTORE_INTO.chosen = storageClass;
+  // Not on the list, so the review blocks on it and asks for another (refused, or on neither list).
+  const offCatalogue = !p.storage_classes.includes(p.storage_class);
   const app = p.app.name || "the app", title = $("#mtitle");
   if (title && p.app.name) title.textContent = `Restore into ${p.app.name}`;
   const managed = p.managed && p.managed.by;
@@ -1226,6 +1229,9 @@ window.lhRestoreInto = async backup => {
       { title: p.check === "uptime" ? "Wait until it is ready and answers" : "Wait until it is ready and stays ready" }])}
     ${UI.notices([...p.blockers.map(b => ["bad", b]), ...(managed ? [["warn", p.notices[0] || `Applied by ${managed}`]] : []),
       ["info", `${p.claim} is ${keptFor(p.keep_days)}.`]], p.blockers.length ? "This cannot start" : managed ? `Applied by ${managed}` : "")}
+    ${(offCatalogue || storageClass) && p.storage_classes.length ? `<div class="f"><label>Storage class ${tip("Replica count, disk tags and other storage settings come from the class the restored volume goes on.")}</label>
+      <select id="ri_sc" onchange="lhRestoreInto(${jsq(backup)},this.value)">${offCatalogue ? '<option value="" selected disabled>Choose a class</option>' : ""}${p.storage_classes.map(name =>
+        `<option value="${esc(name)}" ${name === p.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></div>` : ""}
     ${managed ? UI.ack("ri_gitops", "Restore it anyway", { onchange: "restoreIntoReady()" }) : ""}
     ${UI.actions(UI.cancel() + UI.button("Restore into app", "restoreIntoStart()", { kind: "pri", id: "ri_go", icon: "rollback", attrs: 'data-need="admin"', disabled: !p.ready || !!managed }))}`;
   if (window.applyRole) window.applyRole();
@@ -1241,10 +1247,11 @@ window.restoreIntoStart = async () => {
   try {
     const r = await api("/api/restore-swap", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ backup: p.backup, namespace: p.app.namespace, app: p.app.name, claim: p.claim,
-        new_name: p.new_claim, digest: p.digest, accept_gitops: !!$("#ri_gitops")?.checked }) });
+        new_name: p.new_claim, digest: p.digest, accept_gitops: !!$("#ri_gitops")?.checked,
+        ...(RESTORE_INTO.chosen ? { storage_class: RESTORE_INTO.chosen } : {}) }) });
     toast(r.detail || "Restoring", "ok"); closeModal();
     if (window.refreshOperations) window.refreshOperations(true);
-  } catch (e) { toast(e.message, "bad"); lhRestoreInto(p.backup); }
+  } catch (e) { toast(e.message, "bad"); lhRestoreInto(p.backup, RESTORE_INTO.chosen); }
 };
 
 /* Previous volumes: what each app was moved off, and when it goes. */

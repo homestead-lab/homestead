@@ -210,6 +210,7 @@ const DIALOGS = [
   ["backup-restore", "storage", "lhBackupList('pvc-demo-frigate','frigate-config')", "click:lhRestore"],
   ["restore-into-app", "protect", "lhRestoreInto('backup-demo-frigate-20260919')"],
   ["restore-into-app-gitops", "protect", "window.__demoRestoreGitops=true;lhRestoreInto('backup-demo-frigate-20260919')"],
+  ["restore-into-app-late-class", "protect", "window.__demoRestoreLateClass=true;lhRestoreInto('backup-demo-frigate-20260919')"],
   ["previous-volume-swap-back", "protect", "loadPreviousVolumes().then(()=>previousSwapBack('lab','frigate-config'))"],
   ["fs-freeze-on", "protect", "loadFsFreeze().then(()=>fsFreezeReview(true))"],
   ["fs-freeze-on-old-kernel", "protect", "window.__demoFsFreezeOldKernel=true;loadFsFreeze().then(()=>fsFreezeReview(true))"],

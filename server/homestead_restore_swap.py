@@ -348,6 +348,20 @@ def _free_name(backup, ns, claim, wanted):
     return base, restore_plan(backup, ns, base)
 
 
+def _restore_classes(found, volume_mode):
+    """The classes this volume can be restored onto, and why not the others:
+    ready has to mean the job's first step will not refuse it."""
+    classes, refused = [], dict(found.get("refused_classes") or {})
+    for name in found.get("storage_classes") or []:
+        why = RESTORE.class_refusal(KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{name}", read=kget) or {},
+                                    volume_mode)
+        if why:
+            refused[name] = why
+        else:
+            classes.append(name)
+    return classes, refused
+
+
 def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb=None, now=None):
     """What restoring into the app would do and what stops it, before anything changes."""
     now = now or time.time()
@@ -365,6 +379,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     ns, claim = _valid(ns, "namespace"), _valid(claim, "volume name")
     if new_name:
         new_name = _valid(new_name, "the new volume's name")
+    if storage_class:
+        storage_class = _valid(storage_class, "storage class")
     if ns in system_namespaces():
         blockers.append("system namespaces are changed with Kubernetes administration tools, not here")
     pvc = KUBE.get_optional(_pvc_path(ns, claim), read=kget)
@@ -412,10 +428,16 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     containers = [{"name": c.get("name", ""), "path": m.get("mountPath", "")}
                   for c in ((dep.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or []
                   for m in c.get("volumeMounts") or [] if m.get("name") == volume] if dep else []
-    classes = found.get("storage_classes") or []
-    current_class = (pvc.get("spec") or {}).get("storageClassName", "")
-    chosen_class = storage_class or (current_class if current_class in classes else found.get("storage_class", ""))
     spec = pvc.get("spec") or {}
+    classes, refused_classes = _restore_classes(found, spec.get("volumeMode") or "Filesystem")
+    current_class = spec.get("storageClassName", "")
+    # A refused class is named, not swapped for the default in silence: the review asks for another.
+    chosen_class = storage_class or (current_class if current_class in classes or current_class in refused_classes
+                                     else found.get("storage_class", ""))
+    if chosen_class not in classes:
+        why = refused_classes.get(chosen_class) or f"{chosen_class or 'No class'} is not a storage class a restore can use"
+        blockers.append(f"{why}; " + ("choose another storage class" if classes
+                                      else "no other class can take it, so make one first"))
     access = (spec.get("accessModes") or ["ReadWriteOnce"])[0]
     if access not in ("ReadWriteOnce", "ReadWriteMany"):
         blockers.append(f"{claim} is {access}; a restore makes ReadWriteOnce or ReadWriteMany volumes only")
@@ -434,7 +456,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
         "app": {"namespace": ns, "name": app, "kind": mine["kind"] if mine else "", "replicas": _replicas(dep) if dep else 0},
         "claim": claim, "mount": {"volume": volume, "containers": containers},
         "backup": item["metadata"]["name"], "created": status.get("backupCreatedAt", ""),
-        "new_claim": name, "storage_class": chosen_class, "storage_classes": classes, "size_gb": size,
+        "new_claim": name, "storage_class": chosen_class, "storage_classes": classes,
+        "refused_classes": refused_classes, "size_gb": size,
         "minimum_size_gb": found.get("minimum_size_gb"),
         "steps": ["restore", "stop", "swap", "start", "watch"],
         "check": "uptime" if answers and answers.get("state") != "off" else "ready",
@@ -1157,7 +1180,7 @@ def alert_facts(now=None):
 
 def _plan_route(request):
     q = lambda name: (request.query.get(name) or [""])[0]
-    return public(plan(q("backup"), q("ns"), q("app"), q("claim"), q("new_name")))
+    return public(plan(q("backup"), q("ns"), q("app"), q("claim"), q("new_name"), q("storage_class")))
 
 
 # Its routes and who may use them (homestead_routes.py).

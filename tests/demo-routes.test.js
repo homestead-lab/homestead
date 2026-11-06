@@ -24,3 +24,9 @@ test("the demo's Flux restore review is shown once", () => {
   const answer = require("./helpers/between")(source, '"/api/restore-swap/plan"', '"/api/restore-swap":');
   assert.match(answer, /window\.__demoRestoreGitops = false/);
 });
+
+test("the demo's refused-class restore review is shown once", () => {
+  const source = fs.readFileSync("web/js/demo.js", "utf8");
+  const answer = require("./helpers/between")(source, '"/api/restore-swap/plan"', '"/api/restore-swap":');
+  assert.match(answer, /window\.__demoRestoreLateClass = false/);
+});

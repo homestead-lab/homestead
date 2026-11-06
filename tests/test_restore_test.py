@@ -123,6 +123,28 @@ class PlanTests(Base):
         self.assertEqual([("paperless-data", "backup-data-2", 20)], [(r["claim"], r["backup"], r["size_gb"]) for r in rows])
         self.assertEqual([{"claim": "paperless-cache", "why": "no completed backup"}], without)
 
+    def on_a_class_that_waits_for_its_app(self, *claims):
+        self.c.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "late"},
+                         "provisioner": "driver.longhorn.io", "volumeBindingMode": "WaitForFirstConsumer"})
+        for name in claims:
+            path = f"/api/v1/namespaces/lab/persistentvolumeclaims/{name}"
+            K.ksend("PATCH", path, {"spec": {"storageClassName": "late"}}, ctype="application/merge-patch+json")
+
+    def test_a_volume_on_a_class_a_restore_cannot_use_is_listed_as_not_tested(self):
+        self.on_a_class_that_waits_for_its_app("paperless-data")
+        rows, without = RT.plan("lab", deployment())
+        self.assertEqual([], rows)
+        reasons = {w["claim"]: w["why"] for w in without}
+        self.assertIn("once an app mounts it", reasons["paperless-data"])
+        self.assertNotIn("choose another", reasons["paperless-data"])
+
+    def test_a_test_with_nothing_else_to_restore_ends_saying_why_and_restores_nothing(self):
+        self.on_a_class_that_waits_for_its_app("paperless-data")
+        status, _, message = self.step(10 ** 9)
+        self.assertEqual("succeeded", status)
+        self.assertIn("once an app mounts it", message)
+        self.assertEqual([], self.c.restored)
+
     def test_room_at_each_volumes_copies(self):
         rows = [{"size_gb": 100, "storage_class": "longhorn"}]
         classes = {"longhorn": {"numberOfReplicas": "3"}}

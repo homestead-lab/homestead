@@ -174,6 +174,7 @@ class Base(unittest.TestCase):
                                   "backupCreatedAt": "2026-10-20T03:00:00Z",
                                   "labels": {"KubernetesStatus": json.dumps({"namespace": NS, "pvcName": "app-1-data"})}}}
         self.restored, self.restore_result, self.cancelled = [], ("succeeded", 100, "Restored"), []
+        self.refused_classes = {}
         self.uptime, self.settings, self.notes, self.deleted = {}, {"restore_swap": {"keep_days": 7}}, [], []
         self.leader, self.self_app = True, False
         self.blocking, self.reclaim = [], "Delete"
@@ -203,6 +204,7 @@ class Base(unittest.TestCase):
     def fake_restore_plan(self, backup, ns, name):
         taken = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}" in self.kube.objs
         return {"minimum_size_gb": 10, "storage_class": "longhorn", "storage_classes": ["longhorn"],
+                "refused_classes": self.refused_classes,
                 "conflict": {"message": f"PVC {ns}/{name} already exists; choose a new name"} if taken else None}
 
     def fake_restore_resolver(self, item):
@@ -321,6 +323,87 @@ class PlanTests(Base):
             self.started()
         self.started(accept_gitops=True)
         self.assertEqual("restore-swap", self.ops.started[-1]["kind"])
+
+
+class RefusedClassTests(Base):
+    """A class a restore cannot use: the review says why, and another class can
+    be chosen rather than one being picked in silence. Ready means it can work."""
+    WHY = "late makes a volume only once an app mounts it"
+
+    def on_a_refused_class(self):
+        self.refused_classes = {"late": self.WHY}
+        self.kube.objs[f"/api/v1/namespaces/{NS}/persistentvolumeclaims/app-1-data"]["spec"]["storageClassName"] = "late"
+
+    def add_class(self, name, **fields):
+        self.kube.add(f"/apis/storage.k8s.io/v1/storageclasses/{name}", {"metadata": {"name": name}, **fields})
+
+    def offering(self, *names):
+        """The classes the backup's restore plan offers, as restore_plan answers."""
+        plan = self.fake_restore_plan
+        RS.restore_plan = lambda *args: {**plan(*args), "storage_classes": list(names)}
+
+    def test_the_review_says_why_it_cannot_start_and_asks_for_another(self):
+        self.on_a_refused_class()
+        p = self.plan()
+        self.assertFalse(p["ready"])
+        self.assertIn(f"{self.WHY}; choose another storage class", p["blockers"])
+        self.assertEqual("late", p["storage_class"])
+        self.assertEqual({"late": self.WHY}, p["refused_classes"])
+
+    def test_it_says_so_when_there_is_no_other_class_to_choose(self):
+        self.on_a_refused_class()
+        self.offering()
+        p = self.plan()
+        self.assertFalse(p["ready"])
+        self.assertEqual([], p["storage_classes"])
+        self.assertFalse([b for b in p["blockers"] if "choose another" in b], p["blockers"])
+        self.assertTrue([b for b in p["blockers"] if self.WHY in b and "no other class" in b], p["blockers"])
+
+    def test_it_is_refused_when_asked_for_by_name_too(self):
+        self.refused_classes = {"late": self.WHY}
+        self.assertFalse(self.plan(storage_class="late")["ready"])
+
+    def test_with_another_class_chosen_the_restore_goes_on_that_class(self):
+        self.on_a_refused_class()
+        p = self.plan(storage_class="longhorn")
+        self.assertTrue(p["ready"], p["blockers"])
+        RS.start({"backup": "backup-0123abcd", "namespace": NS, "app": "app-1", "claim": "app-1-data",
+                  "digest": p["digest"], "storage_class": "longhorn"})
+        self.assertEqual("longhorn", self.ops.started[-1]["ref"]["restore"]["restore_config"]["storage_class"])
+
+    def test_the_review_page_can_ask_for_another_class(self):
+        self.on_a_refused_class()
+        plain = RS._plan_route(types.SimpleNamespace(query={"backup": ["backup-0123abcd"]}))
+        chosen = RS._plan_route(types.SimpleNamespace(query={"backup": ["backup-0123abcd"], "storage_class": ["longhorn"]}))
+        self.assertFalse(plain["ready"])
+        self.assertTrue(chosen["ready"], chosen["blockers"])
+
+    def test_a_migratable_class_is_not_ready_for_a_filesystem_volume_and_not_offered(self):
+        self.add_class("rwx", parameters={"migratable": "true"})
+        self.offering("longhorn", "rwx")
+        p = self.plan(storage_class="rwx")
+        self.assertFalse(p["ready"])
+        self.assertEqual(["longhorn"], p["storage_classes"])
+        self.assertIn("migratable disabled", p["refused_classes"]["rwx"])
+
+    def test_a_migratable_class_stays_on_offer_for_a_block_volume(self):
+        self.add_class("rwx", parameters={"migratable": "true"})
+        self.offering("longhorn", "rwx")
+        self.kube.objs[f"/api/v1/namespaces/{NS}/persistentvolumeclaims/app-1-data"]["spec"]["volumeMode"] = "Block"
+        p = self.plan(storage_class="rwx")
+        self.assertTrue(p["ready"], p["blockers"])
+        self.assertEqual(["longhorn", "rwx"], p["storage_classes"])
+
+    def test_a_class_on_neither_list_blocks(self):
+        p = self.plan(storage_class="local-path")
+        self.assertFalse(p["ready"])
+        self.assertTrue([b for b in p["blockers"] if "local-path" in b and "choose another" in b], p["blockers"])
+
+    def test_a_bad_class_name_on_the_route_is_refused_before_it_is_read(self):
+        before = len(self.kube.sent)
+        with self.assertRaisesRegex(ValueError, "storage class must be a valid Kubernetes name"):
+            RS._plan_route(types.SimpleNamespace(query={"backup": ["backup-0123abcd"], "storage_class": ["../secrets/x"]}))
+        self.assertEqual(before, len(self.kube.sent))
 
 
 class StartTests(Base):

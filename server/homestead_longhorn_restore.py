@@ -65,6 +65,9 @@ def restore_plan(backup, namespace, pvc_name):
         elif pvc_name and KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=LH.kget) is not None:
             conflict = {"kind": "PersistentVolumeClaim", "name": pvc_name,
                         "message": f"PVC {namespace}/{pvc_name} already exists; choose a new name"}
+    regular = [c for c in LH.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+               if c.get("provisioner") == "driver.longhorn.io"
+               and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage"))]
     return {
         "backup": item["metadata"]["name"], "source_volume": source_volume,
         "created": status.get("backupCreatedAt", ""),
@@ -74,9 +77,8 @@ def restore_plan(backup, namespace, pvc_name):
         "conflict": conflict, "ready": conflict is None,
         "target": status.get("backupTargetName", "default") or "default",
         "storage_class": STORAGE_CLASSES.claim_class(),
-        "storage_classes": [c["metadata"]["name"] for c in LH.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
-                            if c.get("provisioner") == "driver.longhorn.io"
-                            and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage"))],
+        "storage_classes": [c["metadata"]["name"] for c in regular if not class_refusal(c)],
+        "refused_classes": {c["metadata"]["name"]: class_refusal(c) for c in regular if class_refusal(c)},
     }
 
 
@@ -162,14 +164,30 @@ def restore_backup(cfg, discard_on_failure=False):
             "message": f"Restore of {backup} into {namespace}/{pvc_name} started"}
 
 
+def class_refusal(base, volume_mode=None):
+    """Why a restore cannot use this class, or "". A restore waits for its claim
+    to bind before anything mounts it, and a WaitForFirstConsumer class binds a
+    claim only once something does, so the job would wait for ever. With a
+    volume mode, what that mode rules out too. Says why, not what to do: where
+    this is read, there may be no other class to choose."""
+    if base.get("volumeBindingMode") == "WaitForFirstConsumer":
+        name = (base.get("metadata") or {}).get("name") or "This class"
+        return (f"{name} makes a volume only once an app mounts it, and a restore has to finish "
+                "before anything mounts it")
+    if volume_mode == "Filesystem" and str((base.get("parameters") or {}).get("migratable", "false")).lower() == "true":
+        return "Filesystem volumes need a storage class with migratable disabled"
+    return ""
+
+
 def validate_restore_class(base, volume_mode="Filesystem", migration=False):
     parameters = base.get("parameters") or {}
     if base.get("provisioner") != "driver.longhorn.io" or any(parameters.get(k) for k in ("fromBackup", "backingImage")):
         raise ValueError("Choose a regular Longhorn storage class")
-    if volume_mode == "Filesystem" and str(parameters.get("migratable", "false")).lower() == "true":
-        raise ValueError("Filesystem volumes need a storage class with migratable disabled")
     if migration and base.get("volumeBindingMode") == "WaitForFirstConsumer":
         raise ValueError("Migrated volumes need an Immediate storage class so they can restore before the workload starts")
+    refusal = class_refusal(base, volume_mode)
+    if refusal:
+        raise ValueError(f"{refusal}; choose another storage class")
 
 
 def restore_support():

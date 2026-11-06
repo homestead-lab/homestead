@@ -312,8 +312,11 @@ from the backup target; it cannot be restored afterwards).
 A completed backup has **Restore**. It always restores into a **new** volume -
 it never overwrites one - using the configured Longhorn storage class you
 choose. Its replica count and other provisioning settings come from that class,
-and the PVC keeps the same class after restoring. The backup is imported through
-a retained CSI snapshot; cleanup removes import metadata, never the backup.
+and the PVC keeps the same class after restoring. A class that makes its volume
+only once an app mounts it (WaitForFirstConsumer) is not offered, and the review
+says so: a restore has to finish before anything mounts its volume. The backup
+is imported through a retained CSI snapshot; cleanup removes import metadata,
+never the backup.
 A larger destination restores at the original size first, then expands after
 the data is healthy. Its class must allow expansion. If filesystem resizing
 needs a mount, the job says that it will finish when the volume is next used.
@@ -353,7 +356,8 @@ A StatefulSet, a DaemonSet, a volume more than one app uses, a pod that
 belongs to nothing Homestead can stop, and Homestead's own data cannot be
 restored this way yet: restore into a new volume instead. An app Flux or
 Argo CD applies needs the notice accepted, because its next sync puts the old
-volume back.
+volume back. A volume on a class that makes its volume only once an app mounts
+it cannot start until you choose another class in the review.
 
 While a restore into an app runs, the volumes it uses are held: changing the
 storage class of either, rolling either back to a snapshot, restoring another
