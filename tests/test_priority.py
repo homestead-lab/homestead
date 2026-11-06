@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_workload_edit as WORKLOAD_EDIT
+import homestead_cache as CACHE
 import homestead_priority as priority
 import homestead_usage as usage
 import server
@@ -64,6 +65,8 @@ class PriorityTests(unittest.TestCase):
             "homestead/homestead": deployment("homestead", ns="homestead"),
         }
         self.classes, self.sent, self.vms, self.pods, self.stss = {}, [], {}, [], {}
+        CACHE.forget_where(lambda key: key == "pods")   # protect() shares the Cluster page's kept pod list
+        self.addCleanup(lambda: CACHE.forget_where(lambda key: key == "pods"))
         priority.bind(self.kget, self.ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
     def kget(self, path):
@@ -465,6 +468,7 @@ class PriorityTests(unittest.TestCase):
         with mock.patch.object(priority, "operations", jobs):
             self.assertIsNone(priority.protect(), "nothing is critical yet")
             self.pods = [{"spec": {"priorityClassName": "homestead-critical"}}]
+            CACHE.forget_where(lambda key: key == "pods")   # the minute between the two cycles
             self.running = [{"kind": "deployment", "status": "running"}]
             self.assertIsNone(priority.protect(), "a job runs, which its restart would interrupt")
             self.running = []
@@ -731,12 +735,16 @@ class ProtectTests(unittest.TestCase):
         self.own = {"metadata": {"namespace": "lab", "name": "homestead", "annotations": {}},
                     "spec": {"template": {"spec": {"containers": []}}}}
         self.pods = []
+        self.pod_reads = 0
+        CACHE.forget_where(lambda key: key == "pods")
+        self.addCleanup(lambda: CACHE.forget_where(lambda key: key == "pods"))
         def kget(path):
             if path == "/apis/scheduling.k8s.io/v1/priorityclasses":
                 return {"items": self.items}
             if path == "/apis/apps/v1/namespaces/lab/deployments/homestead":
                 return self.own
             if path == "/api/v1/pods":
+                self.pod_reads += 1
                 return {"items": self.pods}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
         def ksend(method, path, body=None, ctype=None):
@@ -747,6 +755,55 @@ class ProtectTests(unittest.TestCase):
 
     def app(self, priority, ns="lab"):
         self.pods.append({"metadata": {"namespace": ns}, "spec": {"priority": priority}})
+
+    def test_protect_reads_the_pod_list_once_for_a_page_and_the_guard(self):
+        # #980: the guard listed every pod each minute on its own. Before: one
+        # list per cycle (5 cycles, 5 lists). Now it shares the Cluster page's
+        # kept list: 5 cycles within its 15 s make one read, and the verdict
+        # is the one the full list gives.
+        self.app(100000)
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: 1000.0):
+            for _ in range(5):
+                P.protect()
+            self.assertEqual(1, self.pod_reads)
+        self.assertEqual("x-critical", self.patched[0]["metadata"]["annotations"]["homestead.io/priority-protect"])
+
+    def test_protect_reads_again_once_the_kept_list_is_old(self):
+        self.app(100000)
+        clock = [1000.0]
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: clock[0]):
+            P.protect()
+            clock[0] += 60
+            P.protect()
+        self.assertEqual(2, self.pod_reads)
+
+    def test_protect_never_acts_on_an_old_kept_list_after_a_failed_read(self):
+        self.app(100000)
+        clock = [1000.0]
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: clock[0]), \
+                mock.patch("homestead_priority.time.time", side_effect=lambda: clock[0]):
+            P.protect()
+            self.assertEqual(1, len(self.patched))
+            clock[0] += 60
+            real = P.kget
+            def failing(path):
+                if path == "/api/v1/pods":
+                    raise urllib.error.HTTPError(path, 500, "busy", {}, None)
+                return real(path)
+            P.kget = failing
+            P._LADDER.update(at=0, value=None)
+            with self.assertRaisesRegex(RuntimeError, "too old"):
+                P.protect()
+        self.assertEqual(1, len(self.patched), "no second write on the old list")
+
+    def test_a_write_to_pods_makes_the_guard_read_again(self):
+        import homestead_kube as KUBE
+        self.app(100000)
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: 1000.0):
+            P.protect()
+            KUBE.fresh_reads("DELETE", "/api/v1/namespaces/lab/pods/x", None, lambda: None)
+            P.protect()
+        self.assertEqual(2, self.pod_reads)
 
     def test_protect_does_nothing_until_an_app_ranks_above_normal(self):
         self.app(10000)
