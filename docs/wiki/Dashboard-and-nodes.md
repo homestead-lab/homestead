@@ -388,6 +388,10 @@ pressure, core services, and platform warnings from the last day.
   to it. Anything lost must be ticked as accepted. **It is gone for good**
   also force-stops what it held, lets pinned apps run elsewhere, and makes
   its local volumes again empty, so their apps can start on another host.
+  A saved disk job on the host (disk preparation, storage allocation, runtime
+  maintenance, a disk retire or V2 cleanup) refuses the standard removal; gone
+  for good asks you to tick that the job stays, and keeps blocking Longhorn
+  upgrades, shutdown and OS rollouts until it is ended.
   It also deletes the k3s/RKE2 node password, so a rebuilt host of the same
   name can join. Afterwards it lists anything still left over, each with a
   button. On plain Kubernetes, remove its etcd member yourself with
