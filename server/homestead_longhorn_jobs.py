@@ -94,6 +94,11 @@ def run_job(name):
     template = (cron.get("spec", {}) or {}).get("jobTemplate", {}) or {}
     job_name = f"{name[:40]}-now-{int(time.time()) % 1000000:06d}"
     meta = template.get("metadata", {}) or {}
+    # Owned but not controlled, so the CronJob's history limits never trim
+    # it: it goes a day after it ends, as a CronJob's "Run now" does
+    # (homestead_scheduled_jobs), unless the template says otherwise.
+    spec = dict(template.get("spec", {}) or {})
+    spec.setdefault("ttlSecondsAfterFinished", 86400)
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
         "metadata": {"name": job_name, "namespace": LH.LHNS,
@@ -101,7 +106,7 @@ def run_job(name):
                      "annotations": {**(meta.get("annotations") or {}), "cronjob.kubernetes.io/instantiate": "manual"},
                      "ownerReferences": [{"apiVersion": "batch/v1", "kind": "CronJob", "name": name,
                                           "uid": cron["metadata"]["uid"], "controller": False}]},
-        "spec": template.get("spec", {}),
+        "spec": spec,
     }
     LH.ksend("POST", f"/apis/batch/v1/namespaces/{LH.LHNS}/jobs", body)
     LH._bust("lhjobs")

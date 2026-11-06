@@ -109,6 +109,11 @@ done
 if [ -n "$FS" ] && ! grep -q "^$D " /proc/mounts; then
   case "$FS" in ext*) O=ro,noload;; xfs) O=ro,norecovery;; *) O=ro;; esac
   T=$(mktemp -d)
+  # A read cut off while the disk is mounted (TERM, INT, or PIPE when its
+  # output is gone) still unmounts: otherwise the host keeps the mount, and
+  # the disk shows as in use until a reboot. A KILL cannot be caught.
+  trap 'umount "$T" 2>/dev/null; rmdir "$T" 2>/dev/null' EXIT
+  trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 141' PIPE
   if mount -o "$O" "$D" "$T" 2>/dev/null; then
     [ -f "$T/longhorn-disk.cfg" ] && echo "LONGHORN $(tr -d '\\n' < "$T/longhorn-disk.cfg")"
     [ -d "$T/replicas" ] && echo "REPLICAS $(ls "$T/replicas" 2>/dev/null | wc -l)"
@@ -116,6 +121,7 @@ if [ -n "$FS" ] && ! grep -q "^$D " /proc/mounts; then
     umount "$T"
   fi
   rmdir "$T"
+  trap - EXIT HUP INT TERM PIPE
 fi
 for c in mkfs.ext4 mkfs.xfs wipefs chattr findmnt; do command -v $c >/dev/null && echo "TOOL $c"; done
 # LVM on the disk or its partitions: each physical volume and its group, every

@@ -29,8 +29,10 @@ import math
 import re
 import shlex
 from datetime import datetime
+import urllib.error
 import xml.etree.ElementTree as ET
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_proxmox_vms as PROXMOX
@@ -983,7 +985,16 @@ def status(item):
         try:
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
             IMP._recheck_vm_creation(prepared)
-            IMP.commit_vm(prepared, send=ksend)
+            try:
+                IMP.commit_vm(prepared, send=ksend)
+            except urllib.error.HTTPError as error:
+                # Refused: commit_vm removed what it made for the VM, and the
+                # next round would only make and remove it again. Anything else
+                # may have made the VM, and is asked again as before.
+                if not KUBE.definite_refusal(error.code):
+                    raise
+                error.close()
+                raise ValueError(f"Kubernetes refused it (HTTP {error.code})") from None
         except ValueError as error:
             # The disks are whole: keep them, and say how to finish by hand.
             detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "

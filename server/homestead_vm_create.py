@@ -685,7 +685,9 @@ def _recheck_vm_creation(prepared):
 
 
 def commit_vm(prepared, before_save=None, send=None):
-    """Apply an already validated VM. Retain partial resources on any failure.
+    """Apply an already validated VM. When the VM itself is refused (a
+    definite 4xx), the claims, Secrets and ROM ConfigMaps this call made are
+    removed; on any other failure they are kept for inspection.
 
     An image download may outlast the original capacity snapshot. before_save
     receives the resolved manifest for re-admission before creating VM storage.
@@ -715,8 +717,10 @@ def commit_vm(prepared, before_save=None, send=None):
             created_roms[effect["body"]["metadata"]["name"]] = (receipt or {}).get("metadata") or {}
         elif effect["kind"] == "kubevirt-gates":
             PASSTHROUGH.ensure_gates(*effect["gates"], send=send)
+    created_claims = {}
     for claim in prepared["claims"]:
-        send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        receipt = send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
+        created_claims[claim["metadata"]["name"]] = (receipt or {}).get("metadata") or {}
     created_secrets = {}
     for secret in prepared["secrets"]:
         result = send("POST", f"/api/v1/namespaces/{ns}/secrets", secret)
@@ -725,8 +729,12 @@ def commit_vm(prepared, before_save=None, send=None):
     try:
         created = send("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", vm)
     except urllib.error.HTTPError as error:
-        # A failed response does not prove that creation had no effect. Keep
-        # claims and Secrets for explicit inspection instead of deleting data.
+        # A refusal (a definite 4xx) made no VM, so what this attempt made for
+        # it goes, and a retry with the same name works. Anything else may
+        # have made one that uses them: they are kept for inspection.
+        if KUBE.definite_refusal(error.code):
+            _remove_made(ns, send, [("persistentvolumeclaims", created_claims), ("secrets", created_secrets),
+                                    ("configmaps", created_roms)])
         if prepared["downloads"]:
             try:
                 why = json.loads(error.read().decode("utf-8", "replace")).get("message", "")
@@ -763,6 +771,27 @@ def commit_vm(prepared, before_save=None, send=None):
              ctype="application/merge-patch+json")
     I._bust("flow", "ov")
     return prepared["result"]
+
+
+def _remove_made(ns, send, made):
+    """Deletes what a refused VM create made, each by the uid its POST
+    answered with: one made again under the name since is not this one's.
+    A failure is said and the rest still go; what stays is as before."""
+    for kind, rows in made:
+        for name, meta in rows.items():
+            if not meta.get("uid"):
+                continue
+            try:
+                # Gone already is fine; a 409 is one made again since, not this one.
+                KUBE.delete_if_present(f"/api/v1/namespaces/{ns}/{kind}/{name}",
+                                       {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta["uid"]}},
+                                       send=send)
+            except urllib.error.HTTPError as error:
+                error.close()
+                if error.code != 409:
+                    print(f"refused VM create: {kind} {ns}/{name} not removed: HTTP {error.code}", flush=True)
+            except Exception as error:
+                print(f"refused VM create: {kind} {ns}/{name} not removed: {str(error)[:160]}", flush=True)
 
 
 def create_vm(cfg, platform=None, default_class=""):
