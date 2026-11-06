@@ -224,7 +224,7 @@ window.logoSkip = async i => {
   if (!r) return;
   try {
     const result = await logoPost([{ ns: r.ns, name: r.name, skip: true }]);
-    toast(result.detail, "ok");
+    toast(result.detail, result.ok ? "ok" : "bad");
     await refreshWorkloadsAfterLogo();
     logoFixup();
   } catch (e) { toast(e.message, "bad"); }
