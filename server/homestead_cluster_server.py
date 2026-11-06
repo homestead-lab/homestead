@@ -438,7 +438,7 @@ def _harvester_upgrade_status(item):
                                  "Harvester's own dashboard shows whether anything is upgrading")
         return "running", 1, "Waiting for Harvester to take the upgrade"
     ref.pop("missing_since", None)
-    step =next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")
+    step = next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")
     message = row["message"] or (f"{step}" if step else f"Harvester {row['version']}")
     return row["state"], row["progress"], message
 
