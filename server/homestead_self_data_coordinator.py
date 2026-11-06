@@ -21,8 +21,19 @@ RELEASE_LIMIT = 600
 
 
 class HostDown(Held):
-    """A host the move needs is down, and only its being up matters: no pod listed on it can
-    be writing. The move waits and sends nothing; to a recovery review it is a refusal."""
+    """Hosts the move needs are down, and only their being up matters: no pod listed on them
+    can be writing. The move waits and sends nothing; to a recovery review it is a refusal."""
+    def __init__(self, hosts):
+        super().__init__("Waiting for " + ", ".join(hosts))
+        self.hosts = hosts
+
+
+class FigurePending(Held):
+    """The only new capacity warning is a missing memory figure on a host just back. Its
+    words are the hold it becomes if the figure does not come."""
+    def __init__(self, message, hosts):
+        super().__init__(message)
+        self.hosts = hosts
 
 
 def owner(obj, kind, uid):
@@ -59,6 +70,8 @@ class Coordinator:
         self.job_path = f"/apis/batch/v1/namespaces/{self.ns}/jobs/{self.job_name}"
         self.writer = Journal(anchor.item(), read, send, anchor.checkpoint)
         self.waited_for = []  # the pods the latest wait is for
+        # Going back needs only the original volume, so a new volume's host may stay down.
+        self.going_back = self.state.get("recovery", {}).get("action") == "return-original"
 
     def _entry(self, step):
         return next((e for e in self.writer.entries if e["step"] == step), None)
@@ -130,7 +143,10 @@ class Coordinator:
         sets = {identity(r)["uid"] for r in self._sets()}
         known = self._entry("copy-job")
         copy_uid = known.get("after", {}).get("uid") if known else None
-        restarted = job_worker and (self.anchor.state["phase"] in ("start", "done") or self._entry("recover-start"))
+        # Before any stop request Homestead's pods are fenced by the marker, and deleting one
+        # could not help: its ReplicaSet starts another on the same host. After the start
+        # request they are new. Between the two they are the writers that must be gone.
+        restarted = job_worker and (not self._entry("stop") or self.anchor.state["phase"] in ("start", "done") or self._entry("recover-start"))
         for pod in self._pods():
             own = any(owner(pod, "ReplicaSet", uid) for uid in sets)
             node = pod.get("spec", {}).get("nodeName")
@@ -144,7 +160,7 @@ class Coordinator:
                 wanted = None if own and restarted else pins[node]
             if hosts.get(node) is None:
                 hosts[node] = wanted
-        for fact in (self.plan["source_pv"], self.plan["destination_pv"]):
+        for fact in (self.plan["source_pv"],) if self.going_back else (self.plan["source_pv"], self.plan["destination_pv"]):
             pv = self.read("/api/v1/persistentvolumes/" + fact["name"])
             terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
             for term in terms:
@@ -158,6 +174,7 @@ class Coordinator:
 
     def _hosts(self):
         involved = self._involved()
+        down = []  # every host is looked at: one that is down must not hide one that holds
         for pinned in self.plan["nodes"]:
             if pinned["name"] not in involved:
                 continue
@@ -167,7 +184,8 @@ class Coordinator:
             if identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp"):
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             if wanted is None and not ready:
-                raise HostDown(f"Host {pinned['name']} is down. The move waits for it and carries on when it is back.")
+                down.append(pinned["name"])
+                continue
             if wanted is not None and (not ready or node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted):
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             lease = self.read("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + pinned["name"])
@@ -180,8 +198,11 @@ class Coordinator:
                 fresh = False
             if spec.get("holderIdentity") != pinned["name"] or not fresh:
                 if wanted is None:
-                    raise HostDown(f"Host {pinned['name']} has stopped reporting. The move waits for it and carries on when it is back.")
+                    down.append(pinned["name"])
+                    continue
                 raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
+        if down:
+            raise HostDown(down)
 
     def _environment(self):
         self.writer.check()
@@ -350,6 +371,8 @@ class Coordinator:
     def step(self):
         """One bounded phase; create a fresh instance from the anchor next poll."""
         dep = self._environment()
+        if "host" in self.anchor.state.get("waits", {}):
+            self.anchor.host_back(self.clock())
         require_app_readiness(dep["spec"]["template"]["spec"], self.state["deployment"]["name"])
         if self.state.get("recovery", {}).get("action") == "return-original":
             return self._return_original(dep)

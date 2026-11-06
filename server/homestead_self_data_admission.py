@@ -298,6 +298,20 @@ class Admitter:
             # said in the warning's own words, so it can be acted on.
             what = ([f"the {stage} workload changed"] if report["receipt"]["proposal"] != approved["proposal"] else []) +                    [f"new warning: {str(text)[:160]}" for text in
                     [next((w for w in report.get("warnings") or [] if warning_key(w) == key), "") for key in new[:2]] if text]
-            raise Held(f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); "
-                       "review the new warnings before continuing")
+            message = f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); review the new warnings before continuing"
+            back = self._just_back_with_no_figure(report, approved, new)
+            if back:
+                from homestead_self_data_coordinator import FigurePending
+                raise FigurePending(message, back)
+            raise Held(message)
         return True
+
+    def _just_back_with_no_figure(self, report, approved, new):
+        """The hosts, when the only thing new is a missing memory figure and every host
+        with no figure has rebooted since the review. Anything else holds at once."""
+        if report["receipt"]["proposal"] != approved["proposal"] or new != [warning_key("live memory usage is unavailable")]:
+            return []
+        pins = {n["name"]: n["boot_id"] for n in self.nodes}
+        boots = {n["metadata"]["name"]: n.get("status", {}).get("nodeInfo", {}).get("bootID") for n in _inventory(self.read, "/api/v1/nodes")}
+        missing = [n["name"] for n in _nodes(self.read, self.nodes, self.clock(), boots=False) if not n["mem_metrics_available"]]
+        return missing if missing and all(boots.get(name) != pins[name] for name in missing) else []

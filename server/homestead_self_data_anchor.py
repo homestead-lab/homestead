@@ -18,8 +18,10 @@ from homestead_storage_journal import RETRIES, Held, identity, target
 
 PHASES = ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
 LABEL = "homestead.io/self-data-handoff"
-# What may wait for pods and mounts to go: a phase, or a return to the original volume.
-WAITS = frozenset(PHASES[1:-1]) | {"recover"}
+# What may wait, in the record so a new coordinator keeps the clock: pods and mounts
+# going in a phase or on a return to the original volume, a host that is down, and the
+# memory figure of a host just back.
+WAITS = frozenset(PHASES[1:-1]) | {"recover", "host", "figure"}
 MAX_BYTES = 262144
 
 
@@ -469,6 +471,29 @@ class Anchor:
             raise Held("The data handoff wait record cannot be rewritten")
         state = copy.deepcopy(self.state)
         state.setdefault("waits", {})[key] = int(now)
+        self._replace(state)
+
+    def wait_over(self, key):
+        self.handle()
+        state = copy.deepcopy(self.state)
+        waits = state.get("waits", {})
+        if key not in waits:
+            raise Held("The data handoff has no such wait")
+        del waits[key]
+        if not waits:
+            del state["waits"]
+        self._replace(state)
+
+    def host_back(self, now):
+        """The outage is over. The other deadlines did not run during it: no step did."""
+        self.handle()
+        state = copy.deepcopy(self.state)
+        waits = state["waits"]
+        gap = max(0, int(now) - waits.pop("host"))
+        for key in waits:
+            waits[key] += gap
+        if not waits:
+            del state["waits"]
         self._replace(state)
 
     def copy_host_seen(self, boot_id):

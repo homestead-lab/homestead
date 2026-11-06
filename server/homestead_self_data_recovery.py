@@ -61,7 +61,16 @@ def review(anchor, read, logs, action, *, clock=time.time):
     def forbidden(*_): raise Held("Recovery preview cannot write cluster resources")
     engine = C.Coordinator(candidate, current, forbidden, logs, None,
                            worker_uid=state["plan"]["worker"]["uid"], clock=clock)
-    dep = engine._environment()
+    engine.going_back = action == "return-original"
+    try:
+        dep = engine._environment()
+    except C.HostDown as down:
+        names = ", ".join(down.hosts)
+        if action == "return-original":
+            raise Held(f"Going back needs {names}, which is down: the original volume or one of Homestead's pods is on it. "
+                       "Bring it back, then preview again. Nothing was changed") from None
+        raise Held(f"Resuming needs {names}, which is down. Bring it back, then preview again. Nothing was changed"
+                   + ("." if cutover else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
     volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v["name"] == state["plan"]["data_volume"]]
     selected = state["destination"] if cutover else state["source"]["name"]
     if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:

@@ -48,6 +48,12 @@ TRANSIENT_CODES = (429, 500, 502, 503, 504)
 # fence answers 503 while held), and returning to the original volume is
 # not allowed after cutover anyway.
 READY_WARN = 900
+# How long the move waits for a host that is down before it holds, while it could still
+# go back to the original volume. After the switch or a start request a hold would keep
+# the new pods unready, and nothing else can be done, so that wait has no limit.
+HOST_LIMIT = 1800
+# How long it waits for the memory figure of a host just back before it holds.
+FIGURE_LIMIT = 300
 
 
 def transient(error):
@@ -350,17 +356,17 @@ class Runner:
                 result = engine.step()
                 waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
                 self.start_wait = (self.start_wait or self.clock()) if waiting else None
+                if "figure" in anchor.state.get("waits", {}):
+                    anchor.wait_over("figure")
                 anchor.report(self.worker_uid, self._checked_at(anchor),
                               "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
                 self.outage_since = self.host_down = None
             except C.HostDown as error:
-                # Sent nothing; every check runs again next tick. Never a hold: it would
-                # need a person, and after the switch would keep the new pods unready.
-                self.host_down = str(error)
-                try:
-                    anchor.report(self.worker_uid, self._checked_at(anchor), "running", self.host_down, pod_uid=self.pod_uid)
-                except Exception:
-                    pass  # the next tick writes again from a fresh read
+                self._host_down(anchor, error.hosts)
+            except C.FigurePending as error:
+                names = ", ".join(error.hosts)
+                self._wait_for(anchor, "figure", FIGURE_LIMIT, str(error),
+                               f"{names} is back but has no live memory figure yet. Waiting up to {FIGURE_LIMIT // 60} minutes for it.")
             except Held as error:
                 if not self._retry_later(error):
                     self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
@@ -372,6 +378,37 @@ class Runner:
             return self.snapshot()
         finally:
             self.lock.release()
+
+    def _host_down(self, anchor, hosts):
+        names = ", ".join(hosts)
+        writes = anchor.state["journal"]["ref"]["storage_writes"]
+        if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
+            return self._wait_for(anchor, "host", None, None,
+                f"{names} is down. The move has passed the point where it can stop, so it waits with no limit and "
+                "carries on when it is back. Bring it back; if it won't come back, see docs/data-move-recovery.md, "
+                "\"A host that never comes back\".")
+        self._wait_for(anchor, "host", HOST_LIMIT,
+            f"{names} has been down for {HOST_LIMIT // 60} minutes, so the move stopped waiting. Nothing was forced and "
+            "both volumes are retained. Bring it back, or go back to the original volume unless that is on it too.",
+            f"{names} is down. The move waits for it and carries on when it is back; after {HOST_LIMIT // 60} minutes it holds for a review.")
+
+    def _wait_for(self, anchor, key, limit, held, waiting):
+        """Sent nothing; every check runs again next tick. The start is in the record, so
+        a new coordinator keeps the clock, and the heartbeat goes on so the page is live."""
+        now = int(self.clock())
+        started = anchor.state.get("waits", {}).get(key)
+        if limit is not None and started is not None and now - started >= limit:
+            self.host_down = None
+            self.hold = held
+            self._save_hold()
+            return
+        self.host_down = waiting
+        try:
+            if started is None:
+                anchor.wait_started(key, now)
+            anchor.report(self.worker_uid, self._checked_at(anchor), "running", self.host_down, pod_uid=self.pod_uid)
+        except Exception:
+            pass  # the next tick writes again from a fresh read
 
     def _retry_later(self, error):
         """True when this tick failed only because the API did not answer.

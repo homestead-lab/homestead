@@ -52,9 +52,10 @@ def _obj(kind, name, spec=None, *, ns=NS, version="v1", owner=None, status=None,
 
 
 class Move:
-    def __init__(self, kube, *, hosts=("node-a", "node-b"), now=100000, handed_over=True, pinned_to=None):
+    def __init__(self, kube, *, hosts=("node-a", "node-b"), now=100000, handed_over=True, pinned_to=None, pins=None):
         self.kube, self.now, self.hosts = kube, now, tuple(hosts)
-        self.pinned_to = pinned_to  # both volumes on one host's disk, as local-path has them
+        # A volume on one host's disk, as local-path has them: both, or {"old-pv": host, ...}.
+        self.volume_hosts = pins or ({"old-pv": pinned_to, "new-pv": pinned_to} if pinned_to else {})
         self.down = set()
         self.logs_text = "HOMESTEAD_SELF_DATA_COPY " + OP + " " + json.dumps(RECEIPT)
         self.dep_path = f"/apis/apps/v1/namespaces/{NS}/deployments/homestead"
@@ -98,9 +99,9 @@ class Move:
             kube.add(_obj("PersistentVolumeClaim", claim, {"volumeName": volume, "accessModes": ["ReadWriteMany"]}, status={"phase": "Bound"}))
             uid = kube.object(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{claim}")["metadata"]["uid"]
             spec = {"claimRef": {"namespace": NS, "name": claim, "uid": uid}}
-            if self.pinned_to:
+            if volume in self.volume_hosts:
                 spec["nodeAffinity"] = {"required": {"nodeSelectorTerms": [{"matchExpressions": [
-                    {"key": "kubernetes.io/hostname", "operator": "In", "values": [self.pinned_to]}]}]}}
+                    {"key": "kubernetes.io/hostname", "operator": "In", "values": [self.volume_hosts[volume]]}]}]}}
             kube.add(_obj("PersistentVolume", volume, spec, ns=None))
 
     # What the API server adds -----------------------------------------------------

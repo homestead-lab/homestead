@@ -396,15 +396,20 @@ class HostRebootTests(MoveTest):
 
 
 class HostBackWithoutMetricsTests(unittest.TestCase):
-    """A real limit: a host just back has no live memory figure yet. The capacity check
-    holds on that new warning; resume clears it once the figure returns."""
+    """A host just back has no live memory figure for a minute or two: the normal case before
+    the start request. The move waits up to 5 minutes for it, saying so, then holds as before.
+    Only that: any other capacity change still holds at once."""
 
     def setUp(self):
         self.kube = self.enterContext(Kube())
         self.reporting = ["node-a", "node-b"]
+        self.extra = None
         self.kube.react("GET", "/apis/metrics.k8s.io/v1beta1/nodes", self.metrics)
         self.m = None
         self.m = Move(self.kube)
+        self.run_ = self.m.runner(real_admission=True)
+        self.run_.tick(); self.m.stopped(); self.run_.tick()
+        self.assertEqual("copy", self.m.state()["phase"])
 
     def metrics(self, method, path, body):
         now = self.m.now if self.m else 100000
@@ -412,22 +417,408 @@ class HostBackWithoutMetricsTests(unittest.TestCase):
         return {"kind": "NodeMetricsList", "apiVersion": "metrics.k8s.io/v1beta1", "metadata": {},
                 "items": [{"metadata": {"name": h, "uid": h}, "timestamp": stamp, "usage": {"memory": "1Gi", "cpu": "100m"}} for h in self.reporting]}
 
-    def test_it_holds_saying_why_and_resume_carries_on_once_the_figure_is_back(self):
-        m = self.m
-        run = m.runner(real_admission=True)
-        run.tick(); m.stopped(); run.tick()
-        m.rebooted("node-a")
+    def back_without_a_figure(self):
+        self.m.rebooted("node-a")
         self.reporting.remove("node-a")
-        view = run.tick()
+
+    def recover(self, action):
+        m = self.m
+        load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+        review = R.review(load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+        R.confirm(load(), m.read, lambda _: m.logs_text, action, review["fingerprint"], clock=lambda: m.now)
+
+    def test_it_waits_saying_so_sends_nothing_and_carries_on_when_the_figure_comes(self):
+        m = self.m
+        self.back_without_a_figure()
+        view = self.run_.tick()
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("5 minutes", view["message"])
+        self.assertFalse(view["requires_review"])
+        self.assertNotIn("copy-job", m.steps())
+        m.pass_time(120)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.reporting.append("node-a")
+        view = self.run_.tick()
+        self.assertIn("copy-job", m.steps())
+        self.assertNotIn("figure", m.state().get("waits", {}))
+        self.assertNotIn("5 minutes", self.run_.snapshot()["message"])
+
+    def test_after_five_minutes_it_holds_as_before_and_resume_goes_on_once_the_figure_is_back(self):
+        m = self.m
+        self.back_without_a_figure()
+        self.run_.tick()
+        m.pass_time(299)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        m.pass_time(1)
+        view = self.run_.tick()
         self.assertEqual("held", view["status"])
         self.assertIn("live memory usage is unavailable", view["message"])
-        self.assertNotIn("copy-job", m.steps())
+        self.assertIn("held", m.state()["runtime"]["state"])
         self.reporting.append("node-a")
-        load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
-        review = R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
-        R.confirm(load(), m.read, lambda _: m.logs_text, "resume", review["fingerprint"], clock=lambda: m.now)
-        run.tick(); run.tick()
+        self.recover("resume")
+        self.run_.tick(); self.run_.tick()
         self.assertIn("copy-job", m.steps())
+
+    def test_a_new_coordinator_keeps_the_same_five_minutes(self):
+        m = self.m
+        self.back_without_a_figure()
+        self.run_.tick()
+        m.pass_time(200)
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        self.assertNotEqual("held", run.tick()["status"])
+        m.pass_time(100)
+        self.assertEqual("held", run.tick()["status"])
+
+    def test_a_host_that_did_not_reboot_with_no_figure_holds_at_once(self):
+        self.reporting.remove("node-a")
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("live memory usage is unavailable", view["message"])
+
+    def test_another_host_with_no_figure_that_did_not_reboot_holds_at_once(self):
+        self.back_without_a_figure()
+        self.reporting.remove("node-b")
+        self.assertEqual("held", self.run_.tick()["status"])
+
+    def test_any_other_new_warning_holds_at_once_even_with_a_host_just_back(self):
+        self.back_without_a_figure()
+        real = D.review
+        def with_another(*args, **kwargs):
+            report = real(*args, **kwargs)
+            report["warnings"] = report["warnings"] + ["projected RAM reaches 99%"]
+            report["receipt"]["warnings"] = sorted({*report["receipt"]["warnings"], D.warning_key("projected RAM reaches 99%")})
+            return report
+        with mock.patch.object(D, "review", with_another):
+            view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertEqual("held", self.m.state()["runtime"]["state"])
+
+    def test_the_normal_case_before_the_start_request(self):
+        m = self.m
+        self.run_.tick(); m.copy_finished(); self.run_.tick(); self.run_.tick(); m.copy_released(); self.run_.tick(); self.run_.tick(); m.stopped()
+        self.assertEqual("start", m.state()["phase"])
+        self.back_without_a_figure()
+        view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertNotIn("start", m.steps())
+        self.reporting.append("node-a")
+        self.run_.tick()
+        self.assertIn("start", m.steps())
+
+
+class HostNeverBackTests(unittest.TestCase):
+    """Only the new volume on a host that dies: the original is healthy on shared storage."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.m = Move(self.kube, pins={"new-pv": "node-a"})
+        self.run_ = self.m.runner(real_admission=True)
+
+    def load(self):
+        return A.Anchor(self.m.read, self.m.send, NS, "homestead").load(**self.m.handle)
+
+    def preview(self, action):
+        return R.review(self.load(), self.m.read, lambda _: self.m.logs_text, action, clock=lambda: self.m.now)
+
+    def confirm(self, action):
+        fingerprint = self.preview(action)["fingerprint"]
+        R.confirm(self.load(), self.m.read, lambda _: self.m.logs_text, action, fingerprint, clock=lambda: self.m.now)
+
+    def to_the_copy(self):
+        self.run_.tick(); self.m.stopped(); self.run_.tick()
+        self.assertEqual("copy", self.m.state()["phase"])
+
+    def down(self):
+        """The host dies, taking the helper with it."""
+        self.m.host_down("node-a")
+        self.replaced()
+
+    def replaced(self):
+        m = self.m
+        m.pod_lost(getattr(self, "current", m.first_pod))
+        self.current = m.start_pod("node-b")
+        self.run_ = m.runner(self.current, real_admission=True)
+
+    def test_before_the_switch_it_waits_thirty_minutes_saying_so_then_holds(self):
+        m = self.m
+        self.to_the_copy()
+        self.down()
+        view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("30 minutes", view["message"])
+        self.assertFalse(view["requires_review"])
+        started = m.state()["runtime"]["checked_at"]
+        m.pass_time(1799)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.assertGreater(m.state()["runtime"]["checked_at"], started, "the heartbeat goes on while it waits")
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        m.pass_time(1)
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertEqual("held", m.state()["runtime"]["state"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("recovery_command", view)
+        self.assertIn("return-original", view["message"])
+        self.assertEqual(["stop"], m.steps())
+
+    def test_recovery_goes_back_to_the_original_volume_without_the_dead_host(self):
+        m = self.m
+        self.to_the_copy()
+        self.down()
+        self.run_.tick()
+        m.pass_time(1800)
+        self.run_.tick()
+        with self.assertRaisesRegex(Held, "(?s)node-a.*return-original"):
+            self.preview("resume")
+        self.confirm("return-original")
+        self.run_.tick()
+        self.assertIn("recover-start", m.steps())
+        dep = self.kube.object(m.dep_path)
+        self.assertEqual((1, "source"), (dep["spec"]["replicas"], dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"]))
+
+    def test_a_new_coordinator_keeps_the_thirty_minutes(self):
+        m = self.m
+        self.to_the_copy()
+        self.down()
+        self.run_.tick()
+        m.pass_time(1000)
+        self.run_.tick()
+        self.replaced()
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        m.pass_time(800)
+        self.assertEqual("held", self.run_.tick()["status"])
+
+    def test_back_in_time_it_carries_on_and_the_message_and_clock_go(self):
+        m = self.m
+        self.to_the_copy()
+        self.down()
+        self.run_.tick()
+        m.pass_time(1000)
+        self.run_.tick()
+        m.rebooted("node-a")
+        view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertNotIn("node-a", view["message"])
+        self.assertIn("copy-job", m.steps())
+        self.assertNotIn("host", m.state().get("waits", {}))
+        m.host_down("node-a")
+        m.pass_time(1000)
+        self.assertNotEqual("held", self.run_.tick()["status"], "a new outage has its own 30 minutes")
+
+    def after_the_switch(self):
+        m = self.m
+        run = self.run_
+        run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick()
+        self.assertEqual("start", m.state()["phase"])
+        m.stopped()
+
+    def test_after_the_switch_the_wait_has_no_limit_and_the_page_says_so(self):
+        m = self.m
+        self.after_the_switch()
+        self.down()
+        for _ in range(3):
+            m.pass_time(86400)
+            view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("no limit", view["message"])
+        self.assertIn("docs/data-move-recovery.md", view["message"])
+        self.assertNotIn("start", m.steps())
+
+    def test_after_the_start_request_likewise(self):
+        m = self.m
+        self.after_the_switch()
+        self.run_.tick()
+        self.assertIn("start", m.steps())
+        self.down()
+        m.pass_time(86400)
+        view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("no limit", view["message"])
+
+    def test_the_original_on_the_same_dead_disk_cannot_go_back_and_says_so(self):
+        kube = Kube()
+        with kube:
+            m = Move(kube, pinned_to="node-a")
+            run = m.runner(real_admission=True)
+            run.tick(); m.stopped(); run.tick()
+            m.host_down("node-a")
+            m.pod_lost(m.first_pod)
+            run = m.runner(m.start_pod("node-b"), real_admission=True)
+            run.tick()
+            m.pass_time(1800)
+            self.assertEqual("held", run.tick()["status"])
+            load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+            for action in ("resume", "return-original"):
+                with self.assertRaisesRegex(Held, "node-a"):
+                    R.review(load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+            with self.assertRaisesRegex(Held, "(?i)original"):
+                R.review(load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
+            m.rebooted("node-a")
+            self.assertEqual("resume", R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)["action"])
+
+    def test_every_down_host_is_named(self):
+        """A pinned volume's host, and the host of Homestead's own pod before any stop request."""
+        kube = Kube()
+        with kube:
+            m = Move(kube, pins={"new-pv": "node-a"})
+            pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = "node-b"; kube.add(pod)
+            run = m.runner()
+            m.host_down("node-a"); m.host_down("node-b")
+            view = run.tick()
+            self.assertNotEqual("held", view["status"])
+            self.assertIn("node-a, node-b", view["message"])
+
+    def test_a_down_host_does_not_mask_a_measured_one(self):
+        """Pinned node-a is down, and node-b rebooted with an old pod listed: a hold, at once."""
+        kube = Kube()
+        with kube:
+            m = Move(kube, pins={"new-pv": "node-a"})
+            run = m.runner()
+            run.tick()
+            pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = "node-b"; kube.add(pod)
+            m.host_down("node-a"); m.rebooted("node-b")
+            self.assertEqual("held", run.tick()["status"])
+
+    def test_the_ten_minute_clock_stops_during_the_wait(self):
+        kube = Kube()
+        with kube:
+            m = Move(kube, pins={"new-pv": "node-a"})
+            run = m.runner()
+            run.tick()
+            pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = "node-b"; pod["metadata"]["deletionTimestamp"] = "2020-01-01T00:00:00Z"; kube.add(pod)
+            dep = kube.object(m.dep_path)
+            dep["status"] = {"observedGeneration": dep["metadata"]["generation"], "replicas": 0}; kube.add(dep)
+            run.tick()
+            self.assertIn("quiesce", m.state()["waits"])
+            m.pass_time(300)
+            m.host_down("node-a")
+            run.tick()
+            m.pass_time(1200)
+            self.assertNotEqual("held", run.tick()["status"])
+            m.rebooted("node-a")
+            self.assertNotEqual("held", run.tick()["status"], "360 s of the 600 had gone before the outage was seen")
+            m.pass_time(239)
+            self.assertNotEqual("held", run.tick()["status"])
+            m.pass_time(1)
+            self.assertEqual("held", run.tick()["status"])
+
+
+class PartitionedWriterTests(unittest.TestCase):
+    """A host with a pod listed on it that stops answering may have a writer still running: a
+    hold, never a wait, even when a volume is pinned there too."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.m = Move(self.kube, pinned_to="node-a")
+        self.run_ = self.m.runner()
+
+    def copying(self):
+        self.run_.tick(); self.m.stopped(); self.run_.tick(); self.run_.tick(); self.m.copy_running()
+        self.assertNotEqual("held", self.run_.tick()["status"])
+
+    def not_ready(self):
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+        self.kube.add(node)
+
+    def stale(self):
+        self.m.down.add("node-a")
+        self.m.pass_time(60)
+
+    def test_a_copy_pod_on_a_not_ready_host_holds(self):
+        self.copying()
+        self.not_ready()
+        self.assertIn("unavailable", self.run_.tick()["message"])
+        self.assertEqual("held", self.m.state()["runtime"]["state"])
+
+    def test_a_copy_pod_on_a_host_with_a_stale_heartbeat_holds(self):
+        self.copying()
+        self.stale()
+        self.assertIn("heartbeat is stale", self.run_.tick()["message"])
+        self.assertEqual("held", self.m.state()["runtime"]["state"])
+
+    def terminating_old_pod(self):
+        self.run_.tick()
+        pod = self.kube.object(self.m.old_pod)
+        pod["metadata"]["deletionTimestamp"] = "2020-01-01T00:00:00Z"
+        self.kube.add(pod)
+
+    def test_an_old_homestead_pod_terminating_on_a_not_ready_host_holds(self):
+        self.terminating_old_pod()
+        self.not_ready()
+        self.assertIn("unavailable", self.run_.tick()["message"])
+
+    def test_an_old_homestead_pod_terminating_on_a_host_with_a_stale_heartbeat_holds(self):
+        self.terminating_old_pod()
+        self.stale()
+        self.assertIn("heartbeat is stale", self.run_.tick()["message"])
+
+
+class HeldBeforeTheStopTests(MoveTest):
+    """Before any stop request Homestead's pods are fenced by the marker and going back writes
+    nothing, so a reboot of their host holds nothing either: deleting the pod could not help,
+    as its ReplicaSet starts another on the same host."""
+
+    def load(self):
+        return A.Anchor(self.m.read, self.m.send, NS, "homestead").load(**self.m.handle)
+
+    def held(self):
+        m = self.m
+        m.pass_time(61)
+        self.run_ = m.runner()
+        self.assertEqual("held", self.run_.tick()["status"])
+
+    def test_both_previews_pass_after_a_reboot(self):
+        self.held()
+        self.m.rebooted("node-a")
+        for action in ("resume", "return-original"):
+            self.assertEqual(action, R.review(self.load(), self.m.read, lambda _: self.m.logs_text, action, clock=lambda: self.m.now)["action"])
+
+    def test_going_back_writes_nothing_and_homestead_keeps_running(self):
+        m = self.m
+        self.held()
+        m.rebooted("node-a")
+        review = R.review(self.load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
+        R.confirm(self.load(), m.read, lambda _: m.logs_text, "return-original", review["fingerprint"], clock=lambda: m.now)
+        self.assertEqual("cancelled", self.run_.tick()["status"])
+        self.assertEqual([], m.writes_to(m.dep_path))
+        self.assertEqual(1, self.kube.object(m.dep_path)["spec"]["replicas"])
+
+    def test_resume_after_a_reboot_sends_no_stop_on_an_expired_check_and_holds_again(self):
+        """The copy check's one-minute receipt: resume can't get past it, and nothing is sent."""
+        m = self.m
+        self.held()
+        m.rebooted("node-a")
+        review = R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
+        R.confirm(self.load(), m.read, lambda _: m.logs_text, "resume", review["fingerprint"], clock=lambda: m.now)
+        self.run_.tick()
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("expired", view["message"])
+        self.assertEqual([], m.writes_to(m.dep_path))
+
+    def test_homesteads_host_down_before_the_stop_is_a_wait_with_nothing_sent(self):
+        m = self.m
+        run = m.runner()
+        m.host_down("node-a")
+        view = run.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        self.assertEqual([], m.writes_to(m.dep_path))
+
+    def test_after_the_stop_request_its_pods_are_measured_again(self):
+        m = self.m
+        run = m.runner()
+        run.tick()
+        self.assertEqual(["stop"], m.steps())
+        m.rebooted("node-a")
+        self.assertEqual("held", run.tick()["status"])
 
 
 class VolumePinnedToAHostTests(unittest.TestCase):
@@ -548,8 +939,11 @@ class VolumePinnedToAHostTests(unittest.TestCase):
         self.kube.discard(path)
         m.host_down("node-a")
         load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
-        with self.assertRaisesRegex(Held, "node-a"):
-            R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
+        for action in ("resume", "return-original"):
+            with self.assertRaises(Held) as refused:
+                R.review(load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+            self.assertIn("node-a", str(refused.exception))
+            self.assertNotIn("carries on", str(refused.exception), "a held move does not carry on by itself")
         m.rebooted("node-a")
         self.assertEqual("resume", R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)["action"])
 

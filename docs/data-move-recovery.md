@@ -203,7 +203,7 @@ can't be undone.
 If you cannot tell, stop and keep everything as it is. Then record what you found.
 The move must be held and no other Pod of the Job may still be running, and the
 script refuses otherwise: a request still on its way would make your answer wrong. A
-Pod stuck Terminating counts. If its host is down, remove it once you know that.
+Pod stuck Terminating counts: see "A Pod on a dead host" below.
 This needs a running coordinator: if there is none, start a try as above first.
 Save this as `settle.py`:
 
@@ -291,6 +291,18 @@ kubectl -n <namespace> exec -i job/<coordinator> -- python3 - applied < settle.p
 
 Then preview and confirm `--action resume` or `--action return-original` as above.
 
+### A Pod on a dead host
+
+A plain `kubectl delete pod` never finishes while the host is down, because its kubelet has to
+confirm it. Force it only with proof the Pod's process is gone: the host is powered off or
+its machine is known dead (look at it, or its console), or its boot id has changed. A host that
+is only cut off from the network may still be running the Pod, and a forced delete then
+leaves a process nothing can see, which is how two writers happen.
+
+```sh
+kubectl -n <namespace> delete pod <pod> --force --grace-period=0
+```
+
 ## Going back to an earlier release
 
 After **any** finished move, the volume keeps a receipt (`.self-data-completed-v1.json`).
@@ -318,15 +330,41 @@ before Homestead's new pods start on it.
 
 **A volume pinned to a host** (local-path keeps both volumes on one host's disk) needs
 that host up with a fresh heartbeat; its reboot alone holds nothing, at any phase. While
-it is down the status page says so, the move sends nothing and it carries on by itself
+it is down the status page names it, the move sends nothing and it carries on by itself
 when the host is back. No pod listed in the API can be writing unnoticed, since those
 are measured, and the copy flushes to disk before its receipt. A pin that names no
-reviewed host, a zone for example, still measures every host's boot id.
+reviewed host, a zone for example, still measures every host's boot id. The same goes
+for the host of one of Homestead's own pods before any stop request: those pods are
+fenced, and deleting one would only start another on the same host.
 
-**One limit on all of this:** a host just back has no live memory figure for a minute
-or two. If the move reaches a capacity check on that host in that time, it holds:
-"new warning: live memory usage is unavailable". Nothing was sent. Wait for the figure
-to return, then preview and confirm `--action resume`.
+A host with a pod listed on it that stops answering is different: that pod may still
+be writing, so the move holds at once.
+
+### A host that never comes back
+
+Before the switch, the move waits 30 minutes for it, saying so on the page, then holds.
+The 10-minute deadlines don't run during that wait.
+
+- **The original volume is not on that host:** preview and confirm
+  `--action return-original`. It does not need the host, and Homestead restarts on
+  the original volume. The new volume stays as it is; delete it yourself when you
+  no longer want it.
+- **The original volume is on that host too:** recovery refuses, and nothing here can
+  help, because that disk holds the only copy Homestead has. Bring the host or its disk back, or
+  restore from a backup. Do not point the Deployment at another volume by hand.
+
+After the switch, or a start request, the move waits with no limit and the page says so.
+Nothing is written, and a hold would only keep the new pods unready. It can't go back:
+the new pods may have written to the new volume. If the new volume's host will never
+return, the verified copy on it is gone too. The original volume is retained and
+holds the data as it was when Homestead stopped; whatever Homestead wrote after the
+switch is not on it. Going back to it is an administrator-reviewed recovery outside this tool.
+
+**A host just back** has no live memory figure for a minute or two. If that is the only
+thing new at a capacity check, the move waits up to 5 minutes for it, saying so on the
+page. After that it holds: "new warning: live memory usage is unavailable". Nothing was
+sent. Wait for the figure to return, then preview and confirm `--action resume`. Any
+other capacity change holds at once, and so does a missing figure on a host that did not reboot.
 
 **A reboot during the copy, or with one of Homestead's old pods still listed on that
 host, still needs hand work:** the move holds and recovery refuses while that pod is
@@ -341,7 +379,8 @@ kubectl -n <namespace> delete pod <the pod the hold is about>
 ```
 
 Check the Pod is not somewhere else first, and only delete it if it is on the host
-whose boot id changed. Then preview recovery. After a copy pod dies, its Job
+whose boot id changed. Then preview recovery. See "A Pod on a dead host" below if the
+delete never finishes. After a copy pod dies, its Job
 has failed and a copy is never repeated, so `resume` refuses: use
 `return-original`, and move again afterwards. After an old Homestead pod, both are
 offered.
