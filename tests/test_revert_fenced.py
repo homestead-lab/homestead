@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_agent_tools as AGENT
 import homestead_app_hold as HOLD
+import homestead_changes as CHANGES
 import homestead_deploy_server as DEPLOY
 import homestead_kube as K
 import homestead_reclass as RECLASS
@@ -91,6 +92,10 @@ class Base(unittest.TestCase):
              "metadata": {"name": "r-1", "namespace": "longhorn-system"},
              "spec": {"volumeName": VOLUME, "nodeID": "node-a"}, "status": {"currentState": "stopped"}},
             groups=("kubevirt.io",)))
+        for module, names in ((RECLASS, ("kget", "ksend", "ktext", "storage_classes", "capacity", "OWN_NS")),
+                              (REVERT, ("kget", "ksend", "reclass", "is_self", "lh_call"))):
+            for name in names:
+                self.addCleanup(setattr, module, name, getattr(module, name))
         RECLASS.bind(K.kget, K.ksend, None, lambda: [])
         self.clock = Clock()
         self.calls = []
@@ -135,7 +140,9 @@ class Base(unittest.TestCase):
         K.ksend("PATCH", path, {"spec": {"replicas": replicas}}, ctype=MERGE)
 
     def controller_writes_status(self, path):
-        K.ksend("PATCH", path, {"status": {"observedGeneration": self.clock.now}}, ctype=MERGE)
+        """A controller's own write: straight to the API server, on /status. Not through
+        K.ksend, whose guards sign Homestead's writes with an annotation."""
+        self.kube("PATCH", f"{path}/status", {"status": {"observedGeneration": self.clock.now}}, ctype=MERGE)
 
     def replicas(self, path):
         return self.kube.object(path)["spec"]["replicas"]
@@ -300,13 +307,13 @@ class OurOwnMarks(Base):
     def test_a_deployments_status_write_with_an_annotation_does_not_move_it(self):
         """The controller's revision annotation goes through /status: only the resourceVersion moves."""
         before, version = self.generation(), self.kube.object(A)["metadata"]["resourceVersion"]
-        K.ksend("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
+        self.kube("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
         self.assertEqual(before, self.generation())
         self.assertNotEqual(version, self.kube.object(A)["metadata"]["resourceVersion"])
 
     def test_that_revision_write_after_the_start_holds_the_app_again(self):
         item = self.begin()
-        K.ksend("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
+        self.kube("PATCH", f"{A}/status", {"metadata": {"annotations": {"deployment.kubernetes.io/revision": "2"}}}, ctype=MERGE)
         status, _, message = REVERT.resolve(item)
         self.assertEqual("running", status, message)
         self.assertEqual(0, self.replicas(A))
@@ -406,6 +413,48 @@ class OurOwnMarks(Base):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status, message)
         self.assertIn("app-a no longer carries Homestead's mark", message)
+
+
+class OurOwnMarksSigned(OurOwnMarks):
+    """On a real server every write Homestead makes to a Deployment also carries a
+    signed mark of who for (homestead_changes), so its generation moves on each. In
+    a test that happens only when the author key can be read: pin it, so these don't
+    depend on what ran before."""
+
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(CHANGES, "_author_key", return_value=b"k" * 32)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_stop_carries_the_signed_mark_and_is_still_one_fenced_write(self):
+        item = self.begin()
+        before = self.generation()
+        REVERT.resolve(item)
+        self.assertIn(CHANGES.AUTHOR, self.notes(A))
+        self.assertEqual(1, len(self.writes(A)))
+        self.assertGreater(self.generation(), before)
+        self.assertEqual(MARK, self.notes(A)[HOLD.HELD_BY])
+
+    def test_a_homestead_write_after_the_review_counts_as_a_change_a_controllers_does_not(self):
+        token = self.review()
+        self.controller_writes_status(A)
+        REVERT.start(VOLUME, "snap-a", self.ops, token)
+        self.ops.start.reset_mock()
+        K.ksend("PATCH", A, {"metadata": {"labels": {"example.com/x": "y"}}}, ctype=MERGE)
+        with self.assertRaisesRegex(ValueError, "app-a changed after this rollback was reviewed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, token)
+
+    def test_the_job_ending_with_it_left_stopped_takes_its_marks_off_and_can_be_rolled_back_again(self):
+        item = self.begin()
+        self.fits = False
+        for _ in range(4):
+            REVERT.resolve(item)
+        self.clock.now += REVERT.WAIT["restarting"] + 1
+        self.assertEqual("failed", REVERT.resolve(item)[0])
+        self.assertNotIn(HOLD.HELD_BY, self.notes(A))
+        self.fits = True
+        self.assertEqual(0, next(c for c in self.begin()["ref"]["consumers"] if c["name"] == "app-a")["replicas"])
 
 
 class WhoHoldsIt(Base):
