@@ -28,6 +28,7 @@ import json
 import math
 import re
 import shlex
+import time
 from datetime import datetime
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -914,6 +915,28 @@ def _fail(ref, message, item=None):
                            f"The VM on {_where(ref)} is unchanged")
 
 
+# How long CDI may keep an import waiting. Ready to receive takes a claim and a
+# pod, so nothing is copied yet and the import can simply clear up. Finishing can
+# take hours on a big disk, and the copy is done by then, so its disks are kept.
+READY_LIMIT = 30 * 60
+FINISH_LIMIT = 6 * 60 * 60
+_clock = time.time   # a seam for the tests
+
+
+def _waited(ref, key, limit):
+    now = _clock()
+    return now - ref.setdefault(key, now) >= limit
+
+
+def _keep_disks(ref, detail, item):
+    """End the import with its disks kept, clearing only the rest."""
+    if ref.get("cdi_cleanup"):
+        ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
+        return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
+    ref["phase"] = "failed"
+    return "failed", 100, detail
+
+
 def status(item):
     ref = item["ref"]
     ns = ref["namespace"]
@@ -941,6 +964,8 @@ def status(item):
         return _fail(ref, "CDI could not take the disk", item)
     if ref["phase"] == "disks":
         if not all(p in ("UploadReady", "Succeeded") for p in phases):
+            if _waited(ref, "ready_since", READY_LIMIT):
+                return _fail(ref, f"CDI was not ready to receive the disks within {READY_LIMIT // 60} minutes", item)
             return "running", 2, "Waiting for CDI to be ready to receive the disks"
         _, proxy_ns = _upload_url()
         ca = _ca(proxy_ns)
@@ -981,6 +1006,11 @@ def status(item):
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":
         if not all(p == "Succeeded" for p in phases):
+            if _waited(ref, "finish_since", FINISH_LIMIT):
+                names = ", ".join(d["dv"] for d in ref["disks"])
+                return _keep_disks(ref, f"CDI did not finish the disks within {FINISH_LIMIT // 3600} hours. They are kept as "
+                                        f"{names}, and may be incomplete: look at them under Volumes before using or "
+                                        "removing them", item)
             return "running", 96, "CDI is finishing the disk"
         try:
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
@@ -999,11 +1029,7 @@ def status(item):
             # The disks are whole: keep them, and say how to finish by hand.
             detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
                       f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
-            if ref.get("cdi_cleanup"):
-                ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
-                return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
-            ref["phase"] = "failed"
-            return "failed", 100, detail
+            return _keep_disks(ref, detail, item)
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
                          f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")
