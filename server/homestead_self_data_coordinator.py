@@ -227,7 +227,8 @@ class Coordinator:
                 mounted = claims(pod)
                 if (self.state["destination"] in mounted or self.state["source"]["name"] in mounted
                         and not any(owner(pod, "ReplicaSet", uid) for uid in known_sets)):
-                    raise Held("A data volume has an unreviewed consumer; Homestead was not stopped")
+                    raise Held("A data volume has an unreviewed consumer; " + (
+                        "Homestead's stop request was already accepted" if self._entry("stop") else "Homestead was not stopped"))
         return dep
 
     def _worker_running(self):
@@ -301,6 +302,8 @@ class Coordinator:
     def _admission(self, purpose, proposal):
         if self.admit(purpose, copy.deepcopy(proposal)) is not True:
             raise Held("Current placement or capacity needs review before the data handoff can continue")
+        if "figure" in self.anchor.state.get("waits", {}):
+            self.anchor.wait_over("figure")  # only now: an early return has not passed the check
         return self._environment()  # admission may take time; recheck afterwards
 
     def _update_dep(self, step, dep, proposed, built_from):

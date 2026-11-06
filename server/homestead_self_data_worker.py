@@ -56,6 +56,21 @@ HOST_LIMIT = 1800
 FIGURE_LIMIT = 300
 
 
+def _names(hosts, room=120):
+    """Host names for a message that has a size limit: a hold that can't be written is
+    a hold no one can act on."""
+    shown, left = [], room
+    for host in hosts:
+        if len(host) > left:
+            break
+        shown.append(host)
+        left -= len(host) + 2
+    if not shown:
+        shown = [hosts[0][:room - 3] + "..."]
+    rest = len(hosts) - len(shown)
+    return ", ".join(shown) + (f" and {rest} more" if rest else "")
+
+
 def transient(error):
     """Whether error, or what it was raised from, is the API not answering:
     a timeout, a refused or reset connection, or a 429/5xx reply. A refusal
@@ -184,6 +199,7 @@ class Runner:
         # worker_uid is the Job's, the same for every try; pod_uid is this try's.
         self.pod_uid, self.config = pod_uid, config
         self.replacing = False
+        self.acting = False  # whether the record names this pod: only then can it hold
         self.host_down = None
         self.clock = clock
         self.lock = threading.Lock()
@@ -276,9 +292,11 @@ class Runner:
         so a new process is the same as the next tick, except for a request whose
         outcome nobody recorded: that holds, and is never sent again."""
         if self.pod_uid is None or anchor.state.get("plan", {}).get("worker", {}).get("uid") != self.worker_uid:
+            self.acting = True
             return True  # a pod of another Job is refused by the coordinator's own check
         current = anchor.state.get("runtime", {}).get("pod_uid")
-        if current == self.pod_uid:
+        self.acting = current == self.pod_uid
+        if self.acting:
             self.replacing = False
             return True
         listed = self.read(f"/api/v1/namespaces/{self.namespace}/pods")
@@ -299,6 +317,7 @@ class Runner:
                 return False
             raise
         self.replacing = False
+        self.acting = True
         unknown = [e["step"] for e in anchor.state["journal"]["ref"]["storage_writes"] if e["state"] == "intent"]
         # An existing hold keeps its own words: recovery compares them to clear it.
         if unknown and anchor.state.get("runtime", {}).get("state") != "held":
@@ -327,6 +346,7 @@ class Runner:
                 anchor = self._load()
                 # Before anything is written: the record, not this pod's environment, says what was reviewed.
                 if self.config is not None and "pointer_receipt" in anchor.state and anchor.state.get("setup", {}).get("config") != self.config:
+                    self.acting = True  # refused for good, and said on its page; it writes nothing
                     raise Held("This coordinator's configuration differs from the move's record; it changes nothing")
                 if "pointer_receipt" in anchor.state and not self._acts(anchor):
                     return self.snapshot()
@@ -356,15 +376,13 @@ class Runner:
                 result = engine.step()
                 waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
                 self.start_wait = (self.start_wait or self.clock()) if waiting else None
-                if "figure" in anchor.state.get("waits", {}):
-                    anchor.wait_over("figure")
                 anchor.report(self.worker_uid, self._checked_at(anchor),
                               "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
                 self.outage_since = self.host_down = None
             except C.HostDown as error:
                 self._host_down(anchor, error.hosts)
             except C.FigurePending as error:
-                names = ", ".join(error.hosts)
+                names = _names(error.hosts)
                 self._wait_for(anchor, "figure", FIGURE_LIMIT, str(error),
                                f"{names} is back but has no live memory figure yet. Waiting up to {FIGURE_LIMIT // 60} minutes for it.")
             except Held as error:
@@ -380,7 +398,7 @@ class Runner:
             self.lock.release()
 
     def _host_down(self, anchor, hosts):
-        names = ", ".join(hosts)
+        names = _names(hosts)
         writes = anchor.state["journal"]["ref"]["storage_writes"]
         if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
             return self._wait_for(anchor, "host", None, None,
@@ -403,6 +421,7 @@ class Runner:
             self._save_hold()
             return
         self.host_down = waiting
+        self.outage_since = None  # the API answered: this is not an outage going on
         try:
             if started is None:
                 anchor.wait_started(key, now)
@@ -416,7 +435,14 @@ class Runner:
         The next tick starts again from the durable record, as every tick
         does, so nothing is repeated: a write the API may have applied is in
         the journal as uncertain, and that holds at once. An outage longer
-        than OUTAGE_LIMIT holds too, saying so."""
+        than OUTAGE_LIMIT holds too, saying so.
+
+        A pod the record doesn't name never holds: it could not write that, recovery
+        could not see it, and nothing could clear it. It keeps trying to take over."""
+        if self.pod_uid is not None and not self.acting:
+            if transient(error) and self.outage_since is None:
+                self.outage_since = self.clock()
+            return True
         if not transient(error):
             return False
         try:

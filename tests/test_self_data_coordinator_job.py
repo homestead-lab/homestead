@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -496,6 +497,34 @@ class HostBackWithoutMetricsTests(unittest.TestCase):
         self.assertEqual("held", view["status"])
         self.assertEqual("held", self.m.state()["runtime"]["state"])
 
+    def test_a_changed_workload_holds_at_once_even_with_only_the_figure_missing(self):
+        self.back_without_a_figure()
+        real = D.review
+        def changed(*args, **kwargs):
+            report = real(*args, **kwargs)
+            report["receipt"]["proposal"] = "0" * 64
+            return report
+        with mock.patch.object(D, "review", changed):
+            view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("workload changed", view["message"])
+
+    def test_the_five_minutes_keep_running_through_an_early_return_before_the_capacity_check(self):
+        """A pod in the way returns before the check: the check has not passed."""
+        m = self.m
+        self.back_without_a_figure()
+        self.run_.tick()
+        started = m.state()["waits"]["figure"]
+        path = self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "homestead-late", "namespace": NS,
+            "ownerReferences": [{"kind": "ReplicaSet", "uid": m.rs_uid, "name": "hs-rs", "controller": True}]},
+            "spec": {}, "status": {"phase": "Running"}})
+        m.pass_time(120)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.assertEqual(started, m.state()["waits"]["figure"])
+        self.kube.discard(path)
+        m.pass_time(180)
+        self.assertEqual("held", self.run_.tick()["status"])
+
     def test_the_normal_case_before_the_start_request(self):
         m = self.m
         self.run_.tick(); m.copy_finished(); self.run_.tick(); self.run_.tick(); m.copy_released(); self.run_.tick(); self.run_.tick(); m.stopped()
@@ -507,6 +536,118 @@ class HostBackWithoutMetricsTests(unittest.TestCase):
         self.reporting.append("node-a")
         self.run_.tick()
         self.assertIn("start", m.steps())
+
+
+class ApiOutageTests(unittest.TestCase):
+    """An API outage, on a pod that has not taken over and across a wait on a down host."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.answering = True
+
+    def flaky(self, m, run):
+        read = m.read
+        def answer(path):
+            if not self.answering:
+                raise urllib.error.HTTPError(path, 503, "unavailable", {}, None)
+            return read(path)
+        run.read = answer
+        return run
+
+    def blip(self, run):
+        self.answering = False
+        view = run.tick()
+        self.answering = True
+        return view
+
+    def test_a_replacement_that_has_not_taken_over_does_not_latch_and_takes_over_when_the_api_is_back(self):
+        m = Move(self.kube)
+        run = m.runner()
+        run.tick(); m.stopped(); run.tick()
+        second = m.start_pod("node-b")
+        m.pod_failed(m.first_pod)
+        new = self.flaky(m, m.runner(second))
+        self.blip(new)
+        m.pass_time(301)
+        self.assertNotEqual("held", self.blip(new)["status"])
+        m.pass_time(86400)
+        self.assertNotEqual("held", self.blip(new)["status"], "still not acting, still trying")
+        self.assertIsNone(new.hold)
+        self.assertEqual(m.first_pod[0], m.state()["runtime"]["pod_uid"])
+        view = new.tick()
+        self.assertNotEqual("held", view["status"], view)
+        self.assertEqual((second[0], "running"), (m.state()["runtime"]["pod_uid"], m.state()["runtime"]["state"]))
+        self.assertIn("copy-job", m.steps())
+
+    def test_a_refusal_before_taking_over_does_not_latch_either(self):
+        """Nothing it latches could be written, seen by recovery or cleared."""
+        m = Move(self.kube)
+        m.runner().tick()
+        second = m.start_pod("node-b")
+        m.pod_failed(m.first_pod)
+        self.kube.fail(m.anchor.path, 403, method="PUT")
+        new = m.runner(second)
+        self.assertNotEqual("held", new.tick()["status"])
+        self.assertIsNone(new.hold)
+        new.tick()
+        self.assertEqual(second[0], m.state()["runtime"]["pod_uid"])
+
+    def test_a_pod_that_was_replaced_stops_being_able_to_hold(self):
+        m = Move(self.kube)
+        first = self.flaky(m, m.runner())
+        first.tick()
+        second = m.start_pod("node-b")
+        m.pod_terminating(m.first_pod, grace=0)
+        m.pass_time(1)
+        m.runner(second).tick()
+        first.tick()                                # it sees it has been replaced
+        self.blip(first)
+        m.pass_time(301)
+        self.blip(first)
+        self.assertIsNone(first.hold)
+
+    def test_the_acting_pod_still_holds_after_the_outage_limit(self):
+        m = Move(self.kube)
+        run = self.flaky(m, m.runner())
+        run.tick()
+        self.blip(run)
+        m.pass_time(301)
+        self.blip(run)
+        self.assertIn("did not answer", run.hold)
+
+    def test_a_host_wait_is_not_an_outage_before_the_switch(self):
+        """A blip, six minutes waiting for a host, another blip: not five minutes of no answer."""
+        m = Move(self.kube, pinned_to="node-a")
+        run = m.runner()
+        run.tick(); m.stopped(); run.tick()
+        m.pod_lost(m.first_pod)
+        run = self.flaky(m, m.runner(m.start_pod("node-b")))
+        m.host_down("node-a")
+        run.tick()                                  # takes over, and waits
+        self.blip(run)
+        run.tick()
+        m.pass_time(360)
+        run.tick()
+        self.blip(run)
+        self.assertIsNone(run.hold)
+        self.assertEqual("running", m.state()["runtime"]["state"])
+
+    def test_a_host_wait_is_not_an_outage_after_the_switch(self):
+        m = Move(self.kube, pinned_to="node-a")
+        run = m.runner()
+        run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick()
+        self.assertIn("switch", m.steps())
+        m.pod_lost(m.first_pod)
+        run = self.flaky(m, m.runner(m.start_pod("node-b")))
+        m.host_down("node-a")
+        run.tick()
+        self.blip(run)
+        run.tick()
+        m.pass_time(86400)
+        run.tick()
+        self.blip(run)
+        self.assertIsNone(run.hold)
+        self.assertEqual("running", m.state()["runtime"]["state"])
 
 
 class HostNeverBackTests(unittest.TestCase):
@@ -640,6 +781,48 @@ class HostNeverBackTests(unittest.TestCase):
         view = self.run_.tick()
         self.assertNotEqual("held", view["status"])
         self.assertIn("no limit", view["message"])
+
+    def test_after_a_return_to_the_original_volume_is_started_the_wait_has_no_limit(self):
+        """A hold there would keep the restarted pods unready, as after the switch."""
+        kube = Kube()
+        with kube:
+            m = Move(kube, pins={"old-pv": "node-a"})
+            run = m.runner(real_admission=True)
+            run.tick(); m.stopped()
+            path = kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                             "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+            self.assertEqual("held", run.tick()["status"])
+            kube.discard(path)
+            load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+            review = R.review(load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
+            R.confirm(load(), m.read, lambda _: m.logs_text, "return-original", review["fingerprint"], clock=lambda: m.now)
+            run.tick()
+            self.assertIn("recover-start", m.steps())
+            m.host_down("node-a")
+            run.tick()
+            m.pass_time(86400)
+            view = run.tick()
+            self.assertNotEqual("held", view["status"])
+            self.assertIn("no limit", view["message"])
+            self.assertEqual("running", m.state()["runtime"]["state"])
+
+    def test_long_host_names_still_reach_the_record(self):
+        """Its message has a size limit: a hold that can't be written is a hold no one can act on."""
+        kube = Kube()
+        with kube:
+            a, b, c = ("n" * 250 + "-" + x for x in "abc")
+            m = Move(kube, hosts=(a, b, c), pins={"new-pv": a})
+            pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = b; kube.add(pod)
+            m.pod_lost(m.first_pod)
+            run = m.runner(m.start_pod(c))
+            m.host_down(a); m.host_down(b)
+            view = run.tick()
+            self.assertNotEqual("held", view["status"])
+            self.assertLessEqual(len(view["message"]), 512)
+            self.assertIn("n" * 20, m.state()["runtime"]["message"], "the heartbeat wrote it")
+            m.pass_time(1800)
+            self.assertEqual("held", run.tick()["status"])
+            self.assertEqual("held", m.state()["runtime"]["state"])
 
     def test_the_original_on_the_same_dead_disk_cannot_go_back_and_says_so(self):
         kube = Kube()
@@ -942,7 +1125,8 @@ class VolumePinnedToAHostTests(unittest.TestCase):
         for action in ("resume", "return-original"):
             with self.assertRaises(Held) as refused:
                 R.review(load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
-            self.assertIn("node-a", str(refused.exception))
+            self.assertIn("needs node-a, which is down", str(refused.exception))
+            self.assertIn("Bring it back", str(refused.exception))
             self.assertNotIn("carries on", str(refused.exception), "a held move does not carry on by itself")
         m.rebooted("node-a")
         self.assertEqual("resume", R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)["action"])
@@ -1302,6 +1486,22 @@ class LostPodTests(MoveTest):
         run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished()
         self.replaced().tick()
         self.assertEqual(m.job["metadata"]["uid"], m.state()["copy_receipt"]["worker_uid"])
+
+    def test_a_hold_after_an_accepted_stop_does_not_say_homestead_was_not_stopped(self):
+        m = self.m
+        self.died_in("advance", m.runner(self.current))
+        self.assertEqual((["stop"], "prepare"), (m.steps(), m.state()["phase"]))
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                       "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+        view = self.replaced().tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("unreviewed consumer", view["message"])
+        self.assertNotIn("was not stopped", view["message"])
+
+    def test_a_hold_before_the_stop_still_says_homestead_was_not_stopped(self):
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                       "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+        self.assertIn("was not stopped", self.m.runner(self.current).tick()["message"])
 
     def test_lost_before_the_stop_keeps_homestead_as_it_was(self):
         """Later than the copy preflight's minute, the new pod holds with Homestead running."""
