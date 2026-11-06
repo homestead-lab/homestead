@@ -27,6 +27,18 @@ import homestead_components as COMPONENTS
 import homestead_lhv2_upgrade as V2
 import homestead_vm_power_job as LOCKS
 import homestead_copy_job as COPY_JOB
+import homestead_auth as AUTH
+import homestead_deploy_server as DEPLOY_SERVER
+import homestead_helm as HELM
+import homestead_host_bonds as HOST_BONDS
+import homestead_host_bridge as HOST_BRIDGE
+import homestead_host_os as HOST_OS
+import homestead_imports as IMPORTS
+import homestead_lan as LAN
+import homestead_network_state as NETWORK_STATE
+import homestead_reclass as RECLASS
+import homestead_restore_test as RESTORE_TEST
+import homestead_unraid_vms as UNRAID
 import server
 from fakes.kube import Kube
 
@@ -66,6 +78,9 @@ def service(name="web"):
     return {"apiVersion": "v1", "kind": "Service", "metadata": {"namespace": "lab", "name": name},
             "spec": {"selector": {"app": "web"}, "ports": [{"port": 80}]}}
 
+# The modules these cancellers write through, each bound to the API when server.py runs.
+BOUND_TO_THE_API = (DEPLOY_SERVER, HELM, IMPORTS, HOSTRUN, RECLASS, RESTORE_TEST, REVERT, UNRAID)
+
 
 class Base(unittest.TestCase):
     def setUp(self):
@@ -78,6 +93,20 @@ class Base(unittest.TestCase):
             "kget", "ksend", "remove_workload", "tidy_restore")))
         self.kube = self.enterContext(Kube())
         CANCEL.bind(K.kget, K.ksend, server.delete_workload)
+        self.bind_as_the_server_does()
+
+    def bind_as_the_server_does(self):
+        """What these cancellers read through their modules' bound names, as server.py binds it.
+        Another test file may have left its own stand-ins there, and then a write never
+        reaches the fake (so a cut-off never happens). Put back after each test."""
+        names = [(module, name, value) for module in BOUND_TO_THE_API
+                 for name, value in (("kget", K.kget), ("ksend", K.ksend))]
+        # These only read here; AUTH's ksend is a wrapper of its own, and stays.
+        names += [(module, "kget", K.kget) for module in (AUTH, LAN, NETWORK_STATE)]
+        names += [(module, "hostrun", HOSTRUN) for module in (HOST_OS, HOST_BONDS, HOST_BRIDGE)]
+        names += [(HOSTRUN, "NS", "lab"), (UNRAID, "OPS", OPS), (REVERT, "reclass", RECLASS)]
+        for module, name, value in names:
+            self.enterContext(mock.patch.object(module, name, value))
 
     def job(self, kind, ref, name="web"):
         return OPS.start(kind, "A job", {"kind": "Thing", "name": name, "namespace": "lab"}, "/", ref)["id"]
@@ -1314,8 +1343,6 @@ class MadeAgainSurvives(Base):
 class LeaseSomeoneElseHolds(Base):
     """Host jobs delete nothing: they give back a lease, only if it is still theirs."""
     def check(self, kind):
-        for name, value in (("kget", K.kget), ("ksend", K.ksend), ("NS", "lab")):
-            self.enterContext(mock.patch.object(HOSTRUN, name, value))
         path = HOSTRUN._lease_path("node-a")
         lease = {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
                  "metadata": {"namespace": "lab", "name": path.rsplit("/", 1)[-1]},
