@@ -1,0 +1,362 @@
+{
+ "items": [
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Engine",
+   "metadata": {
+    "creationTimestamp": "2026-10-05T16:12:00Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 45,
+    "labels": {
+     "longhornnode": "node-b",
+     "longhornvolume": "vol-a"
+    },
+    "name": "vol-a-e-0",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-a",
+      "uid": "00000000-0000-4000-8000-000000000004"
+     }
+    ],
+    "resourceVersion": "26437256"
+   },
+   "spec": {
+    "active": true,
+    "backupVolume": "",
+    "dataEngine": "v1",
+    "desireState": "running",
+    "disableFrontend": false,
+    "frontend": "blockdev",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "logRequested": false,
+    "nodeID": "node-b",
+    "rebuildConcurrentSyncLimit": 1,
+    "replicaAddressMap": {
+     "vol-a-r-1": "192.0.2.234:10519",
+     "vol-a-r-2": "192.0.2.136:10286"
+    },
+    "requestedBackupRestore": "",
+    "requestedDataSource": "",
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkSnapChainRemovedEnabled": false,
+    "upgradedReplicaAddressMap": {},
+    "volumeName": "vol-a",
+    "volumeSize": "10737418240"
+   },
+   "status": {
+    "backupStatus": null,
+    "cloneStatus": null,
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     }
+    ],
+    "currentImage": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "currentReplicaAddressMap": {
+     "vol-a-r-1": "192.0.2.234:10519",
+     "vol-a-r-2": "192.0.2.136:10286"
+    },
+    "currentSize": "10737418240",
+    "currentState": "running",
+    "endpoint": "/dev/longhorn/vol-a",
+    "instanceManagerName": "instance-manager-00000000000000000000000000000005",
+    "ip": "192.0.2.234",
+    "isExpanding": false,
+    "lastExpansionError": "",
+    "lastExpansionFailedAt": "",
+    "lastRestoredBackup": "",
+    "logFetched": false,
+    "ownerID": "node-b",
+    "port": 10529,
+    "purgeStatus": {
+     "tcp://192.0.2.136:10286": {
+      "error": "",
+      "isPurging": false,
+      "progress": 100,
+      "state": "complete"
+     },
+     "tcp://192.0.2.234:10519": {
+      "error": "",
+      "isPurging": false,
+      "progress": 100,
+      "state": "complete"
+     }
+    },
+    "rebuildConcurrentSyncLimit": 1,
+    "rebuildStatus": {},
+    "replicaModeMap": {
+     "vol-a-r-1": "RW",
+     "vol-a-r-2": "RW"
+    },
+    "replicaTransitionTimeMap": {
+     "vol-a-r-1": "2026-11-01T13:46:29Z",
+     "vol-a-r-2": "2026-11-01T13:46:29Z"
+    },
+    "restoreStatus": {
+     "tcp://192.0.2.136:10286": {
+      "backupURL": "",
+      "currentRestoringBackup": "",
+      "isRestoring": false,
+      "lastRestored": "",
+      "state": ""
+     },
+     "tcp://192.0.2.234:10519": {
+      "backupURL": "",
+      "currentRestoringBackup": "",
+      "isRestoring": false,
+      "lastRestored": "",
+      "state": ""
+     }
+    },
+    "salvageExecuted": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "snapshots": {
+     "backup-d-00000000-0000-4000-8000-000000000012": {
+      "children": {
+       "volume-head": true
+      },
+      "created": "2026-11-03T04:00:02Z",
+      "labels": {
+       "RecurringJob": "backup-daily",
+       "schedule": "daily"
+      },
+      "name": "backup-d-00000000-0000-4000-8000-000000000012",
+      "parent": "backup-w-00000000-0000-4000-8000-000000000013",
+      "removed": false,
+      "size": "78364672",
+      "usercreated": true
+     },
+     "backup-w-00000000-0000-4000-8000-000000000013": {
+      "children": {
+       "backup-d-00000000-0000-4000-8000-000000000012": true
+      },
+      "created": "2026-10-20T21:24:51Z",
+      "labels": {
+       "RecurringJob": "backup-weekly",
+       "schedule": "weekly"
+      },
+      "name": "backup-w-00000000-0000-4000-8000-000000000013",
+      "parent": "backup-w-00000000-0000-4000-8000-000000000014",
+      "removed": false,
+      "size": "143360",
+      "usercreated": true
+     },
+     "backup-w-00000000-0000-4000-8000-000000000014": {
+      "children": {
+       "backup-w-00000000-0000-4000-8000-000000000013": true
+      },
+      "created": "2026-10-20T21:15:38Z",
+      "labels": {
+       "RecurringJob": "backup-weekly",
+       "schedule": "weekly"
+      },
+      "name": "backup-w-00000000-0000-4000-8000-000000000014",
+      "parent": "",
+      "removed": false,
+      "size": "248168448",
+      "usercreated": true
+     },
+     "volume-head": {
+      "children": {},
+      "created": "2026-11-03T04:00:02Z",
+      "labels": {},
+      "name": "volume-head",
+      "parent": "backup-d-00000000-0000-4000-8000-000000000012",
+      "removed": false,
+      "size": "11333632",
+      "usercreated": false
+     }
+    },
+    "snapshotsError": "",
+    "started": true,
+    "starting": false,
+    "storageIP": "192.0.2.234",
+    "unmapMarkSnapChainRemovedEnabled": false,
+    "uuid": "00000000-0000-4000-8000-000000000015"
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Engine",
+   "metadata": {
+    "creationTimestamp": "2026-10-07T11:11:42Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 244,
+    "labels": {
+     "longhornnode": "",
+     "longhornvolume": "vol-b"
+    },
+    "name": "vol-b-e-0",
+    "namespace": "longhorn-system",
+    "ownerReferences": [
+     {
+      "apiVersion": "longhorn.io/v1beta2",
+      "kind": "Volume",
+      "name": "vol-b",
+      "uid": "00000000-0000-4000-8000-000000000011"
+     }
+    ],
+    "resourceVersion": "25979642"
+   },
+   "spec": {
+    "active": true,
+    "backupVolume": "",
+    "dataEngine": "v1",
+    "desireState": "stopped",
+    "disableFrontend": false,
+    "frontend": "blockdev",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "logRequested": false,
+    "nodeID": "",
+    "rebuildConcurrentSyncLimit": 1,
+    "replicaAddressMap": {
+     "vol-b-r-1": "192.0.2.136:10416",
+     "vol-b-r-2": "192.0.2.234:10621"
+    },
+    "requestedBackupRestore": "",
+    "requestedDataSource": "",
+    "revisionCounterDisabled": true,
+    "salvageRequested": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "unmapMarkSnapChainRemovedEnabled": false,
+    "upgradedReplicaAddressMap": {},
+    "volumeName": "vol-b",
+    "volumeSize": "2147483648"
+   },
+   "status": {
+    "backupStatus": null,
+    "cloneStatus": null,
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "InstanceCreation"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "FilesystemReadOnly"
+     }
+    ],
+    "currentImage": "",
+    "currentReplicaAddressMap": {
+     "vol-b-r-1": "192.0.2.136:10416",
+     "vol-b-r-2": "192.0.2.234:10621"
+    },
+    "currentSize": "2147483648",
+    "currentState": "stopped",
+    "endpoint": "",
+    "instanceManagerName": "",
+    "ip": "",
+    "isExpanding": false,
+    "lastExpansionError": "",
+    "lastExpansionFailedAt": "",
+    "lastRestoredBackup": "",
+    "logFetched": false,
+    "ownerID": "node-a",
+    "port": 0,
+    "purgeStatus": null,
+    "rebuildConcurrentSyncLimit": 1,
+    "rebuildStatus": null,
+    "replicaModeMap": null,
+    "restoreStatus": null,
+    "salvageExecuted": false,
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "snapshots": {
+     "backup-d-00000000-0000-4000-8000-000000000016": {
+      "children": {
+       "backup-d-00000000-0000-4000-8000-000000000017": true
+      },
+      "created": "2026-11-02T04:05:14Z",
+      "labels": {
+       "RecurringJob": "backup-daily",
+       "schedule": "daily"
+      },
+      "name": "backup-d-00000000-0000-4000-8000-000000000016",
+      "parent": "backup-w-00000000-0000-4000-8000-000000000018",
+      "removed": false,
+      "size": "242520064",
+      "usercreated": true
+     },
+     "backup-d-00000000-0000-4000-8000-000000000017": {
+      "children": {
+       "volume-head": true
+      },
+      "created": "2026-11-03T04:07:14Z",
+      "labels": {
+       "RecurringJob": "backup-daily",
+       "schedule": "daily"
+      },
+      "name": "backup-d-00000000-0000-4000-8000-000000000017",
+      "parent": "backup-d-00000000-0000-4000-8000-000000000016",
+      "removed": false,
+      "size": "23687168",
+      "usercreated": true
+     },
+     "backup-w-00000000-0000-4000-8000-000000000018": {
+      "children": {
+       "backup-d-00000000-0000-4000-8000-000000000016": true
+      },
+      "created": "2026-10-20T21:14:46Z",
+      "labels": {
+       "RecurringJob": "backup-weekly",
+       "schedule": "weekly"
+      },
+      "name": "backup-w-00000000-0000-4000-8000-000000000018",
+      "parent": "",
+      "removed": false,
+      "size": "313790464",
+      "usercreated": true
+     },
+     "volume-head": {
+      "children": {},
+      "created": "2026-11-03T04:07:14Z",
+      "labels": {},
+      "name": "volume-head",
+      "parent": "backup-d-00000000-0000-4000-8000-000000000017",
+      "removed": false,
+      "size": "0",
+      "usercreated": false
+     }
+    },
+    "snapshotsError": "",
+    "started": false,
+    "starting": false,
+    "storageIP": "",
+    "unmapMarkSnapChainRemovedEnabled": false
+   }
+  }
+ ]
+}

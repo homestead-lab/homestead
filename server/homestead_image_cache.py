@@ -773,6 +773,138 @@ def _scanned_images(node):
 
 
 PREPULL_NAMES = ("homestead-pull-",)
+# The kubelet's reasons for a pull that failed and is being retried, or can
+# never start: a pod waiting for one of these gets no further by itself.
+PULL_ERRORS = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull",
+               "ErrImageInspect", "RegistryUnavailable", "SignatureValidationFailed"}
+# How long every pod of a pull still waiting has to be failing its pull before
+# the job ends failed: long enough for a registry that is down for a moment.
+PULL_STUCK_FOR = 300
+_clock = time.time
+
+
+def pull_progress(read, ref):
+    """A pre-pull job's step: (status, progress, message); read is the job
+    loop's Kubernetes reader.
+
+    A DaemonSet gets no Progressing or Available conditions, so a pull that can
+    never succeed - a typo in the image, a private registry without
+    credentials - used to wait for ever, its pods asking the registry again
+    and again. It is read from the pods instead: when every pod still waiting
+    has failed its pull, and has for PULL_STUCK_FOR, the job fails with the
+    error and the pull is stopped. A slow pull is never failed for its time,
+    a retry that is pulling again is not failing (_pulling_again), and a pod
+    not made yet can still pull."""
+    ds = read(f"/apis/apps/v1/namespaces/{ref['namespace']}/daemonsets/{ref['name']}")
+    status = ds.get("status", {}) or {}
+    desired = int(status.get("desiredNumberScheduled", 0) or 0)
+    ready = int(status.get("numberReady", 0) or 0)
+    unavailable = int(status.get("numberUnavailable", 0) or 0)
+    if desired and ready >= desired and unavailable == 0:
+        _not_failing(ref)
+        return "succeeded", 100, f"Image cached on {ready}/{desired} nodes"
+    progress = min(95, round(ready / desired * 100)) if desired else 5
+    counted = f"Image cached on {ready}/{desired or '?'} nodes"
+    failing = _pull_errors(read, ref)
+    if failing is None:
+        return "running", progress, counted      # not known this time: the wait so far stands
+    if not failing:
+        _not_failing(ref)
+        return "running", progress, counted
+    for row in failing:
+        if row["message"] and row["reason"] != "ImagePullBackOff":
+            # Back-off says only that it waits; the pull's own error says why.
+            ref["pull_error"] = row["message"][:300]
+    said = "; ".join(f"{row['node'] or 'a node'}: {row['reason']}" for row in failing[:3])
+    why = f" ({ref['pull_error']})" if ref.get("pull_error") else ""
+    if any(row["unread"] for row in failing):
+        why += " (pull events could not be read; going by the pod status)"
+    if len(failing) < desired - ready:
+        ref.pop("pull_failing_since", None)     # a pod not made yet, or still pulling, can get there
+        return "running", progress, f"{counted}; {said}{why}"[:400]
+    since = ref.setdefault("pull_failing_since", _clock())
+    if _clock() - since < PULL_STUCK_FOR:
+        return "running", progress, f"{counted}; {said}{why}; retrying"[:400]
+    image = failing[0]["image"] or next((c.get("image") for c in ((ds.get("spec") or {}).get("template") or {}).get(
+        "spec", {}).get("initContainers") or [] if c.get("image")), "the image")
+    stop_prepull(ref["name"])
+    return "failed", progress, (f"Could not pull {image}: {said}{why}. {counted}; "
+                                "the pull was stopped")[:500]
+
+
+def _not_failing(ref):
+    ref.pop("pull_failing_since", None)
+    ref.pop("pull_error", None)
+
+
+def _pull_errors(read, ref):
+    """{node, reason, message, image, unread} for each pod of the pull not
+    ready because its pull failed, or None when the pods cannot be read this
+    time. A pod whose events cannot be read goes by its status (unread): an
+    events outage must not keep a bad pull going for ever. A pod being deleted
+    is not counted: its replacement is the one that pulls."""
+    selector = urllib.parse.quote(f"app={ref['name']}")
+    try:
+        pods = read(f"/api/v1/namespaces/{ref['namespace']}/pods?labelSelector={selector}").get("items") or []
+    except Exception:
+        return None
+    found = []
+    for pod in pods:
+        meta, status = pod.get("metadata") or {}, pod.get("status") or {}
+        if meta.get("deletionTimestamp") or any(
+                c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions") or []):
+            continue
+        for row in (status.get("initContainerStatuses") or []) + (status.get("containerStatuses") or []):
+            waiting = (row.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") not in PULL_ERRORS:
+                continue
+            again = _pulling_again(read, ref["namespace"], meta.get("name", ""), meta.get("uid", ""))
+            if not again:
+                spec = (pod.get("spec") or {})
+                image = row.get("image") or next((c.get("image") for c in (spec.get("initContainers") or [])
+                                                  + (spec.get("containers") or []) if c.get("name") == row.get("name")), "")
+                found.append({"node": spec.get("nodeName", ""), "reason": waiting["reason"],
+                              "message": _scrubbed(str(waiting.get("message") or "")), "image": image,
+                              "unread": again is None})
+            break
+    return sorted(found, key=lambda row: row["node"])
+
+
+def _pulling_again(read, namespace, pod, uid=""):
+    """Whether a pod that shows a pull error is pulling again. The kubelet keeps
+    a container's last error in its status while the retry pulls, which for a
+    big image on a slow link is longer than PULL_STUCK_FOR; its events say
+    which came last. Only this pod's (its uid): an earlier pod of the same
+    name had events of its own. None when the events cannot be read; False
+    with no pull event (they expire after an hour): the status is all there is."""
+    terms = f"involvedObject.kind=Pod,involvedObject.name={pod}" + (f",involvedObject.uid={uid}" if uid else "")
+    selector = urllib.parse.quote(terms)
+    try:
+        events = read(f"/api/v1/namespaces/{namespace}/events?fieldSelector={selector}").get("items") or []
+    except Exception:
+        return None
+    last = {}
+    for event in events:
+        at = str(event.get("lastTimestamp") or event.get("eventTime") or event.get("firstTimestamp")
+                 or (event.get("metadata") or {}).get("creationTimestamp") or "")[:19]
+        reason = event.get("reason")
+        if reason in ("Pulling", "Failed", "BackOff") and at > last.get(reason, ""):
+            last[reason] = at
+    # A pull that fails at once is Failed in the same second as its Pulling:
+    # that is a failure. A BackOff in the same second as a Pulling is the retry starting.
+    return (bool(last.get("Pulling")) and last["Pulling"] > last.get("Failed", "")
+            and last["Pulling"] >= last.get("BackOff", ""))
+
+
+# A URL's query (a pre-signed blob URL's signature and token) and userinfo
+# (a mirror written as user:password@host): never kept or shown.
+_URL_QUERY = re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'?]*)\?[^\s\"']*")
+_URL_USERINFO = re.compile(r"\b([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s\"'@]*@")
+
+
+def _scrubbed(text):
+    """The registry's words with what could be a credential left out."""
+    return _URL_USERINFO.sub(r"\1", _URL_QUERY.sub(r"\1?…", text))
 
 
 def _pullable_nodes():
@@ -878,6 +1010,7 @@ def prepull_status(sweep=True):
     except Exception:
         return {"pulls": [], "finished": []}
     pulls, finished = [], []
+    followed = None
     for item in sets:
         name = item["metadata"]["name"]
         status = item.get("status", {}) or {}
@@ -889,12 +1022,27 @@ def prepull_status(sweep=True):
         row = {"name": name, "image": image, "desired": desired, "ready": ready,
                "complete": bool(desired) and ready >= desired}
         if row["complete"]:
-            if sweep:
+            if sweep and followed is None:
+                followed = _followed()
+            # One a job still follows is that job's to see finished first: removed
+            # under it, its next look was a 404 and a pull that worked failed.
+            if sweep and followed is not None and name not in followed:
                 stop_prepull(name)
             finished.append(row)
         else:
             pulls.append(row)
     return {"pulls": pulls, "finished": finished}
+
+
+def _followed():
+    """Every name a job not yet ended names (homestead_helper_sweep's rule), or
+    None, with nothing to be removed, when the jobs cannot be read."""
+    import homestead_helper_sweep as HELPERS
+    try:
+        return HELPERS._followed(I.OPS.stored())
+    except Exception as error:
+        print(f"finished pre-pulls not removed, the jobs could not be read: {str(error)[:160]}", flush=True)
+        return None
 
 
 def stop_prepull(name):
@@ -927,6 +1075,11 @@ def forget_rollback(namespace, name):
           ctype="application/merge-patch+json")
     I._bust("imgcache", "wl")
     return {"ok": True, "detail": f"{name} no longer keeps its previous image; it can be cleaned up now"}
+
+
+# An image removal pod's time to run: a containerd that does not answer ends
+# it, and its job fails, instead of the pod waiting on the host for ever.
+CLEAN_DEADLINE = 600
 
 
 def cleanup_image(digest, nodes=None, report=None):
@@ -967,7 +1120,7 @@ def cleanup_image(digest, nodes=None, report=None):
         pod_name = f"homestead-image-clean-{suffix}-{attempt}"
         body = RUNTIME.pod(pod_name, I.NS, node, script, "image-cleanup",
                            {NAMES.key("image-digest"): digest, NAMES.key("cache-node"): node},
-                           app="homestead-image-cleaner")
+                           app="homestead-image-cleaner", deadline=CLEAN_DEADLINE)
         for old in NAMES.find(f"/api/v1/namespaces/{I.NS}/pods", "task", "image-cleanup"):
             meta = old.get("metadata") or {}
             if meta.get("name", "").startswith(f"homestead-image-clean-{suffix}") and                     (old.get("status") or {}).get("phase") in ("Succeeded", "Failed"):

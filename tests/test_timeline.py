@@ -10,6 +10,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_shared as SHARED
 import homestead_timeline as T
+import homestead_alerts as _ALERTS
+import homestead_history as _HISTORY
+
+REAL_READERS = {"alerts": (_ALERTS, "log", _ALERTS.log), "hosts": (_HISTORY, "maintenance_since", _HISTORY.maintenance_since)}
 
 T0 = 1_790_000_000
 
@@ -140,7 +144,7 @@ class Sources:
             if name == "recent":
                 fn = lambda since, _g=guard("restarts", lambda: self.restarts): [r for r in _g() if r["at"] > iso(since)]
             elif name == "maintenance_since":
-                fn = lambda since, _g=guard("hosts", lambda: self.hosts): _g()
+                fn = lambda since, _g=guard("hosts", lambda: self.hosts), **kw: _g()
             else:
                 key = {"history": "changes", "_cron_rows": "schedules", "log": "alerts", "_audit_lines": "audit"}[name]
                 fn = guard(key, value)
@@ -284,7 +288,9 @@ class FeedTests(DataDir):
         import homestead_alerts as ALERTS
         import homestead_history as HISTORY
         for module, name, source in ((ALERTS, "alerts.json", "alerts"), (HISTORY, HISTORY.FILE, "hosts")):
-            with self.subTest(source), tempfile.TemporaryDirectory() as folder, mock.patch.object(module, "DATA_DIR", folder):
+            target, attr, real = REAL_READERS[source]
+            with self.subTest(source), tempfile.TemporaryDirectory() as folder, mock.patch.object(module, "DATA_DIR", folder), \
+                 mock.patch.object(target, attr, real):       # the real reader, not the feed's fake
                 with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
                     handle.write("not json")
                 out = self.feed()
@@ -464,6 +470,47 @@ class HostMaintenanceSinceTests(unittest.TestCase):
                     {"id": "e", "node": "node-5", "start": T0}]}, handle)
             self.assertEqual(["b", "a", "d"], [e["job"] for e in HISTORY.maintenance_since(T0 - 1000)])
 
+class ReadsOnceTests(DataDir):
+    """A timeline request reads each source once (#981)."""
+    def test_alerts_and_host_history_files_are_each_opened_once(self):
+        import builtins
+        import homestead_alerts as ALERTS
+        import homestead_history as HISTORY
+        with tempfile.TemporaryDirectory() as alerts_dir, tempfile.TemporaryDirectory() as history_dir, \
+             mock.patch.object(ALERTS, "DATA_DIR", alerts_dir), mock.patch.object(HISTORY, "DATA_DIR", history_dir):
+            with open(os.path.join(alerts_dir, "alerts.json"), "w", encoding="utf-8") as handle:
+                json.dump({"seq": 1, "active": {}, "acknowledgements": {}, "log": [
+                    {"id": 1, "at": T0 - 60, "phase": "raised", "key": "k", "category": "degraded",
+                     "severity": "degraded", "title": "Something", "href": "/nodes?node=node-1"}]}, handle)
+            with open(os.path.join(history_dir, HISTORY.FILE), "w", encoding="utf-8") as handle:
+                json.dump({"maintenance": [{"node": "node-1", "start": T0 - 300, "end": T0 - 200, "reason": "OS update",
+                                            "job": "j", "outcome": "returned"}]}, handle)
+            opened, real_open = [], builtins.open
+            def counting(path, *args, **kwargs):
+                opened.append(os.path.basename(str(path)))
+                return real_open(path, *args, **kwargs)
+            with mock.patch("builtins.open", counting):
+                out = T.timeline("alice", "viewer", since=T0 - 3600, now=T0)
+        self.assertEqual(1, opened.count("alerts.json"))
+        self.assertEqual(1, opened.count(HISTORY.FILE))
+        self.assertEqual({"alert", "host"}, {e["kind"] for e in out["entries"] if e["kind"] in ("alert", "host")})
+
+    def test_each_audit_line_is_parsed_once(self):
+        lines = [json.dumps({"v": 1, "at": iso(T0 - 1000 + i).replace("Z", ".000Z"), "user": "alice", "role": "admin",
+                             "method": "POST", "path": "/api/restart", "status": 200}).encode() for i in range(50)]
+        data = b"\n".join(lines) + b"\n"
+        path = os.path.join(self.tmp.name, "audit-test.jsonl")
+        with open(path, "wb") as out_file:
+            out_file.write(data)
+        real_loads = json.loads
+        calls = []
+        def counting(raw, *args, **kwargs):
+            calls.append(1)
+            return real_loads(raw, *args, **kwargs)
+        with open(path, "rb") as handle, mock.patch.object(json, "loads", counting):
+            out, cut = T._read_lines([handle], T0 - 2000, T.AUDIT_READ)
+        self.assertEqual(50, len(out))
+        self.assertLessEqual(len(calls), 51, "one parse per line, not two")
 
 if __name__ == "__main__":
     unittest.main()

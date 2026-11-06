@@ -14,6 +14,9 @@ where a disk is already mounted, or - for the V2 engine - the raw device.
 Taking a disk out goes the other way, and only once nothing is on it:
 scheduling stops, replicas are moved off, then the disk is removed.
 """
+import contextlib
+import copy
+import functools
 import json
 import posixpath
 import hashlib
@@ -24,11 +27,17 @@ import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
+import homestead_whole_copy as WHOLE
 
 kget = ksend = None
 temps = lambda: {}
-mutation_scope = None
 v2_tasks = lambda: []
+# The saved jobs that hold a host's disks, by the module that saves them. Each
+# installs its check with add_guard(); bind() never clears one. Every disk
+# change below runs inside all of them, under the job store's lock, and is
+# refused while any is missing: a change nothing has checked is not made.
+GUARDS = {}
+REQUIRED_GUARDS = ("disk_v2", "disk_allocation", "longhorn_runtime")
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 BD = "/apis/harvesterhci.io/v1beta1/namespaces/longhorn-system/blockdevices"
 GiB = 1024 ** 3
@@ -37,11 +46,48 @@ SYSTEM_MOUNTS = ("/", "/usr/local", "/var/lib/rancher", "/var/lib/kubelet", "/oe
 
 
 def bind(_kget, _ksend, _temps):
-    global kget, ksend, temps, mutation_scope, v2_tasks
+    global kget, ksend, temps
     kget, ksend, temps = _kget, _ksend, _temps
-    # A fresh reader binding has its own workflow context. The server installs
-    # its shared disk guards after binding; standalone clients supply no store.
-    mutation_scope, v2_tasks = None, lambda: []
+
+
+def add_guard(name, scope):
+    """Install (or replace) one module's check: scope(node, disk, device) is a
+    context manager that raises ValueError while its saved job holds them."""
+    if name not in REQUIRED_GUARDS:
+        raise ValueError(f"unknown disk guard {name}")
+    GUARDS[name] = scope
+
+
+@contextlib.contextmanager
+def _checked(node, disk, device):
+    missing = [name for name in REQUIRED_GUARDS if name not in GUARDS]
+    if missing:
+        raise ValueError("Disk safety checks are not set up (" + ", ".join(missing) + "); nothing was changed")
+    with contextlib.ExitStack() as stack:
+        # Runtime maintenance first, then storage allocation, then V2 preparation.
+        for name in reversed(REQUIRED_GUARDS):
+            stack.enter_context(GUARDS[name](node, disk, device))
+        yield
+
+
+def _guarded(mode):
+    """A disk change that runs only inside every guard. mode says where its
+    node, disk and device are: "disk" (node, disk_id), "node" (node), or
+    "config" (a cfg dict with node, disk and device or path)."""
+    def wrap(fn):
+        @functools.wraps(fn)
+        def guarded(*args, **kwargs):
+            if mode == "config":
+                cfg = args[0] if args else kwargs.get("cfg", {})
+                node, disk, device = cfg.get("node"), cfg.get("disk"), cfg.get("device") or cfg.get("path")
+            else:
+                node = args[0] if args else kwargs.get("node")
+                disk = (args[1] if len(args) > 1 else kwargs.get("disk_id")) if mode == "disk" else None
+                device = None
+            with _checked(node, disk, device):
+                return fn(*args, **kwargs)
+        return guarded
+    return wrap
 
 
 def _gb(value):
@@ -332,6 +378,7 @@ def inventory():
             "all_node_tags": sorted({t for tags in node_tags.values() for t in tags})}
 
 
+@_guarded("disk")
 def set_disk_tags(node, disk_id, tags):
     """Tag a Longhorn disk - "ssd", "nvme", "fast" - for storage classes to
     choose by.
@@ -351,6 +398,7 @@ def set_disk_tags(node, disk_id, tags):
             "detail": f"{disk_id} on {node} " + (f"is tagged {', '.join(tags)}" if tags else "has no tags now")}
 
 
+@_guarded("node")
 def set_node_tags(node, tags):
     """Tag a node, for storage classes that keep their replicas on some."""
     tags = clean_tags(tags)
@@ -418,7 +466,10 @@ def _usage_filesystems(disks):
 def summary():
     """A line per disk for the node cards: its name or device, and - for a
     Longhorn disk on the system drive - that it is both."""
-    inv = _named(inventory())
+    # The reading the Disks page and the alert source keep under "disks" (a disk
+    # write forgets it): one inventory a cycle, not one per Hosts build (#978).
+    # A copy, since naming writes into the rows.
+    inv = _named(copy.deepcopy(homestead_routes.cached("disks", homestead_routes.PAGE_SECONDS, inventory)))
     return {node: [_disk_summary(d) for d in disks] for node, disks in inv["nodes"].items()}
 
 
@@ -450,6 +501,7 @@ def _patch(path, body, what):
         raise _refused(error, what)
 
 
+@_guarded("config")
 def add(cfg):
     """Harvester: provision a BlockDevice. Elsewhere: a mounted folder, or a
     raw device for the V2 engine, becomes a Longhorn disk."""
@@ -521,12 +573,14 @@ def _lh_disk(node, disk_id):
     return disk, status
 
 
+@_guarded("disk")
 def set_scheduling(node, disk_id, allow):
     _lh_disk(node, disk_id)
     _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"allowScheduling": bool(allow)}}}}, "changing the disk")
     return {"ok": True, "detail": f"{disk_id} on {node} {'takes new replicas again' if allow else 'takes no new replicas'}"}
 
 
+@_guarded("disk")
 def evict(node, disk_id, on=True):
     """Move every replica off the disk (and stop new ones) - the step before
     removing it. Longhorn rebuilds each elsewhere first."""
@@ -538,6 +592,7 @@ def evict(node, disk_id, on=True):
     return {"ok": True, "detail": f"moving replicas off {disk_id} on {node}" if on else f"{disk_id} on {node} keeps its replicas"}
 
 
+@_guarded("disk")
 def remove(node, disk_id):
     disk, status = _lh_disk(node, disk_id)
     if status.get("scheduledReplica"):
@@ -583,11 +638,11 @@ def _replicas(strict=False):
         return []
 
 
-def _copy_elsewhere(replica, replicas, node, disk, uuid, scheduled):
-    """A healthy replica of the same volume that is not on this disk."""
+def _copy_elsewhere(replica, replicas, node, disk, uuid, scheduled, whole):
+    """A whole copy of the same volume that is not on this disk."""
     name = (replica.get("spec") or {}).get("volumeName", "")
     return any((r.get("spec") or {}).get("volumeName") == name and r["metadata"]["name"] != replica["metadata"]["name"]
-               and _healthy(r) and not _on_disk(r, node, disk, uuid, scheduled) for r in replicas)
+               and whole(r) and not _on_disk(r, node, disk, uuid, scheduled) for r in replicas)
 
 
 def _on_disk(replica, node, disk, uuid, scheduled):
@@ -599,9 +654,15 @@ def _on_disk(replica, node, disk, uuid, scheduled):
     return bool(uuid and spec.get("diskID") == uuid) or spec.get("diskPath") == disk.get("path")
 
 
-def _healthy(replica):
-    spec, status = replica.get("spec") or {}, replica.get("status") or {}
-    return bool(spec.get("healthyAt")) and not spec.get("failedAt") and status.get("currentState") != "error"
+def _whole_copies():
+    """Whole copies by the one rule (homestead_whole_copy): RW in its running
+    engine, or stopped and healthy on a volume that says detached, on a Ready
+    host. What decides a delete must read the engines, volumes and hosts: a
+    failed read raises."""
+    engines = kget(f"{LH}/engines").get("items", [])
+    volumes = kget(f"{LH}/volumes").get("items", [])
+    nodes = {n["metadata"]["name"]: n for n in kget("/api/v1/nodes").get("items", [])}
+    return WHOLE.judge(engines, detached_ok=True, volumes=volumes, nodes=nodes, lh_nodes=_lh_nodes())
 
 
 def retire_plan(node, disk_id):
@@ -613,6 +674,7 @@ def retire_plan(node, disk_id):
     if ready.get("status", "True") == "True":
         raise ValueError(f"{disk.get('path')} on {node} is working: move its replicas off and remove it instead")
     replicas = _replicas(strict=True)
+    whole = _whole_copies()
     mine = [r for r in replicas if _on_disk(r, node, disk, uuid, scheduled)]
     try:
         volumes = {v["metadata"]["name"]: v for v in kget(f"{LH}/volumes").get("items", [])}
@@ -624,7 +686,7 @@ def retire_plan(node, disk_id):
     for replica in mine:
         name = (replica.get("spec") or {}).get("volumeName", "")
         others = [r for r in replicas if (r.get("spec") or {}).get("volumeName") == name
-                  and r["metadata"]["name"] != replica["metadata"]["name"] and _healthy(r)
+                  and r["metadata"]["name"] != replica["metadata"]["name"] and whole(r)
                   and not _on_disk(r, node, disk, uuid, scheduled)]
         holders = {(r.get("spec") or {}).get("nodeID") for r in others}
         volume = volumes.get(name) or {}
@@ -649,6 +711,7 @@ def retire_plan(node, disk_id):
             "volumes": rows, "only_copies": sum(r["outcome"] == "only-copy" for r in rows)}
 
 
+@_guarded("config")
 def retire_start(cfg, ops):
     node, disk_id = str(cfg.get("node") or ""), str(cfg.get("disk") or "")
     review = retire_plan(node, disk_id)
@@ -701,7 +764,8 @@ def retire_step(item):
         # Checked again at each step, not only at review: a volume whose other
         # copies failed since then has its last one here, and it stays.
         if not ref.get("force"):
-            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled)]
+            whole = _whole_copies()
+            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled, whole)]
             if last:
                 keep |= {r["metadata"]["name"] for r in last}
                 ref["keep"] = sorted(keep)
@@ -814,6 +878,7 @@ def inspect_disk(node, device):
     return setup_module.inspect(node, device)
 
 
+@_guarded("config")
 def set_up(cfg):
     """A disk made ready and given to Longhorn in one step: V1 formatted (or
     kept, with its Longhorn data) and mounted by setup_module, V2 by its raw
@@ -857,6 +922,7 @@ def os_space(node):
     return setup_module.os_space(str(node or ""))
 
 
+@_guarded("config")
 def use_os_space(cfg):
     """Space nothing uses given to Longhorn: a logical volume of its own in
     the OS drive's volume group, or a new partition in a disk's unallocated

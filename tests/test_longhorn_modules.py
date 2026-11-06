@@ -21,6 +21,7 @@ sys.path.insert(0, str(SERVER))
 import source_scan as SS
 import homestead_csi_restore as CSI_RESTORE
 import homestead_longhorn as LH
+from fakes.storage_classes import storage_classes
 import homestead_longhorn_backups as BACKUPS
 import homestead_longhorn_jobs as JOBS
 import homestead_longhorn_restore as RESTORE
@@ -31,10 +32,10 @@ import homestead_operations as OPS
 PARTS = (JOBS, VOLUMES, BACKUP_TARGET, BACKUPS, RESTORE)
 NAMES = ("homestead_longhorn_jobs", "homestead_longhorn_volumes", "homestead_longhorn_target",
          "homestead_longhorn_backups", "homestead_longhorn_restore", "homestead_longhorn")
-# What bind() sets. It stays on homestead_longhorn, where server.py also sets
-# STORAGE_CLASS as it finds the cluster's default class, and the parts read it
-# there: a copy in a part would go stale.
-BOUND = ("kget", "ksend", "_cache", "STORAGE_CLASS", "DEFAULT_NS")
+# What bind() sets. It stays on homestead_longhorn, and the parts read it
+# there: a copy in a part would go stale. (The class new volumes go on is
+# no longer kept here: homestead_storage_classes.default_class, #1125.)
+BOUND = ("kget", "ksend", "_cache", "DEFAULT_NS")
 # What homestead_longhorn defines itself.
 OWN = BOUND + ("LHNS", "API", "TASKS", "KEEPING", "JOB_LABEL", "GROUP_LABEL", "SAFE", "bind", "_bust",
                "JOB_CHANGED", "_Changed", "_plain", "_update", "PROTECTING", "overview", "run_job_now",
@@ -98,12 +99,12 @@ class LonghornModuleTests(unittest.TestCase):
                 self.assertNotIn(name, seen, f"{name} is defined twice")
                 self.assertNotIn(name, OWN, f"{part.__name__}.{name} is homestead_longhorn's")
                 seen.add(name)
-        self.assertEqual(62, len(seen))
+        self.assertEqual(63, len(seen))
         self.assertIn("TRIM_JOB", seen)
         self.assertIn("K8S_LABEL", seen)
 
     def test_what_other_modules_read_is_on_homestead_longhorn_as_the_same_object(self):
-        self.assertIn("STORAGE_CLASS", read_elsewhere())
+        self.assertNotIn("STORAGE_CLASS", read_elsewhere())
         self.assertNotIn("move_snapshot_error", read_elsewhere())
         for name in sorted(read_elsewhere()):
             self.assertTrue(hasattr(LH, name), name)
@@ -156,21 +157,22 @@ class LonghornModuleTests(unittest.TestCase):
             return {"items": []}
 
         cache = {"lhjobs": 1, "other": 2}
-        LH.bind(kget, lambda *args, **_: sent.append(args) or {}, cache, "example-class", "apps")
-        self.assertEqual((kget, cache, "example-class", "apps"),
-                         (LH.kget, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS))
+        LH.bind(kget, lambda *args, **_: sent.append(args) or {}, cache, "apps")
+        self.assertEqual((kget, cache, "apps"),
+                         (LH.kget, LH._cache, LH.DEFAULT_NS))
         # The parts read the clients and the cache bind() was given.
         self.assertEqual([], JOBS.list_jobs())
         self.assertIn(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs", asked)
         JOBS.delete_job("daily")
         self.assertEqual(("DELETE", f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs/daily"), sent[-1])
         self.assertEqual({"other": 2}, cache)
-        # A restore is planned in the default namespace, on the storage class
-        # bind() was given, and then on the one server.py sets later.
+        # A restore is planned in the default namespace, on the class new
+        # volumes go on, as the cluster's classes say when it is planned.
+        storage_classes(self, "example-class")
         plan_route = LH.ROUTES[("GET", "/api/lh/restore/plan")][1]
         plan = plan_route(SimpleNamespace(query={"backup": ["nightly-1"], "name": ["data"]}))
         self.assertEqual(("apps", "example-class"), (plan["namespace"], plan["storage_class"]))
-        LH.STORAGE_CLASS = "example-default"
+        storage_classes(self, "example-default")
         self.assertEqual("example-default", RESTORE.restore_plan("nightly-1", "apps", "data")["storage_class"])
 
     def test_the_overview_and_the_route_handlers_read_the_parts(self):

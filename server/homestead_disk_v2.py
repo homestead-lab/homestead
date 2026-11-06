@@ -6,7 +6,6 @@ second erase. Unknown inventories and identities always stop the workflow.
 """
 import copy
 import hashlib
-import functools
 from contextlib import contextmanager
 import json
 import re
@@ -22,6 +21,7 @@ import homestead_disk_region as REGION
 import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
 import homestead_routes
+import homestead_whole_copy as WHOLE
 
 KIND = 'disk-v2-convert'
 LABEL = 'homestead.io/disk-v2-convert'
@@ -126,15 +126,10 @@ def _on_disk(replica, inv):
 
 
 def _rw(inv, volume):
-    modes = {name: mode for e in inv['engines'] if e.get('spec', {}).get('volumeName') == volume
-             and e.get('status', {}).get('currentState') == 'running' and not e.get('metadata', {}).get('deletionTimestamp')
-             for name, mode in (e.get('status', {}).get('replicaModeMap') or {}).items()}
-    def host_ready(replica):
-        node = replica.get('spec', {}).get('nodeID')
-        return ('kube' not in inv or _ready(inv['kube'].get(node, {}))) and ('lhs' not in inv or _ready(inv['lhs'].get(node, {})))
-    return [r for r in inv['replicas'] if r.get('spec', {}).get('volumeName') == volume
-            and not r.get('metadata', {}).get('deletionTimestamp') and not r.get('spec', {}).get('failedAt')
-            and host_ready(r) and r.get('status', {}).get('currentState') == 'running' and modes.get(r['metadata']['name']) == 'RW']
+    """The volume's whole copies (homestead_whole_copy): running RW on a Ready
+    host; a detached volume's stopped copies do not count here."""
+    whole = WHOLE.judge(inv['engines'], detached_ok=False, nodes=inv.get('kube'), lh_nodes=inv.get('lhs'))
+    return [r for r in inv['replicas'] if r.get('spec', {}).get('volumeName') == volume and whole(r)]
 
 
 def foreign_contents_message():
@@ -970,28 +965,7 @@ def protect_mutations(disks):
         with ops.transaction():
             mutation_guard(node, disk, device)
             yield
-    disks.mutation_scope = scope
-    def protect(fn, mode):
-        @functools.wraps(fn)
-        def guarded(*args, **kwargs):
-            if mode == 'config':
-                cfg = args[0] if args else kwargs.get('cfg', {})
-                node, disk, device = cfg.get('node'), cfg.get('disk'), cfg.get('device') or cfg.get('path')
-            else:
-                node = args[0] if args else kwargs.get('node')
-                disk = (args[1] if len(args) > 1 else kwargs.get('disk_id')) if mode == 'disk' else None
-                device = None
-            current_scope = disks.mutation_scope
-            if current_scope is None:
-                return fn(*args, **kwargs)
-            with current_scope(node, disk, device):
-                return fn(*args, **kwargs)
-        return guarded
-    for name in ('set_disk_tags', 'set_scheduling', 'evict', 'remove'):
-        setattr(disks, name, protect(getattr(disks, name), 'disk'))
-    disks.set_node_tags = protect(disks.set_node_tags, 'node')
-    for name in ('add', 'set_up', 'use_os_space', 'retire_start'):
-        setattr(disks, name, protect(getattr(disks, name), 'config'))
+    disks.add_guard('disk_v2', scope)
     disks.v2_tasks = tasks
 
 

@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_disks as DISKS
 import homestead_kube as K
+from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
 
 GiB = 1024 ** 3
@@ -40,7 +41,8 @@ class Cluster:
             status = {"default-disk": {"storageMaximum": 100 * GiB, "storageAvailable": 80 * GiB,
                                        "conditions": [{"type": "Ready", "status": "True"}], "diskUUID": f"u-{n}"}}
             nodes.append({"apiVersion": LH_VERSION, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": n},
-                          "spec": {"allowScheduling": True, "disks": disks}, "status": {"diskStatus": status}})
+                          "spec": {"allowScheduling": True, "disks": disks},
+                          "status": {"conditions": [{"type": "Ready", "status": "True"}], "diskStatus": status}})
         nodes[2]["spec"]["disks"]["bd-sdb"] = {"path": disk_path, "allowScheduling": True}
         nodes[2]["status"]["diskStatus"]["bd-sdb"] = {
             "storageMaximum": 900 * GiB, "storageAvailable": 0, "diskUUID": "u-dead",
@@ -60,12 +62,22 @@ class Cluster:
                 "spec": {"nodeName": "node3", "devPath": "/dev/sdb", "provision": True},
                 "status": {"state": "Inactive", "deviceStatus": {"devPath": "/dev/sdb", "capacity": {"sizeBytes": 931 * GiB},
                                                                 "fileSystem": {"mountPoint": disk_path}}}}]
+        # The hosts are up; each volume's running engine has its healthy copies
+        # as RW and has dropped the failed ones, as Longhorn does.
+        hosts = [{"apiVersion": "v1", "kind": "Node", "metadata": {"name": n},
+                  "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for n in ("node1", "node2", "node3")]
+        engines = [{"apiVersion": LH_VERSION, "kind": "Engine", "metadata": {"namespace": "longhorn-system", "name": v["metadata"]["name"] + "-e-0"},
+                    "spec": {"volumeName": v["metadata"]["name"]},
+                    "status": {"currentState": "running", "replicaModeMap": {
+                        r["metadata"]["name"]: "RW" for r in replicas
+                        if r["spec"]["volumeName"] == v["metadata"]["name"] and r["spec"]["healthyAt"]}}} for v in volumes]
         # Off Harvester, its block devices are not there at all.
-        self.kube = test.enterContext(Kube(*nodes, *replicas, *volumes, *(bds if harvester else ()),
+        self.kube = test.enterContext(Kube(*nodes, *hosts, *engines, *replicas, *volumes, *(bds if harvester else ()),
                                            absent_groups=() if harvester else ("harvesterhci.io",)))
         for item in replicas:
             self.kube.react("DELETE", self.kube.path_of(item), self._node_controller)
         self.probe = probe if probe is not None else {}
+        disk_guards(test)
         test.addCleanup(DISKS.bind, *(getattr(DISKS, name, None) for name in ("kget", "ksend", "temps")))
         DISKS.bind(K.kget, K.ksend, lambda: self.probe)
 

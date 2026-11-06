@@ -53,15 +53,44 @@ def create_backup(volume, name=None):
     tgt = BACKUP_TARGET.backup_target()
     if not tgt.get("configured"):
         raise ValueError("no backup target configured — set one before backing up")
-    snap = VOLUMES.create_snapshot(volume, name)["snapshot"]
+    made = VOLUMES.create_snapshot(volume, name)
+    snap, snap_uid = made["snapshot"], made.get("uid", "")
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
             "metadata": {"generateName": "homestead-", "namespace": LH.LHNS,
                          "labels": {"backup-volume": volume, NAMES.key("managed"): "true"}},
             "spec": {"snapshotName": snap, "labels": {"homestead": "manual"}}}
-    out = LH.ksend("POST", f"{LH.API}/namespaces/{LH.LHNS}/backups", body)
+    try:
+        out = LH.ksend("POST", f"{LH.API}/namespaces/{LH.LHNS}/backups", body)
+    except urllib.error.HTTPError as error:
+        # Refused, so no Backup reads the snapshot taken for it: it goes. A
+        # 5xx or a lost answer may still have made one, so it stays then.
+        if KUBE.definite_refusal(error.code):
+            drop_snapshot(snap, snap_uid)
+        raise
     LH._bust("lhbackups")
     return {"ok": True, "backup": out.get("metadata", {}).get("name", ""),
-            "snapshot": snap, "volume": volume}
+            "snapshot": snap, "snapshot_uid": snap_uid, "volume": volume}
+
+
+def drop_snapshot(name, uid):
+    """Removes the snapshot "Back up now" took, by the uid it was made with:
+    one made again under the name since is not this one. A failure is said
+    and left; the snapshot then stays, as it did before."""
+    if not name or not uid:
+        return False
+    try:
+        LH.ksend("DELETE", f"{LH.API}/namespaces/{LH.LHNS}/snapshots/{urllib.parse.quote(name, safe='')}",
+                 {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid}})
+    except urllib.error.HTTPError as error:
+        error.close()
+        if error.code not in (404, 409):    # gone already, or not the one taken
+            print(f"backup snapshot {name} not removed: HTTP {error.code}", flush=True)
+        return False
+    except Exception as error:
+        print(f"backup snapshot {name} not removed: {str(error)[:160]}", flush=True)
+        return False
+    LH._bust("lhsnaps")
+    return True
 
 
 def move_snapshot_error(snapshot):

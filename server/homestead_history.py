@@ -53,17 +53,24 @@ def _valid(event):
             and number(event.get("start")) and (event.get("end") is None or number(event.get("end"))))
 
 
-def _read():
+def _read(strict=False):
+    """The stored history. A bad file reads as empty, or with strict raises
+    SHARED.Unreadable (SHARED.read_json), for a reader that must say so."""
     import json
+    if strict:
+        return _shaped(SHARED.read_json(_path(), {}))
     try:
         with open(_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            return {"fine": data.get("fine") or [], "coarse": data.get("coarse") or [],
-                    "boots": data.get("boots") or {}, "events": data.get("events") or [],
-                    "maintenance": [e for e in data.get("maintenance") or [] if _valid(e)]}
+            return _shaped(json.load(handle))
     except (OSError, ValueError):
-        pass
+        return _shaped(None)
+
+
+def _shaped(data):
+    if isinstance(data, dict):
+        return {"fine": data.get("fine") or [], "coarse": data.get("coarse") or [],
+                "boots": data.get("boots") or {}, "events": data.get("events") or [],
+                "maintenance": [e for e in data.get("maintenance") or [] if _valid(e)]}
     return {"fine": [], "coarse": [], "boots": {}, "events": [], "maintenance": []}
 
 
@@ -302,9 +309,9 @@ def maintenance_view(now=None):
     return open_nodes, overran
 
 
-def maintenance_since(since):
+def maintenance_since(since, strict=False):
     """Host maintenance that started or ended after since (#748's timeline)."""
-    return sorted((e for e in _read()["maintenance"] if e["start"] > since or (e["end"] or 0) > since),
+    return sorted((e for e in _read(strict)["maintenance"] if e["start"] > since or (e["end"] or 0) > since),
                   key=lambda e: e["start"])
 
 

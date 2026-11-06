@@ -8,6 +8,7 @@ other host. Now the stage fails after RESTART_SECONDS, naming the host and
 what to check there, and the failed job no longer blocks other hosts.
 
 On the shared Kubernetes fake (tests/fakes/kube.py), with a fake clock."""
+import datetime
 import sys
 import tempfile
 import time
@@ -22,10 +23,12 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import homestead_host_bonds as BONDS
 import homestead_host_bridge as BRIDGE
+import homestead_hostrun as HOSTRUN
 import homestead_job_errors as ERRORS
 import homestead_kube as K
 import homestead_operations as OPS
 from fakes.kube import Kube
+import test_host_bridge as BRIDGE_TESTS
 
 SINCE = 10_000.0
 
@@ -280,13 +283,13 @@ class HostBaselineTests(unittest.TestCase):
             self.assertEqual("succeeded", module.status(item, now=SINCE + 45)[0], module.__name__)
 
 
-class GuardTests(unittest.TestCase):
+class GuardBase(unittest.TestCase):
     """The real job store, the network guard, and a fake clock."""
 
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
-        self.enterContext(Kube(node("node-a", ready=False), node("node-b", ready=True, server=True),
-                               node("node-c", ready=True, server=True)))
+        self.kube = self.enterContext(Kube(node("node-a", ready=False), node("node-b", ready=True, server=True),
+                                           node("node-c", ready=True, server=True)))
         OPS.bind(K.kget, self.tmp, lambda namespace, name: {})
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
@@ -318,11 +321,124 @@ class GuardTests(unittest.TestCase):
         self.assertIn("node-a", item["message"])
         self.assertEqual("", BONDS.network_guard("node-b")[0], "a failed job no longer blocks other hosts")
 
+
+class GuardTests(GuardBase):
     def test_a_bond_that_never_returns_lets_other_hosts_change_again(self):
         self.check_lets_go(BONDS.KIND, bond_ref(), BONDS)
 
     def test_a_bridge_that_never_returns_lets_other_hosts_change_again(self):
         self.check_lets_go("host-bridge", bridge_ref(), BRIDGE)
+
+
+class BridgeBase(GuardBase):
+    """A bridge change on node-b, with a host that answers as a good one does."""
+
+    def setUp(self):
+        super().setUp()
+        self.host = BRIDGE_TESTS.Host(BRIDGE_TESTS.HostLeaseTests.GOOD)
+        BRIDGE.bind(self.host, K.kget, K.ksend)
+
+    def refused(self, words):
+        with self.assertRaises(ValueError) as caught:
+            BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertIn(words, str(caught.exception))
+        self.assertTrue(str(caught.exception).startswith("node-b: "), "names the host, as a bond refusal does")
+        self.assertEqual(([], []), (self.host.holds, self.host.changes), "nothing is held or changed")
+        self.assertIn(words, BRIDGE.look("node-b")["problem"], "the dialog says so before anything is typed")
+
+
+class BridgeGuardTests(BridgeBase):
+    """A bridge change waits for the same things a bond change does: another
+    host's network change still running, and the other servers being Ready.
+    Converting a host restarts k3s or RKE2 there as a bond does, so the
+    cluster's quorum is at stake the same way."""
+
+    def test_a_bridge_waits_while_another_hosts_bond_is_restarting(self):
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {BONDS.KIND: lambda item: ("running", 92, "Waiting")}))
+        OPS.start(BONDS.KIND, bond_ref()["change"], {"kind": "Node", "name": "node-a"}, "/nodes", bond_ref())
+        self.refused("another host's network is changing (Bond enp1s0 + enp2s0 on node-a): one host at a time")
+
+    def test_a_bridge_waits_while_another_hosts_bridge_is_restarting(self):
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {"host-bridge": lambda item: ("running", 92, "Waiting")}))
+        OPS.start("host-bridge", bridge_ref()["change"], {"kind": "Node", "name": "node-a"}, "/nodes", bridge_ref())
+        self.refused("another host's network is changing (Move node-a's enp1s0 into br0): one host at a time")
+
+    def test_a_bridge_waits_while_another_server_is_not_ready(self):
+        self.kube.add(node("node-c", ready=False, server=True))
+        self.refused("1 of the other servers is not Ready: if node-b went quiet too, the cluster could lose its quorum")
+
+    def test_a_bridge_on_a_quiet_cluster_goes_ahead(self):
+        self.assertEqual("", BRIDGE.look("node-b")["problem"])
+        BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual([("node-b", "Move node-b's enp1s0 into br0")], [h[:2] for h in self.host.holds])
+        self.assertEqual(["host-bridge"], [row["kind"] for row in OPS._read()])
+
+
+def claim(holder, minutes_ago=0, seconds=600):
+    """The cluster-wide claim on starting a host network change, as a replica left it."""
+    renewed = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=minutes_ago)
+    return {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+            "metadata": {"name": BONDS.CLAIM, "namespace": HOSTRUN.NS},
+            "spec": {"holderIdentity": holder, "leaseDurationSeconds": seconds,
+                     "renewTime": renewed.strftime("%Y-%m-%dT%H:%M:%S.%fZ")}}
+
+
+class StartingTogetherTests(BridgeBase):
+    """Two changes started at once on two hosts: the guard reads the job
+    store, and a change's job row is only written once netplan has been
+    applied, so the guard alone lets both through. One Lease, taken before
+    the guard runs and given back once the job row is written, lets one
+    through. A Lease, not a lock: two replicas may answer the requests."""
+    STARTING = "another host's network change is starting: try again in a moment"
+
+    def holder(self):
+        lease = self.kube.object(f"/apis/coordination.k8s.io/v1/namespaces/{HOSTRUN.NS}/leases/{BONDS.CLAIM}")
+        return ((lease or {}).get("spec") or {}).get("holderIdentity", "")
+
+    def test_two_bridges_started_together_on_two_hosts_only_one_goes_ahead(self):
+        second, run = [], self.host.run
+
+        def applying(node, script, timeout=60, change="", holder=""):
+            if change and node == "node-b" and not second:
+                try:
+                    BRIDGE.convert({"node": "node-c", "confirm": "node-c"})
+                    second.append("went ahead")
+                except ValueError as error:
+                    second.append(str(error))
+            return run(node, script, timeout, change, holder)
+        self.host.run = applying
+        BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual([f"node-c: {self.STARTING}"], second)
+        self.assertEqual([("node-b", "Move node-b's enp1s0 into br0")], [h[:2] for h in self.host.holds])
+        self.assertEqual(["host-bridge"], [row["kind"] for row in OPS._read()])
+        self.assertEqual("", self.holder(), "given back once the job row is written")
+
+    def test_a_bond_waits_while_a_change_is_starting(self):
+        self.kube.add(claim("other-replica/1"))
+        with self.assertRaisesRegex(ValueError, f"node-b: {self.STARTING}"):
+            BONDS.change({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual("other-replica/1", self.holder(), "someone else's claim is left alone")
+
+    def test_a_claim_left_by_a_replica_that_stopped_is_taken_over(self):
+        self.kube.add(claim("gone-replica/1", minutes_ago=11))
+        BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual(["host-bridge"], [row["kind"] for row in OPS._read()])
+        self.assertEqual("", self.holder())
+
+    def test_a_refusal_gives_the_claim_back(self):
+        self.kube.add(node("node-c", ready=False, server=True))
+        with self.assertRaisesRegex(ValueError, "not Ready"):
+            BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual("", self.holder())
+        self.kube.add(node("node-c", ready=True, server=True))
+        BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        self.assertEqual(["host-bridge"], [row["kind"] for row in OPS._read()])
+
+    def test_the_dialog_shows_the_host_when_other_hosts_cannot_be_checked(self):
+        self.kube.fail("/api/v1/nodes", 500, times=5)
+        facts = BRIDGE.look("node-b")
+        self.assertEqual("enp1s0", facts["interface"])
+        self.assertIn("could not check the other hosts", facts["problem"])
 
 
 if __name__ == "__main__":

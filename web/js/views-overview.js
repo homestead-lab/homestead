@@ -1153,17 +1153,20 @@ window.hardwareFeatureSave = async oldId => {
   const feature = { id: $("#hf_id").value.trim(), name: $("#hf_name").value.trim(), description: $("#hf_desc").value.trim(),
     host_path: $("#hf_host").value.trim(), container_path: $("#hf_container").value.trim(), path_type: $("#hf_type").value,
     usb_ids: $("#hf_usb").value.split(/[\s,]+/).filter(Boolean) };
-  const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== oldId).map(x => ({ ...x }));
+  const read = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin);
+  const custom = read.filter(x => x.id !== oldId).map(x => ({ ...x }));
   custom.push(feature);
-  try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
+  // read: the list this form was built on, so a save from a list another admin changed since is refused.
+  try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom, read }) });
     STATE.data.hardwareFeatures = null; toast(`${feature.name} saved`, "ok"); backToHardwareList(); }
   catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareFeatureDelete = async id => {
   const f = hardwareDef(id);
   if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting apps and VMs using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
-  const custom = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin && x.id !== id);
-  try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom }) });
+  const read = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin);
+  const custom = read.filter(x => x.id !== id);
+  try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom, read }) });
     STATE.data.hardwareFeatures = null; toast(`${f.name} deleted`, "ok"); backToHardwareList(); }
   catch (e) { toast(e.message, "bad"); }
 };

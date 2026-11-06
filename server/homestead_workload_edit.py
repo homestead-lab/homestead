@@ -22,6 +22,7 @@ import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_group_tiers as GROUPS
 import homestead_start_order as START_ORDER
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 def seed_configs(ns, dep):
@@ -400,7 +401,7 @@ def _apply_container_volumes(ns, spec, container_requests):
                     pending.append({
                         "name": claim,
                         "size_gb": max(1, int(row.get("size_gb") or 5)),
-                        "storage_class": str(row.get("storage_class") or "").strip() or L.STORAGE_CLASS,
+                        "storage_class": str(row.get("storage_class") or "").strip() or STORAGE_CLASSES.claim_class(),
                         "access_mode": "ReadWriteMany" if kind == "new-rwx" else "ReadWriteOnce",
                     })
             mount = {"name": volume_name, "mountPath": path}

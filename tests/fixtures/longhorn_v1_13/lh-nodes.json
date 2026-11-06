@@ -1,0 +1,235 @@
+{
+ "items": [
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "creationTimestamp": "2026-10-06T08:07:23Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 3,
+    "name": "node-a",
+    "namespace": "longhorn-system",
+    "resourceVersion": "26431716"
+   },
+   "spec": {
+    "allowScheduling": true
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T09:06:31Z",
+      "message": "Node node-a is ready",
+      "reason": "",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T09:06:28Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:07:23Z",
+      "message": "All required packages [nfs-common open-iscsi cryptsetup dmsetup] are installed",
+      "reason": "",
+      "status": "True",
+      "type": "RequiredPackages"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:07:23Z",
+      "message": "multipathd is running with a known issue that affects Longhorn. See description and solution at https://longhorn.io/kb/troubleshooting-volume-with-multipath",
+      "reason": "MultipathdIsRunning",
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:07:23Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:07:23Z",
+      "message": "Kernel modules [dm_crypt] are not loaded",
+      "reason": "KernelModulesNotLoaded",
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-06T08:07:53Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "creationTimestamp": "2026-10-05T07:38:19Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 5,
+    "name": "node-b",
+    "namespace": "longhorn-system",
+    "resourceVersion": "26431122"
+   },
+   "spec": {
+    "allowScheduling": true
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T08:46:35Z",
+      "message": "Node node-b is ready",
+      "reason": "",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T08:51:28Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T07:38:19Z",
+      "message": "All required packages [cryptsetup dmsetup nfs-common open-iscsi] are installed",
+      "reason": "",
+      "status": "True",
+      "type": "RequiredPackages"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T07:38:19Z",
+      "message": "multipathd is running with a known issue that affects Longhorn. See description and solution at https://longhorn.io/kb/troubleshooting-volume-with-multipath",
+      "reason": "MultipathdIsRunning",
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T07:38:19Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T07:38:19Z",
+      "message": "Kernel modules [dm_crypt] are not loaded",
+      "reason": "KernelModulesNotLoaded",
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T07:38:49Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ]
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Node",
+   "metadata": {
+    "creationTimestamp": "2026-10-24T05:57:17Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 2,
+    "name": "node-d",
+    "namespace": "longhorn-system",
+    "resourceVersion": "26435766"
+   },
+   "spec": {
+    "allowScheduling": true
+   },
+   "status": {
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T10:52:25Z",
+      "message": "Node node-d is ready",
+      "reason": "",
+      "status": "True",
+      "type": "Ready"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T06:53:17Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "Schedulable"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-24T05:57:17Z",
+      "message": "All required packages [nfs-common open-iscsi cryptsetup dmsetup] are installed",
+      "reason": "",
+      "status": "True",
+      "type": "RequiredPackages"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-24T05:57:17Z",
+      "message": "multipathd is running with a known issue that affects Longhorn. See description and solution at https://longhorn.io/kb/troubleshooting-volume-with-multipath",
+      "reason": "MultipathdIsRunning",
+      "status": "False",
+      "type": "Multipathd"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-24T05:57:17Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "NFSClientInstalled"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-24T05:57:17Z",
+      "message": "Kernel modules [dm_crypt] are not loaded",
+      "reason": "KernelModulesNotLoaded",
+      "status": "False",
+      "type": "KernelModulesLoaded"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-24T05:57:47Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "MountPropagation"
+     }
+    ]
+   }
+  }
+ ]
+}

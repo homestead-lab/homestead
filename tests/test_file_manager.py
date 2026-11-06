@@ -160,8 +160,11 @@ class Zips(unittest.TestCase):
         self.assertEqual("cd '/data/media' && tar -cf - -- 'a b' 'c'", argv[2])
 
     def test_the_websocket_mask_matches_byte_by_byte(self):
-        key, payload = b"\x01\x02\x03\x04", bytes(range(256)) * 3
-        self.assertEqual(bytes(b ^ key[i % 4] for i, b in enumerate(payload)), files._mask(payload, key))
+        payload = bytes(range(256)) * 3
+        framed = files._frame(payload)
+        self.assertEqual((0x82, 0x80 | 126), (framed[0], framed[1]))
+        key, masked = framed[4:8], framed[8:]
+        self.assertEqual(payload, bytes(b ^ key[i % 4] for i, b in enumerate(masked)))
 
 
 class Transfers(Base):

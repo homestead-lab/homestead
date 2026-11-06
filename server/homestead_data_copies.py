@@ -38,6 +38,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_routes
 import homestead_shared as SHARED
 import homestead_storage_classes as STORAGE_CLASSES
+import homestead_whole_copy as WHOLE
 
 GiB = 1024 ** 3
 ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
@@ -112,9 +113,7 @@ def _rebuilding(pv):
     """Whether any copy of the volume is being rebuilt (WO). Raises when the
     engines cannot be read."""
     found = NODE_PARITY.kget(f"{ENGINES}?labelSelector=longhornvolume%3D{pv}") or {}
-    return any(mode == "WO" for engine in found.get("items") or []
-               if ((engine.get("spec") or {}).get("volumeName") or pv) == pv
-               for mode in ((engine.get("status") or {}).get("replicaModeMap") or {}).values())
+    return WHOLE.rebuilding(found.get("items") or [], pv)
 
 
 def fit_single_host():

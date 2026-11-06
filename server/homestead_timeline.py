@@ -18,6 +18,7 @@ Entries carry names, times and Homestead's own words only: never a setting's
 value, a run's message, a log line, an address or a key.
 """
 import calendar
+import datetime
 import os
 import time
 
@@ -186,10 +187,10 @@ ALERT_TONES = {"critical": "bad", "degraded": "warn", "info": "info"}
 
 def _alerts(since, now, role, unread):
     # homestead_alerts reads its file leniently (a bad file is a fresh start);
-    # here a file that is there but unreadable is said, not shown as no alerts.
-    SHARED.read_json(os.path.join(ALERTS.DATA_DIR, "alerts.json"), {})
+    # here, strictly: a file that is there but unreadable is said, not shown as
+    # no alerts - in the same one read (#981).
     out = []
-    for a in ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"]:
+    for a in ALERTS.log(limit=ALERTS.LOG_SIZE, strict=True)["alerts"]:
         if a.get("category") in ALERTS.PRIVATE or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
             continue
         tone = "ok" if a.get("phase") == "resolved" else ALERT_TONES.get(a.get("severity"), "info")
@@ -206,9 +207,8 @@ def _alert_host(href):
 
 
 def _hosts(since, now, role, unread):
-    SHARED.read_json(os.path.join(HISTORY.DATA_DIR, HISTORY.FILE), {})     # as _alerts: unreadable is said
     out = []
-    for e in HISTORY.maintenance_since(since):
+    for e in HISTORY.maintenance_since(since, strict=True):     # as _alerts: unreadable is said, in one read
         node, start, end = e["node"], e["start"], e.get("end")
         text, tone = f"{node} went into maintenance ({e['reason']})", "info"
         if end is not None and e.get("outcome") == "returned":
@@ -243,6 +243,14 @@ def _audit_lines(since):
             handle.close()
 
 
+def _line_at(entry):
+    """An audit line's time, from the line already parsed (AUDIT._at parses it again)."""
+    try:
+        return datetime.datetime.fromisoformat(entry["at"].replace("Z", "+00:00")).timestamp()
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
 def _read_lines(handles, since, budget):
     out = []
     for handle in handles:
@@ -257,7 +265,7 @@ def _read_lines(handles, since, budget):
                 entry = json.loads(raw)
             except ValueError:
                 continue                                       # a half-written or garbled line
-            at = AUDIT._at(raw) if isinstance(entry, dict) else None
+            at = _line_at(entry) if isinstance(entry, dict) else None      # parsed once, not again by AUDIT._at
             if at is not None and at <= since:
                 return out, False
             if at is not None and entry.get("event") == "audit-suppressed" and isinstance(entry.get("suppressed"), int):

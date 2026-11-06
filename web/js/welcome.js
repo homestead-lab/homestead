@@ -391,8 +391,9 @@ function setupStorageRecipes(s, classes, inv) {
       node_tags: [], default: s.target > 0 && !s.default && !classes.some(c => c.default) && !spec.disk_tags.length && spec.replicas === target };
   });
 }
-function setupStorageSuggestionsHtml(recipes) {
+function setupStorageSuggestionsHtml(recipes, classes = []) {
   return '<p class="small dim">Choose a recipe to review. You can change every setting before creating the class.</p>'
+    + homesteadClassLine(classes)
     + '<div class="setup-storage-grid">' + recipes.map((r, i) => {
       const status = r.hosts === null ? "Disk availability could not be checked. Review placement before creating."
         : !r.hosts ? (r.disk_tags.length ? `No schedulable V1 disk has the ${r.disk_tags[0]} tag. Tag disks first, or change the tag in the editor.` : "No schedulable V1 disks are reported.")
@@ -424,7 +425,7 @@ window.setupStorageLoad = async (force = false) => {
     return;
   }
   entry.recipes = setupStorageRecipes(state.steps.storage || {}, classes.value, disks.status === "fulfilled" ? disks.value : null);
-  host.innerHTML = setupStorageSuggestionsHtml(entry.recipes);
+  host.innerHTML = setupStorageSuggestionsHtml(entry.recipes, classes.value);
   if (window.applyRole) applyRole();
 };
 async function setupStorageRefresh() {

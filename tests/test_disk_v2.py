@@ -14,9 +14,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_capacity_review as REVIEW
+import homestead_disk_allocation as DISK_ALLOCATION
 import homestead_disk_v2 as V
 import homestead_disks as DISKS
 import homestead_kube as K
+import homestead_longhorn_runtime as LH_RUNTIME
 import homestead_operations as OPS
 import homestead_storage_conflicts as CONFLICTS
 from fakes.job_store import JobStore
@@ -128,7 +130,8 @@ class Cluster:
             uid = self.lh_node(node)['status']['diskStatus']['data']['diskUUID']
             rname = name + '-' + node
             self.kube.add(lh('Replica', rname, spec={'volumeName': name, 'nodeID': node,
-                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB)}, status={'currentState': 'running'}))
+                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB),
+                'healthyAt': '2026-10-01T00:00:00Z', 'failedAt': ''}, status={'currentState': 'running'}))  # as recorded (fixtures/longhorn_v1_13)
             self.put(LHN(node), ('status', 'diskStatus', 'data', 'scheduledReplica', rname), size * GB)
             modes[rname] = 'RW'
         self.kube.add(lh('Engine', name + '-engine', spec={'volumeName': name},
@@ -363,35 +366,38 @@ class DiskV2Tests(unittest.TestCase):
         for kind, ref in [('node-power', {'node': 'node-1'}), ('platform-upgrade', {'component': 'longhorn'}), ('snapshot-delete', {'volume': 'volume-data'})]:
             with self.subTest(kind=kind), self.assertRaises(ValueError): CONFLICTS.require_clear(self.c.ops.items, kind, ref)
         self.assertEqual(V.logs(self.c.ops.items[0])[0]['text'], 'fixture helper output')
-    def test_other_disk_actions_share_the_lock_and_cannot_change_reviewed_device(self):
-        self.c.awaiting(); writes = []
+    def _guarded_disks(self):
+        """The real disk module with the server's three guards over this job
+        store; its cluster reads say only that they were reached, and under the lock."""
+        reached = []
         def change(*args, **kwargs):
-            self.assertTrue(self.c.ops._lock._is_owned()); writes.append(args)
-        names = ('set_disk_tags', 'set_scheduling', 'evict', 'remove', 'set_node_tags', 'add', 'set_up', 'use_os_space', 'retire_start')
-        disks = types.SimpleNamespace(**{name: change for name in names})
-        V.protect_mutations(disks)
-        for apply in (lambda: disks.remove('node-1', 'data'), lambda: disks.set_up({'node': 'node-1', 'device': '/dev/sdb'}),
-                      lambda: disks.add({'node': 'node-1', 'path': '/mnt/data'}), lambda: disks.set_node_tags('node-1', ['changed'])):
+            reached.append(self.c.ops._lock._is_owned()); raise LookupError(args)
+        self.enterContext(patch.multiple(DISKS, kget=change, ksend=change, temps=DISKS.temps, v2_tasks=DISKS.v2_tasks,
+                                         setup_module=types.SimpleNamespace(inspect=change)))
+        self.enterContext(patch.dict(DISKS.GUARDS))
+        for module in (V, DISK_ALLOCATION, LH_RUNTIME):
+            self.enterContext(patch.object(module, 'ops', self.c.ops))
+            module.protect_mutations(DISKS)
+        return reached
+    def test_other_disk_actions_share_the_lock_and_cannot_change_reviewed_device(self):
+        self.c.awaiting(); reached = self._guarded_disks()
+        for apply in (lambda: DISKS.remove('node-1', 'data'), lambda: DISKS.set_up({'node': 'node-1', 'device': '/dev/sdb'}),
+                      lambda: DISKS.add({'node': 'node-1', 'path': '/mnt/data'}), lambda: DISKS.set_node_tags('node-1', ['changed'])):
             with self.assertRaisesRegex(ValueError, 'saved V2'): apply()
-        self.assertFalse(writes)
-        disks.set_up({'node': 'node-1', 'device': '/dev/sdc'})
-        disks.remove('node-2', 'data'); self.assertEqual(len(writes), 2)
-    def test_standalone_reader_rebinding_clears_inherited_store_and_server_reinstalls_guards(self):
-        names = ('kget', 'ksend', 'temps', 'mutation_scope', 'v2_tasks', 'set_disk_tags', 'set_scheduling',
-                 'evict', 'remove', 'set_node_tags', 'add', 'set_up', 'use_os_space', 'retire_start')
-        for name in names:
-            saved = patch.object(DISKS, name, getattr(DISKS, name)); saved.start(); self.addCleanup(saved.stop)
-        self.c.awaiting(); V.protect_mutations(DISKS)
+        self.assertFalse(reached)
+        for apply in (lambda: DISKS.set_up({'node': 'node-1', 'device': '/dev/sdc'}), lambda: DISKS.remove('node-2', 'data')):
+            reached.clear()
+            with self.assertRaises(Exception): apply()
+            self.assertTrue(reached and all(reached), reached)
+    def test_rebinding_the_disk_reader_keeps_the_guards_and_the_saved_task(self):
+        self.c.awaiting(); reached = self._guarded_disks()
         self.assertTrue(DISKS.v2_tasks())
-        writes = []
-        DISKS.bind(K.kget, lambda *args, **kw: writes.append(args), lambda: {})
-        self.assertEqual(DISKS.v2_tasks(), [])
-        with patch.object(V, 'ops', None):
-            DISKS.evict('node-1', 'data', False)  # no inherited production /data store
-        self.assertEqual(len(writes), 1)
-        V.protect_mutations(DISKS)
+        DISKS.bind(K.kget, lambda *args, **kw: reached.append(args), lambda: {})
+        self.assertTrue(DISKS.v2_tasks())
         with self.assertRaisesRegex(ValueError, 'saved V2'): DISKS.evict('node-1', 'data', False)
-        self.assertEqual(len(writes), 1)
+        V.protect_mutations(DISKS)          # installed again: replaced, not stacked
+        with self.assertRaisesRegex(ValueError, 'saved V2'): DISKS.evict('node-1', 'data', False)
+        self.assertFalse(reached)
     def test_json_patch_protects_unreviewed_disk_changes(self):
         self.c.start(); self.c.put(LHN('node-1'), ('spec', 'disks', 'data', 'tags'), ['changed'])
         self.assertIn('configuration changed', self.c.tick()['message']); self.assertFalse(self.c.writes)

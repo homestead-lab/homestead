@@ -3,6 +3,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move_state as STATE
 import homestead_move_phases as PHASE
+import homestead_storage_classes as STORAGE_CLASSES
+from unittest import mock
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
@@ -15,7 +17,7 @@ def klass(name, default=False, backing=""):
 
 
 class Longhorn:
-    STORAGE_CLASS = ""
+    pass
 
 
 class ImageClassTests(unittest.TestCase):
@@ -34,7 +36,7 @@ class ImageClassTests(unittest.TestCase):
         STATE.kget = lambda path: {"items": list(rows)}
 
     def test_homesteads_own_class_is_used_when_it_is_here(self):
-        STATE.LH.STORAGE_CLASS = "longhorn-r2"
+        self.enterContext(mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"))
         self.classes(klass("harvester-longhorn"), klass("longhorn-r2"))
         self.assertEqual("longhorn-r2", PHASE._image_class())
 
@@ -45,6 +47,15 @@ class ImageClassTests(unittest.TestCase):
     def test_an_images_own_class_is_never_chosen(self):
         self.classes(klass("longhorn-ubuntu", backing="ubuntu"), klass("fast"))
         self.assertEqual("fast", PHASE._image_class())
+
+    def test_an_unread_class_list_is_said_and_waited_on_not_called_empty(self):
+        def unread(path):
+            raise urllib.error.URLError("timed out")
+        STATE.kget = unread
+        with self.assertRaisesRegex(RuntimeError, "could not read the storage classes.*timed out") as raised:
+            PHASE._image_class()
+        # Not a ValueError: that would end the move; a read that failed is asked again.
+        self.assertNotIsInstance(raised.exception, ValueError)
 
     def test_the_restored_image_names_its_class(self):
         classes = {"items": [klass("harvester-longhorn")]}

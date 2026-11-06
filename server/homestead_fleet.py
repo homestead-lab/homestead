@@ -740,7 +740,10 @@ def summary(via=None):
                     "reachable": True if mine else bool(seen.get("reachable")),
                     "error": "" if mine else seen.get("error", ""),
                     "compatible": True if mine else (seen.get("protocol") in (0, PROTOCOL) or not seen.get("reachable")),
-                    "checking": False if mine else bool(seen.get("checking"))})
+                    "checking": False if mine else bool(seen.get("checking")),
+                    # Whether it has ever answered a check, even with an error: every
+                    # check's row has "at". The web says "still checking" only without one (#1083).
+                    "answered": True if mine else "at" in seen})
     return {"self": me, "protocol": PROTOCOL, "linked": len(out) > 1, "members": out,
             "via": (via or {}).get("name", ""), "via_id": (via or {}).get("id", ""),
             "address": _self_record(state)["url"], "suggested_address": _address()}
@@ -1308,7 +1311,11 @@ def gather(what, local, user, role):
             threading.Thread(target=_ask, args=(entry, done, m, what, user, role), daemon=True).start()
         asked.append((m, entry, done))
     results = {}
-    missing = [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering",
+    # One never heard from while its first check runs is waiting, as the
+    # cluster menu says "still checking" (#1083); one whose last check failed is not answering.
+    missing = [{"id": m["id"], "name": m["name"], "error": "has not answered yet", "state": "waiting"}
+               if m.get("checking") and m.get("answered") is False else
+               {"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering",
                 "state": "not answering"}
                for m in view["members"] if not m["self"] and not m["reachable"]]
     try:

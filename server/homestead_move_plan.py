@@ -12,6 +12,7 @@ import homestead_kube as KUBE
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_transfer_devices as VM_DEVICES
 import homestead_move_state as STATE
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 ACTIONS = ("move", "blank", "skip")
@@ -159,7 +160,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     if kind != "volume" and KUBE.get_optional(STATE._object_path(kind, namespace, name), read=STATE.kget):
         blockers.append(f"{name} already exists in {namespace} on this cluster")
     choices = _choices(definition.get("claims", []), volumes, kind)
-    chosen_class = storage_class or STATE.LH.STORAGE_CLASS
+    chosen_class = storage_class or STORAGE_CLASSES.claim_class()
 
     def check_class(klass, claim, longhorn):
         base = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}", read=STATE.kget)
@@ -308,7 +309,9 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         _add_operation(move)
         if not move["op"]:
             move["message"] = "Queued; Activity was busy, so this move appears there shortly"
-        STATE._store(move)
+        with STATE.recording(f"The move of {name} is recorded and will run", "its Activity item",
+                             "Activity may list it twice." if move["op"] else ""):
+            STATE._store(move)
     return STATE._public(move)
 
 

@@ -23,9 +23,12 @@ class AtomicSaveTests(unittest.TestCase):
         self.target.chmod(0o640)
         self.fail_stage = False
         self.rename_failure = False
+        self.cleanup_stalls = False
         self.commands = []
         def shell(ns, pod, script, stdin=b"", **kw):
             self.commands.append(script)
+            if self.cleanup_stalls and script.startswith("rm -f "):
+                raise files.POD_EXEC.ExecTimeout("the clean-up did not answer in time")
             if self.fail_stage and "head -c" in script:
                 return b"", "fixture interrupted upload"
             if self.rename_failure and "printf saved" in script:
@@ -47,6 +50,12 @@ class AtomicSaveTests(unittest.TestCase):
         self.assertEqual(0o640, self.target.stat().st_mode & 0o777)
         self.assertEqual(hashlib.sha256(b"changed").hexdigest(), result["revision"])
         self.assertFalse((self.root / "config.txt.homestead-lock").exists())
+
+    def test_a_save_whose_clean_up_times_out_still_reports_saved(self):
+        self.cleanup_stalls = True
+        result = files.write_file("lab", "data", "config.txt", "changed", self.revision)
+        self.assertTrue(result["ok"])
+        self.assertEqual(b"changed", self.target.read_bytes())
 
     def test_stale_editor_cannot_overwrite_equal_length_changed_content(self):
         self.target.write_bytes(b"modified")

@@ -120,16 +120,78 @@ test("failed default retains successful reservation and explains recovery", asyn
   assert.equal(elements["#va_save"].disabled, false);
 });
 
-test("partial range additions stay visible and never silently choose another default", async () => {
+/* A failed default stops the dialog before the Homestead move, so that step is
+   skipped too, and the message says so when it was asked for. */
+test("a failed default says Homestead was not moved either when it was asked to move", async () => {
+  const { ctx, elements, requests } = setup();
+  elements["#va_default"].checked = true;
+  elements["#va_self"] = { checked: true };
+  const original = ctx.api;
+  ctx.api = (url, opts) => url.endsWith("/default") ? Promise.reject(new Error("Provider unavailable")) : original(url, opts);
+  await ctx.vipAddGo();
+  assert.equal(requests.filter(r => r.url === "/api/self/address").length, 0);
+  assert.match(elements["#va_result"].textContent, /Default not changed: Provider unavailable\. Homestead was not moved either\. Saved addresses remain available/);
+});
+
+test("a failed default says nothing about Homestead when it was not asked to move", async () => {
+  const { ctx, elements } = setup();
+  elements["#va_default"].checked = true;
+  elements["#va_self"] = { checked: false };
+  const original = ctx.api;
+  ctx.api = (url, opts) => url.endsWith("/default") ? Promise.reject(new Error("Provider unavailable")) : original(url, opts);
+  await ctx.vipAddGo();
+  assert.doesNotMatch(elements["#va_result"].textContent, /Homestead/);
+  assert.match(elements["#va_result"].textContent, /Default not changed: Provider unavailable\. Saved addresses remain available/);
+});
+
+test("partial range additions stay visible and never ask for a default on a skipped start", async () => {
   const { ctx, elements, requests } = setup();
   elements["#va_default"].checked = true;
   elements["#va_kind"].value = "range";
   const original = ctx.api;
-  ctx.api = (url, opts) => url.endsWith("/add") ? Promise.resolve({ added: ["192.0.2.109"], skipped: ["192.0.2.108 is unavailable"], detail: "1 added; 1 skipped" }) : original(url, opts);
+  ctx.api = (url, opts) => url.endsWith("/add") ? Promise.resolve({ ok: true, added: ["192.0.2.109"], skipped: ["192.0.2.108 is unavailable"], detail: "1 added; 1 skipped" }) : original(url, opts);
   await ctx.vipAddGo();
-  assert.equal(requests[0].body.ip, "192.0.2.108");
+  assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
   assert.match(elements["#va_result"].textContent, /skipped/);
+  assert.match(elements["#va_result"].textContent, /Default not changed: 192\.0\.2\.108 was not added/);
+  assert.doesNotMatch(elements["#va_result"].textContent, /Default workload VIP/);
   assert.equal(ctx.closed, undefined);
+});
+
+test("a refused start address asks for no default and claims no saved addresses", async () => {
+  const { ctx, elements, requests } = setup();
+  elements["#va_default"].checked = true;
+  const original = ctx.api;
+  ctx.api = (url, opts) => url.endsWith("/add") ? Promise.resolve({ ok: false, added: [], skipped: ["192.0.2.108 is a node's own address"], detail: "nothing added; 1 skipped" }) : original(url, opts);
+  await ctx.vipAddGo();
+  assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
+  assert.equal(ctx.STATE.data.ov.lb_ip, undefined);
+  assert.match(elements["#va_result"].textContent, /Default not changed: 192\.0\.2\.108 was not added/);
+  assert.doesNotMatch(elements["#va_result"].textContent, /Saved addresses remain available/);
+  assert.equal(ctx.closed, undefined);
+});
+
+test("a start missing from added and skipped claims no default in the message or toast", async () => {
+  const { ctx, elements, requests, notices } = setup();
+  elements["#va_default"].checked = true;
+  const original = ctx.api;
+  ctx.api = (url, opts) => url.endsWith("/add") ? Promise.resolve({ ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" }) : original(url, opts);
+  await ctx.vipAddGo();
+  assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
+  const said = JSON.stringify(notices) + elements["#va_result"].textContent;
+  assert.doesNotMatch(said, /is the default workload VIP/);
+  assert.match(said, /Default not changed: 192\.0\.2\.108 was not added/);
+});
+
+test("a start address already on the list asks for no default", async () => {
+  const { ctx, elements, requests } = setup();
+  elements["#va_default"].checked = true;
+  const original = ctx.api;
+  ctx.api = (url, opts) => url.endsWith("/add") ? Promise.resolve({ ok: false, added: [], skipped: ["192.0.2.108 is already on the list"], detail: "nothing added; 1 skipped: 192.0.2.108 is already on the list" }) : original(url, opts);
+  await ctx.vipAddGo();
+  assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
+  assert.match(elements["#va_result"].textContent, /already on the list/);
+  assert.match(elements["#va_result"].textContent, /Default not changed/);
 });
 
 /* Homestead itself goes on a new VIP only when that VIP becomes the default,

@@ -156,7 +156,7 @@ class IsoClassTests(unittest.TestCase):
     def test_on_longhorn_a_single_replica_class_is_made_once_and_hidden_from_pickers(self):
         kube = self.cluster()
         with mock.patch.object(server, "storage_classes", return_value=[dict(LONGHORN)]), \
-                mock.patch.object(server, "STORAGE_CLASS", "longhorn-r2"):
+                mock.patch.object(server.STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
             self.assertEqual((server.ISO_CLASS, True), server.iso_storage_class())
         method, path, body, _ = kube.writes[0]
         self.assertEqual(("POST", "homestead-isos"), (method, body["metadata"]["name"]))
@@ -165,14 +165,14 @@ class IsoClassTests(unittest.TestCase):
         made = dict(LONGHORN, name="homestead-isos", made_for="iso")
         kube.writes.clear()
         with mock.patch.object(server, "storage_classes", return_value=[dict(LONGHORN), made]), \
-                mock.patch.object(server, "STORAGE_CLASS", "longhorn-r2"):
+                mock.patch.object(server.STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
             self.assertEqual((server.ISO_CLASS, True), server.iso_storage_class())
         self.assertEqual([], kube.writes, "made once")
 
     def test_without_longhorn_a_shared_class_is_used_as_it_is(self):
         kube = self.cluster()
         nfs = dict(LONGHORN, name="nfs-client", provisioner="nfs.csi.k8s.io")
-        with mock.patch.object(server, "storage_classes", return_value=[nfs]), mock.patch.object(server, "STORAGE_CLASS", "nfs-client"):
+        with mock.patch.object(server, "storage_classes", return_value=[nfs]), mock.patch.object(server.STORAGE_CLASSES, "INSTALL_CLASS", "nfs-client"):
             self.assertEqual(("nfs-client", True), server.iso_storage_class())
         self.assertEqual([], kube.writes, "no class made")
 

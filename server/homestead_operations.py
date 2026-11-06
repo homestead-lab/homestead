@@ -639,19 +639,8 @@ def _deployment(item):
 
 
 def _prepull(item):
-    ref = item["ref"]
-    ds = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/daemonsets/{ref['name']}")
-    status = ds.get("status", {}) or {}
-    desired = int(status.get("desiredNumberScheduled", 0) or 0)
-    ready = int(status.get("numberReady", 0) or 0)
-    unavailable = int(status.get("numberUnavailable", 0) or 0)
-    for condition in status.get("conditions", []) or []:
-        if condition.get("status") == "False" and condition.get("type") in ("Progressing", "Available"):
-            return "failed", 0, condition.get("message") or condition.get("reason") or "Image pull failed"
-    if desired and ready >= desired and unavailable == 0:
-        return "succeeded", 100, f"Image cached on {ready}/{desired} nodes"
-    progress = min(95, round(ready / desired * 100)) if desired else 5
-    return "running", progress, f"Image cached on {ready}/{desired or '?'} nodes"
+    import homestead_image_cache as IMAGES  # imports this module, by way of homestead_imports
+    return IMAGES.pull_progress(kget, item["ref"])
 
 
 def _job(item):
@@ -742,6 +731,12 @@ def _backup(item):
     state = str(status.get("state", "") or "").lower()
     progress = int(status.get("progress", 0) or 0)
     if state == "completed":
+        # "Back up now"'s local snapshot is not needed once the backup is on
+        # the target, and keeps its delta on every replica: the leader's
+        # helper sweep removes it once no job uses it or its volume. A job
+        # from before names none.
+        if ref.get("snapshot") and ref.get("snapshot_uid") and "snapshot_pending" not in ref:
+            ref["snapshot_pending"] = True
         return "succeeded", 100, "Backup complete"
     if state in ("error", "failed", "unknown") and status.get("error"):
         return "failed", progress, status.get("error")
@@ -840,6 +835,11 @@ def _image_cleanup(item):
         states = [row.get("state", {}) for row in status.get("containerStatuses", []) or []]
         failed = next((state.get("terminated") for state in states
                        if (state.get("terminated") or {}).get("exitCode", 0) != 0), None)
+        if status.get("reason") == "DeadlineExceeded":
+            # Killed at its deadline: its own last words are not why it stopped.
+            limit = int((pod.get("spec") or {}).get("activeDeadlineSeconds") or 0)
+            return "failed", round(complete / max(1, len(pods)) * 100), (
+                f"The removal took longer than {max(1, limit // 60)} minutes and was stopped")
         if phase == "Failed" or failed:
             detail = (failed or {}).get("message") or (failed or {}).get("reason") or status.get("message")
             return "failed", round(complete / max(1, len(pods)) * 100), detail or "Image cleanup failed"

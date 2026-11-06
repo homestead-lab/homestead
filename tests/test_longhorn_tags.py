@@ -12,6 +12,7 @@ import homestead_disks as DISKS
 import homestead_kube as K
 import homestead_storage_classes as STORAGE_CLASSES
 import server  # noqa: F401 - binds the storage-class module to the app's helpers, which the tests rely on
+from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
 
 NODES = {
@@ -38,8 +39,8 @@ class Cluster:
             objects += [dict(copy.deepcopy(bd), apiVersion="harvesterhci.io/v1beta1", kind="BlockDevice",
                              metadata=dict(bd["metadata"], namespace="longhorn-system")) for bd in BDS]
         self.kube = test.enterContext(Kube(*objects, absent_groups=() if harvester else ("harvesterhci.io",)))
-        test.enterContext(mock.patch.multiple(DISKS, kget=DISKS.kget, ksend=DISKS.ksend, temps=DISKS.temps,
-                                              mutation_scope=DISKS.mutation_scope, v2_tasks=DISKS.v2_tasks))
+        disk_guards(test)
+        test.enterContext(mock.patch.multiple(DISKS, kget=DISKS.kget, ksend=DISKS.ksend, temps=DISKS.temps))
         DISKS.bind(K.kget, K.ksend, lambda: {})
 
     @property

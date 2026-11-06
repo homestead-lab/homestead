@@ -69,6 +69,16 @@ class FillInTests(unittest.TestCase):
         self.assertEqual(["home", "loft"], self.sites(rows))
         self.assertEqual([("office", "waiting")], [(m["id"], m["state"]) for m in missing])
 
+    def test_a_member_never_heard_from_is_waiting_and_one_that_failed_is_not_answering(self):
+        # As the cluster menu says it (#1083): the last answer wins.
+        self.members[1].update(reachable=False, checking=True, answered=False, error="still checking")
+        self.members[2].update(reachable=False, checking=True, answered=True, error="no answer from https://192.0.2.11:8088")
+        rows, missing = self.gather()
+        self.assertEqual(["home"], self.sites(rows))
+        self.assertEqual([("office", "waiting", "has not answered yet"),
+                          ("loft", "not answering", "no answer from https://192.0.2.11:8088")],
+                         [(m["id"], m["state"], m["error"]) for m in missing])
+
     def test_a_member_that_answers_late_fills_in_on_the_next_refresh(self):
         self.slow["office"] = threading.Event()
         self.gather()

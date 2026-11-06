@@ -26,9 +26,12 @@ import urllib.parse
 
 import homestead_kube as KUBE
 import homestead_names as NAMES
+import homestead_pod_exec as POD_EXEC
 
 kget = ksend = None
-exec_in = None           # (namespace, pod, argv, timeout=, container=) -> (stdout bytes, stderr text)
+# (namespace, pod, argv, timeout=, container=) -> (stdout bytes, stderr text);
+# server.py binds homestead_pod_exec.run, whose answer also carries exit_code.
+exec_in = None
 NS = "lab"
 IMAGE = "alpine:3.24"
 # nsenter leaves the script in this pod's cgroup, so what it runs on the host -
@@ -195,7 +198,10 @@ def _clear_ended():
 
 
 def run(node, script, timeout=120, wait=60, sleep=time.sleep, stdin=b"", change="", holder=""):
-    """Run script as root on node's host; (stdout text, stderr text). The
+    """Run script as root on node's host; (stdout text, stderr text), with
+    the script's exit_code beside them (homestead_pod_exec.Output). A script
+    still running after timeout seconds raises homestead_pod_exec.ExecTimeout,
+    with what it had printed; its helper is removed. The
     helper is made for this run and removed after it; another run on the
     same host has its own, which this one never touches (#597). stdin, when
     given, is what the script reads: a secret goes there, never on its
@@ -252,9 +258,17 @@ def _run(node, script, timeout, wait, sleep, stdin):
         # is tried again for a while (seen on RKE2 after a host failed).
         for attempt in range(EXEC_TRIES):
             try:
-                out, err = exec_in(NS, name, HOST + [script], timeout=timeout, container="host",
-                                   **({"stdin": stdin} if stdin else {}))
-                return out.decode("utf-8", "replace"), err
+                answer = exec_in(NS, name, HOST + [script], timeout=timeout, container="host",
+                                 **({"stdin": stdin} if stdin else {}))
+                out, err = answer
+                return POD_EXEC.Output(out.decode("utf-8", "replace"), err, getattr(answer, "exit_code", None),
+                                       getattr(answer, "cut", False))
+            except POD_EXEC.ExecTimeout as error:
+                # Never tried again: the script may have changed the host.
+                raise POD_EXEC.ExecTimeout(
+                    f"The script on {node} did not finish within {timeout:g} seconds, so Homestead stopped waiting "
+                    f"and removes its helper; what it changed on {node} before then stays changed",
+                    error.stdout.decode("utf-8", "replace"), error.stderr, timeout) from error
             except ConnectionError as error:
                 if not getattr(error, "retry", False) or attempt == EXEC_TRIES - 1:
                     raise

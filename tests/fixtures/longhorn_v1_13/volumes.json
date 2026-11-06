@@ -1,0 +1,344 @@
+{
+ "items": [
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Volume",
+   "metadata": {
+    "creationTimestamp": "2026-10-05T16:11:59Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 17,
+    "labels": {
+     "backup-target": "default",
+     "longhornvolume": "vol-a",
+     "recurring-job-group.longhorn.io/daily": "enabled",
+     "recurring-job-group.longhorn.io/default": "enabled",
+     "setting.longhorn.io/remove-snapshots-during-filesystem-trim": "ignored",
+     "setting.longhorn.io/replica-auto-balance": "ignored",
+     "setting.longhorn.io/snapshot-data-integrity": "ignored"
+    },
+    "name": "vol-a",
+    "namespace": "longhorn-system",
+    "resourceVersion": "26437257"
+   },
+   "spec": {
+    "Standby": false,
+    "accessMode": "rwo",
+    "backingImage": "",
+    "backupBlockSize": "2097152",
+    "backupCompressionMethod": "lz4",
+    "backupTargetName": "default",
+    "dataEngine": "v1",
+    "dataLayout": {
+     "mode": "",
+     "type": ""
+    },
+    "dataLocality": "disabled",
+    "dataSource": "",
+    "disableFrontend": false,
+    "diskSelector": [],
+    "encrypted": false,
+    "engineNodeID": "",
+    "freezeFilesystemForSnapshot": "ignored",
+    "fromBackup": "",
+    "frontend": "blockdev",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastAttachedBy": "",
+    "migratable": false,
+    "migrationNodeID": "",
+    "nodeID": "node-b",
+    "nodeSelector": [],
+    "numberOfReplicas": 2,
+    "offlineRebuilding": "ignored",
+    "rebuildConcurrentSyncLimit": 0,
+    "replicaAutoBalance": "ignored",
+    "replicaDiskSoftAntiAffinity": "ignored",
+    "replicaRebuildingBandwidthLimit": 0,
+    "replicaSoftAntiAffinity": "ignored",
+    "replicaZoneSoftAntiAffinity": "ignored",
+    "restoreVolumeRecurringJob": "ignored",
+    "revisionCounterDisabled": true,
+    "size": "10737418240",
+    "snapshotDataIntegrity": "ignored",
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "staleReplicaTimeout": 30,
+    "unmapMarkSnapChainRemoved": "ignored"
+   },
+   "status": {
+    "actualSize": 338010112,
+    "cloneStatus": {
+     "attemptCount": 0,
+     "nextAllowedAttemptAt": "",
+     "snapshot": "",
+     "sourceVolume": "",
+     "state": ""
+    },
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "TooManySnapshots"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-09T11:02:25Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "Scheduled"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:00Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "Restore"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-05T16:12:02Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "OfflineRebuilding"
+     }
+    ],
+    "currentEngineNodeID": "",
+    "currentImage": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "currentMigrationNodeID": "",
+    "currentNodeID": "node-b",
+    "expansionRequired": false,
+    "frontendDisabled": false,
+    "isStandby": false,
+    "kubernetesStatus": {
+     "lastPVCRefAt": "",
+     "lastPodRefAt": "",
+     "namespace": "lab",
+     "pvName": "vol-a",
+     "pvStatus": "Bound",
+     "pvcName": "vol-a-claim",
+     "workloadsStatus": [
+      {
+       "podName": "app-pod-0",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-0",
+       "workloadType": "Job"
+      },
+      {
+       "podName": "app-pod-1",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-1",
+       "workloadType": "Job"
+      },
+      {
+       "podName": "app-pod-2",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-2",
+       "workloadType": "Job"
+      },
+      {
+       "podName": "app-pod-3",
+       "podStatus": "Running",
+       "workloadName": "app-wor-3",
+       "workloadType": "ReplicaSet"
+      }
+     ]
+    },
+    "lastAutoSalvagedAt": "",
+    "lastBackup": "backup-0000000000000001",
+    "lastBackupAt": "2026-11-03T04:00:17Z",
+    "lastDegradedAt": "",
+    "ownerID": "node-b",
+    "remountRequestedAt": "",
+    "restoreInitiated": false,
+    "restoreRequired": false,
+    "robustness": "healthy",
+    "shareEndpoint": "",
+    "shareState": "",
+    "state": "attached",
+    "switchoverState": ""
+   }
+  },
+  {
+   "apiVersion": "longhorn.io/v1beta2",
+   "kind": "Volume",
+   "metadata": {
+    "creationTimestamp": "2026-10-07T11:11:41Z",
+    "finalizers": [
+     "longhorn.io"
+    ],
+    "generation": 237,
+    "labels": {
+     "backup-target": "default",
+     "longhornvolume": "vol-b",
+     "recurring-job-group.longhorn.io/daily": "enabled",
+     "recurring-job-group.longhorn.io/default": "enabled",
+     "setting.longhorn.io/remove-snapshots-during-filesystem-trim": "ignored",
+     "setting.longhorn.io/replica-auto-balance": "ignored",
+     "setting.longhorn.io/snapshot-data-integrity": "ignored"
+    },
+    "name": "vol-b",
+    "namespace": "longhorn-system",
+    "resourceVersion": "25979661"
+   },
+   "spec": {
+    "Standby": false,
+    "accessMode": "rwo",
+    "backingImage": "",
+    "backupBlockSize": "2097152",
+    "backupCompressionMethod": "lz4",
+    "backupTargetName": "default",
+    "dataEngine": "v1",
+    "dataLayout": {
+     "mode": "",
+     "type": ""
+    },
+    "dataLocality": "disabled",
+    "dataSource": "",
+    "disableFrontend": false,
+    "diskSelector": [],
+    "encrypted": false,
+    "engineNodeID": "",
+    "freezeFilesystemForSnapshot": "ignored",
+    "fromBackup": "",
+    "frontend": "blockdev",
+    "image": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "lastAttachedBy": "",
+    "migratable": false,
+    "migrationNodeID": "",
+    "nodeID": "",
+    "nodeSelector": [],
+    "numberOfReplicas": 2,
+    "offlineRebuilding": "ignored",
+    "rebuildConcurrentSyncLimit": 0,
+    "replicaAutoBalance": "ignored",
+    "replicaDiskSoftAntiAffinity": "ignored",
+    "replicaRebuildingBandwidthLimit": 0,
+    "replicaSoftAntiAffinity": "ignored",
+    "replicaZoneSoftAntiAffinity": "ignored",
+    "restoreVolumeRecurringJob": "ignored",
+    "revisionCounterDisabled": true,
+    "size": "2147483648",
+    "snapshotDataIntegrity": "ignored",
+    "snapshotMaxCount": 250,
+    "snapshotMaxSize": "0",
+    "staleReplicaTimeout": 30,
+    "unmapMarkSnapChainRemoved": "ignored"
+   },
+   "status": {
+    "actualSize": 579997696,
+    "cloneStatus": {
+     "attemptCount": 0,
+     "nextAllowedAttemptAt": "",
+     "snapshot": "",
+     "sourceVolume": "",
+     "state": ""
+    },
+    "conditions": [
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "WaitForBackingImage"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "TooManySnapshots"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "True",
+      "type": "Scheduled"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-10-07T11:11:42Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "Restore"
+     },
+     {
+      "lastProbeTime": "",
+      "lastTransitionTime": "2026-11-01T09:10:24Z",
+      "message": "",
+      "reason": "",
+      "status": "False",
+      "type": "OfflineRebuilding"
+     }
+    ],
+    "currentEngineNodeID": "",
+    "currentImage": "docker.io/longhornio/longhorn-engine:v1.13.0",
+    "currentMigrationNodeID": "",
+    "currentNodeID": "",
+    "expansionRequired": false,
+    "frontendDisabled": false,
+    "isStandby": false,
+    "kubernetesStatus": {
+     "lastPVCRefAt": "",
+     "lastPodRefAt": "",
+     "namespace": "lab",
+     "pvName": "vol-b",
+     "pvStatus": "Bound",
+     "pvcName": "vol-b-claim",
+     "workloadsStatus": [
+      {
+       "podName": "app-pod-0",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-0",
+       "workloadType": "Job"
+      },
+      {
+       "podName": "app-pod-1",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-1",
+       "workloadType": "Job"
+      },
+      {
+       "podName": "app-pod-2",
+       "podStatus": "Succeeded",
+       "workloadName": "app-wor-2",
+       "workloadType": "Job"
+      }
+     ]
+    },
+    "lastAutoSalvagedAt": "",
+    "lastBackup": "backup-0000000000000002",
+    "lastBackupAt": "2026-11-03T04:07:25Z",
+    "lastDegradedAt": "",
+    "ownerID": "node-a",
+    "remountRequestedAt": "",
+    "restoreInitiated": false,
+    "restoreRequired": false,
+    "robustness": "unknown",
+    "shareEndpoint": "",
+    "shareState": "",
+    "state": "detached",
+    "switchoverState": ""
+   }
+  }
+ ]
+}

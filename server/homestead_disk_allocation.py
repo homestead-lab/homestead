@@ -544,13 +544,12 @@ def finish(body):
 
 
 def protect_mutations(disks):
-    previous = disks.mutation_scope
     @contextmanager
     def scope(node, disk, device):
         with ops.transaction():
             if _pending(node): raise ValueError('This host has a storage allocation job. Finish or recheck it before changing disks.')
-            with previous(node, disk, device): yield
-    disks.mutation_scope = scope
+            yield
+    disks.add_guard('disk_allocation', scope)
 
 
 def logs(item):

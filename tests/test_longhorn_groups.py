@@ -106,7 +106,7 @@ class FakeLonghorn:
 class GroupTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 
@@ -167,7 +167,7 @@ class GroupTests(unittest.TestCase):
 class CoverageTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 
@@ -191,7 +191,7 @@ class CoverageTests(unittest.TestCase):
 class BackupTests(unittest.TestCase):
     def setUp(self):
         self.lh = FakeLonghorn()
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.lh.get, self.lh.send, {})
 

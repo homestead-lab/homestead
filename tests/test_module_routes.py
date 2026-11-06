@@ -18,7 +18,7 @@ import source_scan as SS
 SERVER = SS.text(SS.SERVER_PY)
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 1848
+MAX_LINES = 1807
 MAX_PATH_BRANCHES = 3
 # How far below MAX_LINES server.py may fall before MAX_LINES has to come down.
 RATCHET_SLACK = 20

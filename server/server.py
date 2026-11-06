@@ -66,9 +66,6 @@ WEBROOT = os.environ.get("WEBROOT", "/web")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 SMB_NAMESPACE = os.environ.get("SMB_NAMESPACE", "lab")
 DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
-# Empty (as the Helm chart leaves it): the cluster's default class, read once
-# the API is reachable - see _resolve_storage_class below.
-STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", RELEASE.VERSION)
@@ -304,7 +301,7 @@ def app_settings_payload():
     settings = json.loads(json.dumps(CACHE.cached(SETTINGS_HELPERS.REVISION_KEY, 15, SETTINGS_HELPERS.app_settings_with_revision)))
     kube = SETTINGS_HELPERS.kube_version(KUBE_HELPERS.kget)
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
-                        "storage_class": STORAGE_CLASS, "vip": LB_IP,
+                        "storage_class": _shown_default_class(), "vip": LB_IP,
                         "kubernetes": kube, "node_probe": PROBE.status(),
                         "permissions": SELF.status()}
     return settings
@@ -328,7 +325,7 @@ def new_claims(volumes):
             claims[name]["size_gb"] = max(claims[name]["size_gb"], size)
             continue
         claims[name] = {"name": name, "size_gb": size,
-                        "storage_class": v.get("storage_class") or STORAGE_CLASS,
+                        "storage_class": v.get("storage_class") or STORAGE_CLASSES.claim_class(),
                         "access_mode": v.get("access_mode") or "ReadWriteOnce"}
     return list(claims.values())
 
@@ -370,34 +367,14 @@ def storage_classes():
             "internal": _internal_class(meta),
             "made_for": _class_made_for(meta.get("name", ""), parameters),
         })
-    rows = sorted(rows, key=lambda row: row["name"])
-    _note_default_class(rows)
-    return rows
+    return sorted(rows, key=lambda row: row["name"])
 
 
-# The class new volumes go on when none is chosen. The cluster's own default
-# wins - making a class the default in Volumes is how you say which - then
-# the STORAGE_CLASS Homestead was installed with, then Longhorn's usual one.
-ENV_STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
-
-
-def _note_default_class(rows):
-    global STORAGE_CLASS
-    usable = [row for row in rows if class_selectable(row)]
-    names = {row["name"] for row in usable}
-    # k3s marks local-path the default and Longhorn's chart marks its own:
-    # of several defaults, the one Homestead was installed with, then Longhorn.
-    defaults = sorted((row for row in usable if row["default"]),
-                      key=lambda row: (row["name"] != ENV_STORAGE_CLASS, row["provisioner"] != "driver.longhorn.io", row["name"]))
-    chosen = (next((row["name"] for row in defaults), "")
-              or (ENV_STORAGE_CLASS if ENV_STORAGE_CLASS in names else "")
-              or next((n for n in ("longhorn-r2", "harvester-longhorn", "longhorn") if n in names), "")
-              or STORAGE_CLASS)
-    if chosen and chosen != STORAGE_CLASS:
-        STORAGE_CLASS = chosen
-        for module in ("LC", "LH"):
-            if module in globals():
-                globals()[module].STORAGE_CLASS = chosen
+def _shown_default_class():
+    try:
+        return STORAGE_CLASSES.claim_class()
+    except Exception:
+        return ""       # Settings still opens when the classes can't be read
 
 
 import homestead_storage_classes as STORAGE_CLASSES
@@ -406,12 +383,13 @@ import homestead_storage as STORAGE
 
 def selectable_storage_classes(rows=None):
     """Classes a person may pick for their own workloads - the default first."""
-    rows = [row for row in (rows if rows is not None else storage_classes()) if class_selectable(row)]
-    return [row["name"] for row in sorted(rows, key=lambda row: (row["name"] != STORAGE_CLASS, row["name"]))]
+    rows = rows if rows is not None else storage_classes()
+    default = STORAGE_CLASSES.default_class(rows)
+    return [row["name"] for row in sorted((r for r in rows if class_selectable(r)), key=lambda row: (row["name"] != default, row["name"]))]
 
 
 def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=None):
-    sc = sc or STORAGE_CLASS
+    sc = sc or STORAGE_CLASSES.claim_class()
     if access_mode == "ReadWriteMany":
         chosen = next((row for row in storage_classes() if row["name"] == sc), None)
         if chosen and not serves_many(chosen):
@@ -534,25 +512,12 @@ MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
 NODES.bind(kget, ksend, DEFAULT_NS, SYS_NS, get_app_settings, DEFAULT_APP_SETTINGS,
            lambda: WORKLOADS.get_workloads(), STORAGE.get_volumes, parse_cpu, parse_mem, _dns_name)
-def _resolve_storage_class():
-    """An empty STORAGE_CLASS means the cluster's default. It cannot stay
-    empty: a claim asking for class "" asks for no class at all, and never
-    binds on a cluster whose volumes all come from a provisioner."""
-    if STORAGE_CLASS:
-        return STORAGE_CLASS
-    try:
-        return VM_ROUTES.vm_default_class() or "longhorn-r2"
-    except Exception:
-        return "longhorn-r2"
-
-
-STORAGE_CLASS = _resolve_storage_class()
-LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
+LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc)
 IMP.bind(kget, ksend, create_pvc, DEPLOY_MANIFESTS.build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
-LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
+LH.bind(kget, ksend, _cache, DEFAULT_NS)
 PLACE.bind(kget, ksend, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, NODE_ACTIONS.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
@@ -716,7 +681,7 @@ LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
-HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
+HOSTRUN.bind(kget, ksend, lambda *a, **k: HOSTRUN.POD_EXEC.run(*a, **k), DEFAULT_NS)
 import homestead_host_console as HOST_CONSOLE
 HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
@@ -951,7 +916,7 @@ VOLUMES.bind(kget, ksend, LH_VOLUMES.snapshots, LH_BACKUPS.backups, _cache, SYS_
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
 SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY_MANIFESTS.build_deployment(cfg), SMB_NAMESPACE, _cache,
-                   shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
+                   shared_storage_classes, lambda: STORAGE_CLASSES.claim_class(), share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), lambda: NODES.node_temps())
 FLOW.bind(lambda path, **options: KUBE_HELPERS.kget(path, **options), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
@@ -1027,7 +992,8 @@ def iso_storage_class():
     every node can mount; else the VM default, one node at a time."""
     rows = storage_classes()
     shared = shared_storage_classes(rows)
-    base = STORAGE_CLASS if STORAGE_CLASS in shared else (shared[0] if shared else "")
+    default = STORAGE_CLASSES.claim_class(rows)
+    base = default if default in shared else (shared[0] if shared else "")
     row = next((r for r in rows if r["name"] == base), None)
     if row and row["provisioner"] == "driver.longhorn.io":
         if not any(r["name"] == ISO_CLASS for r in rows):

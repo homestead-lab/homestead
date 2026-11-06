@@ -16,10 +16,12 @@ import homestead_move_plan as PLAN
 import homestead_move_phases as PHASE
 import homestead_move_actions as ACT
 import homestead_passthrough as passthrough
+from fakes.storage_classes import storage_classes
 
 
 class ClusterCopyTests(unittest.TestCase):
     def setUp(self):
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         fixtures.EngineTests.setUp(self)
         self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["metadata"]["resourceVersion"] = "1"
 

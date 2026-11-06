@@ -182,7 +182,7 @@ class TransferTargetTests(unittest.TestCase):
 class TargetStateTests(unittest.TestCase):
     def setUp(self):
         self.cluster = FakeCluster()
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(self.cluster.get, self.cluster.send, {})
         self.path = f"{LH.API}/namespaces/longhorn-system/backuptargets/default"

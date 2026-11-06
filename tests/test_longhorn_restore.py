@@ -11,10 +11,12 @@ import homestead_longhorn as longhorn
 import homestead_longhorn_backups as BACKUPS
 import homestead_longhorn_restore as RESTORE
 import homestead_csi_restore as CSI_RESTORE
+from fakes.storage_classes import storage_classes
 
 
 class LonghornRestoreTests(unittest.TestCase):
     def setUp(self):
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         self.objects = {
             "/api/v1/namespaces/lab": {"metadata": {"name": "lab"}},
             "/apis/storage.k8s.io/v1/storageclasses/longhorn-r2": {
@@ -56,9 +58,9 @@ class LonghornRestoreTests(unittest.TestCase):
                 self.objects.pop(path, None)
             return body or {}
 
-        saved = (longhorn.kget, longhorn.ksend, longhorn._cache, longhorn.STORAGE_CLASS, longhorn.DEFAULT_NS)
+        saved = (longhorn.kget, longhorn.ksend, longhorn._cache, longhorn.DEFAULT_NS)
         self.addCleanup(lambda: longhorn.bind(*saved))   # put back what server.py bound
-        longhorn.bind(get, send, {}, "longhorn-r2")
+        longhorn.bind(get, send, {})
 
     def test_plan_reports_minimum_size_and_existing_pvc_conflict(self):
         plan = RESTORE.restore_plan("backup-123", "lab", "restored-data")
