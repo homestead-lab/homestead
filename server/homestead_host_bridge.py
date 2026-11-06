@@ -378,17 +378,20 @@ def _step(item, now=None):
         # kube-vip finds its interface when it starts: its pod here starts again.
         vip = HOST_BONDS.restart_kube_vip(kget, ksend, node, ref)
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        hosts, unread = HOST_BONDS.host_count(kget) if service else (1, "")
-        if hosts and hosts > 1:
+        hosts, unread, down = HOST_BONDS.before_restart(kget, node) if service else (1, "", [])
+        refused = ""
+        if hosts and hosts > 1 and not down:
             try:
-                hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                            **_held(ref))
+                out, err = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                                       **_held(ref))
+                refused = "" if "OK" in out.split() else (err or out or "no answer")[-160:]
             except POD_EXEC.ExecTimeout:
                 pass    # it may have been scheduled: never twice; the Ready check below follows
-            ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
-            return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
-        if not vip or unread:
-            return HOST_BONDS.not_finished(ref, 60, elapsed, BRIDGE, RESTART_SECONDS, service, unread)
+            if not refused:
+                ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
+                return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
+        if not vip or unread or down or refused:
+            return HOST_BONDS.not_finished(ref, 60, elapsed, BRIDGE, RESTART_SECONDS, service, unread, down, refused)
         ref.update(stage="done")
         return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
     if ref["stage"] == "restarting":
@@ -434,6 +437,9 @@ def cancel_plan(item):
         return {"mode": "forget", "needs": "admin",
                 "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
                           f"Other changes on {node} can start again at once"]}
+    if item["ref"].get("stage") == "confirmed":
+        # Its rollback is disarmed; the job alone was going to do what is left.
+        return {"mode": "forget", "needs": "admin", "keeps": HOST_BONDS.confirmed_keeps(node)}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The move carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}

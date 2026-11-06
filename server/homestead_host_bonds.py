@@ -685,6 +685,7 @@ def kubelet_back(read, node, ref):
 # {"done": True} once it is. A job saved restarting by a version without it
 # has none, and is not sent back to kube-vip.
 KUBE_VIP_PODS = "/api/v1/namespaces/kube-system/pods"
+SERVER_LABELS = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
 
 
 def _said(error):
@@ -728,14 +729,47 @@ def kube_vip_settled(read, send, node, ref):
     return "kube_vip" not in ref or restart_kube_vip(read, send, node, ref)
 
 
-def host_count(read):
-    """How many hosts the cluster has, and why it is not known: (count, ""),
-    or (None, why). The host itself is in the list, so an empty one is no answer."""
+def _servers(nodes, node):
+    """The cluster's other control-plane servers: (their names, those not Ready)."""
+    names, down = [], []
+    for found in nodes:
+        meta = found.get("metadata") or {}
+        if meta.get("name") == node or not any(k in (meta.get("labels") or {}) for k in SERVER_LABELS):
+            continue
+        names.append(meta["name"])
+        if not any(c.get("type") == "Ready" and c.get("status") == "True"
+                   for c in (found.get("status") or {}).get("conditions") or []):
+            down.append(meta["name"])
+    return names, down
+
+
+def before_restart(read, node):
+    """What the restart of k3s or RKE2 on node goes by, read fresh each round:
+    (hosts, why the list has no answer, the other servers not Ready). Restarting
+    takes node quiet as the change did, so it waits for what network_guard does. The
+    host itself is in the list, so an empty one is no answer."""
     try:
-        count = len(read("/api/v1/nodes").get("items", []))
+        nodes = read("/api/v1/nodes").get("items", [])
     except Exception as error:
-        return None, _said(error)
-    return (count, "") if count else (None, "the list came back empty")
+        return None, _said(error), []
+    return (len(nodes), "", _servers(nodes, node)[1]) if nodes else (None, "the list came back empty", [])
+
+
+def _restart_undone(node, service, unread, down, refused):
+    """Why the restart was not sent, and what a person does about it."""
+    undone = []
+    if unread:
+        undone.append(f"Homestead could not read the cluster's hosts ({unread}), so it did not restart {service} on {node}, "
+                      "and flannel may still carry pod traffic by the old interface. If the cluster has other hosts, run "
+                      f"`systemctl restart {service}` on {node}.")
+    if down:
+        words = guard_refusals(node, "", (0, len(down)))[0]
+        undone.append(f"Homestead did not restart {service} on {node}, and flannel may still carry pod traffic by the old interface. "
+                      f"{words} ({', '.join(down)}), then run `systemctl restart {service}` on {node}.")
+    if refused:
+        undone.append(f"{node} did not schedule the restart of {service} ({refused}), so it did not restart, and flannel may still "
+                      f"carry pod traffic by the old interface. Run `systemctl restart {service}` on {node}.")
+    return undone
 
 
 def _kube_vip_undone(ref, interface):
@@ -746,23 +780,22 @@ def _kube_vip_undone(ref, interface):
             f"its addresses on the old interface. Delete the kube-vip pod on {ref['node']}, and it starts again on {interface}."]
 
 
-def _unfinished(ref, interface, service="", unread=""):
-    undone = _kube_vip_undone(ref, interface)
-    if unread:
-        undone.append(f"Homestead could not read the cluster's hosts ({unread}), so it did not restart {service} on {ref['node']}, "
-                      "and flannel may still carry pod traffic by the old interface. If the cluster has other hosts, run "
-                      f"`systemctl restart {service}` on {ref['node']}.")
-    return f"{ref['node']} carries {ref['address']} on {interface} and keeps it, but the change is not finished. " + " ".join(undone)
-
-
-def not_finished(ref, progress, elapsed, interface, seconds, service="", unread=""):
-    """The next step of a job with kube-vip or the host count still unproved:
+def not_finished(ref, progress, elapsed, interface, seconds, service="", unread="", down=(), refused=""):
+    """The next step of a job with kube-vip or the restart still not done:
     (status, progress, message). It fails past seconds, saying what is undone."""
+    node, vip_undone = ref["node"], _kube_vip_undone(ref, interface)
     if elapsed > seconds:
-        return "failed", 100, _unfinished(ref, interface, service, unread)
-    trying = (["the cluster's hosts"] if unread else []) + ([f"kube-vip on {ref['node']}"] if _kube_vip_undone(ref, interface) else [])
-    return ("running", progress, f"{ref['node']} is on its new network; still trying to reach {' and '.join(trying)} "
-            f"({unread or ref['kube_vip'].get('error', 'no answer')}), for up to {max(0, int(seconds - elapsed))}s more")
+        return ("failed", 100, f"{node} carries {ref['address']} on {interface} and keeps it, but the change is not finished. "
+                + " ".join(vip_undone + _restart_undone(node, service, unread, down, refused)))
+    reach = (["the cluster's hosts"] if unread else []) + ([f"kube-vip on {node}"] if vip_undone else [])
+    doing = []
+    if reach:
+        doing.append(f"still trying to reach {' and '.join(reach)} ({unread or ref['kube_vip'].get('error', 'no answer')})")
+    if down:
+        doing.append(f"waiting for {', '.join(down)} to be Ready before it restarts {service}")
+    if refused:
+        doing.append(f"still trying to schedule the restart of {service} ({refused})")
+    return "running", progress, f"{node} is on its new network; {' and '.join(doing)}, for up to {max(0, int(seconds - elapsed))}s more"
 
 
 def not_back_with_kube_vip(reason, ref, interface):
@@ -826,17 +859,20 @@ def _step(item, now=None):
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
         vip = restart_kube_vip(kget, ksend, node, ref)
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        hosts, unread = host_count(kget) if service else (1, "")
-        if hosts and hosts > 1:
+        hosts, unread, down = before_restart(kget, node) if service else (1, "", [])
+        refused = ""
+        if hosts and hosts > 1 and not down:
             try:
-                hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                            **_held(ref))
+                out, err = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                                       **_held(ref))
+                refused = "" if "OK" in out.split() else (err or out or "no answer")[-160:]
             except POD_EXEC.ExecTimeout:
                 pass    # it may have been scheduled: never twice; the Ready check below follows
-            ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
-            return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
-        if not vip or unread:
-            return not_finished(ref, 70, elapsed, ref["carries_on"], RESTART_SECONDS, service, unread)
+            if not refused:
+                ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
+                return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
+        if not vip or unread or down or refused:
+            return not_finished(ref, 70, elapsed, ref["carries_on"], RESTART_SECONDS, service, unread, down, refused)
         ref.update(stage="done")
         return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
     if ref["stage"] == "restarting":
@@ -951,12 +987,8 @@ def network_guard(node):
     being checked, and the other servers' readiness (ready, total)."""
     busy = next((op.get("title", "") for op in OPS.snapshot()
                  if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
-    servers = [n for n in kget("/api/v1/nodes").get("items", [])
-               if n["metadata"]["name"] != node and any(k in (n["metadata"].get("labels") or {}) for k in
-                   ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
-    ready = sum(1 for n in servers if any(c.get("type") == "Ready" and c.get("status") == "True"
-                                          for c in (n.get("status") or {}).get("conditions") or []))
-    return busy, (ready, len(servers))
+    servers, down = _servers(kget("/api/v1/nodes").get("items", []), node)
+    return busy, (len(servers) - len(down), len(servers))
 
 
 def _host(body):
@@ -998,6 +1030,15 @@ ROUTES = {
 }
 
 
+def confirmed_keeps(node):
+    """What stopping a job says once the host's rollback is disarmed, for a
+    bond and a bridge: nothing else would restart kube-vip, k3s or RKE2."""
+    return [f"{node} keeps its new network: its rollback is already disarmed",
+            f"Homestead stops restarting kube-vip and k3s or RKE2 on {node}: restart any it had not restarted by hand, "
+            "or VIPs and flannel may stay on the old interface",
+            f"Other changes on {node} can start again at once"]
+
+
 def cancel_plan(item):
     """Stopping tracking it also lets go of the host, so other changes there
     need not wait for the hold to run out (#597)."""
@@ -1008,6 +1049,9 @@ def cancel_plan(item):
         return {"mode": "forget", "needs": "admin",
                 "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
                           f"Other changes on {node} can start again at once"]}
+    if item["ref"].get("stage") == "confirmed":
+        # Its rollback is disarmed; the job alone was going to do what is left.
+        return {"mode": "forget", "needs": "admin", "keeps": confirmed_keeps(node)}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The change carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}

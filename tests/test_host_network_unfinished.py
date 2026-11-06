@@ -85,10 +85,11 @@ def no_restart(why, service="k3s"):
 class Host:
     def __init__(self):
         self.ran, self.let_go_of = [], []
+        self.restart_says = ("OK\n", "")    # what the real command prints once it is scheduled
 
     def run(self, node, script, timeout=60, change="", holder=""):
         self.ran.append((script, change, holder))
-        return "OK\n", ""
+        return self.restart_says
 
     def let_go(self, node, holder):
         self.let_go_of.append((node, holder))
@@ -318,6 +319,141 @@ class KubeVipTests(Unfinished):
             why = "HTTP Error 500: Failure"
             self.assertEqual(f"{kept(kind)} {no_vip(kind, why)} {no_restart(why)}", message)
             self.kube._failures.clear()
+
+
+class QuorumTests(Unfinished):
+    """Restarting k3s or RKE2 takes the host quiet as the change did, so it goes by
+    the other servers as they are at that round, however late that round is."""
+    DOWN = ("1 of the other servers is not Ready: if node-a went quiet too, the cluster could lose its quorum. "
+            "Wait until they are Ready (node-b), then run `systemctl restart k3s` on node-a.")
+
+    def tearDown(self):
+        self.kube.add(DEADLINE.node("node-b", ready=True, server=True))
+
+    def test_a_list_back_late_does_not_restart_on_a_quorum_it_never_checked(self):
+        for kind in self.each():
+            self.kube.add(DEADLINE.node("node-b", ready=True, server=True))
+            self.kube.fail(NODES, 500, method="GET")
+            ref = kind.saved()
+            self.assertEqual("running", self.step(kind, ref, 5)[0])
+            self.kube.add(DEADLINE.node("node-b", ready=False, server=True))
+            status, progress, message = self.step(kind, ref, 300)
+            self.assertEqual(("running", kind.confirmed_at, "confirmed"), (status, progress, ref["stage"]))
+            self.assertEqual([], self.host.restarts())
+            self.assertEqual("node-a is on its new network; waiting for node-b to be Ready before it restarts k3s, "
+                             "for up to 300s more", message)
+            self.kube.add(DEADLINE.node("node-b", ready=True, server=True))
+            self.assertEqual("running", self.step(kind, ref, 330)[0])
+            self.assertEqual(("restarting", 1), (ref["stage"], len(self.host.restarts())))
+
+    def test_a_server_down_on_the_first_round_holds_the_restart_too(self):
+        for kind in self.each():
+            self.kube.add(DEADLINE.node("node-b", ready=False, server=True))
+            ref = kind.saved()
+            self.assertEqual(("running", "confirmed"), (self.step(kind, ref, 0)[0], ref["stage"]))
+            self.assertEqual([], self.host.restarts())
+            self.assertIsNone(self.kube.object(VIP), "kube-vip goes all the same: it restarts in moments, off the quorum")
+
+    def test_it_fails_at_the_deadline_naming_them_in_the_guards_words(self):
+        for kind in self.each():
+            self.kube.add(DEADLINE.node("node-b", ready=False, server=True))
+            ref = kind.saved()
+            status, _, message = self.step(kind, ref, kind.module.RESTART_SECONDS + 1)
+            self.assertEqual("failed", status)
+            self.assertTrue(message.startswith(kept(kind)), message)
+            self.assertIn(self.DOWN, message)
+            self.assertIn("Homestead did not restart k3s on node-a", message)
+            self.assertEqual([], self.host.restarts())
+            self.assertEqual([("node-a", LEASE)], self.host.let_go_of)
+
+    def test_several_are_all_named(self):
+        self.kube.add(DEADLINE.node("node-c", ready=False, server=True))
+        self.addCleanup(self.kube.discard, NODES + "/node-c")
+        for kind in self.each():
+            self.kube.add(DEADLINE.node("node-b", ready=False, server=True))
+            message = self.step(kind, kind.saved(), kind.module.RESTART_SECONDS + 1)[2]
+            self.assertIn("2 of the other servers is not Ready", message)
+            self.assertIn("(node-b, node-c)", message)
+
+    def test_a_worker_down_and_the_host_itself_do_not_hold_it(self):
+        self.kube.add(DEADLINE.node("worker-c", ready=False))
+        self.addCleanup(self.kube.discard, NODES + "/worker-c")
+        for kind in self.each():
+            self.kube.add(DEADLINE.node("node-a", ready=False, server=True))
+            ref = kind.saved()
+            self.assertEqual("running", self.step(kind, ref, 0)[0])
+            self.assertEqual("restarting", ref["stage"])
+
+    def test_a_single_host_has_no_other_servers_to_wait_for(self):
+        self.kube.discard(NODES + "/node-b")
+        for kind in self.each():
+            self.assertEqual("succeeded", self.step(kind, kind.saved(), 0)[0])
+
+
+class RestartNotScheduledTests(Unfinished):
+    """systemd-run that fails prints no OK: nothing was scheduled, so a kubelet
+    that keeps renewing proves nothing, and asking again cannot restart it twice."""
+    SAYS = ("", "Failed to start transient timer unit\n")
+
+    def test_it_stays_confirmed_and_asks_again(self):
+        for kind in self.each():
+            self.host.restart_says = self.SAYS
+            ref = kind.saved()
+            status, progress, message = self.step(kind, ref, 5)
+            self.assertEqual(("running", kind.confirmed_at, "confirmed"), (status, progress, ref["stage"]))
+            self.assertIn("still trying to schedule the restart of k3s (Failed to start transient timer unit", message)
+            self.assertEqual(LEASE, ref["lease"])
+            self.host.restart_says = ("OK\n", "")
+            self.step(kind, ref, 35)
+            self.assertEqual(("restarting", 2), (ref["stage"], len(self.host.restarts())))
+
+    def test_a_kubelet_that_keeps_renewing_is_no_proof_of_a_restart_never_scheduled(self):
+        for kind in self.each():
+            self.host.restart_says = self.SAYS
+            self.kube.add(DEADLINE.real_node("node-a", heartbeat=SINCE + 40, transition=SINCE - 3600))
+            ref = kind.saved()
+            self.assertEqual("running", self.step(kind, ref, 60)[0])
+            self.assertEqual("confirmed", ref["stage"])
+
+    def test_it_ends_at_the_deadline_saying_to_run_it(self):
+        for kind in self.each():
+            self.host.restart_says = ("", "")
+            status, _, message = self.step(kind, kind.saved(), kind.module.RESTART_SECONDS + 1)
+            self.assertEqual("failed", status)
+            self.assertEqual(f"{kept(kind)} node-a did not schedule the restart of k3s (no answer), so it did not restart, and flannel "
+                             "may still carry pod traffic by the old interface. Run `systemctl restart k3s` on node-a.", message)
+
+    def test_a_restart_that_timed_out_may_have_been_scheduled_and_is_not_asked_again(self):
+        import homestead_pod_exec as POD_EXEC
+
+        def timed_out(node, script, timeout=60, change="", holder=""):
+            self.host.ran.append((script, change, holder))
+            raise POD_EXEC.ExecTimeout("did not finish", "", "", 45)
+        for kind in self.each():
+            self.host.run = timed_out
+            ref = kind.saved()
+            self.step(kind, ref, 5)
+            self.assertEqual("restarting", ref["stage"])
+            self.step(kind, ref, 35)
+            self.assertEqual(1, len(self.host.restarts()))
+            del self.host.run
+
+
+class CancelTests(Unfinished):
+    KEEPS = ["node-a keeps its new network: its rollback is already disarmed",
+             "Homestead stops restarting kube-vip and k3s or RKE2 on node-a: restart any it had not restarted by hand, "
+             "or VIPs and flannel may stay on the old interface",
+             "Other changes on node-a can start again at once"]
+
+    def test_cancelling_while_confirmed_says_what_will_not_happen(self):
+        for kind in self.each():
+            self.assertEqual({"mode": "forget", "needs": "admin", "keeps": self.KEEPS},
+                             kind.module.cancel_plan({"ref": kind.saved()}))
+
+    def test_cancelling_before_it_is_confirmed_says_the_host_puts_itself_back(self):
+        for kind in self.each():
+            keeps = kind.module.cancel_plan({"ref": kind.saved(stage="applied")})["keeps"]
+            self.assertIn("puts its old network back by itself", keeps[0])
 
 
 class SavedJobTests(Unfinished):
