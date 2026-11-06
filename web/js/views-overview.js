@@ -445,7 +445,7 @@ function nodeCard(n) {
   const duties = nodeDutyTags(n);
   const up = nodeUpFor(n);
   const net = ratePair(n.rx_mbps, n.tx_mbps);
-  return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard"${clusterAttr(n)}
+  return `<div class="card glow ${bad ? "g-bad" : health} clickable nodecard" data-mkey="${esc(JSON.stringify([n.site?.id || "", n.name]))}"${clusterAttr(n)}
        onclick="nodeDetail(${jsq(n.name)})">
     <div class="between nodehead">
       <div class="row" style="gap:10px">

@@ -17,7 +17,7 @@ function load() {
   ctx.window = ctx;
   vm.createContext(ctx);
   vm.runInContext(between(core, "const PAGE_SNAPSHOT", "function pageSkeleton(view)"), ctx);
-  vm.runInContext(between(core, "function paint(html)", "function morph(a, b)"), ctx);
+  vm.runInContext(between(core, "function paint(html)", "function morph(a, b"), ctx);
   const visit = (search, html) => { ctx.location.search = search; host.dataset = {}; vm.runInContext(`paint(${JSON.stringify(html)})`, ctx); };
   const reopen = search => { ctx.location.search = search; vm.runInContext("pagePlaceholder('nodes')", ctx); return host.innerHTML; };
   return { ctx, visit, reopen, size: () => vm.runInContext("PAGE_SNAPSHOT.size", ctx) };
