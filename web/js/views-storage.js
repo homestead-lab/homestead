@@ -1300,6 +1300,7 @@ async function viewShares() {
       <td class="mono" data-label="Size">${s.size_gb ? s.size_gb + " GiB" : "—"}</td>
       <td data-label="Access"><span>${s.public ? UI.chip("guest", "warn", { tip: "No sign-in. Windows 11 refuses guest shares until two of its own settings are changed - see Allow guest access when making or editing a share" }) : (can("admin") ? `<button type="button" class="pill low pillbtn" data-tip="Private: signs in as ${esc(s.user)}. SMB users" onclick="smbUsers()">${esc(s.user)}</button>` : UI.chip(s.user, "neutral"))}
         ${s.read_only ? UI.chip("read only", "neutral") : UI.chip("read/write", "neutral")}
+        ${shareBinChip(s)}
         ${s.nfs_clients ? UI.chip("NFS", "info", { size: "slim", tip: `NFS ${s.nfs_read_only === false ? "read/write" : "read only"} for ${s.nfs_clients}` }) : ""}</span></td>
       <td class="small muted mono" data-label="UNC path">${smb.address ? `\\\\${esc(ip)}\\${esc(s.name)}` : "Waiting for SMB address"}</td>
       <td data-actions>${actionBar([
@@ -1417,6 +1418,7 @@ window.newShare = async () => {
     <label class="switch"><input type="checkbox" id="sh_pub" onchange="shareAccountHint()"> Allow guest access</label>
     <div id="sh_guest_note" class="hidden">${shareGuestWindowsNote()}</div>
     <label class="switch"><input type="checkbox" id="sh_ro"> Read only</label>
+    ${shareBinFields("sh", { recycle: true, recycle_days: 30 })}
     <p class="ui-help">Creating a share restarts Samba, so open SMB sessions drop briefly.</p>`;
   $("#mbody").innerHTML = stepper("sh_steps", [{ title: "Share and storage", html: shareWhat }, { title: "Access", html: shareAccess }],
     UI.button("Create share", "mkShare(this)", { kind: "pri", id: "sh_go", attrs: 'data-need="admin"' }));
@@ -1470,9 +1472,10 @@ window.mkShare = async button => {
   }
   const reusing = storage.kind === "existing";
   if (reusing && !storage.source) return toast("Choose the volume this share should use", "bad");
+  if (shareBinBody("sh").recycle_days === null) return toast(`Keep deleted files for 0 to ${SHARE_BIN_MAX_DAYS} days`, "bad");
   const body = { name, user: account, password: selected || $("#sh_pub").checked ? "" : $("#sh_pass").value,
     account_mode: selected ? "existing" : "new",
-    public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder,
+    public: $("#sh_pub").checked, read_only: $("#sh_ro").checked, sub_path: folder, ...shareBinBody("sh"),
     samba_ip: ($("#sh_smb_lb_ip")?.value || "").trim() };
   if ($("#sh_smb")?.dataset.unread) return toast($("#sh_smb").dataset.unread, "bad");
   if ($("#sh_smb") && !body.samba_ip) return toast("Choose the address Samba should answer on - add VIPs under Networking if the list is empty", "bad");
@@ -1488,6 +1491,70 @@ window.mkShare = async button => {
     toast(`Share "${name}" created`, "ok"); closeModal(); resetPaint(); viewShares();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create share"; } toast(e.message, "bad"); }
 };
+/* A share's recycle bin: files deleted over SMB wait in .deleted at the
+   share's root, for so many days or until emptied. */
+const SHARE_BIN_MAX_DAYS = 3650;
+const shareBinChip = s => (s.read_only || !s.recycle ? "" : UI.chip(s.recycle_days ? `bin ${s.recycle_days}d` : "bin", s.recycle_days ? "neutral" : "warn",
+  { size: "slim", tip: s.recycle_days ? `Files deleted over SMB wait in .deleted for ${s.recycle_days} days, then are removed`
+    : "Files deleted over SMB wait in .deleted until someone empties it, so they keep taking space. Edit the share to set how many days they are kept" }));
+function shareBinFields(prefix, s) {
+  const on = s.recycle !== false;
+  return UI.section("Recycle bin", `<label class="switch"><input type="checkbox" id="${prefix}_bin" ${on ? "checked" : ""} onchange="shareBinHint(${jsq(prefix)})">
+      Keep deleted files ${tip("Files deleted over SMB move to a hidden .deleted folder at the share's root instead of going at once, so a mistake can be undone. They take space there until they are removed. Apps that change files directly, not over SMB, are not affected.")}</label>
+    <div class="f ${on ? "" : "hidden"}" id="${prefix}_bin_keep"><label>Remove them after (days) ${tip("Counted from when each file was deleted. 0 keeps them until the bin is emptied by hand. Files already in the bin when a limit is first set go by their own modified date.")}</label>
+      <input type="number" id="${prefix}_bin_days" min="0" max="${SHARE_BIN_MAX_DAYS}" step="1" value="${esc(on ? (s.recycle_days ?? 30) : 30)}"></div>
+    ${prefix === "she" && !s.read_only ? `<div id="she_bin_size" class="dim small"><span class="spin2"></span> reading the recycle bin</div>
+    <div id="she_bin_off" class="hidden"></div>` : ""}`);
+}
+window.shareBinHint = prefix => {
+  const on = !!$(`#${prefix}_bin`)?.checked;
+  $(`#${prefix}_bin_keep`)?.classList.toggle("hidden", !on);
+  const off = $("#she_bin_off");
+  if (prefix !== "she" || !off) return;
+  const held = STATE.shareBin && STATE.shareBin.files;
+  off.classList.toggle("hidden", on || !held);
+  off.innerHTML = on || !held ? "" : `<div class="note warn">Turning the bin off stops new deletes going there. What it holds now stays: ${esc(shareBinHolds())}.
+    <label class="switch"><input type="checkbox" id="she_bin_empty"> Empty it when saving · deleted for good</label></div>`;
+};
+const shareBinHolds = () => {
+  const bin = STATE.shareBin || {};
+  return `${bin.gb ?? 0} GiB in ${plural(bin.files || 0, "file")}`;
+};
+async function shareBinLoad(name) {
+  STATE.shareBin = null;
+  if (!$("#she_bin_size")) return;
+  try {
+    const bin = await api(`/api/shares/recycle?name=${encodeURIComponent(name)}`);
+    STATE.shareBin = bin;
+    if (!$("#she_bin_size")) return;
+    $("#she_bin_size").innerHTML = bin.files
+      ? `The bin holds ${esc(shareBinHolds())} in <span class="mono">${esc(bin.folder)}</span>.
+         <button type="button" class="btn sm" data-need="admin" onclick="emptyShareBin(${jsq(name)},this)">Empty now</button>`
+      : "The bin is empty.";
+    shareBinHint("she");
+  } catch (e) {
+    if ($("#she_bin_size")) $("#she_bin_size").textContent = `Could not read the recycle bin: ${e.message}`;
+  }
+}
+window.emptyShareBin = async (name, button) => {
+  if (!(await ask(`Empty the recycle bin of "${name}"?\n\nEverything in it is deleted for good: ${shareBinHolds()}.`,
+    { title: "Empty recycle bin", ok: "Empty it", danger: true }))) return;
+  if (button) { button.disabled = true; button.textContent = "Emptying…"; }
+  try {
+    const result = await api("/api/shares/recycle/empty", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }) });
+    toast(result.detail, "ok");
+    shareBinLoad(name);
+  } catch (e) { if (button) { button.disabled = false; button.textContent = "Empty now"; } toast(e.message, "bad"); }
+};
+function shareBinBody(prefix) {
+  const recycle = !!$(`#${prefix}_bin`)?.checked;
+  const raw = $(`#${prefix}_bin_days`)?.value ?? "30";
+  const days = raw === "" ? 0 : Number(raw);
+  const valid = Number.isInteger(days) && days >= 0 && days <= SHARE_BIN_MAX_DAYS;
+  return { recycle, ...(recycle ? { recycle_days: valid ? days : null } : {}),
+    ...(prefix === "she" && !recycle && $("#she_bin_empty")?.checked ? { empty_recycle: true } : {}) };
+}
 const shareAccountSiblings = share => (STATE.data.shares || [])
   .filter(row => !row.public && row.user === share.user && row.name !== share.name)
   .map(row => row.name);
@@ -1517,8 +1584,10 @@ window.editShare = name => {
         <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}">
         ${shareAccountSiblings(s).length ? `<span class="dim xs">${esc(s.user)} is also used by ${esc(shareAccountSiblings(s).join(", "))}. Samba keeps one password per account, so a new one changes those too.</span>` : ""}</div></div>
     <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
+    ${shareBinFields("she", s)}
     ${UI.actions(`<button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+  shareBinLoad(s.name);
 };
 window.saveShareEdit = async (name, button) => {
   const original = (STATE.data.shares || []).find(row => row.name === name);
@@ -1530,11 +1599,15 @@ window.saveShareEdit = async (name, button) => {
     return toast(`Size must be at least ${original.size_gb || 1} GiB`, "bad");
   }
   if (!publicAccess && !original.has_password && !password) return toast("Set a password before enabling private access", "bad");
+  const bin = shareBinBody("she");
+  if (bin.recycle_days === null) return toast(`Keep deleted files for 0 to ${SHARE_BIN_MAX_DAYS} days`, "bad");
+  if (bin.empty_recycle && !(await ask(`Empty the recycle bin of "${name}" when saving?\n\nEverything in it is deleted for good: ${shareBinHolds()}.`,
+    { title: "Empty recycle bin", ok: "Empty and save", danger: true }))) return;
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
   try {
     const result = await api("/api/shares/edit", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, size_gb: size, user: $("#she_user")?.value.trim() || original.user || "lab",
-        password, public: publicAccess, read_only: $("#she_ro").checked }) });
+        password, public: publicAccess, read_only: $("#she_ro").checked, ...bin }) });
     toast(result.message || `share "${name}" updated`, "ok"); closeModal(); resetPaint(); viewShares();
   } catch (e) { if (button) { button.disabled = false; button.innerHTML = `${icon("edit")}Save changes`; } toast(e.message, "bad"); }
 };

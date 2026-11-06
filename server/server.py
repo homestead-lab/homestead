@@ -1035,7 +1035,7 @@ ADMIN_ROUTES = {
     "/api/import", "/api/import/preview", "/api/imports/delete", "/api/imports/cleanup-plan",
     "/api/vm-disks/import",
     "/api/shares", "/api/shares/edit", "/api/shares/delete", "/api/shares/options",
-    "/api/shares/nfs", "/api/self/nfs", "/api/addons/nfs/remove",
+    "/api/shares/nfs", "/api/self/nfs", "/api/addons/nfs/remove", "/api/shares/recycle", "/api/shares/recycle/empty",
     "/api/storage/classes/default", "/api/storage/classes/delete", "/api/storage/classes/cleanup",
     "/api/network/service/delete",
     "/api/images/cleanup", "/api/images/scan", "/api/images/forget-rollback", "/api/images/vm/delete",

@@ -15,6 +15,7 @@ import homestead_network_services as SVC
 import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
+import homestead_share_recycle as RECYCLE
 import homestead_shares as SHARES
 
 kget = ksend = build_deployment = None
@@ -502,7 +503,8 @@ def create_share(b):
         b["name"], b.get("size_gb", 10), b.get("user", "lab"),
         b.get("password"), b.get("public", False), b.get("read_only", False),
         b.get("pvc"), b.get("sub_path", ""), b.get("storage_class"),
-        access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"))
+        access, b.get("new_name", ""), str(b.get("samba_ip") or "").strip(), b.get("account_mode"),
+        b.get("recycle") is not False, b.get("recycle_days"))
     deployment = result.pop("deployment", None)
     if deployment:
         result["operation"] = _restart("deployment", f"Create share {b['name']}", "Restarting Samba with the new share")
@@ -518,13 +520,61 @@ def save_user(b):
 
 
 def edit_share(b):
+    emptied = None
+    if b.get("empty_recycle") is True and b.get("recycle") is False:
+        # Emptied in the Samba that is running now, before the change
+        # restarts it: what was asked for is gone when the share returns.
+        emptied = empty_recycle({"name": b["name"]})
     result = SHARES.edit_share(
         b["name"], b.get("size_gb"), b.get("user", "lab"),
-        b.get("password"), b.get("public", False), b.get("read_only", False))
+        b.get("password"), b.get("public", False), b.get("read_only", False),
+        None if b.get("recycle") is None else b.get("recycle") is not False, b.get("recycle_days"))
+    if emptied:
+        result["recycle_emptied"] = emptied["emptied"]
+        result["message"] = f"{result.get('message', '')}; {emptied['detail']}"
     deployment = result.pop("deployment", None)
     if deployment:
         result["operation"] = _restart("deployment", f"Update share {b['name']}", "Restarting Samba with updated access")
     return {"ok": True, **result}
+
+
+def _samba_pod():
+    """The running Samba pod, for a command in it; an error when there is none."""
+    pods = KUBE.get_optional(f"/api/v1/namespaces/{SMB_NAMESPACE}/pods?labelSelector=app%3D{SMB_NAME}",
+                             read=kget) or {}
+    for pod in pods.get("items") or []:
+        meta, status = pod.get("metadata") or {}, pod.get("status") or {}
+        ready = any(c.get("name") == SMB_NAME and c.get("ready") for c in status.get("containerStatuses") or [])
+        if status.get("phase") == "Running" and ready and not meta.get("deletionTimestamp"):
+            return meta["name"]
+    raise ValueError("the SMB server is not running, so its recycle bins cannot be read or emptied now")
+
+
+def _share_row(name):
+    row = next((item for item in SHARES.list_shares() if item.get("name") == name), None)
+    if not row:
+        raise ValueError("share not found")
+    return row
+
+
+def recycle_bin(name):
+    """What one share's recycle bin holds now."""
+    row = _share_row(name)
+    on, days = RECYCLE.setting(row)
+    return {"name": row["name"], "recycle": on, "recycle_days": days,
+            **RECYCLE.size(SMB_NAMESPACE, _samba_pod(), SMB_NAME, row)}
+
+
+def empty_recycle(b):
+    """Delete everything in one share's recycle bin, for good."""
+    row = _share_row(str(b.get("name") or ""))
+    if row.get("read_only"):
+        raise ValueError(f"{row['name']} is read only, so Samba cannot empty its recycle bin")
+    gone = RECYCLE.empty(SMB_NAMESPACE, _samba_pod(), SMB_NAME, row)
+    files = gone["files"]
+    return {"ok": True, "emptied": gone,
+            "detail": (f"emptied the recycle bin of {row['name']}: {gone['gb']:g} GiB in {files} file{'s' if files != 1 else ''}"
+                       if files else f"the recycle bin of {row['name']} was already empty")}
 
 
 def delete_share(b):
@@ -556,6 +606,8 @@ ROUTES = {
     ("POST", "/api/shares/users"): ("admin", lambda request: save_user(request.body)),
     ("POST", "/api/shares/edit"): ("admin", lambda request: edit_share(request.body)),
     ("POST", "/api/shares/delete"): ("admin", lambda request: delete_share(request.body)),
+    ("GET", "/api/shares/recycle"): ("admin", lambda request: recycle_bin((request.query.get("name") or [""])[0])),
+    ("POST", "/api/shares/recycle/empty"): ("admin", lambda request: empty_recycle(request.body)),
     ("POST", "/api/shares/nfs"): ("admin", lambda request: set_nfs_export(
         request.body.get("name", ""), str(request.body.get("clients") or "").strip(),
         request.body.get("read_only") is not False)),

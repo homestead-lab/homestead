@@ -118,6 +118,31 @@ saved settings are restored so a failed share cannot reappear on the next edit.
 The **Repair mapping** button reapplies the saved shares, and Homestead also
 checks for drift in the background.
 
+## Recycle bin
+
+Each share can keep files deleted over SMB in a hidden `.deleted` folder at its
+root, so a mistaken delete can be undone from there. Set it in a share's
+**Recycle bin** settings when making or editing it:
+
+- **Keep deleted files** turns the bin on or off. A read-only share has none,
+  as nothing can be deleted through it.
+- **Remove them after (days)** empties the bin of anything deleted longer ago
+  than that, checked every hour by a small container beside Samba. 0 keeps
+  deleted files until the bin is emptied by hand.
+
+New shares keep deleted files for 30 days. A share made before this setting
+existed keeps its bin with no limit, as it always had - the Samba image keeps
+a bin on every share and never empties it - so an old share can hold a lot of
+deleted files. The share list marks such a bin in amber; edit the share to see
+how much it holds, set a limit, or **Empty now**.
+
+Turning the bin off stops new deletes going there but leaves what it holds;
+the edit dialog says how much and offers to empty it when you save. Emptying
+deletes those files for good. The bin only sees deletes made over SMB: an app
+that deletes files on the volume directly, such as Sonarr or Radarr, is not
+affected. Files already in a bin when a limit is first set are removed by
+their own modified date, not the date they were deleted.
+
 ### Partial SMB service after a storage or node failure
 
 One SMB pod normally mounts every configured share. If a host holding the only
