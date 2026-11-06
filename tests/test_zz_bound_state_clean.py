@@ -108,7 +108,6 @@ UNRESTORED_FILES = frozenset({
     "test_api_keys",
     "test_autoupdate",
     "test_data_copies",
-    "test_env_secrets",
     "test_firewall",
     "test_fleet_writes",
     "test_host_bridge",
