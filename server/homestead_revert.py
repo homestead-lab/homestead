@@ -133,6 +133,9 @@ def plan(volume, snapshot):
     for user in users:
         if user["kind"] == "DaemonSet":
             blockers.append(f"{user['name']} is a DaemonSet, which cannot be stopped for this; remove its claim first")
+        if user.get("deletes_claims_on_scale_down"):
+            blockers.append(f"StatefulSet {user['name']} can delete its volumes when stopped; change its scale-down "
+                            "retention policy to Retain before rolling back")
         if is_self(ns, user["name"]):
             blockers.append("this is Homestead's own data: rolling it back would stop Homestead part-way")
     known = {user["name"] for user in users}
@@ -195,23 +198,58 @@ STOPPED = {"Deployment": {"replicas": 0}, "StatefulSet": {"replicas": 0}, "CronJ
            "VirtualMachine": {"runStrategy": "Halted", "running": None}}
 
 
-def _stop(ns, ref):
-    """Stop what is not stopped yet: "" once all are, else why one is not.
-    One Kubernetes no longer has (a 404) is gone, not stopped: it is never
-    started again. Any other failure is tried again on a later round."""
+def _stop(ns, ref, item):
+    """Stop what is not stopped yet: ("", "") once all are, else (why one is
+    not, tried again on a later round) or ("", why this must not go on).
+    A StatefulSet is read first, each try, and its stop is conditional on that
+    read: stopping one that has come to delete its claims would delete the one
+    being rolled back. That a stop went out is saved before it goes: its reply
+    can be lost, and _start_again then reads whether it landed. One Kubernetes
+    no longer has (a 404) is gone, not stopped: it is never started again."""
+    versions = {}
+    for c in ref["consumers"]:
+        if c.get("stopped") or c["kind"] != "StatefulSet":
+            continue
+        try:
+            obj = KUBE.get_optional(_path(ns, c), read=kget)
+        except Exception as error:
+            return f"{c['name']} could not be read ({_why(error)})", ""
+        if obj is None:
+            c.update(gone=True, stopped=True)
+            continue
+        meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
+        if c.get("uid") and meta.get("uid") != c["uid"]:
+            return "", f"{c['name']} was replaced by another object since this rollback was reviewed, and was not stopped"
+        if spec.get("replicas") == 0:
+            if c.get("replicas") and not c.get("sent"):
+                return "", f"{c['name']} was stopped by something else since this rollback was reviewed, and was left as it is"
+            c["stopped"] = True                 # a stop whose reply was lost, or stopped already
+            continue
+        if (spec.get("persistentVolumeClaimRetentionPolicy") or {}).get("whenScaled", "Retain") != "Retain":
+            return "", (f"{c['name']} now deletes its volumes when stopped, so it was not stopped; change its "
+                        "scale-down retention policy (whenScaled) to Retain, then roll back again")
+        versions[c["name"]] = meta.get("resourceVersion")
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
+        body = {"spec": STOPPED[c["kind"]]}
+        if c["name"] in versions:
+            body["metadata"] = {"resourceVersion": versions[c["name"]]}
+        if not c.get("sent"):
+            c["sent"] = True
+            OPS.checkpoint(item)
         try:
-            ksend("PATCH", _path(ns, c), {"spec": STOPPED[c["kind"]]}, ctype="application/merge-patch+json")
+            ksend("PATCH", _path(ns, c), body, ctype="application/merge-patch+json")
         except urllib.error.HTTPError as error:
+            if error.code == 409:
+                return f"{c['name']} changed as it was being stopped; looking at it again", ""
             if error.code != 404:
-                return f"{c['name']} could not be stopped ({_why(error)})"
+                return f"{c['name']} could not be stopped ({_why(error)})", ""
             c["gone"] = True
         except Exception as error:
-            return f"{c['name']} could not be stopped ({_why(error)})"
+            return f"{c['name']} could not be stopped ({_why(error)})", ""
         c["stopped"] = True
-    return ""
+    return "", ""
 
 
 def _phase(ref, phase):
@@ -386,6 +424,16 @@ def _claim_doubt(ns, ref, rolled_back):
     return ""
 
 
+def _claim_going(ns, ref):
+    if not ns or not ref.get("claim"):
+        return False
+    try:
+        pvc = KUBE.get_optional(_claim_path(ns, ref["claim"]), read=kget)
+    except Exception:
+        return False
+    return pvc is None or bool((pvc.get("metadata") or {}).get("deletionTimestamp"))
+
+
 OWNERS = ("/apis/apps/v1/namespaces/{ns}/replicasets", "/apis/batch/v1/namespaces/{ns}/jobs",
           "/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances")
 
@@ -427,7 +475,7 @@ def _start_again(ns, ref, rolled_back=True):
     stopped; empty once everything that can start has been asked to. Never raises."""
     left = {}
     consumers = ref.get("consumers") or []
-    todo = [c for c in consumers if c.get("stopped") and not c.get("gone") and not c.get("started")]
+    todo = [c for c in consumers if (c.get("stopped") or c.get("sent")) and not c.get("gone") and not c.get("started")]
     if not todo or not ns:
         return left
     doubt = _claim_doubt(ns, ref, rolled_back)
@@ -543,15 +591,18 @@ def _put_back(ref, why, stuck="", final=False):
 
 def _put_back_end(ref, left):
     why, stuck = ref["put_back"]["why"], ref["put_back"]["stuck"]
-    started = (_left(ref, left) if left else "everything that was running is starting again") + _gone(ref)
+    stopped = any((c.get("stopped") or c.get("sent")) and not c.get("gone") for c in ref.get("consumers") or [])
+    started = ("; " + _left(ref, left) if left else "; everything that was running is starting again" if stopped else "") + _gone(ref)
     if ref.get("reverting"):
         changed = (f"Longhorn may have rolled it back before failing: the state before is kept as snapshot "
                    f"{ref.get('kept', '')}, to roll back to if needed")
     elif ref.get("kept"):
         changed = f"Nothing was rolled back; the state it is in is also kept as snapshot {ref['kept']}"
+    elif stopped:
+        changed = "The volume was not changed"
     else:
         changed = "Nothing was changed"
-    return "failed", 100, f"{why}. {changed}; {started}{_held(ref, stuck)}"
+    return "failed", 100, f"{why}. {changed}{started}{_held(ref, stuck)}"
 
 
 def _attach(ref, volume):
@@ -615,7 +666,9 @@ def resolve(item):
             return "running", 95, f"Putting things back; {next(iter(left.values()))}"
         return _put_back_end(ref, left)
     if phase == "stopping":
-        unstopped = _stop(ns, ref) if ns else ""
+        unstopped, refused = _stop(ns, ref, item) if ns else ("", "")
+        if refused:
+            return _put_back(ref, refused)
         if unstopped:
             if _late(ref):
                 return _put_back(ref, unstopped)
@@ -678,6 +731,8 @@ def resolve(item):
                             return "running", 40, f"Longhorn's API did not answer ({_why(error)}); trying again"
                         return _put_back(ref, f"Longhorn's API did not keep the present state of {volume}: {_why(error)}")
                 ref["kept"] = keep
+        if _claim_going(ns, ref):                       # the last moment to look: a policy flip can take the claim
+            return _put_back(ref, f"the claim {ref['claim']} is gone or being removed, so {volume} was not rolled back")
         ref.update(reverting=True, revert_sent=True)
         OPS.checkpoint(item)                            # saved before it goes out
         try:

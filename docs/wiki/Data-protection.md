@@ -425,6 +425,10 @@ changed and everything starts again, except an app whose own pod is still
 on the volume: that one is left stopped, named in the job. Homestead's own data cannot be rolled
 back from Homestead, as that would stop it part-way.
 
+A StatefulSet whose `persistentVolumeClaimRetentionPolicy` has `whenScaled:
+Delete` can't be rolled back until that is `Retain`: stopping it would delete
+the claim being rolled back.
+
 Something that uses the volume and is already gone when the rollback stops
 it (Flux or Helm removed it) is left gone, and the rollback carries on with
 the rest. Before Homestead starts an app again it checks that the app is the
