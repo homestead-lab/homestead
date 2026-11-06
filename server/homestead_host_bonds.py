@@ -45,6 +45,7 @@ import homestead_hostrun as HOSTRUN
 import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_pod_exec as POD_EXEC
 import homestead_routes as ROUTER
 
 hostrun = kget = ksend = None
@@ -513,6 +514,10 @@ def start(node, req, ops, busy=None, servers_ready=None):
     lease = hostrun.hold(node, what, seconds=HOLD_SECONDS)
     try:
         out, err = hostrun.run(node, change_script(p["spec"], stamp), timeout=120, change=what, holder=lease)
+    except POD_EXEC.ExecTimeout as error:
+        ref = _unconfirmed_ref(node, what, lease, error)
+        return {**ops.start(KIND, what, {"kind": "Node", "name": node}, f"/nodes?node={node}&section=network", ref,
+                            _unconfirmed(ref)), "unconfirmed": True}
     except Exception:
         hostrun.let_go(node, lease)
         raise
@@ -527,6 +532,35 @@ def start(node, req, ops, busy=None, servers_ready=None):
            "change": what, "lease": lease}
     return ops.start(KIND, what, {"kind": "Node", "name": node}, f"/nodes?node={node}&section=network", ref,
                      f"Applied; checking {node} - it puts its old network back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
+
+
+# A change script still running at its limit (homestead_pod_exec.ExecTimeout)
+# may have changed the network part-way: its job keeps the host held and
+# needs attention until a person cancels it, renewing the hold this often.
+RENEW_UNCONFIRMED = 60
+
+
+def _unconfirmed(ref):
+    node = ref["node"]
+    return (f"{ref['change']} needs attention: the script on {node} did not finish within {ref['timeout']:g} seconds, "
+            f"so Homestead cannot tell whether it changed {node}'s network. {node} stays held, so no other change "
+            f"starts there. Check its network (if the change got as far as arming its rollback, {node} puts its "
+            f"old network back by itself within {ROLLBACK_SECONDS // 60} minutes), then cancel this job to let go of {node}")
+
+
+def _unconfirmed_ref(node, what, lease, error):
+    return {"node": node, "stage": "unconfirmed", "since": time.time(), "renewed": time.time(),
+            "change": what, "lease": lease, "timeout": error.timeout or 0}
+
+
+def _still_unconfirmed(ref, now):
+    if now - ref.get("renewed", 0) >= RENEW_UNCONFIRMED:
+        try:
+            hostrun.hold(ref["node"], ref["change"], seconds=HOLD_SECONDS, holder=ref.get("lease", ""))
+            ref["renewed"] = now
+        except Exception:
+            pass    # asked again next round; the message stays the same
+    return "running", 20, _unconfirmed(ref)
 
 
 def _node_count():
@@ -651,6 +685,8 @@ def kubelet_back(read, node, ref):
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
+    if ref["stage"] == "unconfirmed":
+        return _still_unconfirmed(ref, now)
     if ref["stage"] == "applied":
         if elapsed < 15:
             return "running", 20, f"Applying on {node}"
@@ -709,8 +745,11 @@ def _step(item, now=None):
             pass
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
         if service and _node_count() > 1:
-            hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                        **_held(ref))
+            try:
+                hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                            **_held(ref))
+            except POD_EXEC.ExecTimeout:
+                pass    # it may have been scheduled: never twice; the Ready check below follows
             ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
             return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
         ref.update(stage="done")
@@ -858,6 +897,8 @@ def change(body):
     with network_change(node, f"Bond change on {node}") as (busy, servers):
         op = start(node, body, OPS, busy, servers)
     ROUTER.forget("ports", "network")
+    if op.get("unconfirmed"):
+        return {"ok": False, "operation": op, "detail": f"{node}'s network change needs attention; see its job under Jobs"}
     return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it under Jobs"}
 
 
@@ -873,6 +914,12 @@ def cancel_plan(item):
     """Stopping tracking it also lets go of the host, so other changes there
     need not wait for the hold to run out (#597)."""
     node = item["ref"]["node"]
+    if item["ref"].get("stage") == "unconfirmed":
+        # Its script ran past its limit and its helper was removed: how far it
+        # got, and whether a rollback was armed, is not known.
+        return {"mode": "forget", "needs": "admin",
+                "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
+                          f"Other changes on {node} can start again at once"]}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The change carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}

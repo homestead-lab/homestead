@@ -17,6 +17,7 @@ import urllib.error
 import homestead_kube as KUBE
 import homestead_csi_restore as CSI
 import homestead_files as FILES
+import homestead_pod_exec as POD_EXEC
 import homestead_pod_resources as RESOURCES
 
 PREFIX = "homestead-snapshot-files-"
@@ -550,7 +551,10 @@ def read(namespace, name, action, path="", offset=0):
     if action not in ("list", "stat", "chunk") or not isinstance(offset, int) or offset < 0:
         raise ValueError("Read-only operation required")
     relative = _relative(path)
-    out, err = FILES._exec(namespace, name, ["python3", "-c", READER, "/data", action, relative, str(offset)])
+    answer = POD_EXEC.run(namespace, name, ["python3", "-c", READER, "/data", action, relative, str(offset)])
+    out, err = answer
+    if getattr(answer, "cut", False):
+        raise ValueError("The snapshot's answer for that path is larger than Homestead reads at once (4 MiB)")
     if err or not out:
         raise ValueError("Cannot read that path; symbolic links and special files are not browsable")
     value = json.loads(out)

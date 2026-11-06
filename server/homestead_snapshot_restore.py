@@ -15,6 +15,7 @@ import threading
 import time
 
 import homestead_files as FILES
+import homestead_pod_exec as POD_EXEC
 import homestead_routes as ROUTER
 import homestead_snapshot_files as SNAP
 
@@ -66,8 +67,11 @@ def _request(body):
 
 def _walk(namespace, session, folder, names):
     """Every entry under the chosen ones in the snapshot, links not followed."""
-    out, err = FILES._exec(namespace, session, ["python3", "-c", SNAP.READER, "/data", "walk", folder, json.dumps(names)],
-                           timeout=120)
+    answer = POD_EXEC.run(namespace, session, ["python3", "-c", SNAP.READER, "/data", "walk", folder, json.dumps(names)],
+                          timeout=120)
+    out, err = answer
+    if getattr(answer, "cut", False):
+        raise ValueError("the list of what to restore is larger than Homestead reads at once (4 MiB); choose fewer entries")
     if err or not out:
         raise ValueError("the snapshot could not be read there: " + (err or "no answer")[:200])
     value = json.loads(out)

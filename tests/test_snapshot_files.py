@@ -171,14 +171,14 @@ class BrowserTests(unittest.TestCase):
         pod = self.objects[self.paths[3]]
         self.assertFalse(pod['spec']['automountServiceAccountToken'])
         pod['spec']['volumes'][0]['persistentVolumeClaim']['readOnly'] = False
-        with patch.object(S.FILES, '_exec') as execute:
+        with patch.object(S.POD_EXEC, 'run') as execute:
             with self.assertRaisesRegex(ValueError, 'mount'):
                 S.read('lab', self.name, 'list')
             execute.assert_not_called()
 
     def test_reader_rejects_traversal_and_write_before_exec(self):
         self.start(); self.clone()
-        with patch.object(S.FILES, '_exec') as execute:
+        with patch.object(S.POD_EXEC, 'run') as execute:
             for path in ('../secret', 'a/../b', 'a//b', 'a\x00b'):
                 with self.assertRaises(ValueError):
                     S.read('lab', self.name, 'stat', path)
@@ -188,7 +188,7 @@ class BrowserTests(unittest.TestCase):
 
     def test_download_decodes_one_bounded_chunk(self):
         self.start(); self.clone()
-        with patch.object(S.FILES, '_exec', return_value=(json.dumps({'size': 10, 'data': base64.b64encode(b'contents').decode()}), '')) as execute:
+        with patch.object(S.POD_EXEC, 'run', return_value=(json.dumps({'size': 10, 'data': base64.b64encode(b'contents').decode()}), '')) as execute:
             self.assertEqual(b'contents', S.read('lab', self.name, 'chunk', 'config/file', 2)['data'])
             self.assertEqual(['/data', 'chunk', 'config/file', '2'], execute.call_args.args[2][-4:])
 

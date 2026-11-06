@@ -716,7 +716,7 @@ LHV2_SETUP.bind(kget, ksend, STORAGE_CLASSES.v2_engine_status, OPS, DEFAULT_NS)
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
-HOSTRUN.bind(kget, ksend, lambda *a, **k: FILES._exec(*a, **k), DEFAULT_NS)
+HOSTRUN.bind(kget, ksend, lambda *a, **k: HOSTRUN.POD_EXEC.run(*a, **k), DEFAULT_NS)
 import homestead_host_console as HOST_CONSOLE
 HOST_CONSOLE.bind(kget, HOSTRUN, OPS, HOMESTEAD_VERSION, DATA_DIR)
 HOST_CONSOLE.platform = lambda: PLATFORM.detect()
