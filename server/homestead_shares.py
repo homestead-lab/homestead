@@ -9,6 +9,7 @@ import homestead_specs as SPECS
 import base64
 import homestead_kube as KUBE
 import homestead_names as NAMES
+import homestead_share_recycle as RECYCLE
 import homestead_smb_recovery as RECOVERY
 import homestead_storage_resize as RESIZE
 import copy
@@ -250,6 +251,7 @@ def _public(row, credentials, pvc=None):
         clean["pvc_status"] = (pvc.get("status") or {}).get("phase", "")
     clean["has_password"] = bool((credentials.get(row.get("name")) or {}).get("password"))
     clean["read_only"] = bool(clean.get("read_only", False))
+    clean["recycle"], clean["recycle_days"] = RECYCLE.setting(row)
     return clean
 
 
@@ -616,7 +618,7 @@ def configured_deployment(deployment, rows, credentials):
     # The image's -p recursively chowns/chmods all shares, including appdata.
     # Shared-group preparation only changes writable mount roots.
     args = []
-    attached, paths = {}, set()
+    attached, paths, share_mounts = {}, set(), {}
     for row in sorted(rows, key=lambda item: item["name"]):
         if not row.get("pvc") or row["pvc"] in suspended:
             continue
@@ -642,6 +644,11 @@ def configured_deployment(deployment, rows, credentials):
         # "valid users", which shut guests out of a share marked for them.
         args += ["-s", f"{row['name']};{path};yes;{'yes' if readonly else 'no'};"
                        f"{'yes' if row.get('public') else 'no'};{'all' if row.get('public') else _user(row.get('user'))}"]
+        args += RECYCLE.share_args(row)
+        share_mounts[row["name"]] = mount
+    # The image's own recycle bin is on every share and never emptied: off,
+    # first, and each share given its own as its settings say.
+    args = ["-r"] + args
     for user, password in sorted(users.items()):
         args += ["-u", f"{user};{password}"]
     args += ["-g", "server min protocol = SMB2",
@@ -658,6 +665,7 @@ def configured_deployment(deployment, rows, credentials):
     else:
         spec.pop("initContainers", None)
     container["args"], container["volumeMounts"], spec["volumes"] = args, mounts, volumes
+    RECYCLE.place_cleaner(spec, container.get("name"), rows, share_mounts)
     return deployment
 
 
@@ -771,10 +779,12 @@ def _clear_cache():
 
 @serialized
 def create_share(name, size_gb, user, password, public, read_only=False,
-                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip="", account_mode=None):
+                 pvc=None, sub_path="", storage_class=None, access_mode=None, new_name="", samba_ip="", account_mode=None,
+                 recycle=True, recycle_days=None):
     """Create a share on a new Longhorn claim, or on a folder of an existing one.
     pvc names a claim that exists; new_name the one to create, if not share-<name>."""
     name, user, sub_path = _name(name), _user(user), _sub_path(sub_path)
+    recycle_days = RECYCLE.days_value(recycle_days)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
         raise ValueError("share already exists; use Edit to change it")
@@ -822,7 +832,7 @@ def create_share(name, size_gb, user, password, public, read_only=False,
     row = {"name": name, "pvc": pvc_name, "path": f"/shares/{name}",
            "sub_path": sub_path, "owned": not reuse,
            "size_gb": size_gb, "user": user, "public": bool(public),
-           "read_only": bool(read_only),
+           "read_only": bool(read_only), "recycle": recycle is not False, "recycle_days": recycle_days,
            "created": time.strftime("%Y-%m-%d %H:%M")}
     rows.append(row)
     if not public:
@@ -851,7 +861,8 @@ def create_share(name, size_gb, user, password, public, read_only=False,
 
 
 @serialized
-def edit_share(name, size_gb, user, password, public, read_only=False):
+def edit_share(name, size_gb, user, password, public, read_only=False, recycle=None, recycle_days=None):
+    """recycle and recycle_days left as None keep the share's recycle bin as it is."""
     name, user = _name(name), _user(user)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     row = next((item for item in rows if item.get("name") == name), None)
@@ -870,9 +881,14 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
         if not old_size or size_gb > old_size:
             RESIZE.require(pvc, kget)
     previous = (bool(row.get("public")), str(row.get("user") or "lab"),
-                bool(row.get("read_only", False)))
+                bool(row.get("read_only", False)), RECYCLE.setting(row))
+    bin_on, bin_days = RECYCLE.setting(row)
+    if recycle is not None:
+        bin_on = bool(recycle)
+    if recycle_days is not None:
+        bin_days = RECYCLE.days_value(recycle_days)
     row.update(size_gb=size_gb, user=user, public=bool(public),
-               read_only=bool(read_only))
+               read_only=bool(read_only), recycle=bin_on, recycle_days=bin_days)
     password_changed = bool(password)
     if public:
         password_changed = password_changed or name in credentials
@@ -884,7 +900,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
         if not existing:
             raise ValueError(f"{user} has no password yet; set one to keep this share private")
         _set_account_password(credentials, rows, user, existing)
-    access_changed = previous != (bool(public), user, bool(read_only)) or password_changed
+    access_changed = previous != (bool(public), user, bool(read_only), (bin_on, bin_days)) or password_changed
     _validate_access(rows, credentials)
     if owned and (not old_size or size_gb > old_size):
         pvc["spec"]["resources"]["requests"]["storage"] = f"{size_gb}Gi"

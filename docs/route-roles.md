@@ -578,6 +578,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/shares/nfs/server` | viewer |  | homestead_share_servers |
 | GET | `/api/shares/options` | admin |  | homestead_share_servers |
 | POST | `/api/shares/options` | admin |  | homestead_route_policy |
+| GET | `/api/shares/recycle` | admin |  | homestead_share_servers |
+| POST | `/api/shares/recycle/empty` | admin |  | homestead_share_servers |
 | GET | `/api/shares/repair` | admin |  | homestead_route_policy |
 | POST | `/api/shares/repair` | admin |  | homestead_share_servers |
 | GET | `/api/shares/server` | viewer |  | homestead_share_servers |
