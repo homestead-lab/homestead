@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import secrets
+import time
 
 import homestead_capacity_review as REVIEW
 import homestead_hostrun as HOST
@@ -135,6 +136,26 @@ CORDONED_BY = 'homestead.io/cordoned-by'
 _MARK = '/metadata/annotations/' + CORDONED_BY.replace('/', '~1')
 
 
+# A host that has staged its RAM release can only move on after a restart: its worker
+# says "complete" only once the boot differs (homestead_v2_memory_worker.inspect), and
+# Kubernetes shows that boot here. So it is not asked again each round, for days,
+# under the jobs lock, only now and then in case its receipt was changed by hand, and
+# whenever a person presses Recheck (recheck).
+INSPECT_EVERY = 600
+_clock = time.time   # a seam for the tests
+
+
+def _restart_awaited(row, boot):
+    return (row.get('phase') == 'restart-required' and row.get('boot') == boot
+            and _clock() - row.get('inspected_at', 0) < INSPECT_EVERY)
+
+
+def _inspect(row):
+    memory = host(row)
+    row['inspected_at'] = _clock()
+    return memory
+
+
 def progress(item):
     if item.get('status') == 'failed': return 'failed', item.get('progress', 0), item.get('message', '')
     ref = item['ref']
@@ -230,8 +251,9 @@ def _end_refused(item):
         if obj is None:
             row.update(phase='complete', cordoned=False, left='no longer in the cluster; nothing to release')
             continue
+        if _restart_awaited(row, obj.get('status', {}).get('nodeInfo', {}).get('bootID')): continue
         try:
-            memory = host(row)
+            memory = _inspect(row)
         except (ValueError, OSError) as error:
             notes.append(row['node'] + ': ' + str(error)[:200]); continue   # no receipt: it stays staged
         if memory['phase'] != 'complete' or _released(obj, memory):
@@ -286,7 +308,9 @@ def _progress(item, setting, nodes, pods, active):
         if not node or node['uid'] != row['uid']: raise Refusal('Host identity changed; memory is retained')
         if not node['ready']:
             waiting = True; continue
-        memory = host(row)
+        if _restart_awaited(row, node['boot']):
+            waiting = True; continue
+        memory = _inspect(row)
         if memory['phase'] == 'complete':
             observed = next(n for n in nodes if n['metadata']['name'] == row['node'])
             capacity = RESOURCES.quantity(observed.get('status', {}).get('capacity', {}).get('hugepages-2Mi'), 'storage')
@@ -343,6 +367,8 @@ def recheck(identity):
     with SETUP.ops.transaction():
         item = next((i for i in SETUP.ops.stored() if i.get('id') == identity and i.get('kind') == KIND), None)
         if not item: raise ValueError('V2 cleanup job not found')
+        # A person asked, and may just have changed something on a host: ask them all.
+        for row in item['ref'].get('nodes', ()): row.pop('inspected_at', None)
         state, percent, message = progress(item)
         if state in homestead_routes.ENDED:
             homestead_routes.forget('lhv2')
