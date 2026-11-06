@@ -12,11 +12,10 @@ things around it:
   repository, node preparation, system services and then each node in turn,
   and each step is shown as it lands.
 """
-import json
 import re
 import time
-import urllib.request
 import homestead_cluster as CLUSTER
+import homestead_fetch as FETCH
 import homestead_components as COMPONENTS
 import homestead_kube as KUBE
 import homestead_operations as OPS
@@ -27,6 +26,8 @@ HNS = "harvester-system"
 API = "/apis/harvesterhci.io/v1beta1"
 RELEASES_URL = "https://api.github.com/repos/harvester/harvester/releases?per_page=40"
 RELEASE_TTL = 3600
+RELEASES_MAX_BYTES = 5 << 20   # 40 releases were 1.0 MB in Nov 2026
+RELEASES_DEADLINE = 30         # the alerts loop waits for this
 _releases = {"at": 0.0, "value": [], "error": ""}
 STEPS = [("ImageReady", "Upgrade image"), ("RepoReady", "Package repository"),
          ("NodesPrepared", "Nodes prepared"), ("SystemServicesUpgraded", "System services"),
@@ -41,10 +42,9 @@ def bind(_kget, _fetch=None):
 
 
 def _github(url):
-    request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
-                                                   "User-Agent": "homestead"})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return FETCH.get_json(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "homestead"},
+                          limit=RELEASES_MAX_BYTES, seconds=RELEASES_DEADLINE, timeout=10,
+                          what="Harvester's release list")
 
 
 def version_key(tag):

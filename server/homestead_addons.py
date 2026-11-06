@@ -20,9 +20,9 @@ import re
 import tarfile
 import time
 import calendar
-import urllib.request
 import urllib.error
 
+import homestead_fetch as FETCH
 import homestead_names as NAMES
 import homestead_routes
 import homestead_multus as MULTUS
@@ -55,10 +55,15 @@ NAD_API = "/apis/k8s.cni.cncf.io/v1"
 KUBEVIRT_CR = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
 
 
+# Release manifests and chart indexes (the rke2-charts index was 1.7 MB in Nov 2026).
+FETCH_MAX_BYTES = 8 << 20
+FETCH_DEADLINE = 60
+
+
 def _fetch(url):
-    request = urllib.request.Request(url, headers={"User-Agent": "Homestead"})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return response.read().decode("utf-8"), response.geturl()
+    answer = FETCH.get(url, headers={"User-Agent": "Homestead"}, limit=FETCH_MAX_BYTES, seconds=FETCH_DEADLINE,
+                       timeout=30, what=f"the download from {url.split('/')[2]}")
+    return answer.body.decode("utf-8"), answer.url
 
 
 def bind(_kget, _ksend, _platform, _probes, _fetch_fn=None):

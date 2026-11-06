@@ -209,6 +209,63 @@ class KeyRefreshTests(unittest.TestCase):
             cfaccess._key("k1")
         self.assertEqual(2, fetch.calls)
 
+    def test_a_fetch_that_never_ends_does_not_block_the_next_refresh(self):
+        stuck = self.use(FakeFetch(hold=True, fail=True))
+        self.keys({"k1": OLD}, fetched_ago=cfaccess.CERT_TTL + 1)
+        self.assertEqual(OLD, cfaccess._key("k1"))
+        self.assertTrue(stuck.started.wait(2))
+        stuck_run = cfaccess._fetching
+        fresh = FakeFetch({"k1": NEW, "k2": NEW})
+        self.fakes.append(fresh)
+        cfaccess._fetch_keys = fresh
+        self.clock.at += cfaccess.RETRY_AFTER + 1
+        self.assertEqual(NEW, cfaccess._key("k2"), "a new fetch starts beside the one that is stuck")
+        self.assertEqual(1, fresh.calls)
+        self.settle()
+        self.assertEqual(NEW, cfaccess._key("k1"))
+        stuck.release.set()
+        self.assertTrue(stuck_run.wait(5), "the stuck fetch ends in the end")
+        self.assertEqual(NEW, cfaccess._key("k1"), "and its failure changes nothing")
+        self.assertIsNone(cfaccess._fetching)
+
+    def test_a_stuck_fetch_ending_late_does_not_clear_the_one_running_now(self):
+        stuck = self.use(FakeFetch(hold=True, fail=True))
+        self.keys({"k1": OLD}, fetched_ago=cfaccess.CERT_TTL + 1)
+        cfaccess._key("k1")
+        self.assertTrue(stuck.started.wait(2))
+        stuck_run = cfaccess._fetching
+        later = FakeFetch({"k1": NEW}, hold=True)
+        self.fakes.append(later)
+        cfaccess._fetch_keys = later
+        self.clock.at += cfaccess.RETRY_AFTER + 1
+        cfaccess._key("k1")
+        self.assertTrue(later.started.wait(2))
+        running = cfaccess._fetching
+        stuck.release.set()
+        self.assertTrue(stuck_run.wait(5))
+        self.assertIs(running, cfaccess._fetching, "the newer fetch is still the one running")
+        self.assertEqual(1, later.calls)
+        cfaccess._key("k1")
+        self.assertEqual(1, later.calls, "no third fetch while the newer one runs")
+        later.release.set()
+        self.settle()
+
+    def test_a_given_up_fetch_that_succeeds_late_does_not_replace_newer_keys(self):
+        stuck = self.use(FakeFetch({"k1": OLD}, hold=True))
+        self.keys({"k1": OLD}, fetched_ago=cfaccess.CERT_TTL + 1)
+        cfaccess._key("k1")
+        self.assertTrue(stuck.started.wait(2))
+        stuck_run = cfaccess._fetching
+        newer = FakeFetch({"k1": NEW, "k2": NEW})
+        self.fakes.append(newer)
+        cfaccess._fetch_keys = newer
+        self.clock.at += cfaccess.RETRY_AFTER + 1
+        self.assertEqual(NEW, cfaccess._key("k2"))
+        self.settle()
+        stuck.release.set()
+        self.assertTrue(stuck_run.wait(5))
+        self.assertEqual({"k1": NEW, "k2": NEW}, cfaccess._certs["keys"], "the older answer is dropped")
+
 
 if __name__ == "__main__":
     unittest.main()

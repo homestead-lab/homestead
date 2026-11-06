@@ -29,8 +29,8 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 
+import homestead_fetch as FETCH
 import homestead_names as NAMES
 
 kget = ksend = None
@@ -562,15 +562,25 @@ def save_unifi(cfg):
     return update(change)
 
 
+UNIFI_MAX_BYTES = 16 << 20   # per call: the classic API's user list is not paged
+UNIFI_DEADLINE = 30
+UNIFI_PAGES = 100             # per list, at 200 rows a page
+
+
+class _TooManyPages(ValueError):
+    """The console answered, but its paging would not end."""
+
+
 def _unifi_get(url, key, verify):
     context = ssl.create_default_context()
     if not verify:
         # Consoles ship a self-signed certificate; the address was typed by an admin.
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-    request = urllib.request.Request(url, headers={"X-API-KEY": key, "Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=15, context=context) as response:
-        return json.loads(response.read().decode("utf-8") or "{}")
+    # The key goes only to the console: FETCH.get drops it on a redirect to another host.
+    text = FETCH.get_text(url, headers={"X-API-KEY": key, "Accept": "application/json"}, context=context,
+                          limit=UNIFI_MAX_BYTES, seconds=UNIFI_DEADLINE, timeout=15, what="the UniFi console's answer")
+    return json.loads(text or "{}")
 
 
 def unifi_fetch(cfg, key, get=None):
@@ -586,13 +596,14 @@ def unifi_fetch(cfg, key, get=None):
 
     def pages(path):
         rows, offset = [], 0
-        while True:
+        for _ in range(UNIFI_PAGES):
             page = get(f"{api}/sites/{site['id']}/{path}?offset={offset}&limit=200")
             batch = page.get("data") or []
             rows.extend(batch)
             offset += len(batch)
             if not batch or offset >= int(page.get("totalCount") or 0):
                 return rows
+        raise _TooManyPages(f"the controller listed more than {UNIFI_PAGES} pages of {path}; stopped there")
 
     clients, devices = pages("clients"), pages("devices")
     reservations, networks, notes, known = [], [], [], {}
@@ -727,6 +738,9 @@ def sync_unifi(get=None):
                    else f"the console answered {error.code}")
         _record_sync(False, message)
         raise ValueError(message)
+    except _TooManyPages as error:
+        _record_sync(False, str(error)[:160])
+        raise ValueError(str(error)[:160])
     except (OSError, ValueError) as error:
         _record_sync(False, str(error)[:160])
         raise ValueError(f"could not reach the UniFi console: {str(error)[:120]}")
