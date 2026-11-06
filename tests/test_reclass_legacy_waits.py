@@ -387,7 +387,7 @@ class LegacyMoveTests(unittest.TestCase):
         job = self.look(ident)
         self.assertEqual(2, self.replicas())
         self.assertEqual("failed", job["status"])
-        self.assertIn("could not be removed", job["message"])
+        self.assertIn("could not be confirmed removed", job["message"])
         self.assertNotIn("was removed", job["message"])
         self.assertTrue(self.kube.object(TEMP))
 
@@ -398,7 +398,7 @@ class LegacyMoveTests(unittest.TestCase):
         self.kube.fail(TEMP, 403, times=99, method="DELETE")
         out = OPS.cancel(ident)
         self.assertEqual(2, self.replicas())
-        self.assertIn("could not be removed", out["detail"])
+        self.assertIn("could not be confirmed removed", out["detail"])
 
     def crash_after(self, method, fragment):
         real = K.ksend
@@ -1013,6 +1013,89 @@ class LegacyMoveTests(unittest.TestCase):
         self.assertIn("app at 2 replicas", undo)
         self.assertNotIn("nightly", undo)
         self.assertNotIn("vm1", undo)
+
+
+    # ---- what was off at the review, and on since ------------------------------------
+
+    def test_cancel_leaves_a_vm_off_at_the_review_and_started_since_running(self):
+        self.wired()
+        self.kube.add(self.vm("Always"))
+        ident = self.start("stop", review_fences={"x": "y"},
+                           consumers=REVIEWED + [{"kind": "VirtualMachine", "name": "vm1", "run_strategy": "Halted"}])
+        self.lost_review(ident)
+        OPS.cancel(ident)
+        self.assertEqual(2, self.replicas())
+        self.assertEqual("Always", self.kube.object(VM)["spec"]["runStrategy"], "the review never said it would stop this")
+
+    def test_cancel_leaves_a_deployment_at_zero_at_the_review_and_scaled_since_alone(self):
+        self.wired()
+        self.kube("PATCH", APP, {"spec": {"replicas": 3}}, ctype="application/merge-patch+json")
+        ident = self.start("stopping", consumers=[{"kind": "Deployment", "name": "app", "replicas": 0}])
+        OPS.cancel(ident)
+        self.assertEqual(3, self.replicas())
+
+    def test_cancel_leaves_a_cronjob_suspended_at_the_review_and_resumed_since_alone(self):
+        self.wired()
+        self.kube.add(self.cron(False))
+        ident = self.start("stopping", consumers=[{"kind": "CronJob", "name": "nightly", "suspend": True}])
+        OPS.cancel(ident)
+        self.assertFalse(self.kube.object("/apis/batch/v1/namespaces/lab/cronjobs/nightly")["spec"]["suspend"])
+
+    def test_what_this_move_stopped_itself_goes_back_as_reviewed(self):
+        self.wired()
+        self.kube.add(self.vm("Always"))
+        ident = self.start("stopping", consumers=[{"kind": "VirtualMachine", "name": "vm1", "run_strategy": "Halted", "stopped": True}])
+        OPS.cancel(ident)
+        self.assertEqual("Halted", self.kube.object(VM)["spec"]["runStrategy"])
+
+    # ---- deletes that may yet work, or may have --------------------------------------
+
+    def test_a_job_delete_answering_503_is_tried_again_before_the_apps_start(self):
+        self.made_temp()
+        self.copy_job()
+        ident = self.start("swap", job="copy")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(JOB, 503, method="DELETE")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.assertEqual(0, self.replicas())
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIsNone(self.kube.object(JOB))
+        self.assertNotIn("could not be stopped", job["message"])
+
+    def test_a_job_delete_answering_429_is_tried_again_too(self):
+        self.made_temp()
+        self.copy_job()
+        ident = self.start("swap", job="copy")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(JOB, 429, method="DELETE")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.assertNotIn("could not be stopped", self.look(ident)["message"])
+
+    def test_a_cancel_whose_job_delete_answered_503_finishes_next_round(self):
+        self.wired()
+        self.made_temp()
+        self.copy_job()
+        ident = self.start("copy", copy_since=self.now)
+        self.kube.fail(JOB, 503, method="DELETE")
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual("cancelled", self.look(ident)["status"])
+        self.assertIsNone(self.kube.object(JOB))
+        self.assert_nothing_locked(ident)
+
+    def test_a_temp_delete_that_lost_its_reply_does_not_say_it_is_still_there(self):
+        self.wired()
+        self.made_temp()
+        ident = self.start("copy", job="", copy_since=self.now)
+        self.kube.fail(TEMP, TimeoutError("timed out"), method="DELETE", applied=True)
+        detail = OPS.cancel(ident)["detail"]
+        self.assertIsNone(self.kube.object(TEMP))
+        self.assertIn("could not be confirmed removed", detail)
+        self.assertNotIn("still there", detail)
+        self.assertNotIn("was removed", detail)
 
 
 if __name__ == "__main__":

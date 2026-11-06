@@ -730,7 +730,9 @@ def _put_apps_back(ns, ref):
     held, down = {}, {}
     for c in ref["consumers"]:
         key = f"{c['kind']}/{c['name']}"
-        if key in started:
+        # Off at the review and not stopped by this move: anything on now is someone's
+        # choice since, and the cancel review never said this would turn it off.
+        if key in started or (_off_at_review(c) and not c.get("stopped")):
             continue
         try:
             job = _other_job(_live(ns, c) or {})
@@ -761,7 +763,9 @@ def _rollback(ns, ref, why, item=None):
         if job:
             try:
                 ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{job}?propagationPolicy=Background")
-            except urllib.error.HTTPError as error:   # anything else, a timeout say, is tried again
+            except urllib.error.HTTPError as error:
+                if error.code == 429 or error.code >= 500:
+                    raise   # it may yet work, as with a timeout: tried again next round
                 if error.code != 404:
                     removed = False
                     notes.append(f"The copy job {job} could not be stopped ({error}), so it may still be using the volumes.")
@@ -772,7 +776,7 @@ def _rollback(ns, ref, why, item=None):
                 notes.append(f"A volume named {ref['temp']} is there that this move did not make, so it was left.")
         except Exception as error:
             removed = False
-            notes.append(f"The new volume {ref['temp']} could not be removed ({error}), so it is still there.")
+            notes.append(f"The new volume {ref['temp']} could not be confirmed removed ({error}), so it may still be there.")
     held, down = _put_apps_back(ns, ref)
     if down:
         said = (f"Putting things back: {', '.join(down)} still down ({next(iter(down.values()))}), and trying again. "
