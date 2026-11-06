@@ -36,6 +36,7 @@ import homestead_fetch as FETCH
 import homestead_forced as FORCED
 import homestead_helm as HELM
 import homestead_job_kinds as JOB_KINDS
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_upgrade_check as UPGRADE_CHECK
@@ -471,15 +472,18 @@ def _start_operator(component, target):
     chart = _helmchart(CHARTS[component])
     if not chart:
         raise ValueError(f"Homestead did not install {component}")
-    owner = _operator_chart_owner(chart)
-    if owner:
-        raise ValueError(f"{component} is managed by {owner}; upgrade it through that manager")
+    def still_ours(found):
+        owner = _operator_chart_owner(found)
+        if owner:
+            raise ValueError(f"{component} is managed by {owner}; upgrade it through that manager")
+    still_ours(chart)
     base = addons.KUBEVIRT if component == "kubevirt" else addons.CDI
     manifest = addons.fetch(f"{base}/download/{target}/{'kubevirt' if component == 'kubevirt' else 'cdi'}-operator.yaml")[0]
     switch_on = OPERATOR_MANIFESTS.configuration(component, kget)
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(component, target, manifest, switch_on)
     chart["metadata"].pop("managedFields", None)
-    ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{CHARTS[component]}", chart)
+    KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{CHARTS[component]}", chart, kget, ksend,
+                         still_ours)
     label = "KubeVirt" if component == "kubevirt" else "CDI"
     return f"{label} is moving to {target}; running VMs carry on while its operator rolls the update out"
 
