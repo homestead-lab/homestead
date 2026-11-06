@@ -945,7 +945,7 @@ def _stop_following(ref, item, phases):
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
     done = f"{', '.join(finished)} {'is' if len(finished) == 1 else 'are'} finished and kept. " if finished else ""
-    # The command last, so a job's limit on its message can't cut it short unnoticed.
+    # The command last: a job's limit on its message can only shorten its list of disks.
     detail = (f"CDI has not finished {', '.join(unfinished)} after {FINISH_LIMIT // 3600} hours, so this import has "
               f"stopped and no VM was made. The VM on {_where(ref)} is unchanged. {done}Nothing of the disks was "
               "removed. If CDI does finish, make the VM from them under Import. If not, import again under another "
