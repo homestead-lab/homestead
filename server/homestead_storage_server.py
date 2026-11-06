@@ -23,9 +23,11 @@ import homestead_fleet as FLEET
 import homestead_host_limits as HOST_LIMITS
 import homestead_host_os as HOST_OS
 import homestead_isos as ISOS
+import homestead_job_errors as JOB_ERRORS
 import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn as LH
+import homestead_csi_restore as CSI_RESTORE
 import homestead_longhorn_restore as RESTORE
 import homestead_longhorn_access as LH_ACCESS
 import homestead_manifests as MANIFESTS
@@ -176,6 +178,13 @@ def shared_storage_classes(rows=None):
             if class_selectable(row) and not row["migratable"] and serves_many(row)]
 
 
+def _restore_refused(item, cfg, why):
+    """The job ends in the refusal's words and removes nothing: the claim, if
+    there is one, stays. A resume waits for snapshot setup afresh."""
+    cfg.pop("snapshot_wait_started", None)
+    return "failed", item.get("progress", 0), why
+
+
 def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
     """Resume snapshot setup after a restart and retain the selected class."""
     ref = item["ref"]
@@ -185,15 +194,21 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
             cfg["snapshot_wait_started"] = time.time()
         since = cfg.setdefault("snapshot_wait_started", time.time())
         if time.time() - float(since) > 15 * 60:
-            raise ValueError("CSI snapshot setup did not become ready; repair snapshot support, then resume this restore")
+            last_error = (item.get(JOB_ERRORS.KEY) or {}).get("error")    # the job's last look, if it raised
+            return _restore_refused(item, cfg, (
+                f"The restore could not start within 15 minutes ({last_error}); resume once it has cleared" if last_error
+                else "CSI snapshot setup did not become ready; repair snapshot support, then resume this restore"))
         existing = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
         if existing:
             annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
             if annotation != cfg["restore_id"]:
-                raise ValueError("The destination PVC was created by another operation")
+                return _restore_refused(item, cfg, "The destination PVC was created by another operation")
             ref["restore_started"] = True
         else:
-            created = RESTORE.restore_backup(cfg)
+            try:
+                created = RESTORE.restore_backup(cfg)
+            except CSI_RESTORE.Refused as error:    # only these: any other ValueError may pass, so it waits
+                return _restore_refused(item, cfg, str(error))
             if not created["created"]:
                 return "running", 2, created["message"]
             if created.get("snapshot"):
@@ -202,7 +217,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
     pvc = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
     if pvc:
         if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
-            raise ValueError("The destination PVC was replaced by another operation")
+            return _restore_refused(item, cfg, "The destination PVC was replaced by another operation")
         problem = RESTORE.restore_problem(pvc)
         if problem:
             return "failed", 8, f"CSI restore snapshot failed: {problem}"

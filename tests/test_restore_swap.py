@@ -488,6 +488,15 @@ class SwapBackTests(Base):
 
 
 class BeforeTheSwapTests(Base):
+    def test_the_restore_step_sees_the_errors_the_job_has_had(self):
+        # So at its time limit it can name what it waited on (homestead_job_errors keeps them on the job).
+        _, item = self.started()
+        seen = []
+        RS.restore_resolver = lambda sub: seen.append(sub) or ("running", 10, "Restoring")
+        item["resolver_errors"] = {"error": "HTTP 503"}
+        self.step(item, NOW)
+        self.assertEqual({"error": "HTTP 503"}, seen[0]["resolver_errors"])
+
     def test_a_failed_restore_changes_nothing_and_marks_the_claim_it_made(self):
         _, item = self.started()
         self.restore_result = ("failed", 20, "The restored Longhorn volume is faulted")
