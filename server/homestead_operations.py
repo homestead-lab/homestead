@@ -806,6 +806,18 @@ def _volume_restore(item):
     restored = restored or (
         bool(status.get("restoreInitiated")) and not bool(status.get("restoreRequired")) and
         any(restored_backups))
+    # Longhorn clears transient engine restore details after detachment, and a
+    # later attach does not bring them back. Its volume controller clears
+    # restoreRequired only after finishing the restore of spec.fromBackup.
+    source_backup = urllib.parse.parse_qs(urllib.parse.urlsplit(
+        str((volume.get("spec", {}) or {}).get("fromBackup", "") or "")).query).get("backup", [])
+    completed = (
+        status.get("restoreInitiated") is True and status.get("restoreRequired") is False and
+        bool(ref.get("backup")) and source_backup == [ref["backup"]] and not restoring)
+    restored = restored or completed
+    if (completed and phase == "Bound" and status.get("state") == "detached" and
+            robustness == "unknown"):
+        return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound. Longhorn completed the restore"
     if restored and phase == "Bound" and robustness == "healthy":
         return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound and healthy"
     if restoring or restore_progress:
