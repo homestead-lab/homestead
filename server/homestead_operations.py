@@ -738,8 +738,8 @@ def _backup(item):
         if ref.get("snapshot") and ref.get("snapshot_uid") and "snapshot_pending" not in ref:
             ref["snapshot_pending"] = True
         return "succeeded", 100, "Backup complete"
-    if state in ("error", "failed", "unknown") and status.get("error"):
-        return "failed", progress, status.get("error")
+    if state in ("error", "failed", "unknown"):
+        return "failed", progress, status.get("error") or f"Longhorn reports this backup as {state} and gave no detail"
     return "running", progress, f"Backup {state or 'pending'}"
 
 

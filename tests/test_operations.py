@@ -8,7 +8,9 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as KUBE
 import homestead_operations as operations
+from fakes.kube import Kube
 
 
 class OperationTests(unittest.TestCase):
@@ -435,6 +437,57 @@ class OperationTests(unittest.TestCase):
         complete = operations.list_operations()[0]
         self.assertEqual("succeeded", complete["status"])
         self.assertIn("1 ready endpoint", complete["message"])
+
+
+class BackupJobEndsTests(unittest.TestCase):
+    """A backup job follows the state Longhorn gives its Backup: one Longhorn
+    says went wrong ends, whether or not Longhorn wrote down why."""
+
+    def setUp(self):
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        self.kube = self.enterContext(Kube(groups=("longhorn.io",)))
+        self.enterContext(mock.patch.multiple(operations, kget=KUBE.kget, DATA_DIR=tmp))
+        self.enterContext(mock.patch.dict(operations.RESOLVERS, {"backup": operations._backup}))
+        self.count = 0
+
+    def job_at(self, **status):
+        """A new job following a Backup in this state, after one look at it."""
+        self.count += 1
+        name = f"nightly-{self.count}"
+        self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
+                       "metadata": {"name": name, "namespace": "longhorn-system"}, "status": status})
+        made = operations.start("backup", f"Back up {name}", {"kind": "Volume", "name": name, "namespace": "longhorn-system"},
+                                "/data-protection", {"namespace": "longhorn-system", "name": name})
+        return next(job for job in operations.list_operations() if job["id"] == made["id"])
+
+    def test_a_backup_in_error_with_no_text_fails_saying_longhorn_gave_no_detail(self):
+        for word, status in (("error", {"state": "Error"}), ("error", {"state": "Error", "error": ""}),
+                             ("failed", {"state": "Failed", "progress": 40})):
+            with self.subTest(status=status):
+                job = self.job_at(**status)
+                self.assertEqual("failed", job["status"])
+                self.assertIn(word, job["message"])
+                self.assertIn("gave no detail", job["message"])
+
+    def test_a_backup_in_state_unknown_with_no_text_gets_the_same_answer(self):
+        job = self.job_at(state="Unknown", progress=40)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual(40, job["progress"])
+        self.assertIn("unknown", job["message"])
+        self.assertIn("gave no detail", job["message"])
+
+    def test_longhorn_s_own_words_are_kept_when_it_gives_them(self):
+        job = self.job_at(state="Error", error="the backup target is not reachable")
+        self.assertEqual(("failed", "the backup target is not reachable"), (job["status"], job["message"]))
+
+    def test_a_backup_on_its_way_keeps_running(self):
+        for status in ({}, {"state": ""}, {"state": "New"}, {"state": "Pending"}, {"state": "InProgress", "progress": 10}):
+            with self.subTest(status=status):
+                self.assertEqual("running", self.job_at(**status)["status"])
+
+    def test_a_failed_backup_changes_nothing_in_the_cluster(self):
+        self.job_at(state="Error")
+        self.assertEqual([], self.kube.writes)
 
 
 if __name__ == "__main__":
