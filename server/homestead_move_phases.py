@@ -8,6 +8,7 @@ created and gives the backup target back.
 
 Split out of homestead_move_engine (#623).
 """
+import calendar
 import hashlib
 import uuid
 import json
@@ -688,6 +689,27 @@ def tick_all():
         _tick_all()
 
 
+# A failed copy keeps what it uploaded, so Retry sends only what is missing.
+# Left alone that long it is given up, and the backup store gets its space
+# back: cancelling a copy removes only what it made. One that stopped its
+# source for the copy is never cancelled for a person, as that would start
+# the source again by itself.
+FAILED_COPY_KEEP = 3 * 86400
+
+
+def _stale_failed_copy(move, now=None):
+    if (move.get("status") != "failed" or move.get("transfer_mode") != "copy"
+            or (move.get("flags") or {}).get("cancelling")):
+        return False
+    if STATE._source_held(move) and not move.get("live"):
+        return False
+    try:
+        finished = calendar.timegm(time.strptime(move.get("finished_at") or "", "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return False
+    return (time.time() if now is None else now) - finished >= FAILED_COPY_KEEP
+
+
 def _tick_all():
     with STATE._lock:
         rows = STATE._read()
@@ -699,6 +721,7 @@ def _tick_all():
                or (m.get("flags") or {}).get("target_cleanup_pending")
                or (m.get("flags") or {}).get("resource_cleanup_pending")
                or (m.get("status") in ("failed", "cancelled") and (m.get("flags") or {}).get("cancelling"))
+               or _stale_failed_copy(m)
                or (m.get("status") in ("succeeded", "cancelled") and m.get("transfer_target"))
                or m["id"] == (journal or {}).get("owner")]
     if journal and not any(m["id"] == journal["owner"] for m in rows):
@@ -712,7 +735,8 @@ def _tick_all():
                 if not move.get("op"):
                     PLAN._add_operation(move)
                 _tick(move)
-            elif move.get("status") in ("failed", "cancelled") and (move.get("flags") or {}).get("cancelling"):
+            elif (move.get("status") in ("failed", "cancelled") and (move.get("flags") or {}).get("cancelling")
+                  or _stale_failed_copy(move)):
                 try:
                     ACT._abandon(move_id)
                 except Exception:

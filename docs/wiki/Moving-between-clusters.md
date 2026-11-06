@@ -224,8 +224,18 @@ backups and snapshots, including failed backup attempts replaced during a
 retry. It also removes the destination's CSI restore metadata once the disks
 have bound. The destination disks and images they still use remain.
 
+The backup store gets its space back too. Deleting a backup leaves its
+volume's folder in the store, and blocks a failed attempt uploaded belong to
+no backup, so nothing would ever collect them. Once a transfer's backups are
+gone, Homestead deletes each volume's folder from the store as well - unless
+the folder still holds other backups of that volume, such as your own, which
+are kept and noted, or another transfer is about to use it.
+
 A failed transfer keeps its backups and partial destination disks for
-**Retry**. To discard it, use **Cancel**, **Put back** or **Cancel copy**.
+**Retry**, which then sends only what is missing. A failed copy left for three
+days is cancelled for you so the store is not kept full by it - except one
+that stopped its source for the copy, which stays stopped until you choose.
+To discard a failed transfer sooner, use **Cancel**, **Put back** or **Cancel copy**.
 Homestead restores the source's previous running state and removes the
 destination objects, restore metadata and unused images created by that
 transfer. A failed transfer that has stopped its source must be cancelled
