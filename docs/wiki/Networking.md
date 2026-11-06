@@ -323,7 +323,10 @@ one looks at its network first and says what it would change: the interface
 the default route leaves by, its address (from DHCP or static), its gateway
 and the netplan file that sets it up. Only a plain wired NIC that netplan sets
 up through systemd-networkd - Ubuntu Server's way - is converted; anything
-else is refused and left as it is. Then, with the host's name typed to confirm:
+else is refused and left as it is. As with a bond, it waits while another
+host's bond or bridge change is still being checked, or another server is not
+Ready: the move restarts k3s or RKE2 on the host, and two hosts quiet at once
+could cost the cluster its quorum. Then, with the host's name typed to confirm:
 
 1. `/etc/netplan` is copied to `/var/lib/homestead/netplan-<time>`;
 2. the NIC's addresses, routes, DNS and DHCP move to `br0` in the same file;

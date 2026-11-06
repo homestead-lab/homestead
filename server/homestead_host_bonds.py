@@ -32,12 +32,18 @@ restarts so flannel follows - as after a bridge conversion. Under a bridge,
 or changing a bond, the name does not change and nothing restarts.
 """
 import calendar
+import contextlib
+import datetime
 import hashlib
 import json
 import re
+import secrets
 import time
 import urllib.error
 
+import homestead_hostrun as HOSTRUN
+import homestead_kube as KUBE
+import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 
@@ -261,11 +267,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
     reason = _host_problem(facts, shape)
     if reason:
         refusals.append(reason)
-    if busy:
-        refusals.append(f"another host's network is changing ({busy}): one host at a time")
-    if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
-        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
-                        "the cluster could lose its quorum. Wait until they are Ready")
+    refusals += guard_refusals(node, busy, servers_ready)
     nics = {n["name"]: n for n in facts.get("nics") or []}
     bond = shape["bond"] or BOND
     current = list(shape["members"])
@@ -723,6 +725,100 @@ def _step(item, now=None):
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
 
 
+def guard_refusals(node, busy, servers_ready):
+    """Why network_guard holds a change on node back: the same words for a
+    bond and a bridge (homestead_host_bridge), since both go quiet for a
+    moment and restart k3s or RKE2 there."""
+    refusals = []
+    if busy:
+        refusals.append(f"another host's network is changing ({busy}): one host at a time")
+    if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
+        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
+                        "the cluster could lose its quorum. Wait until they are Ready")
+    return refusals
+
+
+# The one Lease a host network change (bond or bridge) holds while it starts:
+# from before network_guard reads the job store until its job row is written,
+# which is only after netplan is applied. Replicas share it, so two changes
+# sent at once to two hosts cannot both pass the guard. One left by a replica
+# that stopped runs out after CLAIM_SECONDS and is taken over.
+CLAIM = "homestead-network-change"
+CLAIM_SECONDS = 600
+STARTING = "another host's network change is starting: try again in a moment"
+
+
+def _claim_path(name=""):
+    base = f"/apis/coordination.k8s.io/v1/namespaces/{HOSTRUN.NS}/leases"
+    return f"{base}/{name}" if name else base
+
+
+def _when(value):
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
+def claim_network(node, what):
+    """Take the cluster's network-change Lease for a change on node. Returns
+    the holder; raises ValueError while another change holds it and it has
+    not run out. A write that loses a race (409) is refused the same way."""
+    holder = f"{HOSTRUN.IDENTITY}/{secrets.token_hex(4)}"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    lease = KUBE.get_optional(_claim_path(CLAIM), read=kget)
+    try:
+        if lease is None:
+            ksend("POST", _claim_path(), {
+                "apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+                "metadata": {"name": CLAIM, "namespace": HOSTRUN.NS, "labels": NAMES.labels("network-change"),
+                             "annotations": {NAMES.key("change"): what}},
+                "spec": {"holderIdentity": holder, "leaseDurationSeconds": CLAIM_SECONDS,
+                         "acquireTime": stamp, "renewTime": stamp, "leaseTransitions": 0}})
+            return holder
+        spec = lease.get("spec") or {}
+        renewed = _when(spec.get("renewTime")) or _when(spec.get("acquireTime"))
+        if spec.get("holderIdentity") and renewed and \
+                (now - renewed).total_seconds() <= int(spec.get("leaseDurationSeconds") or 0):
+            raise ValueError(f"{node}: {STARTING}")
+        spec.update(holderIdentity=holder, leaseDurationSeconds=CLAIM_SECONDS, acquireTime=stamp, renewTime=stamp,
+                    leaseTransitions=int(spec.get("leaseTransitions") or 0) + 1)
+        lease["spec"] = spec
+        lease.setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("change")] = what
+        # resourceVersion is kept: of two taking it at once, one gets a 409.
+        ksend("PUT", _claim_path(CLAIM), lease)
+        return holder
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            raise ValueError(f"{node}: {STARTING}") from None
+        raise
+
+
+def release_network(holder):
+    """Give the Lease back if holder still has it. Never raises: one not
+    given back runs out by itself."""
+    try:
+        lease = KUBE.get_optional(_claim_path(CLAIM), read=kget)
+        if lease and (lease.get("spec") or {}).get("holderIdentity") == holder:
+            lease["spec"]["holderIdentity"] = ""
+            ksend("PUT", _claim_path(CLAIM), lease)
+    except Exception:
+        pass
+
+
+@contextlib.contextmanager
+def network_change(node, what):
+    """Hold the Lease, and give network_guard's answer for node. Leave the
+    block once the job row is written (ops.start), or by a refusal or error:
+    the Lease is given back either way, and the job row blocks the rest."""
+    holder = claim_network(node, what)
+    try:
+        yield network_guard(node)
+    finally:
+        release_network(holder)
+
+
 def network_guard(node):
     """What a host network change waits for: another host's change still
     being checked, and the other servers' readiness (ready, total)."""
@@ -757,10 +853,10 @@ def review(body):
 def change(body):
     """The bond change, confirmed by the host's name, as a job."""
     node = _host(body)
-    busy, servers = network_guard(node)
     if str(body.get("confirm") or "").strip() != node:
         raise ValueError(f"type the host's name, {node}, to confirm")
-    op = start(node, body, OPS, busy, servers)
+    with network_change(node, f"Bond change on {node}") as (busy, servers):
+        op = start(node, body, OPS, busy, servers)
     ROUTER.forget("ports", "network")
     return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it under Jobs"}
 
