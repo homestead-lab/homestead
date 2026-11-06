@@ -96,6 +96,11 @@ def source(read, send, transfer_id, source_uid):
     preparing_images = {v.get("spec", {}).get("backingImage") for v in image_volumes
                         if any(s.get("spec", {}).get("volume") == v["metadata"].get("name") for s in preparing)}
     pending, retained = [], []
+    # The volumes this transfer backed up: their folders in the backup store
+    # go once nothing else is kept there (reclaim, below).
+    carried = {volume_of(b) for b in backups if owned(b, transfer_id, source_uid)}
+    carried |= {(s.get("spec") or {}).get("volume") for s in snapshots if owned(s, transfer_id, source_uid)}
+    carried.discard(None); carried.discard("")
     for backup in backups:
         if owned(backup, transfer_id, source_uid):
             name = backup["metadata"]["name"]
@@ -104,6 +109,8 @@ def source(read, send, transfer_id, source_uid):
     # Do not remove snapshots while any Backup still names them. Re-list after
     # requesting deletion; asynchronous Longhorn finalizers may still be working.
     backups = items(read, LH + "/backups")
+    if carried:
+        reclaim(read, send, carried, backups, snapshots, transfer_id, pending, retained)
     for snapshot in snapshots:
         if not owned(snapshot, transfer_id, source_uid):
             continue
@@ -132,6 +139,39 @@ def source(read, send, transfer_id, source_uid):
         elif not delete_unused(read, send, LH + "/backupbackingimages/" + name, image):
             pending.append("image backup " + name)
     return {"ok": True, "complete": not pending, "pending": pending, "retained": retained}
+
+
+def volume_of(obj):
+    """The Longhorn volume a Backup or BackupVolume belongs to."""
+    return (((obj.get("metadata") or {}).get("labels") or {}).get("backup-volume")
+            or (obj.get("spec") or {}).get("volumeName") or (obj.get("status") or {}).get("volumeName") or "")
+
+
+def reclaim(read, send, volumes, backups, snapshots, transfer_id, pending, retained):
+    """Give the backup store back the space a transfer used.
+
+    Deleting a Backup leaves its volume's folder in the store: what is shared
+    with no remaining backup is collected only by Longhorn's next deletion
+    there, and blocks a failed attempt uploaded belong to no backup at all, so
+    nothing ever collects them. Deleting the BackupVolume removes the whole
+    folder. That is done only once no Backup of the volume is left - a person's
+    own backups in the same store are never touched, only noted - and no other
+    transfer is preparing one (its Snapshot is taken before its Backup)."""
+    for item in items(read, LH + "/backupvolumes", missing=True):
+        volume = volume_of(item)
+        if volume not in volumes or (item.get("metadata") or {}).get("deletionTimestamp"):
+            continue
+        left = [b for b in backups if volume_of(b) == volume]
+        if any(owned(b, transfer_id) for b in left):
+            pending.append("backup store space of " + volume)
+        elif left:
+            retained.append(f"The backup store keeps {volume}'s folder: it holds {len(left)} other "
+                            f"backup{'s' if len(left) != 1 else ''}")
+        elif any((s.get("spec") or {}).get("volume") == volume and NAMES.annotation_of(s.get("metadata") or {}, "move-id")
+                 and not owned(s, transfer_id) for s in snapshots):
+            pending.append("backup store space of " + volume + " waiting for another transfer")
+        elif not delete_unused(read, send, LH + "/backupvolumes/" + item["metadata"]["name"], item):
+            pending.append("backup store space of " + volume)
 
 
 def destination(read, send, move, cancelled=False):
