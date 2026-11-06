@@ -30,6 +30,7 @@ import homestead_power as POWER
 import homestead_rebalance as REBALANCE
 import test_lhv2_upgrade as UPGRADE_FIXTURE
 import test_node_power_plan as POWER_FIXTURE
+from rebind import keep_bound
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "longhorn_v1_13"
 
@@ -281,6 +282,10 @@ class Places:
 
 class WholeReplicaTableTests(unittest.TestCase):
     get = POWER_FIXTURE.PowerPlanTests.get
+
+    def setUp(self):
+        # The fixtures bind these and leave them to their own test classes' setUp.
+        keep_bound(self, POWER, LHV2_UPGRADE, LHV2_UPGRADE.REVIEW)
 
     def test_every_place_over_every_shape(self):
         for name, (make, _) in SHAPES.items():

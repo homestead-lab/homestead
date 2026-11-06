@@ -321,6 +321,7 @@ class TimedOutStartTests(unittest.TestCase):
     keeps the host held and needs attention, rather than letting go."""
 
     def setUp(self):
+        keep_bound(self, BONDS)
         BONDS.bind(None, lambda path: {"items": [{}, {}]}, lambda verb, path, *a, **k: None)
 
     def start_timed_out(self):

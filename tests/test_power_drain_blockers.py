@@ -24,6 +24,7 @@ import homestead_drain_blockers as BLOCKERS
 import homestead_kube as K
 import homestead_power as power
 from fakes.kube import Kube
+from rebind import keep_bound
 from test_drain_blockers import attachment, claim, engine, engine_orphan, instance_manager, pod
 
 ERROR = "acknowledge each drain blocker (or remove the orphan records) before host power control"
@@ -49,6 +50,7 @@ def stuck_pod():
 
 class DrainBlockerReviewTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, power)
         self.kube = Kube(host("node-a", "uid-a"), host("node-b", "uid-b"), *orphans_here())
         self.kube.__enter__()
         self.addCleanup(self.kube.__exit__, None, None, None)

@@ -28,6 +28,7 @@ import homestead_job_errors as ERRORS
 import homestead_kube as K
 import homestead_operations as OPS
 from fakes.kube import Kube
+from rebind import keep_bound
 import test_host_bridge as BRIDGE_TESTS
 
 SINCE = 10_000.0
@@ -86,6 +87,7 @@ class RestartDeadlineTests(unittest.TestCase):
 
     def setUp(self):
         self.kube = self.enterContext(Kube(node("node-a", ready=False), node("node-b", ready=True, server=True)))
+        keep_bound(self, BONDS, BRIDGE)
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
 
@@ -145,6 +147,7 @@ class RealNodeShapeTests(unittest.TestCase):
         # the Lease last renewed 4 s before it.
         self.kube = self.enterContext(Kube(real_node("node-a", heartbeat=SINCE - 180, transition=SINCE - 3600),
                                            node_lease("node-a", renewed=SINCE - 4)))
+        keep_bound(self, BONDS, BRIDGE)
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
 
@@ -207,6 +210,7 @@ class HostBaselineTests(unittest.TestCase):
 
     def setUp(self):
         self.kube = self.enterContext(Kube(node("node-b", ready=True, server=True)))
+        keep_bound(self, BONDS, BRIDGE)
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
 
@@ -290,6 +294,7 @@ class GuardBase(unittest.TestCase):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
         self.kube = self.enterContext(Kube(node("node-a", ready=False), node("node-b", ready=True, server=True),
                                            node("node-c", ready=True, server=True)))
+        keep_bound(self, OPS, BONDS, BRIDGE)
         OPS.bind(K.kget, self.tmp, lambda namespace, name: {})
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
