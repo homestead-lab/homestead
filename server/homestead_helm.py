@@ -513,6 +513,15 @@ def _no_job(item, ref, earlier=False):
                          "following it. Check that the controller is running; the Helm page shows what is installed")
 
 
+def _job_failed(job):
+    """Whether the Job itself has ended failed. Its `failed` count does not say: it
+    counts lost pods, and the Job goes on making new ones. The controller's Jobs
+    restart a failing container in its own pod, so a chart that fails adds nothing to
+    that count; only this condition covers both."""
+    return any(condition.get("type") == "Failed" and condition.get("status") == "True"
+               for condition in (job.get("status") or {}).get("conditions") or [])
+
+
 def job_status(item):
     """The Helm controller's install or upgrade job, for the job tray."""
     ref = item["ref"]
@@ -533,9 +542,13 @@ def job_status(item):
     status = job.get("status") or {}
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
-    if status.get("failed") and not status.get("active"):
+    if _job_failed(job):
         return "failed", 100, f"Helm failed; the {ref['name']} job's log in {ref['namespace']} says why"
-    return "running", 40 if status.get("active") else 10, "Helm is running" if status.get("active") else "Starting Helm"
+    if status.get("active"):
+        return "running", 40, "Helm is running"
+    if status.get("failed"):
+        return "running", 10, "A Helm pod failed and Kubernetes is trying again"
+    return "running", 10, "Starting Helm"
 
 
 # Its routes and who may use them (homestead_routes.py).

@@ -495,7 +495,8 @@ class PageRouteKeepTests(unittest.TestCase):
         return self.cluster.server.OPS.RESOLVERS["helm"]({"ref": {"namespace": "kube-system", "name": "helm-install-web"}})
 
     def test_a_helm_job_that_ends_drops_the_helm_page(self):
-        for status in ({"succeeded": 1}, {"failed": 1}):
+        failed = {"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]}
+        for status in ({"succeeded": 1}, failed):
             self.helm_job(status)
             self.assertIsNone(CACHE.kept_at("helm"), status)
 
