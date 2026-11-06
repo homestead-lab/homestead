@@ -297,6 +297,9 @@ window.dismissFinishedOperations = async () => {
   } catch (e) { toast(e.message, "bad"); }
   refreshOperations(true);
 };
+// The Activity panel's Clear finished button (#906: no inline handler, so a
+// click before this script runs calls nothing).
+globalThis.document?.getElementById?.("jobClear")?.addEventListener?.("click", () => window.dismissFinishedOperations());
 
 /* A job stopped part-way whose steps are safe to repeat - a storage class
    change caught mid-swap - runs the rest from the step it stopped at. */

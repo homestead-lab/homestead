@@ -531,6 +531,8 @@ window.setViewLayout = (page, redraw, layout, {preservePaint = false} = {}) => {
   if (typeof window[redraw] === "function") window[redraw]();
 };
 window.modalBack = modalBack;
+// The dialog header's back button (#906: a listener, not an inline handler).
+globalThis.document?.getElementById?.("mback")?.addEventListener?.("click", () => modalBack());
 window.pushModal = pushModal;
 /* Homestead's own confirm and prompt, in place of the browser's: a browser
    can silence its dialogs for a page, and an installed app window may not

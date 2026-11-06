@@ -343,3 +343,8 @@ window.notificationsDialog=()=>{
   modal("Notifications",`<div id="notificationsDialogList" class="notification-center"></div>${UI.actions(UI.cancel("Close"))}`,true,"notifications");
   paintBell();
 };
+// On a phone the bell opens Notifications as a dialog; wider, its own menu opens
+// (#906: a listener, not an inline handler, so a tap before boot calls nothing).
+globalThis.document?.querySelector?.("#bell > summary")?.addEventListener?.("click", event => {
+  if (matchMedia("(max-width:900px)").matches) { event.preventDefault(); window.notificationsDialog(); }
+});
