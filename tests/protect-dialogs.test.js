@@ -8,19 +8,109 @@ const src = fs.readFileSync("web/js/views-protect.js", "utf8");
 
 const PLAN = { backup: "backup-7f3a91", source_volume: "pvc-demo-frigate", minimum_size_gb: 20,
   suggested_name: "frigate-config-restore", storage_class: "longhorn-r2", storage_classes: ["longhorn-r2"] };
-async function restore(label) {
+async function restore(label, plan = PLAN) {
   const titles = [], body = { innerHTML: "" };
   const ctx = { document: { addEventListener() {} }, STATE: { data: {} }, setTimeout: () => 0, clearTimeout() {},
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     modal: title => titles.push(title), $: id => (id === "#mbody" ? body : id === "#mtitle" ? { set textContent(t) { titles.push(t); } } : null),
     tip: t => `<span class="tip" data-tip="${t}">?</span>`, icon: () => "", jsArg: s => JSON.stringify(String(s)),
-    api: async path => (path.startsWith("/api/namespaces") ? ["lab"] : PLAN), defaultNamespace: () => "lab" };
+    api: async path => (path.startsWith("/api/namespaces") ? ["lab"] : plan), defaultNamespace: () => "lab" };
   ctx.jsq = s => ctx.esc(ctx.jsArg(s)); ctx.window = ctx;
   vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(src, ctx);
   await ctx.lhRestore(PLAN.backup, label);
   return { html: body.innerHTML, titles };
 }
+
+const LATE_WHY = "longhorn-late makes a volume only once an app mounts it, and a restore has to finish before anything mounts it";
+test("Restore backup says why a class is not offered", async () => {
+  const { html } = await restore("frigate-config", { ...PLAN, refused_classes: { "longhorn-late": LATE_WHY } });
+  assert.match(html, /<select id="lr_sc"[\s\S]*longhorn-r2[\s\S]*<\/select>/);
+  assert.doesNotMatch(between(html, '<select id="lr_sc"', "</select>"), /longhorn-late/);
+  assert.ok(html.includes(`${LATE_WHY}; choose another storage class`), "the reason and the ask are in the dialog");
+});
+
+test("Restore backup does not ask for another class when there is none", async () => {
+  const { html } = await restore("frigate-config", { ...PLAN, storage_classes: [], refused_classes: { "longhorn-late": LATE_WHY } });
+  assert.ok(html.includes(LATE_WHY), "the reason is in the dialog");
+  assert.doesNotMatch(html, /choose another storage class/);
+  assert.match(html, /no other class to choose/);
+});
+
+test("Restore backup says nothing about classes when every class can take it", async () => {
+  const { html } = await restore("frigate-config");
+  assert.doesNotMatch(html, /choose another storage class/);
+});
+
+/* Restore into an app: the review, and the plan asked for again with the chosen class. */
+const INTO = { app: { namespace: "lab", name: "frigate", kind: "Deployment", replicas: 1 }, claim: "frigate-config",
+  mount: { volume: "config", containers: [] }, backup: "backup-7f3a91", created: "", new_claim: "frigate-config-restore",
+  storage_class: "longhorn-r2", storage_classes: ["longhorn-r2"], refused_classes: {}, size_gb: 20, minimum_size_gb: 20,
+  check: "ready", keep_days: 7, managed: {}, notices: [], blockers: [], digest: "d", ready: true };
+async function into(answer) {
+  const asked = [], posted = [], body = { innerHTML: "" };
+  const ctx = { document: { addEventListener() {} }, STATE: { data: {} }, setTimeout: () => 0, clearTimeout() {},
+    esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
+    modal() {}, $: id => (id === "#mbody" ? body : id === "#ri_go" ? { disabled: false } : null), tip: t => t, icon: () => "",
+    jsArg: s => JSON.stringify(String(s)), fmtWhen: s => s, toast() {}, closeModal() {},
+    api: async (path, opts) => { if (opts) { posted.push(JSON.parse(opts.body)); return {}; } asked.push(path); return answer(path); } };
+  ctx.jsq = s => ctx.esc(ctx.jsArg(s)); ctx.window = ctx;
+  vm.createContext(ctx); require("./helpers/load-ui")(ctx);
+  vm.runInContext(src, ctx);
+  return { ctx, asked, posted, body };
+}
+const onLate = path => path.includes("storage_class=longhorn-r2") ? INTO
+  : { ...INTO, storage_class: "longhorn-late", refused_classes: { "longhorn-late": LATE_WHY },
+    blockers: [`${LATE_WHY}; choose another storage class`], ready: false };
+
+test("Restore into app on a class that cannot take it says why and offers the others", async () => {
+  const { ctx, body } = await into(onLate);
+  await ctx.lhRestoreInto("backup-7f3a91");
+  assert.ok(body.innerHTML.includes(LATE_WHY), "the reason is in the dialog");
+  assert.match(body.innerHTML, /This cannot start/);
+  const select = between(body.innerHTML, '<select id="ri_sc"', "</select>");
+  assert.match(select, /longhorn-r2/);
+  assert.doesNotMatch(select, /longhorn-late/);
+});
+
+test("Choosing another class asks the review again and starts on that class", async () => {
+  const { ctx, asked, posted, body } = await into(onLate);
+  await ctx.lhRestoreInto("backup-7f3a91");
+  await ctx.lhRestoreInto("backup-7f3a91", "longhorn-r2");
+  assert.match(asked.at(-1), /storage_class=longhorn-r2/);
+  assert.doesNotMatch(body.innerHTML, /This cannot start/);
+  await ctx.restoreIntoStart();
+  assert.equal(posted[0].storage_class, "longhorn-r2");
+});
+
+test("Restore into app on a class on neither list offers the others, as its blocker asks", async () => {
+  const blocker = "local-path is not a storage class a restore can use; choose another storage class";
+  const { ctx, body } = await into(() => ({ ...INTO, storage_class: "local-path", blockers: [blocker], ready: false }));
+  await ctx.lhRestoreInto("backup-7f3a91");
+  assert.ok(body.innerHTML.includes(blocker));
+  const select = between(body.innerHTML, '<select id="ri_sc"', "</select>");
+  assert.match(select, /<option value="" selected disabled>Choose a class/);
+  assert.match(select, /longhorn-r2/);
+  assert.doesNotMatch(select, /local-path/);
+});
+
+test("Restore into app with no class left to offer shows the review's words and no empty choice", async () => {
+  const blocker = `${LATE_WHY}; no other class can take it, so make one first`;
+  const { ctx, body } = await into(() => ({ ...INTO, storage_class: "longhorn-late", storage_classes: [],
+    refused_classes: { "longhorn-late": LATE_WHY }, blockers: [blocker], ready: false }));
+  await ctx.lhRestoreInto("backup-7f3a91");
+  assert.ok(body.innerHTML.includes(blocker));
+  assert.doesNotMatch(body.innerHTML, /id="ri_sc"/);
+});
+
+test("Restore into app shows no class choice when the app's own class can take it", async () => {
+  const { ctx, asked, posted, body } = await into(() => INTO);
+  await ctx.lhRestoreInto("backup-7f3a91");
+  assert.doesNotMatch(body.innerHTML, /id="ri_sc"/);
+  assert.doesNotMatch(asked[0], /storage_class/);
+  await ctx.restoreIntoStart();
+  assert.equal("storage_class" in posted[0], false);
+});
 
 test("Restore backup names what it restores, from the Backups row", async () => {
   const { titles } = await restore("frigate-config");
