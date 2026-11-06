@@ -25,6 +25,7 @@ import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
+import homestead_whole_copy as WHOLE
 
 kget = ksend = None
 temps = lambda: {}
@@ -587,11 +588,11 @@ def _replicas(strict=False):
         return []
 
 
-def _copy_elsewhere(replica, replicas, node, disk, uuid, scheduled):
-    """A healthy replica of the same volume that is not on this disk."""
+def _copy_elsewhere(replica, replicas, node, disk, uuid, scheduled, whole):
+    """A whole copy of the same volume that is not on this disk."""
     name = (replica.get("spec") or {}).get("volumeName", "")
     return any((r.get("spec") or {}).get("volumeName") == name and r["metadata"]["name"] != replica["metadata"]["name"]
-               and _healthy(r) and not _on_disk(r, node, disk, uuid, scheduled) for r in replicas)
+               and whole(r) and not _on_disk(r, node, disk, uuid, scheduled) for r in replicas)
 
 
 def _on_disk(replica, node, disk, uuid, scheduled):
@@ -603,9 +604,15 @@ def _on_disk(replica, node, disk, uuid, scheduled):
     return bool(uuid and spec.get("diskID") == uuid) or spec.get("diskPath") == disk.get("path")
 
 
-def _healthy(replica):
-    spec, status = replica.get("spec") or {}, replica.get("status") or {}
-    return bool(spec.get("healthyAt")) and not spec.get("failedAt") and status.get("currentState") != "error"
+def _whole_copies():
+    """Whole copies by the one rule (homestead_whole_copy): RW in its running
+    engine, or stopped and healthy on a volume that says detached, on a Ready
+    host. What decides a delete must read the engines, volumes and hosts: a
+    failed read raises."""
+    engines = kget(f"{LH}/engines").get("items", [])
+    volumes = kget(f"{LH}/volumes").get("items", [])
+    nodes = {n["metadata"]["name"]: n for n in kget("/api/v1/nodes").get("items", [])}
+    return WHOLE.judge(engines, detached_ok=True, volumes=volumes, nodes=nodes, lh_nodes=_lh_nodes())
 
 
 def retire_plan(node, disk_id):
@@ -617,6 +624,7 @@ def retire_plan(node, disk_id):
     if ready.get("status", "True") == "True":
         raise ValueError(f"{disk.get('path')} on {node} is working: move its replicas off and remove it instead")
     replicas = _replicas(strict=True)
+    whole = _whole_copies()
     mine = [r for r in replicas if _on_disk(r, node, disk, uuid, scheduled)]
     try:
         volumes = {v["metadata"]["name"]: v for v in kget(f"{LH}/volumes").get("items", [])}
@@ -628,7 +636,7 @@ def retire_plan(node, disk_id):
     for replica in mine:
         name = (replica.get("spec") or {}).get("volumeName", "")
         others = [r for r in replicas if (r.get("spec") or {}).get("volumeName") == name
-                  and r["metadata"]["name"] != replica["metadata"]["name"] and _healthy(r)
+                  and r["metadata"]["name"] != replica["metadata"]["name"] and whole(r)
                   and not _on_disk(r, node, disk, uuid, scheduled)]
         holders = {(r.get("spec") or {}).get("nodeID") for r in others}
         volume = volumes.get(name) or {}
@@ -705,7 +713,8 @@ def retire_step(item):
         # Checked again at each step, not only at review: a volume whose other
         # copies failed since then has its last one here, and it stays.
         if not ref.get("force"):
-            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled)]
+            whole = _whole_copies()
+            last = [r for r in left if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled, whole)]
             if last:
                 keep |= {r["metadata"]["name"] for r in last}
                 ref["keep"] = sorted(keep)

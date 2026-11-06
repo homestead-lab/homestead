@@ -37,7 +37,7 @@ def replica(volume_name, host, n=0, state="running", healthy=True):
 
 def engine(volume_name, modes):
     return {"apiVersion": LONGHORN, "kind": "Engine", "metadata": {"namespace": "longhorn-system", "name": f"{volume_name}-e-0"},
-            "spec": {"volumeName": volume_name}, "status": {"replicaModeMap": modes}}
+            "spec": {"volumeName": volume_name}, "status": {"currentState": "running", "replicaModeMap": modes}}
 
 
 def setting(name, value):
@@ -52,11 +52,19 @@ class World:
         hosts = ("k1", "k2", "k3")
         lh_nodes = [{"apiVersion": LONGHORN, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": h},
                      "spec": {"allowScheduling": True, "disks": {"d": {"allowScheduling": True, "tags": ["hdd"] if h != "k1" or "k1" in hdd else []}}},
-                     "status": {"diskStatus": {"d": {"storageAvailable": 900 * GIB, "storageMaximum": 1000 * GIB}}}}
+                     "status": {"conditions": [{"type": "Ready", "status": "True"}],
+                                "diskStatus": {"d": {"storageAvailable": 900 * GIB, "storageMaximum": 1000 * GIB}}}}
                     for h in hosts]
         nodes = [{"apiVersion": "v1", "kind": "Node", "metadata": {"name": h}, "spec": {"unschedulable": h in cordoned},
                   "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for h in hosts]
-        self.kube = test.enterContext(Kube(*lh_nodes, *nodes, *volumes, *replicas,
+        # Each attached volume's running engine has its running, healthy copies
+        # as RW, as Longhorn does (tests/fixtures/longhorn_v1_13); a test that
+        # needs other modes says so with set_engines().
+        engines = [engine(v["metadata"]["name"], {r["metadata"]["name"]: "RW" for r in replicas
+                                                  if r["spec"]["volumeName"] == v["metadata"]["name"]
+                                                  and r["status"]["currentState"] == "running" and r["spec"].get("healthyAt")})
+                   for v in volumes if v["status"]["state"] == "attached"]
+        self.kube = test.enterContext(Kube(*lh_nodes, *nodes, *volumes, *replicas, *engines,
                                            setting("disable-scheduling-on-cordoned-node", "true"),
                                            setting("offline-replica-rebuilding", "true")))
         # The shared fake runs the real write guards; the storage guard takes the job

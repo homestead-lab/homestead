@@ -99,6 +99,7 @@ def plan(name, disk_tags=(), node_tags=()):
     meta, spec, status = volume.get("metadata") or {}, volume.get("spec") or {}, volume.get("status") or {}
     disks = _disks()
     copies = _copies(name)
+    whole_copy = REBALANCE._judge(volumes=[volume])
     k8s = status.get("kubernetesStatus") or {}
     size, actual = int(spec.get("size") or 0), int(status.get("actualSize") or 0)
     rows = []
@@ -108,7 +109,7 @@ def plan(name, disk_tags=(), node_tags=()):
                                                     and d["path"].rstrip("/") == (r.get("diskPath") or "").rstrip("/")), None)
         rows.append({"replica": (replica.get("metadata") or {}).get("name", ""), "host": r.get("nodeID", ""),
                      "disk": disk["disk"] if disk else "", "path": (disk or {}).get("path") or r.get("diskPath", ""),
-                     "tags": disk["tags"] if disk else [], "whole": REBALANCE._whole(replica),
+                     "tags": disk["tags"] if disk else [], "whole": whole_copy(replica),
                      "moves": bool(disk_tags or node_tags) and not _on_target(disk, disk_tags, node_tags)})
     blockers, warnings = [], []
     wanted = int(spec.get("numberOfReplicas") or 0)
@@ -201,6 +202,7 @@ def status(item):
     spec = volume.get("spec") or {}
     disks = _disks()
     copies = _copies(name)
+    whole_copy = REBALANCE._judge(volumes=[volume])
 
     def where(replica):
         r = replica.get("spec") or {}
@@ -236,7 +238,7 @@ def status(item):
         if not leaving:
             _put_back(ref, keep_tags=True)
             return "succeeded", 100, f"Moved {done} cop{'y' if done == 1 else 'ies'} of {label}; every copy is on the disks chosen"
-        if len(copies) != ref["original"] or not all(REBALANCE._whole(r) for r in copies):
+        if len(copies) != ref["original"] or not all(whole_copy(r) for r in copies):
             waited = ref.setdefault("unsettled_since", now)
             if now - waited > 900:
                 return fail("Its copies did not settle within 15 minutes")
@@ -257,7 +259,7 @@ def status(item):
             return fail(f"Longhorn placed the new copy on {(where(new[0]) or {}).get('path') or 'a disk without those tags'}")
         if now - ref["started"] > limit:
             return fail("The new copy was not whole in time")
-        if not REBALANCE._built(volume, new[0]):
+        if not whole_copy(new[0]):
             target = where(new[0]) or {}
             return "running", progress, f"Building a copy of {label} on {target.get('host', '')} {target.get('path', '')}".rstrip()
         ref["stage"] = stage = "removing"
@@ -266,7 +268,7 @@ def status(item):
         if leaving:
             # A copy that failed while the new one built: removing one now
             # would leave fewer whole copies than the volume asks for.
-            whole = [r for r in copies if REBALANCE._built(volume, r)]
+            whole = [r for r in copies if whole_copy(r)]
             if len(whole) - 1 < ref["original"]:
                 if now - ref["started"] > 3600 + 120 * ref.get("size_gb", 0):
                     return fail("Another copy failed during the move; the old copy is kept")
@@ -277,7 +279,7 @@ def status(item):
         ref.update(stage="settling", settle_from=now)
         return "running", progress, f"Removing the old copy of {label}"
     if stage == "settling":
-        if len(copies) == ref["original"] and all(REBALANCE._whole(r) for r in copies) \
+        if len(copies) == ref["original"] and all(whole_copy(r) for r in copies) \
                 or now - ref.get("settle_from", now) > 900:
             ref.update(stage="add", moved=done + 1)
             return "running", int(100 * (done + 1) / total), f"Moved a copy of {label} ({done + 1} of {total})"

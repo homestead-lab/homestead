@@ -7,6 +7,7 @@ import homestead_history as HISTORY
 import homestead_kube as KUBE
 import homestead_maintenance as MAINTENANCE
 import homestead_power_hold as HOLD
+import homestead_whole_copy as WHOLE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 kget = impact = quorum = None
@@ -68,28 +69,25 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     # Each attached volume's engine says which replicas are whole (RW) and
     # which are still being rebuilt (WO): a rebuilding copy was counted as a
     # healthy one elsewhere, and the drain then stalled on Longhorn.
-    modes, rebuilding, attached = {}, {}, set()
-    for engine in _items(f"{LH}/engines", absent_ok=True) or []:
+    engines = _items(f"{LH}/engines", absent_ok=True) or []
+    rebuilding, attached = {}, set()
+    for engine in engines:
         status = engine.get("status") or {}
         if status.get("currentState") != "running":
             continue
         attached.add((engine.get("spec") or {}).get("volumeName"))
-        modes.update(status.get("replicaModeMap") or {})
         progress = [r.get("progress") for r in (status.get("rebuildStatus") or {}).values() if r.get("isRebuilding")]
         if progress:
             rebuilding[(engine.get("spec") or {}).get("volumeName")] = min(p or 0 for p in progress)
+    # One rule for a whole copy (homestead_whole_copy): a detached volume's
+    # copies are stopped, not lost, so they count; hosts are checked below.
+    whole = WHOLE.judge(engines, detached_ok=True, volumes=volumes or ())
     by_volume = {}
     for row in replicas or []:
         spec, status = row.get("spec") or {}, row.get("status") or {}
         name = spec.get("volumeName")
         if name:
-            # A detached volume's replicas are stopped, not lost: Longhorn
-            # counts one that was healthy and has not failed as a whole copy,
-            # and so does this - or its only copy here went unseen.
-            whole = (status.get("currentState") == "running" and
-                     modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
-                     or name not in attached and bool(spec.get("healthyAt")))
-            by_volume.setdefault(name, []).append((spec.get("nodeID"), not spec.get("failedAt") and whole))
+            by_volume.setdefault(name, []).append((spec.get("nodeID"), whole(row)))
             if status.get("currentState") == "running":
                 attached.add(name)
     volume_obj = {row.get("metadata", {}).get("name"): row for row in volumes or []}

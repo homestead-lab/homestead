@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power as power
 
 
+HEALTHY = "2026-10-01T00:00:00Z"
+
+
 class PowerPlanTests(unittest.TestCase):
     def setUp(self):
         self.objects = {
@@ -20,10 +23,20 @@ class PowerPlanTests(unittest.TestCase):
             "/api/v1/pods": {"items": [{"metadata": {"namespace": "lab", "name": "app-a",
                                          "ownerReferences": [{"kind": "ReplicaSet", "controller": True, "uid": "rs"}]},
                                          "spec": {"nodeName": "node1"}}]},
+            # As Longhorn has them (tests/fixtures/longhorn_v1_13): named, healthyAt
+            # set, and RW in their volume's running engine.
             f"{power.LH}/replicas": {"items": [
-                {"spec": {"nodeID": "node1", "volumeName": "vol-a"}, "status": {"currentState": "running"}},
-                {"spec": {"nodeID": "node2", "volumeName": "vol-a"}, "status": {"currentState": "running"}},
-                {"spec": {"nodeID": "node1", "volumeName": "vol-b"}, "status": {"currentState": "running"}}]},
+                {"metadata": {"name": "vol-a-r-1"}, "spec": {"nodeID": "node1", "volumeName": "vol-a", "healthyAt": HEALTHY},
+                 "status": {"currentState": "running"}},
+                {"metadata": {"name": "vol-a-r-2"}, "spec": {"nodeID": "node2", "volumeName": "vol-a", "healthyAt": HEALTHY},
+                 "status": {"currentState": "running"}},
+                {"metadata": {"name": "vol-b-r-1"}, "spec": {"nodeID": "node1", "volumeName": "vol-b", "healthyAt": HEALTHY},
+                 "status": {"currentState": "running"}}]},
+            f"{power.LH}/engines": {"items": [
+                {"metadata": {"name": "vol-a-e-0"}, "spec": {"volumeName": "vol-a"},
+                 "status": {"currentState": "running", "replicaModeMap": {"vol-a-r-1": "RW", "vol-a-r-2": "RW"}}},
+                {"metadata": {"name": "vol-b-e-0"}, "spec": {"volumeName": "vol-b"},
+                 "status": {"currentState": "running", "replicaModeMap": {"vol-b-r-1": "RW"}}}]},
             f"{power.LH}/volumes": {"items": [
                 {"metadata": {"name": "vol-a"}, "status": {"robustness": "healthy",
                     "kubernetesStatus": {"namespace": "lab", "pvcName": "appdata"}}},
@@ -59,9 +72,10 @@ class PowerPlanTests(unittest.TestCase):
         replicas = self.objects[f"{power.LH}/replicas"]["items"]
         replicas[0]["metadata"], replicas[1]["metadata"] = {"name": "vol-a-r-here"}, {"name": "vol-a-r-there"}
         self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "block-if-contains-last-replica"}]}
-        self.objects[f"{power.LH}/engines"] = {"items": [{"spec": {"volumeName": "vol-a"}, "status": {
+        engines = self.objects[f"{power.LH}/engines"]["items"]
+        engines[0] = {"spec": {"volumeName": "vol-a"}, "status": {
             "currentState": "running", "replicaModeMap": {"vol-a-r-here": "RW", "vol-a-r-there": "WO"},
-            "rebuildStatus": {"tcp://x": {"isRebuilding": True, "progress": 5}}}}]}
+            "rebuildStatus": {"tcp://x": {"isRebuilding": True, "progress": 5}}}}
         plan = power.plan("node1", "reboot")
         vol = next(v for v in plan["volumes"] if v["claim"] == "lab/appdata")
         self.assertEqual(("unavailable", 0, 5), (vol["risk"], vol["healthy_elsewhere"], vol["rebuilding_pct"]))
