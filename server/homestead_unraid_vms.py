@@ -929,12 +929,26 @@ def _fail(ref, message, item=None):
 # stuck from slow, so at that limit it only stops following: see _stop_following.
 READY_LIMIT = 30 * 60
 FINISH_LIMIT = 6 * 60 * 60
+MESSAGE_LIMIT = 500   # what the job list keeps of a message
 _clock = time.time   # a seam for the tests
 
 
 def _waited(ref, key, limit):
     now = _clock()
     return now - ref.setdefault(key, now) >= limit
+
+
+def _count(disks):
+    return f"{len(disks)} disk" + ("" if len(disks) == 1 else "s")
+
+
+def _delete_command(ns, disks, before):
+    """The command that removes these disks, or None when it wouldn't fit whole after
+    before in a job's message. A cut would leave a name short, which could read as
+    another disk, even a finished one: <vm>-disk-2 becomes <vm>-disk. The caller then
+    names no disk in the command."""
+    command = f"`kubectl -n {ns} delete datavolume {' '.join(disks)}`"
+    return command if len(before) + len(command) <= MESSAGE_LIMIT else None
 
 
 def _stop_following(ref, item, phases):
@@ -944,13 +958,19 @@ def _stop_following(ref, item, phases):
     Only an unfinished disk is ever offered for removal, never a finished copy."""
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
-    done = f"{', '.join(finished)} {'is' if len(finished) == 1 else 'are'} finished and kept. " if finished else ""
-    # The command last: a job's limit on its message can only shorten its list of disks.
-    detail = (f"CDI has not finished {', '.join(unfinished)} after {FINISH_LIMIT // 3600} hours, so this import has "
-              f"stopped and no VM was made. The VM on {_where(ref)} is unchanged. {done}Nothing of the disks was "
-              "removed. If CDI does finish, make the VM from them under Import. If not, import again under another "
-              "name. Homestead can't remove an unfinished disk yet: "
-              f"`kubectl -n {ref['namespace']} delete datavolume {' '.join(unfinished)}`")
+
+    def words(not_done, done, are):
+        kept = f"{done} {are} finished and kept. " if finished else ""
+        return (f"CDI has not finished {not_done} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no "
+                f"VM was made. The VM on {_where(ref)} is unchanged. {kept}Nothing of the disks was removed. If CDI does "
+                "finish, make the VM from them under Import. If not, import again under another name. Homestead can't "
+                "remove an unfinished disk yet: ")
+    what = words(", ".join(unfinished), ", ".join(finished), "is" if len(finished) == 1 else "are")
+    command = _delete_command(ref["namespace"], unfinished, what)
+    if command is None:
+        what = words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")
+        command = f"`kubectl -n {ref['namespace']} delete datavolume <name>` for each disk CDI has not finished"
+    detail = what + command
     if not ref.get("cdi_cleanup"):
         ref["phase"] = "failed"
         return "failed", 100, detail

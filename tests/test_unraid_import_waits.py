@@ -51,6 +51,7 @@ class ImportWaitTests(unittest.TestCase):
         self.enterContext(mock.patch.dict(JOBS.CANCELLERS, {}))
         UVMS.register(JOBS)
         self.now = 1000.0
+        self.dvs = DVS
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now, create=True))
         self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})["id"]
 
@@ -58,7 +59,7 @@ class ImportWaitTests(unittest.TestCase):
         return f"{UVMS.CDI_API}/namespaces/{NS}/datavolumes/{name}"
 
     def phase(self, phase):
-        for name in DVS:
+        for name in self.dvs:
             dv = self.kube.object(self.path(name))
             dv["status"] = {"phase": phase}
             self.kube.add(dv)
@@ -222,6 +223,65 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIn(f"{DVS[0]} is finished", job["message"])
         self.assertTrue(job["message"].endswith(f"delete datavolume {DVS[1]}`"), job["message"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
+
+    def ended_with_vm_name(self, name, first_finished=False):
+        """A fresh import under this VM name, past the six hours. Its disks are <name>-disk
+        and <name>-disk-2: the first name is a prefix of the second."""
+        self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": name})["id"]
+        self.dvs = tuple(UVMS.disk_names(name, 2))
+        self.to_convert()
+        if first_finished:
+            dv = self.kube.object(self.path(self.dvs[0]))
+            dv["status"] = {"phase": "Succeeded"}
+            self.kube.add(dv)
+        self.look()
+        self.now += CONVERT_LIMIT
+        job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        return job["message"]
+
+    def test_past_a_jobs_message_limit_the_command_names_no_disk_and_the_message_counts_them(self):
+        message = self.ended_with_vm_name("a-long-vm-name-" + "x" * 45)
+        self.assertLessEqual(len(message), 500)
+        self.assertTrue(message.startswith("CDI has not finished 2 disks after 6 hours"), message)
+        self.assertTrue(message.endswith(f"`kubectl -n {NS} delete datavolume <name>` for each disk CDI has not finished"), message)
+        self.assertNotIn(self.dvs[0], message)
+
+    def test_past_the_limit_a_finished_disk_is_counted_too_and_the_rest_are_still_not_named(self):
+        message = self.ended_with_vm_name("a-long-vm-name-" + "y" * 45, first_finished=True)
+        self.assertLessEqual(len(message), 500)
+        self.assertIn("<name>", message)
+        self.assertTrue(message.startswith("CDI has not finished 1 disk after 6 hours"), message)
+        self.assertIn("1 disk is finished and kept", message)
+        self.assertNotIn(self.dvs[0], message)
+
+    def test_a_cut_can_never_turn_one_disk_into_another_at_any_name_length(self):
+        # <name>-disk is a prefix of <name>-disk-2, and the shorter one may be the finished
+        # one. A whole name or none: the message is read as the job list keeps it.
+        kinds = set()
+        for length in range(30, 64):   # either side of where the command stops fitting
+            for first_finished in (False, True):
+                with self.subTest(length=length, first_finished=first_finished):
+                    message = self.ended_with_vm_name(("f" if first_finished else "n") * length, first_finished)
+                    self.assertLessEqual(len(message), 500)
+                    if "<name>" in message:
+                        kinds.add("no name")
+                        self.assertNotIn(self.dvs[0], message)
+                        self.assertTrue(message.endswith("for each disk CDI has not finished"), message)
+                    else:
+                        kinds.add("named")
+                        wanted = self.dvs[1] if first_finished else f"{self.dvs[0]} {self.dvs[1]}"
+                        self.assertTrue(message.endswith(f"delete datavolume {wanted}`"), message)
+                    history = next(i for i in JOBS._read() if i["id"] == self.ident)["history"]
+                    self.assertFalse(any("delete datavolume" in row["m"] for row in history),
+                                     "the log keeps 240 characters: too few for the command to be cut in it")
+        self.assertEqual({"named", "no name"}, kinds, "both sides of the limit were walked")
+
+    def test_the_command_is_given_only_when_it_fits_to_the_last_character(self):
+        command = f"`kubectl -n {NS} delete datavolume {DVS[0]} {DVS[1]}`"
+        fits = "x" * (500 - len(command))
+        self.assertEqual(command, UVMS._delete_command(NS, DVS, fits))
+        self.assertIsNone(UVMS._delete_command(NS, DVS, fits + "x"))
 
     def test_a_copy_job_held_on_a_finalizer_keeps_the_job_running_until_it_has_gone(self):
         copies = self.to_convert()
