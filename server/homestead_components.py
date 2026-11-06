@@ -36,6 +36,7 @@ import homestead_fetch as FETCH
 import homestead_forced as FORCED
 import homestead_helm as HELM
 import homestead_job_kinds as JOB_KINDS
+import homestead_cancel_rerun as RERUN
 import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
@@ -1154,16 +1155,40 @@ def cancel_plan(item):
                                         "it carries on and only stops showing here"]}
 
 
+def _remove_saved_plans(item, plans):
+    """remove_plans for a cancel: only ours, and only those it first saw."""
+    uids = item["ref"].get("cancel_uids") or {}
+    for path in plans:
+        current = KUBE.get_optional(path, read=kget)
+        if current and uids.get(path) and ((current.get("metadata") or {}).get("labels") or {}).get("homestead.io/managed") == "true":
+            RERUN._delete_same(path, uids[path], ksend)
+
+
 def cancel_run(item, _options):
     if item["ref"].get("component") == "longhorn" and item["ref"].get("v2_mode") == "live":
         import homestead_lhv2_upgrade as V2
         if parse(longhorn_version()) and parse(longhorn_version())[:3] >= (1, 13, 0):
-            V2._set(V2.AUTO, "false")
+            if item["ref"].get("v2_pause_sent"):
+                # A run cut off after it asked: on now, it never landed or someone turned it back on,
+                # and nothing tells which. Theirs is not undone.
+                if V2._setting(V2.AUTO)[1].get("v2") != "false":
+                    return ("V2 live upgrades read as on. Homestead asked to pause them before it restarted, and does "
+                            "not ask again in case someone turned them back on: check that setting")
+            else:
+                item["ref"]["v2_pause_sent"] = True
+                OPS.keep_cancel_ref(item)
+                V2._set(V2.AUTO, "false")
         return "Paused before the next V2 host; the manager and current host upgrade can still finish"
     if item["ref"].get("component") == "cluster":
+        # Before anything goes: run again, a Plan made since is a later upgrade's.
+        plans = [f"{PLANS}/{name}" for name in PLAN_NAMES]
+        RERUN.remember(item, kget, *plans)
         # Marks first: removing the Plans removes the jobs that say which cordons are ours.
         skipped = _claim(item, lambda _item: None) if item["ref"].get("phase") != "releasing" else {}
-        remove_plans()
+        # Saved too: with the Plans gone, a run cut off here could not say why these stay cordoned.
+        item["ref"]["skipped"] = {**(item["ref"].get("skipped") or {}), **skipped}
+        OPS.keep_cancel_ref(item)
+        _remove_saved_plans(item, plans)
         freed, left = _release(item)
         freed = sorted(set(item["ref"].get("freed") or []) | set(freed))
         left = {**(item["ref"].get("skipped") or {}), **skipped, **left}

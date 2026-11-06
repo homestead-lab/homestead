@@ -44,7 +44,6 @@ UNUSED = "unused when this check was added: remove it"
 # its side effect is marked # noqa: F401, and anything else is removed.
 ALLOWED = {
     "server/homestead_cancel.py: import LH": UNUSED,
-    "server/homestead_cancel.py: import NAMES": UNUSED,
     "server/homestead_container_diagnostics.py: import ROUTER": UNUSED,
     "server/homestead_container_rebalance.py: import hashlib": UNUSED,
     "server/homestead_container_rebalance.py: import json": UNUSED,

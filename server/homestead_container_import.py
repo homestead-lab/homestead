@@ -10,6 +10,7 @@ import copy
 import re
 import shlex
 import time
+import homestead_cancel_rerun as RERUN
 import homestead_copy_checks as COPY_CHECKS
 import urllib.error
 import urllib.parse
@@ -862,8 +863,9 @@ def _plan_volumes(annotations, volume, created):
     return [{"name": claim, "created": claim in made} for claim in used]
 
 
-def delete_import(name, ns=None):
-    """Remove an import Job, cancelling the copy if it is still running.
+def delete_import(name, ns=None, uid=""):
+    """Remove an import Job, cancelling the copy if it is still running. uid: only
+    that Job, from a cancel run again, which must not take a new import of the name.
 
     A failed import leaves its Job behind, and while that Job exists it still
     references the appdata claim - which used to leave both the import and the
@@ -897,8 +899,11 @@ def delete_import(name, ns=None):
             annotations["homestead.io/import-completed-job"] = job["metadata"]["uid"]
             dep["metadata"]["annotations"] = annotations
             I.ksend("PUT", path, dep)  # resourceVersion protects concurrent edits
-    KUBE.delete_if_present(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}?propagationPolicy=Background",
-                           send=I.ksend)
+    if uid:
+        RERUN._delete_same(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}?propagationPolicy=Background", uid, I.ksend)
+    else:
+        KUBE.delete_if_present(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}?propagationPolicy=Background",
+                               send=I.ksend)
     stopped = _stop_job_pods(name, ns=ns)
     _drop_source_copy(name, ns)
     # A pre-pull started for this app outlives the import that wanted it: it is

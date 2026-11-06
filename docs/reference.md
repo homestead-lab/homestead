@@ -1089,6 +1089,23 @@ belongs to the original job. Homestead therefore never uses that legacy shortcut
 to delete a cluster with its disks. Use each VM's separate deletion/impact review
 when you deliberately want to remove resources.
 
+If Homestead restarts during a cancel, the leader runs that cancel again by itself,
+with what you chose, and the job says so. What it deletes is only what its first run
+saw, so a new object under the same name stays, and the job says so. An update or
+Helm upgrade is put back only if what you reviewed is still what is there. It is not
+run again, and the job says why and waits for you to press **Cancel** again, when:
+cancelling would now do something other than what you reviewed; you reviewed it over
+an hour ago; it has already been run again twice; or it is a kind that could undo a
+change made since (promoting a host, retiring a disk, moving or rebalancing a
+volume's copies, swapping a restored volume, aborting a disk self-test, older storage
+moves). If at that point it can't be cancelled at all, the job goes back to what it
+was doing, and says why.
+
+Pressing **Cancel** while a cancel is still running on any Homestead pod is refused,
+and the refusal names the pod. A cancel still running after ten minutes says the same
+on the job. If one has hung, restarting that pod is the way out: the leader then runs
+the cancel again, or the job waits for you, for the reasons above.
+
 Failed batches offer **Review retained resources**, not **Clean up**. An admin
 must confirm the cluster name and acknowledge that stopping tracking removes
 nothing and does not verify readiness. The job remains failed; its history records

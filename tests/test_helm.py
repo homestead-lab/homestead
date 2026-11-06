@@ -226,9 +226,9 @@ class HelmJobTests(unittest.TestCase):
         ident = self.failed_upgrade()
         mark = OPS._mark_cancelling
 
-        def changed_now(match, plan):
+        def changed_now(match, *rest):
             self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
-            return mark(match, plan)
+            return mark(match, *rest)
         with mock.patch.object(OPS, "_mark_cancelling", changed_now), self.assertRaisesRegex(ValueError, "changed since"):
             OPS.cancel(ident)
         self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
@@ -327,7 +327,7 @@ class HelmJobTests(unittest.TestCase):
         """The server stopped while the put-back ran: the job stays marked, and that mark goes stale."""
         items = OPS._read()
         match = next(item for item in items if item["id"] == ident)
-        OPS._mark_cancelling(match, {"action": "Put back earlier settings"})
+        OPS._mark_cancelling(match, {"action": "Put back earlier settings", "mode": "rollback"}, {}, "")
         match["cancel_started"] = 1
         OPS._write(items)
 

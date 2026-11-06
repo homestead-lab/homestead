@@ -9,9 +9,11 @@ are deliberately excluded.
 import homestead_job_cadence as CADENCE
 import homestead_job_errors as ERRORS
 import homestead_kube as KUBE
+import homestead_leader as LEADER
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+import homestead_cancel_rerun as CANCEL_RERUN
 import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_storage_journal as STORAGE_JOURNAL
 import homestead_job_steps as STEPS
@@ -54,6 +56,17 @@ CANCELLING = "cancelling"
 # A cancel that stops part-way - Homestead restarted during it - may be asked
 # again after this long; every canceller's steps are safe to repeat.
 CANCEL_RETRY_AFTER = 120
+# How many times the leader runs one cancel again before it is left for a person:
+# a canceller that takes Homestead down with it must not do so for ever.
+MAX_CANCEL_RERUNS = 2
+# How long what a person reviewed still stands for a run without them. A restart takes
+# minutes; after an outage longer than this the cluster may be another one altogether.
+CANCEL_REVIEW_KEEPS = 3600
+# A cancel running this long says so on the job, and what ends it if it never does:
+# only a restart lets go of a canceller that has hung, and nothing else can stop it.
+# So too how long a lock that can't be opened is waited for, as a passing error on the
+# data volume, before the job goes back to what it was.
+CANCEL_SLOW_AFTER = 600
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("operations", strict=True, directory=lambda: DATA_DIR)
 
@@ -408,7 +421,7 @@ def checkpoint(item):
 
 def _public(item):
     out = {key: value for key, value in item.items()
-           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request",
+           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request", "cancel_record",
                           CADENCE.KEY, ERRORS.KEY)}
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
@@ -1110,11 +1123,11 @@ def run_jobs(is_leader, stop=None, beat=None):
 
 # A lock file per job that ran outside the store's lock (_job_lock) stays on the
 # data volume after its job has gone; once a day the leader removes those over a
-# day old whose job is in neither store. This is safe only because nothing but
-# the loop's _resolve_outside opens a job's lock, and it gives up on a job that
-# is not in the store: a later caller must never take _job_lock for a job that
-# is gone, or it could hold a lock file this has removed while another replica
-# makes a new one.
+# day old whose job is in neither store. This is safe only because everything that
+# opens a job's lock (the loop's _resolve_outside and _resume_cancel, and cancel())
+# first finds the job in the store and gives up if it is not: a later caller must
+# never take _job_lock for a job that is gone, or it could hold a lock file this has
+# removed while another replica makes a new one.
 LOCK_KEEP_SECONDS = LOCK_TIDY_EVERY = 86400
 LOCK_TIDY_RETRY = 3600
 _tidied = {"at": 0}
@@ -1182,8 +1195,8 @@ def _job_lock_name(operation_id):
 def _job_lock(operation_id):
     """The lock one job's resolver and its cancel share, on every replica. One
     per job, so a slow step holds up only its own job."""
-    # Only the loop takes it, and only tries: a job busy elsewhere (an old
-    # leader's step still running) is left for the next round, not waited on.
+    # The loop and cancel() take it, and only try. A job busy elsewhere (an old leader's
+    # step, or a cancel running on any replica) is left for the next round, or refused.
     return SHARED.SharedLock(f"operations-job-{_job_lock_name(operation_id)}", strict=True,
                              directory=lambda: DATA_DIR, timeout=0)
 
@@ -1263,9 +1276,16 @@ def step_claims(item):
     return {("all",)}
 
 
+def _cancel_left_behind(item):
+    """A job marked cancelling with no recorded cancel to apply, that is not
+    waiting for a person: its step looks at whether its canceller still runs."""
+    return (item.get("status") == CANCELLING and not item.get("cancel_request")
+            and not (item.get("cancel_record") or {}).get("parked"))
+
+
 def _steppable(item):
-    return item.get("kind") in OUTSIDE_LOCK and bool(item.get("cancel_request") or (
-        item.get("status") not in TERMINAL and item.get("status") != CANCELLING))
+    return _cancel_left_behind(item) or (item.get("kind") in OUTSIDE_LOCK and bool(item.get("cancel_request") or (
+        item.get("status") not in TERMINAL and item.get("status") != CANCELLING)))
 
 
 def list_operations(wait=True):
@@ -1289,12 +1309,18 @@ def list_operations(wait=True):
         reserved = set()   # what the jobs waiting this round claim: no later job overtakes them
         for job_id in STEPS.fair(list(pending), prune=prune):
             item = pending[job_id]
-            claims = step_claims(item)
-            step = lambda job_id=job_id: _resolve_outside(job_id)
+            # A cancel run again claims only what its kind's steps do: it ran on a
+            # request's thread, beside the other jobs, the first time.
+            claims = step_claims(item) if item.get("kind") in OUTSIDE_LOCK else set()
+            work = _resume_cancel if _cancel_left_behind(item) else _resolve_outside
+            step = lambda job_id=job_id, work=work: work(job_id)
             started = STEPS.submit(job_id, claims, step, label=item.get("title") or item.get("kind"),
                                    reserved=reserved)
             if started == "started":
                 mine.append(step)
+            elif started == "running" and _cancel_left_behind(item):
+                # Its re-run is in flight on this very loop, so it takes no look of its own.
+                _say_once_long(job_id, "said_slow", lambda match: f"Still cancelling: {_still_running(match)}")
             elif started == "waiting":
                 reserved |= claims
             # With wait, a job still in flight from the loop gets its own step after.
@@ -1541,7 +1567,79 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
     recorded here: the jobs loop applies the cancel within a tick, once the
     job's step in flight has ended (_apply_cancel), so the canceller sees what
     that step created, never runs beside it, and the request never waits for a
-    slow host."""
+    slow host.
+
+    Any other kind runs here, on this request's thread and possibly on a replica
+    that is not the leader, holding the job's own lock from before it is marked:
+    so a job marked cancelling whose lock is free has lost its canceller, and
+    the leader runs it again (_resume_cancel)."""
+    with _lock:
+        match = next((item for item in _read() if item.get("id") == operation_id), None)
+        if not match:
+            raise ValueError("operation not found")
+        # A first cancel of a kind the loop applies is only recorded. Asking again
+        # after one was cut off takes the lock, to tell one still running from one gone.
+        deferred = match.get("kind") in OUTSIDE_LOCK and match.get("status") != CANCELLING
+    if deferred:
+        return _cancel_marked(operation_id, options, confirm, allowed, by)
+    lock = _job_lock(operation_id)
+    try:
+        lock.__enter__()
+    except TimeoutError:
+        raise ValueError(f"it is being cancelled already: {_still_running(match)}") from None
+    try:
+        return _cancel_marked(operation_id, options, confirm, allowed, by)
+    finally:
+        lock.__exit__(None, None, None)
+
+
+def _still_running(match):
+    """Where a cancel holding its job's lock runs, and the one thing that ends it."""
+    pod = (match.get("cancel_record") or {}).get("on") or "another Homestead pod"
+    minutes = int(max(0, time.time() - float(match.get("cancel_started") or time.time())) // 60)
+    return f"running for {minutes} min on {pod}. If it never ends, restart that pod, and {_after_restart(match)}."
+
+
+def _after_restart(match):
+    return ("the job then waits for you to press Cancel again" if _would_park(match, match.get("cancel_record"))
+            else "the leader runs the cancel again")
+
+
+def _lock_holder(match):
+    """What frees a job's worker lock held for ever: only the process holding it ending."""
+    return f"If that never ends, restart the Homestead pod running it, and {_after_restart(match)}."
+
+
+def _waits_for_lock(match, plan):
+    """Whether a job marked cancelling keeps waiting on a worker lock: for ever while it is
+    busy, and for CANCEL_SLOW_AFTER from the first error when it can't be opened, or
+    a lock that never opens would hold the job cancelling for good."""
+    if plan.get("try_again") == "busy":
+        return True
+    if plan.get("try_again") != "error":
+        return False
+    since = (match.get("cancel_record") or {}).get("lock_error_since")
+    return not since or time.time() - float(since) <= CANCEL_SLOW_AFTER
+
+
+def _hold_for_lock(operation_id, plan):
+    """The leader's look at a job whose plan is waiting on its worker lock."""
+    why = str(plan["why_not"]).rstrip(".")
+    if plan.get("try_again") == "busy":
+        _say_once_long(operation_id, "said_plan",
+                       lambda match: f"This cancel has not run again yet: {why}. {_lock_holder(match)}")
+        return True
+    with _lock:
+        items = _read()
+        match = next((row for row in items if row.get("id") == operation_id), None)
+        record = (match or {}).get("cancel_record")
+        if record and not record.get("lock_error_since"):
+            record["lock_error_since"] = time.time()
+            _write(items)
+        return bool(match) and _waits_for_lock(match, plan)
+
+
+def _cancel_marked(operation_id, options, confirm, allowed, by):
     with _lock:
         items = _read()
         match = next((item for item in items if item.get("id") == operation_id), None)
@@ -1550,12 +1648,21 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
         deferred = match.get("kind") in OUTSIDE_LOCK
         if deferred and match.get("cancel_request"):
             raise ValueError("a cancel is waiting for this job's current step already")
-        plan, chosen = _cancel_checks(match, options, confirm, allowed)
+        try:
+            plan, chosen = _cancel_checks(match, options, confirm, allowed)
+        except _CannotNow as error:
+            # Left marked, this job could never leave cancelling: pressing Cancel is
+            # refused for as long as its plan refuses, and resolvers skip it.
+            if match.get("status") == CANCELLING:
+                _give_back(match, error)
+                _write(items)
+                advance_soon()
+            raise
         if deferred:
             match["cancel_request"] = {"options": chosen, "confirm": str(confirm or "").strip()[:253],
                                        "mode": plan["mode"], "needs": plan["needs"], "by": str(by or "")[:120]}
         else:
-            before = _mark_cancelling(match, plan)
+            before = _mark_cancelling(match, plan, chosen, by)
         _write(items)
         work = json.loads(json.dumps(match))
     if deferred:
@@ -1563,6 +1670,27 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
         return {"ok": True, "accepted": True, "id": operation_id, "operation": _public(work),
                 "detail": "Cancel requested: it takes effect when the job's current step ends"}
     return _run_cancel(operation_id, work, plan, chosen, before, by)
+
+
+class _CannotNow(ValueError):
+    """Its plan refuses at this step."""
+
+
+def _forget_cancel_saved(match):
+    """What fences a run of one cancel, which a new review or a failed run ends."""
+    for key in ("cancel_uids", "v2_pause_sent"):
+        (match.get("ref") or {}).pop(key, None)
+
+
+def _give_back(match, why):
+    """A cancel that did not finish: the job is what it was again, with the reason.
+    What it saved of what it saw goes too: the next cancel is a new review."""
+    _forget_cancel_saved(match)
+    match.pop("cancel_started", None)
+    match.pop("cancel_record", None)
+    match.update(status=match.pop("previous_status", "running"), updated_at=_now(),
+                 message=f"Cancelling did not finish: {why}"[:500])
+    _note(match, match["status"], match.get("progress", 0), match["message"])
 
 
 def _cancel_checks(match, options, confirm, allowed):
@@ -1574,7 +1702,10 @@ def _cancel_checks(match, options, confirm, allowed):
         raise ValueError("it is being cancelled already")
     plan = _plan_for(match)
     if not plan["can"]:
-        raise ValueError(plan["why_not"] or "it cannot be cancelled at this step")
+        why = plan["why_not"] or "it cannot be cancelled at this step"
+        if plan.get("try_again") == "busy" and status == CANCELLING:
+            why = f"{str(why).rstrip('.')}. {_lock_holder(match)}"
+        raise (ValueError if _waits_for_lock(match, plan) else _CannotNow)(why)
     if allowed and not allowed(plan["needs"]):
         raise PermissionError(f"cancelling this job needs the {plan['needs']} role")
     if plan["confirm"] and str(confirm or "").strip() != plan["confirm"]:
@@ -1584,10 +1715,16 @@ def _cancel_checks(match, options, confirm, allowed):
     return plan, chosen
 
 
-def _mark_cancelling(match, plan):
+def _mark_cancelling(match, plan, chosen, by):
+    """Mark a job cancelling, keeping what the person reviewed: a restart loses
+    the request it came in, and a run after it must do what they chose."""
     before = match.get("previous_status") or match.get("status")
+    # Marked again, this is a new review of what is there.
+    _forget_cancel_saved(match)
     match.update(status=CANCELLING, previous_status=before, cancel_started=time.time(),
-                 updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}")
+                 updated_at=_now(), message=f"Cancelling: {plan['action'].lower()}",
+                 cancel_record={"mode": plan["mode"], "options": chosen, "by": str(by or "")[:120], "reruns": 0,
+                                "at": time.time(), "on": LEADER.IDENTITY, "target": plan.get("reviewed_target")})
     _note(match, CANCELLING, match.get("progress", 0), match["message"])
     return before
 
@@ -1609,26 +1746,162 @@ def _apply_cancel(operation_id):
             if plan["mode"] != request.get("mode"):
                 raise ValueError("what cancelling does changed with its last step; review the cancel again")
         except (ValueError, PermissionError) as error:
+            if isinstance(error, _CannotNow) and match.get("status") == CANCELLING:
+                _give_back(match, error)
+                _write(items)
+                advance_soon()
+                return True
             match.update(updated_at=_now(), message=f"Cancel not applied: {error}"[:500])
             _write(items)
             return True
-        before = _mark_cancelling(match, plan)
+        before = _mark_cancelling(match, plan, chosen, request.get("by", ""))
         _write(items)
         work = json.loads(json.dumps(match))
+    _run_for_them(operation_id, work, plan, chosen, before, request.get("by", ""))
+    return True
+
+
+def _run_for_them(operation_id, work, plan, chosen, before, by, lead=""):
+    """The jobs loop running a canceller."""
     # The canceller's writes are for whoever cancelled, not the loop (#621).
     import homestead_changes as CHANGES
     was = getattr(CHANGES.REQUEST, "user", None)
-    CHANGES.REQUEST.user = request.get("by") or None
+    CHANGES.REQUEST.user = by or None
     try:
-        _run_cancel(operation_id, work, plan, chosen, before, request.get("by", ""))
+        _run_cancel(operation_id, work, plan, chosen, before, by, lead)
     except ValueError as error:   # the job is running again and says why
         print(f"job {operation_id} not cancelled: {str(error)[:160]}", flush=True)
     finally:
         CHANGES.REQUEST.user = was
-    return True
 
 
-def _run_cancel(operation_id, work, plan, chosen, before, by):
+def keep_cancel_ref(item):
+    """A canceller saving what it must not lose before a step that destroys it.
+    Its other changes to item["ref"] are saved only when it ends, so a restart
+    before then starts the next run from the job as it was marked."""
+    if not item.get("id"):
+        return
+    with _lock:
+        items = _read()
+        match = next((row for row in items if row.get("id") == item.get("id")), None)
+        if match and match.get("status") == CANCELLING:
+            match["ref"] = json.loads(json.dumps(item.get("ref")))
+            _write(items)
+
+
+def _resume_cancel(operation_id):
+    """The leader's look at a job marked cancelling. If its lock is busy its
+    canceller is still running, on some replica, and is left to finish. If not,
+    the process running it went away: run it again with what the person chose,
+    or, for a cancel that must not run again by itself, say why and leave it for
+    a person. Cancellers are run twice like this: homestead_cancel_rerun. What
+    cancelling does is asked again first, outside the store's lock, as it reads
+    Kubernetes: if that is not what the person reviewed, a person looks again."""
+    try:
+        with _job_lock(operation_id):
+            seen = next((row for row in _read() if row.get("id") == operation_id), None)
+            if not seen or not _cancel_left_behind(seen):
+                return False
+            try:
+                plan = _plan_for(seen) if seen.get("cancel_record") else None
+            except Exception as error:    # it cannot be told yet: next round, at no cost to its tries
+                print(f"job {operation_id}: its cancel not checked: {str(error)[:160]}", flush=True)
+                _say_once_long(operation_id, "said_plan", (
+                    f"Homestead cannot tell what cancelling would do now ({str(error)[:160]}), so this cancel has "
+                    "not run again. It keeps trying; press Cancel to look at it yourself."))
+                return False
+            if plan and not plan["can"] and plan.get("try_again") and _hold_for_lock(operation_id, plan):
+                return False
+            with _lock:
+                items = _read()
+                match = next((row for row in items if row.get("id") == operation_id), None)
+                if not match or not _cancel_left_behind(match):
+                    return False
+                record = match.get("cancel_record")
+                if not record and not _cancel_stale(match):
+                    return False    # an older replica's, which keeps no lock, may still be running it
+                if plan and not plan["can"]:
+                    _give_back(match, plan["why_not"] or "it cannot be cancelled at this step")
+                    _write(items)
+                    advance_soon()
+                    return True
+                why = _rerun_refusal(match, record, plan)
+                if why:
+                    match["cancel_record"] = {**(record or {}), "parked": True}
+                    # Open to a person at once: nothing is running it.
+                    match.update(cancel_started=0, updated_at=_now(), message=(
+                        f"Homestead restarted during this cancel, and it was not run again. {why.rstrip('.')}. "
+                        "Review it, then press Cancel again.")[:500])
+                    _note(match, CANCELLING, match.get("progress", 0), match["message"])
+                    _write(items)
+                    return True
+                record["reruns"] = record.get("reruns", 0) + 1
+                # This run's own: where it runs, and what it has still to say.
+                record["on"] = LEADER.IDENTITY
+                record.pop("said_slow", None)
+                record.pop("said_plan", None)
+                record.pop("lock_error_since", None)
+                match.update(cancel_started=time.time(), updated_at=_now(),
+                             message="Homestead restarted during this cancel; running it again")
+                _note(match, CANCELLING, match.get("progress", 0), match["message"])
+                _write(items)
+                work = json.loads(json.dumps(match))
+            _run_for_them(operation_id, work, {"mode": record.get("mode")}, record.get("options") or {},
+                          match.get("previous_status"), record.get("by") or "",
+                          lead="Homestead restarted during this cancel and ran it again. ")
+            return True
+    except TimeoutError:
+        # Busy: its canceller is running somewhere. The canceller's own end replaces this.
+        _say_once_long(operation_id, "said_slow", lambda match: f"Still cancelling: {_still_running(match)}")
+        return False
+
+
+def _say_once_long(operation_id, flag, words):
+    """Once a cancel has gone on long, the job says why, once."""
+    try:
+        with _lock:
+            items = _read()
+            match = next((row for row in items if row.get("id") == operation_id), None)
+            record = (match or {}).get("cancel_record")
+            if (not record or record.get(flag) or not _cancel_left_behind(match)
+                    or time.time() - float(match.get("cancel_started") or time.time()) <= CANCEL_SLOW_AFTER):
+                return
+            record[flag] = True
+            match.update(updated_at=_now(), message=(words(match) if callable(words) else words)[:500])
+            _note(match, CANCELLING, match.get("progress", 0), match["message"])
+            _write(items)
+    except TimeoutError:
+        pass    # the store is busy: next round
+
+
+def _would_park(match, record):
+    """Why this cancel will not run again by itself, whatever its plan says, or ""."""
+    if not record:
+        return "It started before Homestead kept what you chose, and that is not guessed."
+    if record.get("reruns", 0) >= MAX_CANCEL_RERUNS:
+        return f"It has been run again {record['reruns']} times, and Homestead stopped during each."
+    why = CANCEL_RERUN.why_not(match.get("kind"), CANCELLERS)
+    if why:
+        return why
+    if time.time() - float(record.get("at") or 0) > CANCEL_REVIEW_KEEPS:
+        return f"It was reviewed over {CANCEL_REVIEW_KEEPS // 3600} hour ago, and that review is not acted on so long after."
+    return ""
+
+
+def _rerun_refusal(match, record, plan):
+    why = _would_park(match, record)
+    if why:
+        return why
+    if plan["mode"] != record.get("mode"):
+        return "What cancelling does has changed since it was reviewed."
+    if plan.get("reviewed_target") != record.get("target"):
+        return "What it would act on has changed since it was reviewed."
+    if {row["id"] for row in plan["options"]} - set(record.get("options") or {}):
+        return "It now offers a choice that was not there when it was reviewed."
+    return ""
+
+
+def _run_cancel(operation_id, work, plan, chosen, before, by, lead=""):
     """Run a marked job's canceller and leave it cancelled, or running again
     with the reason when putting it back failed."""
     entry = CANCELLERS.get(work.get("kind"))
@@ -1640,20 +1913,20 @@ def _run_cancel(operation_id, work, plan, chosen, before, by):
             match = next((item for item in items if item.get("id") == operation_id), None)
             if match:
                 match["ref"] = work.get("ref", match.get("ref"))
-                match.pop("cancel_started", None)
-                match.update(status=match.pop("previous_status", "running"), updated_at=_now(),
-                             message=f"Cancelling did not finish: {error}"[:500])
+                _give_back(match, error)
                 _write(items)
         advance_soon()  # the job is running again
         raise ValueError(f"cancelling did not finish: {error}") from error
     message = message or ("Stopped tracking it here; it carries on in Kubernetes"
                           if plan["mode"] == "forget" else "Cancelled")
+    message = (lead + message)[:500]
     with _lock:
         items = _read()
         match = next((item for item in items if item.get("id") == operation_id), None)
         if match:
             match["ref"] = work.get("ref", match.get("ref"))
             match.pop("cancel_started", None)
+            match.pop("cancel_record", None)
             match.pop("previous_status", None)
             if by:
                 match["cancelled_by"] = str(by)[:120]

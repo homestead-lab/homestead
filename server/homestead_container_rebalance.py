@@ -38,6 +38,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_cancel_rerun as RERUN
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
 import homestead_kube as KUBE
@@ -877,19 +878,39 @@ def cancel_plan(item):
 
 def cancel_run(work, chosen):
     ref = work.get("ref") or {}
+    left = []
     if ref.get("pulls"):
         # The pulls are cleared when their stage ends; a cancel ends it too,
-        # or the pre-pull DaemonSets would go on pulling for good.
-        import homestead_host_move as HOST_MOVE
-        HOST_MOVE._clear(ref.pop("pulls"))
+        # or the pre-pull DaemonSets would go on pulling for good. Only those this
+        # cancel first saw: run again, a new pull of the name is someone's. One that
+        # fails stops none of the others, and is named.
+        import homestead_image_cache as IMAGES
+        paths = {name: f"/apis/apps/v1/namespaces/{IMAGES.I.NS}/daemonsets/{name}?propagationPolicy=Background"
+                 for name in ref["pulls"]}
+        for path in paths.values():    # all saved before any goes
+            try:
+                RERUN.remember(work, KUBE.kget, path)
+            except Exception as error:
+                print(f"pull not saved: {str(error)[:160]}", flush=True)
+        for name, path in paths.items():
+            try:
+                RERUN.delete_saved(work, KUBE.kget, KUBE.ksend, path)
+            except Exception as error:
+                print(f"pull {name} not cleared: {str(error)[:160]}", flush=True)
+                left.append(name)
+        ref.pop("pulls")
+    note = ""
+    if left:
+        names = ", ".join(left[:-1]) + " and " + left[-1] if len(left) > 1 else left[0]
+        note = f"; {names} could not be stopped: delete {'them' if len(left) > 1 else 'it'} under Image cache"
     if ref.get("stop_on_failure"):
         # The one moving now finishes its restart; the rest are not reached.
         first = ref.get("index", 0) + (1 if ref.get("stage") == "starting" else 0)
         for move in ref.get("moves", [])[first:]:
             _note(ref, move, "not reached")
-        return "Stopped: " + _summary(ref)
+        return "Stopped: " + _summary(ref) + note
     moved = ref.get("moved", 0)
-    return f"Stopped after moving {moved} container{'' if moved == 1 else 's'}"
+    return f"Stopped after moving {moved} container{'' if moved == 1 else 's'}" + note
 
 
 def start_run(request):

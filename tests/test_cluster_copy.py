@@ -137,6 +137,18 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertNotIn("/api/v1/namespaces/copied/configmaps/desktop-vbios", self.cluster.objects)
         self.assertIn("/api/v1/namespaces/lab/configmaps/desktop-vbios", self.cluster.objects)
 
+    def test_abandoning_again_leaves_a_new_object_of_that_name(self):
+        move = PLAN.start("shed", "container", "frigate", "copied", transfer_mode="copy")
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+        path = "/apis/apps/v1/namespaces/copied/deployments/frigate"
+        self.assertIn(path, self.cluster.objects)
+        ACT.abandon(move["id"])
+        self.assertNotIn(path, self.cluster.objects)
+        self.cluster.put(path, {"metadata": {"name": "frigate", "namespace": "copied", "uid": "someone-elses"},
+                                "spec": {"replicas": 1}})
+        ACT.abandon(move["id"])
+        self.assertEqual("someone-elses", self.cluster.get(path)["metadata"]["uid"])
+
     def test_leave_out_device_removes_its_rom_and_hook_on_copy(self):
         self.hardware_vm()
         move = PLAN.start("shed", "vm", "desktop", "copied", transfer_mode="copy",
