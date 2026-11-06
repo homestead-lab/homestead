@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -6,8 +7,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_cancel as CANCEL
 import homestead_disks as DISKS
 import homestead_kube as K
+import homestead_operations as JOBS
 from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
 
@@ -122,6 +125,233 @@ def run(item, limit=20):
         if status != "running":
             return item
     raise AssertionError("never finished: " + item["message"])
+
+
+class RetireWaitTests(unittest.TestCase):
+    """A retire waiting on Longhorn ends: its waits had no deadline and raise
+    nothing, so no limit on failed reads applied, and the job stayed "running"
+    with every disk and host job that waits for it. Through the real job list."""
+    NODE = f"{DISKS.LH}/nodes/node3"
+    LIMIT = 30 * 60
+
+    def setUp(self):
+        self.enterContext(mock.patch.object(JOBS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.c = Cluster(self)
+        self.enterContext(mock.patch.dict(JOBS.RESOLVERS, {}))
+        self.enterContext(mock.patch.dict(JOBS.RESUMABLE, {}))
+        self.enterContext(mock.patch.dict(JOBS.CANCELLERS, {}))
+        self.enterContext(mock.patch.object(JOBS, "CLEANUPS", set()))
+        DISKS.register(JOBS)
+        CANCEL.register(JOBS)
+        self.now = 1000.0
+        self.enterContext(mock.patch.object(DISKS, "_clock", lambda: self.now))
+
+    def start(self, **cfg):
+        return DISKS.retire_start({"node": "node3", "disk": "bd-sdb", **cfg}, JOBS)["id"]
+
+    def look(self, ident, times=1):
+        for _ in range(times):
+            job = next(job for job in JOBS.list_operations() if job["id"] == ident)
+        return job
+
+    def force(self):
+        return self.start(force=True, confirm="bd-sdb")
+
+    def disk_in_longhorn(self):
+        return "bd-sdb" in self.c.kube.object(self.NODE)["spec"]["disks"]
+
+    def record(self, name):
+        node = self.c.kube.object(self.NODE)
+        node["status"]["diskStatus"]["bd-sdb"]["scheduledReplica"][name] = 1
+        self.c.kube.add(node)
+
+    def forget_record(self, name):
+        node = self.c.kube.object(self.NODE)
+        node["status"]["diskStatus"]["bd-sdb"]["scheduledReplica"].pop(name)
+        self.c.kube.add(node)
+
+    def test_a_replica_record_longhorn_keeps_ends_the_job_with_the_disk_kept(self):
+        self.record("r-ghost")
+        ident = self.force()
+        job = self.look(ident, 4)
+        self.assertEqual("Waiting for Longhorn to let go of 1 replica record(s)", job["message"])
+        self.now += self.LIMIT - 1
+        self.assertEqual("running", self.look(ident)["status"])
+        self.now += 1
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("1 replica record", job["message"])
+        self.assertIn("30 minutes", job["message"])
+        self.assertTrue(self.disk_in_longhorn(), "the disk stays, as reviewed: nothing was let go")
+
+    def test_resuming_after_that_gets_a_fresh_wait_and_can_finish(self):
+        self.no_only_copy()
+        self.record("r-ghost")
+        ident = self.start()
+        self.look(ident, 4)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        JOBS.resume(ident)
+        self.assertEqual("running", self.look(ident)["status"], "it is not refused again at once")
+        self.forget_record("r-ghost")
+        self.assertEqual("succeeded", self.look(ident, 4)["status"])
+
+    def no_only_copy(self):
+        # A kept only copy ends the retire at this step, with the disk kept.
+        self.c.kube.discard(f"{DISKS.LH}/replicas/r-only")
+        self.forget_record("r-only")
+
+    def failed(self, **cfg):
+        self.no_only_copy()
+        self.record("r-ghost")
+        ident = self.start(**cfg)
+        self.look(ident, 4)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.c.kube.writes.clear()
+        return ident
+
+    def saved(self, kind, **ref):
+        return JOBS.start(kind, kind, {"kind": "Node", "name": "node3"}, "/", {"node": "node3", "disk": "bd-sdb", **ref})["id"]
+
+    def drop(self, ident):
+        with JOBS.transaction():
+            JOBS._write([item for item in JOBS._read() if item["id"] != ident])
+
+    def test_a_failed_retire_lets_a_guarded_job_start_and_is_not_resumed_past_it(self):
+        ident = self.failed()
+        for kind, ref in (("disk-allocation", {"phase": "growing"}), ("disk-v2-convert", {"phase": "evacuating"}),
+                          ("longhorn-runtime", {"phase": "staged"})):
+            with self.subTest(kind=kind):
+                other = self.saved(kind, **ref)
+                self.assertFalse(next(j for j in JOBS.snapshot() if j["id"] == ident)["resumable"])
+                with self.assertRaises(ValueError):
+                    JOBS.resume(ident)
+                self.assertEqual("failed", next(j for j in JOBS.snapshot() if j["id"] == ident)["status"])
+                self.assertEqual([], self.c.kube.writes, "nothing runs past the other job")
+                self.drop(other)
+        JOBS.resume(ident)
+
+    def test_a_second_retire_of_the_same_disk_stops_the_first_being_resumed(self):
+        ident = self.failed()
+        other = self.saved("disk-retire", phase="stop")
+        with self.assertRaises(ValueError):
+            JOBS.resume(ident)
+        self.drop(other)
+        JOBS.resume(ident)
+
+    def test_a_forced_retire_with_replicas_to_go_needs_a_fresh_review(self):
+        # Force takes replicas off with no check on their other copies: reviewed once,
+        # and a failed job can be resumed days later.
+        stuck = self.c.kube.object(f"{DISKS.LH}/replicas/r-else")
+        stuck["metadata"]["finalizers"] = ["longhorn.io"]
+        self.c.kube.add(stuck)
+        ident = self.force()
+        self.look(ident, 3)
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["resumable"])
+        self.assertIn("start the retire again", job["message"])
+        self.assertNotIn("Resume", job["message"])
+        with self.assertRaisesRegex(ValueError, "review"):
+            JOBS.resume(ident)
+
+    def test_a_forced_retire_past_its_replicas_can_be_resumed(self):
+        ident = self.force()
+        self.look(ident, 3)
+        self.c.kube.fail(self.NODE, 400, times=2, method="PATCH")
+        self.look(ident)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        JOBS.resume(ident)
+        self.assertEqual("succeeded", self.look(ident, 3)["status"])
+        self.assertFalse(self.disk_in_longhorn())
+
+    def test_a_resumed_retire_checks_the_other_copies_again(self):
+        stuck = self.c.kube.object(f"{DISKS.LH}/replicas/r-else")
+        stuck["metadata"]["finalizers"] = ["longhorn.io"]
+        self.c.kube.add(stuck)
+        self.no_only_copy()
+        ident = self.start()
+        self.look(ident, 3)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.c.change_replica("r-else-1", failedAt="2026-09-29T00:00:00Z")
+        JOBS.resume(ident)
+        self.c.kube.writes.clear()
+        self.assertIn("could not confirm", self.look(ident)["message"])
+        self.assertEqual([], [w for w in self.c.kube.writes if w[0] == "DELETE"], "its last copy is not let go")
+
+    def test_a_failed_retire_can_still_be_put_back(self):
+        ident = self.failed()
+        job = self.look(ident)
+        self.assertTrue(job["cleanable"])
+        self.assertIn("Cancel", job["message"])
+        JOBS.cancel(ident)
+        job = self.look(ident)
+        self.assertIn("takes replicas again", job["message"])
+        self.assertIs(True, self.c.kube.object(self.NODE)["spec"]["disks"]["bd-sdb"]["allowScheduling"])
+        self.assertFalse(job["cleanable"], "once is enough")
+        self.assertFalse(job["resumable"], "what was put back does not carry on")
+        with self.assertRaises(ValueError):
+            JOBS.resume(ident)
+        JOBS.dismiss(ident)
+
+    def test_it_is_not_put_back_past_a_guarded_job(self):
+        ident = self.failed()
+        other = self.saved("disk-allocation", phase="growing")
+        with self.assertRaises(ValueError):
+            JOBS.cancel(ident)
+        self.assertEqual([], self.c.kube.writes)
+        self.drop(other)
+        JOBS.cancel(ident)
+
+    def test_a_disk_being_removed_is_not_put_back(self):
+        ident = self.force()
+        self.look(ident, 3)
+        self.c.kube.fail(self.NODE, 400, times=99, method="PATCH")
+        self.look(ident)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        with self.assertRaises(ValueError):
+            JOBS.cancel(ident)
+
+    def test_a_disk_longhorn_will_not_let_go_ends_the_job_in_longhorns_words(self):
+        ident = self.force()
+        job = self.look(ident, 3)
+        self.c.kube.fail(self.NODE, 400, times=99, method="PATCH")
+        job = self.look(ident)
+        self.assertIn("not letting the disk go yet", job["message"])
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("30 minutes", job["message"])
+        self.assertTrue(self.disk_in_longhorn())
+
+    def test_a_replica_that_never_goes_ends_the_job(self):
+        stuck = self.c.kube.object(f"{DISKS.LH}/replicas/r-else")
+        stuck["metadata"]["finalizers"] = ["longhorn.io"]
+        self.c.kube.add(stuck)
+        ident = self.force()
+        job = self.look(ident, 3)
+        self.assertIn("Letting go of", job["message"])
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("replica", job["message"])
+        self.assertIn("30 minutes", job["message"])
+
+    def test_an_ordinary_retire_still_finishes(self):
+        ident = self.force()
+        self.assertEqual("succeeded", self.look(ident, 8)["status"])
+
+    def test_a_kept_only_copy_is_not_counted_as_a_record_being_waited_for(self):
+        # The only copy, kept as reviewed, keeps its record: the retire ends with it.
+        ident = self.start()
+        job = self.look(ident, 6)
+        self.assertEqual("succeeded", job["status"])
+        self.assertIn("only copy", job["message"])
 
 
 class MissingDriveTests(unittest.TestCase):

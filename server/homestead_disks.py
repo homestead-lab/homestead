@@ -28,6 +28,7 @@ import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
+import homestead_storage_conflicts as CONFLICTS
 import homestead_whole_copy as WHOLE
 
 kget = ksend = None
@@ -733,8 +734,37 @@ def retire_start(cfg, ops):
                      {"kind": "Node", "name": node}, f"/nodes/{node}", ref, "Stopping new replicas on the disk")
 
 
+def retire_held(item):
+    """Why a failed retire may not act again, or "". Failed, it holds nothing: a
+    guarded job may have started on its host since. Asked inside the job store's
+    lock, and whichever answer lets it go marks it active in that same hold, so
+    nothing can start between the two. Reads only the job store."""
+    ref = item.get("ref") or {}
+    others = [other for other in OPS.stored() if other.get("id") != item.get("id")]
+    if any(other.get("kind") == "disk-retire" and other.get("status") not in OPS.TERMINAL
+           and (other.get("ref") or {}).get("node") == ref.get("node") and (other.get("ref") or {}).get("disk") == ref.get("disk")
+           for other in others):
+        return "another retire of this disk is running"
+    try:
+        CONFLICTS.require_clear(others, "disk-retire", ref, item.get("resource"))
+        with _checked(ref.get("node"), ref.get("disk"), ref.get("path")):
+            pass
+    except ValueError as refused:
+        return str(refused)
+    return ""
+
+
 def retire_resumable(item):
-    return "it finished" if (item.get("ref") or {}).get("phase") == "done" else ""
+    ref = item.get("ref") or {}
+    if ref.get("phase") == "done":
+        return "it finished"
+    if ref.get("phase") == "cancelled":
+        return "it was put back"
+    # A forced retire takes replicas off with no check on their other copies, on a
+    # review that may be days old. Past its replicas, force changes nothing.
+    if ref.get("force") and ref.get("phase", "stop") in ("stop", "replicas"):
+        return "a forced retire's review may be out of date: start the retire again and review it afresh"
+    return retire_held(item)
 
 
 def _bd_provisioned(bd):
@@ -748,7 +778,31 @@ def _bd_provisioned(bd):
 # keeps that volume's failed replica here (a host NotReady for a moment, a
 # copy still rebuilding). The clock is a seam for the tests.
 UNCONFIRMED_WAIT = 1800
+# How long a retire waits on Longhorn to let go of a replica or the disk. Past
+# this it fails, with nothing further done: the disk takes no new replicas and
+# stays listed, and Resume carries on from the same step.
+LETTING_GO_WAIT = 1800
 _clock = time.time
+
+
+def _waited_out(ref, key):
+    """Has this wait lasted LETTING_GO_WAIT? When it has, its start is dropped,
+    or a resume would fail again at once."""
+    now = _clock()
+    if now - ref.setdefault(key, now) < LETTING_GO_WAIT:
+        return False
+    ref.pop(key)
+    return True
+
+
+def _still_held(what, ref, disk_id):
+    if ref.get("phase") == "remove":
+        then = "Resume carries on from here"
+    else:
+        again = "start the retire again for a fresh review" if ref.get("force") else "Resume carries on from here"
+        then = f"Cancel lets replicas onto it again; {again}"
+    return (f"Longhorn has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
+            f"no new replicas and stays in Longhorn. {then}")
 
 
 def retire_step(item):
@@ -800,7 +854,11 @@ def retire_step(item):
                     raise
         ref["removed"] = sorted(set(ref.get("removed") or []) | {r["metadata"]["name"] for r in left})
         if left:
-            return "running", 30, f"Letting go of {len(left)} failed replica{'' if len(left) == 1 else 's'}"
+            said = f"{len(left)} failed replica{'' if len(left) == 1 else 's'}"
+            if _waited_out(ref, "letting_go_since"):
+                return "failed", 30, _still_held(said, ref, disk_id)
+            return "running", 30, f"Letting go of {said}"
+        ref.pop("letting_go_since", None)
         # Counted by volume: a volume may have several failed replicas here.
         volume_of = {r["metadata"]["name"]: (r.get("spec") or {}).get("volumeName") or r["metadata"]["name"] for r in replicas}
         volumes = lambda names: (lambda n: f"{n} volume{'' if n == 1 else 's'}")(len({volume_of.get(x, x) for x in names}))
@@ -821,8 +879,11 @@ def retire_step(item):
                             f"{UNCONFIRMED_WAIT // 60} minutes, so their replicas here stay: retire this disk again "
                             "once their other copy is whole")
             return "succeeded", 100, said[0] + ". " + ". ".join(s[0].upper() + s[1:] for s in said[1:]) + "."
-        if [name for name in scheduled if name not in keep]:
-            return "running", 45, f"Waiting for Longhorn to let go of {len(scheduled)} replica record(s)"
+        records = [name for name in scheduled if name not in keep]
+        if records:
+            if _waited_out(ref, "records_since"):
+                return "failed", 45, _still_held(f"{len(records)} replica record(s)", ref, disk_id)
+            return "running", 45, f"Waiting for Longhorn to let go of {len(records)} replica record(s)"
         ref["phase"] = "remove"
         return "running", 55, "Nothing is left on the disk"
     if phase == "remove":
@@ -838,7 +899,10 @@ def retire_step(item):
             ksend("PATCH", f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}},
                   ctype="application/merge-patch+json")
         except urllib.error.HTTPError as error:
-            return "running", 70, f"Longhorn is not letting the disk go yet - {_refused(error, 'removing it')}"
+            refused = _refused(error, "removing it")
+            if _waited_out(ref, "remove_since"):
+                return "failed", 70, _still_held(f"the disk ({refused})", ref, disk_id)
+            return "running", 70, f"Longhorn is not letting the disk go yet - {refused}"
         ref["phase"] = "cleanup"
         return "running", 80, "Taking the disk out of Longhorn"
     if phase == "cleanup":

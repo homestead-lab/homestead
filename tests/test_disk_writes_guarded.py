@@ -32,14 +32,17 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+import homestead_cancel as CANCEL
 import homestead_disks as DISKS
 import homestead_longhorn_runtime as RUNTIME
 import homestead_storage_conflicts as CONFLICTS
 
 # name: why it may write without the guards
 EXEMPT = {
-    ("homestead_disks", "retire_step"): "the retire job's own steps; its start was guarded and it holds the host",
-    ("homestead_cancel", "disk_retire_cancel"): "puts scheduling back on the disk the retire job holds",
+    ("homestead_disks", "retire_step"): "the retire job's own steps; its start was guarded and it holds the host; "
+                                         "failed, it holds nothing, so Resume asks the guards again (retire_resumable)",
+    ("homestead_cancel", "disk_retire_cancel"): "puts scheduling back on the disk the retire job holds; "
+                                                   "failed, it holds nothing, so its plan asks the guards again (retire_held)",
     ("homestead_root_guard", "_schedule"): "stops placement on a root-filesystem folder disk that is nearly full, "
                                           "and allows it again only on one it stopped itself",
     ("homestead_disk_v2", "_patch_disk"): "the V2 preparation job's own steps, which its saved task (the disk_v2 guard) protects",
@@ -139,6 +142,18 @@ class DiskWritesGuardedTests(unittest.TestCase):
         with mock.patch.object(RUNTIME, "ops", types.SimpleNamespace(stored=lambda: [retire], TERMINAL=("succeeded",))), \
                 self.assertRaises(ValueError):
             RUNTIME._conflicts("node-a")
+
+    def test_a_failed_retire_holds_nothing_so_its_way_back_asks_the_guards_again(self):
+        # What the exemptions above rest on: failed, it no longer holds the host.
+        retire = {"id": "r", "kind": "disk-retire", "status": "failed", "ref": {"node": "node-a", "disk": "data"}}
+        for kind in ("disk-v2-convert", "disk-allocation"):
+            with self.subTest(kind=kind):
+                CONFLICTS.require_clear([retire], kind, {"node": "node-a"})
+        scope = mock.MagicMock(side_effect=ValueError("held"))
+        with mock.patch.dict(DISKS.GUARDS, {name: scope for name in DISKS.REQUIRED_GUARDS}), \
+                mock.patch.object(DISKS.OPS, "stored", return_value=[retire]):
+            self.assertIn("held", DISKS.retire_resumable(retire))
+            self.assertFalse(CANCEL.disk_retire_plan(retire).get("can", True))
 
     def test_and_a_retire_cannot_start_past_the_guards(self):
         self.assertTrue(getattr(DISKS.retire_start, "__wrapped__", None), "retire_start runs under @_guarded")

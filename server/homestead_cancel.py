@@ -518,6 +518,11 @@ def disk_retire_plan(item):
         return {"can": False, "needs": "admin",
                 "why_not": "The disk is being taken out of Longhorn; that finishes in moments and "
                            "cannot be stopped half-way"}
+    # A failed retire holds nothing: this is asked under the job store's lock, and
+    # the cancel marks it active in the same hold (DISKS.retire_held).
+    held = DISKS.retire_held(item) if item.get("status") == "failed" else ""
+    if held:
+        return {"can": False, "needs": "admin", "why_not": held}
     removed = len(ref.get("removed") or [])
     return {"mode": "rollback", "needs": "admin",
             "undo": ["Lets Longhorn place replicas on the disk again, as before"],
@@ -661,3 +666,6 @@ def register(ops):
             ops.CANCELLERS[kind] = (plan, run or (lambda _item, _options: ""))
     # Failed k3s jobs allow a retention/tracking review, not automatic deletion.
     ops.CLEANUPS.add("k3s-cluster")
+    # A retire that failed waiting on Longhorn had Cancel until then, and its disk
+    # still takes no replicas: it can still be put back.
+    ops.CLEANUPS.add("disk-retire")
