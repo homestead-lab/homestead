@@ -1,6 +1,6 @@
 "use strict";
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),vm=require("node:vm");
-function setup({cleanup=true,mode="forget",copy=false,blocked=false,named=false,kind="k3s-cluster",tracking=true}={}) {
+function setup({cleanup=true,mode="forget",copy=false,blocked=false,named=false,kind="k3s-cluster",tracking=true,plan={}}={}) {
   const elements={};
   for(const id of ["jobTray","jobSummary","jobClear","jobList","oc_go","oc_confirm"])
     elements[`#${id}`]={innerHTML:"",value:"",disabled:true,classList:{add(){},remove(){},toggle(){}},setAttribute(){}};
@@ -17,7 +17,7 @@ function setup({cleanup=true,mode="forget",copy=false,blocked=false,named=false,
       if(path.endsWith("cancel-plan"))return {id:"old",title:"Legacy build",mode,cleanup,can:!blocked,severity:"low",
         ...(copy?{copy_recovery:true,lead:"Release the hold only; no app is started and no data is deleted.",why_not:"Copy is still active."}:{}),
         action:named?"Let replicas back":mode==="forget"?"Stop tracking it":"Cancel and put back",cleanup_says_action:named,needs:"admin",confirm:"k3s-lab",
-        undo:mode==="forget"?[]:["Deletes owned resources"],keeps:["All VMs, disks, Secrets and IP-address records remain"],options:[]};
+        undo:mode==="forget"?[]:["Deletes owned resources"],keeps:["All VMs, disks, Secrets and IP-address records remain"],options:[],...plan};
       return {operation:{...job,cleanable:false,dismissible:true,tracking_stopped:true}};
     }};
   ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
@@ -53,6 +53,16 @@ test("a cleanup that says its own action does not claim to remove anything",asyn
   const t=setup({mode:"rollback",named:true});await t.ctx.cancelOperation("old");
   assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Let replicas back/);
   assert.doesNotMatch(t.modal.body,/Remove what it made|What cleaning up removes/);
+});
+test("a failed Helm upgrade's review says it puts settings back, in its title, lead and button",async()=>{
+  const lead="This upgrade failed. Putting back returns the chart's version and values; the job stays in the list as failed";
+  const t=setup({mode:"rollback",named:true,plan:{review_title:"Put back earlier settings",action:"Put back earlier settings",lead,confirm:""}});
+  await t.ctx.cancelOperation("old");
+  assert.equal(t.modal.title,"Put back earlier settings · Legacy build");
+  assert.match(t.modal.body,/Putting back returns the chart's version and values/);
+  assert.match(t.modal.body,/What it puts back/);
+  assert.match(t.modal.body,/>Put back earlier settings<\/button>/);
+  assert.doesNotMatch(t.modal.body,/Remove what it made|Cleaning up removes|What cleaning up removes/);
 });
 
 test("a failed disk retire's Clean up does not read as removing anything",()=>{

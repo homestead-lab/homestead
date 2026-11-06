@@ -566,23 +566,66 @@ def disk_retire_cancel(item, _options):
 
 # --------------------------------------------------------------- the rest
 def _helm_action(item):
-    ref = item["ref"]
-    if ref.get("action") in ("install", "upgrade", "uninstall"):
-        return ref["action"]
-    # Jobs from releases before this one: the job's name and the title say.
-    if str(ref.get("name", "")).startswith("helm-delete-"):
-        return "uninstall"
-    return "upgrade" if str(item.get("title", "")).startswith("Helm upgrade ") else "install"
+    return HELM.job_action(item)
+
+
+def _helm_ns(item):
+    return _q((item.get("ref") or {}).get("namespace") or HELM.CONTROLLER_NS)
 
 
 def _helmchart(item):
     name = item["resource"].get("name", "")
-    return name, KUBE.get_optional(f"/apis/helm.cattle.io/v1/namespaces/{_q(HELM.CONTROLLER_NS)}/helmcharts/{_q(name)}", read=kget)
+    return name, KUBE.get_optional(f"/apis/helm.cattle.io/v1/namespaces/{_helm_ns(item)}/helmcharts/{_q(name)}", read=kget)
+
+
+def _no_put_back(item, action, name, chart):
+    """Why a failed Helm job may not put its chart back, or "". The earlier settings
+    belong to the chart as this job's upgrade left it: one changed or made again
+    since has someone's later work on it. A job from before this has no such record."""
+    ref = item["ref"]
+    if action != "upgrade":
+        return f"A failed {action} has nothing to put back"
+    if not chart:
+        return f"{name}'s chart is gone, so there is nothing to put back"
+    meta = chart.get("metadata") or {}
+    if HELM.previous_spec(chart) is None:
+        return f"No earlier settings of {name} were kept to go back to"
+    if not ref.get("chart_uid"):
+        return f"This upgrade is from an older Homestead and kept no record of the chart it wrote, so {name} is not put back from here"
+    if meta.get("uid") != ref["chart_uid"] or meta.get("generation") != ref.get("chart_generation"):
+        return f"{name} has changed since this upgrade was written, so putting it back would undo that; nothing was changed"
+    return ""
+
+
+def _went_back(item, chart):
+    """A failed upgrade's put-back that went through without saying so: its reply
+    was lost, or the server stopped. Its earlier settings are gone from the chart
+    it wrote, and the chart's settings moved exactly once since: restore_previous
+    takes the settings off in the write that puts them back. Anyone else's change
+    leaves them on, so this does not take a later change for it. Only an upgrade
+    records a generation."""
+    ref, meta = item["ref"], (chart or {}).get("metadata") or {}
+    return (bool(ref.get("chart_uid")) and meta.get("uid") == ref["chart_uid"]
+            and isinstance(ref.get("chart_generation"), int) and meta.get("generation") == ref["chart_generation"] + 1
+            and not (meta.get("annotations") or {}).get(HELM.PREVIOUS_SPEC))
+
+
+def _was_failed(item):
+    return "failed" in (item.get("status"), item.get("previous_status"))
 
 
 def helm_plan(item):
     action = _helm_action(item)
     name, chart = _helmchart(item)
+    if _was_failed(item) and _went_back(item, chart):
+        return {"mode": "rollback", "needs": "admin", "review_title": "Close it", "action": "Close it", "cleanup_says_action": True, "keeps": [],
+                "lead": f"{name}'s earlier settings are back already: a put-back went through before it could say so. "
+                        "Closing this changes nothing on the chart; the job stays in the list as failed"}
+    # A failed job offers one thing: an upgrade's earlier settings, on the chart it wrote.
+    if item.get("status") == "failed":
+        why = _no_put_back(item, action, name, chart)
+        if why:
+            return {"can": False, "needs": "admin", "why_not": why}
     if action == "uninstall" or not chart:
         return {"mode": "forget", "needs": "admin", "keeps": [
             f"{name} is being removed already, and Kubernetes cannot take that back; install it again once it is gone"]}
@@ -590,23 +633,43 @@ def helm_plan(item):
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"No earlier settings of {name} were kept to go back to; the upgrade carries on"]}
-        return {"mode": "rollback", "needs": "admin", "severity": "high",
+        plan = {"mode": "rollback", "needs": "admin", "severity": "high",
                 "undo": [f"Puts {name}'s chart version and values back as they were before the upgrade; "
                          "Helm runs again with them"],
                 "keeps": ["Anything the upgrade changed in the chart's own data - a database migration - "
                           "is not undone by Helm"]}
+        if _was_failed(item):
+            plan.update(review_title="Put back earlier settings", action="Put back earlier settings", cleanup_says_action=True,
+                        lead="This upgrade failed. Putting back returns the chart's version and values; "
+                             "the job stays in the list as failed")
+        return plan
     return {"mode": "rollback", "needs": "admin", "severity": "high",
             "undo": [f"Stops the install and deletes the chart {name}: the Helm controller then uninstalls "
                      "whatever it made so far"],
             "keeps": ["Volumes the chart made may be kept, as its own settings say"]}
 
 
+def _helm_view(item, out):
+    """Reads no chart: this runs under the jobs lock on every poll. A chart gone since
+    the job failed is refused by helm_plan when the person asks."""
+    if out.get("cleanable"):
+        ref = item["ref"]
+        out["cleanable"] = _helm_action(item) == "upgrade" and bool(ref.get("chart_uid")) and not ref.get("chart_gone")
+
+
 def helm_cancel(item, _options):
     action = _helm_action(item)
     name, chart = _helmchart(item)
+    # Read again here: the review read the chart a moment ago, and this is its own read.
+    if item.get("previous_status") == "failed":
+        if _went_back(item, chart):
+            return f"{name} went back to its settings from before the upgrade"
+        why = _no_put_back(item, action, name, chart)
+        if why:
+            raise ValueError(why)
     if action == "uninstall" or not chart:
         return "Stopped following it; the removal carries on"
-    ns = _q(HELM.CONTROLLER_NS)
+    ns = _helm_ns(item)
     if action == "upgrade":
         if not HELM.restore_previous(chart):
             return "Stopped following it; the upgrade carries on"
@@ -690,6 +753,9 @@ def register(ops):
             ops.CANCELLERS[kind] = (plan, run or (lambda _item, _options: ""))
     # Failed k3s jobs allow a retention/tracking review, not automatic deletion.
     ops.CLEANUPS.add("k3s-cluster")
+    # A failed Helm upgrade had Cancel until then; its earlier settings are on its chart.
+    ops.CLEANUPS.add("helm")
+    ops.VIEWS["helm"] = _helm_view
     # A retire that failed waiting on Longhorn had Cancel until then, and its disk
     # still takes no replicas: it can still be put back.
     ops.CLEANUPS.add("disk-retire")

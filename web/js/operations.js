@@ -585,7 +585,7 @@ window.cancelOperation = async id => {
       ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup && !plan.cleanup_says_action ? "Remove what it made" : plan.action)}</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button>`)}`;
-  modal(`${plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
+  modal(`${plan.review_title || (plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel")} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
 };

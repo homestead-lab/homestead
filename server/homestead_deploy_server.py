@@ -571,10 +571,12 @@ def _helm(request):
     _cache.pop("helm", None)
     name = result.get("name") or b.get("name", "")
     job = f"helm-{'delete' if action == 'uninstall' else 'install'}-{name}"
+    # Where the chart really is (its Job runs beside it), and what the write found.
+    chart = result.pop("chart", None) or {}
+    home = chart.pop("namespace", HELM.CONTROLLER_NS)
     result["operation"] = OPS.start("helm", f"Helm {action} {name}",
-                                    {"kind": "HelmChart", "name": name, "namespace": HELM.CONTROLLER_NS},
-                                    "/helm", {"namespace": HELM.CONTROLLER_NS, "name": job,
-                                              "action": action},
+                                    {"kind": "HelmChart", "name": name, "namespace": home},
+                                    "/helm", {"namespace": home, "name": job, "action": action, **chart},
                                     "Waiting for the Helm controller")
     return result
 

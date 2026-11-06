@@ -3,16 +3,23 @@ import gzip
 import io
 import json
 import sys
+import tempfile
 import unittest
 import urllib.error
+from types import SimpleNamespace
 from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
+import homestead_cancel as CANCEL
+import homestead_deploy_server as DEPLOY
 import homestead_helm as HELM
+import homestead_kube as KUBE
+import homestead_operations as OPS
 import homestead_yaml as YAML
+from fakes.kube import Kube
 
 MANIFEST = """---
 # Source: grafana/templates/service.yaml
@@ -47,6 +54,477 @@ def secret(ns, name, version, status="deployed", chart_version="8.0.0", config=N
     return {"metadata": {"name": f"sh.helm.release.v1.{name}.v{version}", "namespace": ns,
                          "labels": {"owner": "helm", "name": name, "version": str(version), "status": status}},
             "data": {"release": base64.b64encode(blob.encode()).decode()}}
+
+
+class HelmJobTests(unittest.TestCase):
+    """The Helm job follows a Job the Helm controller makes. With no such Job it
+    used to read "Waiting for the Helm controller" for ever: nothing raises, so
+    no limit on failed reads applies. An uninstall that worked ended up there
+    too, as the controller removes its Job and then the chart."""
+    CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/grafana"
+    LIMIT = 15 * 60
+
+    def setUp(self):
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("helm.cattle.io",)))
+        self.enterContext(mock.patch.object(HELM, "kget", KUBE.kget))
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {}))
+        HELM.register(OPS)
+        self.now = 1000.0
+        self.enterContext(mock.patch.object(HELM, "_clock", lambda: self.now, create=True))
+
+    def start(self, action="install", job="helm-install-grafana", chart=True):
+        if chart:
+            self.chart()
+        return OPS.start("helm", f"Helm {action} grafana", {"kind": "HelmChart", "name": "grafana", "namespace": "kube-system"},
+                         "/helm", {"namespace": "kube-system", "name": job, "action": action},
+                         "Waiting for the Helm controller")["id"]
+
+    def chart(self):
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "kube-system", "name": "grafana"}, "spec": {"chart": "grafana"}})
+
+    def job_object(self, status=None, name="helm-install-grafana"):
+        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": {"namespace": "kube-system", "name": name},
+                       "status": status or {"active": 1}})
+
+    def look(self, ident):
+        return next(job for job in OPS.list_operations() if job["id"] == ident)
+
+    def test_a_job_the_controller_never_makes_ends_failed_and_says_what_it_waited_for(self):
+        ident = self.start()
+        self.assertEqual("Waiting for the Helm controller", self.look(ident)["message"])
+        self.now += self.LIMIT - 1
+        self.assertEqual("running", self.look(ident)["status"], "a slow controller still gets its time")
+        self.now += 1
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("helm-install-grafana", job["message"])
+        self.assertIn("15 minutes", job["message"])
+
+    def test_a_job_removed_while_it_ran_ends_failed_after_the_same_wait(self):
+        ident = self.start()
+        self.job_object()
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana")
+        self.look(ident)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+
+    def test_the_controller_replacing_its_job_does_not_end_it(self):
+        # helm-controller deletes a Job and makes it again when the chart changes.
+        ident = self.start()
+        self.look(ident)
+        self.now += self.LIMIT - 1
+        self.job_object()
+        self.assertEqual("running", self.look(ident)["status"])
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana")
+        self.look(ident)
+        self.now += self.LIMIT - 1
+        self.assertEqual("running", self.look(ident)["status"], "seeing the Job started the wait again")
+        self.job_object({"succeeded": 1})
+        self.assertEqual("succeeded", self.look(ident)["status"])
+
+    def test_an_uninstall_still_waits_while_the_chart_is_there(self):
+        ident = self.start("uninstall", "helm-delete-grafana")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], "the chart is still there, so it did not finish")
+        self.assertIn("helm-delete-grafana", job["message"])
+
+    def test_an_install_whose_chart_was_removed_ends_failed_at_once(self):
+        ident = self.start(chart=False)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("grafana", job["message"])
+
+    # What a failed job still offers. A failed job has no Cancel by itself.
+    def cancelling(self):
+        self.enterContext(mock.patch.dict(OPS.CANCELLERS, {}))
+        self.enterContext(mock.patch.object(OPS, "CLEANUPS", set()))
+        self.enterContext(mock.patch.dict(OPS.VIEWS, {}))
+        self.enterContext(mock.patch.multiple(CANCEL, kget=KUBE.kget, create=True))
+        self.enterContext(mock.patch.object(HELM, "ksend", KUBE.ksend))
+        self.enterContext(mock.patch.object(DEPLOY, "_cache", {}, create=True))
+        CANCEL.register(OPS)
+
+    def route(self, action, **body):
+        """The real route, as the Helm page calls it."""
+        request = SimpleNamespace(path=f"/api/helm/{action}", body={"namespace": "kube-system", "name": "grafana", **body})
+        return DEPLOY._helm(request)["operation"]["id"]
+
+    def upgraded(self):
+        self.cancelling()
+        self.chart()
+        return self.route("upgrade", version="8.0.0")
+
+    def failed_upgrade(self):
+        ident = self.upgraded()
+        self.look(ident)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.kube.writes.clear()
+        return ident
+
+    def refused(self, ident, words):
+        plan = OPS.cancel_plan(ident)
+        self.assertFalse(plan["can"])
+        self.assertIn(words, plan["why_not"])
+        before = self.kube.object(self.CHART)
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+        self.assertEqual(before, self.kube.object(self.CHART))
+
+    def test_a_failed_upgrade_with_its_chart_still_offers_to_put_it_back(self):
+        ident = self.failed_upgrade()
+        job = self.look(ident)
+        self.assertTrue(job["cleanable"])
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"], "as it was before the upgrade")
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["cleanable"], "once is enough")
+
+    def test_the_controllers_own_writes_do_not_take_the_offer_away(self):
+        # On a live cluster HelmCharts have a status subresource and the controller's
+        # finalizer: neither moves the generation, so a normal failed upgrade still offers.
+        ident = self.failed_upgrade()
+        self.kube("PATCH", self.CHART, {"status": {"jobName": "helm-install-grafana"},
+                                        "metadata": {"finalizers": ["wrangler.cattle.io/on-helm-chart-remove"]}},
+                  ctype="application/merge-patch+json")
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+
+    def test_an_upgrade_whose_helm_job_failed_offers_it_too(self):
+        ident = self.upgraded()
+        self.job_object({"failed": 1})
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertTrue(job["cleanable"])
+
+    def test_a_chart_upgraded_since_is_not_put_back_over_that(self):
+        ident = self.failed_upgrade()
+        self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        self.kube.writes.clear()
+        self.refused(ident, "changed since")
+        self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_a_chart_made_again_since_is_not_put_back(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        self.kube.discard(self.CHART)
+        chart["metadata"]["uid"] = "another-uid"
+        self.kube.add(chart)
+        self.refused(ident, "changed since")
+
+    def test_a_chart_changed_between_the_review_and_the_put_back_is_left(self):
+        ident = self.failed_upgrade()
+        mark = OPS._mark_cancelling
+
+        def changed_now(match, plan):
+            self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+            return mark(match, plan)
+        with mock.patch.object(OPS, "_mark_cancelling", changed_now), self.assertRaisesRegex(ValueError, "changed since"):
+            OPS.cancel(ident)
+        self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
+        self.assertEqual("failed", self.look(ident)["status"])
+
+    def test_an_upgrade_from_an_older_homestead_does_not_offer_it(self):
+        # It kept no record of which chart it wrote. It never had this offer.
+        self.cancelling()
+        ident = self.start("upgrade")
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"] = {HELM.PREVIOUS_SPEC: '{"version":"7.0.0"}'}
+        self.kube.add(chart)
+        self.look(ident)
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["cleanable"])
+        self.kube.writes.clear()
+        self.refused(ident, "older Homestead")
+
+    def test_an_upgrade_that_failed_because_its_chart_is_gone_does_not_offer_it(self):
+        ident = self.upgraded()
+        self.kube.discard(self.CHART)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["cleanable"])
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+
+    def test_a_chart_gone_after_the_failure_is_refused_when_asked(self):
+        # The job list reads no chart, under the jobs lock, on every poll: the review does.
+        ident = self.failed_upgrade()
+        self.kube.discard(self.CHART)
+        plan = OPS.cancel_plan(ident)
+        self.assertFalse(plan["can"])
+        self.assertIn("gone", plan["why_not"])
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+
+    def test_a_failed_upgrade_with_nothing_kept_has_nothing_to_put_back(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"].pop(HELM.PREVIOUS_SPEC)
+        self.kube.add(chart)
+        self.refused(ident, "No earlier settings")
+
+    def test_a_failed_upgrade_review_says_what_it_does(self):
+        plan = OPS.cancel_plan(self.failed_upgrade())
+        self.assertEqual("Put back earlier settings", plan["review_title"])
+        self.assertEqual("Put back earlier settings", plan["action"])
+        self.assertTrue(plan["cleanup_says_action"])
+        self.assertEqual("This upgrade failed. Putting back returns the chart's version and values; "
+                         "the job stays in the list as failed", plan["lead"])
+
+    def test_a_running_upgrades_cancel_keeps_its_own_words(self):
+        plan = OPS.cancel_plan(self.upgraded())
+        self.assertEqual("Cancel and put back", plan["action"])
+        self.assertNotIn("cleanup_says_action", plan)
+
+    def test_earlier_settings_that_cannot_be_read_are_not_cleaned_up(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = "not json"
+        self.kube.add(chart)
+        self.refused(ident, "No earlier settings")
+        self.assertNotIn("Cleaned up", self.look(ident)["message"])
+
+    def assert_closed_as_gone_back(self, ident):
+        plan = OPS.cancel_plan(ident)
+        self.assertTrue(plan["can"], plan.get("why_not"))
+        self.assertEqual("rollback", plan["mode"])
+        self.assertEqual("Close it", plan["action"])
+        self.assertIn("are back already", plan["lead"])
+        self.assertEqual([], plan["undo"])
+        self.assertEqual([], plan["keeps"], "nothing is left going for it to name")
+        self.kube.writes.clear()
+        OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes, "it went back once; nothing more is written")
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("Cleaned up after failing: grafana went back to its settings from before the upgrade", job["message"])
+        self.assertFalse(job["cleanable"])
+
+    def test_a_put_back_that_lost_its_reply_says_it_went_back(self):
+        ident = self.failed_upgrade()
+        self.kube.fail(self.CHART, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaisesRegex(ValueError, "timed out"):
+            OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"], "the write stands")
+        self.assert_closed_as_gone_back(ident)
+
+    def cut_off_cancel(self, ident):
+        """The server stopped while the put-back ran: the job stays marked, and that mark goes stale."""
+        items = OPS._read()
+        match = next(item for item in items if item["id"] == ident)
+        OPS._mark_cancelling(match, {"action": "Put back earlier settings"})
+        match["cancel_started"] = 1
+        OPS._write(items)
+
+    def test_a_put_back_cut_off_after_its_write_says_it_went_back(self):
+        ident = self.failed_upgrade()
+        self.cut_off_cancel(ident)
+        HELM.restore_previous(self.kube.object(self.CHART))
+        self.assert_closed_as_gone_back(ident)
+
+    def test_a_put_back_cut_off_before_its_write_still_puts_it_back(self):
+        ident = self.failed_upgrade()
+        self.cut_off_cancel(ident)
+        self.assertEqual("Put back earlier settings", OPS.cancel_plan(ident)["action"])
+        OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"])
+        self.assertIn("is going back", self.look(ident)["message"])
+
+    def test_settings_gone_and_changed_twice_are_not_called_its_own_put_back(self):
+        ident = self.failed_upgrade()
+        HELM.restore_previous(self.kube.object(self.CHART))
+        self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        self.kube.writes.clear()
+        self.refused(ident, "No earlier settings")
+
+    def test_a_chart_made_again_is_not_called_its_own_put_back(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"].pop(HELM.PREVIOUS_SPEC)
+        chart["metadata"]["generation"] += 1
+        self.kube.discard(self.CHART)
+        chart["metadata"]["uid"] = "another-uid"
+        self.kube.add(chart)
+        self.kube.writes.clear()
+        self.refused(ident, "No earlier settings")
+
+    def test_settings_gone_with_no_change_are_not_called_its_own_put_back(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"].pop(HELM.PREVIOUS_SPEC)
+        self.kube.add(chart)
+        self.refused(ident, "No earlier settings")
+
+    def test_a_failed_install_does_not_offer_to_delete_its_chart(self):
+        self.cancelling()
+        ident = self.start()
+        self.look(ident)
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["cleanable"])
+        self.kube.writes.clear()
+        self.refused(ident, "nothing to put back")
+
+    # Where the chart really is.
+    def elsewhere(self):
+        self.cancelling()
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "apps", "name": "grafana",
+                                    "finalizers": ["wrangler.cattle.io/on-helm-chart-remove"]},
+                       "spec": {"chart": "grafana", "targetNamespace": "kube-system"}})
+        return "/apis/helm.cattle.io/v1/namespaces/apps/helmcharts/grafana"
+
+    def test_a_chart_in_another_namespace_is_not_read_as_a_removed_one(self):
+        self.elsewhere()
+        ident = self.route("uninstall")
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], "the chart is there, just not in the Helm controller's namespace")
+
+    def test_its_job_is_followed_where_it_runs(self):
+        self.elsewhere()
+        ident = self.route("upgrade", version="8.0.0")
+        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": {"namespace": "apps", "name": "helm-install-grafana"},
+                       "status": {"active": 1}})
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_and_put_back_where_it_is(self):
+        path = self.elsewhere()
+        ident = self.route("upgrade", version="8.0.0")
+        self.look(ident)
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look(ident)["status"])
+        OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(path)["spec"])
+
+    # What proves an uninstall ran.
+    def test_an_uninstall_the_controller_held_and_let_go_worked(self):
+        self.cancelling()
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "kube-system", "name": "grafana",
+                                    "finalizers": ["wrangler.cattle.io/on-helm-chart-remove"]}, "spec": {}})
+        ident = self.route("uninstall")
+        self.kube.discard(self.CHART)
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertEqual("Helm removed grafana", job["message"])
+
+    def test_an_uninstall_whose_job_was_seen_worked(self):
+        ident = self.start("uninstall", "helm-delete-grafana")
+        self.job_object(name="helm-delete-grafana")
+        self.look(ident)
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-delete-grafana")
+        self.kube.discard(self.CHART)
+        self.assertEqual("succeeded", self.look(ident)["status"])
+
+    def test_a_chart_gone_with_no_sign_of_an_uninstall_does_not_say_it_worked(self):
+        ident = self.start("uninstall", "helm-delete-grafana", chart=False)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("did not see its uninstall run", job["message"])
+        self.assertNotIn("Helm removed", job["message"])
+
+    def test_an_uninstall_of_a_chart_no_controller_took_up_does_not_say_it_worked(self):
+        # No finalizer: nothing held the chart, so it goes at once and nothing ran.
+        self.cancelling()
+        self.chart()
+        ident = self.route("uninstall")
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("did not see its uninstall run", job["message"])
+
+    def test_an_uninstall_seen_held_in_deletion_worked(self):
+        # A job with no record of a finalizer, as one from before this has: seeing
+        # the chart held in deletion is the proof.
+        ident = self.start("uninstall", "helm-delete-grafana")
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["finalizers"] = ["wrangler.cattle.io/on-helm-chart-remove"]
+        self.kube.add(chart)
+        self.kube("DELETE", self.CHART)
+        self.assertEqual("running", self.look(ident)["status"])
+        self.kube.discard(self.CHART)
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertEqual("Helm removed grafana", job["message"])
+
+    def test_an_older_uninstall_with_no_action_is_called_an_uninstall(self):
+        # Jobs from before ref had "action": the job's name says what it is.
+        ident = OPS.start("helm", "Helm uninstall grafana", {"kind": "HelmChart", "name": "grafana", "namespace": "kube-system"},
+                          "/helm", {"namespace": "kube-system", "name": "helm-delete-grafana"},
+                          "Waiting for the Helm controller")["id"]
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("did not see its uninstall run", job["message"])
+        self.assertNotIn("nothing will run", job["message"])
+
+    def held_uninstall(self):
+        self.cancelling()
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "kube-system", "name": "grafana",
+                                    "finalizers": ["wrangler.cattle.io/on-helm-chart-remove"]}, "spec": {"chart": "grafana"}})
+        return self.route("uninstall")
+
+    def test_an_uninstall_whose_chart_was_made_again_says_so_at_once(self):
+        ident = self.held_uninstall()
+        self.kube.discard(self.CHART)
+        self.chart()
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"], "the chart it removed is gone; this is another one")
+        self.assertEqual("Helm removed grafana; a chart of that name has been made since", job["message"])
+
+    def test_an_unproved_uninstall_whose_chart_was_made_again_does_not_call_it_gone(self):
+        self.cancelling()
+        self.chart()
+        ident = self.route("uninstall")
+        self.chart()
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("was removed and made again, but Homestead did not see its uninstall run", job["message"])
+
+    def test_a_failed_uninstall_with_its_chart_recorded_offers_nothing(self):
+        ident = self.held_uninstall()
+        self.look(ident)
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertFalse(job["cleanable"])
+        self.kube.writes.clear()
+        self.refused(ident, "nothing to put back")
+
+    def test_no_helm_api_at_all_is_not_a_chart_that_is_gone(self):
+        self.kube.absent_groups.add("helm.cattle.io")
+        for action, job_name in (("uninstall", "helm-delete-grafana"), ("install", "helm-install-grafana")):
+            with self.subTest(action=action):
+                ident = self.start(action, job_name, chart=False)
+                self.assertEqual("running", self.look(ident)["status"], "a 404 here says nothing about the chart")
+                self.now += self.LIMIT
+                job = self.look(ident)
+                self.assertEqual("failed", job["status"])
+                self.assertIn("controller", job["message"])
+                self.assertNotIn("Helm removed", job["message"])
+                self.now += 1
+
+    def test_a_list_of_charts_that_cannot_be_read_says_nothing_about_the_job(self):
+        ident = self.start("uninstall", "helm-delete-grafana", chart=False)
+        self.kube.fail("/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts", 500, times=5)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], "not read is not gone")
+        self.assertIn("temporarily unavailable", job["message"])
+
+    def test_a_chart_that_cannot_be_read_says_nothing_about_the_job(self):
+        ident = self.start("uninstall", "helm-delete-grafana", chart=False)
+        self.kube.fail(self.CHART, 500, times=5)
+        self.assertEqual("running", self.look(ident)["status"], "not read is not gone")
 
 
 class HelmTests(unittest.TestCase):

@@ -311,20 +311,32 @@ def upgrade(cfg):
             spec.pop("version", None)
     if "values" in cfg:
         spec["valuesContent"] = str(cfg.get("values") or "")
-    ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{item['metadata']['namespace']}/helmcharts/{name}", item)
-    return {"ok": True, "detail": f"{name} is being upgraded by the Helm controller"}
+    home = item["metadata"]["namespace"]
+    written = (ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{home}/helmcharts/{name}", item) or {}).get("metadata") or {}
+    # Which chart this upgrade wrote, for the job: what it may put back later is
+    # this one, as this upgrade left it. Only spec changes move the generation.
+    return {"ok": True, "detail": f"{name} is being upgraded by the Helm controller",
+            "chart": {"namespace": home, "chart_uid": written.get("uid", ""), "chart_generation": written.get("generation")}}
+
+
+def previous_spec(item):
+    """The version and values kept on a chart before its last upgrade, or None
+    when none were kept or they cannot be read."""
+    annotations = (item.get("metadata") or {}).get("annotations") or {}
+    try:
+        previous = json.loads(annotations.get(PREVIOUS_SPEC) or "")
+    except ValueError:
+        return None
+    return previous if isinstance(previous, dict) else None
 
 
 def restore_previous(item):
     """Put a chart's version and values back as they were before its last
     upgrade; False when none were kept."""
-    annotations = (item.get("metadata") or {}).get("annotations") or {}
-    try:
-        previous = json.loads(annotations.get(PREVIOUS_SPEC) or "")
-    except ValueError:
+    previous = previous_spec(item)
+    if previous is None:
         return False
-    if not isinstance(previous, dict):
-        return False
+    annotations = item["metadata"]["annotations"]
     spec = item.setdefault("spec", {})
     for key in ("version", "valuesContent"):
         if key in previous:
@@ -340,8 +352,14 @@ def restore_previous(item):
 
 def uninstall(namespace, name):
     item = _helmchart(namespace, name)
-    ksend("DELETE", f"/apis/helm.cattle.io/v1/namespaces/{item['metadata']['namespace']}/helmcharts/{name}")
-    return {"ok": True, "detail": f"{name} is being uninstalled; volumes its chart kept are left in place"}
+    home = item["metadata"]["namespace"]
+    ksend("DELETE", f"/apis/helm.cattle.io/v1/namespaces/{home}/helmcharts/{name}")
+    # A finalizer means the controller took the chart up, and holds it until its
+    # uninstall has run: then the chart going is proof that it did. The uid tells
+    # that chart from one made again under its name.
+    meta = item.get("metadata") or {}
+    return {"ok": True, "detail": f"{name} is being uninstalled; volumes its chart kept are left in place",
+            "chart": {"namespace": home, "chart_uid": meta.get("uid", ""), "uninstall_seen": bool(meta.get("finalizers"))}}
 
 
 # ------------------------------------------------------------------ finding charts
@@ -389,6 +407,75 @@ def chart(repo_name, name):
             "readme_url": f"https://artifacthub.io/packages/helm/{repo_name}/{name}"}
 
 
+# How long a Helm job may have no Job to follow. The controller makes one within
+# seconds and deletes one only to make it again, so this is a controller that is
+# not there, or a Job someone removed. The clock is a seam for the tests.
+JOB_MISSING_LIMIT = 15 * 60
+_clock = time.time
+
+
+def job_action(item):
+    """What a Helm job does. Jobs from older releases have no action: the job's
+    name and the title say."""
+    ref = item["ref"]
+    if ref.get("action") in ("install", "upgrade", "uninstall"):
+        return ref["action"]
+    if str(ref.get("name", "")).startswith("helm-delete-"):
+        return "uninstall"
+    return "upgrade" if str(item.get("title", "")).startswith("Helm upgrade ") else "install"
+
+
+def _chart_gone(item, ref):
+    """This job's chart, if a read shows no such chart, or an uninstall's chart has
+    been made again: a failed read raises, and a 404 from no Helm API at all says
+    nothing about the chart."""
+    name = (item.get("resource") or {}).get("name") or ""
+    charts = f"/apis/helm.cattle.io/v1/namespaces/{ref['namespace']}/helmcharts"
+    try:
+        chart = kget(f"{charts}/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        try:
+            kget(charts)
+        except urllib.error.HTTPError as listing:
+            if listing.code != 404:
+                raise
+            return ""
+        return name
+    meta = chart.get("metadata") or {}
+    if job_action(item) == "uninstall":
+        if ref.get("chart_uid") and meta.get("uid") != ref["chart_uid"]:
+            ref["chart_made_again"] = True
+            return name
+        if meta.get("deletionTimestamp"):
+            ref["uninstall_seen"] = True
+    return ""
+
+
+def _no_job(item, ref):
+    """What a Helm job with no Job to follow comes to. An uninstall that worked
+    ends here: the controller removes its Job, then lets the chart go. Only what
+    this job saw of that says it worked."""
+    gone = _chart_gone(item, ref)
+    if gone:
+        action = job_action(item)
+        if action == "uninstall":
+            again = ref.get("chart_made_again")
+            if ref.get("uninstall_seen"):
+                return "succeeded", 100, f"Helm removed {gone}" + ("; a chart of that name has been made since" if again else "")
+            return "failed", 5, (f"The HelmChart {gone} {'was removed and made again' if again else 'is gone'}, but Homestead "
+                                 "did not see its uninstall run. The Helm page shows whether its release is still there")
+        ref["chart_gone"] = True   # the job list reads no chart: it offers nothing to put back on this
+        return "failed", 5, f"The HelmChart {gone} is gone, so nothing will run this {action}"
+    now = _clock()
+    if now - ref.setdefault("job_missing_since", now) < JOB_MISSING_LIMIT:
+        return "running", 5, "Waiting for the Helm controller"
+    return "failed", 5, (f"The Helm controller had no job {ref['name']} in {ref['namespace']} for "
+                         f"{JOB_MISSING_LIMIT // 60} minutes, so Homestead has stopped following it. Check that the "
+                         "controller is running; the Helm page shows what is installed")
+
+
 def job_status(item):
     """The Helm controller's install or upgrade job, for the job tray."""
     ref = item["ref"]
@@ -396,8 +483,11 @@ def job_status(item):
         job = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['name']}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return "running", 5, "Waiting for the Helm controller"
+            return _no_job(item, ref)
         raise
+    ref.pop("job_missing_since", None)
+    if job_action(item) == "uninstall":
+        ref["uninstall_seen"] = True
     status = job.get("status") or {}
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
