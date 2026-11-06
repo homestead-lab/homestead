@@ -763,10 +763,15 @@ def _rollback(ns, ref, why, item=None):
         if job:
             try:
                 ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{job}?propagationPolicy=Background")
-            except urllib.error.HTTPError as error:
-                if error.code == 429 or error.code >= 500:
-                    raise   # it may yet work, as with a timeout: tried again next round
-                if error.code != 404:
+            except Exception as error:
+                code = getattr(error, "code", None)
+                if code != 404:
+                    # A blip is tried again, for its time; a lasting fault can't keep the
+                    # apps down. The start stays saved: no retry or Cancel gets new time.
+                    if code is None or code == 429 or code >= 500:
+                        now = _clock()
+                        if now - ref.setdefault("job_delete_since", now) < START_LIMIT:
+                            raise
                     removed = False
                     notes.append(f"The copy job {job} could not be stopped ({error}), so it may still be using the volumes.")
         # A claim that can't be deleted is no reason to leave the apps down.

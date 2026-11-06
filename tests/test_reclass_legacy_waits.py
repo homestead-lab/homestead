@@ -1098,5 +1098,80 @@ class LegacyMoveTests(unittest.TestCase):
         self.assertNotIn("was removed", detail)
 
 
+    # ---- a job delete that goes on failing can't keep the apps down --------------------
+
+    def job_delete_failing(self, answer, **start):
+        self.made_temp()
+        self.copy_job()
+        self.kube.fail(JOB, answer, times=10**6, method="DELETE")
+        return self.start("copy", copy_since=self.now, **start)
+
+    def rollback_begun(self, answer):
+        self.made_temp()
+        self.copy_job()
+        ident = self.start("swap", job="copy")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(JOB, answer, times=10**6, method="DELETE")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.assertEqual(0, self.replicas())
+        return ident
+
+    def assert_named_and_started(self, message):
+        self.assertEqual(2, self.replicas())
+        self.assertIn("The copy job copy could not be stopped", message)
+        self.assertIn("may still be using the volumes", message)
+        self.assertNotIn("Nothing changed", message)
+        self.assertNotIn("was removed", message)
+
+    def test_a_job_delete_answering_503_for_ten_minutes_counts_as_refused(self):
+        ident = self.rollback_begun(503)
+        self.now += LIMIT - 1
+        self.assertEqual("running", self.look(ident)["status"], "a blip gets its time")
+        self.assertEqual(0, self.replicas())
+        self.now += 1
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assert_named_and_started(job["message"])
+
+    def test_a_job_delete_answering_429_for_ten_minutes_counts_as_refused(self):
+        ident = self.rollback_begun(429)
+        self.now += LIMIT
+        self.assert_named_and_started(self.look(ident)["message"])
+
+    def test_a_job_delete_timing_out_for_ten_minutes_counts_as_refused(self):
+        ident = self.rollback_begun(TimeoutError("timed out"))
+        self.now += LIMIT
+        self.assert_named_and_started(self.look(ident)["message"])
+
+    def test_a_cancel_does_not_give_a_failing_job_delete_more_time(self):
+        self.wired()
+        ident = self.rollback_begun(503)
+        self.now += LIMIT
+        out = OPS.cancel(ident)
+        self.assert_named_and_started(out["detail"])
+        self.assert_nothing_locked(ident)
+
+    def test_a_second_cancel_does_not_give_a_failing_job_delete_more_time(self):
+        self.wired()
+        ident = self.job_delete_failing(503)
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual(0, self.replicas())
+        self.now += LIMIT
+        out = OPS.cancel(ident)
+        self.assert_named_and_started(out["detail"])
+        self.assert_nothing_locked(ident)
+
+    def test_a_retry_for_an_app_still_down_gets_no_new_time_for_the_job_delete(self):
+        ident = self.rollback_begun(503)
+        self.now += LIMIT
+        self.kube.fail(APP, 403, method="PATCH")
+        self.assertIn("app still down", self.look(ident)["message"])
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assert_named_and_started(job["message"])
+
+
 if __name__ == "__main__":
     unittest.main()
