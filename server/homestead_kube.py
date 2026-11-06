@@ -445,6 +445,51 @@ def delete_if_present(path, body=None, send=_CLIENT, **options):
         return None
 
 
+def put_past_status(path, body, read, write, still_allowed=None):
+    """PUT an object read a moment ago, with its resourceVersion, past a
+    controller's status write: that moves the version, and changes nothing anyone
+    decided. On a 409 it reads again and tries once more with the same spec, on the
+    fresh read, only if that is plainly the same object at the same generation.
+    Otherwise it is refused in words, with nothing written. For kinds with a status
+    subresource, whose generation only spec changes move.
+
+    still_allowed(fresh) is the caller's own check on what it read first, run again:
+    labels, annotations and owners don't move the generation, so whose object this is
+    can have changed. It raises ValueError to refuse."""
+    meta = body.get("metadata") or {}
+    name = meta.get("name", "it")
+    try:
+        return write("PUT", path, body)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+    try:
+        fresh = read(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        error.close()
+        raise ValueError(f"{name} is gone, so nothing was written") from None
+    now = fresh.get("metadata") or {}
+    if now.get("deletionTimestamp"):
+        raise ValueError(f"{name} is being deleted, so nothing was written")
+    # What can't be read is not taken as unchanged.
+    if not meta.get("uid") or now.get("uid") != meta["uid"] or not meta.get("generation") or (
+            now.get("generation") != meta["generation"]):
+        raise ValueError(f"{name} changed while this was being saved, so nothing was written; look at it and try again")
+    if still_allowed:
+        still_allowed(fresh)
+    metadata = {key: value for key, value in now.items() if key != "managedFields"}
+    try:
+        return write("PUT", path, {**fresh, "metadata": metadata, "spec": body.get("spec")})
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+    raise ValueError(f"{name} kept being updated while this was being saved, so nothing was written; try again in a moment")
+
+
 def definite_refusal(code):
     """A write answered with a status that says it was not made, so what was
     made for it may go: the statuses a journaled VM write records as refused

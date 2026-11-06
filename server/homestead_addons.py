@@ -23,6 +23,7 @@ import calendar
 import urllib.error
 
 import homestead_fetch as FETCH
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_routes
 import homestead_multus as MULTUS
@@ -357,8 +358,10 @@ def _ensure_multus_crd():
 def repair_multus(cfg=None):
     p = _can_install("Multus")
     chart = _helmcharts().get(CHARTS["multus"])
-    if not _repairable_multus(chart, p):
-        raise ValueError("Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page")
+    def still_ours(found):
+        if not _repairable_multus(found, p):
+            raise ValueError("Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page")
+    still_ours(chart)
     # Keep all fields, including the version and resourceVersion concurrency check.
     if not chart["spec"].get("version"):
         ds = kget(f"{MULTUS.DAEMONSETS}/multus")
@@ -371,7 +374,7 @@ def repair_multus(cfg=None):
     _ensure_multus_crd()
     chart["spec"]["valuesContent"] = K3S_MULTUS_VALUES
     chart.get("metadata", {}).pop("managedFields", None)
-    ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts/multus", chart)
+    KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts/multus", chart, kget, ksend, still_ours)
     return {"ok": True, "name": "multus", "job": "helm-install-multus",
             "detail": "Multus CNI directory corrected; waiting for its node agents to become available"}
 
