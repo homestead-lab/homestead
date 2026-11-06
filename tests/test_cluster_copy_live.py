@@ -7,13 +7,21 @@ from test_move_flow import source, client
 import homestead_move_state as STATE
 import homestead_move_plan as PLAN
 import homestead_move_phases as PHASE
+import homestead_names as NAMES
 
 FREEZE = "/apis/subresources.kubevirt.io/v1/namespaces/lab/virtualmachineinstances/desktop/freeze"
 UNFREEZE = FREEZE.replace("/freeze", "/unfreeze")
 
 
+def set_up(self):
+    """The copy tests' own, and afterwards put back what its source.bind() sets."""
+    for module, name in ((source, "kget"), (source, "ksend"), (source, "LH"), (source, "NS"), (NAMES, "kget")):
+        self.addCleanup(setattr, module, name, getattr(module, name))
+    base.ClusterCopyTests.setUp(self)
+
+
 class LiveCopyTests(unittest.TestCase):
-    setUp = base.ClusterCopyTests.setUp
+    setUp = set_up
     LIVE = True
     seed_vm = base.ClusterCopyTests.seed_vm
     vm_path = staticmethod(base.ClusterCopyTests.vm_path)
@@ -157,7 +165,7 @@ class LiveCopyTests(unittest.TestCase):
 
 
 class PersistentStateTests(unittest.TestCase):
-    setUp = base.ClusterCopyTests.setUp
+    setUp = set_up
     LIVE = True
     seed_vm = base.ClusterCopyTests.seed_vm
     vm_path = staticmethod(base.ClusterCopyTests.vm_path)
