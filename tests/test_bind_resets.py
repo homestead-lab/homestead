@@ -107,7 +107,7 @@ class EachBindResetsWhatItLeavesOut(unittest.TestCase):
                         self.assertIs(now, defaults[global_name], f"{name}.{global_name} is not its module default")
 
     def test_every_name_a_bind_keeps_unless_given_is_covered_here(self):
-        """The scan the review used: x = _x or x, if _x: x = _x, and the tuple forms."""
+        """The scan the review used: x = _x or x, x = _x if _x else x, if _x: x = _x, and the tuple forms."""
         import ast
         covered = {(n, g) for n, _, optional in CASES for _, names in optional.values() for g in names}
         found = set()
@@ -127,6 +127,9 @@ class EachBindResetsWhatItLeavesOut(unittest.TestCase):
                         if isinstance(target, ast.Name) and target.id in globs and isinstance(value, ast.BoolOp) \
                                 and isinstance(value.op, ast.Or) \
                                 and any(isinstance(v, ast.Name) and v.id == target.id for v in value.values[1:]):
+                            found.add((path.stem, target.id))
+                        if isinstance(target, ast.Name) and target.id in globs and isinstance(value, ast.IfExp) \
+                                and isinstance(value.orelse, ast.Name) and value.orelse.id == target.id:
                             found.add((path.stem, target.id))
                     if isinstance(node, ast.If) and not node.orelse:
                         for statement in node.body:

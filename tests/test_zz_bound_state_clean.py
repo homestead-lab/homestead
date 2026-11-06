@@ -99,7 +99,7 @@ class BoundStateClean(unittest.TestCase):
 
 
 # Test files that call a module's bind() and never restore anything (no addCleanup,
-# tearDown, restore, _reset, rebind or keep_bound in the file). They may only go
+# tearDown, restore, _reset, rebind or keep_bound in the file's code). They may only go
 # away: move one onto tests/rebind.py and take it off this list. A file listed here
 # that is not in the tree yet comes with an open PR of ours, so the combined run passes.
 UNRESTORED_FILES = frozenset({
@@ -109,7 +109,6 @@ UNRESTORED_FILES = frozenset({
     "test_autoupdate",
     "test_data_copies",
     "test_firewall",
-    "test_fleet_writes",
     "test_host_bridge",
     "test_hostrun_lease",
     "test_hostrun_retry",
@@ -141,12 +140,8 @@ UNRESTORED_FILES = frozenset({
 
 class BindRatchet(unittest.TestCase):
     def test_no_new_test_file_binds_without_restoring(self):
-        import re
         here = Path(__file__).resolve().parent
-        binds = re.compile(r"^\s+[A-Za-z_][A-Za-z_0-9.]*\.bind\(", re.M)
-        restores = re.compile(r"addCleanup|tearDown|restore|_reset|rebind|keep_bound")
-        found = {p.stem for p in here.glob("test_*.py")
-                 if binds.search(p.read_text(encoding="utf-8")) and not restores.search(p.read_text(encoding="utf-8"))}
+        found = {p.stem for p in here.glob("test_*.py") if GUARD.binds_without_restoring(p.read_text(encoding="utf-8"))}
         self.assertEqual(sorted(found - UNRESTORED_FILES), [], "these bind without restoring: use tests/rebind.py")
         # A listed file that is not in this tree (it comes with an open PR) is left alone.
         present = {p.stem for p in here.glob("test_*.py")}

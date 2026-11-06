@@ -42,6 +42,28 @@ class Checks(unittest.TestCase):
                          GUARD.unknown(LISTED, {"homestead_addons.kget": None}, {"homestead_addons", "homestead_uplinks"}))
 
 
+class Ratchet(unittest.TestCase):
+    """What BindRatchet counts as a file that binds, and as a restore."""
+
+    def judge(self, body, imports="import homestead_addons as A\n"):
+        return GUARD.binds_without_restoring(imports + body)
+
+    def test_a_module_bound_with_no_restore_is_found(self):
+        self.assertTrue(self.judge("def setUp(self):\n    A.bind(1)\n"))
+        self.assertTrue(self.judge("def setUp(self):\n    server.LC.bind(1)\n", "import server\n"))
+
+    def test_a_socket_bind_is_not_a_module_bind(self):
+        self.assertFalse(self.judge('def setUp(self):\n    sock.bind(("127.0.0.1", 0))\n'))
+
+    def test_the_word_in_a_comment_or_a_string_is_no_restore(self):
+        self.assertTrue(self.judge('def setUp(self):\n    # restore it\n    """rebind"""\n    A.bind(1)\n'))
+
+    def test_code_that_puts_it_back_is_a_restore(self):
+        for line in ("self.addCleanup(f)", "keep_bound(self, A)", "self.restore_it()"):
+            with self.subTest(line=line):
+                self.assertFalse(self.judge(f"def setUp(self):\n    {line}\n    A.bind(1)\n"))
+
+
 class Kinds(unittest.TestCase):
     """What a test leaves is a fake (enforced) or another value (printed only)."""
 

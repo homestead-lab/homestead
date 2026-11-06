@@ -22,6 +22,8 @@ Values compare by identity, immutable ones by equality: an equal but new mutable
 value (a fresh dict or set a bind() builds) reads as a change. That is cautious on
 purpose; such a name is either restored or on the list.
 """
+import ast
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -30,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import rebind as REBIND
 
 LEAKS_FILE = Path(__file__).resolve().parent / "bound_leaks.txt"
+_RESTORE = re.compile(r"^(addCleanup|addClassCleanup|tearDown|tearDownClass|tearDownModule|rebind|keep_bound)$|restore|_reset")
 IMMUTABLE = (str, int, float, bool, type(None), tuple, frozenset)
 
 left = {}          # (name, test file) -> first test: a FAKE left there, credited to the file that made it
@@ -137,6 +140,36 @@ def _run(self, result=None):
                         others.setdefault((name, test_file), test_id)
                 if name in watch and fake_origin(now.get(name), test_file):
                     held.add((name, test_file))
+
+
+def binds_without_restoring(source):
+    """Whether a test file calls bind() on a server module and has no way to put it back.
+
+    A module is what the file imports from homestead_* (or server), under the name it
+    uses, so a socket's bind() does not count. A restore is code: a word in a comment or
+    a string does not count."""
+    tree = ast.parse(source)
+    modules, names = set(), set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.asname or alias.name for alias in node.names
+                           if alias.name.startswith("homestead_") or alias.name == "server")
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").startswith("homestead_"):
+            modules.update(alias.asname or alias.name for alias in node.names)
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            names.add(node.name)
+    binds = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "bind":
+            root = node.func.value
+            while isinstance(root, ast.Attribute):
+                root = root.value
+            binds = binds or (isinstance(root, ast.Name) and root.id in modules)
+    return binds and not any(_RESTORE.search(name) for name in names)
 
 
 def install():
