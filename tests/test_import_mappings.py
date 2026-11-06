@@ -13,6 +13,17 @@ import homestead_container_import as CONTAINER_IMPORT
 import server
 import homestead_deploy_manifests as MANIFESTS
 from fixtures_source import source
+from fakes.storage_classes import storage_classes
+
+
+class _Module:
+    enterContext = staticmethod(unittest.enterModuleContext)
+
+
+def setUpModule():
+    # The volumes these imports name no class for go on the one default class
+    # (#1125), read from the cluster: longhorn-r2, the install class, here.
+    storage_classes(_Module, "longhorn-r2")
 
 
 SOURCE = source(host="192.0.2.10")
@@ -143,6 +154,19 @@ class MultipleVolumeTests(unittest.TestCase):
             CONTAINER_IMPORT.import_volumes({"volumes": [{"name": "a"}, {"name": "a"}]})
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
             CONTAINER_IMPORT.import_volumes({"volumes": [{"name": "Bad Name"}]})
+
+
+class ImportVolumeClassTests(unittest.TestCase):
+    """A volume the import names no class for goes on the one class every new
+    volume goes on (#1125), not a fixed longhorn-r2."""
+
+    def test_an_unnamed_class_follows_the_one_rule(self):
+        # The install class is not here; the cluster marks local-path its default.
+        storage_classes(self, {"name": "local-path", "provisioner": "rancher.io/local-path", "default": True,
+                               "internal": False, "made_for": ""}, "longhorn", install="longhorn-r2")
+        rows = CONTAINER_IMPORT.import_volumes({"name": "app", "volumes": [{"name": "app-data"},
+                                                                         {"name": "app-media", "storage_class": "fast"}]})
+        self.assertEqual(["local-path", "fast"], [row["storage_class"] for row in rows])
 
 
 class ScratchMountTests(unittest.TestCase):

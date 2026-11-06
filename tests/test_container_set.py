@@ -12,6 +12,7 @@ import homestead_network_services as SVC
 import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_host_access as host_access
+from fakes.storage_classes import storage_classes
 
 # No VIP registry saved: these build manifests without a cluster to read it from.
 NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_value=[])
@@ -19,6 +20,7 @@ NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_val
 
 class ContainerSetTests(unittest.TestCase):
     def setUp(self):
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         self.current = {"apiVersion": "apps/v1", "kind": "Deployment",
             "metadata": {"name": "media", "namespace": "lab", "resourceVersion": "7"},
             "spec": {"replicas": 2, "selector": {"matchLabels": {"app": "media"}},
@@ -185,7 +187,7 @@ class ContainerSetTests(unittest.TestCase):
                 mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
                 mock.patch.object(server.OPS, "start", return_value={"id": "created"}):
             server.DEPLOY.run_deploy(config)
-        claim.assert_called_once_with("lab", "metrics-data", 3, server.STORAGE_CLASS, "ReadWriteOnce")
+        claim.assert_called_once_with("lab", "metrics-data", 3, "longhorn-r2", "ReadWriteOnce")
         deployment = next(call.args[2] for call in send.call_args_list if call.args[1].endswith("/deployments"))
         self.assertEqual(["main", "metrics"], [c["name"] for c in deployment["spec"]["template"]["spec"]["containers"]])
         # The sidecar's API_TOKEN is kept in the workload's Secret, written first.

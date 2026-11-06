@@ -1906,7 +1906,7 @@ are released from the VM first, so Kubernetes does not delete them with it.
 shared block volume declared the way Harvester's UI declares it, so the VM can
 live-migrate, and a disk from a Harvester image lives on that image's own
 class. On k3s, RKE2 or any other cluster with KubeVirt, a new disk lands on
-the class you pick - the cluster's default to begin with - and CDI picks the
+the class you pick - Homestead's default class to begin with - and CDI picks the
 access mode that class supports, so local-path works; such a VM stays on the
 host its disk is on. Without CDI, a VM starts from a blank disk KubeVirt
 formats itself, and downloading or importing an image asks for CDI first.
@@ -2088,7 +2088,7 @@ authenticated.
 | `SMB_NAMESPACE` | `lab` | namespace containing the managed Samba deployment |
 | `SAMBA_IMAGE` | `dperson/samba:latest` | image Samba is installed from when the first share is created |
 | `NFS_IMAGE` | `pedroetb/nfs-server:v2.4.0` | image used by the optional NFSv4 server |
-| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes (the manifest sets `longhorn`) |
+| `STORAGE_CLASS` | `longhorn-r2` | default StorageClass for new volumes, VM disks, moves and the object store while it exists and is usable; else the class the cluster marks as default, else the first of `longhorn-r2`, `harvester-longhorn`, `longhorn` (the manifest sets `longhorn`; the chart leaves it empty) |
 | `LB_IP` | empty | shared kube-vip address |
 | `SESSION_TTL_HOURS` | `12` | idle window for an ordinary session |
 | `SESSION_REMEMBER_DAYS` | `30` | idle window when "keep me signed in" is ticked |

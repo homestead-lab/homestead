@@ -7,12 +7,15 @@ import server
 import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_capacity_review as review
+from fakes.storage_classes import storage_classes
 
 
 class EditCapacityTests(unittest.TestCase):
     get = fixtures.RolloutCapacityTests.get
 
     def setUp(self):
+
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         fixtures.RolloutCapacityTests.setUp(self)
         self.config = {"ns": "lab", "name": "shared", "containers": [
             {"original_name": "main", "name": "main", "memory": "6Gi", "memory_limit": "6Gi"}]}

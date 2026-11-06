@@ -11,10 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_restructure as restructure
+from fakes.storage_classes import storage_classes
 from fixtures_source import source
 
 
 class PathValidationTests(unittest.TestCase):
+    def setUp(self):
+        # A volume named with no class goes on the one default class (#1125).
+        storage_classes(self, "longhorn-r2")
+
     def test_aliases_and_overlapping_import_destinations_are_rejected(self):
         for folder in (".", "x/../y", "x/./y"):
             with self.assertRaises(ValueError):

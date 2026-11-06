@@ -4,7 +4,7 @@ These bindings decide what a write is allowed to do, who it is signed as and
 which cluster client the lifecycle code uses: the request role
 (host_access.set_role), changes._author_key, changes.REQUEST.user (a thread
 local), and what server.py gives homestead_lifecycle through its bind():
-kget, ksend, SYS_NS, _cache, hardware_features, create_pvc and STORAGE_CLASS
+kget, ksend, SYS_NS, _cache, hardware_features and create_pvc
 (a test that calls lifecycle.bind() restores the module with addCleanup). A test that binds one and does not restore it changes every test after
 it, so a file passes alone and fails in the suite, or the other way round.
 A test that sets them restores them itself (mock.patch, addCleanup); this
@@ -28,11 +28,10 @@ import homestead_lifecycle as LIFECYCLE
 import server  # noqa: F401  (binds lifecycle, so the baseline is server's client even if no file imported it yet)
 
 UNSET = object()
-# Everything LIFECYCLE.bind sets, not only its client: a test that picks a
-# default storage class leaves LIFECYCLE.STORAGE_CLASS changed unless it puts it back.
+# Everything LIFECYCLE.bind sets, not only its client.
 LIFECYCLE_BOUND = {"lifecycle reads": "kget", "lifecycle writes": "ksend", "lifecycle system namespaces": "SYS_NS",
                    "lifecycle cache": "_cache", "lifecycle hardware features": "hardware_features",
-                   "lifecycle create pvc": "create_pvc", "lifecycle storage class": "STORAGE_CLASS"}
+                   "lifecycle create pvc": "create_pvc"}
 
 
 def bound_now():
@@ -64,7 +63,7 @@ class GuardState(unittest.TestCase):
         # Everything LH.bind sets, homestead_csi_restore's binding included.
         LH = sys.modules["homestead_longhorn"]
         bound = {"kget": LH.kget is server.kget, "ksend": LH.ksend is server.ksend, "cache": LH._cache is server._cache,
-                 "storage class": LH.STORAGE_CLASS == server.STORAGE_CLASS, "namespace": LH.DEFAULT_NS == server.DEFAULT_NS,
+                 "namespace": LH.DEFAULT_NS == server.DEFAULT_NS,
                  "csi kget": LH.CSI_RESTORE.kget is server.kget, "csi ksend": LH.CSI_RESTORE.ksend is server.ksend}
         self.assertEqual({name: True for name in bound}, bound,
                          "a test bound homestead_longhorn to its own fake and did not put the server's binding back")

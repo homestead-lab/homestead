@@ -23,6 +23,8 @@ import homestead_move_phases as PHASE
 import homestead_move_actions as ACT
 import homestead_transfer_cleanup as CLEANUP
 import homestead_move_source as source
+import homestead_storage_classes as STORAGE_CLASSES
+from fakes.storage_classes import storage_classes
 
 
 def merge(target, patch):
@@ -87,8 +89,6 @@ class FakeCluster:
 
 
 class FakeLonghorn:
-    STORAGE_CLASS = "longhorn-r2"
-
     def __init__(self, cluster):
         self.cluster = cluster
         self.target = {"configured": True, "url": "s3://homestead-backups@us-east-1/",
@@ -459,6 +459,8 @@ class EngineTests(unittest.TestCase):
     """The destination drives the source over HTTP; here, over a function call."""
 
     def setUp(self):
+
+        storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         # Fake clusters must not invoke server.py's live API cleanup hook.
         cleanup = mock.patch.object(engine, "after_finish", None)
         cleanup.start()
@@ -558,7 +560,9 @@ class EngineTests(unittest.TestCase):
     def test_effective_destination_class_is_frozen_when_default_changes(self):
         move = PLAN.start("shed", "container", "frigate", "moved", "automatic")
         self.assertEqual("longhorn-r2", move["storage_class"])
-        with mock.patch.object(self.lh, "STORAGE_CLASS", "missing-new-default"):
+        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "missing-new-default"), \
+                mock.patch.object(STORAGE_CLASSES, "storage_classes", lambda: [{"name": "other-default", "default": True,
+                                                                               "provisioner": STORAGE_CLASSES.LONGHORN_PROVISIONER}]):
             finished = self.run_until_settled(move_id=move["id"])
         self.assertEqual("succeeded", finished["status"], finished["message"])
         self.assertEqual("longhorn-r2", self.lh.restored[0]["storage_class"])

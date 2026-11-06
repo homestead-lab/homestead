@@ -1,8 +1,10 @@
 """Storage classes: making, defaulting and removing them, the V2 engine they
 may ask for, and the restore classes Homestead makes and tidies.
 
-server.py keeps storage_classes() itself, which also tracks the class new
-volumes go on when none is chosen; it is bound here to read them.
+server.py keeps storage_classes() itself (every class, with the facts the
+pages show); it is bound here to read them. The class new volumes go on when
+none is chosen is decided here, by default_class(), from that read each time:
+no module keeps a copy (#1125).
 """
 import json
 import os
@@ -25,17 +27,106 @@ selectable = shared = facts = None
 _cache = {}
 DATA_DIR = "/data"
 DEFAULT_NS = "lab"
+# The class Homestead was installed with: its STORAGE_CLASS setting (the Helm
+# chart leaves it empty, deploy.yaml names one). Then Longhorn's usual names.
+INSTALL_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
+FALLBACK_CLASSES = ("longhorn-r2", "harvester-longhorn", "longhorn")
 
 
 def bind(_kget, _ksend, _storage_classes, dns_name, _node_temps, cache, data_dir, default_namespace,
          _selectable=None, _shared=None, _facts=None):
     """_selectable, _shared and _facts are server.py's class pickers: they put
-    the class new volumes go on first, which server.py keeps."""
+    the class new volumes go on (default_class) first."""
     global kget, ksend, storage_classes, _dns_name, node_temps, _cache, DATA_DIR, DEFAULT_NS
     global selectable, shared, facts
     kget, ksend, storage_classes, _dns_name, node_temps = _kget, _ksend, _storage_classes, dns_name, _node_temps
     _cache, DATA_DIR, DEFAULT_NS = cache, data_dir, default_namespace
     selectable, shared, facts = _selectable, _shared, _facts
+
+
+# Harvester keeps these for VM images and VM state; they are not general
+# purpose storage and Harvester's own UI marks them internal.
+INTERNAL_STORAGE_CLASSES = {"longhorn-static", "vmstate-persistence"}
+
+
+def _internal_class(meta):
+    annotations = meta.get("annotations", {}) or {}
+    return (meta.get("name", "") in INTERNAL_STORAGE_CLASSES or
+            str(annotations.get("harvesterhci.io/is-reserved-storageclass", "")).lower() == "true")
+
+
+def _class_made_for(name, parameters):
+    """A class made for one thing, not for choosing: a Harvester image's
+    (its disks start as that image - named longhorn-image-* or lh-<uuid>,
+    with the image as its backing image) or a restore's (Homestead's
+    homestead-restore-*, reading one backup). Neither belongs in a picker."""
+    if name.startswith("homestead-restore-") or parameters.get("fromBackup"):
+        return "restore"
+    if parameters.get("backingImage") or name.startswith("longhorn-image-"):
+        return "image"
+    if name == NAMES.object_name("isos"):
+        # Homestead's ISO copies: one replica, not a class to put data on.
+        return "iso"
+    return ""
+
+
+def class_row(item):
+    """The facts default_class() reads from one StorageClass object, for code
+    that reads the classes itself; server.py's storage_classes() has more."""
+    meta = item.get("metadata", {}) or {}
+    return {"name": meta.get("name", ""), "provisioner": item.get("provisioner", ""),
+            "default": (meta.get("annotations") or {}).get(DEFAULT_CLASS_ANNOTATION) == "true",
+            "internal": _internal_class(meta), "made_for": _class_made_for(meta.get("name", ""), item.get("parameters") or {})}
+
+
+def class_selectable(row):
+    """A class a person may put data on: not one Harvester keeps for itself,
+    and not one made for an image, a restore or Homestead's ISO copies."""
+    return not row.get("internal") and not row.get("made_for")
+
+
+def default_class(rows=None):
+    """The class a new volume goes on when none is named, everywhere Homestead
+    asks (#1125): new claims, VM disks, a move's restored images, the object
+    store. Of the usable classes (rows: storage_classes(), read now if not
+    given): the install class, if it is here; else the one the cluster marks
+    as its default (of several - k3s marks local-path, Longhorn's chart its
+    own - Longhorn's first); else the first of FALLBACK_CLASSES that is here.
+    "" when none is usable. Reading it changes nothing: there is no copy."""
+    return default_choice(rows)[0]
+
+
+def default_choice(rows=None):
+    """default_class() and why: (name, "install" | "default" | "fallback"),
+    or ("", "") when no class is usable."""
+    usable = [row for row in (storage_classes() if rows is None else rows) if class_selectable(row)]
+    names = {row["name"] for row in usable}
+    if INSTALL_CLASS and INSTALL_CLASS in names:
+        return INSTALL_CLASS, "install"
+    marked = sorted((row for row in usable if row.get("default")),
+                    key=lambda row: (row.get("provisioner") != LONGHORN_PROVISIONER, row["name"]))
+    if marked:
+        return marked[0]["name"], "default"
+    name = next((name for name in FALLBACK_CLASSES if name in names), "")
+    return name, "fallback" if name else ""
+
+
+def claim_class(rows=None):
+    """default_class() for a claim, which must name a class: one naming ""
+    asks for none and never binds. With no usable class at all, the install
+    class, else longhorn-r2, as Homestead has always named then."""
+    return default_class(rows) or INSTALL_CLASS or FALLBACK_CLASSES[0]
+
+
+def read_claim_class(what):
+    """claim_class() for a request that names no class, with a failed read
+    said as such (as a move says it), not as the raw client error: what is
+    what it was choosing a class for."""
+    try:
+        return claim_class()
+    except Exception as error:
+        raise RuntimeError(f"Homestead could not read the storage classes, so it did not choose one for {what}: "
+                           f"{error}. Try again in a moment.") from error
 
 
 def cleanup_restore_classes():
@@ -91,8 +182,13 @@ def storage_class_usage():
 def storage_class_inventory():
     usage = storage_class_usage()
     rows = storage_classes()
+    # Which class Homestead puts new volumes on, and why, for the card beside
+    # Make default: an install class wins over the cluster's default (#1125).
+    chosen, reason = default_choice(rows)
     for row in rows:
         row["in_use"] = usage.get(row["name"], 0)
+        if row["name"] == chosen:
+            row.update(homestead_default=True, homestead_reason=reason)
     return rows
 
 

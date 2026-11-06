@@ -24,9 +24,6 @@ CLASSES = {"items": [
 
 class StorageClassTests(unittest.TestCase):
     def setUp(self):
-        # Listing classes picks a default on the server, LC and LH (_note_default_class): put all three back.
-        for module in (server, server.LC, server.LH):
-            self.addCleanup(setattr, module, "STORAGE_CLASS", module.STORAGE_CLASS)
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
@@ -41,8 +38,10 @@ class StorageClassTests(unittest.TestCase):
         server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
 
     def test_internal_classes_are_never_offered(self):
-        self.assertEqual(["harvester-longhorn", "longhorn", "longhorn-r2"],
-                         server.selectable_storage_classes())
+        # The class new volumes go on first: the install class, over the
+        # one the cluster marks as default (#1125).
+        with mock.patch.object(STORAGE_CLASSES, "INSTALL_CLASS", "longhorn-r2"):
+            self.assertEqual(["longhorn-r2", "harvester-longhorn", "longhorn"], server.selectable_storage_classes())
 
     def test_class_deletion_refuses_incomplete_claim_inventory(self):
         self.claims["metadata"] = {"continue": "next"}
@@ -143,9 +142,6 @@ class StorageClassTests(unittest.TestCase):
 class LonghornV2Tests(unittest.TestCase):
     def setUp(self):
         plain_platform(self)
-        # Listing classes picks a default on the server, LC and LH (_note_default_class): put all three back.
-        for module in (server, server.LC, server.LH):
-            self.addCleanup(setattr, module, "STORAGE_CLASS", module.STORAGE_CLASS)
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))

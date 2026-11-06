@@ -19,6 +19,7 @@ from unittest import mock
 sys.path.insert(0, "/repo/server")
 import homestead_imports as imports
 import homestead_container_import as CONTAINER_IMPORT
+import homestead_storage_classes as STORAGE_CLASSES
 import homestead_source_ssh as ssh
 from unraid_vm_copy import exercise as exercise_vm_copy
 
@@ -88,7 +89,12 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
                "source_consistency": "stopped", "remote_path": str(source_dir),
                "pvc": "fixture-data", "size_gb": 1, "mount_path": "/config",
                "mappings": [{"remote_path": str(source_dir), "mount_path": "/config", "bytes": 9 * 1024 ** 2}]}
-        with mock.patch.object(imports, "_source", return_value=src):
+        # The fixture has no cluster: state the storage classes it assumes, as the unit tests do
+        # (tests/fakes/storage_classes.py). The import names no class, so the one rule picks.
+        classes = [{"name": "longhorn-r2", "provisioner": STORAGE_CLASSES.LONGHORN_PROVISIONER,
+                    "default": False, "internal": False, "made_for": ""}]
+        with mock.patch.object(imports, "_source", return_value=src), \
+                mock.patch.object(STORAGE_CLASSES, "storage_classes", lambda: [dict(c) for c in classes]):
             prepared = CONTAINER_IMPORT.prepare_import(cfg)
         job = prepared["job"]
         assert job["spec"]["backoffLimit"] == 0

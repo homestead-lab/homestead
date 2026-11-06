@@ -56,7 +56,7 @@ def volume(name, groups=(), state="attached"):
 
 class WeeklyTrimTests(unittest.TestCase):
     def bind(self, cluster):
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(cluster.get, cluster.send, {}, "longhorn")
         return cluster

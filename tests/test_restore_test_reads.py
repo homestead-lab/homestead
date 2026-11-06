@@ -66,7 +66,7 @@ class Reads(unittest.TestCase):
         def kget(path, timeout=10):
             self.reads.append(path)
             return K.kget(path, timeout)
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(kget, K.ksend, CACHE._cache)
         self.operations = []
@@ -180,7 +180,7 @@ class OneVolume(unittest.TestCase):
         def kget(path, timeout=10):
             self.reads.append(path)
             return K.kget(path, timeout)
-        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        saved = (LH.kget, LH.ksend, LH._cache, LH.DEFAULT_NS)
         self.addCleanup(lambda: LH.bind(*saved))   # put back what server.py bound
         LH.bind(kget, K.ksend, {})
 

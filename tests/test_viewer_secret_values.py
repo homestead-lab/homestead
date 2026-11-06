@@ -71,8 +71,8 @@ class Base(unittest.TestCase):
         self.store.objects[DEP] = dep
         self.store.sent.clear()
         # put back what server.py bound, or the next file's lifecycle reads go to this fake
-        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc", "STORAGE_CLASS")})
-        lifecycle.bind(self.store.read, self.store.send, set(), {}, lambda: [], lambda *a, **k: None, "longhorn-r2")
+        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc")})
+        lifecycle.bind(self.store.read, self.store.send, set(), {}, lambda: [], lambda *a, **k: None)
         self.kget = server.KUBE_HELPERS.kget
         server.KUBE_HELPERS.kget = self.store.read
         self.features = server.WORKLOADS.HW.features

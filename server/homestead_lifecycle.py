@@ -32,7 +32,6 @@ SYS_NS = set()
 _cache = {}
 hardware_features = lambda: []
 create_pvc = None
-STORAGE_CLASS = "longhorn-r2"
 
 
 def dns_label(value, label):
@@ -43,15 +42,13 @@ def dns_label(value, label):
 
 
 def bind(_kget, _ksend, _sys_ns, _cache_ref, _hardware_features=None,
-         _create_pvc=None, _storage_class=None):
-    global kget, ksend, SYS_NS, _cache, hardware_features, create_pvc, STORAGE_CLASS
+         _create_pvc=None):
+    global kget, ksend, SYS_NS, _cache, hardware_features, create_pvc
     kget, ksend, SYS_NS, _cache = _kget, _ksend, _sys_ns, _cache_ref
     if _hardware_features:
         hardware_features = _hardware_features
     if _create_pvc:
         create_pvc = _create_pvc
-    if _storage_class:
-        STORAGE_CLASS = _storage_class
 
 
 def _bust(*keys):

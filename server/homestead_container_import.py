@@ -19,6 +19,7 @@ import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
 import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
+import homestead_storage_classes as STORAGE_CLASSES
 
 
 # --------------------------------------------------------------- import job
@@ -247,8 +248,11 @@ def import_volumes(cfg):
     Appdata and recordings do not belong on the same volume: one is small and
     wants replicas, the other is large and usually does not. An import may
     therefore land in several claims, and each folder says which one it goes to.
+    A volume it makes with no class named goes on the one default class (#1125),
+    read once and only when such a volume is asked for; a reused claim keeps
+    its own class (prepare_import reads it from the claim).
     """
-    rows, seen = [], set()
+    rows, seen, default = [], set(), []
     requested = cfg.get("volumes") or []
     copies = [row for row in (cfg.get("mappings") or [])
               if str(row.get("medium") or "").lower() != "memory"
@@ -280,15 +284,19 @@ def import_volumes(cfg):
         access_mode = str(item.get("access_mode") or "ReadWriteOnce")
         if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
             raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
-        storage_class = str(item.get("storage_class") or "longhorn-r2").strip()
-        if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
+        storage_class = str(item.get("storage_class") or "").strip()
+        if not storage_class and create:
+            if not default:
+                default.append(STORAGE_CLASSES.read_claim_class("the imported volumes"))
+            storage_class = default[0]
+        if (storage_class or create) and not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", storage_class):
             raise ValueError("storage class must use lowercase letters, numbers, dots and dashes")
         rows.append({"name": claim, "create": create, "size_gb": size,
                      "storage_class": storage_class, "access_mode": access_mode})
     return rows
 
 
-def import_mappings(cfg):
+def import_mappings(cfg, volumes=None):
     """Every remote directory this import copies, and where it lands.
 
     An Unraid container usually maps several folders under appdata. They belong
@@ -297,7 +305,7 @@ def import_mappings(cfg):
     a volume per mapping.
     """
     rows, used, paths = [], set(), set()
-    volumes = import_volumes(cfg)
+    volumes = import_volumes(cfg) if volumes is None else volumes
     names = [volume["name"] for volume in volumes]
     requested = cfg.get("mappings")
     if requested is None:
@@ -418,7 +426,7 @@ def prepare_import(cfg):
     ns = cfg.get("namespace") or I.NS
     src = I._source(cfg["source"])
     volumes = import_volumes(cfg)
-    mappings = import_mappings(cfg)
+    mappings = import_mappings(cfg, volumes)  # the same volumes: the classes are read once
     # What the job copies; a mapping mounted empty is only the workload's.
     copied = [row for row in mappings if not row.get("medium") and row.get("copy", True)]
     if copied:

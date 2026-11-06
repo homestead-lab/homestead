@@ -932,6 +932,18 @@ async function storageClassesPaint() {
 }
 window.storageClassesPaint = storageClassesPaint;
 
+/* Which class Homestead puts new volumes on, and why (#1125), said beside
+   every Make default (this card and the setup guide's storage step): an
+   install class wins over the cluster's default. "" for an answer without it. */
+function homesteadClassLine(classes) {
+  const ours = (classes || []).find(row => row.homestead_default);
+  return !ours ? "" : `<p class="dim xs" data-homestead-class>Homestead puts new volumes on <b class="mono">${esc(ours.name)}</b>${
+    ours.homestead_reason === "install" ? " (its install class); making another class the default here does not change that."
+    : ours.homestead_reason === "default" ? ", the cluster's default: making another class the default here moves new volumes there too."
+    : " (no class is marked default); making a class the default here moves new volumes there."}</p>`;
+}
+window.homesteadClassLine = homesteadClassLine;
+
 function storageClassCard(classes, v2 = null) {
   const every = classes || [];
   if (!every.length) return "";
@@ -945,6 +957,7 @@ function storageClassCard(classes, v2 = null) {
       ${STATE.showSpecialClasses ? "shown" : "hidden"}, and never offered when choosing a class.
       <a class="linkish" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;storageClassesPaint()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
       ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove unused restore classes</a>` : ""}</div>` : "";
+  const oursLine = homesteadClassLine(every);
   // What a volume on it can do, as tags: one column, not three.
   const features = row => [
     row.migratable ? UI.chip("VM disk class", "neutral", { tip: "Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX)." })
@@ -955,7 +968,7 @@ function storageClassCard(classes, v2 = null) {
   const kind = row => row.made_for === "image" ? ` ${UI.chip("image", "neutral", { tip: "Harvester made it for one image: disks from that image are made on it" })}`
     : row.made_for === "restore" ? ` ${UI.chip("restore", "neutral", { tip: "Made to restore a backup; kept while claims reference it so they can be resized" })}`
     : row.made_for === "iso" ? ` ${UI.chip("ISO copies", "neutral", { tip: "ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares" })}` : "";
-  return `${UI.moduleHeader(`Storage classes`, `What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}
+  return `${UI.moduleHeader(`Storage classes`, `What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}${oursLine}
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
       <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Its volumes</th><th>In use</th><th data-nosort></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
@@ -969,7 +982,7 @@ function storageClassCard(classes, v2 = null) {
       <td data-label="Its volumes">${features(row)}</td>
       <td class="mono" data-label="In use">${row.in_use ?? 0}</td>
       <td data-actions>${actionBar([
-        row.default || row.internal || row.made_for ? null : { label: "Make default", run: `storageClassDefault(${jsq(row.name)})`, need: "admin", tip: "Use this class when nothing else is chosen" },
+        row.default || row.internal || row.made_for ? null : { label: "Make default", run: `storageClassDefault(${jsq(row.name)})`, need: "admin", tip: "The cluster's default, for claims that name no class" },
         row.internal || row.default || row.in_use ? null : { label: "Delete", icon: "trash", run: `storageClassDelete(${jsq(row.name)})`, need: "admin", danger: true },
       ], { shown: 1 })}</td></tr>`).join("")}</tbody></table></div>${specialLine}`;
 }
@@ -1002,7 +1015,8 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks ${tip("Migratable is for VM live migration. Its volumes mount on one host at a time: fine for one pod, but not for a volume several hosts share (RWX).")}</label>
     <div id="sc_hint" hidden></div>
-    <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
+    <label class="switch"><input type="checkbox" id="sc_default"> Make this the cluster's default class ${tip("The cluster's default, for claims that name no class.")}</label>
+    ${homesteadClassLine(STATE.data.storageClasses)}
     ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],

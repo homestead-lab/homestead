@@ -52,7 +52,7 @@ class SeedConfigTests(unittest.TestCase):
             return body
 
         # put back what server.py bound, or the next file's lifecycle reads go to this fake
-        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc", "STORAGE_CLASS")})
+        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc")})
         lifecycle.bind(get, send, set(), {}, lambda: [])
 
     def test_discovers_configmap_mounted_by_init_container(self):
