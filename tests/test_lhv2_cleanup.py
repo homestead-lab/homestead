@@ -158,7 +158,10 @@ class RefusalEndsTests(unittest.TestCase):
                 self.staged.append(row['node']); self.memory[row['node']]['phase']='restart-required'
                 if self.stage_error: raise self.stage_error   # staged on the host, but the answer is lost
             elif self.inspect_error: raise self.inspect_error
+            else: self.inspected.append(row['node'])
             return copy.deepcopy(self.memory[row['node']])
+        self.inspected=[]; self.now=1000.0
+        self.enterContext(patch.object(C,'_clock',lambda:self.now,create=True))
         for obj,name,value in [(C.SETUP,'ops',ops),(C.SETUP,'kget',K.kget),(C.SETUP,'ksend',K.ksend),(C.CAP,'ksend',K.ksend),
                                (C,'host',host),(REVIEW,'_key',lambda:b'test-key')]:
             p=patch.object(obj,name,value);p.start();self.addCleanup(p.stop)
@@ -192,6 +195,63 @@ class RefusalEndsTests(unittest.TestCase):
         self.assertFalse(self.cordoned('node-a')); self.assertFalse(self.staged)
         self.assertNotIn(C.CORDONED_BY,self.annotations('node-a'))   # our mark goes with our cordon
         self.assertIsNone(C.pending()); C.require_idle()   # V2 prepare and enable are allowed again
+
+    def all_staged(self):
+        item=self.start_and_stop_v2()
+        for _ in range(4):
+            C.progress(item)
+        self.assertEqual(['restart-required']*2,[r['phase'] for r in item['ref']['nodes']])
+        self.inspected.clear()
+        return item
+
+    def restarted(self,name):
+        node=self.kube.object('/api/v1/nodes/'+name); node['status']['nodeInfo']['bootID']='boot-2'
+        node['status']['capacity']['hugepages-2Mi']='1Gi'; self.kube.add(node)
+        self.memory[name].update(phase='complete',boot='boot-2',baseline=512)
+
+    def test_a_host_waiting_for_its_restart_is_not_asked_again_every_round(self):
+        item=self.all_staged()
+        for _ in range(5):
+            self.assertEqual('running',C.progress(item)[0])
+        self.assertEqual([],self.inspected,'its worker can only move on after a restart, so asking changes nothing')
+
+    def test_it_is_still_asked_now_and_then(self):
+        item=self.all_staged()
+        self.now+=10*60
+        C.progress(item); C.progress(item)
+        self.assertEqual(['node-a','node-b'],sorted(self.inspected),'once each, and then not again')
+
+    def test_a_restart_is_seen_on_the_next_round(self):
+        item=self.all_staged()
+        C.progress(item)
+        self.restarted('node-a')
+        C.progress(item)
+        self.assertEqual(['node-a'],self.inspected)
+        self.assertEqual('complete',item['ref']['nodes'][0]['phase'])
+        self.restarted('node-b')
+        self.assertEqual('succeeded',C.progress(item)[0])
+
+    def test_a_refused_job_waiting_on_a_restart_is_not_asked_every_round_either(self):
+        item=self.all_staged()
+        item['ref']['refused']='V2 was re-enabled'
+        for _ in range(3):
+            self.assertEqual('running',C.progress(item)[0])
+        self.assertEqual([],self.inspected)
+        self.restarted('node-a'); self.restarted('node-b')
+        self.assertEqual('failed',C.progress(item)[0])
+        self.assertEqual(['node-a','node-b'],sorted(self.inspected))
+
+    def test_a_stage_whose_answer_was_lost_is_asked_every_round(self):
+        # An error from the stage run is no proof either way: only the host can say.
+        item=self.start_and_stop_v2()
+        self.stage_error=ValueError('lost')
+        with self.assertRaises(ValueError):
+            C.progress(item)
+        self.stage_error=None
+        self.assertEqual('staging',item['ref']['nodes'][0]['phase'])
+        self.inspected.clear()
+        C.progress(item)
+        self.assertIn('node-a',self.inspected)
 
     def test_the_cordon_carries_the_jobs_mark(self):
         item=self.start_and_stop_v2(); C.progress(item)
