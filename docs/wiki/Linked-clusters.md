@@ -200,6 +200,13 @@ the link** instead.
 
 ## Troubleshooting
 
+**"still checking"** (a grey dot) - this Homestead has asked a cluster it has
+never heard from for its summary, and the first answer has not come yet. It
+cannot be chosen as the destination of a move or copy until it answers; open
+the menu or the page again in a few seconds. A cluster that answered before
+keeps its last state while it is asked again, so one whose last check failed
+reads "not answering".
+
 **"not answering"** - open the cluster's own address from a browser on the LAN.
 If it works there, its address in **Manage clusters** may be out of date: set
 it on that cluster, under **Where the others reach this Homestead**.
