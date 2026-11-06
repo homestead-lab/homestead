@@ -119,6 +119,24 @@ def _get(path):
         return None
 
 
+def _patch(path, body, read):
+    """A merge patch naming the resourceVersion of read, so a change saved
+    since (the Helm page, the add-ons repair, an admin) is refused with a 409
+    and kept: True when written, False when it waits for the next round,
+    which works it out again from a fresh read."""
+    version = (read.get("metadata") or {}).get("resourceVersion")
+    if version:
+        body = dict(body, metadata={"resourceVersion": version})
+    try:
+        ksend("PATCH", path, body, ctype="application/merge-patch+json")
+        return True
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+        return False
+
+
 def _vote_only():
     """The tiebreakers: they never run kube-vip (its affinity), so their
     interfaces have no say in the one it announces on. Empty when the nodes
@@ -221,8 +239,8 @@ def kube_vip():
     # Only on what the probes say: no probe, no evidence either way.
     if not found or found == {match.group(1)}:
         return ""
-    ksend("PATCH", f"{HELMCHARTS}/kube-vip", {"spec": {"valuesContent": VIP_INTERFACE.sub("", values, count=1)}},
-          ctype="application/merge-patch+json")
+    if not _patch(f"{HELMCHARTS}/kube-vip", {"spec": {"valuesContent": VIP_INTERFACE.sub("", values, count=1)}}, chart):
+        return ""
     return match.group(1)
 
 
@@ -298,8 +316,8 @@ def kube_vip_settings():
     wanted = addons.kube_vip_values(interface, env.get("lb_class_only") == "true", election)
     if wanted == values:
         return ""
-    ksend("PATCH", f"{HELMCHARTS}/kube-vip", {"spec": {"valuesContent": wanted}},
-          ctype="application/merge-patch+json")
+    if not _patch(f"{HELMCHARTS}/kube-vip", {"spec": {"valuesContent": wanted}}, chart):
+        return ""
     notes = []
     if election == "global" and env.get("svc_election") != "false":
         notes.append("one leader now holds every VIP (global election), so VIPs come back after a reboot")
@@ -436,17 +454,25 @@ def longhorn_copies(storing):
     updated = addons.longhorn_values(want, priority=bool(match.group(3)))
     if match.group(4):
         updated += f"  defaultDataPath: {match.group(4)}\n"
-    ksend("PATCH", f"{HELMCHARTS}/longhorn",
-          # The priority stays as the install wrote it: an older install's
-          # Longhorn changes it only with every volume detached.
-          {"spec": {"valuesContent": updated}},
-          ctype="application/merge-patch+json")
     # The chart's defaults reach a running Longhorn only at its install; the
-    # setting is what it reads for each new volume now.
+    # setting is what it reads for each new volume now. It goes first: a
+    # change saved meanwhile to either (409) leaves the rest to the next round,
+    # which raises a setting still to raise and leaves a chart no longer
+    # Homestead's - a chart written first would leave the setting behind.
     setting = _get(LONGHORN_SETTING)
     value = _raised_setting(str((setting or {}).get("value") or ""), ours, want)
     if value is not None:
-        ksend("PATCH", LONGHORN_SETTING, {"value": value}, ctype="application/merge-patch+json")
+        if not _patch(LONGHORN_SETTING, {"value": value}, setting):
+            return None
+        # Recorded at once: if the chart then waits (409), a later round still
+        # counts this value as Homestead's and raises it again as hosts join.
+        state = _load()
+        state["longhorn_copies"] = want
+        SHARED.write_json(_path(), state, indent=1, sort_keys=True)
+    # The priority stays as the install wrote it: an older install's
+    # Longhorn changes it only with every volume detached.
+    if not _patch(f"{HELMCHARTS}/longhorn", {"spec": {"valuesContent": updated}}, chart):
+        return None
     state = _load()
     state["longhorn_copies"] = want
     SHARED.write_json(_path(), state, indent=1, sort_keys=True)
