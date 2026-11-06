@@ -780,6 +780,13 @@ def retire_step(item):
             unconfirmed = {r["metadata"]["name"] for r in left
                            if not _copy_elsewhere(r, replicas, node, disk, uuid, scheduled, whole)}
             left = [r for r in left if r["metadata"]["name"] not in unconfirmed]
+        # Each unconfirmed replica gets its own UNCONFIRMED_WAIT from when it was
+        # first seen so, recorded before anything below can fail.
+        since = {name: at for name, at in (ref.get("unconfirmed_since") or {}).items() if name in unconfirmed}
+        now = _clock()
+        for name in unconfirmed:
+            since.setdefault(name, now)
+        ref["unconfirmed_since"] = since
         for replica in left:
             try:
                 ksend("DELETE", f"{LH}/replicas/{replica['metadata']['name']}")
@@ -789,28 +796,26 @@ def retire_step(item):
         ref["removed"] = sorted(set(ref.get("removed") or []) | {r["metadata"]["name"] for r in left})
         if left:
             return "running", 30, f"Letting go of {len(left)} failed replica{'' if len(left) == 1 else 's'}"
-        plural = lambda n: f"{n} volume{'' if n == 1 else 's'}"
-        if unconfirmed:
-            since = ref.setdefault("unconfirmed_since", _clock())
-            if _clock() - since < UNCONFIRMED_WAIT:
-                return "running", 40, (
-                    f"Waiting: Homestead could not confirm another whole copy of {plural(len(unconfirmed))} (a copy "
-                    "may be rebuilding, or its host not Ready), so their replicas here stay; asking again")
-        else:
-            ref.pop("unconfirmed_since", None)
+        # Counted by volume: a volume may have several failed replicas here.
+        volume_of = {r["metadata"]["name"]: (r.get("spec") or {}).get("volumeName") or r["metadata"]["name"] for r in replicas}
+        volumes = lambda names: (lambda n: f"{n} volume{'' if n == 1 else 's'}")(len({volume_of.get(x, x) for x in names}))
+        waiting = {name for name, at in since.items() if now - at < UNCONFIRMED_WAIT}
+        if waiting:
+            return "running", 40, (
+                f"Waiting: Homestead could not confirm another whole copy of {volumes(waiting)} (a copy "
+                "may be rebuilding, or its host not Ready), so their replicas here stay; asking again")
         if keep or unconfirmed:
             ref["phase"] = "done"
             ref["kept"] = sorted(keep | unconfirmed)
-            said = []
+            said = ["Failed replicas removed, so their volumes rebuild from their healthy copies. The disk itself is kept"]
             if keep:
-                said.append(f"{plural(len(keep))} had the only copy on it")
+                said.append(f"{volumes(keep)} had the only copy on it: reconnect the drive to get "
+                            "them back; if it is dead, restore them from a backup and replace the disk again")
             if unconfirmed:
-                said.append(f"Homestead could not confirm another whole copy of {plural(len(unconfirmed))} "
-                            f"within {UNCONFIRMED_WAIT // 60} minutes, so their replicas here stay")
-            return "succeeded", 100, (
-                "Failed replicas removed, so their volumes rebuild from their healthy copies. The disk itself is "
-                f"kept: {'; '.join(said)}. Reconnect the drive to get them back; if it is dead, restore them from "
-                "a backup and replace the disk again.")
+                said.append(f"Homestead could not confirm another whole copy of {volumes(unconfirmed)} within "
+                            f"{UNCONFIRMED_WAIT // 60} minutes, so their replicas here stay: retire this disk again "
+                            "once their other copy is whole")
+            return "succeeded", 100, said[0] + ". " + ". ".join(s[0].upper() + s[1:] for s in said[1:]) + "."
         if [name for name in scheduled if name not in keep]:
             return "running", 45, f"Waiting for Longhorn to let go of {len(scheduled)} replica record(s)"
         ref["phase"] = "remove"

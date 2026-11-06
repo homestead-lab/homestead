@@ -254,6 +254,42 @@ class ReplaceFailedDiskTests(unittest.TestCase):
         # The reviewed only copy (scratch) and the unconfirmed one (jellyfin) are told apart.
         self.assertIn("1 volume had the only copy on it", item["message"])
         self.assertIn("Homestead could not confirm another whole copy of 1 volume", item["message"])
+        # What to do differs: an only copy needs the drive or a backup; an unconfirmed one, another retire later.
+        self.assertIn("retire this disk again once their other copy is whole", item["message"])
+
+    def test_a_volume_unconfirmed_later_still_gets_its_own_half_hour(self):
+        c = Cluster(self)
+        clock = [1000.0]
+        self.enterContext(mock.patch.object(DISKS, "_clock", lambda: clock[0]))
+        item = DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS())
+        # jellyfin is unconfirmed from the start (node1 NotReady); frigate's failed
+        # replica here could not be let go at first (the API refused), and twenty
+        # minutes later its other copies cannot be confirmed either.
+        self.node_ready(c, "node1", False)
+        c.kube.fail(f"{DISKS.LH}/replicas/r-waits", 500, times=99, method="DELETE")
+        self.step(item)                                  # no new replicas onto the disk
+        with self.assertRaises(urllib.error.HTTPError):
+            self.step(item)
+        clock[0] += 20 * 60
+        c.change_replica("r-waits-2", failedAt="2026-09-29T00:00:00Z")
+        self.step(item)                                  # now nothing is let go: no refused DELETE
+        # Past jellyfin's half hour, not frigate's: still waiting for frigate.
+        clock[0] += 11 * 60
+        self.step(item)
+        self.assertEqual("running", item["status"], item["message"])
+        self.assertIn("could not confirm another whole copy of 1 volume", item["message"])
+        clock[0] += 20 * 60
+        item = run(item)
+        self.assertEqual("succeeded", item["status"], item["message"])
+        self.assertLessEqual({"r-else", "r-waits"}, {r["metadata"]["name"] for r in c.replicas}, "both kept")
+        self.assertIn("could not confirm another whole copy of 2 volumes", item["message"])
+
+    def test_counts_are_of_volumes_not_replicas(self):
+        c = Cluster(self)
+        # A second failed replica of scratch on the same disk.
+        c.kube.add(replica("r-only-b", "pvc-scratch", "node3", "u-dead", healthy=False))
+        item = run(DISKS.retire_start({"node": "node3", "disk": "bd-sdb"}, OPS()))
+        self.assertIn("1 volume had the only copy on it", item["message"])
 
     def test_nothing_is_deleted_when_the_replicas_cannot_be_read(self):
         c = Cluster(self)
