@@ -208,7 +208,14 @@ class Coordinator:
                 raise
             wanted = involved[pinned["name"]]
             ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))
-            if identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp"):
+            # A host of Homestead's new pods with nothing pinned to it: it holds no writer from
+            # before the move (all were proven gone before the start request), and its boot
+            # id isn't measured either, so a Node back under its name only has to be up.
+            only_new_pods = pinned["name"] in self.new_pod_hosts and wanted is None
+            if node["metadata"].get("deletionTimestamp") and only_new_pods:
+                down.append(pinned["name"]); removed.append(pinned["name"])
+                continue
+            if node["metadata"].get("deletionTimestamp") or identity(node)["uid"] != pinned["uid"] and not only_new_pods:
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             if wanted is None and not ready:
                 down.append(pinned["name"])

@@ -384,14 +384,19 @@ its next capacity check before the switch, because the cluster is no longer the 
 - **Before the switch, resuming refuses**, and says what changed. Going back is the way on,
   or put a host back if that is possible; a removed host's identity can't come back.
 - **Going back ignores the change**, unless the original volume or one of Homestead's pods is on
-  the missing host; then it refuses and names it. Remove a pod left on a host that is gone, as
-  "A Pod on a dead host" says. Homestead may start on a host that has joined, both when a
+  the missing host; then it refuses and names it. That refusal clears when the pod leaves
+  Kubernetes, which pod GC does by itself; if it is still listed after a few minutes, see
+  "A Pod on a dead host". A move held before the stop is the same: Homestead's pod on a removed
+  host refuses going back until it has left. Homestead may start on a host that has joined, both when a
   return restarts it and if a pod is already there before any stop request. That is safe:
   nothing about that host matters to its original volume.
 - **After the switch there is no going back, so resuming and the start request ignore
   the change** and the move finishes, unless what it needs is on a missing host:
   - **Homestead's new pod listed on a deleted Node** counts as waiting, with no limit, until it
     leaves Kubernetes. Pod GC removes it, then its ReplicaSet starts another. Nothing needs doing.
+    If it is still listed after a few minutes, see "A Pod on a dead host". If the Node comes
+    back under the same name, it only has to be up with a fresh heartbeat: no writer from
+    before the move can be on it, as all were proven gone before the start request.
   - **The new volume's own host removed** holds, and recovery refuses and says so. The data
     is on that host. This is an administrator-reviewed recovery outside this tool.
 

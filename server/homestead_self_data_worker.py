@@ -421,7 +421,10 @@ class Runner:
                 "while its copy check lasts; after that it holds, and the way out is going back.")
         if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
             return self._wait_for(anchor, "host", None, None,
-                f"{names} is down. The move has passed the point where it can stop, so it waits with no limit and "
+                f"{_names(removed)} was removed. The move has passed the point where it can stop, so it waits with no limit: "
+                "Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
+                if len(removed) == len(hosts) else
+                f"{_names([h for h in hosts if h not in removed])} is down. The move has passed the point where it can stop, so it waits with no limit and "
                 "carries on when it is back. " + (
                     f"{_names(removed)} was removed: Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
                     if removed else "Bring it back; if it won't come back, see docs/data-move-recovery.md, "

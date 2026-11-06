@@ -923,7 +923,103 @@ class ClusterChangedAfterTheSwitchTests(unittest.TestCase):
         m.removed("node-a")
         self.assertEqual("held", run.tick()["status"])
 
-    def test_a_copy_of_the_rule_before_the_switch_is_still_strict(self):
+    def re_registered(self, m, host):
+        """Deleted and back under the same name: a new uid, up, with a fresh lease."""
+        node = self.kube.object("/api/v1/nodes/" + host)
+        node["metadata"]["uid"] = "new-identity"
+        self.kube.add(node)
+
+    def test_the_new_pods_node_re_registered_under_the_same_name_finishes(self):
+        m, run = self.started()
+        self.new_pod(m, "node-b")
+        self.re_registered(m, "node-b")
+        view = run.tick()
+        self.assertEqual("done", view["status"], view)
+
+    def test_the_new_pods_node_re_registered_and_not_up_yet_waits(self):
+        m, run = self.started()
+        self.new_pod(m, "node-b")
+        self.re_registered(m, "node-b")
+        m.host_down("node-b")
+        view = run.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-b", view["message"])
+        self.assertNotEqual("done", view["status"])
+
+    def test_the_new_pods_node_being_deleted_waits(self):
+        m, run = self.started()
+        pod = self.new_pod(m, "node-b")
+        dep = self.kube.object(m.dep_path); dep["status"]["readyReplicas"] = 0; self.kube.add(dep)
+        node = self.kube.object("/api/v1/nodes/node-b")
+        node["metadata"]["deletionTimestamp"] = "2020-01-01T00:00:00Z"
+        self.kube.add(node)
+        self.assertNotEqual("held", run.tick()["status"])
+        self.assertTrue(pod)
+
+    def test_a_re_registered_node_before_the_start_request_stays_strict(self):
+        """An old pod listed on it, after the stop, is still a writer to account for."""
+        m = Move(self.kube)
+        run = m.runner(real_admission=True)
+        run.tick()
+        self.re_registered(m, "node-a")
+        self.assertIn("replaced", run.tick()["message"])
+
+    def test_the_new_volumes_host_re_registered_stays_strict(self):
+        """Its disk may not be the one that was copied to, even with the new pod on it."""
+        m, run = self.started(pins={"new-pv": "node-a"})
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        self.new_pod(m, "node-a")
+        self.re_registered(m, "node-a")
+        self.assertIn("replaced", run.tick()["message"])
+        self.assertEqual("held", m.state()["runtime"]["state"])
+
+    def test_a_host_with_something_measured_on_it_re_registered_stays_strict(self):
+        """A stranger on the new pod's host makes it more than the new pod's."""
+        m, run = self.started()
+        self.new_pod(m, "node-b")
+        self.stranger("node-b")
+        self.re_registered(m, "node-b")
+        self.assertEqual("held", run.tick()["status"])
+        self.assertIn("replaced", m.state()["runtime"]["message"])
+
+    def test_the_new_volumes_host_being_deleted_holds(self):
+        m, run = self.started(pins={"new-pv": "node-a"})
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["metadata"]["deletionTimestamp"] = "2020-01-01T00:00:00Z"
+        self.kube.add(node)
+        self.assertEqual("held", run.tick()["status"])
+        self.assertEqual("held", m.state()["runtime"]["state"])
+
+    def test_one_host_down_and_one_removed_says_which_is_which(self):
+        m, run = self.started()
+        self.new_pod(m, "node-a", name="homestead-one")
+        self.new_pod(m, "node-b", name="homestead-two")
+        dep = self.kube.object(m.dep_path); dep["status"]["readyReplicas"] = 0; self.kube.add(dep)
+        m.removed("node-b")
+        m.host_down("node-a")
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-a"), real_admission=True)
+        view = run.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-a is down", view["message"])
+        self.assertIn("node-b was removed", view["message"])
+        self.assertNotIn("node-b is down", view["message"])
+        self.assertNotIn("node-a, node-b", view["message"])
+
+    def test_every_host_removed_does_not_promise_it_comes_back(self):
+        m, run = self.started()
+        self.new_pod(m, "node-b")
+        dep = self.kube.object(m.dep_path); dep["status"]["readyReplicas"] = 0; self.kube.add(dep)
+        m.removed("node-b")
+        view = run.tick()
+        self.assertIn("node-b was removed", view["message"])
+        self.assertNotIn("is down", view["message"])
+        self.assertNotIn("when it is back", view["message"])
+
+    def test_forward_before_the_switch_is_still_strict(self):
         """Forward before the switch needs the reviewed cluster: going back is still there."""
         m = Move(self.kube)
         run = m.runner(real_admission=True)
