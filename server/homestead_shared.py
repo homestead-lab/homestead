@@ -166,16 +166,28 @@ def read_json(path, default):
     """A JSON store on the data volume. A missing file is a fresh copy of
     default; a file that is there but cannot be read, is not JSON or holds
     another kind of value raises Unreadable, so nothing is saved over it."""
-    name = os.path.basename(path)
     try:
         with open(path, encoding="utf-8") as handle:
-            value = json.load(handle)
+            return parse_json(handle, path, default)
     except FileNotFoundError:
         return copy.deepcopy(default)
+    except OSError as error:
+        raise _unreadable(path, error) from error
+
+
+def _unreadable(path, error):
+    reason = getattr(error, "strerror", None) or "it is not valid JSON"
+    return Unreadable(f"Homestead could not read {os.path.basename(path)} on its data volume ({reason}), "
+                      "so it changed nothing; the saved data is kept")
+
+
+def parse_json(handle, path, default):
+    """read_json for a file already open, as read_json judges it."""
+    name = os.path.basename(path)
+    try:
+        value = json.load(handle)
     except (OSError, ValueError) as error:
-        reason = getattr(error, "strerror", None) or "it is not valid JSON"
-        raise Unreadable(f"Homestead could not read {name} on its data volume ({reason}), so it changed nothing; "
-                         "the saved data is kept") from error
+        raise _unreadable(path, error) from error
     if not isinstance(value, type(default)):
         raise Unreadable(f"{name} on Homestead's data volume does not hold what Homestead saved there, "
                          "so it changed nothing; the saved data is kept")
@@ -204,8 +216,11 @@ def update_file(path, fn, lock, default, **dump):
 
 
 def write_json(path, value, *, durable=False, mode=None, **dump):
+    """Save value at path, replacing the file. Returns the inode of the file
+    it wrote, so a caller can tell it from one another writer put there
+    after; None when the file already held exactly this and was left."""
     with write_scope(path):
-        _write_json(path, value, durable=durable, mode=mode, **dump)
+        return _write_json(path, value, durable=durable, mode=mode, **dump)
 
 
 def _same(path, text):
@@ -226,7 +241,7 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
         WRITE_GUARD(path)
     text = json.dumps(value, **dump)
     if not durable and mode is None and _same(path, text):
-        return                       # loops save each round; what has not changed is not written again
+        return None                  # loops save each round; what has not changed is not written again
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -238,6 +253,7 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
+        inode = os.fstat(handle.fileno()).st_ino
     os.replace(tmp, path)
     if durable and os.name == "posix":
         # fsync(file) alone does not make the replacement directory entry
@@ -247,3 +263,4 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+    return inode

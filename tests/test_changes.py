@@ -1,4 +1,5 @@
 import copy
+import os
 import sys
 import tempfile
 import unittest
@@ -273,19 +274,19 @@ class CompactHistoryTests(Base):
     def test_an_unchanged_index_is_not_read_again(self):
         import homestead_shared as SHARED
         CH.observe([dep()], now=1000)
-        with mock.patch.object(SHARED, "read_json", wraps=SHARED.read_json) as read:
+        with mock.patch.object(SHARED, "parse_json", wraps=SHARED.parse_json) as read:
             for i in range(3):
                 CH.observe([dep()], now=1060 + i * 60)
                 CH.history("lab", "sonarr")
-            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")), "the minute's look and the page answer from what was read")
+            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[1].endswith("change-history.json")), "the minute's look and the page answer from what was read")
             CH.observe([dep(image="example/sonarr:5.0")], now=1300)
             CH.history("lab", "sonarr")
-            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")), "nor after its own write")
+            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[1].endswith("change-history.json")), "nor after its own write")
             other = self.index()                          # another copy of Homestead leads now, and writes
             other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
             self.write_old(other)
             self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
-            self.assertEqual(1, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")))
+            self.assertEqual(1, sum(1 for c in read.call_args_list if c.args[1].endswith("change-history.json")))
 
     def test_a_failed_write_is_not_remembered_as_written(self):
         CH.observe([dep()], now=1000)
@@ -309,6 +310,132 @@ class CompactHistoryTests(Base):
                 CH.observe([dep()], now=1000 + minute * 60)
             self.assertEqual(2, save.call_count, "a day and two days on")
         self.assertGreater(self.index()["apps"]["lab/sonarr"]["seen"], 1000 + 2 * 86400)
+
+
+class SharedVolumeTests(Base):
+    """#1081: two replicas share the data volume over NFS, where stat() of a
+    path is answered from the client's attribute cache for up to a minute;
+    an open revalidates it. Another copy's save must be seen at once."""
+
+    def path(self):
+        return str(Path(self.dir.name, "change-history.json"))
+
+    def written_by_another_copy(self):
+        """The leader's look, then a save by another copy of Homestead (a whole
+        new file, as homestead_shared.write_json writes), and a stat() that
+        still answers with the attributes from before it."""
+        import json
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        self.assertEqual(1, len(CH.history("lab", "sonarr")))
+        cached = os.stat(self.path())
+        other = json.loads(Path(self.path()).read_text())
+        other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
+        CH.SHARED.write_json(self.path(), other, separators=(",", ":"), sort_keys=True, mode=0o600)
+        real = os.stat
+
+        def stat(path, *args, **kwargs):
+            return cached if str(path) == self.path() else real(path, *args, **kwargs)
+        return stat
+
+    def test_another_copys_save_is_seen_while_stat_answers_from_its_cache(self):
+        stale = self.written_by_another_copy()
+        with mock.patch.object(CH.os, "stat", side_effect=stale):
+            self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
+
+    def test_the_next_leader_does_not_save_over_another_copys_save(self):
+        stale = self.written_by_another_copy()
+        with mock.patch.object(CH.os, "stat", side_effect=stale):
+            CH.observe([dep(image="example/sonarr:6.0")], now=1120)
+        rows = CH.history("lab", "sonarr")
+        self.assertEqual(2, len(rows))
+        self.assertEqual("someone", rows[1]["by"], "the other copy's entry is kept, not saved over")
+
+    def test_a_rewrite_that_keeps_inode_time_and_size_is_seen(self):
+        """A real file, nothing patched: rewritten in place to the same size
+        and its modification time set back. Only st_ctime_ns tells."""
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        self.assertEqual(1060, CH.history("lab", "sonarr")[0]["at"])
+        before = os.stat(self.path())
+        text = Path(self.path()).read_text()
+        self.assertEqual(1, text.count('"at":1060'))
+        with open(self.path(), "r+", encoding="utf-8") as handle:
+            handle.write(text.replace('"at":1060', '"at":1061'))
+        os.utime(self.path(), ns=(before.st_atime_ns, before.st_mtime_ns))
+        after = os.stat(self.path())
+        self.assertEqual((before.st_ino, before.st_mtime_ns, before.st_size),
+                         (after.st_ino, after.st_mtime_ns, after.st_size))
+        self.assertEqual(1061, CH.history("lab", "sonarr")[0]["at"])
+
+    def test_a_quiet_look_opens_the_file_once_and_parses_nothing(self):
+        import builtins
+        import json
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        CH.history("lab", "sonarr")
+        opened, parsed = [], []
+        real_open, real_load = builtins.open, json.load
+
+        def counting_open(file, *args, **kwargs):
+            if str(file) == self.path():
+                opened.append(file)
+            return real_open(file, *args, **kwargs)
+
+        def counting_load(handle, *args, **kwargs):
+            if getattr(handle, "name", "") == self.path():
+                parsed.append(handle)
+            return real_load(handle, *args, **kwargs)
+        with mock.patch("builtins.open", counting_open), mock.patch("json.load", counting_load):
+            for i in range(3):
+                CH.observe([dep(image="example/sonarr:5.0")], now=1120 + i * 60)
+                CH.history("lab", "sonarr")
+            self.assertEqual([], parsed, "nothing changed, so nothing is parsed again")
+            self.assertEqual(6, len(opened), "one open each: three looks and three page answers")
+            CH.SHARED.write_json(self.path(), {"apps": {}}, separators=(",", ":"), sort_keys=True, mode=0o600)
+            self.assertEqual([], CH.history("lab", "sonarr"))
+            self.assertEqual(1, len(parsed), "another copy's save is parsed once")
+            CH.history("lab", "sonarr")
+            self.assertEqual(1, len(parsed))
+
+
+    def test_a_save_replaced_before_it_is_looked_at_again_is_read_again(self):
+        """A handover: another leader's save lands between this copy's write
+        and its look at what it wrote. That file is not kept as this copy's."""
+        import json
+        CH.observe([dep()], now=1000)
+        real = CH.SHARED.write_json
+        other = {}
+
+        def write_then_replaced(path, value, **kwargs):
+            written = real(path, value, **kwargs)
+            if path == self.path() and not other:
+                other.update(json.loads(json.dumps(value)))
+                other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
+                real(path, other, separators=(",", ":"), sort_keys=True, mode=0o600)
+            return written
+        with mock.patch.object(CH.SHARED, "write_json", side_effect=write_then_replaced):
+            CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        self.assertTrue(other, "the save was replaced")
+        self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
+
+    def test_a_save_that_was_not_replaced_is_still_not_read_again(self):
+        import json
+        CH.observe([dep()], now=1000)
+        with mock.patch("json.load", wraps=json.load) as load:
+            CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+            CH.history("lab", "sonarr")
+            self.assertEqual(0, sum(1 for c in load.call_args_list if getattr(c.args[0], "name", "") == self.path()))
+
+    def test_an_fstat_that_fails_says_the_history_cannot_be_read(self):
+        import errno
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        stale = OSError(errno.ESTALE, "Stale file handle")
+        with mock.patch.object(CH.os, "fstat", side_effect=stale):
+            with self.assertRaisesRegex(CH.SHARED.Unreadable, "change-history.json.*Stale file handle"):
+                CH.history("lab", "sonarr")
+        self.assertEqual(1, len(CH.history("lab", "sonarr")), "read again once it can be")
 
 class RouteTests(Base):
     def setUp(self):

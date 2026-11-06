@@ -87,37 +87,58 @@ def _path():
     return os.path.join(DATA_DIR, "change-history.json")
 
 
-_memo = {}      # the index as last read or written here, and the file it came from
+_memo = {}      # the index as last read or written here, and the version of the file it came from
 
 
-def _stat():
-    try:
-        st = os.stat(_path())
-    except OSError:
-        return None
-    return st.st_ino, st.st_mtime_ns, st.st_size
+def _version(handle):
+    """Which file an open handle reads, and which writing of it. From the open
+    file, never a stat() of the path: two replicas share the data volume over
+    NFS, where stat() answers from the attribute cache for up to a minute and
+    an open asks the server (#1081, as homestead_diagnostics._head)."""
+    st = os.fstat(handle.fileno())
+    return st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size
 
 
 def _load():
     """The index, under _lock. It is parsed again only when the file has changed
-    (#981); only observe() changes what this returns, and it saves what it changes."""
-    stat = _stat()            # before reading: a file replaced meanwhile is read again next time
-    if stat is not None and _memo.get("stat") == stat:
-        return _memo["data"]
-    _memo.clear()
-    data = SHARED.read_json(_path(), {})
-    if stat is not None:
-        _memo.update(stat=stat, data=data)
+    (#981): a quiet look is one open and an fstat. Only observe() changes what
+    this returns, and it saves what it changes."""
+    path = _path()
+    try:
+        handle = open(path, encoding="utf-8")
+    except FileNotFoundError:
+        _memo.clear()
+        return {}
+    except OSError:
+        _memo.clear()
+        return SHARED.read_json(path, {})     # says why it cannot be read
+    with handle:
+        try:
+            version = _version(handle)
+        except OSError as error:            # a stale NFS handle, say: as unreadable as a failed read
+            _memo.clear()
+            raise SHARED._unreadable(path, error) from error
+        if _memo.get("version") == version:
+            return _memo["data"]
+        _memo.clear()
+        data = SHARED.parse_json(handle, path, {})
+    _memo.update(version=version, data=data)
     return data
 
 
 def _save(data):
+    """Save the index and keep it as read, keyed on the file as it now is,
+    but only if that is still the file this wrote: another leader's save in
+    between (a handover) is read on the next look, never taken for this one."""
+    _memo.clear()
+    written = SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
     try:
-        SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
-    except BaseException:
-        _memo.clear()
-        raise
-    _memo.update(stat=_stat(), data=data)
+        with open(_path(), encoding="utf-8") as handle:
+            version = _version(handle)
+    except OSError:
+        return                                  # read again next time
+    if written is not None and version[0] == written:
+        _memo.update(version=version, data=data)
 
 
 def _template_path(digest):
