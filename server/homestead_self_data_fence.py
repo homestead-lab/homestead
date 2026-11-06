@@ -33,6 +33,11 @@ class MoveHeld(Held):
     data_handoff for this one alone; any other Held keeps its own reply."""
 
 
+class DataUnavailable(MoveHeld):
+    """The barrier couldn't use the volume, as opposed to refusing on purpose:
+    /readyz?check=data counts this as a bad volume and a plain hold as ready."""
+
+
 def _as_move(step):
     try:
         return step()
@@ -63,7 +68,7 @@ class WriteBarrier:
             os.makedirs(self.directory, exist_ok=True)
             fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
-            raise Held("The shared data activity lock is unavailable; no change was authorized") from None
+            raise DataUnavailable("The shared data activity lock is unavailable; no change was authorized") from None
         try:
             info, current = os.fstat(fd), os.lstat(path)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
@@ -93,7 +98,7 @@ class WriteBarrier:
             except BlockingIOError:
                 raise MoveHeld("Homestead is finishing current work for its data move. Wait before making changes") from None
             except OSError:
-                raise MoveHeld("The shared data activity lock is unavailable; no change was authorized") from None
+                raise DataUnavailable("The shared data activity lock is unavailable; no change was authorized") from None
             self.local.depth = 1
             _as_move(self.check)  # Fence may have been published while opening the lock.
             yield
@@ -106,7 +111,10 @@ class WriteBarrier:
         if getattr(self.local, "depth", 0):
             raise Held("The data handoff must drain outside an active request or job")
         self.check()
-        fd = self._open()
+        try:
+            fd = self._open()
+        except DataUnavailable as error:
+            raise Held(str(error)) from None  # A move not yet begun: not a request a move held.
         try:
             deadline = time.monotonic() + timeout
             while True:
