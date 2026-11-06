@@ -386,10 +386,10 @@ h1{margin:2px 0 0;font-size:22px;font-weight:700;letter-spacing:-.02em}
 .tree-pull{margin:4px 0 2px}
 /* A node card: thirty days of uptime under the head, then its meters two
    to a row where the card is wide enough, and its pods on one line. */
-.node-upstrip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
-.node-upstrip .uptime-unread{flex-basis:100%}
-.node-upstrip .uptime-strip.mini{flex:1;min-width:0;height:12px;grid-template-columns:repeat(30,minmax(0,1fr));gap:2px}
-.node-upstrip b{min-width:44px;text-align:right}
+.node-upstrip{display:grid;grid-template-columns:52px minmax(0,1fr);align-items:center;gap:4px 8px;margin-top:10px}
+.node-upstrip .uptime-unread{grid-column:1/-1}
+.node-upstrip .uptime-strip.mini{min-width:0;height:12px;grid-template-columns:repeat(30,minmax(0,1fr));gap:2px}
+.node-upstrip b{min-width:0;text-align:left}
 .nodemetrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:9px 20px;margin-top:12px}
 .nodemetrics .between{flex-wrap:nowrap;gap:8px}
 .nodemetrics .between>.dim{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3164,7 +3164,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .comparison-table .podgrid{margin-top:6px;gap:3px}
 .comparison-table .podgrid i{width:6px;height:6px;border-radius:1.5px}
 .node-comparison .comparison-table .podgrid i.wl,.single-node-summary .nodecard .podgrid i.wl{background:var(--tx);box-shadow:none}
-.comparison-table .node-upstrip{margin:0}
+.comparison-table .node-upstrip{grid-template-columns:auto minmax(0,1fr);margin:0}
+.comparison-table .node-upstrip .mini{grid-column:1/-1}
 .comparison-table .node-upstrip>.dim:first-child{display:none}
 .comparison-table th,.comparison-table td{width:auto;text-align:left;vertical-align:top;overflow-wrap:anywhere;white-space:normal;border-bottom:1px solid var(--line)}
 .comparison-table th:first-child{width:116px}
@@ -3250,13 +3251,14 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
   .tbl.stack.comparison-table th,.tbl.stack.comparison-table td{display:table-cell;width:auto;padding:8px 4px;text-align:left;vertical-align:middle;font-size:12px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
   .tbl.stack.comparison-table th:first-child{width:56px;font-size:11.5px}
   .tbl.stack.comparison-table td::before{content:none}
+  .tbl.stack.comparison-table td:has(.node-upstrip){vertical-align:top}
   .tbl.stack.comparison-table tr.comparison-extra{display:none}
   .comparison-table .meter{min-width:0;width:100%}
   .comparison-table .podgrid{gap:1px;margin-top:4px}
   .comparison-table .podgrid i{width:3px;height:3px;border-radius:1px}
-  .comparison-table .node-upstrip{display:grid;grid-template-columns:1fr auto;gap:3px}
-  .comparison-table .node-upstrip .mini{grid-column:1/-1;gap:1px;height:8px}
-  .comparison-table .node-upstrip b{min-width:0;text-align:left;font-size:11px}
+  .comparison-table .node-upstrip{gap:3px}
+  .comparison-table .node-upstrip .mini{gap:1px;height:8px}
+  .comparison-table .node-upstrip b{font-size:11px}
   .comparison-table .node-upstrip>.dim:last-child{font-size:10px}
   .comparison-select{font-size:12px;min-height:40px;padding:4px 0;text-align:center}
   .comparison-table .tag{padding:2px 4px;font-size:10.5px;margin:0 0 3px}
