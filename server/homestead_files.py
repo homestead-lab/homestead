@@ -440,7 +440,12 @@ def write_file(namespace, pvc, path, content, revision=None):
         if answer != b"saved":
             raise ValueError(err[:200] or "save failed; the original or its backup is retained")
     finally:
-        _sh(namespace, pod, f"rm -f {tmp} {bak}; rmdir {lk}")
+        # A clean-up that times out must not replace the save's own answer: the
+        # file is already replaced (or the real error is on its way out).
+        try:
+            _sh(namespace, pod, f"rm -f {tmp} {bak}; rmdir {lk}")
+        except OSError:
+            pass
     return {"ok": True, "path": relative, "bytes": len(payload),
             "revision": digest,
             "message": f"Saved {relative} ({len(payload)} bytes); previous contents kept as "
