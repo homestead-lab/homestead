@@ -372,7 +372,7 @@ class ReportTests(Base):
                     self.assertEqual({k: _reference_summary(a, at) for k, a in UP._state["apps"].items()}, got)
 
     def test_reports_between_rounds_are_several_times_quicker(self):
-        import random, time
+        import gc, random, time
         rnd = random.Random(7)
         now = 1_790_000_000 + 13 * 3600
         this = UP._hour(now)
@@ -380,13 +380,21 @@ class ReportTests(Base):
                                                           for h in range(720)}} for i in range(100)}
         UP._state.update(loaded=True, apps=apps, observed_at=time.time())
         UP.report(now)
-        started = time.process_time()
-        want = {k: _reference_summary(a, now) for k, a in apps.items()}
-        before = time.process_time() - started
-        started = time.process_time()
-        for _ in range(3):
-            got = UP.report(now + 20)
-        after = (time.process_time() - started) / 3
+        # A full collection inside the timed loop costs it a few tenths of a second once
+        # earlier test files have left millions of objects alive: collect first, and time
+        # neither side with GC on.
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.process_time()
+            want = {k: _reference_summary(a, now) for k, a in apps.items()}
+            before = time.process_time() - started
+            started = time.process_time()
+            for _ in range(3):
+                got = UP.report(now + 20)
+            after = (time.process_time() - started) / 3
+        finally:
+            gc.enable()
         self.assertEqual(want, got)
         # Relative, so a busy machine slows both alike: 200 apps took 481 ms before #979.
         # A generous ratio: about 100 times, so a loaded runner never trips it.
