@@ -1,7 +1,7 @@
 """An Unraid or Proxmox VM import that CDI never moves on ends, and lets go of the
 VM's name: the "disks" and "convert" waits had no deadline and raise nothing, so
 the job stayed "running" and its disk targets refused a retry. On the shared fake
-API and the real job list."""
+API and the real job list, walking the import's own phases."""
 import sys
 import tempfile
 import unittest
@@ -13,12 +13,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_operations as JOBS
 import homestead_unraid_vms as UVMS
+import homestead_vm_create as VM_CREATE
 import test_unraid_vms as fixture
 from fakes.kube import Kube
 
 DISKS_LIMIT = 30 * 60
 CONVERT_LIMIT = 6 * 60 * 60
 DVS = ("win11-disk", "win11-disk-2")
+NS = "lab"
+CLAIMS = f"/api/v1/namespaces/{NS}/persistentvolumeclaims/"
+PODS = f"/api/v1/namespaces/{NS}/pods/"
+JOB_API = f"/apis/batch/v1/namespaces/{NS}/jobs/"
+SECRETS = f"/api/v1/namespaces/{NS}/secrets/"
+
+
+def owned_by(kind, name, uid):
+    return [{"kind": kind, "name": name, "uid": uid, "controller": True}]
 
 
 class ImportWaitTests(unittest.TestCase):
@@ -27,19 +37,25 @@ class ImportWaitTests(unittest.TestCase):
         self.kube = self.enterContext(Kube(
             {"apiVersion": "v1", "kind": "Service", "metadata": {"namespace": "cdi", "name": "cdi-uploadproxy",
                                                                  "labels": {"cdi.kubevirt.io": "cdi-uploadproxy"}}},
+            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"namespace": "cdi", "name": "cdi-uploadproxy-signer-bundle"},
+             "data": {"ca-bundle.crt": "a-ca"}},
             groups=("cdi.kubevirt.io", "kubevirt.io")))
+        self.kube.react("POST", f"{UVMS.UPLOAD_API}/namespaces/{NS}/uploadtokenrequests",
+                        lambda method, path, body: {"status": {"token": "a-token"}})
         for name in ("IMP", "kget", "ksend", "OPS"):
             self.addCleanup(setattr, UVMS, name, getattr(UVMS, name, None))
         self.imp = fixture.FakeImports(fixture.listing_lines())
+        self.imp._get_or_none = lambda path: K.get_optional(path, read=K.kget)
         UVMS.bind(self.imp, K.kget, K.ksend, JOBS)
         self.enterContext(mock.patch.dict(JOBS.RESOLVERS, {}))
+        self.enterContext(mock.patch.dict(JOBS.CANCELLERS, {}))
         UVMS.register(JOBS)
         self.now = 1000.0
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now, create=True))
         self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})["id"]
 
     def path(self, name):
-        return f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{name}"
+        return f"{UVMS.CDI_API}/namespaces/{NS}/datavolumes/{name}"
 
     def phase(self, phase):
         for name in DVS:
@@ -52,11 +68,80 @@ class ImportWaitTests(unittest.TestCase):
             job = next(job for job in JOBS.list_operations() if job["id"] == self.ident)
         return job
 
+    def ref(self):
+        return next(item for item in JOBS._read() if item["id"] == self.ident)["ref"]
+
     def set_ref(self, **values):
         with JOBS.transaction():
             items = JOBS._read()
             next(item for item in items if item["id"] == self.ident)["ref"].update(values)
             JOBS._write(items)
+
+    def to_convert(self):
+        """Through the import's own phases: CDI is ready, the copies run and end."""
+        self.phase("UploadReady")
+        self.look()
+        self.assertEqual("copy", self.ref()["phase"])
+        for disk in self.ref()["disks"]:
+            job = self.kube.object(JOB_API + disk["job"])
+            job["status"] = {"succeeded": 1}
+            self.kube.add(job)
+        self.look()
+        self.assertEqual("convert", self.ref()["phase"])
+        return [(JOB_API + d["job"], SECRETS + d["job"] + "-upload") for d in self.ref()["disks"]]
+
+    def claim(self, name, owner, status="Bound", volume=""):
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"namespace": NS, "name": name, "annotations": {}, "ownerReferences": owner},
+                       "spec": {"volumeName": volume} if volume else {}, "status": {"phase": status}})
+        return self.kube.object(CLAIMS + name)["metadata"]["uid"]
+
+    def upload_pod(self, name, owner, claims):
+        self.kube.add({"apiVersion": "v1", "kind": "Pod",
+                       "metadata": {"namespace": NS, "name": name, "labels": {"cdi.kubevirt.io": "cdi-upload-server"},
+                                    "ownerReferences": owner},
+                       "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": c}} for c in claims]},
+                       "status": {"phase": "Running"}})
+        return self.kube.object(PODS + name)["metadata"]["uid"]
+
+    def populator_disk(self, name):
+        """CDI with volume populators, as tests/test_cdi_import_cleanup.py has it: the
+        target stays Pending until the very end and the copy is on its prime claim."""
+        target = self.claim(name, owned_by("DataVolume", name, self.kube.object(self.path(name))["metadata"]["uid"]), "Pending")
+        prime = "prime-" + target
+        prime_uid = self.claim(prime, owned_by("PersistentVolumeClaim", name, target), volume="pv-" + name)
+        pod = "upload-" + name
+        pod_uid = self.upload_pod(pod, owned_by("PersistentVolumeClaim", prime, prime_uid), (prime, prime + "-scratch"))
+        self.claim(prime + "-scratch", owned_by("Pod", pod, pod_uid), volume="pv-scratch-" + name)
+        return [CLAIMS + name, CLAIMS + prime, PODS + pod, CLAIMS + prime + "-scratch"]
+
+    def bound_disk(self, name):
+        """CDI with no populator: the target itself is bound, and the pod hangs off it."""
+        target = self.claim(name, owned_by("DataVolume", name, self.kube.object(self.path(name))["metadata"]["uid"]), volume="pv-" + name)
+        pod = "upload-" + name
+        pod_uid = self.upload_pod(pod, owned_by("PersistentVolumeClaim", name, target), (name, name + "-scratch"))
+        self.claim(name + "-scratch", owned_by("Pod", pod, pod_uid), volume="pv-scratch-" + name)
+        return [CLAIMS + name, PODS + pod, CLAIMS + name + "-scratch"]
+
+    def assert_ended_with_everything_of_cdis_left(self, kept):
+        copies = self.to_convert()
+        self.assertEqual("CDI is finishing the disk", self.look()["message"])
+        self.now += CONVERT_LIMIT - 1
+        self.assertEqual("running", self.look()["status"], "a moment longer is still a wait")
+        self.now += 1
+        job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        for words in ("6 hours", "not finished", DVS[0], "under Import", "under Volumes", "Unraid"):
+            self.assertIn(words, job["message"])
+        self.assertNotIn("cleared", job["message"], "nothing of the disk's was cleared")
+        self.assertTrue(job["message"].endswith("unchanged"), "the message fits a job's limit: " + job["message"])
+        for path in kept + [self.path(name) for name in DVS]:
+            self.assertTrue(self.kube.object(path), path + " is CDI's or the disk's, and stays")
+        for job_path, secret in copies:
+            self.assertIsNone(self.kube.object(job_path), "the copy is over: its Job goes")
+            self.assertIsNone(self.kube.object(secret), "and so does the Secret with its upload token")
+        self.assertFalse(self.ref()["retain_resources"], "the job lets go of the name")
+        return job
 
     def test_cdi_never_ready_ends_the_import_and_clears_what_it_made(self):
         self.phase("UploadScheduled")
@@ -70,42 +155,143 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIsNone(self.kube.object(self.path(DVS[0])), "what it made goes, so a retry can run")
         UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
 
-    def claims(self):
-        # CDI's own claims: the copy wrote to them, so they are bound by this phase.
-        for name in DVS:
-            uid = self.kube.object(self.path(name))["metadata"]["uid"]
-            self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-                           "metadata": {"namespace": "lab", "name": name, "annotations": {},
-                                        "ownerReferences": [{"kind": "DataVolume", "name": name, "uid": uid, "controller": True}]},
-                           "spec": {"volumeName": f"pv-{name}"}, "status": {"phase": "Bound"}})
+    def test_clearing_takes_cdis_populator_claims_and_leaves_a_lookalike_alone(self):
+        self.phase("UploadScheduled")
+        made = self.populator_disk(DVS[0])
+        self.claim("win11-disk-backup", [], volume="pv-mine")
+        self.look()
+        self.now += DISKS_LIMIT
+        self.look(3)
+        for path in made + [self.path(DVS[0])]:
+            self.assertIsNone(self.kube.object(path), path)
+        self.assertTrue(self.kube.object(CLAIMS + "win11-disk-backup"))
 
-    def test_cdi_never_finishing_ends_the_import_and_keeps_the_copied_disks(self):
-        self.phase("Pending")
-        self.claims()
-        self.set_ref(phase="convert")
-        self.assertEqual("CDI is finishing the disk", self.look()["message"])
+    def test_after_six_hours_a_populator_disk_is_left_as_it_is_and_the_job_ends(self):
+        # The usual shape of a stuck finish: the claim the disk will end up on isn't bound yet.
+        self.phase("UploadReady")
+        kept = [path for name in DVS for path in self.populator_disk(name)]
+        self.assert_ended_with_everything_of_cdis_left(kept)
+
+    def test_after_six_hours_a_bound_disk_is_left_as_it_is_and_the_job_ends(self):
+        self.phase("UploadReady")
+        kept = [path for name in DVS for path in self.bound_disk(name)]
+        self.assert_ended_with_everything_of_cdis_left(kept)
+
+    def test_after_six_hours_a_disk_with_no_claim_at_all_ends_too(self):
+        self.assert_ended_with_everything_of_cdis_left([])
+
+    def test_the_finish_limit_counts_from_the_end_of_the_copy(self):
+        self.phase("UploadScheduled")
+        self.look()
+        self.now += DISKS_LIMIT - 1   # slow to be ready, then a long copy
+        self.phase("UploadReady")
+        self.look()
+        self.now += 2 * CONVERT_LIMIT
+        self.assertEqual("running", self.look()["status"], "a copy has no limit here")
+        for disk in self.ref()["disks"]:
+            job = self.kube.object(JOB_API + disk["job"])
+            job["status"] = {"succeeded": 1}
+            self.kube.add(job)
+        self.assertEqual("running", self.look()["status"])
+        self.assertEqual("convert", self.ref()["phase"])
+        self.assertEqual("running", self.look()["status"], "time spent before this wait doesn't count towards it")
         self.now += CONVERT_LIMIT - 1
-        self.assertEqual("running", self.look()["status"], "a big disk takes its time")
+        self.assertEqual("running", self.look()["status"])
         self.now += 1
-        job = self.look(3)
-        self.assertEqual("failed", job["status"], job["message"])
-        self.assertIn("6 hours", job["message"])
-        self.assertIn(DVS[0], job["message"])
-        self.assertTrue(self.kube.object(self.path(DVS[0])), "hours of copying are not thrown away on a guess")
-        self.assertFalse(next(i for i in JOBS._read() if i["id"] == self.ident)["ref"].get("retain_resources"))
+        self.assertEqual("failed", self.look()["status"])
 
-    def test_a_disk_with_no_bound_claim_is_held_and_says_why_and_can_be_cancelled(self):
-        # Keeping disks needs a bound claim. With none the clean-up holds, in words,
-        # as it does after a refused VM: this job is not "ended", but it says so.
-        self.phase("Pending")
-        self.set_ref(phase="convert")
+    def test_the_copy_output_is_kept_when_its_job_goes(self):
+        self.to_convert()
         self.look()
         self.now += CONVERT_LIMIT
-        job = self.look(2)
+        self.look()
+        self.assertTrue(any("copy" in row["title"] for row in self.ref()["diagnostics"]), self.ref().get("diagnostics"))
+
+    def test_a_copy_job_already_gone_is_no_obstacle(self):
+        copies = self.to_convert()
+        self.kube.discard(copies[0][0])   # its time to live is an hour
+        self.look()
+        self.now += CONVERT_LIMIT
+        self.assertEqual("failed", self.look()["status"])
+        self.assertIsNone(self.kube.object(copies[0][1]))
+
+    def test_a_secret_someone_replaced_is_left_alone(self):
+        copies = self.to_convert()
+        secret = self.kube.object(copies[0][1])
+        secret["metadata"]["annotations"] = {}
+        self.kube.add(secret)
+        self.look()
+        self.now += CONVERT_LIMIT
+        self.assertEqual("failed", self.look()["status"])
+        self.assertTrue(self.kube.object(copies[0][1]))
+        self.assertIsNone(self.kube.object(copies[1][1]))
+
+    def test_a_copy_job_that_cant_be_removed_yet_is_retried_and_the_job_says_so(self):
+        copies = self.to_convert()
+        self.look()
+        self.now += CONVERT_LIMIT
+        self.kube.fail(copies[0][0], 500, method="DELETE")
+        job = self.look()
         self.assertEqual("running", job["status"])
-        self.assertIn("not bound", job["message"])
-        self.assertIn("6 hours", job["message"])
+        self.assertIn("not finished", job["message"])
+        self.assertIn("copy Job", job["message"])
+        self.assertTrue(self.ref()["retain_resources"])
+        with self.assertRaisesRegex(ValueError, "still active"):
+            UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
+        self.phase("Succeeded")
+        job = self.look()
+        self.assertEqual("failed", job["status"], "what was decided stands: it isn't decided again")
+        self.assertIsNone(self.kube.object(copies[0][0]))
+        self.assertFalse(self.ref()["retain_resources"])
+
+    def test_cancel_while_the_copy_job_cant_be_removed_yet_removes_the_disks_as_its_review_says(self):
+        copies = self.to_convert()
+        kept = self.populator_disk(DVS[0])
+        self.look()
+        self.now += CONVERT_LIMIT
+        self.kube.fail(copies[0][0], 500, method="DELETE")
+        job = self.look()
+        self.assertEqual("running", job["status"])
         self.assertTrue(job["cancellable"])
+        self.assertIn("remove its disks", JOBS.cancel_plan(self.ident)["action"])
+        JOBS.cancel(self.ident, {}, by="a person")
+        self.assertEqual("cancelled", self.look()["status"])
+        self.assertIsNone(self.kube.object(self.path(DVS[0])))
+        self.assertIsNone(self.kube.object(copies[0][0]))
+        self.assertIsNone(self.kube.object(kept[0]), "taken with its DataVolume")
+
+    def real_disk_check(self):
+        self.imp.vm_disk_import_plan = VM_CREATE.vm_disk_import_plan
+        self.enterContext(mock.patch.object(VM_CREATE.I, "kget", K.kget))
+
+    def ended_after_six_hours(self):
+        self.to_convert()
+        self.look()
+        self.now += CONVERT_LIMIT
+        self.assertEqual("failed", self.look()["status"])
+
+    def test_a_retry_after_it_says_what_is_in_the_way(self):
+        self.real_disk_check()
+        self.ended_after_six_hours()
+        before = [item["id"] for item in JOBS._read()]
+        uid = self.kube.object(self.path(DVS[0]))["metadata"]["uid"]
+        with self.assertRaises(ValueError) as refused:
+            UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
+        for words in (DVS[0], "already exists", "earlier import", "under Volumes", "another name"):
+            self.assertIn(words, str(refused.exception))
+        self.assertEqual(before, [item["id"] for item in JOBS._read()], "no job that can only fail")
+        self.assertEqual(uid, self.kube.object(self.path(DVS[0]))["metadata"]["uid"])
+
+    def test_it_lets_go_of_the_name_so_another_name_or_a_removed_disk_can_run(self):
+        self.real_disk_check()
+        self.ended_after_six_hours()
+        other = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11b"})
+        self.assertEqual("running", other["status"])
+        self.assertTrue(self.kube.object(self.path("win11b-disk")))
+        for name in DVS:
+            self.kube.discard(self.path(name))
+        UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
+        self.assertTrue(self.kube.object(self.path(DVS[0])))
 
     def test_an_older_import_with_no_receipt_ends_too_and_removes_nothing(self):
         self.phase("UploadScheduled")
@@ -116,14 +302,36 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
 
+    def test_an_older_import_past_six_hours_ends_too_and_removes_nothing(self):
+        self.phase("UploadReady")
+        self.set_ref(cdi_cleanup=None, phase="convert")
+        self.look()
+        self.now += CONVERT_LIMIT
+        job = self.look()
+        self.assertEqual("failed", job["status"])
+        self.assertIn("not finished", job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])))
+
     def test_disks_that_become_ready_in_time_are_not_failed(self):
         self.phase("UploadScheduled")
         self.look()
         self.now += DISKS_LIMIT - 1
-        self.phase("Succeeded")
-        self.set_ref(phase="convert")
+        self.phase("UploadReady")
         self.now += 1
         self.assertNotEqual("failed", self.look()["status"])
+        self.assertEqual("copy", self.ref()["phase"])
+
+    def test_a_disk_that_finishes_in_time_makes_the_vm(self):
+        self.to_convert()
+        self.look()
+        self.now += CONVERT_LIMIT - 1
+        self.phase("Succeeded")
+        self.imp.prepare_vm = lambda cfg, platform, source: cfg
+        self.imp._recheck_vm_creation = lambda prepared: None
+        self.imp.commit_vm = mock.Mock()
+        self.now += 1
+        self.look()
+        self.imp.commit_vm.assert_called_once()
 
 
 if __name__ == "__main__":

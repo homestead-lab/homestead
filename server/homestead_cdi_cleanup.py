@@ -311,6 +311,28 @@ def finish(item, read, send, checkpoint):
     return outcome, 100, ref["detail"]
 
 
+def leave(item, read, send):
+    """End an import CDI did not finish, keeping out of CDI's way: only the import's
+    own copy Job and Secret go, and only when they still carry its stamp. A later
+    round picks this up where it left off, so nothing is decided again."""
+    ref = item["ref"]
+    detail, stamp = ref.get("cleanup_detail", "Import ended"), ref["cdi_cleanup"]["id"]
+    pending = False
+    try:
+        for row in ref["cdi_cleanup"].get("aux", []):
+            obj = RESOURCES.optional(read, row["path"])
+            if obj and ((obj.get("metadata") or {}).get("annotations") or {}).get(STAMP) == stamp:
+                pending |= not RESOURCES.delete(read, send, row["path"], obj)
+    except Exception:
+        pending = True
+    ref["retain_resources"] = pending
+    if pending:
+        return "running", 99, detail + ". Still removing its copy Job"
+    ref["phase"] = "failed"
+    ref["detail"] = detail
+    return "failed", 100, detail
+
+
 def track(item, read, checkpoint):
     """An unavailable inventory must not end the job and lose reclamation."""
     try:

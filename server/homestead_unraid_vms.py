@@ -588,7 +588,9 @@ def start(body, actor=""):
     for dv in names:
         plan_ = IMP.vm_disk_import_plan(ns, dv)
         if not plan_["ready"]:
-            raise ValueError(plan_["message"])
+            # An import names its disks after the VM, so a new disk name means a new VM name.
+            raise ValueError(f"A disk named {dv} already exists in {ns}, perhaps left by an earlier import: "
+                             "remove it under Volumes, or import under another name")
     cores = int(body.get("cores") or found["cores"])
     memory = str(body.get("memory") or found["memory"])
     if not 1 <= cores <= 128:
@@ -892,9 +894,9 @@ def log_sources(item):
     return out or [{"title": "Disk copy", "text": "", "note": "The import has no retained copy output yet, or its pods were cleaned up by an older release."}]
 
 
-def _fail(ref, message, item=None):
-    """Clear what this import made, so it can simply be run again."""
-    # Save before deleting Jobs and DataVolumes: their pods disappear with them.
+def _save_output(ref):
+    """Keep the copy's output with the job. Before deleting Jobs and DataVolumes:
+    their pods disappear with them."""
     remaining, saved = 60000, []
     for source in log_sources({"ref": ref}):
         if remaining <= 0:
@@ -905,6 +907,11 @@ def _fail(ref, message, item=None):
                       "note": str(source.get("note") or "")[:500],
                       **({"kind": "disk-copy", "progress": source.get("progress")} if source.get("kind") == "disk-copy" else {})})
     ref["diagnostics"] = saved
+
+
+def _fail(ref, message, item=None):
+    """Clear what this import made, so it can simply be run again."""
+    _save_output(ref)
     if ref.get("cdi_cleanup"):
         ref.update(phase="cleanup", cleanup_outcome="failed",
                    cleanup_detail=message + f"; the VM on {_where(ref)} is unchanged")
@@ -916,8 +923,10 @@ def _fail(ref, message, item=None):
 
 
 # How long CDI may keep an import waiting. Ready to receive takes a claim and a
-# pod, so nothing is copied yet and the import can simply clear up. Finishing can
-# take hours on a big disk, and the copy is done by then, so its disks are kept.
+# pod, so nothing is copied yet and the import can simply clear up. Once the copy
+# is over CDI should have little left to do, as far as can be told without a real
+# import, so 6 hours is a wide margin and not a measure. Homestead can't tell
+# stuck from slow, so at that limit it only stops following: see _stop_following.
 READY_LIMIT = 30 * 60
 FINISH_LIMIT = 6 * 60 * 60
 _clock = time.time   # a seam for the tests
@@ -928,13 +937,21 @@ def _waited(ref, key, limit):
     return now - ref.setdefault(key, now) >= limit
 
 
-def _keep_disks(ref, detail, item):
-    """End the import with its disks kept, clearing only the rest."""
-    if ref.get("cdi_cleanup"):
-        ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
-        return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
-    ref["phase"] = "failed"
-    return "failed", 100, detail
+def _stop_following(ref, item):
+    """CDI has not finished the disks in time. End the import and let go of the
+    name, removing only the import's own copy Job and Secret: the DataVolumes, their
+    claims, CDI's pods and its work space may still be in use, and may hold the copy."""
+    names = ", ".join(d["dv"] for d in ref["disks"])
+    detail = (f"CDI has not finished {names} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no VM "
+              "was made. The disks are not finished and are left as they are. If CDI does finish them, make the VM "
+              "from them under Import. If not, remove them under Volumes, or import again under another name. "
+              f"The VM on {_where(ref)} is unchanged")
+    if not ref.get("cdi_cleanup"):
+        ref["phase"] = "failed"
+        return "failed", 100, detail
+    _save_output(ref)
+    ref.update(phase="leaving", cleanup_detail=detail)
+    return CDI_CLEANUP.leave(item, kget, ksend)
 
 
 def status(item):
@@ -945,6 +962,8 @@ def status(item):
         return "succeeded", 100, ref.get("detail", "Imported")
     if ref["phase"] == "failed":
         return "failed", 100, item.get("message", "Import failed")
+    if ref["phase"] == "leaving":
+        return CDI_CLEANUP.leave(item, kget, ksend)
     if ref.get("cdi_cleanup"):
         if ref["phase"] == "creating":
             ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail="Import setup was interrupted")
@@ -1007,10 +1026,7 @@ def status(item):
     if ref["phase"] == "convert":
         if not all(p == "Succeeded" for p in phases):
             if _waited(ref, "finish_since", FINISH_LIMIT):
-                names = ", ".join(d["dv"] for d in ref["disks"])
-                return _keep_disks(ref, f"CDI did not finish the disks within {FINISH_LIMIT // 3600} hours. They are kept as "
-                                        f"{names}, and may be incomplete: look at them under Volumes before using or "
-                                        "removing them", item)
+                return _stop_following(ref, item)
             return "running", 96, "CDI is finishing the disk"
         try:
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
@@ -1029,7 +1045,11 @@ def status(item):
             # The disks are whole: keep them, and say how to finish by hand.
             detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
                       f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
-            return _keep_disks(ref, detail, item)
+            if ref.get("cdi_cleanup"):
+                ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
+                return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
+            ref["phase"] = "failed"
+            return "failed", 100, detail
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
                          f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")
