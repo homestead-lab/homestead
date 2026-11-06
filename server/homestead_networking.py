@@ -75,7 +75,14 @@ def _default_vip_route(request):
 
 def _change_vip_route(request):
     b = request.body
-    result = REG.change_vip(b.get("old", ""), b.get("new", ""), apply=b.get("apply") is True)
+    try:
+        result = REG.change_vip(b.get("old", ""), b.get("new", ""), apply=b.get("apply") is True)
+    except Exception:
+        if b.get("apply") is True:
+            # A refused move may have moved Services and put them back (or
+            # not all of them): the cached addresses are stale either way.
+            homestead_routes.forget("network", "ov")
+        raise
     if b.get("apply") is True:
         homestead_routes.forget("network", "ov")
         # Backups follow the store to its new address. Imported here: the
