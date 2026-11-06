@@ -47,3 +47,24 @@ test("removed recovery points cannot be rolled back from the timeline", () => {
   assert.match(html, /Track cleanup/);
   assert.doesNotMatch(html, /lhRevert\(/);
 });
+
+test("a rollback sends back what the person reviewed", async () => {
+  const body = {innerHTML: ""};
+  const sent = [];
+  const plan = {consumers: [], blockers: [], ready: true, created: "", review_token: "seen-this"};
+  context.childModal = () => {};
+  context.closeModal = () => {};
+  context.toast = () => {};
+  context.$ = () => body;
+  context.api = async (url, options) => {
+    if (!options) return plan;
+    sent.push(JSON.parse(options.body));
+    return {detail: "started", operation: {}};
+  };
+  await context.window.lhRevert("vol", "snap", "Media");
+  const call = /lhRevertGo\((.*?)\)">/.exec(body.innerHTML);
+  assert.ok(call, body.innerHTML);
+  const args = JSON.parse(`[${call[1]}]`);
+  await context.window.lhRevertGo(...args);
+  assert.deepEqual(sent, [{volume: "vol", snapshot: "snap", review_token: "seen-this"}]);
+});

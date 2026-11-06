@@ -21,6 +21,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_deploy_server as DEPLOY
 import homestead_kube as K
 import homestead_reclass as RECLASS
 import homestead_revert as REVERT
@@ -33,7 +34,7 @@ APPS = f"/apis/apps/v1/namespaces/{NS}/deployments"
 
 def deployment(name, replicas, claim=CLAIM, annotations=None):
     return {"apiVersion": "apps/v1", "kind": "Deployment",
-            "metadata": {"name": name, "namespace": NS, "annotations": annotations or {}},
+            "metadata": {"name": name, "namespace": NS, "generation": 1, "annotations": annotations or {}},
             "spec": {"replicas": replicas, "selector": {"matchLabels": {"app": name}},
                      "template": {"metadata": {"labels": {"app": name}}, "spec": {
                          "containers": [{"name": "app", "image": "example.com/app:1"}],
@@ -81,14 +82,15 @@ class RevertStopTests(unittest.TestCase):
         for patch in (mock.patch.object(REVERT, "time", types.SimpleNamespace(time=self.clock)),
                       mock.patch.object(REVERT.ACCESS, "reachable", return_value=""),
                       mock.patch.object(REVERT.OPS, "checkpoint", lambda item: None),
-                      mock.patch.object(REVERT, "_admission", side_effect=self.admit, create=True)):
+                      mock.patch.object(DEPLOY, "copy_admission", side_effect=self.admit)):
             patch.start()
             self.addCleanup(patch.stop)
         self.fits = True
         self.admitted = []
         ops = mock.Mock()
         ops.start.side_effect = lambda kind, title, target, link, ref, message: ref
-        self.item = {"ref": REVERT.start(VOLUME, "snap-a", ops)}
+        token = REVERT.plan(VOLUME, "snap-a")["review_token"]
+        self.item = {"id": "job-1", "ref": REVERT.start(VOLUME, "snap-a", ops, token)}
         self.recorded = ops.start.call_args.args[4]
 
     def admit(self, obj):
@@ -275,7 +277,7 @@ class RevertStopTests(unittest.TestCase):
         self.assertEqual("failed", status, message)
         self.assertEqual(0, self.replicas("app-a"))
         self.assertIn(("app-a", 2), self.admitted, "admitted at the count it ran before")
-        self.assertIn("no longer fits", message)
+        self.assertIn("doesn't fit on the hosts", message)
 
     def test_an_app_that_cannot_be_read_is_not_taken_as_gone_when_starting(self):
         self.stop()
@@ -290,9 +292,10 @@ class RevertStopTests(unittest.TestCase):
     def test_the_start_is_conditional_on_the_object_read(self):
         self.stop()
         self.rollback()
-        starts = [w for w in self.kube.writes if w[:2] == ("PATCH", f"{APPS}/app-a") and w[2]["spec"]["replicas"]]
+        starts = [w for w in self.kube.writes if w[:2] == ("PATCH", f"{APPS}/app-a")
+                  and any(op == {"op": "add", "path": "/spec/replicas", "value": 2} for op in w[2])]
         self.assertEqual(1, len(starts))
-        self.assertTrue(starts[0][2]["metadata"]["resourceVersion"])
+        self.assertTrue(any(op["op"] == "test" and op["path"] == "/metadata/resourceVersion" for op in starts[0][2]))
 
     # After the review of the first version ---------------------------------
 

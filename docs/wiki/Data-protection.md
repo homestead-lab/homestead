@@ -414,11 +414,17 @@ progress is still visible in the snapshot dialog.
 volume back as it was then. Longhorn only reverts a volume nothing is using,
 so Homestead:
 
-1. stops what uses it (containers, VMs, scheduled jobs), noting how each ran;
+1. stops what uses it (containers, VMs, scheduled jobs), noting how each ran
+   and marking it (`homestead.io/held-for-power`);
 2. waits for the volume to detach, then attaches it in maintenance mode;
 3. keeps the present state as a snapshot of its own (`before-rollback-…`),
    so rolling forward again is one more **Roll back**;
 4. reverts to the snapshot, detaches, and starts everything again as it was.
+
+An app edited, scaled or replaced after you opened **Roll back** is not
+stopped. Before the job starts you are told which one and asked to open the
+rollback again; once it has started, the rollback does not go ahead, that app
+is left as it is, and whatever had stopped starts again.
 
 The job tray follows each step. If the volume will not let go, nothing is
 changed and everything starts again, except an app whose own pod is still

@@ -151,7 +151,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/icon`, `icon-source` | `Deployment`, `VirtualMachine` | an app's or VM's icon |
 | `homestead.io/group`, `placement`, `lan`, `firewall`, `primary-port`, `vip-mode`, `hardware`, `autostart-replicas`, `helm-previous` | `Deployment`, `VirtualMachine` | you set the app's group, placement, LAN address, firewall, ports, address, devices, autostart or Helm values |
 | `homestead.io/tier`, `tier-class` | `Deployment` | an app follows its group's priority tier |
-| `homestead.io/held-for-power`, `held-as` | `Deployment`, `StatefulSet`, `VirtualMachine` | a host goes down for a reboot or shutdown; removed when the app is given back |
+| `homestead.io/held-for-power`, `held-as` | `Deployment`, `StatefulSet`, `VirtualMachine`, `CronJob` | a host goes down for a reboot or shutdown, or a volume is rolled back to a snapshot; removed when the app is given back, or when the rollback ends with the app left stopped. While one is there, a rollback that would stop that app is refused; one left after its job ended can be removed by hand |
 | `homestead.io/restore-tested` | `Deployment` | a restore test of the app finishes |
 | `homestead.io/renamed-from`, `renamed-at` | `Deployment` | you rename an app |
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |

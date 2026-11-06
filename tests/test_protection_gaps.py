@@ -130,8 +130,6 @@ class RevertTests(unittest.TestCase):
                         "since": time.time()}}
         status, _, message = REVERT.resolve(item)
         self.assertEqual("running", status)
-        self.assertIn(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/paperless", {"spec": {"replicas": 0}}),
-                      self.sent)
         self.assertEqual([], self.calls, "nothing is attached while the app still has it")
         self.pod_running, self.state = False, "detached"
         REVERT.resolve(item)
@@ -167,7 +165,7 @@ class RevertTests(unittest.TestCase):
         self.pod_running = False
         ops = mock.Mock()
         with self.assertRaisesRegex(ValueError, "Nothing was changed"):
-            REVERT.start("pvc-1", "snap-a", ops)
+            REVERT.start("pvc-1", "snap-a", ops, REVERT.plan("pvc-1", "snap-a")["review_token"])
         ops.start.assert_not_called()
         self.assertEqual([], [s for s in self.sent if s[0] != "GET"])
         self.assertEqual([], self.calls)
@@ -318,7 +316,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual(1, len({body["name"] for path, body in self.calls if "snapshotCreate" in path}),
                          "one name, so a retry can't leave two")
         self.assertNotIn("snapshotRevert", self.actions())
-        self.assertIn("The volume was not changed", message)
+        self.assertIn("may have been made", message, "a timed out request may have gone out")
         self.assertEqual([["paperless"]], self.started())
 
     def test_put_back_still_starts_the_app_when_detach_fails(self):
