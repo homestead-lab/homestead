@@ -206,7 +206,7 @@ def _as_reviewed(p, token):
     again = "open the rollback again. Nothing was changed"
     seen = _reviewed(token)
     if seen is None:
-        raise ValueError(f"This request doesn't say what was reviewed; {again}")
+        raise ValueError(f"This request doesn't say what was reviewed; reload the page and {again}")
     now = {(c["kind"], c["name"]): (c.get("uid"), c.get("generation")) for c in p["consumers"]}
     for key, value in now.items():
         if key not in seen:
@@ -216,6 +216,17 @@ def _as_reviewed(p, token):
     for key in seen:
         if key not in now:
             raise ValueError(f"{key[1]} no longer uses {p['claim']}; {again}")
+
+
+def _holder(mark):
+    """Who a mark names, for a person: the job's title when it can be found.
+    Power jobs mark with a bare job id, others with <kind>:<id>."""
+    job = str(mark).rsplit(":", 1)[-1]
+    try:
+        title = next((row.get("title") for row in OPS.snapshot() if row.get("id") == job), "")
+    except Exception:
+        title = ""
+    return f"another job ({title or job})"
 
 
 def _hold_all(ns, claim, consumers):
@@ -229,6 +240,9 @@ def _hold_all(ns, claim, consumers):
             raise ValueError(f"{c['name']} is no longer there; open the rollback again. Nothing was changed")
         if (meta.get("uid"), meta.get("generation")) != (c.get("uid"), c.get("generation")):
             raise ValueError(f"{c['name']} changed after this rollback was reviewed; open the rollback again. Nothing was changed")
+        mark = (meta.get("annotations") or {}).get(HOLD.HELD_BY)
+        if mark:
+            raise ValueError(f"{c['name']} is held by {_holder(mark)}. Nothing was changed")
         try:
             record = HOLD.hold({**obj, "kind": c["kind"]}, KIND, "")
         except HOLD.Refused as refused:
@@ -286,7 +300,7 @@ def _look(ref, c, obj):
         c["stopped"] = _as_left(c, spec)        # its stop landed: a reply was lost
         return "" if c["stopped"] else f"{name} was changed while it was stopped, and was left as it is now"
     if mark:
-        return f"{left} it is held by {mark}"
+        return f"{left} it is held by {_holder(mark)}"
     record = _record_of(c)
     if record is None:                          # a job from before this version
         if (spec.get("persistentVolumeClaimRetentionPolicy") or {}).get("whenScaled", "Retain") != "Retain":
@@ -596,7 +610,12 @@ def _start_again(ns, ref, rolled_back=True):
         record = _record_of(c)
         marked = bool(record and (meta.get("annotations") or {}).get(HOLD.HELD_BY))
         if record and not marked and meta.get("uid") == c.get("uid"):
-            _not_marked(ref, c, record, meta, left, key)
+            if c.get("stopped") and _as_left(c, spec) and not _as_before(c, spec):
+                # This job stopped it and its mark has gone: taken off by hand, or by
+                # this job's own end, whose save a crash lost. Not this job's to start.
+                left[key] = f"{name} no longer carries Homestead's mark, so Homestead did not start it"
+            else:
+                _not_marked(ref, c, record, meta, left, key)
             continue
         if c.get("uid") and meta.get("uid") != c["uid"]:
             if record and not c.get("stopped"):
@@ -609,6 +628,13 @@ def _start_again(ns, ref, rolled_back=True):
             continue
         if not _mounts(c, obj, ref["claim"]):
             left[key] = f"{name} no longer uses {ref['claim']}"
+            continue
+        if marked and not _mine(ref, obj):
+            holder = _holder(meta["annotations"][HOLD.HELD_BY])
+            if c.get("stopped"):
+                left[key] = f"{name} is held by {holder}"
+            else:
+                c["refused"] = f"{name} was left as it is: it is held by {holder}"
             continue
         if marked:
             c["stopped"] = True
@@ -737,7 +763,8 @@ def _put_back_end(ref, left):
                    f"{ref.get('kept', '')}, to roll back to if needed")
     elif ref.get("kept"):
         changed = f"Nothing was rolled back; the state it is in is also kept as snapshot {ref['kept']}"
-    elif ref.get("keep") and not ref.get("keep_refused"):
+    elif ref.get("keep") and ref.get("keep_refused", 0) != ref.get("keep_tries", 1):
+        # Only when every try is known never to have gone out is it certain none was made.
         changed = f"Nothing was rolled back; a snapshot named {ref['keep']} may have been made, of the state it is in"
     elif any((c.get("stopped") or c.get("sent")) and not c.get("gone") for c in ref.get("consumers") or []):
         changed = "The volume was not changed"
@@ -789,14 +816,16 @@ def _reverted(ref):
 
 def _let_marks_go(ref):
     """The job has ended: what it didn't start stays as it is, and carries no
-    mark of a job that is over. Why one may still be there, for the person."""
+    mark of a job that is over. Why one may still be there, for the person, to
+    go first: a job's message is cut at 500 characters. Never stopped and left
+    alone, it has no mark of this job to take off."""
     out = ""
     for c in ref.get("consumers") or []:
         if c.get("hold") and not c.get("started") and not c.get("gone"):
             why = HOLD.release(_record_of(c), KIND, ref.get("job"))
-            if why and c.get("stopped"):
-                out += (f"; {c['name']} may still carry {HOLD.HELD_BY} ({why}): until that annotation is removed, later "
-                        f"jobs refuse it (see What Homestead changes)")
+            if why and (c.get("stopped") or not c.get("refused")):
+                out += (f"{c['name']} may still carry {HOLD.HELD_BY} ({why}): until that annotation is removed, later "
+                        f"jobs refuse it (see What Homestead changes). ")
     return out
 
 
@@ -804,7 +833,7 @@ def resolve(item):
     ref = item["ref"]
     ref["job"] = item.get("id")
     status, progress, message = _resolve(item)
-    return status, progress, message + (_let_marks_go(ref) if status != "running" else "")
+    return status, progress, (_let_marks_go(ref) if status != "running" else "") + message
 
 
 def _resolve(item):
@@ -881,16 +910,15 @@ def _resolve(item):
                 ref["kept"] = ref["keep"]               # made before a restart lost the answer
             else:
                 if not ref.get("keep"):
-                    ref["keep"] = f"before-rollback-{int(time.time())}"
-                    OPS.checkpoint(item)                # one name, whoever sends it
+                    ref["keep"] = f"before-rollback-{int(time.time())}"  # one name, whoever sends it
                 keep = ref["keep"]
-                if ref.pop("keep_refused", False):
-                    OPS.checkpoint(item)                # this try may go out: a crash now must not say it didn't
+                ref["keep_tries"] = ref.get("keep_tries", 0) + 1
+                OPS.checkpoint(item)                    # saved before it goes: a crash now counts as gone out
                 try:
                     lh_call("POST", f"/volumes/{volume}?action=snapshotCreate", {"name": keep})
                 except Exception as error:
                     if not _snapshot_made(volume, keep):
-                        ref["keep_refused"] = _never_sent(error)
+                        ref["keep_refused"] = ref.get("keep_refused", 0) + _never_sent(error)
                         if _again(ref, "snapshotCreate", error):
                             return "running", 40, f"Longhorn's API did not answer ({_why(error)}); trying again"
                         return _put_back(ref, f"Longhorn's API did not keep the present state of {volume}: {_why(error)}")
@@ -986,7 +1014,8 @@ def cancel_run(item, _options):
     if why:
         raise ValueError(why)
     item["ref"]["job"] = item.get("id")
-    return _put_back(item["ref"], "Cancelled", final=True)[2] + _let_marks_go(item["ref"])
+    message = _put_back(item["ref"], "Cancelled", final=True)[2]
+    return _let_marks_go(item["ref"]) + message
 
 
 def start_guarded(b):

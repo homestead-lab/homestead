@@ -553,6 +553,44 @@ class AppHoldTest(unittest.TestCase):
         self.assertEqual("", HOLD.release(record, "node-power", "j1"))
         self.assertEqual(sent, len(self.patches(kube)))
 
+    def test_release_is_fenced_so_a_mark_another_job_put_in_the_instant_before_stays(self):
+        kube, record = self.held(web())
+
+        def beat_it(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            taken["metadata"]["annotations"][HOLD.HELD_BY] = "other:j2"
+            taken["metadata"]["resourceVersion"] = "9000"
+            kube.add(taken)
+        kube.react("PATCH", WEB, beat_it)
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual("other:j2", kube.object(WEB)["metadata"]["annotations"][HOLD.HELD_BY])
+
+    def test_a_mark_gone_in_the_instant_before_release_reads_again_and_is_done(self):
+        """A remove of a mark already gone answers 422 on a real cluster."""
+        kube, record = self.held(web())
+
+        def gone(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            del taken["metadata"]["annotations"][HOLD.HELD_BY]
+            kube.add(taken)
+        kube.react("PATCH", WEB, gone)
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+
+    def test_a_mark_gone_in_the_instant_before_a_restart_waits_then_keeps_it_stopped(self):
+        kube, record = self.held(web())
+
+        def gone(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            del taken["metadata"]["annotations"][HOLD.HELD_BY]
+            kube.add(taken)
+        kube.react("PATCH", WEB, gone)
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Wait)
+        self.assertEqual(0, kube.object(WEB)["spec"]["replicas"])
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.KeptStopped)
+
     def test_release_says_why_when_it_can_not_write(self):
         kube, record = self.held(web())
         kube.fail(WEB, 403, method="PATCH")

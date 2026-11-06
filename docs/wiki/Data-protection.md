@@ -424,7 +424,10 @@ so Homestead:
 An app edited, scaled or replaced after you opened **Roll back** is not
 stopped. Before the job starts you are told which one and asked to open the
 rollback again; once it has started, the rollback does not go ahead, that app
-is left as it is, and whatever had stopped starts again.
+is left as it is, and whatever had stopped starts again. Any write to the app's
+settings counts. On a Deployment, and only there, so does a new or changed
+annotation, as Kubernetes gives a Deployment a new generation for that: if the
+rollback is refused for one, open it again.
 
 The job tray follows each step. If the volume will not let go, nothing is
 changed and everything starts again, except an app whose own pod is still

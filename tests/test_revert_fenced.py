@@ -236,7 +236,7 @@ class ChangedAfterTheReview(Base):
 
     def test_a_start_with_no_review_is_refused(self):
         for token in (None, "", "not a review", "e30"):
-            with self.subTest(token=token), self.assertRaisesRegex(ValueError, "open the rollback again"):
+            with self.subTest(token=token), self.assertRaisesRegex(ValueError, "reload the page and open the rollback again"):
                 REVERT.start(VOLUME, "snap-a", self.ops, token)
         self.ops.start.assert_not_called()
 
@@ -256,9 +256,169 @@ class ChangedAfterTheReview(Base):
     def test_an_app_another_job_holds_is_refused_before_anything_changes(self):
         K.ksend("PATCH", A, {"metadata": {"annotations": {HOLD.HELD_BY: "node-power:other", HOLD.HELD_AS: "2"}}}, ctype=MERGE)
         before = len(self.kube.writes)
-        with self.assertRaisesRegex(ValueError, "app-a is held by node-power:other.*Nothing was changed"):
+        with self.assertRaisesRegex(ValueError, "app-a is held by another job \\(other\\).*Nothing was changed"):
             REVERT.start(VOLUME, "snap-a", self.ops, self.review())
         self.assertEqual(before, len(self.kube.writes))
+
+
+class OurOwnMarks(Base):
+    """A mark is an annotation, so on a real Deployment our own write moves the
+    generation (the fake models it). That must never read as someone's change."""
+
+    def generation(self, path=A):
+        return self.kube.object(path)["metadata"]["generation"]
+
+    def test_a_deployments_generation_moves_on_an_annotation_and_a_statefulsets_does_not(self):
+        before = self.generation()
+        K.ksend("PATCH", A, {"metadata": {"annotations": {"example.com/note": "x"}}}, ctype=MERGE)
+        self.assertEqual(before + 1, self.generation())
+        path = self.kube.add(statefulset("db", 1))
+        before = self.generation(path)
+        K.ksend("PATCH", path, {"metadata": {"annotations": {"example.com/note": "x"}}}, ctype=MERGE)
+        self.assertEqual(before, self.generation(path))
+
+    def test_an_annotation_after_the_review_on_a_deployment_is_refused(self):
+        token = self.review()
+        K.ksend("PATCH", A, {"metadata": {"annotations": {"example.com/note": "x"}}}, ctype=MERGE)
+        with self.assertRaisesRegex(ValueError, "app-a changed after this rollback was reviewed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, token)
+
+    def test_the_stop_retried_after_a_lost_reply_is_not_its_own_change(self):
+        item = self.begin()
+        self.kube.fail(A, OSError("timed out"), method="PATCH", applied=True)
+        REVERT.resolve(item)
+        before = self.generation()
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertGreater(self.generation(), before)
+        self.assertEqual((2, 1), (self.replicas(A), self.replicas(B)))
+
+    def test_a_second_app_retried_after_the_first_was_marked_goes_on(self):
+        item = self.begin()
+        self.kube.fail(B, 500, method="PATCH")
+        REVERT.resolve(item)
+        self.assertEqual(0, self.replicas(A))
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertEqual((2, 1), (self.replicas(A), self.replicas(B)))
+
+    def test_a_restart_after_the_start_reply_was_lost_is_not_its_own_change(self):
+        item = self.begin()
+        REVERT.resolve(item)
+        REVERT.resolve(item)
+        self.kube.fail(A, OSError("timed out"), method="PATCH", applied=True)
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertNotIn("changed", message)
+        self.assertEqual(2, self.replicas(A))
+
+    def test_a_new_leader_rereading_the_saved_job_is_not_its_own_change(self):
+        item = self.begin()
+        self.kube.fail(A, Died(), method="PATCH", applied=True)
+        kept = self.saved(item)
+        with self.assertRaises(Died):
+            REVERT.resolve(item)
+        status, _, message = self.rounds(kept)
+        self.assertEqual("succeeded", status, message)
+        self.assertNotIn("changed", message)
+
+    def test_an_end_replayed_after_the_mark_came_off_is_not_said_to_be_changed(self):
+        item = self.begin()
+        self.fits = False
+        for _ in range(4):
+            REVERT.resolve(item)
+        kept = self.saved(item)
+        self.clock.now += REVERT.WAIT["restarting"] + 1
+        REVERT.resolve(item)
+        status, _, message = self.rounds(kept)
+        self.assertEqual("failed", status, message)
+        self.assertIn("app-a was left stopped", message)
+        self.assertNotIn("changed", message)
+
+    def test_the_same_review_sent_again_after_the_stop_starts_no_second_job(self):
+        token = self.review()
+        REVERT.resolve({"id": JOB, "ref": REVERT.start(VOLUME, "snap-a", self.ops, token)})
+        self.ops.start.reset_mock()
+        with self.assertRaisesRegex(ValueError, "changed after this rollback was reviewed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, token)
+        self.ops.start.assert_not_called()
+
+    def test_a_cancel_after_a_stop_is_not_its_own_change(self):
+        item = self.begin()
+        REVERT.resolve(item)
+        message = REVERT.cancel_run(item, {})
+        self.assertNotIn("changed while", message)
+        self.assertEqual((2, 1), (self.replicas(A), self.replicas(B)))
+        self.assertNotIn("left", message)
+
+    def test_a_person_removing_the_mark_in_the_instant_before_the_start_reads_again(self):
+        """A remove of a mark already gone answers 422 on a real cluster: read again, not a failure."""
+        item = self.begin()
+        REVERT.resolve(item)
+        REVERT.resolve(item)
+        count = []
+
+        def gone(method, path, body):
+            if not count:
+                count.append(1)
+                self.kube._reactions.clear()
+                K.ksend("PATCH", A, {"metadata": {"annotations": {HOLD.HELD_BY: None, HOLD.HELD_AS: None}}}, ctype=MERGE)
+        self.kube.react("PATCH", A, gone)
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("running", status, message)
+        self.assertEqual(0, self.replicas(A), "the fenced start lost")
+        self.assertIn("reads it again", message)
+        self.clock.now += REVERT.WAIT["restarting"] + 1
+        status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status, message)
+        self.assertIn("app-a no longer carries Homestead's mark", message)
+
+
+class WhoHoldsIt(Base):
+    """Power jobs mark with a bare job id: a person should read the job's name."""
+
+    def hold(self, mark):
+        K.ksend("PATCH", A, {"metadata": {"annotations": {HOLD.HELD_BY: mark, HOLD.HELD_AS: "2"}}}, ctype=MERGE)
+
+    def jobs(self, *rows):
+        patch = mock.patch.object(REVERT.OPS, "snapshot", return_value=list(rows))
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_bare_id_names_the_job(self):
+        self.jobs({"id": "feedc0de", "title": "Reboot node-a"})
+        self.hold("feedc0de")
+        with self.assertRaisesRegex(ValueError, "app-a is held by another job \\(Reboot node-a\\). Nothing was changed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, self.review())
+
+    def test_a_kind_and_id_names_the_job(self):
+        self.jobs({"id": "beef", "title": "Reboot node-b"})
+        item = self.begin()
+        self.hold("node-power:beef")
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertIn("app-a was left as it is: it is held by another job (Reboot node-b)", message)
+
+    def test_a_job_it_cant_find_says_the_mark(self):
+        self.jobs()
+        self.hold("feedc0de")
+        with self.assertRaisesRegex(ValueError, "held by another job \\(feedc0de\\)"):
+            REVERT.start(VOLUME, "snap-a", self.ops, self.review())
+
+    def test_a_job_list_it_cant_read_says_the_mark(self):
+        self.hold("feedc0de")
+        with mock.patch.object(REVERT.OPS, "snapshot", side_effect=OSError("no volume")), \
+                self.assertRaisesRegex(ValueError, "held by another job \\(feedc0de\\)"):
+            REVERT.start(VOLUME, "snap-a", self.ops, self.review())
+
+    def test_a_stopped_app_another_job_took_is_left_stopped_and_names_it(self):
+        self.jobs({"id": "feedc0de", "title": "Reboot node-a"})
+        item = self.begin()
+        REVERT.resolve(item)
+        self.hold("feedc0de")
+        message = REVERT.cancel_run(item, {})
+        self.assertIn("app-a was left stopped: app-a is held by another job (Reboot node-a)", message)
+        self.assertEqual("feedc0de", self.notes(A)[HOLD.HELD_BY])
 
 
 class ChangedOnceTheJobStarted(Base):
@@ -273,6 +433,7 @@ class ChangedOnceTheJobStarted(Base):
         self.assertIn("app-a was left as it is: it changed after this rollback was reviewed (3 now, 2 when it was reviewed)", message)
         self.assertNotIn("left stopped", message)
         self.assertNotIn("starting again", message, "nothing had stopped")
+        self.assertIn("Nothing was changed", message)
         self.assertEqual([], self.calls)
 
     def test_the_second_app_changing_after_the_first_stopped_starts_the_first_again(self):
@@ -341,7 +502,54 @@ class ChangedOnceTheJobStarted(Base):
         status, _, message = self.rounds(item)
         self.assertEqual("failed", status, message)
         self.assertEqual("node-power:other", self.notes(A)[HOLD.HELD_BY], "another job's mark is never taken away")
-        self.assertIn("app-a was left as it is: it is held by node-power:other", message)
+        self.assertIn("app-a was left as it is: it is held by another job (other)", message)
+
+
+class Stopping(Base):
+    def test_an_app_being_removed_is_not_stopped(self):
+        item = self.begin()
+        current = self.kube.object(A)
+        current["metadata"]["deletionTimestamp"] = "2026-11-06T00:00:00Z"
+        current["metadata"]["finalizers"] = ["example.com/hold"]
+        self.kube.add(current)
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertEqual(2, self.replicas(A))
+        self.assertIn("app-a was left as it is: it is being removed", message)
+
+    def test_an_object_with_no_generation_that_moved_is_refused_not_trusted(self):
+        current = self.kube.object(A)
+        current["metadata"].pop("generation")
+        self.kube.add(current)
+        item = self.begin()
+        self.controller_writes_status(A)
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertEqual(2, self.replicas(A))
+
+    def test_a_statefulset_that_came_to_delete_its_claims_after_the_start_is_not_stopped(self):
+        """The policy is in spec: the generation moves. (Blocked at review by its own PR.)"""
+        path = f"/apis/apps/v1/namespaces/{NS}/statefulsets/db"
+        self.kube.add(statefulset("db", 1))
+        item = self.begin()
+        K.ksend("PATCH", path, {"spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled": "Delete"}}}, ctype=MERGE)
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertEqual(1, self.kube.object(path)["spec"]["replicas"])
+        self.assertIn("db was left as it is: it changed after this rollback was reviewed", message)
+
+    def test_that_policy_change_in_the_instant_before_the_stop_loses_to_the_fence(self):
+        path = f"/apis/apps/v1/namespaces/{NS}/statefulsets/db"
+        self.kube.add(statefulset("db", 1))
+        item = self.begin()
+
+        def beat_it(method, where, body):
+            self.kube._reactions.clear()
+            K.ksend("PATCH", path, {"spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled": "Delete"}}}, ctype=MERGE)
+        self.kube.react("PATCH", path, beat_it)
+        status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertEqual(1, self.kube.object(path)["spec"]["replicas"])
 
 
 class LostReplies(Base):
@@ -559,6 +767,162 @@ class Interrupted(Base):
         self.assertIn(item["ref"]["keep"], message)
         self.assertIn("may have been made", message)
 
+    def keep_fails(self, *errors):
+        """snapshotCreate answers with each of these in turn."""
+        errors = list(errors)
+
+        def call(method, path, body=None):
+            if path.endswith("action=snapshotCreate"):
+                self.tries.append(json.loads(json.dumps(self.stored)))
+                raise errors.pop(0)
+            return self.lh_call(method, path, body)
+        self.tries = []
+        REVERT.lh_call = call
+
+    def to_the_snapshot(self):
+        """Stopped and attached, with what the store holds at each checkpoint."""
+        item = self.begin()
+        self.stored = self.saved(item)
+
+        def keep(saved):
+            self.stored = json.loads(json.dumps(saved))
+        patch = mock.patch.object(REVERT.OPS, "checkpoint", keep)
+        patch.start()
+        self.addCleanup(patch.stop)
+        REVERT.resolve(item)
+        return item
+
+    def test_a_try_that_may_have_gone_out_then_a_refused_one_still_says_it_may_exist(self):
+        item = self.to_the_snapshot()
+        self.keep_fails(OSError("timed out"), REVERT.Refused("Longhorn refused it: busy"))
+        with mock.patch.object(REVERT, "_snapshot_made", return_value=False):
+            self.assertEqual("running", REVERT.resolve(item)[0])
+            status, _, message = REVERT.resolve(item)
+        self.assertEqual("failed", status, message)
+        self.assertIn("may have been made", message)
+        self.assertNotIn("not changed", message)
+
+    def test_only_tries_all_refused_say_the_volume_was_not_changed(self):
+        refused = REVERT.urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+        item = self.to_the_snapshot()
+        self.keep_fails(refused, refused, refused)
+        rounds = [REVERT.resolve(item) for _ in range(3)]
+        self.assertEqual("failed", rounds[-1][0], rounds[-1][2])
+        self.assertIn("The volume was not changed", rounds[-1][2])
+        self.assertNotIn("may have been made", rounds[-1][2])
+
+    def test_each_try_is_saved_before_it_goes_so_a_crash_during_a_retry_still_says_it_may_exist(self):
+        """A refused try, then a retry the pod dies in: the store must already
+        show that retry, or the next leader would say nothing went out."""
+        item = self.to_the_snapshot()
+        self.keep_fails(REVERT.urllib.error.URLError(ConnectionRefusedError(111, "refused")), Died())
+        REVERT.resolve(item)
+        self.stored = self.saved(item)                  # the round's end is saved
+        with self.assertRaises(Died):
+            REVERT.resolve(item)
+        REVERT.lh_call = self.lh_call
+        message = REVERT.cancel_run(self.stored, {})
+        self.assertIn("may have been made", message)
+        self.assertNotIn("not changed", message)
+
+    def test_a_crash_during_the_first_try_says_it_may_exist(self):
+        item = self.to_the_snapshot()
+        self.keep_fails(Died())
+        with self.assertRaises(Died):
+            REVERT.resolve(item)
+        REVERT.lh_call = self.lh_call
+        self.assertIn("may have been made", REVERT.cancel_run(self.stored, {}))
+
+    def test_a_crash_just_after_the_mark_came_off_still_says_the_app_was_left_stopped(self):
+        """The end's save is lost: the next leader runs the round again and
+        finds the app at 0 with no mark. It is not "left as it is" and the job
+        did not succeed."""
+        item = self.begin()
+        self.fits = False
+        for _ in range(4):
+            REVERT.resolve(item)
+        kept = self.saved(item)
+        self.clock.now += REVERT.WAIT["restarting"] + 1
+        self.assertEqual("failed", REVERT.resolve(item)[0])     # mark off; pretend this end was never saved
+        self.assertNotIn(HOLD.HELD_BY, self.notes(A))
+        self.fits = True
+        status, _, message = self.rounds(kept)
+        self.assertEqual("failed", status, message)
+        self.assertEqual(0, self.replicas(A), "with no mark it is not this job's to start")
+        self.assertIn("app-a was left stopped", message)
+        self.assertIn("Containers → app-a → Start with 2 replicas", message)
+        self.assertNotIn("app-a was left as it is", message)
+
+    def test_a_mark_removed_by_hand_while_stopped_is_said_to_be_left_stopped(self):
+        item = self.begin()
+        REVERT.resolve(item)
+        K.ksend("PATCH", A, {"metadata": {"annotations": {HOLD.HELD_BY: None, HOLD.HELD_AS: None}}}, ctype=MERGE)
+        message = REVERT.cancel_run(item, {})
+        self.assertEqual(0, self.replicas(A))
+        self.assertIn("app-a was left stopped", message)
+        self.assertIn("Start with 2 replicas", message)
+
+    def test_a_never_stopped_app_a_power_job_holds_is_not_told_to_start(self):
+        item = self.begin()
+        self.kube.fail(B, Died(), method="PATCH")
+        with self.assertRaises(Died):
+            REVERT.resolve(item)
+        K.ksend("PATCH", B, {"metadata": {"annotations": {HOLD.HELD_BY: "feedc0de", HOLD.HELD_AS: "1"}}, "spec": {"replicas": 0}}, ctype=MERGE)
+        message = REVERT.cancel_run(item, {})
+        self.assertIn("app-b was left as it is: it is held by another job (feedc0de)", message)
+        self.assertNotIn("Containers → app-b", message)
+        self.assertEqual("feedc0de", self.notes(B)[HOLD.HELD_BY])
+
+    def test_the_mark_warning_survives_the_500_characters_a_job_message_keeps(self):
+        item = self.begin()
+        self.fits = False
+        for _ in range(4):
+            REVERT.resolve(item)
+        self.clock.now += REVERT.WAIT["restarting"] + 1
+        self.kube.fail(A, OSError("timed out"), times=5, method="PATCH")
+        with mock.patch.object(REVERT, "_how", lambda c: "x" * 400):
+            _, _, message = REVERT.resolve(item)
+        self.assertIn(f"may still carry {HOLD.HELD_BY}", message[:500])
+
+    def test_a_failed_release_is_told_even_when_the_stop_was_never_flagged(self):
+        """A stop whose reply was lost: not flagged, marked, and the mark can't come off."""
+        item = self.begin()
+        self.kube.fail(A, OSError("timed out"), method="PATCH", applied=True)
+        REVERT.resolve(item)
+        self.assertFalse(next(c for c in item["ref"]["consumers"] if c["name"] == "app-a").get("stopped"))
+        self.kube.fail(A, OSError("timed out"), times=9, method="PATCH")
+        message = REVERT.cancel_run(item, {})
+        self.assertIn(f"app-a may still carry {HOLD.HELD_BY}", message)
+
+    def test_a_failed_release_is_told_when_the_app_could_not_even_be_read(self):
+        """A stop whose reply was lost, and then reads fail: nothing has flagged
+        it as stopped, and the mark may be there."""
+        item = self.begin()
+        self.kube.fail(A, OSError("timed out"), method="PATCH", applied=True)
+        REVERT.resolve(item)
+        self.kube.fail(A, 500, times=100, method="GET")
+        message = REVERT.cancel_run(item, {})
+        self.assertIn(f"app-a may still carry {HOLD.HELD_BY}", message)
+
+    def test_an_app_left_alone_and_never_stopped_is_not_warned_about_a_mark(self):
+        item = self.begin()
+        self.person_scales(A, 3)
+        with mock.patch.object(HOLD, "release", return_value="HTTP 500"):
+            status, _, message = self.rounds(item)
+        self.assertEqual("failed", status, message)
+        self.assertNotIn("may still carry", message)
+
+    def test_a_never_stopped_app_replaced_before_a_cancel_is_not_said_to_be_stopped(self):
+        item = self.begin()
+        self.kube.fail(B, Died(), method="PATCH")
+        with self.assertRaises(Died):
+            REVERT.resolve(item)
+        self.kube.discard(B)
+        self.kube.add(deployment("app-b", 1))
+        message = REVERT.cancel_run(item, {})
+        self.assertIn("app-b was left as it is: it was replaced", message)
+        self.assertNotIn("app-b was left stopped", message)
+
     def test_a_job_from_before_this_version_still_starts_what_it_stopped(self):
         """No record, only the flag: as the old code would."""
         ref = {"volume": VOLUME, "snapshot": "snap-a", "namespace": NS, "claim": CLAIM, "phase": "stopping",
@@ -641,6 +1005,35 @@ class ManualVm(Base):
         self.kube.add({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachineInstance",
                        "metadata": {"name": "vm-1", "namespace": NS}, "status": {"phase": "Running"}})
         return {}
+
+    def test_an_unmarked_vm_whose_state_cant_be_read_waits_and_is_not_written_off(self):
+        """restart() can't tell whether it runs: a read that fails can pass."""
+        item = self.begin()
+        self.kube.fail(self.vm, 500, times=1000, method="PATCH")
+        REVERT.resolve(item)                            # its stop refused: not marked
+        self.kube.fail(self.instance, 500, times=1, method="GET")
+        message = REVERT.cancel_run(item, {})
+        self.assertNotIn("vm-1 was left as it is", message)
+        self.assertIn("could not tell whether vm-1 is running", message)
+
+    def test_a_mark_gone_in_the_instant_before_its_removal_reads_again_and_finishes(self):
+        """The start went out; the mark's removal answers 422 as it has gone: the VM runs, so it is done."""
+        item = self.begin()
+        REVERT.resolve(item)
+        self.kube.discard(self.instance)
+        REVERT.resolve(item)
+        seen = []
+
+        def gone(method, path, body):
+            seen.append(1)
+            if len(seen) == 2:                          # 1: back to Manual; 2: the marks come off
+                self.kube._reactions.clear()
+                self.kube.react("PUT", self.start_path, self.started)
+                K.ksend("PATCH", self.vm, {"metadata": {"annotations": {HOLD.HELD_BY: None, HOLD.HELD_AS: None}}}, ctype=MERGE)
+        self.kube.react("PATCH", self.vm, gone)
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertEqual(1, len(self.starts))
 
     def test_a_manual_vm_whose_start_failed_is_asked_again_not_taken_as_started(self):
         """Set back to Manual is not started: its mark stays until it is."""

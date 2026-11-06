@@ -143,7 +143,7 @@ class StopRestoreTests(unittest.TestCase):
 
     def test_another_jobs_hold_is_not_taken_over(self):
         HOLD.stop(self.items[0], "job-1")
-        with self.assertRaisesRegex(ValueError, "another host power job"):
+        with self.assertRaisesRegex(ValueError, "held by another job"):
             HOLD.stop(self.items[0], "job-2")
 
     def test_a_manual_vm_is_started_by_asking(self):
