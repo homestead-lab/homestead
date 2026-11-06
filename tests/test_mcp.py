@@ -796,6 +796,7 @@ class CatalogueTests(unittest.TestCase):
         **dict.fromkeys(("/api/shares", "/api/shares/delete", "/api/shares/edit", "/api/shares/nfs",
                          "/api/shares/repair", "/api/shares/users", "/api/shares/users/delete"),
                         "file shares and their users hold passwords, which agents are never given"),
+        "/api/shares/recycle/empty": "emptying a share's recycle bin deletes people's files for good: a person's call",
         **dict.fromkeys(("/api/mqtt", "/api/mqtt/control", "/api/mqtt/test"), "the MQTT broker's credentials"),
         **dict.fromkeys(("/api/snapshot-files/close", "/api/snapshot-files/restore",
                          "/api/snapshot-files/restore/plan", "/api/snapshot-files/start"),

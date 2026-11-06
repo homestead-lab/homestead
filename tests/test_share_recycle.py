@@ -140,7 +140,7 @@ class EmptyingTests(unittest.TestCase):
 
     def test_turning_off_with_empty_empties_before_samba_restarts(self):
         self.pod()
-        calls = self.run_in_pod()
+        self.run_in_pod()
         order = []
         edit = shares.edit_share
         with mock.patch.object(shares, "edit_share", side_effect=lambda *a, **k: order.append("edit") or edit(*a, **k)):
