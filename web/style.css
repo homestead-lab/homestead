@@ -689,7 +689,7 @@ html[data-theme="light"] select{color-scheme:light}
 .device-browser{margin:14px 0;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--surf2)}
 .device-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:6px;max-height:300px;overflow:auto;padding-right:4px}
 .device-row{display:flex;justify-content:space-between;align-items:center;gap:9px;text-align:left;color:var(--tx);background:var(--surf);border:1px solid var(--line);border-radius:10px;padding:9px 10px;cursor:pointer}.device-row:hover{border-color:var(--line2);background:var(--surf3)}.device-row>span:first-child{display:flex;min-width:0;flex-direction:column;gap:3px;word-break:break-all}
-.switch{display:flex;gap:9px;align-items:center;cursor:pointer;user-select:none;margin-bottom:14px;font-size:13px}
+.switch{display:flex;gap:9px;align-items:center;cursor:pointer;user-select:none;margin-bottom:14px;font-size:13px}.switch:has(input:disabled){cursor:not-allowed}
 .switch input{width:auto;accent-color:#fff}
 .seed-note{margin:0 0 12px}.seed-editor{margin-bottom:12px;padding:14px!important}.seed-head{margin-bottom:12px}
 .seed-editor textarea{min-height:220px;resize:vertical;line-height:1.55;tab-size:2}.seed-command{margin-top:9px;overflow-wrap:anywhere}
