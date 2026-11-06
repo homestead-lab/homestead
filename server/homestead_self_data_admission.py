@@ -146,11 +146,10 @@ def _nodes(read, pinned, now):
 
 
 def _proposal(purpose, proposal, namespace):
-    kind = {"copy": "Job", "restart": "Deployment", "worker": "Pod"}.get(purpose)
+    kind = {"copy": "Job", "restart": "Deployment", "worker": "Job"}.get(purpose)
     if kind is None or proposal.get("kind") != kind or proposal.get("metadata", {}).get("namespace") != namespace:
         raise Held("The capacity proposal does not match this data move")
-    template = ({"metadata": copy.deepcopy(proposal["metadata"]), "spec": copy.deepcopy(proposal["spec"])}
-                if purpose == "worker" else proposal["spec"]["template"])
+    template = copy.deepcopy(proposal["spec"]["template"]) if purpose == "worker" else proposal["spec"]["template"]
     if purpose == "worker":
         # A read-only preview cannot know a future ConfigMap's Kubernetes UID.
         # Normalize ONLY that runtime identity for capacity acknowledgement.
@@ -165,11 +164,6 @@ def _proposal(purpose, proposal, namespace):
             raise Held("The coordinator capacity template belongs to a different namespace")
         config["anchor_uid"] = "pending"
         env[0]["value"] = json.dumps(config, sort_keys=True, separators=(",", ":"))
-        if "route" in config:
-            owners = template.get("metadata", {}).get("ownerReferences", [])
-            if len(owners) != 1 or owners[0].get("kind") != "ConfigMap" or owners[0].get("name") != scope.deployment + "-data-handoff":
-                raise Held("The maintenance helper needs its exact control-record owner")
-            owners[0]["uid"] = "pending"
     spec = template["spec"]
     replicas = 1 if purpose in ("copy", "worker") else proposal["spec"]["replicas"]
     if type(replicas) is not int or not 1 <= replicas <= 64:

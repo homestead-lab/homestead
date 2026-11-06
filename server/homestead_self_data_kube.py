@@ -54,6 +54,7 @@ class Scope:
         self.dep = f"/apis/apps/v1/namespaces/{namespace}/deployments/{deployment}"
         self.jobs = f"/apis/batch/v1/namespaces/{namespace}/jobs"
         self.job = self.jobs + "/" + self.copy_name
+        self.worker_job = self.jobs + "/" + access_name(namespace, deployment, operation)
 
     def check(self, method, path, body=None, *, logs=False):
         # Reject encoded traversal, arbitrary query parameters, subresources,
@@ -67,7 +68,7 @@ class Scope:
         if logs:
             allowed = method == "GET" and re.fullmatch(re.escape(self.core) + rf"/pods/{NAME}/log\?container=copy&tailLines=20", path)
         elif method == "GET":
-            allowed = path in {self.anchor, self.dep, self.job, self.core + "/pods",
+            allowed = path in {self.anchor, self.dep, self.job, self.worker_job, self.core + "/pods",
                 f"/apis/apps/v1/namespaces/{self.namespace}/replicasets",
                 f"/apis/autoscaling/v2/namespaces/{self.namespace}/horizontalpodautoscalers",
                 "/api/v1/nodes", "/api/v1/pods", "/api/v1/namespaces", "/apis/metrics.k8s.io/v1beta1/nodes"}
@@ -122,19 +123,12 @@ class PreviewScope:
         meta = body.get("metadata", {}) if isinstance(body, dict) else {}
         suffix = "?dryRun=All&fieldValidation=Strict"
         wanted = (("v1", "Pod", {self.worker_name, self.pod_name}) if path == f"/api/v1/namespaces/{self.namespace}/pods" + suffix else
-                  ("batch/v1", "Job", {self.copy_name}) if path == f"/apis/batch/v1/namespaces/{self.namespace}/jobs" + suffix else None)
+                  ("batch/v1", "Job", {self.copy_name, self.worker_name}) if path == f"/apis/batch/v1/namespaces/{self.namespace}/jobs" + suffix else None)
         if (logs or method != "POST" or wanted is None or not isinstance(body, dict) or not isinstance(meta, dict)
                 or body.get("apiVersion") != wanted[0] or body.get("kind") != wanted[1]
                 or meta.get("namespace") != self.namespace or meta.get("name") not in wanted[2]
-                or any(key in meta for key in ("uid", "resourceVersion", "generateName"))):
+                or any(key in meta for key in ("uid", "resourceVersion", "generateName", "ownerReferences"))):
             raise Held("This preflight client only permits the reviewed dry-run Pod and Job requests")
-        if "ownerReferences" in meta:
-            owners = meta["ownerReferences"]
-            if (meta["name"] != self.worker_name or body["kind"] != "Pod" or not isinstance(owners, list) or len(owners) != 1
-                    or not isinstance(owners[0], dict) or not isinstance(owners[0].get("uid"), str) or not owners[0]["uid"]
-                    or owners[0] != {"apiVersion": "v1", "kind": "ConfigMap", "name": self.anchor_name,
-                                      "uid": owners[0]["uid"], "controller": True, "blockOwnerDeletion": False}):
-                raise Held("Only the maintenance worker may reference its control-record owner during preflight")
 
 
 class Client:
@@ -230,6 +224,7 @@ def access_resources(scope):
         rule("", ["pods"], ["get"]), rule("", ["pods/log"], ["get"]),
         rule("apps", ["replicasets"], ["list"]), rule("autoscaling", ["horizontalpodautoscalers"], ["list"]),
         rule("batch", ["jobs"], ["create"]), rule("batch", ["jobs"], ["get", "delete"], [scope.copy_name]),
+        rule("batch", ["jobs"], ["get"], [name]),  # its own Job, read to check it is still the reviewed one
     ]}
     cluster = {**resource("ClusterRole", None), "rules": [
         rule("", ["nodes", "pods", "namespaces"], ["list"]), rule("", ["nodes"], ["get"], scope.nodes),

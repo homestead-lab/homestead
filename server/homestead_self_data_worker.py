@@ -5,6 +5,7 @@ The deployment wrapper must supply the pinned API handle, narrow Kubernetes
 client and current admission adapter. Source setup hands control over only after
 the final review, writer drain and durable local publication.
 """
+import datetime
 import hashlib
 import hmac
 import http.client
@@ -75,8 +76,12 @@ RECOVERY_MODULE = "/srv/homestead_self_data_recovery.py"
 def recovery_command(namespace, state):
     """The preview command to run for a held move while Homestead is stopped:
     the worker's status server stays read-only, so recovery is kubectl exec
-    into this move's coordinator (docs/data-move-recovery.md)."""
-    return f"kubectl -n {namespace} exec {state['plan']['worker']['name']} -- python3 {RECOVERY_MODULE} --action resume"
+    into this move's coordinator (docs/data-move-recovery.md). kubectl picks the
+    Job's running pod, whichever try that is; an earlier release's coordinator
+    is a bare pod with this name."""
+    target = A.worker_target(state)
+    name = state["plan"]["worker"]["name"]
+    return f"kubectl -n {namespace} exec {'job/' + name if target and target['kind'] == 'Job' else name} -- python3 {RECOVERY_MODULE} --action resume"
 
 
 def recovery_help(namespace, state):
@@ -150,7 +155,7 @@ def progress(anchor, now):
 
 class Runner:
     def __init__(self, read, send, logs, admit=None, *, namespace, deployment, operation, anchor_uid,
-                 worker_uid, clock=time.time, require_setup_receipts=False):
+                 worker_uid, clock=time.time, require_setup_receipts=False, pod_uid=None, config=None):
         A._name(namespace); A._name(deployment)
         if not re.fullmatch(r"[a-f0-9]{24}", operation or "") or not anchor_uid or not worker_uid:
             raise Held("The data move worker needs its exact reviewed identities")
@@ -158,6 +163,9 @@ class Runner:
         self.require_setup_receipts = require_setup_receipts
         self.namespace, self.deployment = namespace, deployment
         self.operation, self.anchor_uid, self.worker_uid = operation, anchor_uid, worker_uid
+        # worker_uid is the Job's, the same for every try; pod_uid is this try's.
+        self.pod_uid, self.config = pod_uid, config
+        self.replacing = False
         self.clock = clock
         self.lock = threading.Lock()
         self.hold = None
@@ -190,6 +198,8 @@ class Runner:
                 if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
                     view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
                                 recovery_command=recovery_command(self.namespace, anchor.state))
+            elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message="A new coordinator is waiting for the previous one to stop; it changes nothing until then. " + view["message"])
             elif self.outage_since is not None and view["status"] != "done":
                 view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
             elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"
@@ -204,13 +214,71 @@ class Runner:
         try:
             anchor = self._load()
             self.held_recovery = anchor.state.get("recovery", {}).get("review")
+            runtime = anchor.state.get("runtime", {})
             if (anchor.state.get("plan", {}).get("worker", {}).get("uid") == self.worker_uid
-                    and "pointer_receipt" in anchor.state and anchor.state.get("runtime", {}).get("state") != "held"):
-                anchor.report(self.worker_uid, int(self.clock()), "held", self.hold)
+                    and "pointer_receipt" in anchor.state and runtime.get("state") != "held"
+                    # A pod that was replaced has no say over the record any more.
+                    and (self.pod_uid is None or runtime.get("pod_uid") in (None, self.pod_uid))):
+                anchor.report(self.worker_uid, self._checked_at(anchor), "held", self.hold, pod_uid=self.pod_uid)
         except Exception:
             # Hold is latched in this process too. A later poll may checkpoint
             # the hold, but cannot continue the move or replay a resource write.
             pass
+
+    def _checked_at(self, anchor):
+        # Tries can run on different hosts, whose clocks differ a little; the
+        # record's time only moves forward.
+        return max(int(self.clock()), anchor.state.get("runtime", {}).get("checked_at", 0))
+
+    @staticmethod
+    def _ended(pod, now):
+        """Whether a pod can no longer be acting: gone, finished, or past the end of
+        its deletion grace (a host that stays down leaves its pod Terminating for
+        ever). If it was only cut off, the takeover's write is what fences it."""
+        if pod is None or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            return True
+        stamp = pod.get("metadata", {}).get("deletionTimestamp")
+        if not stamp:
+            return False
+        try:
+            return now >= datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except (AttributeError, ValueError):
+            return False
+
+    def _acts(self, anchor):
+        """One pod of the Job at a time. The record names the one acting, in its
+        heartbeat. A retry's new pod waits, reading only, until that one has ended,
+        then takes over; losing that write to anyone else just means trying again.
+        Everything else it does starts from the durable record, as every tick does,
+        so a new process is the same as the next tick, except for a request whose
+        outcome nobody recorded: that holds, and is never sent again."""
+        if self.pod_uid is None or anchor.state.get("plan", {}).get("worker", {}).get("uid") != self.worker_uid:
+            return True  # a pod of another Job is refused by the coordinator's own check
+        current = anchor.state.get("runtime", {}).get("pod_uid")
+        if current == self.pod_uid:
+            self.replacing = False
+            return True
+        listed = self.read(f"/api/v1/namespaces/{self.namespace}/pods")
+        pods = {p.get("metadata", {}).get("uid"): p for p in listed.get("items", []) if C.owner(p, "Job", self.worker_uid)}
+        mine = pods.get(self.pod_uid)
+        now = self.clock()
+        if (mine is None or mine.get("metadata", {}).get("deletionTimestamp")
+                or (current is not None and not self._ended(pods.get(current), now))):
+            self.replacing = True
+            return False
+        try:
+            anchor.take_over(self.pod_uid, now)
+        except Held as error:
+            cause = error.__cause__ or error.__context__
+            if transient(error) or (isinstance(cause, urllib.error.HTTPError) and cause.code == 409):
+                self.replacing = True
+                return False
+            raise
+        self.replacing = False
+        if any(e["state"] == "intent" for e in anchor.state["journal"]["ref"]["storage_writes"]):
+            raise Held("The previous coordinator stopped before it recorded what happened to its last request. "
+                       "It will not be sent again; inspect the move's record and that request's resource by hand.")
+        return True
 
     def tick(self):
         if not self.lock.acquire(blocking=False):
@@ -231,6 +299,11 @@ class Runner:
                     return self.snapshot()
             try:
                 anchor = self._load()
+                # Before anything is written: the record, not this pod's environment, says what was reviewed.
+                if self.config is not None and "pointer_receipt" in anchor.state and anchor.state.get("setup", {}).get("config") != self.config:
+                    raise Held("This coordinator's configuration differs from the move's record; it changes nothing")
+                if "pointer_receipt" in anchor.state and not self._acts(anchor):
+                    return self.snapshot()
                 if anchor.state.get("runtime", {}).get("state") == "held":
                     self.hold = anchor.state["runtime"]["message"]
                     self.held_recovery = anchor.state.get("recovery", {}).get("review")
@@ -257,8 +330,8 @@ class Runner:
                 result = engine.step()
                 waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
                 self.start_wait = (self.start_wait or self.clock()) if waiting else None
-                anchor.report(self.worker_uid, int(self.clock()),
-                              "done" if result["phase"] == "done" else "running", result["message"])
+                anchor.report(self.worker_uid, self._checked_at(anchor),
+                              "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
                 self.outage_since = None
             except Held as error:
                 if not self._retry_later(error):

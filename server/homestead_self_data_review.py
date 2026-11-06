@@ -192,7 +192,7 @@ class Review:
         reports = {"worker": D.review(read, ns, "worker", worker, pins, self.threshold, clock=self.clock)}
         # This is conditional planning only. Real phase admission never sees
         # this inventory and never subtracts live/terminating writers.
-        synthetic = copy.deepcopy(worker)
+        synthetic = L.pod_of(worker)
         synthetic["metadata"]["uid"] = "review-worker-" + cfg["operation"]
         synthetic["spec"]["nodeName"] = cfg["worker_node"]
         synthetic["status"] = {"phase": "Running"}

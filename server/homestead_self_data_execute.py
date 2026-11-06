@@ -43,11 +43,12 @@ def enqueue(ops, execution):
         "retain_resources": True, "setup_state": "intent"}, "Preparing the move; Homestead is still online")
 
 
-def handshake(pod, execution, anchor_uid):
-    # Fixed cluster-private DNS, no redirects/proxies, no user-supplied URL.
+def handshake(job, execution, anchor_uid):
+    # Fixed cluster-private DNS, no redirects/proxies, no user-supplied URL. The
+    # private Service has the coordinator Job's name, whichever try answers it.
     scope = execution["scope"]
-    name = pod["metadata"]["name"]
-    expected = {"operation": scope.operation, "anchor_uid": anchor_uid, "worker_uid": identity(pod)["uid"]}
+    name = job["metadata"]["name"]
+    expected = {"operation": scope.operation, "anchor_uid": anchor_uid, "worker_uid": identity(job)["uid"]}
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *_): return None
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())

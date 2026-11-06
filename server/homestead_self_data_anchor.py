@@ -3,7 +3,9 @@
 The independent worker must quiesce writers and prove each phase before
 advancing. This record is deliberately NOT
 on either data PVC. A stale copied journal cannot win a resourceVersion CAS.
-No request bodies, configuration, credentials or raw API errors belong here.
+No request bodies, credentials or raw API errors belong here. The coordinator's
+configuration does (setup.config): names, identities and a token's digest, so
+a retried coordinator is held to what was reviewed.
 Conditional PUT semantics: https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
 """
 import copy
@@ -57,6 +59,13 @@ def _identity(value, named=False):
 def _hash(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
         raise Held("The data handoff receipt fingerprint is invalid")
+
+
+def worker_target(state):
+    """The helper setup's coordinator: the Job, or the bare Pod of a move started
+    by an earlier release. None for a record with no setup receipts."""
+    resources = state.get("setup", {}).get("resources") or []
+    return resources[-2]["target"] if len(resources) >= 2 else None
 
 
 def _status_retry(old, new):
@@ -234,7 +243,9 @@ def _validate(state, namespace):
         _hash(state["pointer_receipt"])
     if "runtime" in state:
         runtime = state["runtime"]
-        _keys(runtime, ("worker_uid", "checked_at", "state", "message"))
+        _keys(runtime, ("worker_uid", "checked_at", "state", "message"), ("pod_uid",))
+        if "pod_uid" in runtime:
+            _identity({"uid": runtime["pod_uid"], "resourceVersion": "validated-separately"})
         if (runtime["worker_uid"] != state.get("plan", {}).get("worker", {}).get("uid")
                 or "pointer_receipt" not in state
                 or type(runtime["checked_at"]) is not int or runtime["checked_at"] < 0
@@ -398,7 +409,7 @@ class Anchor:
         state["plan"] = copy.deepcopy(plan)
         self._replace(state)
 
-    def prepare_setup(self, resources, *, admission=None):
+    def prepare_setup(self, resources, *, admission=None, config=None):
         """Pin helper creation targets/hashes once, before sending any POST."""
         self.handle()
         if (self.state["phase"] != "prepare" or any(k in self.state for k in ("setup", "plan", "pointer_receipt"))
@@ -408,6 +419,8 @@ class Anchor:
         state["setup"] = {"resources": copy.deepcopy(resources), "receipts": []}
         if admission is not None:
             state["setup"]["admission"] = copy.deepcopy(admission)
+        if config is not None:
+            state["setup"]["config"] = config
         self._replace(state)
 
     def checkpoint_setup(self, receipts):
@@ -442,7 +455,21 @@ class Anchor:
         state["pointer_receipt"] = digest
         self._replace(state)
 
-    def report(self, worker_uid, checked_at, status, message):
+    def take_over(self, pod_uid, checked_at):
+        """A retry's Pod becomes the one that acts (stuck-jobs C4). This CAS is the
+        fence: the previous Pod's next write of this record is refused, so it can
+        send nothing more. The hold, phase and journal are left exactly as they are."""
+        self.handle()
+        if "pointer_receipt" not in self.state:
+            raise Held("Setup still owns this data move's record")
+        state = copy.deepcopy(self.state)
+        runtime = state.get("runtime") or {"worker_uid": state["plan"]["worker"]["uid"], "state": "running",
+                                           "message": "A coordinator is taking over this data move"}
+        runtime.update(pod_uid=pod_uid, checked_at=max(int(checked_at), runtime.get("checked_at", 0)))
+        state["runtime"] = runtime
+        self._replace(state)
+
+    def report(self, worker_uid, checked_at, status, message, pod_uid=None):
         """CAS-persist public worker status outside either data volume.
 
         A runtime hold cannot be cleared by a later heartbeat or process restart.
@@ -456,6 +483,9 @@ class Anchor:
             raise Held("The data handoff worker cannot overwrite its current hold or status")
         state = copy.deepcopy(self.state)
         state["runtime"] = {"worker_uid": worker_uid, "checked_at": checked_at, "state": status, "message": message}
+        pod_uid = pod_uid or previous.get("pod_uid")
+        if pod_uid:
+            state["runtime"]["pod_uid"] = pod_uid
         self._replace(state)
 
     def abort_setup(self):

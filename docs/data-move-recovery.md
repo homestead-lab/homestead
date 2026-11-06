@@ -14,16 +14,17 @@ Longhorn replicas or bypass scheduling and capacity checks.
 
 An administrator with Kubernetes `pods/exec` access can review a **held move**,
 in any phase from preparation to restart, using the coordinator's bundled
-recovery module. Find its Pod
+recovery module. Find its Job
 in the move's namespace by label `homestead.io/self-data-handoff=<operation>`;
-select the independent `homestead-handoff-*` coordinator, not the copy Pod.
+select the independent `homestead-handoff-*` coordinator, not the copy Job.
+kubectl picks the Job's running Pod, whichever try that is.
 These commands require a coordinator running a release with this module.
 While a move is held, its status page (and the Jobs entry) shows the exact
-preview command for that coordinator, with the namespace and Pod filled in.
+preview command for that coordinator, with the namespace and Job filled in.
 The page itself stays read-only; there is no recovery button.
 
 ```sh
-kubectl -n <namespace> exec <coordinator-pod> -- \
+kubectl -n <namespace> exec job/<coordinator> -- \
   python3 /srv/homestead_self_data_recovery.py --action resume
 ```
 
@@ -33,7 +34,7 @@ outcomes and writer/mount inventory. It reports the action, phase, volume names
 and fingerprint. Review the result, then confirm that exact fingerprint:
 
 ```sh
-kubectl -n <namespace> exec <coordinator-pod> -- \
+kubectl -n <namespace> exec job/<coordinator> -- \
   python3 /srv/homestead_self_data_recovery.py --action resume --confirm <fingerprint>
 ```
 
@@ -80,10 +81,40 @@ would have without the hold.
 A restart that is still not ready after 15 minutes says so on the status
 page. It does not hold, since a hold would keep the new pods unready.
 
+## If the coordinator is lost
+
+The coordinator is a Job with `backoffLimit: 3`: four tries in all. If its Pod is
+killed, evicted or lost with its host, Kubernetes starts another on any reviewed
+host, preferring the one you chose. Homestead stays stopped meanwhile, and the
+status page comes back with the new Pod.
+
+- A host going down takes Kubernetes about 6 minutes to notice and replace the
+  Pod. An eviction or a crash takes seconds.
+- The new Pod reads only until the previous one has gone, finished, or passed
+  the end of its deletion grace. It then takes over with a conditional write to
+  the control record, so the old Pod can write nothing more if it was only cut off.
+- It continues from the record, which holds the Job's identity, the coordinator's
+  configuration and every receipt. Nothing already recorded is done again: a
+  running copy is followed, a finished one is verified, and after the switch
+  the move only goes forward. A hold stays held, and a wait keeps its deadline.
+- **A request whose outcome was never recorded** holds, and is never sent again:
+  the Pod died in the moment between saying it would send a request and recording
+  the answer. Recovery refuses too, since it needs known outcomes. Inspect the
+  named step's resource and treat this as the administrator-reviewed recovery below.
+- **After the fourth try** the Job has failed and nothing looks after the move:
+  no process answers on Homestead's address, and no alert fires. A coordinator
+  from a new Job is refused, because the record pins this Job. This is also an
+  administrator-reviewed recovery. Keep the Job, its Pods' logs and the control
+  record; Pods stay until the Job is deleted, so `kubectl logs` shows why each try ended.
+
+A move started by an earlier release keeps its bare coordinator Pod, on its pinned
+image, with the old behaviour. Use `kubectl exec <coordinator-pod>` for it.
+
 Only the hosts the move uses are checked for reboots and stale heartbeats: the
-copy host, the nodes of the coordinator, of Homestead's own pods and of any pod
+copy host, the nodes of Homestead's own pods and of any pod
 mounting either claim, and the nodes either volume is pinned to. A reboot of
-another host does not hold the move. A pod that has left the API was removed
+another host does not hold the move, and neither does one of the coordinator's
+host: it mounts nothing, and its next try carries on. A pod that has left the API was removed
 normally (nothing force-deletes one), so its writer had stopped. If a volume's
 placement names no reviewed host, every reviewed host is checked.
 

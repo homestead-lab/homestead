@@ -95,9 +95,10 @@ class Coordinator:
     def _involved(self):
         """The hosts that can hold a writer or a mount of either volume: the
         copy host, the nodes of every pod in the namespace that mounts either
-        claim, is Homestead's own or is this coordinator, and the nodes either
-        PV is pinned to. A reboot elsewhere proves nothing about this move's
-        writers. A pod that left the API was removed normally (nothing here
+        claim, is Homestead's own or is an earlier release's bare coordinator,
+        and the nodes either PV is pinned to. A reboot elsewhere proves nothing
+        about this move's writers, and a Job's coordinator mounts nothing: if its
+        host reboots, its next try carries on. A pod that left the API was removed normally (nothing here
         force-deletes), so its writer stopped. A PV pinned by a hostname
         that names no reviewed node checks every reviewed node, as before."""
         names = {n["name"] for n in self.plan["nodes"]}
@@ -153,12 +154,7 @@ class Coordinator:
         self._hosts()
         dep = self._deployment()
         self._bound(True); self._bound(False)
-        worker = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/pods/{self.plan['worker']['name']}"),
-                            self.plan["worker"], namespace=self.ns)
-        if (worker.get("status", {}).get("phase") != "Running"
-                or claims(worker) & {self.state["source"]["name"], self.state["destination"]}
-                or worker.get("spec", {}).get("nodeName") not in {n["name"] for n in self.plan["nodes"]}):
-            raise Held("The coordinator must remain running independently of both data volumes")
+        self._worker_running()
         for hpa in self._list(f"/apis/autoscaling/v2/namespaces/{self.ns}/horizontalpodautoscalers"):
             target = hpa.get("spec", {}).get("scaleTargetRef", {})
             if target.get("kind") == "Deployment" and target.get("name") == self.state["deployment"]["name"]:
@@ -173,6 +169,25 @@ class Coordinator:
                         and not any(owner(pod, "ReplicaSet", uid) for uid in known_sets)):
                     raise Held("A data volume has an unreviewed consumer; Homestead was not stopped")
         return dep
+
+    def _worker_running(self):
+        """The reviewed coordinator exists, and what runs it mounts neither volume.
+        Normally that is a Job, whichever try is running now; a record with no Job
+        (an earlier release's) has one bare Pod."""
+        target = A.worker_target(self.state)
+        data = {self.state["source"]["name"], self.state["destination"]}
+        hosts = {n["name"] for n in self.plan["nodes"]}
+        if target and target["kind"] == "Job":
+            self._fact(self.read(target["path"]), self.plan["worker"], namespace=self.ns)
+            pods = [p for p in self._pods() if owner(p, "Job", self.plan["worker"]["uid"])]
+            running = [p for p in pods if p.get("status", {}).get("phase") == "Running" and not p["metadata"].get("deletionTimestamp")]
+        else:
+            pod = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/pods/{self.plan['worker']['name']}"),
+                             self.plan["worker"], namespace=self.ns)
+            pods = running = [pod] if pod.get("status", {}).get("phase") == "Running" else []
+        if (not running or any(claims(p) & data for p in pods)
+                or any(p.get("spec", {}).get("nodeName") not in hosts for p in running)):
+            raise Held("The coordinator must remain running independently of both data volumes")
 
     def _pods(self):
         return self._list(f"/api/v1/namespaces/{self.ns}/pods")
@@ -225,31 +240,9 @@ class Coordinator:
                         self.plan["copy_image"], self.state["operation"], self.plan["copy_node"])
 
     def _copy_admitted(self, job, pod):
-        """The finished pod passes the check its dry run passed (#467): admitted()
-        on the reviewed template, so its security contexts, priority, service
-        account and tolerations are what was reviewed. The Job controller's
-        additions are the only allowance: the generated name, its owner, the
-        controller-uid and job-name labels, which must be this Job's, and its
-        tracking finalizer, which stays on the pod until the controller has
-        counted it. The pod comes from a list, so it names no kind itself."""
         import homestead_self_data_bootstrap as B
         from homestead_self_data_preflight import copy_pod
-        meta, job_uid = pod.get("metadata", {}), identity(job)["uid"]
-        owners = meta.get("ownerReferences", [])
-        if len(owners) != 1 or owners[0].get("kind") != "Job" or owners[0].get("uid") != job_uid:
-            raise Held("The copy pod is not owned by this data copy Job alone")
-        added = {"controller-uid": job_uid, "job-name": job["metadata"]["name"],
-                 "batch.kubernetes.io/controller-uid": job_uid, "batch.kubernetes.io/job-name": job["metadata"]["name"]}
-        labels = dict(meta.get("labels", {}))
-        if any(labels.pop(key, value) != value for key, value in added.items()):
-            raise Held("The copy pod's Job labels are not this Job's")
-        body = copy_pod(self._copy_manifest())
-        body["metadata"].update(name=meta.get("name"), ownerReferences=copy.deepcopy(owners))
-        real = {"apiVersion": "v1", "kind": "Pod", **copy.deepcopy(pod)}
-        real["metadata"]["labels"] = labels
-        real["metadata"]["finalizers"] = [f for f in meta.get("finalizers", []) if f != "batch.kubernetes.io/job-tracking"]
-        B.admitted(body, real, {"apiVersion": "v1", "kind": "Pod", "namespace": self.ns, "name": meta.get("name")},
-                   default=B.default_priority(self.read))
+        B.job_pod_admitted(copy_pod(self._copy_manifest()), job, pod, default=B.default_priority(self.read))
 
     def _copy_receipt(self, job, pods):
         if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):

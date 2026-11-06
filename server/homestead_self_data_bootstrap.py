@@ -13,16 +13,21 @@ import homestead_self_data_launch as L
 from homestead_storage_journal import Held, digest, identity, pod_annotations, shape
 
 
-def targets(namespace, deployment, operation):
+def targets(namespace, deployment, operation, *, worker="Job"):
+    """The helpers a move creates. worker="Pod" is the record of a move started by
+    an earlier release: its bare coordinator keeps its pinned image and finishes
+    by itself, and this release has only to read that record and clean up after it."""
     name = K.access_name(namespace, deployment, operation)
+    plural_of = {"Job": "jobs", "Pod": "pods"}
     result = []
     for kind, plural, ns, suffix in (
         ("ServiceAccount", "serviceaccounts", namespace, ""),
         ("Role", "roles", namespace, ""), ("RoleBinding", "rolebindings", namespace, ""),
         ("ClusterRole", "clusterroles", None, ""), ("ClusterRoleBinding", "clusterrolebindings", None, ""),
         ("Role", "roles", "kube-node-lease", "-leases"), ("RoleBinding", "rolebindings", "kube-node-lease", "-leases"),
-        ("Pod", "pods", namespace, ""), ("Service", "services", namespace, "")):
-        version = "v1" if kind in ("ServiceAccount", "Pod", "Service") else "rbac.authorization.k8s.io/v1"
+        (worker, plural_of[worker], namespace, ""), ("Service", "services", namespace, "")):
+        version = ("v1" if kind in ("ServiceAccount", "Pod", "Service") else "batch/v1" if kind == "Job"
+                   else "rbac.authorization.k8s.io/v1")
         base = "/api/v1" if version == "v1" else "/apis/" + version
         path = base + ("/namespaces/" + ns if ns else "") + "/" + plural + "/" + name + suffix
         result.append({"kind": kind, "apiVersion": version, "namespace": ns, "name": name + suffix, "path": path})
@@ -32,13 +37,17 @@ def targets(namespace, deployment, operation):
 def validate(value, namespace, deployment, operation):
     # Local import avoids making the anchor import a second copy of itself.
     import homestead_self_data_anchor as A
-    A._keys(value, ("resources", "receipts"), ("admission",))
+    A._keys(value, ("resources", "receipts"), ("admission", "config"))
     if "admission" in value:
         from homestead_self_data_admission import validate_worker_approval
         validate_worker_approval(value["admission"])
-    expected = targets(namespace, deployment, operation)
-    if not isinstance(value["resources"], list) or len(value["resources"]) != len(expected):
+    if "config" in value:
+        L.parse_configuration(value["config"])
+    if not isinstance(value["resources"], list) or len(value["resources"]) != 9:
         raise Held("The helper setup plan is incomplete")
+    row = value["resources"][-2]
+    earlier = isinstance(row, dict) and isinstance(row.get("target"), dict) and row["target"].get("kind") == "Pod"
+    expected = targets(namespace, deployment, operation, worker="Pod" if earlier else "Job")
     for resource, target in zip(value["resources"], expected):
         A._keys(resource, ("target", "payload"))
         if resource["target"] != target:
@@ -142,7 +151,9 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
     if not _subset(body, obj):
         raise Held("Admission changed a reviewed helper setting; inspect it before continuing")
     kind = obj["kind"]
-    if kind not in ("Pod", "Service"):
+    if kind == "Job":
+        _job_admitted(body, obj, target, default=default)
+    elif kind not in ("Pod", "Service"):
         # rules, subjects, roleRef, aggregationRule, token settings and any
         # future RBAC fields must be exactly what this operation requested.
         fields = lambda value: {k: v for k, v in value.items() if k not in ("apiVersion", "kind", "metadata", "status")}
@@ -157,8 +168,9 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
         # default class, or none at priority 0. A raised class is still held.
         unread = bool(default and default.get("unread"))
         given = default if default and not unread else {"name": None, "value": 0, "preemptionPolicy": "PreemptLowerPriority"}
-        host = wanted["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"][0]["matchFields"][0]["values"][0]
-        if (spec.get("nodeName") not in (None, "", host) or spec.get("dnsPolicy", "ClusterFirst") != "ClusterFirst"
+        hosts = [host for term in wanted["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+                 for host in term["matchFields"][0]["values"]]
+        if (spec.get("nodeName") not in (None, "", *hosts) or spec.get("dnsPolicy", "ClusterFirst") != "ClusterFirst"
                 or spec.get("schedulerName", "default-scheduler") != "default-scheduler"
                 or spec.get("serviceAccount", wanted.get("serviceAccountName", "default")) != wanted.get("serviceAccountName", "default")
                 or spec.get("serviceAccountName", "default") != wanted.get("serviceAccountName", "default")
@@ -196,6 +208,61 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
             raise Held("Admission changed the private helper progress service")
 
 
+def _job_admitted(body, obj, target, *, default=None):
+    """The Job as the API answered it: only Kubernetes' own defaults and its
+    generated selector and labels were added, and what its template describes
+    passes the Pod check, because the Job controller makes pods from it."""
+    meta, spec, wanted = obj["metadata"], obj["spec"], body["spec"]
+    if (set(spec) - set(wanted) - {"selector", "manualSelector", "completionMode", "suspend"}
+            or spec.get("manualSelector", False) is not False or spec.get("suspend", False) is not False
+            or spec.get("completionMode", "NonIndexed") != "NonIndexed"):
+        raise Held("Admission changed the helper Job's policy")
+    template = copy.deepcopy(spec["template"])
+    generated = {"controller-uid": meta.get("uid"), "batch.kubernetes.io/controller-uid": meta.get("uid"),
+                 "job-name": meta["name"], "batch.kubernetes.io/job-name": meta["name"]}
+    labels = template.get("metadata", {}).get("labels", {})
+    original = wanted["template"].get("metadata", {}).get("labels", {})
+    for key in set(labels) - set(original):
+        if key not in generated or not generated[key] or labels[key] != generated[key]:
+            raise Held("Admission added an unreviewed helper Job label")
+        labels.pop(key)
+    selector = spec.get("selector", {})
+    if (set(selector) - {"matchLabels"} or any(not generated.get(key) or value != generated[key]
+            for key, value in selector.get("matchLabels", {}).items())):
+        raise Held("Admission added an unreviewed helper Job selector")
+    if template.get("metadata", {}).get("annotations", {}) != wanted["template"].get("metadata", {}).get("annotations", {}):
+        raise Held("Admission added unreviewed helper Job annotations")
+    answered = {"metadata": {"name": meta["name"], "namespace": meta["namespace"]}, "spec": {"template": template}}
+    pod_target = {"apiVersion": "v1", "kind": "Pod", "namespace": target["namespace"], "name": target["name"]}
+    admitted(L.pod_of(body), L.pod_of(answered), pod_target, dry_run=True, default=default)
+
+
+def job_pod_admitted(body, job, pod, *, default=None):
+    """A Job's pod passes the check its dry run passed (#467): admitted() on the
+    reviewed template, so its security contexts, priority, service account and
+    tolerations are what was reviewed. The Job controller's additions are the only
+    allowance: the generated name, its owner, the controller-uid and job-name
+    labels, which must be this Job's, and its tracking finalizer, which stays on
+    the pod until the controller has counted it. The pod comes from a list, so it
+    names no kind itself."""
+    meta, job_uid = pod.get("metadata", {}), identity(job)["uid"]
+    owners = meta.get("ownerReferences", [])
+    if len(owners) != 1 or owners[0].get("kind") != "Job" or owners[0].get("uid") != job_uid:
+        raise Held("The helper pod is not owned by its Job alone")
+    added = {"controller-uid": job_uid, "job-name": job["metadata"]["name"],
+             "batch.kubernetes.io/controller-uid": job_uid, "batch.kubernetes.io/job-name": job["metadata"]["name"]}
+    labels = dict(meta.get("labels", {}))
+    if any(labels.pop(key, value) != value for key, value in added.items()):
+        raise Held("The helper pod's Job labels are not its Job's")
+    body = copy.deepcopy(body)
+    body["metadata"].update(name=meta.get("name"), ownerReferences=copy.deepcopy(owners))
+    real = {"apiVersion": "v1", "kind": "Pod", **copy.deepcopy(pod)}
+    real["metadata"]["labels"] = labels
+    real["metadata"]["finalizers"] = [f for f in meta.get("finalizers", []) if f != "batch.kubernetes.io/job-tracking"]
+    admitted(body, real, {"apiVersion": "v1", "kind": "Pod", "namespace": body["metadata"]["namespace"], "name": meta.get("name")},
+             default=default)
+
+
 class Setup:
     def __init__(self, anchor, scope, *, image, node, status_digest, approval=None, admit=None, clock=None, route=None, handshake=None):
         self.anchor, self.read, self.send = anchor, anchor.read, anchor.send
@@ -205,6 +272,7 @@ class Setup:
                 or not {state["source"]["name"], state["destination"]} <= set(scope.claims)):
             raise Held("Helper setup scope does not match this data move")
         self.route, self.handshake = route, handshake
+        self.config = L.configuration(scope, anchor.handle()["uid"], status_digest, route)
         self.bodies = L.resources(scope, anchor_uid=anchor.handle()["uid"], image=image, node=node, status_digest=status_digest, route=route)
         self.resources = [{"target": target, "payload": digest(body)} for target, body in
                           zip(targets(scope.namespace, scope.deployment, scope.operation), self.bodies)]
@@ -261,10 +329,10 @@ class Setup:
             if self.admit(copy.deepcopy(self.bodies[-2])) is not True:
                 raise Held("Current capacity and placement must be reviewed before starting the coordinator")
             self._current()
-            self.anchor.prepare_setup(self.resources, admission=self.approval)
+            self.anchor.prepare_setup(self.resources, admission=self.approval, config=self.config)
             return {"created": 0, "total": len(self.resources), "complete": False}
         setup = self.anchor.state["setup"]
-        if setup["resources"] != self.resources or setup.get("admission") != self.approval:
+        if setup["resources"] != self.resources or setup.get("admission") != self.approval or setup.get("config") != self.config:
             raise Held("The helper configuration differs from the saved setup review")
         receipts = copy.deepcopy(setup["receipts"])
         for i, receipt in enumerate(receipts):
@@ -275,11 +343,11 @@ class Setup:
         target, body = self.resources[i]["target"], self.bodies[i]
         if self._get(target["path"]) is not None:
             raise Held("A helper name is already in use; it will not be adopted or replaced")
-        if target["kind"] == "Pod":
+        if target["kind"] == "Job":
             if self.admit is None or self.admit(copy.deepcopy(body)) is not True:
                 raise Held("Current capacity and placement must be reviewed before starting the coordinator")
-            # The source account checks actual Pod admission before persisting a
-            # create intent. Do not grant Pod creation to the coordinator Role.
+            # The source account checks actual Job and Pod admission before persisting
+            # a create intent. Do not grant this creation to the coordinator Role.
             from homestead_self_data_preflight import Preflight
             Preflight(self.scope, self.send, default=self.default, **({"clock": self.clock} if self.clock is not None else {})).worker(body)
             # Admission may take time; recheck prior setup receipts afterwards.
@@ -313,13 +381,24 @@ class Setup:
             pass  # The earlier durable intent still prohibits replay.
 
     def worker_fact(self):
-        """Proof for configure(): actual scheduled Pod shape, never its manifest."""
+        """Proof for configure(): the actual Job and its one running Pod, never the
+        manifest. The Job is what is pinned: a retry's new Pod is still this worker."""
         self._current(allow_plan=True)
         setup = self.anchor.state.get("setup")
         if not setup or setup["resources"] != self.resources or not complete(setup):
             raise Held("Helper setup is not complete")
         observed = [self._observe(i, receipt) for i, receipt in enumerate(setup["receipts"])]
-        pod = observed[-2]
+        job = observed[-2]
+        if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
+            raise Held("The move's coordinator Job failed before the move began; Homestead was not stopped. Close this move and start again")
+        listed = self._get(f"/api/v1/namespaces/{self.anchor.namespace}/pods") or {}
+        pods = [p for p in listed.get("items", [])
+                if any(o.get("kind") == "Job" and o.get("uid") == identity(job)["uid"] for o in p.get("metadata", {}).get("ownerReferences", []))
+                and p.get("status", {}).get("phase") not in ("Succeeded", "Failed") and not p["metadata"].get("deletionTimestamp")]
+        if len(pods) != 1:
+            raise Held("Waiting for the exact coordinator pod to become ready")
+        pod = pods[0]
+        job_pod_admitted(L.pod_of(self.bodies[-2]), job, pod, default=self.default)
         statuses = pod.get("status", {}).get("containerStatuses", [])
         if (pod.get("status", {}).get("phase") != "Running" or not pod["spec"].get("nodeName")
                 or self.route is None and not any(c.get("type") == "Ready" and c.get("status") == "True" for c in pod["status"].get("conditions", []))
@@ -327,10 +406,11 @@ class Setup:
                 or statuses[0]["restartCount"] != 0 or self.route is None and statuses[0].get("ready") is not True or not statuses[0].get("state", {}).get("running")
                 or not statuses[0].get("containerID") or not statuses[0].get("imageID")):
             raise Held("Waiting for the exact coordinator pod to become ready")
-        if self.route is not None and (self.handshake is None or self.handshake(pod) is not True):
+        # The Service has the Job's name, and /identity answers with the Job's uid.
+        if self.route is not None and (self.handshake is None or self.handshake(job) is not True):
             raise Held("Waiting for the maintenance page to answer on the exact coordinator pod")
         self._current(allow_plan=True)
-        return {"name": pod["metadata"]["name"], "uid": identity(pod)["uid"], "shape": shape(pod)}
+        return {"name": job["metadata"]["name"], "uid": identity(job)["uid"], "shape": shape(job)}
 
     def preflight_copy(self, plan):
         """Source-side final check; pin its receipt with the immutable plan.

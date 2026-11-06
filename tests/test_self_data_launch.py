@@ -39,11 +39,11 @@ class ManifestTests(unittest.TestCase):
         args.update(overrides)
         return L.resources(scope(), **args)
 
-    def test_worker_is_non_restarting_non_root_and_never_mounts_either_data_claim(self):
+    def test_each_try_is_a_new_non_root_pod_that_never_mounts_either_data_claim(self):
         resources = self.resources()
-        pod = next(r for r in resources if r["kind"] == "Pod")
-        spec = pod["spec"]; container = spec["containers"][0]
-        self.assertNotIn("ownerReferences", pod["metadata"])
+        job = next(r for r in resources if r["kind"] == "Job")
+        spec = job["spec"]["template"]["spec"]; container = spec["containers"][0]
+        self.assertNotIn("ownerReferences", job["metadata"])
         self.assertEqual("Never", spec["restartPolicy"])
         self.assertFalse(spec["automountServiceAccountToken"])
         self.assertEqual([K.token_volume()], spec["volumes"])
@@ -64,9 +64,10 @@ class ManifestTests(unittest.TestCase):
 
     def test_identity_comes_from_downward_api_and_only_digest_is_stored(self):
         resources = self.resources()
-        pod = next(r for r in resources if r["kind"] == "Pod")
+        pod = L.pod_of(next(r for r in resources if r["kind"] == "Job"))
         env = {e["name"]: e for e in pod["spec"]["containers"][0]["env"]}
         self.assertEqual("metadata.uid", env[L.UID_ENV]["valueFrom"]["fieldRef"]["fieldPath"])
+        self.assertEqual("metadata.labels['batch.kubernetes.io/controller-uid']", env[L.JOB_UID_ENV]["valueFrom"]["fieldRef"]["fieldPath"])
         value, actual_scope = L.parse_configuration(env[L.CONFIG_ENV]["value"])
         self.assertEqual(DIGEST, value["status_digest"])
         self.assertEqual(scope().claims, actual_scope.claims)
@@ -105,12 +106,12 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertEqual("", result.stdout)
             self.assertNotIn("Traceback", result.stderr)
-            self.assertIn("no retry was requested", result.stderr)
+            self.assertIn("repeats no request", result.stderr)
             self.assertEqual([], list(Path(directory).iterdir()))
 
     def test_main_uses_scoped_client_default_admission_and_restores_signals(self):
         before = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGINT)}
-        env = {L.CONFIG_ENV: config(), L.UID_ENV: "worker-uid"}
+        env = {L.CONFIG_ENV: config(), L.UID_ENV: "pod-uid", L.JOB_UID_ENV: "worker-uid"}
         with mock.patch.dict(os.environ, env), mock.patch.object(sys, "argv", ["worker"]), \
                 mock.patch.object(L.K, "Client") as client, mock.patch.object(L.W, "Runner") as runner, \
                 mock.patch.object(L, "serve") as serve:
@@ -118,12 +119,13 @@ class RuntimeTests(unittest.TestCase):
                 signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
                 self.assertTrue(stop.is_set())
             serve.side_effect = interrupt
-            self.assertEqual(0, L.main())
+            self.assertEqual(1, L.main(), "told to stop is never success: a Job would not replace it")
             args, kwargs = runner.call_args
             self.assertEqual((client.return_value.read, client.return_value.send, client.return_value.logs), args)
             self.assertNotIn("admit", kwargs)
             self.assertTrue(kwargs["require_setup_receipts"])
             self.assertEqual("worker-uid", kwargs["worker_uid"])
+            self.assertEqual("pod-uid", kwargs["pod_uid"])
             self.assertEqual("anchor-uid", kwargs["anchor_uid"])
             self.assertEqual(DIGEST, serve.call_args.args[1])
         self.assertEqual(before, {s: signal.getsignal(s) for s in before})

@@ -1,7 +1,7 @@
 """Use the existing Homestead Service for the temporary maintenance page.
 
-No Service edits, new VIPs, public ports or account-secret copies. A ConfigMap
-controller owner prevents ReplicaSet adoption of the label-matching helper.
+No Service edits, new VIPs, public ports or account-secret copies. The helper's
+Pods have their Job as controller owner, so a ReplicaSet can't adopt them.
 Readiness admits it only after the source is fenced, and withdraws it on success.
 """
 import copy
@@ -59,14 +59,12 @@ def validate(route):
         raise Held("The maintenance route is invalid")
 
 
-def apply(pod, service, route, anchor_name, anchor_uid):
+def apply(template, service, route):
     validate(route)
-    if any(k in pod["metadata"]["labels"] and pod["metadata"]["labels"][k] != v for k, v in route["labels"].items()):
+    if any(k in template["metadata"]["labels"] and template["metadata"]["labels"][k] != v for k, v in route["labels"].items()):
         raise Held("Homestead's Service selector conflicts with the maintenance helper")
-    pod["metadata"]["labels"].update(copy.deepcopy(route["labels"]))
-    pod["metadata"]["ownerReferences"] = [{"apiVersion": "v1", "kind": "ConfigMap", "name": anchor_name,
-        "uid": anchor_uid, "controller": True, "blockOwnerDeletion": False}]
-    app = pod["spec"]["containers"][0]
+    template["metadata"]["labels"].update(copy.deepcopy(route["labels"]))
+    app = template["spec"]["containers"][0]
     app["ports"].extend({"name": n, "containerPort": route["port"], "protocol": "TCP"} for n in route["names"])
     app["readinessProbe"]["httpGet"]["path"] = "/readyz"
     service["spec"]["publishNotReadyAddresses"] = True  # private setup handshake, never the app Service

@@ -133,11 +133,30 @@ def main():
                     except Exception: pass
                     stop_watch.wait(1)
             threading.Thread(target=watch_controllers, daemon=True).start()
+            # A coordinator lost in the middle of a move: once Homestead is stopped, delete
+            # the helper's pod, once. The real Job controller has to start another, and
+            # the first move below can only finish if that one carries on from the record.
+            lost = []
+            def lose_the_coordinator():
+                while not stop_watch.is_set() and not lost:
+                    try:
+                        stopped = json.loads(kube("-n", "lab", "get", "deployment", "homestead", "-o", "json"))["spec"]["replicas"] == 0
+                        pods = json.loads(kube("-n", "lab", "get", "pods", "-l", "homestead.io/handoff-worker", "-o", "json"))["items"]
+                        running = [p["metadata"]["name"] for p in pods if (p.get("status") or {}).get("phase") == "Running"
+                                   and not p["metadata"].get("deletionTimestamp")]
+                        if stopped and running:
+                            kube("-n", "lab", "delete", "pod", running[0], "--wait=false")
+                            lost.append(running[0])
+                            log("Lost the coordinator on purpose:", running[0])
+                    except Exception: pass
+                    stop_watch.wait(1)
+            threading.Thread(target=lose_the_coordinator, daemon=True).start()
             service = json.loads(kube("-n", "lab", "get", "service", "homestead", "-o", "json"))
             url = "http://" + service["spec"]["clusterIP"] + ":8088"
             subprocess.run(["docker", "run", "--rm", "--network", "container:" + cid, "--read-only", "--tmpfs", "/tmp",
                          "--env", "FIXTURE_URL=" + url, "--env", "FIXTURE_SETUP_CODE=" + SETUP_CODE, "--env", "FIXTURE_BUDGET=600", "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
                          "--entrypoint", "python3", IMAGE, "-u", "/repo/tests/integration/self-data-http.py"], timeout=660, check=True)
+            assert lost, "The move never gave the fixture a coordinator to lose while Homestead was stopped"
             pvcs = json.loads(kube("-n", "lab", "get", "pvc", "-o", "json"))["items"]
             assert len(pvcs) == 3 and all(p["status"]["phase"] == "Bound" for p in pvcs), "Both old data volumes must be retained"
             # Helpers are retired in the background once a move is done: they

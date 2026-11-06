@@ -30,6 +30,8 @@ class Cluster:
             "spec": {"volumeName": "old-pv"}}
 
     def read(self, path):
+        if path.endswith("/pods"):
+            return {"items": [copy.deepcopy(v) for k, v in self.objects.items() if k.rsplit("/", 1)[0] == path]}
         if path not in self.objects:
             raise urllib.error.HTTPError(path, 404, "absent", {}, None)
         return copy.deepcopy(self.objects[path])
@@ -58,6 +60,19 @@ class Cluster:
         if len(self.sent) == self.lose_at:
             raise TimeoutError("secret response diagnostic")
         return copy.deepcopy(obj)
+
+
+def job_pod(job):
+    """What the Job controller makes from a Job, as a pod list returns it."""
+    uid, name = job["metadata"]["uid"], job["metadata"]["name"]
+    template = job["spec"]["template"]
+    return {"apiVersion": "v1", "kind": "Pod", "metadata": {
+        "namespace": job["metadata"]["namespace"], "name": name + "-abcde", "uid": "pod-" + uid, "resourceVersion": "1",
+        "labels": {**template["metadata"]["labels"], "controller-uid": uid, "job-name": name,
+                   "batch.kubernetes.io/controller-uid": uid, "batch.kubernetes.io/job-name": name},
+        "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": name, "uid": uid, "controller": True, "blockOwnerDeletion": True}],
+        "finalizers": ["batch.kubernetes.io/job-tracking"]},
+        "spec": copy.deepcopy(template["spec"])}
 
 
 def with_preview(send):
@@ -92,8 +107,8 @@ class BootstrapTests(unittest.TestCase):
         return self.setup.step()
 
     def pod_ready(self):
-        path = self.setup.resources[-2]["target"]["path"]
-        pod = self.c.objects[path]
+        pod = job_pod(self.c.objects[self.setup.resources[-2]["target"]["path"]])
+        self.c.objects[f"/api/v1/namespaces/lab/pods/{pod['metadata']['name']}"] = pod
         pod["spec"]["nodeName"] = "node1"
         pod["status"] = {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
             "containerStatuses": [{"name": "coordinator", "ready": True, "restartCount": 0,
@@ -224,8 +239,13 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual("unverified", self.saved().state["setup"]["receipts"][-1]["state"])
         with self.assertRaises(Held): self.fresh().step()
 
+    def pod_check(self):
+        """The Pod the coordinator Job's template describes, and its check's target."""
+        body = B.L.pod_of(self.setup.bodies[-2])
+        return body, {"apiVersion": "v1", "kind": "Pod", "namespace": "lab", "name": body["metadata"]["name"]}
+
     def test_injected_sidecars_data_mounts_or_host_access_are_rejected(self):
-        body, target = self.setup.bodies[-2], self.setup.resources[-2]["target"]
+        body, target = self.pod_check()
         for change in (lambda p: p["spec"]["containers"].append({"name": "sidecar"}),
                        lambda p: p["metadata"]["labels"].update(app="homestead"),
                        lambda p: p["spec"].update(hostNetwork=True),
@@ -235,7 +255,7 @@ class BootstrapTests(unittest.TestCase):
             with self.assertRaises(Held): B.admitted(body, pod, target)
 
     def test_what_the_network_plugin_reports_is_not_an_edit_but_any_other_annotation_is(self):
-        body, target = self.setup.bodies[-2], self.setup.resources[-2]["target"]
+        body, target = self.pod_check()
         created = copy.deepcopy(body); created["metadata"].update(uid="worker-uid", resourceVersion="1")
         running = copy.deepcopy(created)
         running["metadata"].setdefault("annotations", {}).update({
@@ -251,17 +271,17 @@ class BootstrapTests(unittest.TestCase):
     def test_normal_api_defaults_and_scheduling_are_accepted_but_wrong_node_is_not(self):
         self.all_created()
         pod = self.pod_ready()
-        self.assertNotEqual(shape(self.setup.bodies[-2]), shape(pod))
+        job = self.c.objects[self.setup.resources[-2]["target"]["path"]]
         fact = self.setup.worker_fact()
-        self.assertEqual(shape(pod), fact["shape"])
-        self.assertEqual(pod["metadata"]["uid"], fact["uid"])
-        body = self.setup.bodies[-2]
+        self.assertEqual(shape(job), fact["shape"])
+        self.assertEqual(job["metadata"]["uid"], fact["uid"])
+        body, target = self.pod_check()
         defaulted = copy.deepcopy(body); defaulted["metadata"].update(uid="pod-uid", resourceVersion="1")
         defaulted["spec"].update(dnsPolicy="ClusterFirst", schedulerName="default-scheduler", priority=0,
             serviceAccount=body["spec"]["serviceAccountName"], preemptionPolicy="PreemptLowerPriority",
             tolerations=[{"key": "node.kubernetes.io/not-ready", "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 300}])
         defaulted["spec"]["containers"][0].update(terminationMessagePath="/dev/termination-log", terminationMessagePolicy="File")
-        B.admitted(body, defaulted, self.setup.resources[-2]["target"])
+        B.admitted(body, defaulted, target)
         pod["spec"]["nodeName"] = "other"
         with self.assertRaises(Held): self.setup.worker_fact()
 
@@ -270,7 +290,7 @@ class BootstrapTests(unittest.TestCase):
     DEFAULT = {"name": "x-normal", "value": 10000, "preemptionPolicy": "PreemptLowerPriority"}
 
     def admitted_with(self, default=None, **spec):
-        body, target = self.setup.bodies[-2], self.setup.resources[-2]["target"]
+        body, target = self.pod_check()
         pod = copy.deepcopy(body); pod["metadata"].update(uid="pod-uid", resourceVersion="1")
         pod["spec"].update(spec)
         B.admitted(body, pod, target, default=default)
@@ -315,7 +335,10 @@ class BootstrapTests(unittest.TestCase):
         self.default_admission()
         self.setup = self.fresh()
         self.all_created()
-        self.assertEqual("x-normal", self.c.objects[self.setup.resources[-2]["target"]["path"]]["spec"]["priorityClassName"])
+        # Admission gives the class to each pod the Job makes, not to its template.
+        pod = self.pod_ready()
+        pod["spec"].update(priorityClassName="x-normal", priority=10000, preemptionPolicy="PreemptLowerPriority")
+        self.assertEqual(self.setup.resources[-2]["target"]["name"], self.setup.worker_fact()["name"])
 
     def test_without_reading_the_default_such_helpers_are_still_held(self):
         self.default_admission()
@@ -394,7 +417,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(before, len(self.c.sent))
         self.assertNotIn(self.setup.resources[-2]["target"]["path"], self.c.objects)
 
-    def test_pod_policy_rejection_leaves_no_create_intent_or_live_pod(self):
+    def test_policy_rejection_leaves_no_create_intent_or_live_job(self):
         self.setup.step()
         for _ in range(7): self.setup.step()
         before = copy.deepcopy(self.saved().state)
@@ -406,7 +429,7 @@ class BootstrapTests(unittest.TestCase):
                 raise urllib.error.HTTPError("private", 403, "private policy", {}, None)
             return original(method, path, body)
         self.setup.send = send
-        with self.assertRaisesRegex(Held, "Pod admission preflight"):
+        with self.assertRaisesRegex(Held, "Job admission preflight"):
             self.setup.step()
         self.assertEqual(1, len(previews))
         self.assertEqual(before, self.saved().state)
@@ -431,13 +454,13 @@ class BootstrapTests(unittest.TestCase):
         self.setup.step()
         for _ in range(7): self.setup.step()
         def admit(body):
-            body["spec"]["containers"][0]["image"] = "evil:latest"
+            body["spec"]["template"]["spec"]["containers"][0]["image"] = "evil:latest"
             role = self.c.objects[self.setup.resources[1]["target"]["path"]]
             role["rules"].append({"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]})
             return True
         with self.assertRaises(Held): self.fresh(admit=admit).step()
         self.assertNotIn(self.setup.resources[-2]["target"]["path"], self.c.objects)
-        self.assertEqual(IMAGE, self.setup.bodies[-2]["spec"]["containers"][0]["image"])
+        self.assertEqual(IMAGE, self.setup.bodies[-2]["spec"]["template"]["spec"]["containers"][0]["image"])
 
     def test_read_errors_are_safe_and_do_not_send_a_creation(self):
         def unreadable(_): raise OSError("private upstream diagnostic")
@@ -470,7 +493,9 @@ class BootstrapTests(unittest.TestCase):
         setup = B.Setup(anchor, scope, image=IMAGE, node="node1", status_digest="b" * 64, approval=approval, clock=lambda: 1000)
         setup.step()
         for _ in range(9): setup.step()
-        pod = c.objects[setup.resources[-2]["target"]["path"]]
+        job = c.objects[setup.resources[-2]["target"]["path"]]
+        pod = job_pod(job)
+        c.objects[f"/api/v1/namespaces/lab/pods/{pod['metadata']['name']}"] = pod
         pod["spec"]["nodeName"] = "node1"
         pod["status"] = {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
             "containerStatuses": [{"name": "coordinator", "ready": True, "restartCount": 0, "containerID": "containerd://worker",
@@ -492,7 +517,7 @@ class BootstrapTests(unittest.TestCase):
             scope.check("GET", path)
             return parent_read(path)
         runner = W.Runner(read, c.send, lambda _: c.logs_text, namespace="lab", deployment="homestead",
-            operation=op, anchor_uid=handle["uid"], worker_uid=identity(pod)["uid"], clock=lambda: 1000, require_setup_receipts=True)
+            operation=op, anchor_uid=handle["uid"], worker_uid=identity(job)["uid"], clock=lambda: 1000, require_setup_receipts=True)
         self.assertEqual("quiesce", runner.tick()["phase"])
         c.settle_stop(); runner.tick(); runner.tick(); c.finish_copy(); runner.tick(); runner.tick()
         c.objects.pop("/api/v1/namespaces/lab/pods/copy-pod")
