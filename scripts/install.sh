@@ -53,6 +53,11 @@
 #          --report      run the health checks, print the results and exit
 #                        (0 healthy, 1 warnings, 2 failures)
 #          --fix-safe    run the health checks and apply every safe fix
+#          --uninstall   remove Homestead from this cluster, on a server node: lists
+#                        every object by exact name, then asks. Apps are never touched.
+#                        With --dry-run: only the list. Stays by default (--keep-data):
+#                        the data volume, accounts and settings; --everything removes
+#                        them too. HS_NAMESPACE and HS_APPS_NAMESPACE, if yours moved.
 #          --dry-run     print the commands instead of running them
 #          --text        use plain prompts instead of menus
 #          --ref v2.8.176  use the scripts from this release
@@ -66,6 +71,8 @@ DIST=k3s
 ROLE=""
 ACTION=""
 SKIP_CHECKS=0
+EVERYTHING=0
+KEEP_DATA=0
 UI=""
 TTY=/dev/tty
 WIKI="https://github.com/homestead-lab/homestead/wiki"
@@ -82,6 +89,9 @@ while [ $# -gt 0 ]; do
     --no-console) ACTION=console; HS_CONSOLE=no; shift ;;
     --report) ACTION=report; UI=text; shift ;;
     --fix-safe) ACTION=fix-safe; UI=text; shift ;;
+    --uninstall) ACTION=uninstall; UI=text; shift ;;
+    --keep-data) KEEP_DATA=1; shift ;;
+    --everything) EVERYTHING=1; shift ;;
     --skip-checks) SKIP_CHECKS=1; shift ;;
     --check) ACTION=check; UI=text; shift ;;
     --text) UI=text; shift ;;
@@ -91,6 +101,12 @@ while [ $# -gt 0 ]; do
     *) printf 'Unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
   esac
 done
+if [ "$KEEP_DATA$EVERYTHING" != 00 ] && [ "$ACTION" != uninstall ]; then
+  printf 'Options --keep-data and --everything go with --uninstall (see --help)\n' >&2; exit 2
+fi
+if [ "$KEEP_DATA$EVERYTHING" = 11 ]; then
+  printf 'Choose one of --keep-data and --everything (see --help)\n' >&2; exit 2
+fi
 
 # Every staged script, manifest and dialog file belongs to this invocation.
 WORK_TMP=$(mktemp -d "${TMPDIR:-/tmp}/homestead.XXXXXXXX") || exit 1
@@ -216,7 +232,7 @@ get_menus() {
 prepare_terminal() {
   [ -n "${SUDO_USER:-}" ] && [ ! -t 0 ] && interactive || return 0
   [ -z "${HS_ROLE:-}" ] || return 0
-  case "$ACTION" in report|fix-safe) return 0 ;; esac
+  case "$ACTION" in report|fix-safe|uninstall) return 0 ;; esac
   printf 'Press Enter to open Homestead setup (Ctrl+C to cancel): ' > "$TTY"
   read -r terminal_ready < "$TTY" || fail "Could not read the terminal. Download install.sh and run sudo sh install.sh."
 }
@@ -1725,6 +1741,506 @@ do_install() {
   fi
 }
 
+# ------------------------------------------------------------------ uninstall
+# What --uninstall removes, and the only things it removes: exact names, never a
+# label, because apps deployed through Homestead carry its labels too.
+# tests/test_what_homestead_changes.py holds this list against the wiki page
+# "What Homestead changes": each name under "Safe to delete", none under "do not
+# delete". self is Homestead itself, safe its helpers, data goes only with
+# --everything. own is Homestead's namespace, apps the apps' namespace and lab.
+# Not here on purpose, and on the page under "do not delete":
+# homestead-data-handoff and homestead-cluster-shutdown (the journals of a data
+# move and a cluster shutdown), homestead-move-credentials-* (a backup target
+# may read them, and each name is generated).
+UNINSTALL_OBJECTS='
+self own deployment homestead
+self own service homestead
+self own serviceaccount homestead
+self cluster clusterrolebinding homestead
+self cluster clusterrole homestead
+safe apps daemonset homestead-nodeprobe
+safe apps configmap homestead-nodeprobe
+safe apps secret homestead-smart-key
+safe apps secret homestead-allocation-auth
+safe apps configmap homestead-shell-sessions
+safe apps role homestead-console
+safe apps rolebinding homestead-console
+safe own secret homestead-setup
+safe own role homestead-setup
+safe own rolebinding homestead-setup
+safe longhorn-system recurringjobs.longhorn.io homestead-weekly-trim
+safe longhorn-system networkpolicies.networking.k8s.io homestead-backend-access
+data own service homestead-vip
+data own lease homestead-leader
+data apps secret homestead-auth
+data apps configmap homestead-install
+data apps configmap homestead-settings
+data apps configmap homestead-outage-carry
+data apps configmap homestead-portal
+data apps configmap homestead-ipam
+data apps configmap homestead-group-tiers
+data apps configmap homestead-mqtt
+data apps configmap homestead-hardware
+data apps configmap homestead-sources
+data apps configmap homestead-vm-store
+data apps configmap homestead-vips
+data apps configmap homestead-fleet
+data apps configmap homestead-fleet-replay
+data apps configmap homestead-clusters
+data apps configmap homestead-iso-library
+data apps secret homestead-unifi
+data apps secret homestead-mqtt
+data apps secret homestead-fleet-key
+data own persistentvolumeclaim homestead-data
+'
+UNINSTALL_TAINT=homestead.io/standby
+UNINSTALL_HOLD=/etc/apt/apt.conf.d/99-homestead-hold
+UNINSTALL_HOLD_MARK="Homestead installs updates on this host itself"
+UNINSTALL_PAGE="$WIKI/What-Homestead-changes#what-removing-homestead-leaves-behind"
+UNINSTALL_WAIT_TRIES=60 # three seconds apart: three minutes for Homestead's pods to stop
+UNINSTALL_AGAIN="curl -sfL $RAW/main/scripts/install.sh | sudo sh -s -- --uninstall"
+UN_OWN=""; UN_APPS=""; UN_RELEASE=""; UN_COUNT=0; UN_LOOKED=""; UN_FAILED=""; UN_CLAIM=""
+UN_RUNNING=0 # Homestead's Deployment was there when this run started
+UN_PROVEN=0 # a Homestead Deployment or a homestead-data claim says Homestead was here
+UN_GUESSED_APPS=0; UN_FOREIGN=0; UN_BINDING_FOREIGN=0
+UN_SO_FAR="Nothing has been removed."
+
+# Asks the cluster and keeps its words: "not there" and "could not ask" are not
+# the same, and only the first may read as nothing to remove.
+uk() {
+  if have timeout; then
+    timeout 60 $KC "$@" 2>"$WORK_TMP/uk.err"; uk_rc=$?
+    [ "$uk_rc" != 124 ] || echo "no answer in 60 seconds" > "$WORK_TMP/uk.err"
+    return "$uk_rc"
+  fi
+  $KC "$@" 2>"$WORK_TMP/uk.err"
+}
+uk_absent() { grep -Eq "NotFound|doesn't have a resource type" "$WORK_TMP/uk.err"; }
+uk_refuse() { # what could not be read
+  fail "Could not read $1 from the cluster: $(head -n 1 "$WORK_TMP/uk.err"). $UN_SO_FAR"
+}
+
+uninstall_namespaces() {
+  named=${HS_NAMESPACE:-}; UN_APPS=${HS_APPS_NAMESPACE:-}
+  rows=$(uk get deployment -A --field-selector metadata.name=homestead -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.labels.app}{"|"}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.spec.template.spec.containers[0].env[?(@.name=="DEFAULT_NS")].value}{"|"}{.spec.template.spec.volumes[?(@.name=="data")].persistentVolumeClaim.claimName}{"\n"}{end}') \
+    || uk_refuse "the Deployments named homestead"
+  rows=$(printf '%s\n' "$rows" | awk -F'|' '$2 == "homestead"')
+  # Copies in two namespaces share one ClusterRole: naming one does not make it
+  # safe to take the role from the other.
+  if [ "$(printf '%s\n' "$rows" | grep -c .)" -gt 1 ]; then
+    fail "Homestead is running in more than one namespace: $(printf '%s\n' "$rows" | cut -d'|' -f1 | tr '\n' ' ')
+They share a ClusterRole, so removing one this way would break the other. Remove all but one by hand: $UNINSTALL_PAGE
+Nothing has been removed."
+  fi
+  if [ -n "$rows" ]; then
+    UN_OWN=$(printf '%s' "$rows" | cut -d'|' -f1)
+    if [ -n "$named" ] && [ "$named" != "$UN_OWN" ]; then
+      fail "HS_NAMESPACE says $named, but Homestead is running in $UN_OWN. Nothing has been removed."
+    fi
+    UN_RELEASE=$(printf '%s' "$rows" | cut -d'|' -f3)
+    says=$(printf '%s' "$rows" | cut -d'|' -f4)
+    if [ -n "$UN_APPS" ] && [ -n "$says" ] && [ "$UN_APPS" != "$says" ]; then
+      fail "HS_APPS_NAMESPACE says $UN_APPS, but Homestead's Deployment says $says. Nothing has been removed."
+    fi
+    [ -n "$UN_APPS" ] || UN_APPS=$says
+    UN_CLAIM=$(printf '%s' "$rows" | cut -d'|' -f5)
+    UN_RUNNING=1; UN_PROVEN=1
+  else
+    # Homestead has gone already: its data volume says where it lived.
+    claims=$(uk get persistentvolumeclaim -A --field-selector metadata.name=homestead-data -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}') \
+      || uk_refuse "the claims named homestead-data"
+    if [ -n "$named" ]; then
+      UN_OWN=$named
+      if printf '%s\n' "$claims" | grep -qxF -- "$named"; then UN_PROVEN=1
+      elif [ -n "$claims" ]; then
+        fail "HS_NAMESPACE says $named, but Homestead's data volume is in: $(printf '%s\n' "$claims" | tr '\n' ' ')
+Nothing has been removed."
+      fi
+    elif [ "$(printf '%s\n' "$claims" | grep -c .)" -gt 1 ]; then
+      fail "Found Homestead's data volume in more than one namespace: $(printf '%s\n' "$claims" | tr '\n' ' ')
+Set HS_NAMESPACE to the one to remove. Nothing has been removed."
+    elif [ -n "$claims" ]; then
+      UN_OWN=$claims; UN_PROVEN=1
+    else
+      UN_OWN=lab
+    fi
+    [ -n "$UN_APPS" ] || UN_GUESSED_APPS=1
+  fi
+  [ -n "$UN_APPS" ] || UN_APPS=lab
+  UN_LOOKED=$UN_OWN
+  for ns in "$UN_APPS" lab; do
+    case " $UN_LOOKED " in *" $ns "*) ;; *) UN_LOOKED="$UN_LOOKED $ns" ;; esac
+  done
+}
+
+uninstall_foreign() { # a Deployment named homestead in Homestead's namespace that is someone else's
+  UN_FOREIGN=0
+  label=$(uk -n "$UN_OWN" get deployment homestead -o 'jsonpath={.metadata.labels.app}') \
+    || { uk_absent && return 0; uk_refuse "deployment $UN_OWN/homestead"; }
+  # It may be what mounts homestead-data, so that claim proves nothing either.
+  [ "$label" = homestead ] || { UN_FOREIGN=1; UN_PROVEN=0; }
+}
+
+uninstall_moved() { [ "$UN_RUNNING" = 1 ] && [ "$UN_CLAIM" != homestead-data ]; }
+
+# What a person can do next, once Homestead's Deployment has gone. A moved claim
+# leaves a later run nothing to know this install by.
+uninstall_next() { # what to say when a rerun will work
+  if uninstall_moved; then
+    printf 'A later run cannot recognise this install, so it may refuse. Finish by hand: %s' "$UNINSTALL_PAGE"
+  else
+    printf '%s' "$1"
+  fi
+}
+
+uninstall_kept_tickets() {
+  [ -s "$WORK_TMP/tickets-kept" ] || return 0
+  printf '\nStaying: a rollback may be running while Homestead runs, so these stay. Once\nHomestead has gone, wait at least 5 minutes after any rollback, then run this again\nto remove them. The app on each may be stopped; start it yourself:\n'
+  while read -r volume; do printf '  attachment ticket homestead-revert on %s\n' "$volume"; done < "$WORK_TMP/tickets-kept"
+}
+
+uninstall_is_homesteads() { # kind namespace name: what marks it, for the kinds that have a mark
+  case "$1" in
+    service) path='{.spec.selector.app}'; want=homestead ;;
+    clusterrolebinding)
+      path='{range .subjects[*]}{.kind}{"|"}{.name}{"|"}{.namespace}{"\n"}{end}'
+      want="ServiceAccount|homestead|$UN_OWN" ;;
+    *) return 0 ;;
+  esac
+  if [ "$2" = - ]; then whose=$(uk get "$1" "$3" -o "jsonpath=$path") || uk_refuse "$1 $3"
+  else whose=$(uk -n "$2" get "$1" "$3" -o "jsonpath=$path") || uk_refuse "$1 $2/$3"; fi
+  [ "$whose" = "$want" ]
+}
+
+uninstall_leaving() { # kind namespace|- name
+  if [ "$2" = - ]; then shown="$1 $3"; else shown="$1 $2/$3"; fi
+  printf "Leaving %s: it has that name, but it is not Homestead's.\n" "$shown"
+}
+
+# One line per object that exists: tier|namespace|kind|name.
+uninstall_list() {
+  : > "$WORK_TMP/remove"
+  UN_BINDING_FOREIGN=0
+  uninstall_foreign
+  while read -r tier where kind name; do
+    [ -n "$tier" ] || continue
+    [ "$tier" != data ] || [ "$EVERYTHING" = 1 ] || continue
+    # With the data on another claim, what is on this one is not known to be spare.
+    if [ "$name" = homestead-data ] && [ "$UN_RUNNING" = 1 ] && [ "$UN_CLAIM" != homestead-data ]; then continue; fi
+    case "$where" in
+      own) places=$UN_OWN ;;
+      apps) places=$UN_APPS; [ "$UN_APPS" = lab ] || places="$UN_APPS lab" ;;
+      cluster) places=- ;;
+      *) places=$where ;;
+    esac
+    for ns in $places; do
+      if [ "$ns" = - ]; then uk get "$kind" "$name" -o name >/dev/null
+      else uk -n "$ns" get "$kind" "$name" -o name >/dev/null; fi
+      if [ $? != 0 ]; then
+        uk_absent && continue
+        uk_refuse "$kind $name"
+      fi
+      if [ "$tier" = self ] && { [ "$UN_FOREIGN" = 1 ] || [ "$UN_BINDING_FOREIGN" = 1 ]; }; then
+        uninstall_leaving "$kind" "$ns" "$name"
+        continue
+      fi
+      if ! uninstall_is_homesteads "$kind" "$ns" "$name"; then
+        [ "$kind" != clusterrolebinding ] || UN_BINDING_FOREIGN=1
+        uninstall_leaving "$kind" "$ns" "$name"
+        continue
+      fi
+      printf '%s|%s|%s|%s\n' "$tier" "$ns" "$kind" "$name" >> "$WORK_TMP/remove"
+    done
+  done <<LIST
+$UNINSTALL_OBJECTS
+LIST
+}
+
+uninstall_tainted() { # the hosts carrying the hot-spare taint
+  nodes=$(uk get nodes -o 'jsonpath={range .items[*]}{.metadata.name}{" "}{.spec.taints[*].key}{"\n"}{end}') || uk_refuse "the hosts"
+  printf '%s\n' "$nodes" | awk -v taint="$UNINSTALL_TAINT" '{for (i = 2; i <= NF; i++) if ($i == taint) print $1}'
+}
+
+# volume ticket, for each of Homestead's attachment tickets it may take; no Longhorn
+# is none. While Homestead runs a revert ticket may be a live rollback, not a leftover.
+uninstall_tickets() {
+  : > "$WORK_TMP/tickets-kept"
+  rows=$(uk -n longhorn-system get volumeattachments.longhorn.io -o 'jsonpath={range .items[*]}{.metadata.name}{"\t"}{.spec.attachmentTickets.homestead-rebuild}{"\t"}{.spec.attachmentTickets.homestead-revert}{"\n"}{end}') \
+    || { uk_absent && return 0; uk_refuse "Longhorn's attachment tickets"; }
+  printf '%s\n' "$rows" | awk -F'\t' '$2 != "" {print $1, "homestead-rebuild"}'
+  if [ "$UN_RUNNING" = 1 ] || [ "$UN_FOREIGN" = 1 ]; then
+    printf '%s\n' "$rows" | awk -F'\t' '$3 != "" {print $1}' > "$WORK_TMP/tickets-kept"
+  else
+    printf '%s\n' "$rows" | awk -F'\t' '$3 != "" {print $1, "homestead-revert"}'
+  fi
+}
+
+uninstall_hold_is_homesteads() { [ -f "$UNINSTALL_HOLD" ] && grep -qF "$UNINSTALL_HOLD_MARK" "$UNINSTALL_HOLD"; }
+
+# An app Homestead stopped stays stopped, and only the annotation says how many
+# copies it had. What a job holds is named whatever state it is in: never refused.
+uninstall_stopped() {
+  rows=$(uk get deployments,statefulsets,cronjobs -A -o 'jsonpath={range .items[*]}{.kind}{"|"}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.replicas}{"|"}{.spec.suspend}{"|"}{.metadata.annotations.homestead\.io/held-for-power}{"|"}{.metadata.annotations.homestead\.io/held-as}{"|"}{.metadata.annotations.homestead\.io/schedule-copies}{"|"}{.metadata.annotations.homestead\.io/autostart-replicas}{"|"}{.metadata.annotations.homestead\.io/restructure-replicas}{"\n"}{end}') \
+    || uk_refuse "the apps"
+  printf '%s\n' "$rows" | awk -F'|' '
+    $6 != "" {printf "  %s %s/%s (a job holds this)\n", $1, $2, $3; next}
+    ($1 == "CronJob" ? $5 == "true" : $4 == "0") && ($7 != "" || $8 != "" || $9 != "" || $10 != "") {printf "  %s %s/%s\n", $1, $2, $3}'
+  rows=$(uk get virtualmachines.kubevirt.io -A -o 'jsonpath={range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.running}{"|"}{.spec.runStrategy}{"|"}{.metadata.annotations.homestead\.io/held-for-power}{"|"}{.metadata.annotations.homestead\.io/held-as}{"|"}{.metadata.annotations.homestead\.io/schedule-copies}{"|"}{.metadata.annotations.homestead\.io/autostart-replicas}{"\n"}{end}') \
+    || { uk_absent && return 0; uk_refuse "the VMs"; }
+  printf '%s\n' "$rows" | awk -F'|' '
+    $5 != "" {printf "  VirtualMachine %s/%s (a job holds this)\n", $1, $2; next}
+    ($3 == "false" || $4 == "Halted") && ($6 != "" || $7 != "" || $8 != "") {printf "  VirtualMachine %s/%s\n", $1, $2}'
+}
+
+uninstall_stays() {
+  printf '\nWhat stays:\n'
+  cat <<STAYS
+  - Your apps, VMs and volumes, and what Homestead made for them. They keep
+    running. Nothing is removed by label.
+  - The homestead.io/* annotations on your apps. They are harmless, and they are
+    the only record of how many copies a stopped app had.
+  - Longhorn, kube-vip, Multus, KubeVirt and CDI (their HelmCharts), the backup
+    target's Secrets, the object store, the share servers, and the storage and
+    priority classes Homestead made: your apps and data still use them.
+  - The other taints and labels on hosts, and what Homestead set on the hosts
+    (the multipath setting, inotify limits, Longhorn's disk and its mount, GPU
+    passthrough, network configuration).
+  - /etc/apt/apt.conf.d/99-homestead-hold on each other host, if Homestead
+    managed OS updates: this removes it only on this host.
+STAYS
+  if [ "$EVERYTHING" = 1 ]; then
+    printf '  - A namespace that still holds anything else.\n'
+  else
+    printf '  - Homestead'"'"'s data volume, its accounts, its settings and its own address (the\n'
+    printf '    Service homestead-vip, if it has one), so a reinstall picks them up.'
+    if uninstall_moved; then printf '\n'; else printf ' To remove\n    those too, run this with --everything.\n'; fi
+    printf '    A reinstall keeping this data does not put the node probe back: it is recorded\n'
+    printf '    as already installed. Install it again from Settings > Cluster > Add-ons.\n'
+  fi
+  printf 'The whole list: %s\n' "$UNINSTALL_PAGE"
+}
+
+uninstall_review() {
+  say "Removing Homestead ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"
+  UN_COUNT=$(grep -c . "$WORK_TMP/remove")
+  # Into files, not $(...): a refusal in a subshell would only end the subshell,
+  # and "not allowed to look" would read as "none".
+  uninstall_stopped > "$WORK_TMP/stopped"
+  if [ -s "$WORK_TMP/stopped" ]; then
+    printf '\nWarning: Homestead stopped these, and they stay stopped once it is gone. Each\nhas an annotation saying how many copies it had; scale it back up yourself. One\nthat a job holds was stopped, or is about to be, by a job that will not finish:\n'
+    cat "$WORK_TMP/stopped"
+  fi
+  uninstall_tainted > "$WORK_TMP/tainted"; uninstall_tickets > "$WORK_TMP/tickets"
+  tainted=$(cat "$WORK_TMP/tainted"); tickets=$(cat "$WORK_TMP/tickets")
+  [ -z "$tainted" ] || UN_COUNT=$((UN_COUNT + 1))
+  [ -z "$tickets" ] || UN_COUNT=$((UN_COUNT + 1))
+  uninstall_hold_is_homesteads && UN_COUNT=$((UN_COUNT + 1))
+  if [ "$UN_COUNT" = 0 ]; then
+    printf "\nNothing of Homestead's is left to remove. Looked in namespaces %s and longhorn-system, and at the hosts. Set HS_NAMESPACE or HS_APPS_NAMESPACE if yours are elsewhere.\n" "$UN_LOOKED"
+    uninstall_stays
+    return 0
+  fi
+  for tier in self safe data; do
+    grep -q "^$tier|" "$WORK_TMP/remove" || continue
+    case "$tier" in
+      self) printf '\nHomestead itself:\n' ;;
+      safe) printf '\nIts helpers:\n' ;;
+      data) printf '\nIts data, accounts and records, for good:\n' ;;
+    esac
+    awk -F'|' -v tier="$tier" '$1 == tier { if ($2 == "-") printf "  %s %s\n", $3, $4; else printf "  %s %s/%s\n", $3, $2, $4 }' "$WORK_TMP/remove"
+  done
+  if [ -n "$tainted" ] || [ -n "$tickets" ] || uninstall_hold_is_homesteads; then
+    printf '\nOn the hosts:\n'
+    for node in $tainted; do printf '  taint %s on %s\n' "$UNINSTALL_TAINT" "$node"; done
+    printf '%s\n' "$tickets" | while read -r volume ticket; do
+      [ -n "$volume" ] && printf '  attachment ticket %s on Longhorn volume %s\n' "$ticket" "$volume"
+    done
+    if uninstall_hold_is_homesteads; then
+      printf '  %s on this host. It gives Ubuntu its own automatic updates back: if\n  those reboot by themselves, hosts reboot without being drained first.\n' "$UNINSTALL_HOLD"
+    fi
+  fi
+  if [ "$EVERYTHING" = 1 ] && [ "$UN_PROVEN" = 1 ]; then
+    printf '\nThen namespace %s, only if nothing else is left in it.\n' "$UN_OWN"
+  fi
+  if [ -n "$UN_RELEASE" ]; then
+    printf '\nHomestead was installed with Helm, so that part goes through: helm uninstall %s -n %s\n' "$UN_RELEASE" "$UN_OWN"
+  fi
+  uninstall_kept_tickets
+  if uninstall_moved; then
+    printf '\nStaying: Homestead has its data on a claim it did not start with, so this will not\ndelete it, nor any claim named homestead-data. Delete them yourself if you are sure:\n'
+    [ -z "$UN_CLAIM" ] || printf '  %s/%s holds the data\n' "$UN_OWN" "$UN_CLAIM"
+    printf "A later run cannot recognise this: with Homestead's Deployment gone, it may offer a\nclaim named homestead-data as Homestead's data volume, or refuse if there is none.\n"
+    [ "$EVERYTHING" = 1 ] || printf 'To remove the accounts and records too, choose --everything on this run.\n'
+  fi
+  if [ "$UN_GUESSED_APPS" = 1 ]; then
+    printf "\nHomestead's Deployment has gone, so it cannot say where your apps' namespace is:\nthis looked in %s. If yours is elsewhere, set HS_APPS_NAMESPACE and run this again.\n" "$UN_LOOKED"
+  fi
+  printf '\nMake sure no OS update, host reboot, cluster shutdown or other Homestead job (a\ncopy, an import, a restore, a rollback) is running: Homestead cannot finish one\nonce it is gone. If Flux, Argo CD or a k3s HelmChart manages Homestead, stop that\nfirst: it would put Homestead back after this has checked it is gone.\n'
+  uninstall_stays
+}
+
+uninstall_delete() { # namespace|- kind name
+  if [ "$1" = - ]; then set -- "$2" "$3"; run $KC delete "$1" "$2" --ignore-not-found --timeout=120s
+  else ns=$1; shift; run $KC -n "$ns" delete "$1" "$2" --ignore-not-found --timeout=120s; fi \
+    || UN_FAILED="$UN_FAILED $1/$2"
+}
+
+uninstall_remove_tier() { # tier
+  while IFS='|' read -r tier ns kind name; do
+    [ "$tier" = "$1" ] || continue
+    # The data volume is what lets a later run know this install, so it goes last
+    # and only when all the rest went.
+    if [ "$kind" = persistentvolumeclaim ] && [ -n "$UN_FAILED" ]; then
+      printf 'Keeping the data volume %s/%s: something above could not be removed, and a later run needs it to recognise this install.\n' "$ns" "$name"
+      continue
+    fi
+    uninstall_delete "$ns" "$kind" "$name"
+  done < "$WORK_TMP/remove"
+}
+
+uninstall_kubeconfig() {
+  case "$SERVICE" in
+    k3s) echo /etc/rancher/k3s/k3s.yaml ;;
+    rke2-server) echo /etc/rancher/rke2/rke2.yaml ;;
+    *) echo "${KUBECONFIG:-}" ;;
+  esac
+}
+
+# Homestead first, and seen gone before anything else goes: while it runs, it
+# puts back what it looks after.
+uninstall_stop_homestead() {
+  if grep -q "^self|$UN_OWN|deployment|homestead$" "$WORK_TMP/remove"; then
+    if [ -n "$UN_RELEASE" ]; then
+      if ! run env KUBECONFIG="$(uninstall_kubeconfig)" helm uninstall "$UN_RELEASE" -n "$UN_OWN" 2>"$WORK_TMP/helm.err"; then
+        cat "$WORK_TMP/helm.err" >&2
+        # The Deployment names a release Helm has lost: asking again would only fail again.
+        grep -q "release: not found" "$WORK_TMP/helm.err" \
+          || fail "helm uninstall did not finish. Nothing else has been removed; run this again once it has."
+        printf 'Helm has no record of that release, so its objects go by name instead.\n'
+        run $KC -n "$UN_OWN" delete deployment homestead --ignore-not-found --timeout=120s \
+          || fail "Could not remove Homestead's Deployment. Nothing else has been removed."
+      fi
+    else
+      run $KC -n "$UN_OWN" delete deployment homestead --ignore-not-found --timeout=120s \
+        || fail "Could not remove Homestead's Deployment. Nothing else has been removed."
+    fi
+  fi
+  i=0
+  while :; do
+    pods=$(uk -n "$UN_OWN" get pods -l app=homestead -o name) \
+      || fail "Could not check that Homestead has stopped: $(head -n 1 "$WORK_TMP/uk.err"). Nothing else has been removed. $(uninstall_next "Run this again.")"
+    [ -n "$pods" ] || return 0
+    i=$((i + 1))
+    if [ "$i" -ge "$UNINSTALL_WAIT_TRIES" ]; then
+      printf "\nHomestead's pods are still there after three minutes:\n%s\n" "$pods" >&2
+      printf 'A pod on a host that is down stays until that host returns. Force it, only if the host is really off:\n' >&2
+      for pod in $pods; do printf '  %s -n %s delete %s --force --grace-period=0\n' "$KC" "$UN_OWN" "$pod" >&2; done
+      fail "Nothing else has been removed. $(uninstall_next "Run this again once they have gone.")"
+    fi
+    sleep 3
+  done
+}
+
+uninstall_namespace() {
+  ns=$UN_OWN
+  case "$ns" in
+    default|kube-*|longhorn-system)
+      printf 'Namespace %s stays: it is not Homestead'"'"'s alone.\n' "$ns"; return 0 ;;
+  esac
+  kinds=$(uk api-resources --namespaced --verbs=list -o name) \
+    || { printf 'Namespace %s stays: could not check what is in it (%s).\n' "$ns" "$(head -n 1 "$WORK_TMP/uk.err")"; return 0; }
+  held=""
+  for kind in $kinds; do
+    case "$kind" in events|events.events.k8s.io) continue ;; esac
+    found=$(uk -n "$ns" get "$kind" -o name) \
+      || { printf 'Namespace %s stays: could not check its %s (%s).\n' "$ns" "$kind" "$(head -n 1 "$WORK_TMP/uk.err")"; return 0; }
+    for item in $found; do
+      case "${item##*/}" in kube-root-ca.crt) continue ;; esac
+      case "$item" in serviceaccount/default) continue ;; esac
+      held="$held $item"
+    done
+  done
+  if [ -n "$held" ]; then
+    printf 'Namespace %s stays. It still holds:%s\n' "$ns" "$(printf '%s\n' $held | head -n 10 | sed 's/^/ /' | tr -d '\n')"
+    return 0
+  fi
+  uninstall_delete - namespace "$ns"
+}
+
+do_uninstall() {
+  detect_node
+  [ -n "$KC" ] || fail "This host has no administrator access to the cluster. On a server node, run: $UNINSTALL_AGAIN
+Nothing has been removed."
+  uninstall_namespaces
+  uninstall_list
+  # Beside a Deployment that is not Homestead's, the marks on the hosts prove nothing
+  # either. With no Deployment at all they stand on their own: each carries its mark.
+  : > "$WORK_TMP/marks"
+  if [ "$UN_FOREIGN" = 1 ]; then
+    uninstall_tainted > "$WORK_TMP/tainted"; uninstall_tickets > "$WORK_TMP/tickets"
+    while read -r node; do printf '  taint %s on %s\n' "$UNINSTALL_TAINT" "$node"; done < "$WORK_TMP/tainted" >> "$WORK_TMP/marks"
+    while read -r volume ticket; do printf '  attachment ticket %s on Longhorn volume %s\n' "$ticket" "$volume"; done < "$WORK_TMP/tickets" >> "$WORK_TMP/marks"
+    while read -r volume; do printf '  attachment ticket homestead-revert on Longhorn volume %s\n' "$volume"; done < "$WORK_TMP/tickets-kept" >> "$WORK_TMP/marks"
+    if uninstall_hold_is_homesteads; then printf '  %s on this host\n' "$UNINSTALL_HOLD" >> "$WORK_TMP/marks"; fi
+  fi
+  if [ "$UN_PROVEN" = 0 ] && { [ -s "$WORK_TMP/remove" ] || [ -s "$WORK_TMP/marks" ]; }; then
+    if [ "$UN_FOREIGN" = 1 ]; then why="the Deployment $UN_OWN/homestead is not Homestead's, and it may be what uses them"
+    else why="there is no Homestead Deployment and no homestead-data claim"; fi
+    fail "These have Homestead's names, but $why, so nothing shows they are Homestead's:
+$(awk -F'|' '{ if ($2 == "-") printf "  %s %s\n", $3, $4; else printf "  %s %s/%s\n", $3, $2, $4 }' "$WORK_TMP/remove"; cat "$WORK_TMP/marks")
+Nothing has been removed. If they are Homestead's leftovers, remove them by hand: $UNINSTALL_PAGE"
+  fi
+  uninstall_review
+  [ "$UN_COUNT" != 0 ] || return 0
+  if [ "$DRY" = 1 ]; then printf '\nDry run: nothing was changed.\n'; return 0; fi
+  interactive || fail "Removing Homestead asks first, and there is no terminal to ask on. Nothing was removed. Run it from a terminal: $UNINSTALL_AGAIN
+Add --dry-run to see the list without one."
+  if [ -n "$UN_RELEASE" ] && ! have helm; then
+    fail "helm is not on this host. Run this, then $UNINSTALL_AGAIN for the rest:
+  helm uninstall $UN_RELEASE -n $UN_OWN
+Nothing was removed."
+  fi
+  word=yes
+  [ "$EVERYTHING" != 1 ] || word=everything
+  question="This removes everything listed above."
+  volume=$(awk -F'|' '$1 == "data" && $3 == "persistentvolumeclaim" {print $2 "/" $4}' "$WORK_TMP/remove")
+  [ -z "$volume" ] || question="$question That includes Homestead's data volume, $volume, for good."
+  if ! typed "Remove Homestead" "$question" "$word"; then
+    printf '\nNothing was removed.\n'
+    return 1
+  fi
+  uninstall_stop_homestead
+  UN_SO_FAR="Homestead itself may have gone, and the rest is still there. $(uninstall_next "Run this again.")"
+  uninstall_list > /dev/null # what Helm or the first delete took is off the list
+  uninstall_remove_tier self
+  uninstall_remove_tier safe
+  uninstall_tainted > "$WORK_TMP/tainted"
+  for node in $(cat "$WORK_TMP/tainted"); do
+    run $KC taint nodes "$node" "$UNINSTALL_TAINT-" || UN_FAILED="$UN_FAILED taint/$node"
+  done
+  uninstall_tickets > "$WORK_TMP/tickets"
+  while read -r volume ticket; do
+    [ -n "$volume" ] || continue
+    run $KC -n longhorn-system patch volumeattachments.longhorn.io "$volume" --type=merge \
+      -p "{\"spec\":{\"attachmentTickets\":{\"$ticket\":null}}}" || UN_FAILED="$UN_FAILED ticket/$volume"
+  done < "$WORK_TMP/tickets"
+  if uninstall_hold_is_homesteads; then
+    run rm -f -- "$UNINSTALL_HOLD" || UN_FAILED="$UN_FAILED $UNINSTALL_HOLD"
+  fi
+  uninstall_remove_tier data
+  if [ "$EVERYTHING" = 1 ] && [ "$UN_PROVEN" = 1 ]; then uninstall_namespace; fi
+  uninstall_stays
+  uninstall_kept_tickets
+  printf '\nOn each other host, if Homestead managed its OS updates: rm -f %s\n' "$UNINSTALL_HOLD"
+  if [ -n "$UN_FAILED" ]; then
+    printf '\nCould not remove:%s\n%s\n' "$UN_FAILED" "$(uninstall_next "Run this again; it only looks for what is left.")"
+    return 1
+  fi
+  if [ "$UN_RUNNING" = 1 ]; then say "Homestead has been removed."
+  else say "What was left of Homestead has been removed."; fi
+  [ "$UN_GUESSED_APPS" = 0 ] || printf "This looked in %s for it. If your apps' namespace is elsewhere, set HS_APPS_NAMESPACE and run this again.\n" "$UN_LOOKED"
+}
+
 # ------------------------------------------------------------------ start
 what_is_here() {
   found="No Kubernetes installation"
@@ -1744,7 +2260,10 @@ kind_name() {
 }
 
 # The checks alone only read, and say themselves when they are not run as root.
-[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || [ "$ACTION" = check ] || fail "The installer must run as root: curl ... | sudo sh"
+[ "$(id -u)" = 0 ] || [ "$DRY" = 1 ] || [ "$ACTION" = check ] || {
+  [ "$ACTION" != uninstall ] || fail "This must run as root: $UNINSTALL_AGAIN"
+  fail "The installer must run as root: curl ... | sudo sh"
+}
 banner() { say "Homestead installer ($REF)$([ "$DRY" = 1 ] && printf ', dry run: no changes will be made')"; }
 case "$ACTION" in
   check) ROLE=$(given HS_ROLE); prechecks "${ROLE:-server}" ;;
@@ -1753,6 +2272,7 @@ case "$ACTION" in
   doctor) doctor menu; exit 0 ;;
   report) UI=text; doctor report ;;
   fix-safe) UI=text; doctor fix ;;
+  uninstall) do_uninstall; exit $? ;;
 esac
 # Without a terminal, or with the mode set in the environment: unattended.
 if [ -n "$(given HS_ROLE)" ] || ! interactive; then

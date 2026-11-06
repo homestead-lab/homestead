@@ -264,6 +264,19 @@ belongs behind Cloudflare Access (or a VPN), never published bare.
 
 ## Removing Homestead
 
+On a server node, the installer does it, for a Helm or a manifest install. It
+lists every object by exact name and asks first; `--dry-run` only lists. Your
+apps keep running, and your data volume, accounts and settings stay unless you
+add `--everything`:
+
+```bash
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh -s -- --uninstall --dry-run
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh -s -- --uninstall
+```
+
+[What Homestead changes](What-Homestead-changes#what-removing-homestead-leaves-behind)
+says what it removes and what it leaves. To do it by hand instead:
+
 ```bash
 helm uninstall homestead -n homestead
 ```
