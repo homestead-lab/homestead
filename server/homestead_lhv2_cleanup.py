@@ -368,7 +368,7 @@ def recheck(identity):
         item = next((i for i in SETUP.ops.stored() if i.get('id') == identity and i.get('kind') == KIND), None)
         if not item: raise ValueError('V2 cleanup job not found')
         # A person asked, and may just have changed something on a host: ask them all.
-        for row in item['ref']['nodes']: row.pop('inspected_at', None)
+        for row in item['ref'].get('nodes', ()): row.pop('inspected_at', None)
         state, percent, message = progress(item)
         if state in homestead_routes.ENDED:
             homestead_routes.forget('lhv2')
