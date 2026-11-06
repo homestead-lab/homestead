@@ -3,12 +3,17 @@ import tempfile
 import urllib.error
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_alerts as ALERTS
+import homestead_cluster_server as CLUSTER_ROUTES
+import homestead_kube as KUBE
+import homestead_operations as OPS
 import homestead_upgrades as UPGRADES
+from fakes.kube import Kube
 
 RELEASES = [
     {"tag_name": "v1.5.1", "prerelease": False, "published_at": "2026-08-01T00:00:00Z", "html_url": "u151"},
@@ -112,6 +117,74 @@ class UpgradeTests(unittest.TestCase):
 
 def http_error(code):
     return urllib.error.HTTPError("https://192.0.2.1/x", code, "failed", {}, None)
+
+
+class UpgradeJobTests(unittest.TestCase):
+    """A Harvester upgrade job follows Harvester's Upgrade object. One that never
+    came, or was deleted, used to read "Waiting for Harvester to take the
+    upgrade" for ever: nothing raises, so no limit on failed reads applies."""
+    PATH = "/apis/harvesterhci.io/v1beta1/namespaces/harvester-system/upgrades/hvst-upgrade-x"
+    LIMIT = 15 * 60
+
+    def setUp(self):
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("harvesterhci.io",)))
+        self.enterContext(mock.patch.object(UPGRADES, "kget", KUBE.kget))
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {}))
+        CLUSTER_ROUTES.register(OPS)
+        self.now = 1000.0
+        self.enterContext(mock.patch.object(CLUSTER_ROUTES, "_clock", lambda: self.now, create=True))
+        self.job = OPS.start("harvester-upgrade", "Upgrade Harvester to v1.5.1",
+                             {"kind": "Upgrade", "name": "hvst-upgrade-x", "namespace": "harvester-system"},
+                             "/system/cluster", {"upgrade": "hvst-upgrade-x", "version": "v1.5.1"})["id"]
+
+    def look(self):
+        return next(job for job in OPS.list_operations() if job["id"] == self.job)
+
+    def upgrade(self, conditions=()):
+        self.kube.add({"apiVersion": "harvesterhci.io/v1beta1", "kind": "Upgrade",
+                       "metadata": {"name": "hvst-upgrade-x", "namespace": "harvester-system"},
+                       "spec": {"version": "v1.5.1"}, "status": {"conditions": list(conditions)}})
+
+    def test_an_upgrade_harvester_never_took_ends_failed_and_says_so(self):
+        self.assertEqual("running", self.look()["status"])
+        self.now += self.LIMIT - 1
+        self.assertEqual("running", self.look()["status"], "a moment longer is still a wait")
+        self.now += 1
+        job = self.look()
+        self.assertEqual("failed", job["status"])
+        self.assertIn("hvst-upgrade-x", job["message"])
+        self.assertIn("15 minutes", job["message"])
+
+    def test_an_upgrade_deleted_while_running_ends_failed(self):
+        self.upgrade()
+        self.assertEqual("running", self.look()["status"])
+        self.kube.discard(self.PATH)
+        self.look()
+        self.now += self.LIMIT
+        self.assertEqual("failed", self.look()["status"])
+
+    def test_an_upgrade_seen_again_starts_the_wait_afresh(self):
+        self.look()
+        self.now += self.LIMIT - 1
+        self.upgrade()
+        self.assertEqual("running", self.look()["status"])
+        self.kube.discard(self.PATH)
+        self.look()
+        self.now += self.LIMIT - 1
+        self.assertEqual("running", self.look()["status"], "it was there a moment ago, so the wait starts again")
+
+    def test_a_long_running_upgrade_has_no_limit(self):
+        self.upgrade()
+        self.look()
+        self.now += self.LIMIT * 100
+        self.assertEqual("running", self.look()["status"])
+
+    def test_a_failed_read_is_not_taken_for_a_missing_upgrade(self):
+        self.look()
+        self.now += self.LIMIT
+        self.kube.fail("/apis/harvesterhci.io/v1beta1/namespaces/harvester-system/upgrades", 500, times=99)
+        self.assertEqual("running", self.look()["status"], "not read is not gone: the kept-errors limit decides")
 
 
 class UnreadUpgradesTests(unittest.TestCase):
