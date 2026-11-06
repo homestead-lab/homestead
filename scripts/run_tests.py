@@ -152,9 +152,15 @@ def with_guard(files):
 
 def run(files):
     sys.path.insert(0, str(TESTS))
+    # Before any test file loads: a real lookup or connect fails at once and is
+    # named (tests/network_guard.py); a test file not on its list is reported
+    # (and fails the run once network_guard.ENFORCE is on).
+    import network_guard as NETWORK
+    NETWORK.install()
     suite = unittest.defaultTestLoader.loadTestsFromNames([path.stem for path in files])
     print(f"{len(files)} test files", flush=True)
-    return unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+    passed = unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+    return NETWORK.report() and passed
 
 
 def main(argv=None):
