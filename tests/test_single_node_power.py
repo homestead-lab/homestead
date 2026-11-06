@@ -10,6 +10,13 @@ import server
 import homestead_power as power
 import homestead_lifecycle as lifecycle
 import homestead_node_actions as NODE_ACTIONS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # A read on the way to what these tests check fails at once, as on CI (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 import test_node_power_plan as fixture
 
 

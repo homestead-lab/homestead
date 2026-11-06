@@ -17,6 +17,14 @@ REAL_READERS = {"alerts": (_ALERTS, "log", _ALERTS.log), "hosts": (_HISTORY, "ma
 
 T0 = 1_790_000_000
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # A read on the way to what these tests check fails at once, as on CI (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
+
 
 class DataDir(unittest.TestCase):
     def setUp(self):
