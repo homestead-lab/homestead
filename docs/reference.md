@@ -631,8 +631,13 @@ most of these can't be cancelled once started (a disk retire can be rolled
 back early), so the standard removal is refused while one is saved: a host
 that may come back keeps its job's chance to resume. Gone for good removes it
 only once the person ticks that the job stays, and will keep blocking Longhorn
-upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it
-yet. The job is not changed, and the removal's log says so. The check is made
+upgrades, shutdown and OS rollouts until it ends: a V2 disk preparation,
+storage allocation or runtime maintenance until you end it from Jobs once the
+host is removed; a disk retire until it fails by itself once Longhorn's record
+of the host is deleted; a V2 cleanup until its next round refuses on the
+changed hosts, lets go of the hosts it cordoned and fails - or, if it staged a
+RAM release on another host, until that host has restarted. The job is not changed, and
+the removal's log says so. The check is made
 again under the job lock when the removal starts, and the lock is held until
 the node is deleted, so a job that checks the host when it starts cannot be
 saved in between.
@@ -1060,6 +1065,22 @@ already cleaned). A step that must not be interrupted, such as a volume swap,
 is refused until it has finished, and the few things Kubernetes cannot take
 back once asked, such as a volume deletion, are only no longer tracked.
 Cancelling something that deletes VMs or stops a volume move needs an admin.
+
+A V2 disk preparation, a storage allocation or Longhorn runtime maintenance
+whose host was removed can never finish: each pins its host's identity and
+refuses to step on another. Such a job offers admins **End: host removed**. Its
+review reads the host afresh and goes ahead only when Kubernetes no longer has
+the node the job pinned (gone, or a host of that name with a new identity) and,
+where the job pinned Longhorn's record of the host, Longhorn no longer has that
+either; a host that is only down, or a read that failed, is not enough. It lists
+what the job may have left on the machine - a partly erased disk, a partly
+grown volume, the runtime maintenance's boot unit that runs before k3s - and
+what ending it releases. Ending it needs the host's name typed: the job is
+marked failed, ended because its host was removed, and stops holding back
+Longhorn upgrades, shutdown, OS rollouts, V2 cleanup and the volumes it moved.
+Its helper Job is deleted if it is still the one the job created. Nothing on
+the machine is changed; if the same machine comes back without a reinstall,
+clear what the review listed first. The ended record can be dismissed.
 
 k3s VM-batch cancellation **only stops tracking**: VMs, disks, Secrets and IP
 records stay in place, and guest installation may continue. Older jobs have no

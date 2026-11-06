@@ -68,6 +68,7 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
       ${operation.preparation_archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(operation.id)})">Archive preparation</button>` : ""}
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Inspect outcome</button>` : ""}
       ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview(${jsq(operation.id)})">Review storage move</button>` : ""}
+      ${operation.host_gone_endable ? `<button class="btn sm" data-need="admin" data-tip="If its host was removed: review what it left, then end it so it holds nothing back" onclick="hostGoneReview(${jsq(operation.id)})">End: host removed</button>` : ""}
       ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)},${operation.kind === 'import-create' ? "'import'" : 'true'})">Inspect ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
@@ -484,6 +485,64 @@ window.powerRecoveryResolve = async () => {
     }
     toast(error.message,"bad");
   } finally {POWER_RECOVERY_BUSY=false;refreshOperations(true);}
+};
+
+/* A disk job whose host was removed (V2 preparation, storage allocation,
+   runtime maintenance) can never finish and is never forgotten. The review
+   checks the host's identity afresh and lists what the job may have left on
+   the machine; ending it changes nothing there. */
+let HOST_GONE = null, HOST_GONE_SEQ = 0, HOST_GONE_BUSY = false;
+const hostGoneList = rows => `<ul>${(rows || []).map(row => `<li>${esc(row)}</li>`).join("")}</ul>`;
+window.hostGoneReview = async id => {
+  if (HOST_GONE_BUSY) return;
+  HOST_GONE = null;
+  const sequence = ++HOST_GONE_SEQ;
+  modal("End a job whose host was removed", '<div id="hostGoneLoading" class="empty"><span class="spin2"></span>Checking the host afresh…</div>', true, "operation-review");
+  try {
+    const review = await api("/api/operations/host-gone/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+    if (sequence !== HOST_GONE_SEQ || !$("#hostGoneLoading")) return;
+    const p = review.plan;
+    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("The review is incomplete. Nothing was ended.");
+    HOST_GONE = {id, ...review};
+    $("#mbody").innerHTML = UI.lead(p.blocked
+        ? `This job pinned <b>${esc(p.node)}</b>. Homestead checks whether that host is gone before the job can be ended.`
+        : `This job can no longer finish: it pinned <b>${esc(p.node)}</b>, and that host is gone. Ending it keeps its record and stops it holding anything back.`) +
+      UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to end" : "Nothing on the host is changed",
+        p.blocked ? (p.blockers || []).map(esc).join("<br>") : (p.warnings || []).map(esc).join("<br>")) +
+      UI.section("What may remain on the machine", hostGoneList(p.left_on_host)) +
+      ((p.left_in_cluster || []).length ? UI.section("Left in the cluster", hostGoneList(p.left_in_cluster)) : "") +
+      UI.section("No longer held back once it ends", hostGoneList(p.released)) +
+      (!p.blocked ? UI.typedConfirm({ id: "hostGoneName", expect: p.confirm, oninput: "hostGoneReady()" }) +
+        UI.ack("hostGoneAck", "I checked the list above. End the job; nothing on the host is changed.", {onchange:"hostGoneReady()"}) : "") +
+      UI.actions(UI.cancel("Keep the job") + UI.button("End the job", "hostGoneResolve()", {kind:"danger", id:"hostGoneApply", disabled:true}));
+    if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+  } catch (error) {
+    if (sequence !== HOST_GONE_SEQ || !$("#hostGoneLoading")) return;
+    HOST_GONE = null;
+    $("#mbody").innerHTML = UI.callout("bad", "Nothing was ended", esc(error.message)) + UI.actions(UI.cancel("Close"));
+  }
+};
+window.hostGoneReady = () => {
+  const ready = !!(HOST_GONE && !HOST_GONE_BUSY && !HOST_GONE.plan.blocked && HOST_GONE.capacity_token && $("#hostGoneAck")?.checked && typedConfirmMatches("hostGoneName"));
+  if ($("#hostGoneApply")) $("#hostGoneApply").disabled = !ready;
+  return ready;
+};
+window.hostGoneResolve = async () => {
+  if (!hostGoneReady()) return;
+  const review = HOST_GONE, button = $("#hostGoneApply");
+  HOST_GONE = null; HOST_GONE_BUSY = true; button.disabled = true;
+  try {
+    const result = await api("/api/operations/host-gone/resolve", {method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({id:review.id, capacity_token:review.capacity_token, confirm_capacity:true, confirm:review.plan.confirm, acknowledge_host_gone:true})});
+    if (result.operation) noteOperation(result.operation);
+    toast(result.detail, "ok"); closeModal();
+  } catch (error) {
+    if ($("#hostGoneApply") === button) {
+      $("#mbody").insertAdjacentHTML("afterbegin", UI.callout("bad", "Nothing was ended", `${esc(error.message)} Review again before trying once more.`));
+      if ($(".modalbox")) $(".modalbox").scrollTop = 0;
+    }
+    toast(error.message, "bad");
+  } finally { HOST_GONE_BUSY = false; refreshOperations(true); }
 };
 
 /* Cancelling a job says first what it would do: what is put back, what is

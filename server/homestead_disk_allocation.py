@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 import homestead_capacity_review as REVIEW
 import homestead_routes
 import homestead_hostrun as HOST
+import homestead_storage_conflicts as CONFLICTS
 
 KIND = 'disk-allocation'
 LABEL = 'homestead.io/disk-allocation'
@@ -243,7 +244,7 @@ def _saved(operation_id):
 
 def _pending(node, exclude=''):
     return next((i for i in ops.stored() if i.get('kind') == KIND and i.get('id') != exclude and i.get('ref', {}).get('node') == node
-                 and i.get('ref', {}).get('phase') not in ('complete', 'cancelled')), None)
+                 and not CONFLICTS.settled(i)), None)
 
 
 def review(body):
@@ -493,6 +494,7 @@ def status(operation_id):
 def recheck(operation_id):
     with ops.transaction():
         item = _saved(operation_id); ref = item['ref']
+        if ref.get('phase') == CONFLICTS.HOST_GONE: raise ValueError(CONFLICTS.ENDED)
         if item.get('status') not in ops.TERMINAL: raise ValueError('Wait for the current helper to finish before rechecking')
         if ref['phase'] == 'queued':
             ref['phase'] = 'cancelled'

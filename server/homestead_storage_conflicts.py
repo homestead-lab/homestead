@@ -7,6 +7,14 @@ look alike. The creating workflow must capture both from its reviewed binding.
 
 KINDS = {"reclass", "snapshot-delete", "snapshot-revert", "volume-delete", "volume-restore", "disk-v2-convert", "disk-allocation", "longhorn-runtime", "longhorn-v2-cleanup"}
 TERMINAL = {"succeeded", "failed", "cancelled"}
+# A disk job whose host was removed, ended by a person after a review
+# (homestead_host_gone): settled, like a finished one. The kinds it applies to,
+# and the phases at which each phase-decided kind is settled.
+HOST_GONE = "host-gone"
+HOST_GONE_KINDS = ("disk-v2-convert", "disk-allocation", "longhorn-runtime")
+_SETTLED = {"disk-v2-convert": ("complete", "cancelled", HOST_GONE), "disk-allocation": ("complete", "cancelled", HOST_GONE),
+            "longhorn-runtime": ("retired", HOST_GONE), "longhorn-v2-cleanup": ("complete",)}
+ENDED = "This job was ended because its host was removed; review a new one for the host that is there now."
 
 
 def targets(kind, ref, resource=None):
@@ -45,6 +53,12 @@ def targets(kind, ref, resource=None):
     return result
 
 
+def settled(item):
+    """A phase-decided disk job that has nothing left to finish: the one rule
+    unresolved() and the disk modules' own no-forget checks read."""
+    return (item.get("ref") or {}).get("phase") in _SETTLED.get(item.get("kind"), ())
+
+
 def unresolved(item):
     """A timeout or stopped tracking is not proof that a storage write ended."""
     if item.get("kind") == "restore-swap":
@@ -52,12 +66,8 @@ def unresolved(item):
     if item.get("kind") not in KINDS:
         return False
     ref = item.get("ref", {})
-    if item.get('kind') == 'longhorn-v2-cleanup':
-        return ref.get('phase') != 'complete'
-    if item.get("kind") == "longhorn-runtime":
-        return ref.get("phase") != "retired"
-    if item.get("kind") in ("disk-v2-convert", "disk-allocation"):
-        return ref.get("phase") not in ("complete", "cancelled")
+    if item.get("kind") in _SETTLED:
+        return not settled(item)
     if ref.get("retain_resources") or item.get("status") not in TERMINAL:
         return True
     if item.get("status") == "succeeded":

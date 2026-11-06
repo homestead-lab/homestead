@@ -6,8 +6,10 @@ const fs = require("node:fs"), vm = require("node:vm");
 
 const JOB = { id: "job-1", kind: "disk-allocation", title: "Grow storage on <node3>",
   text: "node3 has a saved storage allocation job (Grow storage on <node3>). Open that job first; removing the host would leave it with nothing to finish on." };
-const plan = (jobs = [JOB]) => ({ node: "node3", ready: false, roles: [], ok: true, blockers: [], warnings: [],
-  lost_volumes: [], rebuilt_volumes: [], lost_detail: [], pinned_volumes: [], pinned_workloads: [], disk_jobs: jobs,
+// What leaving them means comes from the server, per kind (homestead_onboard.stays).
+const STAY = "The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed.";
+const plan = (jobs = [JOB], stay = STAY) => ({ node: "node3", ready: false, roles: [], ok: true, blockers: [], warnings: [],
+  lost_volumes: [], rebuilt_volumes: [], lost_detail: [], pinned_volumes: [], pinned_workloads: [], disk_jobs: jobs, disk_jobs_stay: stay,
   stuck: { pods: 0, vms: [], attachments: 0, replicas: 0 },
   steps: ["Stop", "Delete node", "Delete machine", "Delete Longhorn record"],
   gone_steps: ["pods", "vms", "attachments", "replicas", "machine", "No apps", "No volumes"] });
@@ -62,8 +64,8 @@ test("Gone for good asks for the acknowledgement and sends the reviewed job ids"
   await t.c.window.nodeRemoval("node3");
   t.choose("gone");
   assert.equal(t.controls.rm_jobs.closest("label").hidden, false);
-  assert.match(t.body.innerHTML, /Remove it anyway\. The saved job stays, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet\./);
-  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves it as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until it is ended; Homestead can't end it yet.");
+  assert.match(t.body.innerHTML, /Remove it anyway\. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed\./);
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves it as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed.");
   assert.equal(t.controls.rm_go.disabled, true, "not until it is accepted");
   t.controls.rm_jobs.checked = true;
   t.c.window.nodeRemovalMode();
@@ -73,12 +75,23 @@ test("Gone for good asks for the acknowledgement and sends the reviewed job ids"
 });
 
 test("Several saved jobs are named in the plural", async () => {
-  const t = setup(plan([JOB, { ...JOB, id: "job-2" }]));
+  const stay = "The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts until you end them from Jobs once the host is removed.";
+  const t = setup(plan([JOB, { ...JOB, id: "job-2" }], stay));
   await t.c.window.nodeRemoval("node3");
   assert.match(t.body.innerHTML, /Saved disk jobs on node3/);
   t.choose("gone");
-  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves them as they are. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet.");
-  assert.match(t.body.innerHTML, /The saved jobs stay, and will keep blocking Longhorn upgrades, shutdown and OS rollouts until they are ended; Homestead can't end them yet\./);
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves them as they are. " + stay);
+  assert.ok(t.body.innerHTML.includes("Remove it anyway. " + stay));
+});
+
+test("A disk retire or V2 cleanup left behind is described as the server says, escaped", async () => {
+  const stay = "The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts. The disk retire job does so until it stops; it fails by itself once Longhorn's record of <node3> is deleted.";
+  const t = setup(plan([{ ...JOB, kind: "disk-retire" }, { ...JOB, id: "job-2", kind: "longhorn-v2-cleanup" }], stay));
+  await t.c.window.nodeRemoval("node3");
+  t.choose("gone");
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves them as they are. " + stay);
+  assert.ok(t.body.innerHTML.includes("Remove it anyway. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts. The disk retire job does so until it stops; it fails by itself once Longhorn's record of &lt;node3&gt; is deleted."));
+  assert.doesNotMatch(t.body.innerHTML, /end them from Jobs/);
 });
 
 test("Without the tick, gone for good sends no acknowledgement", async () => {

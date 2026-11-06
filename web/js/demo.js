@@ -1215,14 +1215,14 @@
         "Delete the 2 replica records Longhorn keeps for it, so it rebuilds them from the remaining copies",
         "Finish its Cluster API machine's deletion if finalizers hold it",
         "Let 1 app pinned to it run on any host", "No volumes were kept on the host itself"],
-      machine: { name: "custom-8a1b2c3d", namespace: "fleet-local" }, disk_jobs: [] } : ({ node: url.searchParams.get("node"), ready: true, roles: ["control-plane", "etcd"],
+      machine: { name: "custom-8a1b2c3d", namespace: "fleet-local" }, disk_jobs: [], disk_jobs_stay: "" } : ({ node: url.searchParams.get("node"), ready: true, roles: ["control-plane", "etcd"],
       since: "", ok: false, lost_volumes: [], rebuilt_volumes: ["frigate-config"],
       blockers: [`${url.searchParams.get("node")} is Ready. A running node re-registers itself, so it is not removed from here: put it in maintenance mode in Harvester, run /opt/rke2/bin/rke2-uninstall.sh on it, power it off, and come back when it shows Not ready.`],
       warnings: ["1 volume will rebuild the copy it held, on the remaining nodes."],
       steps: ["Stop Longhorn scheduling new replicas to it", "Delete the Kubernetes node (RKE2 removes its etcd membership)",
         "Delete its Cluster API machine", "Delete Longhorn's record of it once it holds no replicas"],
       gone_steps: [], stuck: { pods: 0, vms: [], attachments: 0, replicas: 0 },
-      machine: { name: "custom-1", namespace: "fleet-local" }, disk_jobs: [] }),
+      machine: { name: "custom-1", namespace: "fleet-local" }, disk_jobs: [], disk_jobs_stay: "" }),
     "/api/cluster/remove-node": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, node: body.node, log: [
@@ -1675,6 +1675,29 @@ ssh_pwauth: true
       Object.assign(op,{status:"failed",power_recovery:false,cancellable:false,dismissible:false,
         message:"Admin acknowledged an unknown outcome. No retry or rollback was sent; a late effect is still possible.",finished_at:new Date().toISOString()});
       return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
+    },
+    "/api/operations/host-gone/preview": (url, init) => {
+      const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
+      if (!op?.host_gone_endable) throw new Error("There is no disk job left by a removed host with this id to end");
+      const node=op.resource?.name || "node-c";
+      return {capacity_token:"demo-host-gone-review",plan:{id,kind:op.kind,node,phase:"preparing",blocked:false,blockers:[],
+        evidence:{node:"missing",longhorn:"missing"},requires_confirmation:true,confirm:node,
+        left_on_host:["/dev/sdb (serial DEMO123, /dev/disk/by-id/ata-DEMO) may be partly erased: the erase helper may have started on it."],
+        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host: deleted when you end the job, only if it is still the same Job."],
+        released:["Longhorn upgrades, cluster shutdown and OS rollouts, which this job holds back cluster-wide.",
+          `Disk and host jobs on a host named ${node}.`,"Starting V2 cleanup (disabling Longhorn V2).",
+          "Storage jobs on the volumes it moved to other hosts: pvc-demo-photos."],
+        warnings:["Nothing on the host is changed. Homestead records the end and, if it is still the same Job, deletes the helper Job listed below. Cancelling stays refused.",
+          "The job's record stays in Jobs, with what it did, until you dismiss it."]}};
+    },
+    "/api/operations/host-gone/resolve": (url, init) => {
+      const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
+      const node=op?.resource?.name || "node-c";
+      if (!op?.host_gone_endable || body.capacity_token!=="demo-host-gone-review" || body.confirm!==node || !body.confirm_capacity || !body.acknowledge_host_gone)
+        throw new Error("Type the host's name and confirm that nothing on the host is changed. Nothing was ended.");
+      Object.assign(op,{status:"failed",host_gone_endable:false,cancellable:false,dismissible:true,finished_at:new Date().toISOString(),
+        message:`Ended: its host ${node} was removed. Nothing on the host was changed; the record lists what may remain there.`});
+      return {ok:true,detail:`Ended. ${node}'s job no longer holds anything back; nothing on the host was changed.`,operation:op};
     },
     "/api/operations/vm-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);

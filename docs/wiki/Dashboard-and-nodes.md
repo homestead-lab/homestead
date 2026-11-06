@@ -391,7 +391,13 @@ pressure, core services, and platform warnings from the last day.
   A saved disk job on the host (disk preparation, storage allocation, runtime
   maintenance, a disk retire or V2 cleanup) refuses the standard removal; gone
   for good asks you to tick that the job stays, and keeps blocking Longhorn
-  upgrades, shutdown and OS rollouts until it is ended.
+  upgrades, shutdown and OS rollouts until it ends. A disk preparation,
+  storage allocation or runtime maintenance is ended from Jobs once the host is
+  removed (**End: host removed** on the job, for admins: it checks the host is
+  really gone, lists what the job may have left on the machine, and changes
+  nothing there); a disk retire fails by itself once Longhorn's record of the
+  host is deleted; a V2 cleanup ends on its next round, or, if it staged a RAM
+  release on another host, once that host has restarted.
   It also deletes the k3s/RKE2 node password, so a rebuilt host of the same
   name can join. Afterwards it lists anything still left over, each with a
   button. On plain Kubernetes, remove its etcd member yourself with
