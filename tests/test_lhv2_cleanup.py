@@ -217,9 +217,45 @@ class RefusalEndsTests(unittest.TestCase):
 
     def test_it_is_still_asked_now_and_then(self):
         item=self.all_staged()
-        self.now+=10*60
+        self.now+=599
+        C.progress(item)
+        self.assertEqual([],self.inspected,'not before the ten minutes are up')
+        self.now+=1
         C.progress(item); C.progress(item)
         self.assertEqual(['node-a','node-b'],sorted(self.inspected),'once each, and then not again')
+
+    def test_a_failed_ask_is_asked_again_next_round(self):
+        # Only an answer counts as asked: no answer is not ten more minutes of quiet.
+        item=self.all_staged()
+        self.now+=10*60
+        self.inspect_error=ValueError('no answer')
+        with self.assertRaises(ValueError):
+            C.progress(item)
+        self.inspect_error=None
+        C.progress(item)
+        self.assertIn('node-a',self.inspected)
+
+    def test_a_job_from_before_this_check_is_asked_on_its_first_round(self):
+        item=self.all_staged()
+        for row in item['ref']['nodes']:
+            del row['inspected_at']   # saved by a version that kept no time
+        C.progress(item)
+        self.assertEqual(['node-a','node-b'],sorted(self.inspected))
+
+    def test_the_recheck_button_always_asks_the_hosts(self):
+        # A person asked: they may have just changed something on the host.
+        item=self.all_staged()
+        C.recheck(item['id'])
+        self.assertEqual(['node-a','node-b'],sorted(self.inspected))
+        self.inspected.clear()
+        C.progress(item)
+        self.assertEqual([],self.inspected,'the rounds after it go back to waiting')
+
+    def test_the_recheck_button_always_asks_on_the_refused_path_too(self):
+        item=self.all_staged()
+        item['ref']['refused']='V2 was re-enabled'
+        C.recheck(item['id'])
+        self.assertEqual(['node-a','node-b'],sorted(self.inspected))
 
     def test_a_restart_is_seen_on_the_next_round(self):
         item=self.all_staged()

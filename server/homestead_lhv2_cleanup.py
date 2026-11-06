@@ -139,7 +139,8 @@ _MARK = '/metadata/annotations/' + CORDONED_BY.replace('/', '~1')
 # A host that has staged its RAM release can only move on after a restart: its worker
 # says "complete" only once the boot differs (homestead_v2_memory_worker.inspect), and
 # Kubernetes shows that boot here. So it is not asked again each round, for days,
-# under the jobs lock, only now and then in case its receipt was changed by hand.
+# under the jobs lock, only now and then in case its receipt was changed by hand, and
+# whenever a person presses Recheck (recheck).
 INSPECT_EVERY = 600
 _clock = time.time   # a seam for the tests
 
@@ -366,6 +367,8 @@ def recheck(identity):
     with SETUP.ops.transaction():
         item = next((i for i in SETUP.ops.stored() if i.get('id') == identity and i.get('kind') == KIND), None)
         if not item: raise ValueError('V2 cleanup job not found')
+        # A person asked, and may just have changed something on a host: ask them all.
+        for row in item['ref']['nodes']: row.pop('inspected_at', None)
         state, percent, message = progress(item)
         if state in homestead_routes.ENDED:
             homestead_routes.forget('lhv2')
