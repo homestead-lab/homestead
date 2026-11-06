@@ -16,28 +16,64 @@ function gitopsNote(managed, { rename = false, yaml = "" } = {}) {
 
 /* A change made here, as YAML to commit where git keeps the app (#735): the
    server's review sends only the fields that changed, under the app's kind,
-   name and namespace. The text is kept here, not in the onclick. */
+   name and namespace. Deploy's review (#920) sends a new app whole, or the
+   patch that adds a container. The text is kept here, not in the onclick. */
 const GITOPS_COPIES = [];
-function gitopsCopyButton(yaml) {
+function gitopsCopyButton(yaml, whole = false) {
   if (!yaml) return "";
-  return UI.button("Copy as YAML for git", `gitopsCopy(${GITOPS_COPIES.push(yaml) - 1})`, { kind: "sm" });
+  return UI.button("Copy as YAML for git", `gitopsCopy(${GITOPS_COPIES.push({ yaml, whole }) - 1})`, { kind: "sm" });
 }
 window.gitopsCopy = async index => {
-  const done = await copyText(GITOPS_COPIES[index] || "");
-  toast(done ? "Copied. Paste it where git keeps this app: a kustomize patch, or the same fields in its manifest"
-    : "Copying did not work here: select the YAML and copy it", done ? "ok" : "bad");
+  const copy = GITOPS_COPIES[index] || {};
+  const done = await copyText(copy.yaml || "");
+  toast(!done ? "Copying did not work here: select the YAML and copy it"
+    : copy.whole ? "Copied. Commit it where git keeps your apps, as a file of its own"
+    : "Copied. Paste it where git keeps this app: a kustomize patch, or the same fields in its manifest", done ? "ok" : "bad");
 };
-function gitopsYamlBlock(yaml, secret = {}) {
+/* Save text as a file in the browser: a link with download, as the config
+   backup and the address list do. */
+function downloadText(name, text, type = "text/plain") {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([text], { type }));
+  link.download = name;
+  document.body.appendChild(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+}
+const GITOPS_DOWNLOADS = [];
+window.gitopsDownload = index => {
+  const file = GITOPS_DOWNLOADS[index];
+  if (file) downloadText(file.name, file.yaml, "application/yaml");
+};
+/* scope: "edit", the fields an edit sets; "app", a new app whole; "added",
+   the patch that adds a container to an app. file names the download. */
+const GITOPS_SCOPES = {
+  edit: "Only the fields this change sets. Services and volumes are not in it.",
+  app: "The whole app in one file: its Deployment, Service and new volume claims, without server fields or Homestead's bookkeeping.",
+  added: "Only what adding this container changes in the app, as a patch, and any volume claim it creates.",
+};
+/* What Deploy adds when it runs that the file cannot hold (the server's
+   deploy_adds: [{what, certain}]), named only when it applies; "" for none. */
+function gitopsDeployAdds(adds = []) {
+  const sure = adds.filter(a => a.certain).map(a => a.what), may = adds.filter(a => !a.certain).map(a => a.what);
+  if (!sure.length && !may.length) return "";
+  const lead = sure.length ? `Homestead also adds at deploy time: ${sure.join("; ")}${may.length ? `, and may add ${may.join("; ")}` : ""}.`
+    : `At deploy time Homestead may add ${may.join("; ")}.`;
+  return `<p class="ui-help">${esc(`${lead} Applying this file elsewhere won't add ${sure.length + may.length > 1 ? "them" : "it"}.`)}</p>`;
+}
+function gitopsYamlBlock(yaml, secret = {}, { scope = "edit", file = "", adds = [] } = {}) {
   if (!yaml) return "";
+  const saved = scope === "edit" ? "saved" : "deployed", save = scope === "edit" ? "save" : "deploy";
   // The app's own Secret exists only once Homestead has saved the app, never in git.
   const needs = secret?.name ? `<p class="ui-help">It refers to Secret <span class="mono">${esc(secret.name)}</span> (keys ${
     (secret.keys || []).map(key => `<span class="mono">${esc(key)}</span>`).join(", ")}), not to the values. That Secret exists only once
-    Homestead has saved the app: in git, create it yourself first (for example with SOPS), or save here first.</p>` : "";
-  return UI.more("YAML for git", `<p class="ui-help">Only the fields this change sets. Services and volumes are not in it.
+    Homestead has ${saved} the app: in git, create it yourself first (for example with SOPS), or ${save} here first.</p>` : "";
+  const download = file ? UI.button(`Download ${file}`, `gitopsDownload(${GITOPS_DOWNLOADS.push({ name: file, yaml }) - 1})`, { kind: "sm" }) : "";
+  return UI.more("YAML for git", `<p class="ui-help">${GITOPS_SCOPES[scope] || GITOPS_SCOPES.edit}
     Values Homestead keeps in the app's Secret, and values with a password or token in them, are left out; still check it
     before committing it to a public repository.</p>${needs}
-    <pre class="mono small agent-raw">${esc(yaml)}</pre>${gitopsCopyButton(yaml)}`);
+    <pre class="mono small agent-raw">${esc(yaml)}</pre>${gitopsDeployAdds(adds)}${gitopsCopyButton(yaml, scope === "app")}${download}`);
 }
+window.downloadText = downloadText;
 window.gitopsCopyButton = gitopsCopyButton;
 window.gitopsYamlBlock = gitopsYamlBlock;
 window.gitopsNote = gitopsNote;

@@ -99,6 +99,40 @@ def dump(value):
     return "\n".join(_lines(value, 0))
 
 
+def dump_all(objects):
+    """Several objects as one multi-document YAML file, each after ---; a
+    document already written (document()'s patch) is taken as it is."""
+    return "\n---\n".join(value if isinstance(value, str) else dump(value) for value in objects if value) + "\n"
+
+
+# What the API server writes on an object, never a setting to commit.
+SERVER_FIELDS = ("managedFields", "uid", "resourceVersion", "creationTimestamp", "generation", "selfLink",
+                 "deletionTimestamp", "deletionGracePeriodSeconds", "ownerReferences")
+# kubectl's copy of the last object it applied: on a live object it holds
+# every value, env included, so it never reaches the YAML.
+LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration"
+
+
+def stripped(obj):
+    """A whole object to commit (#920): no status or server fields, and of
+    its labels and annotations only the settings (_settings), in the pod
+    template too. A copy; obj is left as it was."""
+    out = {key: copy.deepcopy(value) for key, value in obj.items() if key != "status"}
+    for holder in (out, (out.get("spec") or {}).get("template") or {}):
+        meta = holder.get("metadata")
+        if not isinstance(meta, dict):
+            continue
+        for key in SERVER_FIELDS:
+            meta.pop(key, None)
+        (meta.get("annotations") or {}).pop(LAST_APPLIED, None)
+        for key, value in _settings(meta).items():
+            if value:
+                meta[key] = value
+            else:
+                meta.pop(key, None)
+    return out
+
+
 def _named(rows):
     return isinstance(rows, list) and rows and all(isinstance(r, dict) and isinstance(r.get("name"), str) for r in rows)
 

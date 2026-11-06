@@ -303,7 +303,8 @@ const DIALOGS = [
   ["node-promote", "nodes", "nodePromoteReview('harvester-node1')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
-  ["deploy-preview", "deploy", "UI.selectSection('containerDeploy','summary')", "click:previewYaml"],
+  ["deploy-review", "deploy", "$('#d_workload_name').value='paperless';$('#d_container_name').value='paperless';$('#d_image').value='registry.example.com/paperless:2.1'", "doDeploy()"],
+  ["deploy-review-yaml", "deploy", "$('#d_workload_name').value='paperless';$('#d_container_name').value='paperless';$('#d_image').value='registry.example.com/paperless:2.1'", "doDeploy()", "[...document.querySelectorAll('#mbody details')].find(d=>d.textContent.includes('YAML for git')).open=true"],
   ["fleet-link", "workloads", "fleetLink()"],
   ["fleet-migration-on", "settings", "settingsTab('fleet')", "fleetMigration('b2c0de')"],
   ["fleet-migration-here", "settings", "settingsTab('fleet')", "fleetMigration('a1f00d')"],
@@ -426,7 +427,10 @@ async function audit([label, width, height, mobile], items) {
           notes: body.querySelectorAll(".note").length,
           buttons: body.querySelectorAll("button, .btn").length,
           checkboxes: body.querySelectorAll("input[type=checkbox]").length,
-          words: body.innerText.split(/\s+/).filter(Boolean).length,
+          // Raw text a person opened Details to read (YAML, a log) is not the
+          // dialog's own wording: it is left out of the budget, as of the width check.
+          words: body.innerText.split(/\s+/).filter(Boolean).length - [...body.querySelectorAll("details[open] pre")]
+            .reduce((n, e) => n + e.innerText.split(/\s+/).filter(Boolean).length, 0),
           // Visible notices: design.md asks for one, combining related warnings.
           attention: [...body.querySelectorAll(".ui-callout, .note.bad, .note.warn")].filter(e => e.checkVisibility()).length,
           // The same sentence said twice in one dialog.
