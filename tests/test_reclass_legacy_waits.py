@@ -1173,5 +1173,23 @@ class LegacyMoveTests(unittest.TestCase):
         self.assert_named_and_started(job["message"])
 
 
+    # ---- beside the rule for a disk job whose host was removed ---------------------------
+
+    def test_a_disk_job_stranded_by_a_removed_host_is_not_freed_as_a_cancelled_move(self):
+        for kind in sorted(CONFLICTS.HOST_GONE_KINDS):
+            with self.subTest(kind):
+                item = {"id": kind, "kind": kind, "title": kind, "status": "cancelled", "progress": 0, "message": "",
+                        "ref": {"phase": "rolled-back", "retain_resources": True}, "resource": {}}
+                self.assertTrue(CONFLICTS.unresolved(item))
+                self.assertTrue(OPS._recovery_needed(item))
+                self.assertIs(True, OPS._public(item)["host_gone_endable"], "ending it stays the way out")
+
+    def test_a_cancelled_and_freed_move_is_not_offered_the_end_for_a_removed_host(self):
+        ident = self.older_cancel()
+        public = next(job for job in OPS.snapshot() if job["id"] == ident)
+        self.assertNotIn("host_gone_endable", public)
+        self.assert_nothing_locked(ident)
+
+
 if __name__ == "__main__":
     unittest.main()
