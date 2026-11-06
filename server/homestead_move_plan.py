@@ -57,6 +57,45 @@ def storage_choices():
                   and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")))
 
 
+def _persistent_state(vm_spec):
+    """What of the VM's firmware or TPM lives in KubeVirt's state volume, in words; "" if nothing."""
+    domain = vm_spec.get("domain") or {}
+    efi = (((domain.get("firmware") or {}).get("bootloader") or {}).get("efi") or {}).get("persistent") is True
+    tpm = (((domain.get("devices") or {}).get("tpm") or {}).get("persistent")) is True
+    return " and ".join(part for part, kept in (("UEFI settings", efi), ("TPM", tpm)) if kept)
+
+
+def _fresh(state):
+    return " and ".join(part for part, kept in (("blank UEFI settings", "UEFI" in state),
+                                                ("a new, empty TPM", "TPM" in state)) if kept)
+
+
+def _state_storage_problem():
+    """Why KubeVirt here could not make the VM's state volume, or "" when it can.
+
+    It uses its vmStateStorageClass, or else the one default storage class
+    (KubeVirt's own default-virt class first)."""
+    try:
+        kubevirts = (STATE.kget("/apis/kubevirt.io/v1/kubevirts") or {}).get("items") or []
+        config = ((kubevirts[0].get("spec") or {}).get("configuration") or {}) if len(kubevirts) == 1 else {}
+        explicit = config.get("vmStateStorageClass")
+        if explicit:
+            if not KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(explicit, safe='')}",
+                                     read=STATE.kget):
+                return (f"KubeVirt here keeps VM firmware and TPM state on storage class {explicit}, which does not "
+                        "exist; the VM cannot start until it does")
+            return ""
+        classes = (STATE.kget("/apis/storage.k8s.io/v1/storageclasses") or {}).get("items") or []
+    except Exception:
+        return "Could not check where KubeVirt here would keep the VM's firmware and TPM state"
+    marked = lambda key: [c for c in classes if ((c.get("metadata") or {}).get("annotations") or {}).get(key) == "true"]
+    choices = marked("storageclass.kubevirt.io/is-default-virt-class") or marked("storageclass.kubernetes.io/is-default-class")
+    if len(choices) == 1:
+        return ""
+    return ("KubeVirt here has no single default storage class for VM firmware and TPM state, so the VM cannot "
+            "start: mark one storage class as the default, or set KubeVirt's vmStateStorageClass")
+
+
 def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
          transfer_mode="move", source_namespace="", host_devices=None):
     """Everything that would stop a move, or surprise someone, before it starts.
@@ -67,6 +106,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     """
     namespace = namespace or STATE.NS
     blockers, warnings, fixes = [], [], []
+    live = False
     device_rows, device_resources, device_hosts = [], [], []
     if kind not in STATE.KINDS:
         raise ValueError("kind must be container, vm or volume")
@@ -119,6 +159,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         # would needlessly stop the source on a destination without KubeVirt.
         if not KUBE.get_optional("/apis/kubevirt.io/v1", read=STATE.kget):
             blockers.append("Install KubeVirt on the destination before transferring a VM")
+        live = transfer_mode == "copy" and "copy-live-vm" in versions.get("capabilities", [])
+        if transfer_mode == "copy" and not live and definition.get("vm_running") is not False:
+            warnings.append(f"{cluster} pauses {name} while its disks are backed up; update Homestead there to copy it while it runs")
         if transfer_mode == "copy":
             warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
             vm = (definition.get("object") or {}).get("spec") or {}
@@ -135,11 +178,24 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                     blockers.append(f"Disk {volume.get('name', '?')} has an external source that cannot be copied; use a Longhorn PVC")
             if vm_spec.get("accessCredentials"):
                 blockers.append("VM access credentials use additional Secrets; copy those dependencies separately before using this transfer")
-            domain = vm_spec.get("domain") or {}
-            persistent_efi = (((domain.get("firmware") or {}).get("bootloader") or {}).get("efi") or {}).get("persistent")
-            persistent_tpm = (((domain.get("devices") or {}).get("tpm") or {}).get("persistent"))
-            if persistent_efi or persistent_tpm:
-                blockers.append("This VM has persistent firmware or TPM state outside its disks; copying that state is not supported yet")
+        vm_spec = ((((definition.get("object") or {}).get("spec") or {}).get("template") or {}).get("spec")) or {}
+        state = _persistent_state(vm_spec)
+        if state:
+            warnings.append(f"This VM keeps its {state} in a small volume of its own, outside its disks, and that is "
+                            f"not brought across: here it starts with {_fresh(state)}. Anything sealed to the TPM, "
+                            "such as BitLocker or Windows Hello, then asks for its recovery key")
+            problem = _state_storage_problem()
+            origin = definition.get("origin") or {}
+            starts = transfer_mode == "move" and (origin.get("runStrategy", "Halted") != "Halted" or origin.get("running"))
+            if problem:
+                # A copy arrives stopped, so there is time to fix it; a move starts the VM here.
+                (blockers if starts else warnings).append(problem)
+        if live and definition.get("vm_running"):
+            warnings.append(f"{name} keeps running while it is copied. " + (
+                "Its guest agent freezes its filesystems while the disks are snapshotted, so they hold one instant"
+                if definition.get("guest_agent") else
+                "Its guest agent is not connected, so the copy's disks are as a power cut would leave them: "
+                "the guest repairs its filesystems on first boot, and a database inside may need recovery"))
         for secret in definition.get("secrets", []):
             if KUBE.get_optional(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}", read=STATE.kget):
                 blockers.append(f"Secret {secret['metadata']['name']} already exists in {namespace}; choose another destination namespace")
@@ -253,7 +309,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
         "source_namespace": definition.get("namespace", ""),
         "joined": joined, "will_run": bool(will_run) and transfer_mode != "copy", "addresses": addresses,
-        "transfer_mode": transfer_mode,
+        "transfer_mode": transfer_mode, "live": live,
         "host_devices": device_rows, "device_resources": device_resources, "device_hosts": device_hosts,
         "versions": versions,
         "storage_class": chosen_class, "storage_classes": storage_choices(),
@@ -282,7 +338,8 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
     move = {
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
-        "transfer_mode": transfer_mode, "source_uid": definition.get("source_uid", ""),
+        "transfer_mode": transfer_mode, "live": bool(checked.get("live")),
+        "source_uid": definition.get("source_uid", ""),
         "cleanup_protocol": 1 if definition.get("cleanup_protocol") == 1 and definition.get("source_uid") else 0,
         "host_devices": json.loads(json.dumps(host_devices or {})),
         "device_signature": VM_DEVICES.signature(definition) if kind == "vm" else "",

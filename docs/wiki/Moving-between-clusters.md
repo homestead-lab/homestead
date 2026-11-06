@@ -168,10 +168,19 @@ use its own class, or be created blank. Existing VM, claim and cloud-init
 Secret names are checked before the source stops; choose another namespace
 if those names are already in use on the destination.
 
-The source pauses while its selected volumes are backed up. Homestead then
-restores the source's previous running state, while the destination restores
-those backups and creates a **stopped** copy. A source that was stopped stays
-stopped. Copies receive new VM MAC addresses and a firmware UUID. Review the
+A VM keeps running while it is copied. Its disks are snapshotted together and
+the backups are made from those snapshots. When the VM's guest agent is
+connected, its filesystems are frozen for the second or so the snapshots take,
+so every disk holds the guest as it was at one instant. Without the agent, the
+copy's disks are as a power cut would leave them: the guest checks its
+filesystems on first boot, and a database inside may need its own recovery.
+The review says which applies. A source cluster running an older Homestead
+pauses the VM for its backups instead, and the review says that too.
+
+A container pauses while its selected volumes are backed up. Homestead then
+restores its previous running state. Either way, the destination restores
+those backups and creates a **stopped** copy, and a source that was stopped
+stays stopped. Copies receive new VM MAC addresses and a firmware UUID. Review the
 guest's static IP and network settings before starting the copy; guest disk
 contents and cloud-init configuration are preserved.
 
@@ -184,9 +193,22 @@ cancelled before it can be dismissed.
 
 VM data disks must be Longhorn PVCs. Container-image disks and cloud-init travel with the
 VM definition. External instance types and preferences must first be expanded
-into the VM's settings. Host disks, additional access-credential Secrets and persistent
-firmware/TPM state are not copied; the review blocks these rather than making
-an incomplete VM. Change a VM's `Once` run strategy before copying it, since
+into the VM's settings. Host disks and additional access-credential Secrets are
+not copied; the review blocks these rather than making an incomplete VM.
+
+### Persistent UEFI settings and TPM
+
+A VM can keep its UEFI settings or TPM in a small volume of KubeVirt's own,
+outside its disks. Moves and copies don't bring that volume across, and the
+review warns when a VM has one. On the destination the VM starts with blank
+UEFI settings and a new, empty TPM. The disks boot as before, since the guest's
+bootloader is on them, but anything sealed to the old TPM is gone: BitLocker
+asks for its recovery key, and Windows Hello needs setting up again.
+
+KubeVirt makes the new state volume on its `vmStateStorageClass`, or else on
+the cluster's one default storage class. If the destination has neither, the
+VM can't start there. The review blocks a move that would start the VM, and
+warns on a copy, which arrives stopped. Change a VM's `Once` run strategy before copying it, since
 that strategy cannot safely resume after being stopped for the backup.
 
 ## After a move

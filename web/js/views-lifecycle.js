@@ -2913,6 +2913,8 @@ let MOVE_VOLUMES = {};
 let MOVE_TRANSFER_MODE = "move";
 let MOVE_SOURCE_NAMESPACE = "";
 let MOVE_DEVICES = {}, MOVE_ROM_NAMES = {};
+// Whether the last review copies a VM while it keeps running (plan.live).
+let MOVE_LIVE = false;
 window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace = "") => {
   ++MOVE_PLAN_SEQUENCE;
   MOVE_VOLUMES = {};
@@ -2925,7 +2927,9 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
       and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
       you change your mind.`
-    : copy ? `Creates a stopped copy here. The source pauses for its volume backups, then resumes its previous running state.
+    : copy ? `Creates a stopped copy here from backups of the source's volumes. ${kind === "vm"
+      ? "A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says."
+      : "The source pauses for its volume backups, then resumes its previous running state."}
       Review the copy's network settings before starting it.`
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
       storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
@@ -3051,6 +3055,7 @@ window.movePlan = async (cluster, kind, name) => {
     const plan = await api("/api/move/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
+    MOVE_LIVE = plan.live === true;
     if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
       host.innerHTML = '<div class="note bad">Update Homestead on this destination before copying. It only supports moves.</div>';
       return;
@@ -3095,7 +3100,8 @@ window.moveStart = async (cluster, kind, name) => {
   const body = JSON.parse(JSON.stringify(moveBody(cluster, kind, name)));
   const copy = body.transfer_mode === "copy", sequence = MOVE_PLAN_SEQUENCE;
   const question = copy ? `Copy ${name} from ${cluster}?` + String.fromCharCode(10, 10)
-      + "The source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped."
+      + (MOVE_LIVE ? "It keeps running while its disks are snapshotted and backed up. The destination copy stays stopped."
+        : "The source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped.")
     : kind === "volume"
     ? `Bring the volume ${name} here from ${cluster}?` + String.fromCharCode(10, 10)
       + `Nothing on ${cluster} can use it until the move finishes or is put back.`
