@@ -141,16 +141,25 @@ def subscribe_packet(packet_id, topic):
     return bytes([0x82]) + _remaining(len(body)) + body
 
 
+# Commands and SUBACKs are a few hundred bytes; a packet that says it is longer
+# is refused before its body is read, so it costs no memory.
+PACKET_MAX = 64 * 1024
+
+
+class PacketTooLarge(ConnectionError):
+    pass
+
+
 def read_packet(recv):
     """(first byte, body) of one packet; recv(n) returns up to n bytes, b"" when closed."""
     def exactly(n):
-        out = b""
+        out = bytearray()
         while len(out) < n:
             chunk = recv(n - len(out))
             if not chunk:
                 raise ConnectionError("the broker closed the connection")
             out += chunk
-        return out
+        return bytes(out)
     first = exactly(1)[0]
     length, shift = 0, 0
     for _ in range(4):
@@ -161,6 +170,8 @@ def read_packet(recv):
             break
     else:
         raise ConnectionError("the broker sent a malformed packet")
+    if length > PACKET_MAX:
+        raise PacketTooLarge(f"the broker sent a {length}-byte packet; Homestead takes at most 64 KiB")
     return first, exactly(length) if length else b""
 
 
@@ -185,6 +196,7 @@ class Client:
         self.sock = None
         self._send = threading.Lock()
         self.lost = threading.Event()
+        self.refused = ""   # why the listener stopped, when it refused a packet
 
     def connect(self, timeout=10):
         raw = socket.create_connection((self.cfg["host"], int(self.cfg["port"])), timeout=timeout)
@@ -235,6 +247,8 @@ class Client:
                     first, body = read_packet(recv)
                     if first >> 4 == 3:
                         on_message(*parse_publish(first, body))
+            except PacketTooLarge as error:
+                self.refused = str(error)
             except (OSError, ConnectionError, ValueError, struct.error):
                 pass
             if self.sock is sock:
@@ -821,6 +835,14 @@ def _set(state, detail="", error=""):
 _restart = threading.Event()
 
 
+def _pause(seconds):
+    """The backoff after a failure; saving the settings ends it early. A
+    wake-up left by the connection that just failed does not."""
+    _restart.clear()
+    if _restart.wait(seconds):
+        _restart.clear()
+
+
 def run():
     """Publishes while enabled and leading; reconnects after any failure."""
     client, announced, backoff = None, {}, 5
@@ -859,7 +881,6 @@ def run():
                                   published=STATUS["published"] + count,
                                   detail=f"publishing to {cfg['host']}:{cfg['port']} every {cfg['interval']}s{note}")
                 _share()
-            backoff = 5
             # Between publishes the broker hears a ping at least every minute,
             # inside the keepalive, so a long interval does not look like a
             # dead client.
@@ -873,7 +894,12 @@ def run():
             if changed:
                 _restart.clear()
                 client.close()
-                client = None
+                client, refused = None, client.refused
+                if refused:
+                    # Shown, and retried with the backoff: a retained one comes
+                    # back on every subscribe.
+                    raise ConnectionError(refused)
+            backoff = 5
         except Exception as error:
             _set("error", "", str(error)[:200])
             if is_leader():
@@ -881,7 +907,7 @@ def run():
             if client:
                 client.close(gracefully=False)
                 client = None
-            time.sleep(backoff)
+            _pause(backoff)
             backoff = min(backoff * 2, 300)
 
 
