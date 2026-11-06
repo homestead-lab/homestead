@@ -288,9 +288,11 @@ RENEW_UNCONFIRMED = 60
 
 def _unconfirmed(ref):
     node = ref["node"]
+    held = (f"{node} stays held, so no other change starts there" if not ref.get("renew_error") else
+            f"Homestead could not renew its hold on {node} ({ref['renew_error']}), so another change may start "
+            f"there once the hold runs out")
     return (f"{ref['change']} needs attention: the script on {node} did not finish within {ref['timeout']:g} seconds, "
-            f"so Homestead cannot tell whether it changed {node}'s network. {node} stays held, so no other change "
-            f"starts there. Check its network (if the change got as far as arming its rollback, {node} puts its "
+            f"so Homestead cannot tell whether it changed {node}'s network. {held}. Check its network (if the change got as far as arming its rollback, {node} puts its "
             f"old network back by itself within {ROLLBACK_SECONDS // 60} minutes), then cancel this job to let go of {node}")
 
 
@@ -304,8 +306,9 @@ def _still_unconfirmed(ref, now):
         try:
             hostrun.hold(ref["node"], ref["change"], seconds=HOLD_SECONDS, holder=ref.get("lease", ""))
             ref["renewed"] = now
-        except Exception:
-            pass    # asked again next round; the message stays the same
+            ref.pop("renew_error", None)
+        except Exception as error:
+            ref["renew_error"] = str(error)[:160] or type(error).__name__    # asked again next round
     return "running", 20, _unconfirmed(ref)
 
 

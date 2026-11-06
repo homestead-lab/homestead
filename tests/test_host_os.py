@@ -3,6 +3,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -190,6 +191,19 @@ class StateTests(unittest.TestCase):
         self.assertNotIn("dist-upgrade", started, "no package is ever removed")
         self.assertEqual(("host-os", "Install 3 updates on node-1"), ops.started[0][:2])
 
+    def test_the_upgrade_command_is_quoted_for_the_unit_whatever_it_holds(self):
+        import shlex
+        host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
+        self.bind(host)
+        command = "apt-get -o 'APT::Get::Assume-Yes=true' upgrade"
+        with mock.patch.dict(HOST_OS.UPGRADE, {"apt": command}):
+            ref = {}
+            HOST_OS.upgrade_begin("node-1", ref=ref)
+        launch = next(s for s in host.scripts if "systemd-run" in s)
+        inner = launch.split(" --quiet sh -c ", 1)[1].rsplit(" && echo STARTED", 1)[0]
+        self.assertEqual([f"( {command} ) > {HOST_OS.LOG} 2>&1; echo {ref['run']} $? > {HOST_OS.STATUS}"],
+                         shlex.split(inner))
+
     def test_updates_hold_the_host_until_the_job_ends(self):
         host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
         self.bind(host)
@@ -218,6 +232,85 @@ class StateTests(unittest.TestCase):
         keeps = " ".join(plan(item)["keeps"])
         self.assertIn("keep installing on node-1", keeps)
         self.assertIn("no longer wait", keeps)
+        run(item, {})
+        self.assertEqual([("node-1", "this-replica/1")], host.let_go_of)
+
+    def start_timed_out(self):
+        import homestead_pod_exec as POD_EXEC
+
+        def out(script):
+            if "systemd-run" in script:
+                raise POD_EXEC.ExecTimeout("The script on node-1 did not finish within 60 seconds", "", "", 60)
+            return UBUNTU
+
+        host = Host(out)
+        real = host.run
+        host.run = lambda node, script, timeout=60, change="", holder="": (
+            out(script) if "systemd-run" in script else real(node, script, timeout, change, holder))
+        self.bind(host)
+        ops, messages = Ops(), []
+        started = ops.start
+        ops.start = lambda kind, title, target, href, ref, message: (messages.append(message),
+                                                                     started(kind, title, target, href, ref, message))[1]
+        HOST_OS.upgrade_start("node-1", ops)
+        return host, ops.started[0][2], messages
+
+    def test_a_launch_that_times_out_keeps_the_host_held_and_needs_attention(self):
+        host, ref, messages = self.start_timed_out()
+        self.assertEqual([], host.let_go_of, "the updates may be running detached")
+        self.assertEqual("this-replica/1", ref["lease"])
+        host.out = lambda script: "" if 'echo "CODE' in script else UBUNTU   # no result yet
+        state = HOST_OS.status({"ref": ref}, now=ref["since"] + 60)
+        self.assertEqual("running", state[0])
+        for message in (messages[0], state[2]):
+            self.assertIn("needs attention", message)
+            self.assertIn("did not finish within 60 seconds", message)
+            self.assertIn("cannot tell whether", message)
+            self.assertIn("node-1 stays held", message)
+        self.assertEqual([], host.let_go_of)
+
+    def test_an_unconfirmed_launch_that_did_start_is_followed_to_its_end(self):
+        host, ref, _ = self.start_timed_out()
+        self.assertTrue(ref.get("run"), "the launch has an id of its own")
+        host.out = lambda script: f"CODE {ref['run']} 0\n" if 'echo "CODE' in script else UBUNTU
+        self.assertEqual("succeeded", HOST_OS.status({"ref": ref}, now=ref["since"] + 60)[0])
+        self.assertEqual([("node-1", "this-replica/1")], host.let_go_of)
+
+    def test_an_old_result_on_the_host_is_not_this_unconfirmed_launch(self):
+        # A STATUS left by an earlier install: the launch may never have run.
+        host, ref, _ = self.start_timed_out()
+        for old in ("CODE 0\n", "CODE 0a1b2c3d4e5f 0\n", "RUNNING\nCODE 0\n"):
+            with self.subTest(old):
+                host.out = lambda script, old=old: old if 'echo "CODE' in script else UBUNTU
+                state = HOST_OS.status({"ref": ref}, now=ref["since"] + 60)
+                self.assertEqual("running", state[0], state[2])
+                self.assertEqual([], host.let_go_of)
+
+    def test_a_confirmed_launch_writes_its_id_and_its_result_is_read(self):
+        host = Host(lambda script: "STARTED\n" if "systemd-run" in script else UBUNTU)
+        self.bind(host)
+        ops = Ops()
+        HOST_OS.upgrade_start("node-1", ops)
+        ref = ops.started[0][2]
+        self.assertIn(f"echo {ref['run']} $?", next(s for s in host.scripts if "systemd-run" in s))
+        host.out = lambda script: f"CODE {ref['run']} 0\n" if 'echo "CODE' in script else UBUNTU
+        self.assertEqual("succeeded", HOST_OS.status({"ref": ref}, now=ref["since"] + 60)[0])
+
+    def test_an_unconfirmed_launch_seen_running_says_so_and_still_needs_its_own_result(self):
+        host, ref, _ = self.start_timed_out()
+        host.out = lambda script: "RUNNING\nunpacking\n" if 'echo "CODE' in script else UBUNTU
+        state = HOST_OS.status({"ref": ref}, now=ref["since"] + 60)
+        self.assertEqual(("running", "Installing on node-1: unpacking"), (state[0], state[2]))
+        self.assertIn("unconfirmed", ref, "only a result with this launch's id proves it")
+
+    def test_cancelling_an_unconfirmed_launch_claims_nothing_about_the_install(self):
+        host, ref, _ = self.start_timed_out()
+        item = {"kind": "host-os", "ref": ref}
+        HOST_OS.register(HOST_OS.OPS)
+        plan, run = HOST_OS.OPS.CANCELLERS["host-os"]
+        keeps = " ".join(plan(item)["keeps"])
+        self.assertIn("cannot tell whether the updates started on node-1", keeps)
+        self.assertNotIn("keep installing", keeps)
         run(item, {})
         self.assertEqual([("node-1", "this-replica/1")], host.let_go_of)
 

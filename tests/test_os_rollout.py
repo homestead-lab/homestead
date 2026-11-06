@@ -41,7 +41,9 @@ class Hosts:
         if ref.pop("lease", "") == f"lease-{name}":
             self.held.discard(name)
 
-    def upgrade_state(self, name):
+    def upgrade_state(self, name, run=None):
+        self.asked_run = getattr(self, "asked_run", [])
+        self.asked_run.append((name, run))
         code = self.codes.get(name, "0")
         if code == "0":
             # Installed: nothing waits any more; a kernel asks for a restart.
@@ -277,6 +279,33 @@ class RolloutTests(unittest.TestCase):
         self.run_until_done(on_step=self.finish_restarts)
         self.assertEqual(["node-1"], self.restarts)
         self.assertNotIn(("node-1", False), self.cordons)
+
+    def test_an_unconfirmed_launch_is_read_only_by_its_own_id(self):
+        def begin(name, facts=None, ref=None):
+            self.hosts.began.append(name)
+            ref.update(lease=f"lease-{name}", run="run-1", unconfirmed=60)
+            self.hosts.held.add(name)
+        self.hosts.upgrade_begin = begin
+        ROLLOUT.start(now=1000)
+        self.run_until_done(on_step=self.finish_restarts)
+        asked = {run for name, run in self.hosts.asked_run}
+        self.assertEqual({"run-1"}, asked, "every unconfirmed launch's result must carry its own id")
+
+    def test_an_unconfirmed_launch_does_not_show_an_old_log_line_as_progress(self):
+        def begin(name, facts=None, ref=None):
+            self.hosts.began.append(name)
+            ref.update(lease=f"lease-{name}", run="run-1", unconfirmed=60)
+            self.hosts.held.add(name)
+        self.hosts.upgrade_begin = begin
+        self.hosts.upgrade_state = lambda name, run=None: {"running": True, "code": None, "active": False,
+                                                           "last": "Setting up curl (an earlier install)"}
+        ROLLOUT.start(now=1000)
+        for _ in range(6):
+            ROLLOUT.tick(now=1000)
+        message = (ROLLOUT._load().get("rollout") or {}).get("message", "")
+        self.assertNotIn("an earlier install", message)
+        self.assertIn("needs attention", message)
+        self.assertIn("cannot tell whether", message)
 
     def test_a_failed_install_stops_before_the_next_host(self):
         self.hosts.codes["node-2"] = "100"

@@ -281,13 +281,21 @@ def step(state, now=None):
             _result(rollout, True, "up to date")
         return True
     if phase == "installing":
-        state_now = host_os.upgrade_state(name)
+        # A launch that timed out is read only by its own id: an older result
+        # on the host must not move the rollout on to a restart.
+        state_now = host_os.upgrade_state(name, **({"run": node.get("run", "")} if node.get("unconfirmed") else {}))
         if not state_now["running"]:
             host_os.upgrade_done(name, node)
         if state_now["running"]:
             if now - node.get("since", now) > INSTALL_LIMIT:
                 _result(rollout, False, f"updates did not finish in two hours; see {host_os.LOG} there")
                 rollout["stop"] = True
+            elif node.get("unconfirmed") and not state_now.get("active"):
+                # The log's last line may be an earlier install's.
+                rollout["message"] = (f"{name} needs attention: the update launch did not finish within "
+                                      f"{node['unconfirmed']:g} seconds, so Homestead cannot tell whether it started. "
+                                      f"{name} stays held while Homestead looks for its result; with none within two "
+                                      f"hours the rollout stops. Check {host_os.LOG} on {name}")
             else:
                 rollout["message"] = f"{name}: {state_now.get('last') or 'installing updates'}"[:200]
             return True
