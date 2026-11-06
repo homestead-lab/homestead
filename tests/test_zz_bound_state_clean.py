@@ -7,7 +7,7 @@ scripts/run_tests.py ends every share (and every
 --changed run) with this file, then test_zz_guard_state_clean.
 
 Here, at the end. Failed, because none of these depends on CI's split:
-- the list may only grow smaller (CEILING), and its names must still be bound;
+- the list may only grow smaller (CEILING), and its fake lines' names must still be bound;
 - in a run of the whole suite in one process (how the list is measured), a listed
   fake line whose file no longer leaks the name, so the list holds real leaks.
 Reported, not failed (for now, ENFORCE_FAKES below):
@@ -91,8 +91,10 @@ class BoundStateClean(unittest.TestCase):
             self.fail(f"bound_leaks.txt has {len(LISTED)} lines: lower CEILING to match")
 
     def test_each_listed_name_is_still_bound(self):
+        # Fake lines only, as the stale check: the other lines are reported, not enforced, and
+        # one can name what another PR has since removed.
         loaded = {name for name in sys.modules if name.startswith("homestead_")}
-        self.assertEqual([], GUARD.unknown(LISTED, GUARD.state(), loaded),
+        self.assertEqual([], GUARD.unknown({(n, f) for n, f, k in LISTED if k == "fake"}, GUARD.state(), loaded),
                          "these are no longer bound names: take them off bound_leaks.txt")
 
 
