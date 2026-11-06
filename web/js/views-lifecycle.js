@@ -2913,14 +2913,16 @@ let MOVE_VOLUMES = {};
 let MOVE_TRANSFER_MODE = "move";
 let MOVE_SOURCE_NAMESPACE = "";
 let MOVE_DEVICES = {}, MOVE_ROM_NAMES = {};
-// Whether the last review copies a VM while it keeps running (plan.live).
-let MOVE_LIVE = false;
+// Whether the last review copies a VM while it keeps running (plan.live),
+// and whether the person chose to stop it for the copy instead.
+let MOVE_LIVE = false, MOVE_STOP_SOURCE = false;
 window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace = "") => {
   ++MOVE_PLAN_SEQUENCE;
   MOVE_VOLUMES = {};
   MOVE_DEVICES = {}; MOVE_ROM_NAMES = {};
   MOVE_TRANSFER_MODE = transferMode === "copy" && kind !== "volume" ? "copy" : "move";
   MOVE_SOURCE_NAMESPACE = sourceNamespace;
+  MOVE_STOP_SOURCE = false;
   const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
   childModal(`${verb} ${name} from ${cluster}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, `
   <p class="muted small">${kind === "volume"
@@ -2943,6 +2945,9 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
   <div class="f"><label>Destination storage class</label><select id="mv_sc" disabled><option value="">Loading destination classes…</option></select>
     <div class="dim xs">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>
+  ${copy && kind === "vm" ? `<div class="f" id="mv_stop_row" hidden><label class="switch"><input type="checkbox" id="mv_stop"
+      onchange="moveStopSource(${jsq(cluster)},${jsq(kind)},${jsq(name)},this.checked)"> Stop the VM while its disks are backed up</label>
+    <div class="dim xs">It starts again on ${esc(cluster)} once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>` : ""}
   <div id="mv_plan"></div>
   ${UI.actions(`<button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
     <button class="btn pri" id="mv_go" data-need="admin" disabled
@@ -2966,8 +2971,13 @@ const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || defaultNamespace(),
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
-  source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES });
+  source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES, stop_source: MOVE_STOP_SOURCE });
 
+window.moveStopSource = (cluster, kind, name, stop) => {
+  MOVE_STOP_SOURCE = stop === true;
+  if ($("#mv_go")) $("#mv_go").disabled = true;
+  movePlan(cluster, kind, name);
+};
 window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
   MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), [field]: value };
   if (field === "rom") delete MOVE_ROM_NAMES[device];
@@ -3056,6 +3066,8 @@ window.movePlan = async (cluster, kind, name) => {
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
     MOVE_LIVE = plan.live === true;
+    const stopChoice = $("#mv_stop_row");
+    if (stopChoice) stopChoice.hidden = plan.can_live !== true;
     if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
       host.innerHTML = '<div class="note bad">Update Homestead on this destination before copying. It only supports moves.</div>';
       return;
@@ -3101,6 +3113,7 @@ window.moveStart = async (cluster, kind, name) => {
   const copy = body.transfer_mode === "copy", sequence = MOVE_PLAN_SEQUENCE;
   const question = copy ? `Copy ${name} from ${cluster}?` + String.fromCharCode(10, 10)
       + (MOVE_LIVE ? "It keeps running while its disks are snapshotted and backed up. The destination copy stays stopped."
+        : MOVE_STOP_SOURCE ? "It stops while its disks are backed up, then starts again as it was. The destination copy stays stopped."
         : "The source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped.")
     : kind === "volume"
     ? `Bring the volume ${name} here from ${cluster}?` + String.fromCharCode(10, 10)

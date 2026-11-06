@@ -97,7 +97,7 @@ def _state_storage_problem():
 
 
 def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-         transfer_mode="move", source_namespace="", host_devices=None):
+         transfer_mode="move", source_namespace="", host_devices=None, stop_source=False):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -106,7 +106,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     """
     namespace = namespace or STATE.NS
     blockers, warnings, fixes = [], [], []
-    live = False
+    live = can_live = False
     device_rows, device_resources, device_hosts = [], [], []
     if kind not in STATE.KINDS:
         raise ValueError("kind must be container, vm or volume")
@@ -159,9 +159,12 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         # would needlessly stop the source on a destination without KubeVirt.
         if not KUBE.get_optional("/apis/kubevirt.io/v1", read=STATE.kget):
             blockers.append("Install KubeVirt on the destination before transferring a VM")
-        live = transfer_mode == "copy" and "copy-live-vm" in versions.get("capabilities", [])
-        if transfer_mode == "copy" and not live and definition.get("vm_running") is not False:
+        can_live = transfer_mode == "copy" and "copy-live-vm" in versions.get("capabilities", [])
+        live = can_live and not stop_source
+        if transfer_mode == "copy" and not can_live and definition.get("vm_running") is not False:
             warnings.append(f"{cluster} pauses {name} while its disks are backed up; update Homestead there to copy it while it runs")
+        elif transfer_mode == "copy" and not live and definition.get("vm_running"):
+            warnings.append(f"{name} stops while its disks are backed up, then starts again on {cluster}")
         if transfer_mode == "copy":
             warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
             vm = (definition.get("object") or {}).get("spec") or {}
@@ -309,7 +312,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
         "source_namespace": definition.get("namespace", ""),
         "joined": joined, "will_run": bool(will_run) and transfer_mode != "copy", "addresses": addresses,
-        "transfer_mode": transfer_mode, "live": live,
+        "transfer_mode": transfer_mode, "live": live, "can_live": kind == "vm" and can_live,
         "host_devices": device_rows, "device_resources": device_resources, "device_hosts": device_hosts,
         "versions": versions,
         "storage_class": chosen_class, "storage_classes": storage_choices(),
@@ -325,9 +328,10 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
 
 
 def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-          transfer_mode="move", source_namespace="", host_devices=None):
+          transfer_mode="move", source_namespace="", host_devices=None, stop_source=False):
     namespace = namespace or STATE.NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace, host_devices)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace, host_devices,
+                   stop_source=stop_source)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     _refuse_second(cluster, kind, name)

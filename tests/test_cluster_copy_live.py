@@ -121,6 +121,35 @@ class LiveCopyTests(unittest.TestCase):
         self.assertEqual("failed", current["status"])
         self.assertIn("did not hold desktop for a live copy", current["message"])
 
+    def test_choosing_to_stop_the_vm_copies_it_stopped_and_starts_it_again(self):
+        self.seed_vm()
+        review = PLAN.plan("shed", "vm", "desktop", "copied", transfer_mode="copy", stop_source=True)
+        self.assertFalse(review["live"])
+        self.assertTrue(review["can_live"])
+        self.assertTrue(any("stops while its disks are backed up" in w for w in review["warnings"]), review["warnings"])
+        move = PLAN.start("shed", "vm", "desktop", "copied", transfer_mode="copy", stop_source=True)
+        self.assertFalse(STATE._find(move["id"]).get("live"))
+        halted = False
+        for _ in range(40):
+            current = STATE._find(move["id"])
+            if current["status"] != "running":
+                break
+            if current["phase"] == "quiescing" and current.get("flags", {}).get("quiesced"):
+                halted = halted or self.cluster.get(self.vm_path())["spec"]["runStrategy"] == "Halted"
+                self.cluster.objects.pop(self.vmi_path(), None)
+            PHASE.tick_all()
+        self.assertEqual("succeeded", current["status"], current["message"])
+        self.assertTrue(halted, "the source VM was not stopped for the copy")
+        self.assertEqual("Always", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+
+    def test_stop_choice_reaches_the_plan_from_the_route(self):
+        import homestead_move_engine as engine
+        request = mock.Mock(body={"cluster": "shed", "kind": "vm", "name": "desktop", "namespace": "copied",
+                                  "transfer_mode": "copy", "stop_source": True})
+        with mock.patch.object(PLAN, "plan", return_value={"ok": True}) as planned:
+            engine._plan_or_start(request, False)
+        self.assertTrue(planned.call_args.kwargs["stop_source"])
+
     def test_stopped_vm_copy_has_no_running_warning(self):
         self.seed_vm(running=False)
         review = PLAN.plan("shed", "vm", "desktop", "copied", transfer_mode="copy")
