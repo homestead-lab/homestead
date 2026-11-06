@@ -17,6 +17,14 @@ GiB = 1024 ** 3
 LONGHORN, HARVESTER = "longhorn.io/v1beta2", "harvesterhci.io/v1beta1"
 
 
+def setUpModule():
+    # summary() takes the kept "disks" reading: a cache another test module
+    # bound would hand one test the inventory of the one before.
+    patch = mock.patch.object(DISKS.homestead_routes, "_cached", [lambda key, seconds, fn: fn()])
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
+
+
 def lh_node(disks, status):
     return {"apiVersion": LONGHORN, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": "node1"},
             "spec": {"disks": disks}, "status": {"diskStatus": status}}
