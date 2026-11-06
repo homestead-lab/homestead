@@ -566,13 +566,6 @@ def _still_unconfirmed(ref, now):
     return "running", 20, _unconfirmed(ref)
 
 
-def _node_count():
-    try:
-        return len(kget("/api/v1/nodes").get("items", []))
-    except Exception:
-        return 1
-
-
 def status(item, now=None):
     """The job's next step: (status, progress, message). The host is let go
     of when the job ends."""
@@ -685,6 +678,98 @@ def kubelet_back(read, node, ref):
     return any(t > after for t in heard) or (renewed is not None and renewed > after)
 
 
+# kube-vip's pod and the host count, after the rollback is disarmed. Neither is
+# taken on trust: until each is proved the job keeps trying, for as long as it
+# waits for a restart, and then fails saying what was not done. ref["kube_vip"]
+# remembers it: {"pods": [the pods found first], "error": ...} until done, and
+# {"done": True} once it is. A job saved restarting by a version without it
+# has none, and is not sent back to kube-vip.
+KUBE_VIP_PODS = "/api/v1/namespaces/kube-system/pods"
+
+
+def _said(error):
+    return str(error)[:160] or type(error).__name__
+
+
+def _pod_key(pod):
+    return pod["metadata"].get("uid") or pod["metadata"]["name"]
+
+
+def restart_kube_vip(read, send, node, ref):
+    """Delete the kube-vip pods the job first found on node; True once none is
+    left to delete. A reply can be lost after the delete landed, so a retry goes
+    by what the cluster shows: a pod gone or going counts, and a replacement,
+    even under the same name, is left alone."""
+    state = ref.get("kube_vip") or {}
+    if state.get("done"):
+        return True
+    try:
+        found = read(f"{KUBE_VIP_PODS}?fieldSelector=spec.nodeName%3D{node}").get("items", [])
+        pods = [pod for pod in found if pod["metadata"]["name"].startswith("kube-vip")]
+        if "pods" not in state:
+            state = {"pods": [_pod_key(pod) for pod in pods]}
+            ref["kube_vip"] = state
+        for pod in pods:
+            if _pod_key(pod) in state["pods"] and not pod["metadata"].get("deletionTimestamp"):
+                try:
+                    send("DELETE", f"{KUBE_VIP_PODS}/{pod['metadata']['name']}")
+                except urllib.error.HTTPError as error:
+                    if error.code != 404:
+                        raise
+    except Exception as error:
+        ref["kube_vip"] = {**state, "error": _said(error)}
+        return False
+    ref["kube_vip"] = {"done": True}
+    return True
+
+
+def kube_vip_settled(read, send, node, ref):
+    """For the wait after the restart: try again if kube-vip is still unproved."""
+    return "kube_vip" not in ref or restart_kube_vip(read, send, node, ref)
+
+
+def host_count(read):
+    """How many hosts the cluster has, and why it is not known: (count, ""),
+    or (None, why). The host itself is in the list, so an empty one is no answer."""
+    try:
+        count = len(read("/api/v1/nodes").get("items", []))
+    except Exception as error:
+        return None, _said(error)
+    return (count, "") if count else (None, "the list came back empty")
+
+
+def _kube_vip_undone(ref, interface):
+    state = ref.get("kube_vip") or {}
+    if "kube_vip" not in ref or state.get("done"):
+        return []
+    return [f"Homestead could not restart kube-vip on {ref['node']} ({state.get('error', 'no answer')}), so it may still announce "
+            f"its addresses on the old interface. Delete the kube-vip pod on {ref['node']}, and it starts again on {interface}."]
+
+
+def _unfinished(ref, interface, service="", unread=""):
+    undone = _kube_vip_undone(ref, interface)
+    if unread:
+        undone.append(f"Homestead could not read the cluster's hosts ({unread}), so it did not restart {service} on {ref['node']}, "
+                      "and flannel may still carry pod traffic by the old interface. If the cluster has other hosts, run "
+                      f"`systemctl restart {service}` on {ref['node']}.")
+    return f"{ref['node']} carries {ref['address']} on {interface} and keeps it, but the change is not finished. " + " ".join(undone)
+
+
+def not_finished(ref, progress, elapsed, interface, seconds, service="", unread=""):
+    """The next step of a job with kube-vip or the host count still unproved:
+    (status, progress, message). It fails past seconds, saying what is undone."""
+    if elapsed > seconds:
+        return "failed", 100, _unfinished(ref, interface, service, unread)
+    trying = (["the cluster's hosts"] if unread else []) + ([f"kube-vip on {ref['node']}"] if _kube_vip_undone(ref, interface) else [])
+    return ("running", progress, f"{ref['node']} is on its new network; still trying to reach {' and '.join(trying)} "
+            f"({unread or ref['kube_vip'].get('error', 'no answer')}), for up to {max(0, int(seconds - elapsed))}s more")
+
+
+def not_back_with_kube_vip(reason, ref, interface):
+    """A host not back by the deadline, with kube-vip still undone if it is."""
+    return " ".join([reason, *_kube_vip_undone(ref, interface)])
+
+
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
@@ -739,15 +824,10 @@ def _step(item, now=None):
         if not ref.get("renamed"):
             ref.update(stage="done")
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
-        try:
-            pods = kget("/api/v1/namespaces/kube-system/pods?fieldSelector=spec.nodeName%3D" + node).get("items", [])
-            for pod in pods:
-                if pod["metadata"]["name"].startswith("kube-vip"):
-                    ksend("DELETE", f"/api/v1/namespaces/kube-system/pods/{pod['metadata']['name']}")
-        except Exception:
-            pass
+        vip = restart_kube_vip(kget, ksend, node, ref)
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        if service and _node_count() > 1:
+        hosts, unread = host_count(kget) if service else (1, "")
+        if hosts and hosts > 1:
             try:
                 hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
                             **_held(ref))
@@ -755,14 +835,19 @@ def _step(item, now=None):
                 pass    # it may have been scheduled: never twice; the Ready check below follows
             ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
             return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
+        if not vip or unread:
+            return not_finished(ref, 70, elapsed, ref["carries_on"], RESTART_SECONDS, service, unread)
         ref.update(stage="done")
         return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
     if ref["stage"] == "restarting":
+        vip = kube_vip_settled(kget, ksend, node, ref)
         if elapsed > 30 and kubelet_back(kget, node, ref):
+            if not vip:
+                return not_finished(ref, 92, elapsed, ref["carries_on"], RESTART_SECONDS)
             ref.update(stage="done")
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
         if elapsed > RESTART_SECONDS:
-            return "failed", 100, _not_back(ref, ref["carries_on"])
+            return "failed", 100, not_back_with_kube_vip(_not_back(ref, ref["carries_on"]), ref, ref["carries_on"])
         return "running", 92, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
 

@@ -312,13 +312,6 @@ def _still_unconfirmed(ref, now):
     return "running", 20, _unconfirmed(ref)
 
 
-def _node_count():
-    try:
-        return len(kget("/api/v1/nodes").get("items", []))
-    except Exception:
-        return 1
-
-
 def status(item, now=None):
     """The job's next step: (status, progress, message). The host is let go
     of when the job ends."""
@@ -383,15 +376,10 @@ def _step(item, now=None):
         return "running", 30, f"Waiting for {', '.join(waiting)}; {node} puts itself back in {max(0, int(ROLLBACK_SECONDS - elapsed))}s"
     if ref["stage"] == "confirmed":
         # kube-vip finds its interface when it starts: its pod here starts again.
-        try:
-            pods = kget("/api/v1/namespaces/kube-system/pods?fieldSelector=spec.nodeName%3D" + node).get("items", [])
-            for pod in pods:
-                if pod["metadata"]["name"].startswith("kube-vip"):
-                    ksend("DELETE", f"/api/v1/namespaces/kube-system/pods/{pod['metadata']['name']}")
-        except Exception:
-            pass
+        vip = HOST_BONDS.restart_kube_vip(kget, ksend, node, ref)
         service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        if service and _node_count() > 1:
+        hosts, unread = HOST_BONDS.host_count(kget) if service else (1, "")
+        if hosts and hosts > 1:
             try:
                 hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
                             **_held(ref))
@@ -399,14 +387,19 @@ def _step(item, now=None):
                 pass    # it may have been scheduled: never twice; the Ready check below follows
             ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
             return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
+        if not vip or unread:
+            return HOST_BONDS.not_finished(ref, 60, elapsed, BRIDGE, RESTART_SECONDS, service, unread)
         ref.update(stage="done")
         return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
     if ref["stage"] == "restarting":
+        vip = HOST_BONDS.kube_vip_settled(kget, ksend, node, ref)
         if elapsed > 30 and HOST_BONDS.kubelet_back(kget, node, ref):
+            if not vip:
+                return HOST_BONDS.not_finished(ref, 90, elapsed, BRIDGE, RESTART_SECONDS)
             ref.update(stage="done")
             return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
         if elapsed > RESTART_SECONDS:
-            return "failed", 100, _not_back(ref, BRIDGE)
+            return "failed", 100, HOST_BONDS.not_back_with_kube_vip(_not_back(ref, BRIDGE), ref, BRIDGE)
         return "running", 90, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} is on {BRIDGE}"
 
