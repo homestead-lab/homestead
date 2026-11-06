@@ -102,7 +102,15 @@ def recovery_command(namespace, state):
     is a bare pod with this name."""
     target = A.worker_target(state)
     name = state["plan"]["worker"]["name"]
-    return f"kubectl -n {namespace} exec {'job/' + name if target and target['kind'] == 'Job' else name} -- python3 {RECOVERY_MODULE} --action resume"
+    action = "return-original" if _goes_back_first(state) else "resume"
+    return f"kubectl -n {namespace} exec {'job/' + name if target and target['kind'] == 'Job' else name} -- python3 {RECOVERY_MODULE} --action {action}"
+
+
+def _goes_back_first(state):
+    """Held before any request, with a copy check that only lasts a minute: by the time a
+    person reads this it has expired, and resuming could not get past it."""
+    return (state["phase"] == "prepare" and not state["journal"]["ref"]["storage_writes"]
+            and bool(state.get("plan", {}).get("copy_preflight")))
 
 
 def recovery_fields(namespace, state):
@@ -119,6 +127,9 @@ def recovery_help(namespace, state):
         return (" Recovery needs every request's outcome, so settle this one by hand first: "
                 "docs/data-move-recovery.md, \"A request with no recorded outcome\".")
     command = recovery_command(namespace, state)
+    if _goes_back_first(state):
+        return (f" To review going back, run: {command}, then run it again with --confirm <fingerprint>. "
+                "It writes nothing until confirmed. Then start a new move.")
     cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
     return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
             + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
@@ -200,6 +211,7 @@ class Runner:
         self.pod_uid, self.config = pod_uid, config
         self.replacing = False
         self.acting = False  # whether the record names this pod: only then can it hold
+        self.retry_reason = None  # why a pod that hasn't taken over is still trying
         self.host_down = None
         self.clock = clock
         self.lock = threading.Lock()
@@ -234,6 +246,8 @@ class Runner:
                     view.pop("recovery_command", None)
                     view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
                                 **recovery_fields(self.namespace, anchor.state))
+            elif self.retry_reason and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message=f"This coordinator has not taken over yet and is retrying: {self.retry_reason}. " + view["message"])
             elif self.host_down and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message=self.host_down)
             elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
@@ -342,6 +356,7 @@ class Runner:
                 else:
                     self._save_hold()
                     return self.snapshot()
+            self.retry_reason = None
             try:
                 anchor = self._load()
                 # Before anything is written: the record, not this pod's environment, says what was reviewed.
@@ -400,6 +415,17 @@ class Runner:
     def _host_down(self, anchor, hosts):
         names = _names(hosts)
         writes = anchor.state["journal"]["ref"]["storage_writes"]
+        if A.stop_check_expired(anchor.state, self.clock()):
+            # This move can never stop Homestead now: no wait can help it.
+            self.host_down = None
+            self.hold = (f"{names} is down, and this move's copy check has expired, so it can't stop Homestead now. Homestead was not "
+                         "stopped. Go back to the original volume, which writes nothing and does not need that host.")
+            self._save_hold()
+            return None
+        if _goes_back_first(anchor.state):
+            return self._wait_for(anchor, "host", None, None,
+                f"{names} is down. Homestead has not been stopped. The move can go on only if it is back within about a minute, "
+                "while its copy check lasts; after that it holds, and the way out is going back.")
         if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
             return self._wait_for(anchor, "host", None, None,
                 f"{names} is down. The move has passed the point where it can stop, so it waits with no limit and "
@@ -442,6 +468,10 @@ class Runner:
         if self.pod_uid is not None and not self.acting:
             if transient(error) and self.outage_since is None:
                 self.outage_since = self.clock()
+            cause = error.__cause__ or error.__context__
+            code = error.code if isinstance(error, urllib.error.HTTPError) else getattr(cause, "code", None)
+            self.retry_reason = (f"the Kubernetes API answered {code}" if code else "the Kubernetes API is not answering" if transient(error)
+                                 else str(error)[:200] if isinstance(error, Held) else "its next step could not be verified")
             return True
         if not transient(error):
             return False

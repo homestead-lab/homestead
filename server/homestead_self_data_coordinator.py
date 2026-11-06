@@ -8,6 +8,7 @@ import copy
 import datetime
 import json
 import time
+import urllib.error
 
 import homestead_self_data_copy as COPY
 import homestead_self_data_anchor as A
@@ -153,6 +154,8 @@ class Coordinator:
             if not node or not (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"] or own):
                 continue
             if node not in pins:
+                if self.going_back and own and restarted:
+                    continue  # Homestead's restart may land on a host that joined since
                 raise Held("A host this data move uses was not reviewed; review the move again")
             if copy_uid and owner(pod, "Job", copy_uid):
                 wanted = self.anchor.state.get("copy_host_boot", pins[node])
@@ -178,7 +181,13 @@ class Coordinator:
         for pinned in self.plan["nodes"]:
             if pinned["name"] not in involved:
                 continue
-            node = self.read("/api/v1/nodes/" + pinned["name"])
+            try:
+                node = self.read("/api/v1/nodes/" + pinned["name"])
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    raise Held(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
+                               "Nothing was forced and both volumes are retained") from None
+                raise
             wanted = involved[pinned["name"]]
             ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))
             if identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp"):
@@ -201,8 +210,17 @@ class Coordinator:
                     down.append(pinned["name"])
                     continue
                 raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
-        if down:
+        # Going back from before any request writes nothing, so a down host can't matter.
+        if down and not (self.going_back and not self.writer.entries):
             raise HostDown(down)
+
+    def cluster_changes(self):
+        """In words: how the cluster's hosts differ from the review's, for a refusal."""
+        pins = {n["name"]: n["uid"] for n in self.plan["nodes"]}
+        now = {n["metadata"]["name"]: n["metadata"]["uid"] for n in self._list("/api/v1/nodes")}
+        return ([f"{name} has been removed" for name in sorted(set(pins) - set(now))]
+                + [f"{name} has been replaced" for name in sorted(set(pins) & set(now)) if pins[name] != now[name]]
+                + [f"{name} has joined" for name in sorted(set(now) - set(pins))])
 
     def _environment(self):
         self.writer.check()

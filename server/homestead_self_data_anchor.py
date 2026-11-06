@@ -25,6 +25,19 @@ WAITS = frozenset(PHASES[1:-1]) | {"recover", "host", "figure"}
 MAX_BYTES = 262144
 
 
+# How long the copy admission check is good for, before Homestead is stopped. It can't
+# be done again from here: the helper may not create Jobs by dry run, only the app can.
+COPY_CHECK_LIFE = 60
+
+
+def stop_check_expired(state, now):
+    """Nothing has been requested yet and the copy check has expired, so this move can
+    never stop Homestead. Going back is the way out: it writes nothing."""
+    receipt = state.get("plan", {}).get("copy_preflight")
+    return (bool(receipt) and state["phase"] == "prepare" and not state["journal"]["ref"]["storage_writes"]
+            and not 0 <= now - receipt["checked_at"] <= COPY_CHECK_LIFE)
+
+
 def pointer(namespace, state, uid):
     """Non-secret local pointer; the API record remains the authority."""
     if "plan" not in state:

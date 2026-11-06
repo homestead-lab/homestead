@@ -33,7 +33,7 @@ def copy_pod(job):
 
 
 def validate_receipt(receipt, job, *, now=None):
-    from homestead_self_data_anchor import _keys, _hash
+    from homestead_self_data_anchor import _keys, _hash, COPY_CHECK_LIFE
     _keys(receipt, ("checked_at", "request", "pod_request", "admitted", "limitation"))
     for key in ("request", "pod_request", "admitted"):
         _hash(receipt[key])
@@ -41,8 +41,9 @@ def validate_receipt(receipt, job, *, now=None):
             or receipt["request"] != digest(job) or receipt["pod_request"] != digest(copy_pod(job))
             or receipt["limitation"] != LIMITATION):
         raise Held("The copy admission receipt does not match this data move")
-    if now is not None and not 0 <= now - receipt["checked_at"] <= 60:
-        raise Held("Copy admission preflight expired before Homestead stopped; obtain a fresh review")
+    if now is not None and not 0 <= now - receipt["checked_at"] <= COPY_CHECK_LIFE:
+        raise Held("The copy check expired before Homestead was stopped, so this move can't stop it now. "
+                   "Go back to the original volume, which changes nothing, then start a new move")
 
 
 class Preflight:

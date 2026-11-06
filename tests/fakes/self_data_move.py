@@ -274,6 +274,16 @@ class Move:
         self.kube.add(node)
         self.pass_time(60)
 
+    def joined(self, host):
+        """A host added to the cluster after the review."""
+        self.kube.add(_obj("Node", host, ns=None, labels={"kubernetes.io/hostname": host}, status={"nodeInfo": {"bootID": "boot-" + host},
+            "conditions": [{"type": "Ready", "status": "True"}],
+            "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "110"}, "capacity": {"cpu": "8", "memory": "16Gi", "pods": "110"}}))
+
+    def removed(self, host):
+        self.down.add(host)
+        self.kube.discard("/api/v1/nodes/" + host)
+
     def rebooted(self, host):
         """It came back: Ready, a fresh lease, another boot id."""
         self.down.discard(host)

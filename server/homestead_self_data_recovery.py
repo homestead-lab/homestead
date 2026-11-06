@@ -10,6 +10,7 @@ import json
 import os
 import time
 
+import homestead_self_data_anchor as A
 import homestead_self_data_coordinator as C
 from homestead_storage_journal import Held, digest, identity, shape
 
@@ -62,6 +63,16 @@ def review(anchor, read, logs, action, *, clock=time.time):
     engine = C.Coordinator(candidate, current, forbidden, logs, None,
                            worker_uid=state["plan"]["worker"]["uid"], clock=clock)
     engine.going_back = action == "return-original"
+    if action == "resume" and A.stop_check_expired(state, clock()):
+        raise Held("The copy check expired before Homestead was stopped, so resuming can't get past it: going back is the only "
+                   "way. It changes nothing, as Homestead was not stopped. Preview --action return-original, then start a new move")
+    target = A.worker_target(state)
+    if action == "resume" and target and target["kind"] == "Job":
+        changes = engine.cluster_changes()
+        if changes:
+            raise Held("Resuming needs the cluster as it was reviewed, and " + ", ".join(changes) + ". " + (
+                "It can't go back now either: see docs/data-move-recovery.md, \"Hosts removed or added\"" if cutover else
+                "Preview --action return-original, which does not need it unless the original volume or Homestead's pods are on a missing host"))
     try:
         dep = engine._environment()
     except C.HostDown as down:
@@ -115,7 +126,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         from homestead_self_data_fence import pin_app_image
         pin_app_image(proposed, state["plan"]["copy_image"])
         report = capacity(current, anchor.namespace, "restart", proposed, state["plan"]["nodes"],
-                          state["plan"]["admission"]["threshold"], clock=clock, boots=False)
+                          state["plan"]["admission"]["threshold"], clock=clock, boots=False, members=False)
         result["restart"], result["warnings"] = report["receipt"], report["warnings"]
     if not 0 <= clock() - started <= 30:
         raise Held("Recovery inspection took too long; obtain a fresh review")
@@ -137,7 +148,6 @@ def main(argv=None):
     parser.add_argument("--confirm", help="Fingerprint from the immediately preceding preview")
     args = parser.parse_args(argv)
     try:
-        import homestead_self_data_anchor as A
         import homestead_self_data_kube as K
         import homestead_self_data_launch as L
         config, scope = L.parse_configuration(os.environ.get(L.CONFIG_ENV))

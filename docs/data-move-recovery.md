@@ -61,7 +61,9 @@ What each held phase allows:
   it is. Nothing is written to the Deployment; the coordinator checks it is
   still the reviewed one on the original claim with its replica count, then
   records the return, startup writes resume and cleanup removes the helpers.
-  `resume` retries the stop with every check it had.
+  It does not need a host that is down. `resume` works only within about a minute: the copy
+  check has a one-minute life and can't be done again from here, so after that its preview
+  refuses and going back is the only way. Then start a new move. The hold offers going back first.
 - **Held after the stop, before the switch request**: `resume`, or
   `return-original` as above.
 - **Held after the switch request** (phase switch or start): `resume` only,
@@ -342,8 +344,12 @@ be writing, so the move holds at once.
 
 ### A host that never comes back
 
-Before the switch, the move waits 30 minutes for it, saying so on the page, then holds.
-The 10-minute deadlines don't run during that wait.
+Before any stop request, the wait lasts only as long as the copy check, about a minute: after
+that this move can never stop Homestead, so it holds at once and the way out is going back,
+which writes nothing and does not need the host. Homestead keeps running as it was.
+
+After the stop request and before the switch, the move waits 30 minutes for it, saying so
+on the page, then holds. The 10-minute deadlines don't run during that wait.
 
 - **The original volume is not on that host:** preview and confirm
   `--action return-original`. It does not need the host, and Homestead restarts on
@@ -353,12 +359,29 @@ The 10-minute deadlines don't run during that wait.
   help, because that disk holds the only copy Homestead has. Bring the host or its disk back, or
   restore from a backup. Do not point the Deployment at another volume by hand.
 
-After the switch, or a start request, the move waits with no limit and the page says so.
-Nothing is written, and a hold would only keep the new pods unready. It can't go back:
-the new pods may have written to the new volume. If the new volume's host will never
-return, the verified copy on it is gone too. The original volume is retained and
-holds the data as it was when Homestead stopped; whatever Homestead wrote after the
-switch is not on it. Going back to it is an administrator-reviewed recovery outside this tool.
+After the switch, the move waits with no limit and the page says so, because a hold would
+only keep the new pods unready. Recovery can't go back from here. If the new volume's host
+will never return, the verified copy on it is gone too, and what that costs depends on when:
+
+- **After the switch, before the start request:** replicas are still 0, so **nothing
+  has been written to the new volume, and the original volume is complete.** Nothing is
+  lost. Recovery still can't go back in this window, so it is an administrator-reviewed
+  recovery outside this tool.
+- **After the start request:** the new pods may have written to the new volume. The
+  original holds the data as it was when Homestead stopped, and whatever was written after that
+  is not on it. Going back to it is also an administrator-reviewed recovery outside this tool.
+
+### Hosts removed or added
+
+A Node deleted, a host replaced under the same name, or a new one joining holds the move at
+its next capacity check, because the cluster is no longer the one reviewed.
+
+- **Resuming refuses**, and says what changed. Put the cluster back as it was, or go back.
+- **Going back ignores the change**, unless the original volume or one of Homestead's pods is on
+  the missing host; then it refuses and names it. Remove a pod left on a host that is gone, as
+  "A Pod on a dead host" says. Homestead's restart may land on a host that has joined.
+- **After the switch** recovery can only resume, so the cluster has to be put back as it was;
+  otherwise it is an administrator-reviewed recovery outside this tool.
 
 **A host just back** has no live memory figure for a minute or two. If that is the only
 thing new at a capacity check, the move waits up to 5 minutes for it, saying so on the

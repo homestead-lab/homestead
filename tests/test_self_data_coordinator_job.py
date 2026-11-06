@@ -587,10 +587,28 @@ class ApiOutageTests(unittest.TestCase):
         m.pod_failed(m.first_pod)
         self.kube.fail(m.anchor.path, 403, method="PUT")
         new = m.runner(second)
-        self.assertNotEqual("held", new.tick()["status"])
+        view = new.tick()
+        self.assertNotEqual("held", view["status"])
         self.assertIsNone(new.hold)
-        new.tick()
+        self.assertIn("retrying", view["message"])
+        self.assertIn("403", view["message"], "the page says why")
+        view = new.tick()
         self.assertEqual(second[0], m.state()["runtime"]["pod_uid"])
+        self.assertNotIn("retrying", view["message"])
+
+    def test_a_lasting_refusal_keeps_saying_so_and_never_latches(self):
+        m = Move(self.kube)
+        m.runner().tick()
+        second = m.start_pod("node-b")
+        m.pod_failed(m.first_pod)
+        self.kube.fail(m.anchor.path, 403, method="PUT", times=50)
+        new = m.runner(second)
+        for _ in range(3):
+            m.pass_time(600)
+            view = new.tick()
+            self.assertIn("403", view["message"])
+            self.assertNotEqual("held", view["status"])
+        self.assertIsNone(new.hold)
 
     def test_a_pod_that_was_replaced_stops_being_able_to_hold(self):
         m = Move(self.kube)
@@ -648,6 +666,136 @@ class ApiOutageTests(unittest.TestCase):
         self.blip(run)
         self.assertIsNone(run.hold)
         self.assertEqual("running", m.state()["runtime"]["state"])
+
+
+class ClusterChangedTests(unittest.TestCase):
+    """A host removed, or one added, since the review. Going back doesn't care, unless what it
+    needs was on the missing host. Resuming refuses, in words."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.m = Move(self.kube, pins={"new-pv": "node-a"})
+        self.run_ = self.m.runner(real_admission=True)
+        self.run_.tick(); self.m.stopped(); self.run_.tick()
+        self.assertEqual("copy", self.m.state()["phase"])
+
+    def load(self):
+        return A.Anchor(self.m.read, self.m.send, NS, "homestead").load(**self.m.handle)
+
+    def preview(self, action):
+        return R.review(self.load(), self.m.read, lambda _: self.m.logs_text, action, clock=lambda: self.m.now)
+
+    def go_back(self):
+        fingerprint = self.preview("return-original")["fingerprint"]
+        R.confirm(self.load(), self.m.read, lambda _: self.m.logs_text, "return-original", fingerprint, clock=lambda: self.m.now)
+        self.run_.tick()
+        self.assertIn("recover-start", self.m.steps())
+        dep = self.kube.object(self.m.dep_path)
+        self.assertEqual((1, "source"), (dep["spec"]["replicas"], dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"]))
+
+    def test_the_dead_hosts_node_deleted_going_back_reaches_the_restart(self):
+        """The new volume's host never came back, the hold came, then someone deleted its Node."""
+        m = self.m
+        m.host_down("node-a")
+        m.pod_lost(m.first_pod)
+        self.run_ = m.runner(m.start_pod("node-b"), real_admission=True)
+        self.run_.tick()
+        m.pass_time(1800)
+        self.assertEqual("held", self.run_.tick()["status"])
+        m.removed("node-a")
+        with self.assertRaises(Held) as refused:
+            self.preview("resume")
+        self.assertNotIn("HTTP Error", str(refused.exception))
+        self.assertIn("node-a", str(refused.exception))
+        self.assertIn("removed", str(refused.exception))
+        self.assertIn("return-original", str(refused.exception))
+        self.go_back()
+
+    def held_on_the_change(self):
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("membership changed", view["message"])
+
+    def test_a_host_removed_at_a_capacity_check_holds_and_going_back_works(self):
+        self.m.removed("node-b")
+        self.held_on_the_change()
+        with self.assertRaisesRegex(Held, "(?s)node-b.*removed.*return-original"):
+            self.preview("resume")
+        self.go_back()
+
+    def test_a_host_joined_holds_and_going_back_works_and_homestead_may_land_on_it(self):
+        m = self.m
+        m.joined("node-c")
+        self.held_on_the_change()
+        with self.assertRaisesRegex(Held, "(?s)node-c.*joined.*return-original"):
+            self.preview("resume")
+        self.go_back()
+        dep = self.kube.object(m.dep_path)
+        dep["status"] = {"observedGeneration": dep["metadata"]["generation"], "replicas": 1, "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1}
+        self.kube.add(dep)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "homestead-back", "namespace": NS,
+            "ownerReferences": [{"kind": "ReplicaSet", "uid": m.rs_uid, "name": "hs-rs", "controller": True}]},
+            "spec": {"nodeName": "node-c", "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "source"}}],
+                     "containers": dep["spec"]["template"]["spec"]["containers"]},
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}})
+        self.assertEqual("cancelled", self.run_.tick()["status"])
+
+    def test_a_host_replaced_under_the_same_name_is_treated_as_removed(self):
+        node = self.kube.object("/api/v1/nodes/node-b"); node["metadata"]["uid"] = "a-new-machine"; self.kube.add(node)
+        self.assertEqual("held", self.run_.tick()["status"])
+        with self.assertRaisesRegex(Held, "(?s)node-b.*replaced.*return-original"):
+            self.preview("resume")
+        self.go_back()
+
+    def test_going_back_refuses_when_the_original_volume_was_on_the_removed_host(self):
+        kube = Kube()
+        with kube:
+            m = Move(kube, pins={"old-pv": "node-a"})
+            run = m.runner(real_admission=True)
+            run.tick(); m.stopped(); run.tick()
+            m.pod_lost(m.first_pod)
+            run = m.runner(m.start_pod("node-b"), real_admission=True)
+            m.removed("node-a")
+            self.assertEqual("held", run.tick()["status"])
+            load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+            with self.assertRaises(Held) as refused:
+                R.review(load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
+            self.assertIn("node-a", str(refused.exception))
+            self.assertIn("removed", str(refused.exception))
+            self.assertNotIn("HTTP Error", str(refused.exception))
+
+    def test_going_back_refuses_while_a_homestead_pod_is_listed_on_the_removed_host(self):
+        m = self.m
+        pod = self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "homestead-stuck", "namespace": NS,
+            "ownerReferences": [{"kind": "ReplicaSet", "uid": m.rs_uid, "name": "hs-rs", "controller": True}]},
+            "spec": {"nodeName": "node-b"}, "status": {"phase": "Running"}})
+        m.removed("node-b")
+        self.assertEqual("held", self.run_.tick()["status"])
+        with self.assertRaisesRegex(Held, "(?s)node-b.*removed"):
+            self.preview("return-original")
+        self.kube.discard(pod)
+        self.go_back()
+
+    def test_a_stranger_on_a_new_host_is_still_refused_when_going_back(self):
+        m = self.m
+        m.joined("node-c")
+        self.held_on_the_change()
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                       "spec": {"nodeName": "node-c", "volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+        with self.assertRaisesRegex(Held, "not reviewed"):
+            self.preview("return-original")
+
+    def test_after_the_switch_resume_refuses_in_words_and_does_not_offer_going_back(self):
+        m = self.m
+        run = self.run_
+        run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick(); m.stopped()
+        self.assertIn("switch", m.steps())
+        m.removed("node-b")
+        self.assertEqual("held", run.tick()["status"])
+        with self.assertRaises(Held) as refused:
+            self.preview("resume")
+        self.assertIn("node-b", str(refused.exception))
+        self.assertNotIn("return-original", str(refused.exception))
 
 
 class HostNeverBackTests(unittest.TestCase):
@@ -808,21 +956,31 @@ class HostNeverBackTests(unittest.TestCase):
 
     def test_long_host_names_still_reach_the_record(self):
         """Its message has a size limit: a hold that can't be written is a hold no one can act on."""
-        kube = Kube()
-        with kube:
-            a, b, c = ("n" * 250 + "-" + x for x in "abc")
-            m = Move(kube, hosts=(a, b, c), pins={"new-pv": a})
-            pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = b; kube.add(pod)
-            m.pod_lost(m.first_pod)
-            run = m.runner(m.start_pod(c))
-            m.host_down(a); m.host_down(b)
-            view = run.tick()
-            self.assertNotEqual("held", view["status"])
-            self.assertLessEqual(len(view["message"]), 512)
-            self.assertIn("n" * 20, m.state()["runtime"]["message"], "the heartbeat wrote it")
-            m.pass_time(1800)
-            self.assertEqual("held", run.tick()["status"])
-            self.assertEqual("held", m.state()["runtime"]["state"])
+        for several in (False, True):
+            with self.subTest(several=several):
+                kube = Kube()
+                with kube:
+                    a, b, c = ("n" * 250 + "-" + x for x in "abc")
+                    m = Move(kube, hosts=(a, b, c), pins={"new-pv": a})
+                    run = m.runner()
+                    if several:                 # before the stop: Homestead's own host counts too
+                        pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = b; kube.add(pod)
+                    else:                       # after it: the 30-minute wait, on one long name
+                        run.tick(); m.stopped(); run.tick()
+                    m.pod_lost(m.first_pod)
+                    run = m.runner(m.start_pod(c))
+                    m.host_down(a)
+                    if several:
+                        m.host_down(b)
+                    else:
+                        view = run.tick()
+                        self.assertNotEqual("held", view["status"])
+                        self.assertLessEqual(len(view["message"]), 512)
+                        self.assertIn("n" * 20, m.state()["runtime"]["message"], "the heartbeat wrote it")
+                        m.pass_time(1800)
+                    self.assertEqual("held", run.tick()["status"])
+                    self.assertEqual("held", m.state()["runtime"]["state"])
+                    self.assertIn("n" * 20, m.state()["runtime"]["message"])
 
     def test_the_original_on_the_same_dead_disk_cannot_go_back_and_says_so(self):
         kube = Kube()
@@ -853,9 +1011,7 @@ class HostNeverBackTests(unittest.TestCase):
             pod = kube.object(m.old_pod); pod["spec"]["nodeName"] = "node-b"; kube.add(pod)
             run = m.runner()
             m.host_down("node-a"); m.host_down("node-b")
-            view = run.tick()
-            self.assertNotEqual("held", view["status"])
-            self.assertIn("node-a, node-b", view["message"])
+            self.assertIn("node-a, node-b", run.tick()["message"])
 
     def test_a_down_host_does_not_mask_a_measured_one(self):
         """Pinned node-a is down, and node-b rebooted with an old pod listed: a hold, at once."""
@@ -957,11 +1113,10 @@ class HeldBeforeTheStopTests(MoveTest):
         self.run_ = m.runner()
         self.assertEqual("held", self.run_.tick()["status"])
 
-    def test_both_previews_pass_after_a_reboot(self):
+    def test_going_back_previews_after_a_reboot(self):
         self.held()
         self.m.rebooted("node-a")
-        for action in ("resume", "return-original"):
-            self.assertEqual(action, R.review(self.load(), self.m.read, lambda _: self.m.logs_text, action, clock=lambda: self.m.now)["action"])
+        self.assertEqual("return-original", R.review(self.load(), self.m.read, lambda _: self.m.logs_text, "return-original", clock=lambda: self.m.now)["action"])
 
     def test_going_back_writes_nothing_and_homestead_keeps_running(self):
         m = self.m
@@ -973,17 +1128,65 @@ class HeldBeforeTheStopTests(MoveTest):
         self.assertEqual([], m.writes_to(m.dep_path))
         self.assertEqual(1, self.kube.object(m.dep_path)["spec"]["replicas"])
 
-    def test_resume_after_a_reboot_sends_no_stop_on_an_expired_check_and_holds_again(self):
-        """The copy check's one-minute receipt: resume can't get past it, and nothing is sent."""
+    def test_resume_refuses_at_preview_once_the_copy_check_has_expired(self):
+        """It could never get past that check, so it isn't offered: going back is the way out."""
         m = self.m
         self.held()
-        m.rebooted("node-a")
+        before = list(self.kube.writes)
+        for reboot in (False, True):
+            if reboot:
+                m.rebooted("node-a")
+            with self.assertRaisesRegex(Held, "(?s)expired.*going back.*new move"):
+                R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
+        self.assertEqual(before, self.kube.writes)
+        self.assertEqual([], m.writes_to(m.dep_path))
+
+    def test_the_hold_offers_going_back_first_and_no_fresh_review_it_cannot_get(self):
+        self.held()
+        view = self.run_.snapshot()
+        self.assertIn("--action return-original", view["recovery_command"])
+        self.assertNotIn("--action resume", view["message"])
+        self.assertIn("--action return-original", view["message"])
+        self.assertNotIn("fresh review", view["message"])
+        self.assertIn("new move", view["message"])
+        self.assertIn("To review going back", view["message"])
+        self.assertNotIn("(or --action", view["message"])
+
+    def test_resume_works_while_the_copy_check_is_still_good(self):
+        m = self.m
+        run = m.runner()
+        path = self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                              "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+        self.assertEqual("held", run.tick()["status"])
+        self.kube.discard(path)
         review = R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
         R.confirm(self.load(), m.read, lambda _: m.logs_text, "resume", review["fingerprint"], clock=lambda: m.now)
-        self.run_.tick()
-        view = self.run_.tick()
+        run.tick()
+        self.assertEqual(["stop"], m.steps())
+
+    def test_a_host_down_before_the_stop_holds_at_once_when_the_check_expires(self):
+        """Not after 30 minutes: that wait is for a move that can still continue, and this
+        one can't. Going back writes nothing, so it does not need the host."""
+        m = self.m
+        run = m.runner()
+        m.host_down("node-a")                       # 60 s: the check is good for exactly that long
+        view = run.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        self.assertNotIn("carries on", view["message"])
+        self.assertIn("minute", view["message"])
+        m.pass_time(1)
+        view = run.tick()
         self.assertEqual("held", view["status"])
-        self.assertIn("expired", view["message"])
+        self.assertEqual("held", m.state()["runtime"]["state"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("return-original", view["message"])
+        self.assertEqual([], m.writes_to(m.dep_path))
+        with self.assertRaisesRegex(Held, "going back"):
+            R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
+        review = R.review(self.load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
+        R.confirm(self.load(), m.read, lambda _: m.logs_text, "return-original", review["fingerprint"], clock=lambda: m.now)
+        self.assertEqual("cancelled", run.tick()["status"])
         self.assertEqual([], m.writes_to(m.dep_path))
 
     def test_homesteads_host_down_before_the_stop_is_a_wait_with_nothing_sent(self):

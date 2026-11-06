@@ -205,7 +205,7 @@ class PreflightTests(unittest.TestCase):
         engine = Coordinator.Coordinator(cluster.anchor, cluster.read, cluster.send, lambda _: "", cluster.admit,
                                           worker_uid="coordinator-uid", clock=lambda: 1000)
         before = len(cluster.sent)
-        with self.assertRaisesRegex(Held, "expired before Homestead stopped"): engine.step()
+        with self.assertRaisesRegex(Held, "expired before Homestead was stopped"): engine.step()
         self.assertEqual(before, len(cluster.sent))
         self.assertEqual(2, cluster.objects[cluster.dep_path]["spec"]["replicas"])
 

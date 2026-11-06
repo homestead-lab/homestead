@@ -103,13 +103,21 @@ def _inventory(read, path, *, metric=False):
     return result["items"]
 
 
-def _nodes(read, pinned, now, *, boots=True):
+def _nodes(read, pinned, now, *, boots=True, members=True):
     """boots: the review before anything stops compares every reviewed host's boot id.
     During the move only a replaced or removed host matters here: the coordinator
-    measures reboots itself, on the hosts actually in use (Coordinator._involved)."""
+    measures reboots itself, on the hosts actually in use (Coordinator._involved).
+    members: going back to the original volume ignores hosts removed, replaced or
+    added: it needs only what the original was running on, which the coordinator checks,
+    and counts capacity on the reviewed hosts that are still there."""
     raw = _inventory(read, "/api/v1/nodes")
     expected = {n["name"]: n for n in pinned}
-    if len(expected) != len(pinned) or {n["metadata"]["name"] for n in raw} != set(expected):
+    if len(expected) != len(pinned):
+        raise Held("Cluster membership changed; review the data move placement again")
+    if not members:
+        raw = [n for n in raw if n["metadata"]["name"] in expected and n["metadata"]["uid"] == expected[n["metadata"]["name"]]["uid"]
+               and not n["metadata"].get("deletionTimestamp")]
+    elif {n["metadata"]["name"] for n in raw} != set(expected):
         raise Held("Cluster membership changed; review the data move placement again")
     try:
         metrics = {n["metadata"]["name"]: n for n in _inventory(read, "/apis/metrics.k8s.io/v1beta1/nodes", metric=True)}
@@ -188,7 +196,7 @@ def _review_key(fingerprint, threshold, nodes):
     return digest({"workload": fingerprint, "threshold": threshold, "nodes": sorted(nodes, key=lambda n: n["name"])})
 
 
-def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time, boots=True):
+def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time, boots=True, members=True):
     """Return displayable fresh evidence plus an unsigned receipt for approval.
 
     Never filters old or terminating pods out of the inventory. The phase engine
@@ -203,7 +211,7 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
         if path not in cache:
             cache[path] = copy.deepcopy(read(path))
         return copy.deepcopy(cache[path])
-    nodes = _nodes(current, pinned_nodes, started, boots=boots)
+    nodes = _nodes(current, pinned_nodes, started, boots=boots, members=members)
     pods = _inventory(current, "/api/v1/pods")
     # Do not let a planner's unknown-storage caution become a RAM override.
     for volume in dep["spec"]["template"]["spec"].get("volumes", []):
@@ -286,7 +294,8 @@ class Admitter:
                     raise Held("Copy or restart approval no longer matches; Homestead has not been stopped")
             return True
         stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
-        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False)
+        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False,
+                        members=purpose != "recover-start")
         approved = self.policy["reviews"][stage]
         if purpose == "recover-start":
             approved = (self.handoff or {}).get("recovery", {}).get("restart")
@@ -313,5 +322,5 @@ class Admitter:
             return []
         pins = {n["name"]: n["boot_id"] for n in self.nodes}
         boots = {n["metadata"]["name"]: n.get("status", {}).get("nodeInfo", {}).get("bootID") for n in _inventory(self.read, "/api/v1/nodes")}
-        missing = [n["name"] for n in _nodes(self.read, self.nodes, self.clock(), boots=False) if not n["mem_metrics_available"]]
+        missing = [n["name"] for n in _nodes(self.read, self.nodes, self.clock(), boots=False, members=False) if not n["mem_metrics_available"]]
         return missing if missing and all(boots.get(name) != pins[name] for name in missing) else []
