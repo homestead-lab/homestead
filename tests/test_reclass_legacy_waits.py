@@ -13,6 +13,8 @@ import homestead_cancel as CANCEL
 import homestead_kube as K
 import homestead_operations as OPS
 import homestead_reclass as RC
+import homestead_storage_conflicts as CONFLICTS
+import homestead_storage_guard as GUARD
 import homestead_storage_server as STORAGE_ROUTES
 from fakes.kube import Kube
 
@@ -20,6 +22,12 @@ CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/data"
 TEMP = "/api/v1/namespaces/lab/persistentvolumeclaims/data-reclass"
 APP = "/apis/apps/v1/namespaces/lab/deployments/app"
 LIMIT = 10 * 60
+RECHECK = 60
+REVIEWED = [{"kind": "Deployment", "name": "app", "replicas": 2}]
+
+
+class Crash(BaseException):
+    """The server going away: nothing in the jobs loop catches this."""
 
 
 def claim(name, volume, finalizers=()):
@@ -135,7 +143,7 @@ class LegacyMoveTests(unittest.TestCase):
         with mock.patch.object(RC, "plan", return_value={"ok": False, "_fences": {}}):
             job = self.look(ident)
         self.assertEqual("failed", job["status"])
-        self.assertIn("Nothing was stopped", job["message"])
+        self.assertIn("Every app is as reviewed", job["message"])
         self.assertEqual(2, self.replicas(), "nothing was touched")
         self.assertFalse(job["resumable"])
         OPS.dismiss(ident)
@@ -148,7 +156,7 @@ class LegacyMoveTests(unittest.TestCase):
             self.now += LIMIT
             job = self.look(ident)
         self.assertEqual("failed", job["status"])
-        self.assertIn("Nothing was stopped", job["message"])
+        self.assertIn("Every app is as reviewed", job["message"])
         OPS.dismiss(ident)
 
     def lost_review(self, ident):
@@ -166,8 +174,7 @@ class LegacyMoveTests(unittest.TestCase):
         self.assertEqual("running", job["status"], "nothing holds that app if this job ends")
         self.assertIn("app looks stopped", job["message"])
         self.assertIn("Cancel", job["message"])
-        self.assertNotIn("Nothing was stopped", job["message"])
-        self.assertTrue(self.raw(ident)["ref"]["retain_resources"])
+        self.assertNotIn("Every app is as reviewed", job["message"])
         self.assertEqual(0, self.replicas(), "and nothing was started by itself")
 
     def test_and_cancel_starts_that_app_again(self):
@@ -185,6 +192,7 @@ class LegacyMoveTests(unittest.TestCase):
         job = self.lost_review(ident)
         self.assertEqual("running", job["status"])
         self.assertIn("could not be checked", job["message"])
+        self.assertIn("waiting to check", job["message"])
 
     def test_a_held_copy_mark_counts_as_stopped(self):
         self.running()
@@ -192,7 +200,9 @@ class LegacyMoveTests(unittest.TestCase):
         app["metadata"]["annotations"] = {"homestead.io/storage-copy-job": "copy-1"}
         self.kube.add(app)
         ident = self.start("stop", review_fences={"x": "y"}, consumers=[{"kind": "Deployment", "name": "app", "replicas": 2}])
-        self.assertEqual("running", self.lost_review(ident)["status"])
+        job = self.lost_review(ident)
+        self.assertEqual("running", job["status"])
+        self.assertIn("copy-1", job["message"], "a job no longer on the list is named by its id")
 
     def test_the_attempt_is_saved_before_anything_is_stopped(self):
         self.running()
@@ -299,6 +309,456 @@ class LegacyMoveTests(unittest.TestCase):
         job = self.look(ident)
         self.assertEqual("running", job["status"])
         self.assertIn("interrupted", job["message"])
+
+
+    # ---- what a person is left with afterwards ------------------------------
+
+    def wired(self):
+        self.enterContext(mock.patch.dict(OPS.CANCELLERS, {"reclass": (CANCEL.reclass_plan, STORAGE_ROUTES.storage_legacy_cancel)}))
+
+    def assert_nothing_locked(self, ident):
+        self.assertEqual([], GUARD.active_moves(OPS.stored()), "Homestead's own updates and shutdown wait on this")
+        self.assertEqual([], GUARD.reasons(OPS.stored(), namespace="lab", claim="data"))
+        OPS.dismiss(ident)
+
+    def test_cancel_from_a_hold_leaves_nothing_locked(self):
+        self.wired()
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        self.lost_review(ident)
+        OPS.cancel(ident)
+        self.assertEqual(2, self.replicas())
+        self.assert_nothing_locked(ident)
+
+    def test_cancel_after_an_interrupted_stop_leaves_nothing_locked(self):
+        self.wired()
+        ident = self.start("stop", review_fences={"x": "y"}, stop_attempted=True, retain_resources=True)
+        self.look(ident)
+        OPS.cancel(ident)
+        self.assertEqual(2, self.replicas())
+        self.assert_nothing_locked(ident)
+
+    def test_an_app_started_by_hand_ends_the_hold_and_locks_nothing(self):
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        self.lost_review(ident)
+        self.running()
+        self.now += RECHECK
+        job = self.lost_review(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("Every app is as reviewed", job["message"])
+        self.assertNotIn("othing was stopped", job["message"])
+        self.assert_nothing_locked(ident)
+
+    def test_a_review_that_holds_again_carries_on_with_no_hold_left(self):
+        self.running()
+        fences = {"x": "y"}
+        ident = self.start("stop", review_fences=fences, consumers=REVIEWED)
+        with mock.patch.object(RC, "plan", side_effect=ValueError("inventory")):
+            self.look(ident)
+            self.now += LIMIT
+            self.kube.fail(APP, 500, method="GET")
+            job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertIn("waiting to check", job["message"])
+        self.assertNotIn("waits for you", job["message"])
+        self.now += RECHECK
+        with mock.patch.object(RC, "plan", return_value={"ok": True, "_fences": fences}):
+            job = self.look(ident)
+        self.assertEqual("Stopping app", job["message"])
+        self.assertEqual(0, self.replicas())
+        self.assertFalse(CONFLICTS.unresolved({**self.raw(ident), "status": "succeeded"}),
+                         "a move that then succeeds must hold nothing")
+
+    # ---- a rollback that cannot do everything --------------------------------
+
+    def made_temp(self):
+        made = {**claim("data-reclass", ""), "spec": {}}
+        made["metadata"]["labels"] = RC.NAMES.labels("reclass", "data")
+        self.kube.add(made)
+
+    def test_a_refused_delete_still_starts_the_apps_and_says_so(self):
+        self.made_temp()
+        ident = self.start("swap", job="")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(TEMP, 403, times=99, method="DELETE")
+        job = self.look(ident)
+        self.assertEqual(2, self.replicas())
+        self.assertEqual("failed", job["status"])
+        self.assertIn("could not be removed", job["message"])
+        self.assertNotIn("was removed", job["message"])
+        self.assertTrue(self.kube.object(TEMP))
+
+    def test_cancel_with_a_refused_delete_still_starts_the_apps(self):
+        self.wired()
+        self.made_temp()
+        ident = self.start("copy", job="", copy_since=self.now)
+        self.kube.fail(TEMP, 403, times=99, method="DELETE")
+        out = OPS.cancel(ident)
+        self.assertEqual(2, self.replicas())
+        self.assertIn("could not be removed", out["detail"])
+
+    def crash_after(self, method, fragment):
+        real = K.ksend
+
+        def send(verb, path, *args, **options):
+            answer = real(verb, path, *args, **options)
+            if verb == method and fragment in path:
+                raise Crash(path)
+            return answer
+        return mock.patch.object(RC, "ksend", send)
+
+    def crashes(self, ident, method, fragment):
+        with self.crash_after(method, fragment), self.assertRaises(Crash):
+            self.look(ident)
+
+    def test_a_crash_after_starting_the_apps_cannot_go_on_to_the_copy_from_stopping(self):
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        self.crashes(ident, "PATCH", "deployments/app")
+        self.assertEqual(2, self.replicas())
+        self.kube.discard("/api/v1/namespaces/lab/pods/app-1")
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual([], [w for w in self.kube.writes if w[0] == "POST"], "no new volume, no copy")
+
+    def test_a_crash_after_starting_the_apps_cannot_go_on_to_the_copy_from_create(self):
+        ident = self.start("create", job="")
+        self.kube.fail("/api/v1/namespaces/lab/persistentvolumeclaims", 500, method="POST")
+        self.crashes(ident, "PATCH", "deployments/app")
+        self.assertEqual(2, self.replicas())
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIsNone(self.kube.object("/apis/batch/v1/namespaces/lab/jobs/copy"), "no copy with the apps up")
+
+    def test_a_rollback_that_cannot_be_saved_starts_nothing_yet(self):
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        with mock.patch.object(RC.OPS, "checkpoint", side_effect=OSError("store is full")):
+            self.look(ident)
+        self.assertEqual(0, self.replicas(), "unsaved, a restart could take the started apps on to the copy")
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.assertEqual(2, self.replicas())
+
+    def test_a_crash_mid_swap_keeps_the_new_volume_and_carries_on(self):
+        bound = claim("data-reclass", "new-pv")
+        self.kube.add(bound)
+        ident = self.start("swap", job="")
+        self.crashes(ident, "DELETE", "persistentvolumeclaims/data-reclass")
+        job = self.look(ident)
+        self.assertNotIn("to be bound", job["message"])
+        self.assertIn("Letting go", job["message"])
+        self.assertEqual(0, self.replicas())
+
+    def test_a_save_that_failed_is_not_taken_for_an_interrupted_stop(self):
+        self.running()
+        fences = {"x": "y"}
+        ident = self.start("stop", review_fences=fences, consumers=REVIEWED)
+        with mock.patch.object(RC, "plan", return_value={"ok": True, "_fences": fences}):
+            with mock.patch.object(RC.OPS, "checkpoint", side_effect=OSError("store is full")):
+                self.look(ident)
+            self.assertEqual(2, self.replicas())
+            self.assertEqual("Stopping app", self.look(ident)["message"])
+        self.assertEqual(0, self.replicas())
+
+    # ---- an app another job holds --------------------------------------------
+
+    def held_by_another_job(self):
+        other = OPS.start("weekly-trim", "Copy app elsewhere", {"kind": "Deployment", "name": "app", "namespace": "lab"}, "/", {})["id"]
+        app = self.kube.object(APP)
+        app["metadata"]["annotations"] = {"homestead.io/storage-copy-job": other}
+        self.kube.add(app)
+
+    def test_the_hold_names_the_job_holding_the_app(self):
+        self.held_by_another_job()
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        message = self.lost_review(ident)["message"]
+        self.assertIn("Copy app elsewhere", message)
+        self.assertNotIn("earlier try", message)
+        self.assertNotIn("starts app again", message)
+
+    def test_cancel_leaves_an_app_another_job_holds_stopped_and_names_it(self):
+        self.wired()
+        self.held_by_another_job()
+        self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "lab", "name": "web"},
+                       "spec": {"replicas": 0}, "status": {}})
+        ident = self.start("stop", review_fences={"x": "y"},
+                           consumers=REVIEWED + [{"kind": "Deployment", "name": "web", "replicas": 1}])
+        self.lost_review(ident)
+        out = OPS.cancel(ident)
+        self.assertEqual(0, self.replicas())
+        self.assertEqual(1, self.kube.object("/apis/apps/v1/namespaces/lab/deployments/web")["spec"]["replicas"])
+        self.assertIn("Copy app elsewhere", out["detail"])
+        self.assertIn("app (Copy app elsewhere) stays stopped", out["detail"])
+
+    def test_the_cancel_review_says_it_leaves_that_app_stopped(self):
+        self.wired()
+        self.held_by_another_job()
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        undo = " ".join(OPS.cancel_plan(ident)["undo"])
+        self.assertNotIn("app at 2 replicas", undo)
+        self.assertIn("Leaves app stopped", undo)
+        self.assertIn("Copy app elsewhere", undo)
+
+    def test_a_rollback_that_timed_out_leaves_that_app_stopped_too(self):
+        self.held_by_another_job()
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual(0, self.replicas())
+        self.assertIn("Copy app elsewhere", job["message"])
+
+    def test_an_app_that_cannot_be_read_is_not_started_by_a_rollback(self):
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(APP, 500, method="GET")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.assertEqual(0, self.replicas(), "it might be another job's")
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.assertEqual(2, self.replicas())
+
+    # ---- what the words say ---------------------------------------------------
+
+    def test_the_hold_stays_said_while_the_review_stays_unreadable(self):
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        with mock.patch.object(RC, "plan", side_effect=ValueError("inventory")):
+            first = self.look(ident)["message"]
+            self.assertIn("waiting to check", first)
+            self.assertNotIn("othing was stopped", first)
+            self.now += LIMIT
+            for wait in (0, RECHECK, RECHECK):
+                self.now += wait
+                self.assertIn("app looks stopped", self.look(ident)["message"])
+
+    def test_the_hold_reads_as_a_hold_not_as_a_lost_status(self):
+        name = "an-app-with-a-long-name-" * 4 + "x"
+        self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "lab", "name": name},
+                       "spec": {"replicas": 0}, "status": {}})
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=[{"kind": "Deployment", "name": name, "replicas": 2}])
+        message = self.lost_review(ident)["message"]
+        self.assertTrue(message.startswith("Volume use or identity changed"), message)
+        self.assertTrue(message.endswith("on the original."), message)
+
+    def test_a_held_review_is_asked_again_once_a_minute(self):
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        with mock.patch.object(RC, "plan", return_value={"ok": False, "_fences": {}}) as plan:
+            said = self.look(ident)["message"]
+            self.assertEqual(said, self.look(ident)["message"])
+            self.assertEqual(1, plan.call_count)
+            self.now += RECHECK
+            self.look(ident)
+            self.assertEqual(2, plan.call_count)
+
+    def test_a_pod_that_never_lets_go_names_a_long_grace_period(self):
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        self.assertIn("long shutdown grace period", self.look(ident)["message"])
+
+    def test_cancel_from_stopping_says_nothing_of_a_new_volume(self):
+        self.wired()
+        ident = self.start("stopping")
+        self.assertNotIn("new volume", " ".join(OPS.cancel_plan(ident)["undo"]))
+        self.assertNotIn("new volume", OPS.cancel(ident)["detail"])
+
+    def test_cancel_names_a_claim_it_left(self):
+        self.wired()
+        self.foreign_temp()
+        ident = self.start("copy", job="", copy_since=self.now)
+        out = OPS.cancel(ident)
+        self.assertTrue(self.kube.object(TEMP))
+        self.assertIn("did not make", out["detail"])
+        self.assertNotIn("was removed", out["detail"])
+
+    def test_cancel_from_the_copy_says_it_removed_the_new_volume(self):
+        self.wired()
+        self.made_temp()
+        ident = self.start("copy", job="", copy_since=self.now)
+        self.assertIn("deletes the new volume", " ".join(OPS.cancel_plan(ident)["undo"]))
+        self.assertIn("new volume was removed", OPS.cancel(ident)["detail"])
+        self.assertIsNone(self.kube.object(TEMP))
+
+    def test_the_cancel_review_says_the_count_it_starts_at(self):
+        self.wired()
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        self.assertIn("app at 2 replicas", " ".join(OPS.cancel_plan(ident)["undo"]))
+
+    # ---- each kind of workload, seen stopped ----------------------------------
+
+    def held_with(self, obj, consumer):
+        self.kube.add(obj)
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=[consumer])
+        return ident, self.lost_review(ident)
+
+    def vm(self, strategy):
+        return {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"namespace": "lab", "name": "vm1"},
+                "spec": {"runStrategy": strategy, "template": {"spec": {"volumes": []}}}}
+
+    def cron(self, suspend):
+        return {"apiVersion": "batch/v1", "kind": "CronJob", "metadata": {"namespace": "lab", "name": "nightly"},
+                "spec": {"suspend": suspend, "schedule": "0 1 * * *"}}
+
+    def stateful(self, replicas):
+        return {"apiVersion": "apps/v1", "kind": "StatefulSet", "metadata": {"namespace": "lab", "name": "db"},
+                "spec": {"replicas": replicas}, "status": {}}
+
+    def test_a_halted_vm_looks_stopped_and_cancel_runs_it_again(self):
+        self.wired()
+        ident, job = self.held_with(self.vm("Halted"), {"kind": "VirtualMachine", "name": "vm1", "run_strategy": "Always"})
+        self.assertEqual("running", job["status"])
+        self.assertIn("vm1", job["message"])
+        OPS.cancel(ident)
+        self.assertEqual("Always", self.kube.object("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/vm1")["spec"]["runStrategy"])
+
+    def test_a_vm_halted_at_the_review_is_as_reviewed(self):
+        _, job = self.held_with(self.vm("Halted"), {"kind": "VirtualMachine", "name": "vm1", "run_strategy": "Halted"})
+        self.assertEqual("failed", job["status"])
+
+    def test_a_suspended_cronjob_looks_stopped_and_cancel_resumes_it(self):
+        self.wired()
+        ident, job = self.held_with(self.cron(True), {"kind": "CronJob", "name": "nightly", "suspend": False})
+        self.assertEqual("running", job["status"])
+        self.assertIn("nightly", job["message"])
+        OPS.cancel(ident)
+        self.assertFalse(self.kube.object("/apis/batch/v1/namespaces/lab/cronjobs/nightly")["spec"]["suspend"])
+
+    def test_a_cronjob_suspended_at_the_review_is_as_reviewed(self):
+        _, job = self.held_with(self.cron(True), {"kind": "CronJob", "name": "nightly", "suspend": True})
+        self.assertEqual("failed", job["status"])
+
+    def test_a_statefulset_at_zero_looks_stopped_and_cancel_starts_it(self):
+        self.wired()
+        ident, job = self.held_with(self.stateful(0), {"kind": "StatefulSet", "name": "db", "replicas": 3})
+        self.assertEqual("running", job["status"])
+        self.assertIn("db", job["message"])
+        OPS.cancel(ident)
+        self.assertEqual(3, self.kube.object("/apis/apps/v1/namespaces/lab/statefulsets/db")["spec"]["replicas"])
+
+    def test_a_deployment_at_zero_at_the_review_is_as_reviewed(self):
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=[{"kind": "Deployment", "name": "app", "replicas": 0}])
+        self.assertEqual("failed", self.lost_review(ident)["status"])
+
+    def test_a_saved_stopped_note_counts_as_stopped(self):
+        self.running()
+        ident = self.start("stop", review_fences={"x": "y"},
+                           consumers=[{"kind": "Deployment", "name": "app", "replicas": 2, "stopped": True}])
+        self.assertEqual("running", self.lost_review(ident)["status"])
+
+    # ---- the delete racing with the real thing --------------------------------
+
+    def swap_timed_out(self):
+        ident = self.start("swap", job="")
+        self.look(ident)
+        self.now += LIMIT
+        return ident
+
+    def test_a_claim_replaced_just_before_the_delete_is_left(self):
+        self.made_temp()
+        mine = self.kube.object(TEMP)["metadata"]["uid"]
+
+        def replaced(*_):
+            self.kube.discard(TEMP)
+            self.kube.add(claim("data-reclass", "someone-elses-pv"))
+
+        self.kube.react("DELETE", TEMP, replaced)
+        job = self.look(self.swap_timed_out())
+        self.assertEqual("failed", job["status"])
+        kept = self.kube.object(TEMP)
+        self.assertNotEqual(mine, kept["metadata"]["uid"])
+        self.assertEqual("someone-elses-pv", kept["spec"]["volumeName"])
+        self.assertIn("did not make", job["message"])
+        self.assertEqual(2, self.replicas())
+
+    def test_a_claim_gone_just_before_the_delete_counts_as_removed(self):
+        self.made_temp()
+        self.kube.react("DELETE", TEMP, lambda *_: self.kube.discard(TEMP))
+        job = self.look(self.swap_timed_out())
+        self.assertIn("new volume was removed", job["message"])
+
+    # ---- Cancel while it is putting things back ---------------------------------
+
+    def test_cancel_while_rolling_back_starts_the_apps_and_keeps_the_reason(self):
+        self.wired()
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(APP, 500, method="PATCH")
+        self.look(ident)
+        self.assertEqual(0, self.replicas())
+        out = OPS.cancel(ident)
+        self.assertEqual(2, self.replicas(), "a cancel here must put things back, not just stop tracking")
+        self.assertIn("did not let go", out["detail"])
+        self.assert_nothing_locked(ident)
+
+
+    # ---- every way into a rollback saves first --------------------------------
+
+    def rolled_back_saved_first(self, ident, *steps):
+        seen = []
+        self.kube.react("PATCH", APP, lambda *_: seen.append(self.raw(ident)["ref"]["phase"]) and None)
+        for step in steps:
+            step()
+            self.look(ident)
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.assertEqual("rolling-back", seen[0], "a restart must find this, once the apps are up")
+
+    def test_a_copy_job_gone_saves_the_rollback_before_starting_apps(self):
+        self.rolled_back_saved_first(self.start("copy", copy_since=self.now))
+
+    def test_a_volume_never_bound_saves_the_rollback_before_starting_apps(self):
+        ident = self.start("swap", job="")
+        self.look(ident)
+        self.now += LIMIT
+        self.rolled_back_saved_first(ident)
+
+    def test_a_lasting_not_found_saves_the_rollback_before_starting_apps(self):
+        ident = self.start("stopping")
+        self.kube.fail("/api/v1/namespaces/lab/pods", 404, times=99)
+        self.rolled_back_saved_first(ident, *[lambda: None] * RC.MISS_LIMIT)
+
+    def test_a_refused_new_volume_saves_the_rollback_before_starting_apps(self):
+        ident = self.start("create", job="")
+        self.kube.fail("/api/v1/namespaces/lab/persistentvolumeclaims", 500, method="POST")
+        self.rolled_back_saved_first(ident)
+
+    def test_cancel_from_the_stop_step_touches_no_claim_of_that_name(self):
+        self.wired()
+        self.foreign_temp()
+        ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
+        self.lost_review(ident)
+        detail = OPS.cancel(ident)["detail"]
+        self.assertTrue(self.kube.object(TEMP))
+        self.assertEqual([], [w for w in self.kube.writes if w[0] == "DELETE"])
+        self.assertNotIn("new volume", detail)
+
+    def test_a_swap_that_finishes_after_the_limit_is_not_failed(self):
+        self.kube.discard(CLAIM)
+        waiting = claim("data", "new-pv")
+        waiting["status"]["phase"] = "Pending"
+        self.kube.add(waiting)
+        ident = self.start("swap", job="", new_pv="new-pv")
+        self.assertIn("to bind", self.look(ident)["message"])
+        self.kube.add(claim("data", "new-pv"))
+        self.now += LIMIT
+        job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertIn("is on fast", job["message"])
+
+    def test_the_cancel_review_does_not_start_an_app_reviewed_at_zero(self):
+        self.wired()
+        ident = self.start("stop", review_fences={"x": "y"},
+                           consumers=[{"kind": "Deployment", "name": "app", "replicas": 0}])
+        self.assertNotIn("app", " ".join(OPS.cancel_plan(ident)["undo"]))
 
 
 if __name__ == "__main__":

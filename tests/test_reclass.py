@@ -1,6 +1,7 @@
 import copy
 import sys
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -140,6 +141,11 @@ def run(item, limit=30):
 
 
 class ReclassTests(unittest.TestCase):
+    def setUp(self):
+        # Saves between steps need a job store, which these resolver-only tests don't
+        # have; test_reclass_legacy_waits runs the same steps through the real one.
+        self.enterContext(mock.patch.object(RC.OPS, "checkpoint", lambda item: None))
+
     def test_the_review_names_what_uses_it_and_the_room_it_takes(self):
         Cluster()
         plan = RC.plan("lab", "frigate-config", "longhorn-r3")
@@ -277,6 +283,11 @@ class ReclassTests(unittest.TestCase):
 class NotFoundPartWayTests(unittest.TestCase):
     """The operations poll failed the whole job on any 404, which left a
     move stopped half-way through its swap with nothing to carry it on."""
+
+    def setUp(self):
+        # Saves between steps need a job store, which these resolver-only tests don't
+        # have; test_reclass_legacy_waits runs the same steps through the real one.
+        self.enterContext(mock.patch.object(RC.OPS, "checkpoint", lambda item: None))
 
     def flaky(self, cluster, where, times):
         """Answer 404 to writes on a path containing `where`, `times` times."""

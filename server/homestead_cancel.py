@@ -481,9 +481,8 @@ def reclass_plan(item):
     users = [c["name"] for c in ref.get("consumers") or []]
     if phase in RECLASS.BEFORE_SWAP:
         return {"mode": "rollback", "needs": "admin", "severity": "high" if users else "low",
-                "undo": [f"Stops the copy and deletes the new volume on {ref['target']}"]
-                        + ([f"Starts {_names(users)} again as {'it was' if len(users) == 1 else 'they were'}, "
-                            f"on the original {claim}"] if users else []),
+                "undo": ([] if RECLASS._made_nothing(ref) else [f"Stops the copy and deletes the new volume on {ref['target']}"])
+                        + RECLASS.cancel_starts(ref),
                 "keeps": [f"{claim} and its data were only read, and are as they were"]}
     if phase == "swap":
         return {"can": False, "needs": "admin",
@@ -497,9 +496,10 @@ def reclass_plan(item):
 def reclass_cancel(item, _options):
     ref = item["ref"]
     if ref.get("phase", "stop") in RECLASS.BEFORE_SWAP:
-        RECLASS._rollback(ref["namespace"], ref, "")
-        return (f"Cancelled: the new volume was removed and {ref['claim']} is in use again as before, "
-                "on its untouched original")
+        said = RECLASS._rollback(ref["namespace"], ref, "")[2]
+        # Put back: nothing of this move is left to hold, or the volume stays locked for good.
+        ref.pop("retain_resources", None)
+        return f"Cancelled. {said.strip()}"
     return "Stopped waiting; the move itself had finished"
 
 

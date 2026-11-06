@@ -107,7 +107,7 @@ class ReviewTests(unittest.TestCase):
         self.extra['/api/v1/namespaces/lab/pods']=urllib.error.HTTPError('',404,'missing',{},None)
         with mock.patch.object(rc,'_rollback') as rollback:
             for _ in range(rc.MISS_LIMIT+1):
-                with self.assertRaisesRegex(ValueError,'nothing was stopped'):rc.resolve(item)
+                with self.assertRaisesRegex(ValueError,'waiting to check'):rc.resolve(item)
             rollback.assert_not_called()
         self.assertEqual([],self.cluster.sent)
 
