@@ -69,6 +69,29 @@ class NothingSecret(unittest.TestCase):
             client.close()
 
     def test_no_password_setup_code_key_or_cookie_is_ever_written(self):
+        self.send_and_check()
+
+    def test_the_lines_are_checked_whatever_order_the_hooks_queue_in(self):
+        """server.H queues a request's hooks after its answer is sent, on the
+        request's own thread: the client already has the answer and sends the
+        next request, whose hooks may be queued first. Here the users request's
+        hooks wait until the keys request's are queued, so the lines arrive in
+        that order every time (the plain test met it now and then under load)."""
+        keys_queued, waited = threading.Event(), []
+        queue_hooks = self.server.H.after_request
+
+        def in_reverse(handler):
+            path = (handler.path or "").split("?")[0]
+            if path == "/api/auth/users":
+                waited.append(keys_queued.wait(5))
+            queue_hooks(handler)
+            if path == "/api/auth/keys":
+                keys_queued.set()
+        self.enterContext(mock.patch.object(self.server.H, "after_request", in_reverse))
+        self.send_and_check()
+        self.assertEqual([True], waited, "the users request's hooks were queued after the keys request's")
+
+    def send_and_check(self):
         S, AUTH = self.server, self.server.AUTH
         cookie = {"Cookie": "homestead_session=sessiontoken123; CF_Authorization=cfjwt.a.b",
                   "Cf-Access-Jwt-Assertion": "cfjwt.a.b", "Proxy-Authorization": "Basic-Pw-0123456789"}
@@ -95,8 +118,10 @@ class NothingSecret(unittest.TestCase):
         self.assertIn(b"hs_live_NEWKEYSECRET", answers[4][1], "the key was answered, to the client only")
         with self.arrived:
             self.arrived.wait_for(lambda: len(self.printed) >= 5, timeout=5)
-        self.assertEqual(["/api/auth/setup", "/api/auth/password", "/api/auth/users", "/api/auth/keys",
-                          "/api/v1/apps/restart"], [json.loads(t)["path"] for t in self.printed])
+        # One line per audited request, in the order their hooks were queued: that is
+        # not the order the requests were sent (see the test above).
+        self.assertCountEqual(["/api/auth/setup", "/api/auth/password", "/api/auth/users", "/api/auth/keys",
+                               "/api/v1/apps/restart"], [json.loads(t)["path"] for t in self.printed])
         audit = Path(self.dir) / "audit.jsonl"
 
         def kept_lines():           # stdout is written first, then the file, on the hooks' thread
