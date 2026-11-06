@@ -231,6 +231,20 @@ class Move:
         self.kube.add(rs)
         self.kube.discard(self.old_pod)
 
+    def copy_running(self):
+        """The copy Job's pod, running on the copy host, with both volumes mounted."""
+        job = self.kube.object(self.copy_path)
+        pod = _obj("Pod", "copy-pod", {**copy.deepcopy(job["spec"]["template"]["spec"]), "nodeName": self.hosts[0]},
+                   owner=("Job", job["metadata"]["uid"], job["metadata"]["name"]), labels=job["spec"]["template"]["metadata"]["labels"],
+                   status={"phase": "Running"})
+        self.copy_pod = self.kube.add(pod)
+
+    def rebooted(self, host):
+        """It came back: Ready, a fresh lease, another boot id."""
+        node = self.kube.object("/api/v1/nodes/" + host)
+        node["status"]["nodeInfo"]["bootID"] = "another-boot-of-" + host
+        self.kube.add(node)
+
     def copy_finished(self):
         job = self.kube.object(self.copy_path)
         job["status"] = {"conditions": [{"type": "Complete", "status": "True"}]}

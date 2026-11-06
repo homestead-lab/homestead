@@ -164,10 +164,17 @@ class Review:
             data = [v for v in current["spec"].get("volumes", []) if v.get("name") == "data"]
             if len(data) != 1 or data[0].get("persistentVolumeClaim", {}).get("claimName") != source or data[0]["persistentVolumeClaim"].get("readOnly"):
                 raise Held("The current Homestead pod does not mount the reviewed source claim")
+        ours = {identity(s)["uid"] for s in sets if ROLLOUT.controller(s).get("uid") == identity(dep)["uid"]}
         for pod in pods:
-            if pod.get("metadata", {}).get("namespace") != ns or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            if pod.get("metadata", {}).get("namespace") != ns:
                 continue
             used = {v.get("persistentVolumeClaim", {}).get("claimName") for v in pod.get("spec", {}).get("volumes", [])}
+            if pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+                # No controller removes it, and the move would wait for it with Homestead stopped.
+                if ROLLOUT.controller(pod).get("uid") in ours or used & {source, cfg["destination"]}:
+                    raise Held(f"A finished pod is still listed: {pod['metadata'].get('name')}. "
+                               "The move would wait for it with Homestead stopped. Delete it, then review again")
+                continue
             if cfg["destination"] in used or source in used and identity(pod)["uid"] not in owned_uids:
                 raise Held("Another pod uses a data volume; stop or move that consumer before reviewing")
         autoscalers = D._inventory(read, f"/apis/autoscaling/v2/namespaces/{ns}/horizontalpodautoscalers")

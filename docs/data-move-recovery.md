@@ -101,13 +101,18 @@ A slow copy never holds, however long it takes.
 
 ## If the coordinator is lost
 
-The coordinator is a Job with `backoffLimit: 3`: four tries in all. If its Pod is
-killed, evicted or lost with its host, Kubernetes starts another on any reviewed
-host, preferring the one you chose. Homestead stays stopped meanwhile, and the
-status page comes back with the new Pod.
+The coordinator is a Job with `backoffLimit: 3`. If its Pod crashes, runs out of
+memory, is evicted or deleted, or is lost with its host, Kubernetes starts another
+on any reviewed host, preferring the one you chose. Homestead stays as it was
+meanwhile, and the status page comes back with the new Pod.
 
-- A host going down takes Kubernetes about 6 minutes to notice and replace the
-  Pod. An eviction or a crash takes seconds.
+- **How long:** a crash or a deletion takes from a few seconds to a few minutes:
+  the Job controller backs off, 10 s then 20 s then 40 s, and a Pod being deleted
+  has up to a minute to stop. A host going down takes about 7 minutes: Kubernetes
+  notices after about 40 s, waits 5 minutes before evicting, then the new Pod waits
+  for the old one's grace to end.
+- **`backoffLimit` is a count for the whole move**, not for a run of failures: four
+  tries in all, and a drain or a delete uses one up just as a crash does.
 - The new Pod reads only until the previous one has gone, finished, or passed
   the end of its deletion grace. It then takes over with a conditional write to
   the control record, so the old Pod can write nothing more if it was only cut off.
@@ -115,24 +120,156 @@ status page comes back with the new Pod.
   configuration and every receipt. Nothing already recorded is done again: a
   running copy is followed, a finished one is verified, and after the switch
   the move only goes forward. A hold stays held, and a wait keeps its deadline.
-- **A request whose outcome was never recorded** holds, and is never sent again:
-  the Pod died in the moment between saying it would send a request and recording
-  the answer. Recovery refuses too, since it needs known outcomes. Inspect the
-  named step's resource and treat this as the administrator-reviewed recovery below.
-- **After the fourth try** the Job has failed and nothing looks after the move:
-  no process answers on Homestead's address, and no alert fires. A coordinator
-  from a new Job is refused, because the record pins this Job. This is also an
-  administrator-reviewed recovery. Keep the Job, its Pods' logs and the control
-  record; Pods stay until the Job is deleted, so `kubectl logs` shows why each try ended.
 
 A move started by an earlier release keeps its bare coordinator Pod, on its pinned
 image, with the old behaviour. Use `kubectl exec <coordinator-pod>` for it.
 
+### A replacement that never starts
+
+Nothing bounds this and nothing says so: a Job does not time out a Pod that cannot
+start. It happens when no reviewed host has room, or the image cannot be pulled
+(a registry that is down, or one that needs `imagePullSecrets`: the coordinator
+has none, and a host that does not already have the image must pull it). The
+page does not answer and the tries are not used up. Look at the Job's Pods:
+
+```sh
+kubectl -n <namespace> get pods -l homestead.io/self-data-handoff=<operation>
+kubectl -n <namespace> describe pod <pod>
+```
+
+Make room or fix the pull; the Pod then starts and the move carries on.
+
+### After the fourth try
+
+The Job has failed and nothing looks after the move. What you see depends on when:
+before Homestead was stopped it still answers, read-only, and its Jobs page says
+the worker has not reported. After that, Homestead's address does not answer. No
+alert fires. Read why the tries ended with `kubectl logs` on the Job's Pods, which
+stay until the Job is deleted, and fix that first.
+
+A failed Job cannot be restarted, and a new Job is refused because the record pins
+this one. **Do not delete the Job, delete the marker file or scale Homestead up.**
+Start one more try by hand: a Pod made from the Job's own template and owned by it,
+which the record accepts as this Job's. Save this as `new-try.py`:
+
+```python
+# new-try.py: reads the failed Job as JSON, prints one more Pod for it.
+import json
+import sys
+
+job = json.load(sys.stdin)
+meta, template = job["metadata"], job["spec"]["template"]
+json.dump({"apiVersion": "v1", "kind": "Pod", "metadata": {
+    "generateName": meta["name"] + "-by-hand-", "namespace": meta["namespace"],
+    "labels": template["metadata"]["labels"],
+    "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": meta["name"], "uid": meta["uid"],
+                         "controller": True, "blockOwnerDeletion": False}]},
+    "spec": template["spec"]}, sys.stdout)
+```
+
+```sh
+kubectl -n <namespace> get job <coordinator> -o json | python3 new-try.py | kubectl create -f -
+```
+
+It takes over as any try does, and the status page comes back. If it dies, nothing
+replaces it: run the same command again. Cleanup removes it with the Job.
+
+### A request with no recorded outcome
+
+If a Pod died between saying it would send a request and recording the answer, the
+hold names the step, and nothing sends it again. Recovery refuses until the outcome
+is known, because guessing is how a request gets sent twice. Only a person can look:
+
+```sh
+kubectl -n <namespace> get configmap <deployment>-data-handoff -o jsonpath='{.data.state\.json}' \
+  | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["journal"]["ref"]["storage_writes"][-1], indent=2))'
+```
+
+Read `step` and `target.path`, then read that object:
+
+| `step` | It was **applied** if | Otherwise **not-sent** |
+|---|---|---|
+| `stop` | the Deployment's `spec.replicas` is 0 | it still has its replica count |
+| `copy-job` | the copy Job exists | no such Job |
+| `release-copy`, `recover-release-copy` | the copy Job is gone or has a `deletionTimestamp` | it is there with none |
+| `switch` | the Deployment's data volume names the new claim | it names the original |
+| `start` | the claim is the new one and `spec.replicas` is back to its count | `spec.replicas` is 0 |
+| `recover-start` | `spec.replicas` is back to its count | `spec.replicas` is 0 |
+
+If you cannot tell, stop and keep everything as it is. Then record what you found.
+This needs a running coordinator: if there is none, start a try as above first.
+Save this as `settle.py`:
+
+```python
+# settle.py: writes what you found about the last request into the move's record.
+import json
+import os
+import sys
+
+sys.path.insert(0, "/srv")
+import homestead_self_data_kube as K
+import homestead_self_data_launch as L
+from homestead_storage_journal import identity, shape
+
+outcome = sys.argv[1]
+if outcome not in ("applied", "not-sent"):
+    sys.exit("Say applied or not-sent")
+_, scope = L.parse_configuration(os.environ[L.CONFIG_ENV])
+client = K.Client(scope)
+record = client.read(scope.anchor)
+state = json.loads(record["data"]["state.json"])
+entries = state["journal"]["ref"]["storage_writes"]
+if not entries or entries[-1]["state"] == "accepted":
+    sys.exit("Nothing to settle: the last request has a recorded outcome")
+if outcome == "not-sent":
+    entries.pop()
+else:
+    entry = entries[-1]
+    entry["state"] = "accepted"
+    if entry["method"] != "DELETE":
+        current = client.read(entry["target"]["path"])
+        entry.update(after=identity(current), shape=shape(current))
+record["data"]["state.json"] = json.dumps(state, sort_keys=True, separators=(",", ":"))
+client.send("PUT", scope.anchor, record)
+print("Recorded. Now preview recovery.")
+```
+
+```sh
+kubectl -n <namespace> exec -i job/<coordinator> -- python3 - applied < settle.py   # or not-sent
+```
+
+Then preview and confirm `--action resume` or `--action return-original` as above.
+The write is conditional: if the record moved meanwhile it is refused, so run it again.
+
+## Going back to an earlier release
+
+After **any** finished move, the volume keeps a receipt (`.self-data-completed-v1.json`).
+A release from before the coordinator became a Job cannot verify a receipt made by a
+later one, so it stays read-only on that volume, whichever volume that is. Going
+forward again fixes it. To go back, first wait for the temporary helpers to be gone
+(`kubectl -n <namespace> get configmap <deployment>-data-handoff` says NotFound), then
+remove the receipt with the current release still running:
+
+```sh
+kubectl -n <namespace> exec deploy/<deployment> -- rm /data/.self-data-completed-v1.json
+```
+
+With no marker, no receipt and no control record, a release starts normally.
+
+## Which hosts are checked
+
 Only the hosts the move uses are checked for reboots and stale heartbeats: the
-copy host, the nodes of Homestead's own pods and of any pod
-mounting either claim, and the nodes either volume is pinned to. A reboot of
+nodes of Homestead's own pods and of any pod mounting either claim, which includes
+the copy pod while it exists, and the nodes either volume is pinned to. A reboot of
 another host does not hold the move, and neither does one of the coordinator's
-host: it mounts nothing, and its next try carries on. A pod that has left the API was removed
+host: it mounts nothing, and its next try carries on. A reboot of the copy host
+before the copy or after its pod has gone holds nothing either, and nor does one
+before Homestead's new pods start on it.
+
+**A reboot during the copy still needs hand work:** while a copy pod is on that
+host, the move holds and recovery refuses, because it can't prove what the copy
+did. The same goes for a host that rebooted with one of Homestead's old pods still
+listed on it, and for a volume pinned to a rebooted host. A pod that has left the API was removed
 normally (nothing force-deletes one), so its writer had stopped. If a volume's
 placement names no reviewed host, every reviewed host is checked.
 

@@ -139,7 +139,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery", "waits"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery", "waits", "copy_host_boot"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -179,6 +179,8 @@ def _validate(state, namespace):
                                  "reviews": {"copy": recovery["restart"], "restart": recovery["restart"]}})
         elif "restart" in recovery:
             raise Held("Resume cannot replace the reviewed restart approval")
+    if "copy_host_boot" in state and (not isinstance(state["copy_host_boot"], str) or not 0 < len(state["copy_host_boot"]) <= 128):
+        raise Held("The data handoff copy host record is invalid")
     if "waits" in state and (not isinstance(state["waits"], dict) or not state["waits"]
                              or any(k not in WAITS or type(v) is not int or v < 0 for k, v in state["waits"].items())):
         raise Held("The data handoff wait record is invalid")
@@ -467,6 +469,15 @@ class Anchor:
             raise Held("The data handoff wait record cannot be rewritten")
         state = copy.deepcopy(self.state)
         state.setdefault("waits", {})[key] = int(now)
+        self._replace(state)
+
+    def copy_host_seen(self, boot_id):
+        """The copy host's boot id as the copy is requested. Rewritten until it has been."""
+        self.handle()
+        if self.state["phase"] != "copy" or any(e["step"] == "copy-job" for e in self.state["journal"]["ref"]["storage_writes"]):
+            raise Held("The copy host's boot id can be recorded only before the copy is requested")
+        state = copy.deepcopy(self.state)
+        state["copy_host_boot"] = boot_id
         self._replace(state)
 
     def take_over(self, pod_uid, checked_at):

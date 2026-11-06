@@ -84,7 +84,19 @@ def recovery_command(namespace, state):
     return f"kubectl -n {namespace} exec {'job/' + name if target and target['kind'] == 'Job' else name} -- python3 {RECOVERY_MODULE} --action resume"
 
 
+def recovery_fields(namespace, state):
+    """The command for the status view, unless it could only refuse."""
+    return {} if _unsettled(state) else {"recovery_command": recovery_command(namespace, state)}
+
+
+def _unsettled(state):
+    return any(e["state"] != "accepted" for e in state["journal"]["ref"]["storage_writes"])
+
+
 def recovery_help(namespace, state):
+    if _unsettled(state):
+        return (" Recovery needs every request's outcome, so settle this one by hand first: "
+                "docs/data-move-recovery.md, \"A request with no recorded outcome\".")
     command = recovery_command(namespace, state)
     cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
     return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
@@ -142,7 +154,7 @@ def progress(anchor, now):
     help_fields = {}
     if held and not preparing and state.get("plan", {}).get("worker"):
         message += recovery_help(anchor.namespace, state)
-        help_fields["recovery_command"] = recovery_command(anchor.namespace, state)
+        help_fields.update(recovery_fields(anchor.namespace, state))
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
                "state": "complete" if i < current or status == "done" else "current" if i == current else "pending"}
@@ -196,8 +208,9 @@ class Runner:
             if self.hold:
                 view.update(status="held", message=self.hold, requires_review=True)
                 if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
+                    view.pop("recovery_command", None)
                     view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
-                                recovery_command=recovery_command(self.namespace, anchor.state))
+                                **recovery_fields(self.namespace, anchor.state))
             elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message="A new coordinator is waiting for the previous one to stop; it changes nothing until then. " + view["message"])
             elif self.outage_since is not None and view["status"] != "done":
@@ -217,8 +230,9 @@ class Runner:
             runtime = anchor.state.get("runtime", {})
             if (anchor.state.get("plan", {}).get("worker", {}).get("uid") == self.worker_uid
                     and "pointer_receipt" in anchor.state and runtime.get("state") != "held"
-                    # A pod that was replaced has no say over the record any more.
-                    and (self.pod_uid is None or runtime.get("pod_uid") in (None, self.pod_uid))):
+                    # Only the pod the record names has a say over it: not one that
+                    # was replaced, and not one that has not taken over.
+                    and (self.pod_uid is None or runtime.get("pod_uid") == self.pod_uid)):
                 anchor.report(self.worker_uid, self._checked_at(anchor), "held", self.hold, pod_uid=self.pod_uid)
         except Exception:
             # Hold is latched in this process too. A later poll may checkpoint
@@ -263,6 +277,7 @@ class Runner:
         mine = pods.get(self.pod_uid)
         now = self.clock()
         if (mine is None or mine.get("metadata", {}).get("deletionTimestamp")
+                or mine.get("status", {}).get("phase") in ("Succeeded", "Failed")
                 or (current is not None and not self._ended(pods.get(current), now))):
             self.replacing = True
             return False
@@ -275,9 +290,11 @@ class Runner:
                 return False
             raise
         self.replacing = False
-        if any(e["state"] == "intent" for e in anchor.state["journal"]["ref"]["storage_writes"]):
-            raise Held("The previous coordinator stopped before it recorded what happened to its last request. "
-                       "It will not be sent again; inspect the move's record and that request's resource by hand.")
+        unknown = [e["step"] for e in anchor.state["journal"]["ref"]["storage_writes"] if e["state"] == "intent"]
+        # An existing hold keeps its own words: recovery compares them to clear it.
+        if unknown and anchor.state.get("runtime", {}).get("state") != "held":
+            raise Held(f"The previous coordinator stopped before it recorded what happened to its last request ({unknown[-1]}). "
+                       "It will not be sent again.")
         return True
 
     def tick(self):

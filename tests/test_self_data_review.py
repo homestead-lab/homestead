@@ -185,6 +185,42 @@ class ReviewTests(unittest.TestCase):
             self.setUp(); transform()
             with self.assertRaises(Held): self.review.preview(self.body)
 
+    def leftover(self, name, **phase):
+        pod = copy.deepcopy(self.f.pods[0])
+        pod["metadata"].update(name=name, uid=name + "-uid")
+        pod["status"] = {"phase": "Failed", "reason": "Evicted"}
+        return pod
+
+    def test_a_failed_homestead_pod_left_over_is_refused_before_anything_stops_naming_it(self):
+        """The ReplicaSet never removes it, and the move would wait for it with Homestead stopped."""
+        self.f.pods.append(self.leftover("homestead-evicted"))
+        before = len(self.c.sent)
+        with self.assertRaisesRegex(Held, "homestead-evicted"):
+            self.review.preview(self.body)
+        self.assertEqual(before, len(self.c.sent))
+
+    def test_a_finished_pod_of_anything_else_that_mounts_a_data_volume_is_refused(self):
+        pod = self.leftover("old-backup")
+        pod["status"]["phase"] = "Succeeded"
+        pod["metadata"]["ownerReferences"] = [{"kind": "Job", "uid": "backup-job", "controller": True}]
+        self.f.pods.append(pod)
+        with self.assertRaisesRegex(Held, "old-backup"):
+            self.review.preview(self.body)
+
+    def test_a_finished_pod_that_has_nothing_to_do_with_the_move_is_no_reason_to_refuse(self):
+        pod = self.leftover("someone-else")
+        pod["metadata"]["ownerReferences"] = [{"kind": "Job", "uid": "other-job", "controller": True}]
+        pod["spec"]["volumes"] = [{"name": "other", "persistentVolumeClaim": {"claimName": "other"}}]
+        self.f.pods.append(pod)
+        self.review.preview(self.body)
+
+    def test_once_it_is_removed_the_review_goes_on(self):
+        self.f.pods.append(self.leftover("homestead-evicted"))
+        with self.assertRaises(Held):
+            self.review.preview(self.body)
+        self.f.pods.pop()
+        self.review.preview(self.body)
+
     def test_rollout_terminating_replicas_or_pending_destination_cannot_be_reviewed(self):
         for transform in (lambda: self.dep["status"].update(updatedReplicas=1),
                           lambda: self.f.pods[0]["metadata"].update(deletionTimestamp="now"),

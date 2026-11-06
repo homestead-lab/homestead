@@ -4,10 +4,15 @@ not leave Homestead at 0 copies with nothing looking after it (stuck-jobs C4).
 Each test drives the real setup, worker and coordinator on the shared fake API
 (tests/fakes/kube.py, tests/fakes/self_data_move.py) with a clock the test moves.
 A "new pod" is a new Runner, as a new process has nothing in memory."""
+import hashlib
+import http.client
+import io
 import json
 import os
+import re
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,12 +20,13 @@ from unittest import mock
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import homestead_self_data_anchor as A
 import homestead_self_data_bootstrap as B
+import homestead_self_data_coordinator as C
 import homestead_self_data_finish as FIN
 import homestead_self_data_kube as HK
 import homestead_self_data_launch as L
 import homestead_self_data_recovery as R
 import homestead_self_data_worker as W
-from homestead_storage_journal import Held
+from homestead_storage_journal import Held, shape
 from fakes.kube import Kube
 from fakes.self_data_move import DIGEST, IMAGE, Move, NS, OP
 
@@ -153,6 +159,283 @@ class Died(BaseException):
     """The process is gone: nothing after this point of a tick ran."""
 
 
+def _fails_after_intent():
+    """The first checkpoint (the intent) lands; the process is gone before the second."""
+    real, calls = A.Anchor.checkpoint, []
+    def fatal(anchor, job):
+        calls.append(job)
+        if len(calls) > 1:
+            raise Died()
+        return real(anchor, job)
+    return fatal
+
+
+class ReplacementStartingTests(MoveTest):
+    """C1: a normal replacement is not a hold while the API catches up."""
+
+    def stopped_and_copying(self):
+        run = self.m.runner()
+        run.tick(); self.m.stopped(); run.tick()
+        return run
+
+    def test_a_new_pod_the_api_still_shows_pending_carries_on(self):
+        self.stopped_and_copying()
+        self.m.pod_failed(self.m.first_pod)
+        pending = self.m.start_pod("node-b", phase="Pending")
+        view = self.m.runner(pending).tick()
+        self.assertNotEqual("held", view["status"], view)
+        self.assertEqual(("running", pending[0]), (self.m.state()["runtime"]["state"], self.m.state()["runtime"]["pod_uid"]))
+        self.assertIn("copy-job", self.m.steps())
+
+    def test_a_pod_with_no_host_yet_in_the_api_carries_on(self):
+        self.stopped_and_copying()
+        self.m.pod_failed(self.m.first_pod)
+        pending = self.m.start_pod("node-b", phase="Pending")
+        pod = self.kube.object(pending[1]); pod["spec"].pop("nodeName"); self.kube.add(pod)
+        self.assertNotEqual("held", self.m.runner(pending).tick()["status"])
+
+    def test_the_acting_pod_being_deleted_writes_no_hold_for_its_replacement_to_inherit(self):
+        """kubectl delete or a drain, or a kubelet cut off so the signal never comes."""
+        m = self.m
+        run = self.stopped_and_copying()
+        m.pod_terminating(m.first_pod, grace=60)
+        self.assertNotEqual("held", run.tick()["status"])
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        second = m.start_pod("node-b")
+        m.pass_time(61)
+        self.assertNotEqual("held", m.runner(second).tick()["status"])
+        self.assertEqual(second[0], m.state()["runtime"]["pod_uid"])
+
+    def test_recovery_previews_with_the_new_pod_still_pending(self):
+        m = self.m
+        run = self.stopped_and_copying()
+        path = self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                              "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
+        self.assertEqual("held", run.tick()["status"])
+        self.kube.discard(path)
+        m.pod_failed(m.first_pod)
+        m.start_pod("node-b", phase="Pending")
+        anchor = A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+        self.assertEqual("resume", R.review(anchor, m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)["action"])
+
+    def test_a_pod_of_the_job_that_mounts_a_data_volume_holds(self):
+        """The check that stays: whichever try it is, it mounts neither volume."""
+        for claim in ("source", "target"):
+            with self.subTest(claim=claim):
+                kube = Kube()
+                with kube:
+                    m = Move(kube)
+                    run = m.runner()
+                    run.tick(); m.stopped()
+                    pod = kube.object(m.first_pod[1])
+                    pod["spec"]["volumes"].append({"name": "data", "persistentVolumeClaim": {"claimName": claim}})
+                    kube.add(pod)
+                    view = run.tick()
+                    self.assertEqual("held", view["status"])
+                    # This check's own words: the wait for mounts would also hold, later and vaguer.
+                    self.assertIn("independently of both data volumes", view["message"])
+
+    def test_a_pod_of_the_job_on_an_unreviewed_host_holds(self):
+        run = self.m.runner()
+        run.tick()
+        pod = self.kube.object(self.m.first_pod[1]); pod["spec"]["nodeName"] = "node-z"; self.kube.add(pod)
+        self.assertEqual("held", run.tick()["status"])
+
+
+class HostRebootTests(MoveTest):
+    """The default: the coordinator and the copy on one host (node-a). A reboot counts
+    only while a copy pod is on it; before or after the copy it holds nothing."""
+
+    def to_the_copy(self):
+        run = self.m.runner()
+        run.tick(); self.m.stopped(); run.tick()
+        self.assertEqual("copy", self.m.state()["phase"])
+        return run
+
+    def replaced(self):
+        self.m.pod_lost(self.m.first_pod)
+        return self.m.runner(self.m.start_pod("node-a"))
+
+    def finish(self, run):
+        m = self.m
+        m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick(); m.stopped(); run.tick(); m.started()
+        return run.tick()
+
+    def test_a_reboot_before_the_copy_holds_nothing_and_the_move_finishes(self):
+        m = self.m
+        self.to_the_copy()
+        m.rebooted("node-a")
+        run = self.replaced()
+        self.assertNotEqual("held", run.tick()["status"])
+        self.assertIn("copy-job", m.steps())
+        m.copy_running()                            # on the host that rebooted, after it did
+        self.assertNotEqual("held", run.tick()["status"])
+        self.assertEqual("done", self.finish(run)["status"])
+
+    def test_a_reboot_after_the_copy_holds_nothing_and_the_move_finishes(self):
+        m = self.m
+        run = self.to_the_copy()
+        run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released()
+        m.rebooted("node-a")
+        run = self.replaced()
+        self.assertEqual("switch", run.tick()["phase"])
+        self.assertEqual("start", run.tick()["phase"])
+        m.stopped(); run.tick(); m.started()        # Homestead's new pods are on that host
+        self.assertEqual("done", run.tick()["status"])
+
+    def test_a_reboot_during_the_copy_still_holds_and_recovery_refuses(self):
+        m = self.m
+        run = self.to_the_copy()
+        run.tick(); m.copy_running()
+        self.assertNotEqual("held", run.tick()["status"])
+        m.rebooted("node-a")
+        self.assertIn("rebooted", run.tick()["message"])
+        anchor = A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+        with self.assertRaisesRegex(Held, "rebooted"):
+            R.review(anchor, m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
+
+    def test_a_reboot_while_the_finished_copy_pod_is_there_still_holds(self):
+        m = self.m
+        run = self.to_the_copy()
+        run.tick(); m.copy_finished(); run.tick()
+        m.rebooted("node-a")
+        self.assertEqual("held", run.tick()["status"])
+
+    def test_a_reboot_while_homesteads_own_old_pod_is_there_still_holds(self):
+        """A writer from before the move, on the host that rebooted: unchanged."""
+        run = self.m.runner()
+        run.tick()
+        self.m.rebooted("node-a")
+        self.assertEqual("held", run.tick()["status"])
+
+
+class ByHandTests(MoveTest):
+    """docs/data-move-recovery.md's own scripts, run as written."""
+
+    @staticmethod
+    def script(name):
+        docs = (Path(__file__).resolve().parents[1] / "docs" / "data-move-recovery.md").read_text()
+        return re.search(r"```python\n# " + re.escape(name) + r":.*?```", docs, re.S).group(0).split("\n", 1)[1].rsplit("```", 1)[0]
+
+    def new_try(self):
+        """new-try.py over the Job as kubectl prints it, then kubectl create."""
+        job = self.kube.object(self.m.worker_path)
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(job))), mock.patch.object(sys, "stdout", out):
+            exec(compile(self.script("new-try.py"), "new-try.py", "exec"), {"__name__": "__main__"})
+        pod = json.loads(out.getvalue())
+        pod["metadata"]["name"] = pod["metadata"].pop("generateName") + "abcde"
+        pod["status"] = {"phase": "Running"}
+        path = self.kube.add(pod)
+        return self.kube.object(path)["metadata"]["uid"], path
+
+    def settle(self, outcome):
+        m = self.m
+        client = mock.Mock(read=m.read, send=m.send)
+        env = {L.CONFIG_ENV: m.setup.config}
+        with mock.patch.dict(os.environ, env), mock.patch.object(HK, "Client", lambda scope: client), \
+                mock.patch.object(sys, "argv", ["settle.py", outcome]), mock.patch.object(sys, "path", list(sys.path)), \
+                mock.patch("builtins.print"):
+            exec(compile(self.script("settle.py"), "settle.py", "exec"), {"__name__": "__main__"})
+
+    def load(self):
+        return A.Anchor(self.m.read, self.m.send, NS, "homestead").load(**self.m.handle)
+
+    def recover(self, action):
+        m = self.m
+        review = R.review(self.load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+        R.confirm(self.load(), m.read, lambda _: m.logs_text, action, review["fingerprint"], clock=lambda: m.now)
+
+    def job_gave_up(self):
+        job = self.kube.object(self.m.worker_path)
+        job["status"] = {"failed": 4, "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}
+        self.kube.add(job)
+
+    def test_after_the_last_try_a_pod_made_from_the_failed_job_finishes_the_move(self):
+        m = self.m
+        run = m.runner()
+        run.tick(); m.stopped(); run.tick(); run.tick()
+        m.pod_failed(m.first_pod)
+        self.job_gave_up()
+        run = m.runner(self.new_try())
+        self.assertNotEqual("held", run.tick()["status"])
+        m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick(); m.stopped(); run.tick(); m.started()
+        self.assertEqual("done", run.tick()["status"])
+        self.assertEqual(["stop", "copy-job", "release-copy", "switch", "start"], m.steps())
+
+    def test_the_new_try_carries_the_jobs_labels_owner_and_no_tracking_finalizer(self):
+        pod = self.kube.object(self.new_try()[1])
+        self.assertEqual(self.m.job["metadata"]["uid"], pod["metadata"]["labels"]["batch.kubernetes.io/controller-uid"])
+        owner = pod["metadata"]["ownerReferences"][0]
+        self.assertEqual(("Job", self.m.job["metadata"]["uid"], True), (owner["kind"], owner["uid"], owner["controller"]))
+        self.assertNotIn("finalizers", pod["metadata"])
+
+    def unknown_outcome(self):
+        m = self.m
+        with mock.patch.object(A.Anchor, "checkpoint", _fails_after_intent()), self.assertRaises(Died):
+            m.runner().tick()
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"))
+        self.assertEqual("held", run.tick()["status"])
+        return run
+
+    def test_a_request_found_applied_is_recorded_and_recovery_goes_on_without_sending_it(self):
+        m = self.m
+        run = self.unknown_outcome()
+        self.assertEqual(0, self.kube.object(m.dep_path)["spec"]["replicas"])
+        self.settle("applied")
+        m.stopped()
+        self.recover("resume")
+        puts = len(m.writes_to(m.dep_path, "PUT"))
+        run.tick(); run.tick()
+        self.assertEqual("copy", m.state()["phase"])
+        self.assertEqual(puts, len(m.writes_to(m.dep_path, "PUT")))
+
+    def test_a_request_found_not_sent_can_go_back_to_the_original_volume(self):
+        """It never reached the API: the record forgets it, and Homestead was never stopped."""
+        m = self.m
+        self.kube.fail(m.dep_path, 500, method="PUT")
+        with mock.patch.object(A.Anchor, "checkpoint", _fails_after_intent()), self.assertRaises(Died):
+            m.runner().tick()
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"))
+        self.assertEqual("held", run.tick()["status"])
+        self.assertEqual(1, self.kube.object(m.dep_path)["spec"]["replicas"])
+        self.settle("not-sent")
+        self.assertEqual([], m.steps())
+        self.recover("return-original")
+        self.assertEqual("cancelled", run.tick()["status"])
+
+    def test_settling_refuses_a_request_whose_outcome_is_known(self):
+        m = self.m
+        m.runner().tick()
+        with self.assertRaises(SystemExit):
+            self.settle("applied")
+        self.assertEqual("accepted", m.state()["journal"]["ref"]["storage_writes"][-1]["state"])
+
+    def test_settling_refuses_anything_but_the_two_outcomes(self):
+        self.unknown_outcome()
+        with self.assertRaises(SystemExit):
+            self.settle("maybe")
+        self.assertEqual("intent", self.m.state()["journal"]["ref"]["storage_writes"][-1]["state"])
+
+    def test_a_recovery_clears_a_new_pods_hold_when_the_old_pod_had_already_held(self):
+        """The old pod's hold and an open request: the new pod keeps the record's message,
+        which is what recovery compares when it clears the hold."""
+        m = self.m
+        with mock.patch.object(A.Anchor, "checkpoint", _fails_after_intent()), self.assertRaises(Died):
+            m.runner().tick()
+        anchor = self.load()
+        anchor.report(m.job["metadata"]["uid"], m.now, "held", "An earlier hold")
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"))
+        self.assertEqual("held", run.tick()["status"])
+        self.settle("applied")
+        m.stopped()
+        self.recover("resume")
+        self.assertNotEqual("held", run.tick()["status"])
+
+
 class LostPodTests(MoveTest):
     """A new process at each phase: nothing already done is done again."""
 
@@ -282,6 +565,7 @@ class LostPodTests(MoveTest):
         view = self.replaced().tick()
         self.assertEqual("held", view["status"])
         self.assertIn("will not be sent again", view["message"])
+        self.assertIn("(stop)", view["message"])
         self.assertEqual(1, self.counts()["deployment"])
         self.assertEqual("held", self.m.runner(self.current).tick()["status"])
         self.assertEqual(1, self.counts()["deployment"])
@@ -379,24 +663,76 @@ class TwoPodsTests(MoveTest):
         self.assertNotEqual("held", self.m.state()["runtime"]["state"], view)
 
     def test_a_stale_pods_hold_is_not_written_over_the_new_pods_record(self):
-        self.m.pod_terminating(self.m.first_pod, grace=0)
-        self.m.pass_time(1)
-        self.second.tick()
-        self.first.hold = "The data handoff control write was not verified"
+        """It is mid-tick when the new pod takes over: its heartbeat is refused, it latches
+        a hold of its own, and the record the new pod owns stays as it was."""
+        read, raced = self.first.read, []
+        def read_then_be_replaced(path):
+            answer = read(path)
+            if path == self.m.dep_path and not raced:
+                raced.append(True)
+                self.m.pod_terminating(self.m.first_pod, grace=0)
+                self.m.pass_time(1)
+                self.second.tick()
+            return answer
+        self.first.read = read_then_be_replaced
+        self.first.tick()
+        self.assertTrue(raced)
+        self.assertIsNotNone(self.first.hold, "its own write was refused")
+        self.assertEqual(self.second_pod[0], self.m.state()["runtime"]["pod_uid"])
+        self.assertNotEqual("held", self.m.state()["runtime"]["state"])
         self.first.tick()
         self.assertNotEqual("held", self.m.state()["runtime"]["state"])
 
-    def test_two_pods_cannot_both_win_the_takeover(self):
-        """The record's version decides: the loser's write is refused and it tries again next time."""
+    def test_a_pod_being_deleted_does_not_take_over_even_when_the_last_one_has_ended(self):
         self.m.pod_failed(self.m.first_pod)
-        third = self.m.start_pod("node-a")
-        self.kube.fail(self.m.anchor.path, 409, method="PUT")
-        self.assertNotEqual("held", self.second.tick()["status"])
-        self.assertEqual(self.m.first_pod[0], self.m.state()["runtime"]["pod_uid"])
+        self.m.pod_terminating(self.second_pod, grace=60)
+        before = len(self.m.writes_to(self.m.anchor.path, "PUT"))
         self.second.tick()
+        self.assertEqual(before, len(self.m.writes_to(self.m.anchor.path, "PUT")))
+        self.assertEqual(self.m.first_pod[0], self.m.state()["runtime"]["pod_uid"])
+
+    def test_a_pod_the_api_says_has_failed_does_not_take_back_the_move(self):
+        self.second.tick()                          # waits: the first is alive
+        self.m.pod_failed(self.m.first_pod)
+        self.second.tick()                          # took over
+        self.m.pod_failed(self.second_pod)
+        self.m.pod_failed(self.m.first_pod)
+        before = len(self.m.writes_to(self.m.anchor.path, "PUT"))
+        self.first.tick()
         self.assertEqual(self.second_pod[0], self.m.state()["runtime"]["pod_uid"])
-        self.assertTrue(third)
+        self.assertEqual(before, len(self.m.writes_to(self.m.anchor.path, "PUT")))
+
+    def test_a_pod_that_has_not_taken_over_writes_no_hold_into_a_record_with_no_owner(self):
+        kube = Kube()
+        with kube:
+            m = Move(kube)
+            changed = L.configuration(m.scope, m.handle["uid"], "e" * 64)
+            before = len(m.writes_to(m.anchor.path, "PUT"))
+            self.assertEqual("held", m.runner(config=changed).tick()["status"])
+            self.assertEqual(before, len(m.writes_to(m.anchor.path, "PUT")))
+            self.assertNotIn("runtime", m.state())
+
+    def test_two_pods_cannot_both_win_the_takeover(self):
+        """Both read the record; the third writes first. The record's version decides:
+        the second is refused, holds nothing, and waits for the winner."""
+        self.m.pod_failed(self.m.first_pod)
+        third_pod = self.m.start_pod("node-a")
+        third = self.m.runner(third_pod)
+        read, raced = self.second.read, []
+        def read_then_lose_the_race(path):
+            answer = read(path)
+            if path == self.m.pods_path and not raced:   # the second is about to take over
+                raced.append(True)
+                third.tick()
+            return answer
+        self.second.read = read_then_lose_the_race
+        self.assertNotEqual("held", self.second.tick()["status"])
+        self.assertTrue(raced)
+        self.assertEqual(third_pod[0], self.m.state()["runtime"]["pod_uid"])
         self.assertNotEqual("held", self.m.state()["runtime"]["state"])
+        before = len(self.m.writes_to(self.m.anchor.path, "PUT"))
+        self.assertIn("previous", self.second.tick()["message"])
+        self.assertEqual(before, len(self.m.writes_to(self.m.anchor.path, "PUT")))
 
     def test_a_pod_of_another_job_writes_nothing_to_the_record(self):
         pod = self.m.start_pod("node-b")
@@ -426,8 +762,33 @@ class WhatAPersonSeesTests(MoveTest):
         command = W.recovery_command(NS, self.m.state())
         self.assertIn(f"exec job/{self.m.job['metadata']['name']} --", command)
 
-    def test_identity_still_answers_with_the_job_after_a_new_pod(self):
-        self.assertEqual(self.m.job["metadata"]["uid"], self.m.runner(self.m.start_pod("node-b")).worker_uid)
+    def test_identity_answers_with_the_job_on_every_try(self):
+        """Setup's handshake and the private Service: the real status server, a new pod."""
+        token = "f" * 64
+        answers = []
+        for pod in (self.m.first_pod, self.m.start_pod("node-b")):
+            server = W.status_server(("127.0.0.1", 0), self.m.runner(pod), hashlib.sha256(token.encode()).hexdigest())
+            thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+            try:
+                connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+                connection.request("GET", "/identity", headers={"Authorization": "Bearer " + token})
+                answers.append(json.load(connection.getresponse()))
+            finally:
+                server.shutdown(); server.server_close()
+        self.assertEqual([self.m.job["metadata"]["uid"]] * 2, [a["worker_uid"] for a in answers])
+
+    def test_a_hold_with_an_unknown_outcome_does_not_offer_a_command_that_refuses(self):
+        m = self.m
+        run = m.runner()
+        with mock.patch.object(A.Anchor, "checkpoint", _fails_after_intent()), self.assertRaises(Died):
+            run.tick()
+        m.pod_lost(m.first_pod)
+        view = m.runner(m.start_pod("node-b")).tick()
+        self.assertEqual("held", view["status"])
+        self.assertNotIn("recovery_command", view)
+        self.assertNotIn("--action", view["message"])
+        self.assertIn("(stop)", view["message"])
+        self.assertIn("docs/data-move-recovery.md", view["message"])
 
 
 class CleanupTests(MoveTest):
@@ -526,6 +887,30 @@ class OldMoveTests(unittest.TestCase):
         command = W.recovery_command(NS, self.m.state())
         self.assertIn(f"exec {self.m.state()['plan']['worker']['name']} --", command)
         self.assertNotIn("job/", command)
+
+    def test_a_bare_coordinator_must_still_be_running_and_mount_nothing(self):
+        """Only a Job's next try makes "not Running" normal; an earlier release's pod is alone."""
+        m = self.m
+        obj = self.kube.object(m.anchor.path)
+        state = json.loads(obj["data"]["state.json"])
+        name = state["setup"]["resources"][-2]["target"]["name"]
+        path = state["setup"]["resources"][-2]["target"]["path"]
+        self.kube.discard(m.worker_path)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name, "namespace": NS},
+                       "spec": {"nodeName": "node-a", "volumes": []}, "status": {"phase": "Running"}})
+        live = self.kube.object(path)
+        uid = live["metadata"]["uid"]
+        state["setup"]["receipts"][-2]["after"]["uid"] = uid
+        state["plan"]["worker"].update(uid=uid, shape=shape(live))
+        obj["data"]["state.json"] = json.dumps(state)
+        self.kube.add(obj)
+        engine = lambda: C.Coordinator(A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle), m.read, m.send,
+                                       lambda _: "", lambda *_: True, worker_uid=uid, clock=lambda: m.now)
+        self.assertEqual(1, engine()._environment()["spec"]["replicas"])
+        live["status"]["phase"] = "Pending"
+        self.kube.add(live)
+        with self.assertRaisesRegex(Held, "remain running"):
+            engine()._environment()
 
     def test_a_record_with_another_kind_of_worker_is_refused(self):
         state = self.m.state()

@@ -97,35 +97,55 @@ class Coordinator:
         return pvc
 
     def _involved(self):
-        """The hosts that can hold a writer or a mount of either volume: the
-        copy host, the nodes of every pod in the namespace that mounts either
-        claim, is Homestead's own or is an earlier release's bare coordinator,
-        and the nodes either PV is pinned to. A reboot elsewhere proves nothing
-        about this move's writers, and a Job's coordinator mounts nothing: if its
-        host reboots, its next try carries on. A pod that left the API was removed normally (nothing here
-        force-deletes), so its writer stopped. A PV pinned by a hostname
-        that names no reviewed node checks every reviewed node, as before."""
-        names = {n["name"] for n in self.plan["nodes"]}
-        involved = {self.plan.get("copy_node")} - {None}
+        """The hosts that can hold a writer or a mount of either volume, each with
+        the boot id it must still have, or None when only being up matters: every
+        pod in the namespace that mounts either claim or is Homestead's own (or an
+        earlier release's bare coordinator), and the nodes either PV is pinned to.
+
+        A reboot elsewhere proves nothing about this move's writers. A Job's
+        coordinator mounts nothing: if its host reboots, its next try carries on.
+        The copy host counts only while a copy pod is on it, against the boot id it
+        had when the copy was requested, so a reboot before the copy holds nothing.
+        Homestead's own pods after the start request are new, so a reboot before
+        them holds nothing either. A pod that left the API was removed normally
+        (nothing here force-deletes), so its writer stopped. A PV pinned by a
+        hostname that names no reviewed node checks every reviewed node, as before."""
+        pins = {n["name"]: n["boot_id"] for n in self.plan["nodes"]}
+        target = A.worker_target(self.state)
+        job_worker = bool(target) and target["kind"] == "Job"
+        hosts = {}
+        if not job_worker and self.plan.get("copy_node") in pins:
+            hosts[self.plan["copy_node"]] = pins[self.plan["copy_node"]]
         claims_ = {self.state["source"]["name"], self.state["destination"]}
         sets = {identity(r)["uid"] for r in self._sets()}
+        known = self._entry("copy-job")
+        copy_uid = known.get("after", {}).get("uid") if known else None
+        restarted = job_worker and (self.anchor.state["phase"] in ("start", "done") or self._entry("recover-start"))
         for pod in self._pods():
-            if (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"]
-                    or any(owner(pod, "ReplicaSet", uid) for uid in sets)):
-                if pod.get("spec", {}).get("nodeName"):
-                    involved.add(pod["spec"]["nodeName"])
-        if involved - names:
-            raise Held("A host this data move uses was not reviewed; review the move again")
+            own = any(owner(pod, "ReplicaSet", uid) for uid in sets)
+            node = pod.get("spec", {}).get("nodeName")
+            if not node or not (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"] or own):
+                continue
+            if node not in pins:
+                raise Held("A host this data move uses was not reviewed; review the move again")
+            if copy_uid and owner(pod, "Job", copy_uid):
+                wanted = self.anchor.state.get("copy_host_boot", pins[node])
+            else:
+                wanted = None if own and restarted else pins[node]
+            if hosts.get(node) is None:
+                hosts[node] = wanted
         for fact in (self.plan["source_pv"], self.plan["destination_pv"]):
             pv = self.read("/api/v1/persistentvolumes/" + fact["name"])
             terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
             for term in terms:
                 for rule in term.get("matchExpressions", []) + term.get("matchFields", []):
                     values = set(rule.get("values", []))
-                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - names:
-                        return names  # a topology this can't map to reviewed hosts: check them all
-                    involved |= values
-        return involved
+                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - set(pins):
+                        return {**pins, **{k: v for k, v in hosts.items() if v}}  # a topology this can't map to reviewed hosts: check them all
+                    for value in values:
+                        if hosts.get(value) is None:
+                            hosts[value] = pins[value]
+        return hosts
 
     def _hosts(self):
         involved = self._involved()
@@ -133,8 +153,9 @@ class Coordinator:
             if pinned["name"] not in involved:
                 continue
             node = self.read("/api/v1/nodes/" + pinned["name"])
+            wanted = involved[pinned["name"]]
             if (identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp")
-                    or node.get("status", {}).get("nodeInfo", {}).get("bootID") != pinned["boot_id"]
+                    or wanted is not None and node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted
                     or not any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))):
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             lease = self.read("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + pinned["name"])
@@ -175,22 +196,26 @@ class Coordinator:
         return dep
 
     def _worker_running(self):
-        """The reviewed coordinator exists, and what runs it mounts neither volume.
-        Normally that is a Job, whichever try is running now; a record with no Job
-        (an earlier release's) has one bare Pod."""
+        """The reviewed coordinator exists, and nothing running it mounts either
+        volume. For a Job, the process running this is the proof that a pod is alive:
+        the API may still show it Pending with no host, or the last try ending. Neither
+        is a hold, because that would stop every move at its first replacement. A
+        record with no Job (an earlier release's) has one bare Pod, which must be Running."""
         target = A.worker_target(self.state)
         data = {self.state["source"]["name"], self.state["destination"]}
         hosts = {n["name"] for n in self.plan["nodes"]}
         if target and target["kind"] == "Job":
             self._fact(self.read(target["path"]), self.plan["worker"], namespace=self.ns)
             pods = [p for p in self._pods() if owner(p, "Job", self.plan["worker"]["uid"])]
-            running = [p for p in pods if p.get("status", {}).get("phase") == "Running" and not p["metadata"].get("deletionTimestamp")]
+            placed = [p for p in pods if p.get("spec", {}).get("nodeName") and p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
+            alive = True
         else:
             pod = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/pods/{self.plan['worker']['name']}"),
                              self.plan["worker"], namespace=self.ns)
-            pods = running = [pod] if pod.get("status", {}).get("phase") == "Running" else []
-        if (not running or any(claims(p) & data for p in pods)
-                or any(p.get("spec", {}).get("nodeName") not in hosts for p in running)):
+            alive = pod.get("status", {}).get("phase") == "Running"
+            pods = placed = [pod]
+        if (not alive or any(claims(p) & data for p in pods)
+                or any(p.get("spec", {}).get("nodeName") not in hosts for p in placed)):
             raise Held("The coordinator must remain running independently of both data volumes")
 
     def _pods(self):
@@ -352,6 +377,11 @@ class Coordinator:
                 dep = self._admission("copy", body)
                 if not self._quiet(dep):
                     return self._wait("copy", "Waiting for source writers to stop")
+                target = A.worker_target(self.state)
+                if target and target["kind"] == "Job":
+                    # What a reboot during the copy is measured against, not the
+                    # boot id from before the move: the host may have rebooted since.
+                    self.anchor.copy_host_seen(self.read("/api/v1/nodes/" + self.plan["copy_node"])["status"]["nodeInfo"]["bootID"])
                 self.writer.write("copy-job", "POST", self.job_path.rsplit("/", 1)[0], body)
                 return self._result("Copy Job started; waiting for verified data and metadata")
             job = self.writer.observe(known)
