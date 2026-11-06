@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_joblogs as JOBLOGS
 import homestead_kube as K
 import homestead_operations as JOBS
 import homestead_unraid_vms as UVMS
@@ -49,6 +50,8 @@ class ImportWaitTests(unittest.TestCase):
         UVMS.bind(self.imp, K.kget, K.ksend, JOBS)
         self.enterContext(mock.patch.dict(JOBS.RESOLVERS, {}))
         self.enterContext(mock.patch.dict(JOBS.CANCELLERS, {}))
+        # A pod's log is read through raw_get, which the fake API doesn't answer.
+        self.enterContext(mock.patch.object(JOBLOGS, "ktext", lambda path: ""))
         UVMS.register(JOBS)
         self.now = 1000.0
         self.dvs = DVS
