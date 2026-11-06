@@ -518,8 +518,9 @@ def disk_retire_plan(item):
         return {"can": False, "needs": "admin",
                 "why_not": "The disk is being taken out of Longhorn; that finishes in moments and "
                            "cannot be stopped half-way"}
-    # A failed retire holds nothing: this is asked under the job store's lock, and
-    # the cancel marks it active in the same hold (DISKS.retire_held).
+    # A failed retire holds nothing. The cancel asks this under the job store's lock
+    # and marks it active in the same hold (DISKS.retire_held); the review before it
+    # asks too, as a preview.
     held = DISKS.retire_held(item) if item.get("status") == "failed" else ""
     if held:
         return {"can": False, "needs": "admin", "why_not": held}
@@ -527,7 +528,9 @@ def disk_retire_plan(item):
     back = bool(ref.get("was_scheduling", True))
     plan = {"mode": "rollback", "needs": "admin",
             "undo": ["Lets Longhorn place replicas on the disk again, as before"] if back else [],
-            "keeps": ([] if back else ["Scheduling stays off on the disk, as it was when the retire started"])
+            "keeps": ([] if back else ["Nothing on the disk changes: it took no new replicas when the retire started"
+                                       if item.get("status") == "failed"
+                                       else "Scheduling stays off on the disk, as it was when the retire started"])
             + ([f"The {_s(removed, 'failed replica')} already let go of cannot come back; "
                 f"{'its volume rebuilds' if removed == 1 else 'their volumes rebuild'} from healthy copies"]
                if removed else ["No replica has been removed yet"])}
@@ -542,9 +545,15 @@ def disk_retire_plan(item):
 def disk_retire_cancel(item, _options):
     ref = item["ref"]
     back = bool(ref.get("was_scheduling", True))
+    if not back and item.get("previous_status") == "failed":
+        # Failed, it holds nothing, and a person may have let replicas back since.
+        ref["phase"] = "cancelled"
+        return "The retire is closed, and nothing on the disk was changed"
     try:
         DISKS._lh_disk(ref["node"], ref["disk"])
-    except ValueError:  # a merge patch would make a disk with no path
+    except (ValueError, urllib.error.HTTPError) as gone:  # a merge patch would make a disk with no path
+        if getattr(gone, "code", 404) != 404:
+            raise
         ref["phase"] = "cancelled"
         return f"The disk is no longer in Longhorn on {ref['node']}, so there was nothing to put back"
     DISKS._patch(f"{DISKS.LH}/nodes/{ref['node']}", {"spec": {"disks": {ref["disk"]: {"allowScheduling": back}}}},

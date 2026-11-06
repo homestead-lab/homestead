@@ -738,15 +738,15 @@ def retire_start(cfg, ops):
     keep = [r["replica"] for r in review["volumes"] if r["outcome"] == "only-copy" and not force]
     disk, _ = _lh_disk(node, disk_id)
     # How it was, so cancelling before anything is removed puts it back so. A failed
-    # retire of this disk that was not cleaned up left it off: how it was is what that
-    # one found.
-    was_scheduling = disk.get("allowScheduling", True) is not False or any(
-        other.get("kind") == "disk-retire" and other.get("status") == "failed"
-        and _same_disk(other.get("ref") or {}, {"node": node, "disk": disk_id})
-        and (other.get("ref") or {}).get("was_scheduling") and (other.get("ref") or {}).get("phase") not in ("done", "cancelled")
-        for other in OPS.stored())
+    # retire of this disk that was not cleaned up left it off and let replicas go: how
+    # it was, and what has gone, is what that one found and did.
+    older = [other.get("ref") or {} for other in OPS.stored()
+             if other.get("kind") == "disk-retire" and other.get("status") == "failed"
+             and _same_disk(other.get("ref") or {}, {"node": node, "disk": disk_id})
+             and (other.get("ref") or {}).get("phase") not in ("done", "cancelled")]
     ref = {"node": node, "disk": disk_id, "path": review["path"], "force": force, "phase": "stop", "keep": keep,
-           "was_scheduling": was_scheduling}
+           "was_scheduling": disk.get("allowScheduling", True) is not False or any(o.get("was_scheduling") for o in older),
+           "removed": sorted({name for o in older for name in o.get("removed") or []})}
     return ops.start("disk-retire", f"Replace failed disk {review['path'] or disk_id} on {node}",
                      {"kind": "Node", "name": node}, f"/nodes/{node}", ref, "Stopping new replicas on the disk")
 
@@ -803,7 +803,7 @@ def retire_resuming(item):
     if held:
         raise ValueError(held)
     ref = item["ref"]
-    for key in (*LETTING_GO_KEYS, "unconfirmed_since"):
+    for key in WAITS:
         ref.pop(key, None)
     ref["recheck"] = True
 
@@ -837,21 +837,27 @@ UNCONFIRMED_WAIT = 1800
 # this it fails, with nothing further done: the disk takes no new replicas and
 # stays listed, and Carry on goes on from the same step.
 LETTING_GO_WAIT = 1800
-LETTING_GO_KEYS = ("letting_go_since", "records_since", "remove_since")
+# What a retire's waits have saved; carrying on starts them all again.
+WAITS = ("letting_go_since", "letting_go_for", "records_since", "remove_since", "recheck_since",
+         "unconfirmed_since", "unconfirmed_last")
 _clock = time.time
+
+
+def _gap(last, now):
+    """A gap in looking (Homestead down, the clock stepped) says nothing about Longhorn,
+    so a wait starts again, as for failed reads (homestead_job_errors)."""
+    return last is None or last > now or now - last > ERRORS.GAP
 
 
 def _waited_out(ref, key):
     """Has this wait lasted LETTING_GO_WAIT, with the jobs loop looking throughout?
-    A gap in looking (Homestead down, the clock stepped) says nothing about Longhorn,
-    so the wait starts again, as for failed reads (homestead_job_errors): that covers
-    time spent in another of the retire's waits too. Carrying on drops them all
-    (retire_resuming). The last look is saved at most once per LAST_EVERY, so a wait
-    is not written every round."""
+    Not looking for a while (_gap) includes time spent in another of the retire's
+    waits. Carrying on drops them all (retire_resuming). The last look is saved at
+    most once per LAST_EVERY, so a wait is not written every round."""
     now = _clock()
     state = ref.get(key) or {}
     since, last = state.get("since"), state.get("last")
-    if since is None or last is None or since > now or last > now or now - last > ERRORS.GAP:
+    if _gap(last, now):
         since = last = now
     elif now - last >= ERRORS.LAST_EVERY:
         last = now
@@ -894,15 +900,27 @@ def retire_step(item):
     elif ref.get("recheck"):
         # Carrying on, perhaps days later: a start refuses a disk that works, and
         # anyone may have let replicas back since. Starts again from "stop", keeping
-        # its phase, as a disk being removed still can't be put back.
-        if _ready(status).get("status", "True") == "True":
-            ref.pop("recheck")
-            return "failed", item.get("progress", 0), (
-                f"{ref.get('path') or disk_id} is working again, so this retire stops here and the disk stays in "
-                f"Longhorn. {_back_on(ref)}")
-        _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+        # its phase, as a disk being removed still can't be put back. What can't be
+        # told, or done, leaves it failed as the person left it.
+        path, ready = ref.get("path") or disk_id, _ready(status).get("status")
+        progress = item.get("progress", 10)
+        if ready == "True":
+            return "failed", progress, (f"{path} is working again, so this retire stops here and the disk stays in "
+                                        f"Longhorn. {_back_on(ref)}")
+        if ready is None:
+            return "failed", progress, (f"Longhorn does not say whether {path} works, so this retire stops here and the "
+                                        f"disk stays in Longhorn. {_back_on(ref)} Carry on asks again.")
+        try:
+            _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+        except ValueError as refused:
+            said = str(refused)[:160]
+            if _waited_out(ref, "recheck_since"):
+                return "failed", progress, (f"Longhorn has not let new replicas be stopped on {path} after "
+                                            f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire went no further and "
+                                            f"the disk stays in Longhorn. {_back_on(ref)} Carry on tries again from here.")
+            return "running", progress, f"Stopping new replicas first - {said}"
         ref.pop("recheck")
-        return "running", item.get("progress", 10), "No new replicas go to the disk"
+        return "running", progress, "No new replicas go to the disk"
     if phase == "stop":
         _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
         ref["phase"] = "replicas"
@@ -929,6 +947,12 @@ def retire_step(item):
         # first seen so, recorded before anything below can fail.
         since = {name: at for name, at in (ref.get("unconfirmed_since") or {}).items() if name in unconfirmed}
         now = _clock()
+        last = ref.get("unconfirmed_last")
+        if _gap(last, now):
+            since, last = {}, now
+        elif now - last >= ERRORS.LAST_EVERY:
+            last = now
+        ref["unconfirmed_last"] = last
         for name in unconfirmed:
             since.setdefault(name, now)
         ref["unconfirmed_since"] = since
@@ -938,7 +962,6 @@ def retire_step(item):
         if removed != (ref.get("removed") or []):
             ref["removed"] = removed
             OPS.checkpoint(item)
-        ref["removed"] = removed
         for replica in left:
             try:
                 ksend("DELETE", f"{LH}/replicas/{replica['metadata']['name']}")
@@ -947,6 +970,11 @@ def retire_step(item):
                     raise
         if left:
             said = f"{len(left)} failed replica{'' if len(left) == 1 else 's'}"
+            # A replica newly let go gets its full wait: the last one going is progress.
+            names, seen = {r["metadata"]["name"] for r in left}, set(ref.get("letting_go_for") or [])
+            if names - seen:
+                ref.pop("letting_go_since", None)
+                ref["letting_go_for"] = sorted(seen | names)
             if _waited_out(ref, "letting_go_since"):
                 return "failed", 30, _still_held(said, ref, disk_id)
             return "running", 30, f"Letting go of {said}"
