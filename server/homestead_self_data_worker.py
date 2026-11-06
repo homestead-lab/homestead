@@ -322,14 +322,7 @@ class Runner:
                 or (current is not None and not self._ended(pods.get(current), now))):
             self.replacing = True
             return False
-        try:
-            anchor.take_over(self.pod_uid, now)
-        except Held as error:
-            cause = error.__cause__ or error.__context__
-            if transient(error) or (isinstance(cause, urllib.error.HTTPError) and cause.code == 409):
-                self.replacing = True
-                return False
-            raise
+        anchor.take_over(self.pod_uid, now)  # refused or lost: _retry_later, as this pod isn't acting yet
         self.replacing = False
         self.acting = True
         unknown = [e["step"] for e in anchor.state["journal"]["ref"]["storage_writes"] if e["state"] == "intent"]
@@ -395,7 +388,7 @@ class Runner:
                               "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
                 self.outage_since = self.host_down = None
             except C.HostDown as error:
-                self._host_down(anchor, error.hosts)
+                self._host_down(anchor, error.hosts, error.removed)
             except C.FigurePending as error:
                 names = _names(error.hosts)
                 self._wait_for(anchor, "figure", FIGURE_LIMIT, str(error),
@@ -412,7 +405,7 @@ class Runner:
         finally:
             self.lock.release()
 
-    def _host_down(self, anchor, hosts):
+    def _host_down(self, anchor, hosts, removed=()):
         names = _names(hosts)
         writes = anchor.state["journal"]["ref"]["storage_writes"]
         if A.stop_check_expired(anchor.state, self.clock()):
@@ -429,8 +422,10 @@ class Runner:
         if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
             return self._wait_for(anchor, "host", None, None,
                 f"{names} is down. The move has passed the point where it can stop, so it waits with no limit and "
-                "carries on when it is back. Bring it back; if it won't come back, see docs/data-move-recovery.md, "
-                "\"A host that never comes back\".")
+                "carries on when it is back. " + (
+                    f"{_names(removed)} was removed: Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
+                    if removed else "Bring it back; if it won't come back, see docs/data-move-recovery.md, "
+                    "\"A host that never comes back\"."))
         self._wait_for(anchor, "host", HOST_LIMIT,
             f"{names} has been down for {HOST_LIMIT // 60} minutes, so the move stopped waiting. Nothing was forced and "
             "both volumes are retained. Bring it back, or go back to the original volume unless that is on it too.",

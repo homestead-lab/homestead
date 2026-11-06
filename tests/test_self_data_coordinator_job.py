@@ -785,17 +785,194 @@ class ClusterChangedTests(unittest.TestCase):
         with self.assertRaisesRegex(Held, "not reviewed"):
             self.preview("return-original")
 
-    def test_after_the_switch_resume_refuses_in_words_and_does_not_offer_going_back(self):
-        m = self.m
-        run = self.run_
-        run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick(); m.stopped()
-        self.assertIn("switch", m.steps())
-        m.removed("node-b")
+
+
+class ClusterChangedAfterTheSwitchTests(unittest.TestCase):
+    """After the switch there is no going back, so resuming ignores host changes unless the
+    new volume or Homestead's pods are on a missing host. A pod on a deleted host counts
+    as waiting until it leaves Kubernetes (pod GC, which the fake doesn't do: tests do it)."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+
+    def switched(self, **kwargs):
+        m = Move(self.kube, **kwargs)
+        run = m.runner(real_admission=True)
+        run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick(); run.tick(); m.stopped()
+        self.assertEqual(("start", "switch"), (m.state()["phase"], m.steps()[-1]))
+        return m, run
+
+    def started(self, **kwargs):
+        m, run = self.switched(**kwargs)
+        run.tick()
+        self.assertEqual("start", m.steps()[-1])
+        return m, run
+
+    def load(self, m):
+        return A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
+
+    def preview(self, m, action="resume"):
+        return R.review(self.load(m), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+
+    def resume(self, m):
+        R.confirm(self.load(m), m.read, lambda _: m.logs_text, "resume", self.preview(m)["fingerprint"], clock=lambda: m.now)
+
+    def stranger(self, node="node-b"):
+        return self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "stranger", "namespace": NS},
+                              "spec": {"nodeName": node, "volumes": [{"persistentVolumeClaim": {"claimName": "target"}}]}})
+
+    def new_pod(self, m, host, name="homestead-on-a-host"):
+        dep = self.kube.object(m.dep_path)
+        dep["status"] = {"observedGeneration": dep["metadata"]["generation"], "replicas": 1, "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1}
+        self.kube.add(dep)
+        return self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name, "namespace": NS,
+            "ownerReferences": [{"kind": "ReplicaSet", "uid": m.rs_uid, "name": "hs-rs", "controller": True}]},
+            "spec": {"nodeName": host, "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "target"}}],
+                     "containers": dep["spec"]["template"]["spec"]["containers"]},
+            "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}})
+
+    def test_an_unrelated_host_joins_after_the_start_then_a_hold_and_resume_reaches_done(self):
+        m, run = self.started()
+        path = self.stranger()
+        self.new_pod(m, "node-a")
         self.assertEqual("held", run.tick()["status"])
+        self.kube.discard(path)
+        m.joined("node-c")
+        self.resume(m)
+        self.assertEqual("done", run.tick()["status"])
+
+    def test_an_unused_reviewed_host_removed_then_a_hold_and_resume_reaches_done(self):
+        m, run = self.started()
+        path = self.stranger("node-a")
+        self.new_pod(m, "node-a")
+        self.assertEqual("held", run.tick()["status"])
+        self.kube.discard(path)
+        m.removed("node-b")
+        self.resume(m)
+        self.assertEqual("done", run.tick()["status"])
+
+    def test_the_new_pods_host_deleted_waits_until_the_pod_leaves_then_a_replacement_finishes(self):
+        """RWX: nothing pins the volume to that host."""
+        m, run = self.started()
+        pod = self.new_pod(m, "node-b")
+        dep = self.kube.object(m.dep_path); dep["status"]["readyReplicas"] = 0; self.kube.add(dep)
+        self.assertNotEqual("held", run.tick()["status"])
+        m.removed("node-b")
+        view = run.tick()
+        self.assertNotEqual("held", view["status"], view)
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        self.assertIn("node-b", view["message"])
+        self.assertIn("leaves Kubernetes", view["message"])
+        m.pass_time(86400)
+        self.assertNotEqual("held", run.tick()["status"], "no limit: it leaves when Kubernetes collects it")
+        self.kube.discard(pod)                      # pod GC
+        self.new_pod(m, "node-a", name="homestead-replacement")
+        self.assertEqual("done", run.tick()["status"])
+
+    def test_a_hold_then_the_new_pods_host_deleted_preview_says_to_wait_and_then_passes(self):
+        m, run = self.started()
+        pod = self.new_pod(m, "node-b")
+        path = self.stranger("node-a")
+        self.assertEqual("held", run.tick()["status"])
+        self.kube.discard(path)
+        m.removed("node-b")
+        with self.assertRaisesRegex(Held, "(?s)node-b.*leave"):
+            self.preview(m)
+        self.kube.discard(pod)
+        self.assertEqual("resume", self.preview(m)["action"])
+
+    def test_an_unrelated_host_joins_after_the_switch_before_the_start_request(self):
+        m, run = self.switched()
+        m.joined("node-c")
+        self.assertNotEqual("held", run.tick()["status"])
+        self.assertEqual("start", m.steps()[-1])
+
+    def test_homesteads_new_pod_may_land_on_a_host_that_joined(self):
+        m, run = self.started()
+        m.joined("node-c")
+        self.new_pod(m, "node-c")
+        self.assertEqual("done", run.tick()["status"])
+
+    def test_a_stranger_on_a_host_that_joined_is_still_refused(self):
+        m, run = self.started()
+        m.joined("node-c")
+        self.stranger("node-c")
+        self.assertIn("not reviewed", run.tick()["message"])
+
+    def test_the_new_volumes_own_host_removed_still_holds_and_refuses_in_words(self):
+        m, run = self.started(pins={"new-pv": "node-a"})
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        m.removed("node-a")
+        view = run.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("removed", view["message"])
+        self.assertNotIn("HTTP Error", view["message"])
         with self.assertRaises(Held) as refused:
-            self.preview("resume")
-        self.assertIn("node-b", str(refused.exception))
-        self.assertNotIn("return-original", str(refused.exception))
+            self.preview(m)
+        self.assertIn("node-a", str(refused.exception))
+        self.assertIn("removed", str(refused.exception))
+        self.assertNotIn("HTTP Error", str(refused.exception))
+
+    def test_the_new_volumes_host_removed_holds_even_with_the_new_pod_listed_on_it(self):
+        """The pod leaving would not bring the data back."""
+        m, run = self.started(pins={"new-pv": "node-a"})
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        self.new_pod(m, "node-a")
+        m.removed("node-a")
+        self.assertEqual("held", run.tick()["status"])
+
+    def test_a_copy_of_the_rule_before_the_switch_is_still_strict(self):
+        """Forward before the switch needs the reviewed cluster: going back is still there."""
+        m = Move(self.kube)
+        run = m.runner(real_admission=True)
+        run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick()
+        self.assertEqual("switch", m.state()["phase"])
+        m.joined("node-c")
+        self.assertIn("membership changed", run.tick()["message"])
+        self.assertNotIn("switch", m.steps())
+
+    def test_going_back_before_any_request_with_homesteads_pod_on_a_removed_host_still_refuses(self):
+        m = Move(self.kube, pinned_to="node-a")
+        m.pod_lost(m.first_pod)
+        run = m.runner(m.start_pod("node-b"), real_admission=True)
+        m.pass_time(61)
+        self.assertEqual("held", run.tick()["status"])
+        m.removed("node-a")
+        with self.assertRaisesRegex(Held, "(?s)node-a.*removed"):
+            self.preview(m, "return-original")
+
+
+class HomesteadsPodBeforeTheStopTests(unittest.TestCase):
+    """Before any stop request, on storage not pinned to a host: Homestead's own pod counts."""
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.m = Move(self.kube)
+        self.m.pod_lost(self.m.first_pod)
+        self.run_ = self.m.runner(self.m.start_pod("node-b"), real_admission=True)
+
+    def preview(self, action):
+        m = self.m
+        return R.review(A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
+
+    def test_on_a_removed_host_going_back_refuses_and_names_it(self):
+        """It is not a new pod: the wait for one leaving Kubernetes doesn't apply."""
+        m = self.m
+        m.pass_time(61)
+        self.assertEqual("held", self.run_.tick()["status"])
+        m.removed("node-a")
+        with self.assertRaisesRegex(Held, "(?s)node-a.*removed"):
+            self.preview("return-original")
+
+    def test_on_a_host_that_joined_a_forward_move_holds_and_going_back_is_safe(self):
+        m = self.m
+        m.joined("node-c")
+        pod = self.kube.object(m.old_pod); pod["spec"]["nodeName"] = "node-c"; self.kube.add(pod)
+        self.assertIn("not reviewed", self.run_.tick()["message"])
+        self.assertEqual([], m.writes_to(m.dep_path))
+        self.assertEqual("return-original", self.preview("return-original")["action"])
 
 
 class HostNeverBackTests(unittest.TestCase):

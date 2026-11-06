@@ -129,8 +129,13 @@ class AdmissionTests(unittest.TestCase):
         for change in (lambda: self.nodes[0]["metadata"].update(uid="replacement"),
                        lambda: self.nodes.append(obj("Node", "new", ns=None)), lambda: self.nodes.clear()):
             saved = copy.deepcopy(self.nodes); change()
-            with self.assertRaises(Held): admit("start", self.dep)
+            with self.assertRaises(Held): admit("switch", self.dep)
             self.nodes = saved
+
+    def test_after_the_switch_the_start_request_ignores_hosts_that_changed(self):
+        admit = self.admit()
+        self.nodes.append(obj("Node", "new", ns=None))
+        self.assertTrue(admit("start", self.dep))
 
     def test_a_reboot_is_measured_at_the_review_before_the_stop_and_not_at_each_step_of_the_move(self):
         """During the move the coordinator measures reboots, on the hosts in use."""

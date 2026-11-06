@@ -123,6 +123,11 @@ meanwhile, and the status page comes back with the new Pod.
   running copy is followed, a finished one is verified, and after the switch
   the move only goes forward. A hold stays held, and a wait keeps its deadline.
 
+A new Pod that hasn't taken over never holds, because nothing it held could be written or
+cleared. If it is refused, the page says "This coordinator has not taken over yet and is retrying",
+with the reason. Most often that clears by itself; if it lasts, the reason is what to fix,
+such as the helper's permissions. Recovery can't see this: it acts only on the move's record.
+
 A move started by an earlier release keeps its bare coordinator Pod, on its pinned
 image, with the old behaviour. Use `kubectl exec <coordinator-pod>` for it.
 
@@ -374,14 +379,22 @@ will never return, the verified copy on it is gone too, and what that costs depe
 ### Hosts removed or added
 
 A Node deleted, a host replaced under the same name, or a new one joining holds the move at
-its next capacity check, because the cluster is no longer the one reviewed.
+its next capacity check before the switch, because the cluster is no longer the one reviewed.
 
-- **Resuming refuses**, and says what changed. Put the cluster back as it was, or go back.
+- **Before the switch, resuming refuses**, and says what changed. Going back is the way on,
+  or put a host back if that is possible; a removed host's identity can't come back.
 - **Going back ignores the change**, unless the original volume or one of Homestead's pods is on
   the missing host; then it refuses and names it. Remove a pod left on a host that is gone, as
-  "A Pod on a dead host" says. Homestead's restart may land on a host that has joined.
-- **After the switch** recovery can only resume, so the cluster has to be put back as it was;
-  otherwise it is an administrator-reviewed recovery outside this tool.
+  "A Pod on a dead host" says. Homestead may start on a host that has joined, both when a
+  return restarts it and if a pod is already there before any stop request. That is safe:
+  nothing about that host matters to its original volume.
+- **After the switch there is no going back, so resuming and the start request ignore
+  the change** and the move finishes, unless what it needs is on a missing host:
+  - **Homestead's new pod listed on a deleted Node** counts as waiting, with no limit, until it
+    leaves Kubernetes. Pod GC removes it, then its ReplicaSet starts another. Nothing needs doing.
+  - **The new volume's own host removed** holds, and recovery refuses and says so. The data
+    is on that host. This is an administrator-reviewed recovery outside this tool.
+
 
 **A host just back** has no live memory figure for a minute or two. If that is the only
 thing new at a capacity check, the move waits up to 5 minutes for it, saying so on the

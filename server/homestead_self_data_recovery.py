@@ -67,12 +67,13 @@ def review(anchor, read, logs, action, *, clock=time.time):
         raise Held("The copy check expired before Homestead was stopped, so resuming can't get past it: going back is the only "
                    "way. It changes nothing, as Homestead was not stopped. Preview --action return-original, then start a new move")
     target = A.worker_target(state)
-    if action == "resume" and target and target["kind"] == "Job":
+    # After the switch there is no going back, so resuming ignores host changes; _hosts
+    # below still measures the new volume's host and every pod in use.
+    if action == "resume" and not cutover and target and target["kind"] == "Job":
         changes = engine.cluster_changes()
         if changes:
-            raise Held("Resuming needs the cluster as it was reviewed, and " + ", ".join(changes) + ". " + (
-                "It can't go back now either: see docs/data-move-recovery.md, \"Hosts removed or added\"" if cutover else
-                "Preview --action return-original, which does not need it unless the original volume or Homestead's pods are on a missing host"))
+            raise Held("Resuming needs the cluster as it was reviewed, and " + ", ".join(changes) + ". "
+                       "Preview --action return-original, which does not need it unless the original volume or Homestead's pods are on a missing host")
     try:
         dep = engine._environment()
     except C.HostDown as down:
@@ -81,7 +82,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
             raise Held(f"Going back needs {names}, which is down: the original volume or one of Homestead's pods is on it. "
                        "Bring it back, then preview again. Nothing was changed") from None
         raise Held(f"Resuming needs {names}, which is down. Bring it back, then preview again. Nothing was changed"
-                   + ("." if cutover else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
+                   + (". If it was removed, wait for Homestead's pod on it to leave Kubernetes" if down.removed else "." if cutover else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
     volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v["name"] == state["plan"]["data_volume"]]
     selected = state["destination"] if cutover else state["source"]["name"]
     if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:

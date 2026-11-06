@@ -107,9 +107,10 @@ def _nodes(read, pinned, now, *, boots=True, members=True):
     """boots: the review before anything stops compares every reviewed host's boot id.
     During the move only a replaced or removed host matters here: the coordinator
     measures reboots itself, on the hosts actually in use (Coordinator._involved).
-    members: going back to the original volume ignores hosts removed, replaced or
-    added: it needs only what the original was running on, which the coordinator checks,
-    and counts capacity on the reviewed hosts that are still there."""
+    members: going back to the original volume, or starting on the new one after the
+    switch, ignores hosts removed, replaced or added: it needs only the volume and what
+    runs on it, which the coordinator checks, and counts capacity on the reviewed
+    hosts that are still there."""
     raw = _inventory(read, "/api/v1/nodes")
     expected = {n["name"]: n for n in pinned}
     if len(expected) != len(pinned):
@@ -295,7 +296,7 @@ class Admitter:
             return True
         stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
         report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False,
-                        members=purpose != "recover-start")
+                        members=purpose not in ("start", "recover-start"))
         approved = self.policy["reviews"][stage]
         if purpose == "recover-start":
             approved = (self.handoff or {}).get("recovery", {}).get("restart")

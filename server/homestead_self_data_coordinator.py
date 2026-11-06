@@ -23,10 +23,11 @@ RELEASE_LIMIT = 600
 
 class HostDown(Held):
     """Hosts the move needs are down, and only their being up matters: no pod listed on them
-    can be writing. The move waits and sends nothing; to a recovery review it is a refusal."""
-    def __init__(self, hosts):
+    can be writing. The move waits and sends nothing; to a recovery review it is a refusal.
+    removed: those deleted from the cluster with a new Homestead pod still listed on them."""
+    def __init__(self, hosts, removed=()):
         super().__init__("Waiting for " + ", ".join(hosts))
-        self.hosts = hosts
+        self.hosts, self.removed = hosts, list(removed)
 
 
 class FigurePending(Held):
@@ -148,19 +149,27 @@ class Coordinator:
         # could not help: its ReplicaSet starts another on the same host. After the start
         # request they are new. Between the two they are the writers that must be gone.
         restarted = job_worker and (not self._entry("stop") or self.anchor.state["phase"] in ("start", "done") or self._entry("recover-start"))
+        new_pods = job_worker and (self._entry("start") or self._entry("recover-start"))
+        self.new_pod_hosts = set()  # a host of Homestead's new pods and nothing pinned to it
+        pinned_hosts = set()
         for pod in self._pods():
             own = any(owner(pod, "ReplicaSet", uid) for uid in sets)
             node = pod.get("spec", {}).get("nodeName")
             if not node or not (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"] or own):
                 continue
             if node not in pins:
-                if self.going_back and own and restarted:
-                    continue  # Homestead's restart may land on a host that joined since
+                # Homestead's own pods may be on a host that joined since, when it is staying or
+                # going back to its original volume, or restarted on the new one. Forward
+                # before the start request, the capacity check holds on the change anyway.
+                if own and restarted and (self.going_back or self._entry("start")):
+                    continue
                 raise Held("A host this data move uses was not reviewed; review the move again")
             if copy_uid and owner(pod, "Job", copy_uid):
                 wanted = self.anchor.state.get("copy_host_boot", pins[node])
             else:
                 wanted = None if own and restarted else pins[node]
+                if own and new_pods:
+                    self.new_pod_hosts.add(node)
             if hosts.get(node) is None:
                 hosts[node] = wanted
         for fact in (self.plan["source_pv"],) if self.going_back else (self.plan["source_pv"], self.plan["destination_pv"]):
@@ -170,20 +179,29 @@ class Coordinator:
                 for rule in term.get("matchExpressions", []) + term.get("matchFields", []):
                     values = set(rule.get("values", []))
                     if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - set(pins):
+                        self.new_pod_hosts = set()
                         return {**pins, **{k: v for k, v in hosts.items() if v}}  # a topology this can't map to reviewed hosts: check them all
+                    pinned_hosts |= values
                     for value in values:
                         hosts.setdefault(value, None)
+        self.new_pod_hosts -= pinned_hosts
         return hosts
 
     def _hosts(self):
         involved = self._involved()
-        down = []  # every host is looked at: one that is down must not hide one that holds
+        down, removed = [], []  # every host is looked at: one that is down must not hide one that holds
         for pinned in self.plan["nodes"]:
             if pinned["name"] not in involved:
                 continue
             try:
                 node = self.read("/api/v1/nodes/" + pinned["name"])
             except urllib.error.HTTPError as error:
+                if error.code == 404 and pinned["name"] in self.new_pod_hosts and involved[pinned["name"]] is None:
+                    # Homestead's new pod is listed on a deleted Node: it can't be running,
+                    # and Kubernetes removes it, then its ReplicaSet starts another. Only
+                    # the volume being there matters, and nothing pins it to this host.
+                    down.append(pinned["name"]); removed.append(pinned["name"])
+                    continue
                 if error.code == 404:
                     raise Held(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
                                "Nothing was forced and both volumes are retained") from None
@@ -212,7 +230,7 @@ class Coordinator:
                 raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
         # Going back from before any request writes nothing, so a down host can't matter.
         if down and not (self.going_back and not self.writer.entries):
-            raise HostDown(down)
+            raise HostDown(down, removed)
 
     def cluster_changes(self):
         """In words: how the cluster's hosts differ from the review's, for a refusal."""
