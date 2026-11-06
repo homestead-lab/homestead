@@ -69,6 +69,10 @@ def _items(path, optional_group=None):
         raise ValueError("Volume inventory is incomplete; refresh before moving data") from error
 
 
+def _vm_strategy(spec):
+    return spec.get("runStrategy") or ("Always" if spec.get("running") else "Halted")
+
+
 def _pin(fences, path, obj):
     if fences is None:
         return
@@ -143,7 +147,7 @@ def consumers(ns, claim, fences=None):
             continue
         _pin(fences, f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{vm['metadata']['name']}", vm)
         spec = vm.get("spec") or {}
-        strategy = spec.get("runStrategy") or ("Always" if spec.get("running") else "Halted")
+        strategy = _vm_strategy(spec)
         out.append({"kind": "VirtualMachine", "name": vm["metadata"]["name"], "run_strategy": strategy,
                     "running": (vm.get("status") or {}).get("printableStatus") == "Running", "via": via})
     return out
@@ -588,11 +592,9 @@ def journaled_stop(item, checkpoint, *, journal_factory=JOURNAL.Journal):
     checkpoint(item)
 
 
-def _start(ns, ref, skip=()):
+def _start(ns, ref):
     for c in ref["consumers"]:
         name = c["name"]
-        if (c["kind"], name) in skip:
-            continue
         try:
             if c["kind"] in ("Deployment", "StatefulSet"):
                 plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
@@ -603,7 +605,7 @@ def _start(ns, ref, skip=()):
                       ctype="application/merge-patch+json")
             elif c["kind"] == "VirtualMachine":
                 ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
-                      {"spec": {"runStrategy": c["run_strategy"]}}, ctype="application/merge-patch+json")
+                      {"spec": {"runStrategy": c["run_strategy"], "running": None}}, ctype="application/merge-patch+json")
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
@@ -720,6 +722,28 @@ def _made_nothing(ref):
     return ref.get("rollback_from", ref.get("phase", "stop")) in ("stop", "stopping")
 
 
+def _put_apps_back(ns, ref):
+    """Start each app this rollback hasn't yet, one at a time, so one that can't be
+    read or started keeps no other down. Those started are noted, so a retry leaves
+    them as they are by then. Returns ({(kind, name): the job holding it}, {name: why it's down})."""
+    started = ref.setdefault("rollback_started", [])
+    held, down = {}, {}
+    for c in ref["consumers"]:
+        key = f"{c['kind']}/{c['name']}"
+        if key in started:
+            continue
+        try:
+            job = _other_job(_live(ns, c) or {})
+            if job:
+                held[(c["kind"], c["name"])] = job
+                continue
+            _start(ns, {"consumers": [c]})
+            started.append(key)
+        except Exception as error:
+            down[c["name"]] = error
+    return held, down
+
+
 def _rollback(ns, ref, why, item=None):
     """Put everything back. item is the resolver's job: Cancel passes none, as its
     job is marked as being cancelled, so no round runs beside it and a save is refused."""
@@ -731,32 +755,44 @@ def _rollback(ns, ref, why, item=None):
         ref.update(rollback_from=ref.get("phase", "stop"), rollback_why=why, phase="rolling-back")
         if item is not None:
             OPS.checkpoint(item)
-    left = ""   # why a claim of that name is still there
+    notes, removed = [], not _made_nothing(ref)
     if not _made_nothing(ref):
-        if ref.get("job"):
+        job = ref.get("job") or ref.get("job_name")
+        if job:
             try:
-                ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}?propagationPolicy=Background")
-            except Exception:
-                pass
+                ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{job}?propagationPolicy=Background")
+            except urllib.error.HTTPError as error:   # anything else, a timeout say, is tried again
+                if error.code != 404:
+                    removed = False
+                    notes.append(f"The copy job {job} could not be stopped ({error}), so it may still be using the volumes.")
         # A claim that can't be deleted is no reason to leave the apps down.
         try:
             if not _remove_temp(ns, ref):
-                left = f"A volume named {ref['temp']} is there that this move did not make, so it was left."
+                removed = False
+                notes.append(f"A volume named {ref['temp']} is there that this move did not make, so it was left.")
         except Exception as error:
-            left = f"The new volume {ref['temp']} could not be removed ({error}), so it is still there."
-    held = _held_elsewhere(ns, ref)
-    _start(ns, ref, skip=held)
+            removed = False
+            notes.append(f"The new volume {ref['temp']} could not be removed ({error}), so it is still there.")
+    held, down = _put_apps_back(ns, ref)
+    if down:
+        said = (f"Putting things back: {', '.join(down)} still down ({next(iter(down.values()))}), and trying again. "
+                "What could be started has been.")
+        if item is None:
+            raise ValueError(said)
+        return "running", item.get("progress", 0), said
     ref["phase"] = "rolled-back"
+    # Put back: nothing of this move is left to hold, or the volume stays locked for good.
+    ref.pop("retain_resources", None)
     why = ref.get("rollback_why", why)
-    started = "everything started again on the original"
-    if held:
-        started = (f"everything else started again on the original, and {_named(held)} stays stopped "
-                   f"because another job holds it")
-    if _made_nothing(ref):
-        return "failed", 0, f"{why} Nothing changed: {started}."
-    if left:
-        return "failed", 0, f"{why} {started[0].upper()}{started[1:]}. {left}"
-    return "failed", 0, f"{why} Nothing changed: the new volume was removed and {started}."
+    apps = ("everything else started again on the original" if held
+            else "everything started again on the original")
+    notes += [_stays_stopped(c, held[(c["kind"], c["name"])]) for c in ref["consumers"] if (c["kind"], c["name"]) in held]
+    if notes:
+        said = f"{apps[0].upper()}{apps[1:]}.{' The new volume was removed.' if removed else ''} {' '.join(notes)}"
+    else:
+        said = f"Nothing changed: {'the new volume was removed and ' if removed else ''}{apps}."
+    # With no reason of its own this is a Cancel that took more than one try.
+    return ("failed", 0, f"{why} {said}") if why else ("cancelled", 0, f"Cancelled. {said}")
 
 
 # Kubernetes answering "not found" part-way: once is a race (a claim being
@@ -862,6 +898,24 @@ def _named(held):
     return ", ".join(f"{name} ({job})" for (_, name), job in held.items())
 
 
+def _was(c):
+    """How an app was at its review, for one left for a person to start."""
+    if "replicas" in c:
+        return f"it was at {c['replicas']} replica{'' if c['replicas'] == 1 else 's'}"
+    if c["kind"] == "CronJob":
+        return "it was suspended" if c.get("suspend") else "it was not suspended"
+    return f"its run strategy was {c.get('run_strategy')}"
+
+
+def _stays_stopped(c, job):
+    return f"{c['name']} ({job}) stays stopped because another job holds it; {_was(c)}."
+
+
+def _off_at_review(c):
+    return (c.get("replicas") == 0 or (c["kind"] == "CronJob" and c.get("suspend"))
+            or (c["kind"] == "VirtualMachine" and c.get("run_strategy") == "Halted"))
+
+
 def cancel_starts(ref):
     """What Cancel says about the apps: the count it starts each at, and any it leaves."""
     try:
@@ -870,10 +924,11 @@ def cancel_starts(ref):
         held = {}
         words = ["Leaves stopped any app another job holds; that could not be read just now"]
     else:
-        words = [f"Leaves {name} stopped: another job holds it ({job})" for (_, name), job in held.items()]
+        words = [f"Leaves {c['name']} stopped: another job holds it ({held[(c['kind'], c['name'])]}); {_was(c)}"
+                 for c in ref.get("consumers") or [] if (c["kind"], c["name"]) in held]
     starts = []
     for c in ref.get("consumers") or []:
-        if (c["kind"], c["name"]) in held or c.get("replicas") == 0:
+        if (c["kind"], c["name"]) in held or _off_at_review(c):
             continue
         if "replicas" in c:
             starts.append(f"{c['name']} at {c['replicas']} replica{'' if c['replicas'] == 1 else 's'}")
@@ -885,23 +940,26 @@ def cancel_starts(ref):
 
 
 def _looks_stopped(ns, ref):
-    """The apps this move would stop that are not as its review recorded them, and
-    those another job holds: (names, {(kind, name): job})."""
-    found, held = [], {}
+    """The apps this move would stop that are not as its review recorded them, those
+    another job holds, and those gone: (names, {(kind, name): job}, names)."""
+    found, held, gone = [], {}, []
     for c in ref["consumers"]:
+        if c["kind"] not in ("Deployment", "StatefulSet", "CronJob", "VirtualMachine"):
+            continue
         obj = _live(ns, c)
-        spec = (obj or {}).get("spec") or {}
-        job = _other_job(obj or {})
+        if obj is None:
+            gone.append(c["name"])
+            continue
+        spec = obj.get("spec") or {}
+        job = _other_job(obj)
         if job:
             held[(c["kind"], c["name"])] = job
-        elif c["kind"] not in ("Deployment", "StatefulSet", "CronJob", "VirtualMachine"):
-            continue
-        elif c.get("stopped") or (obj and (
-                (c["kind"] in ("Deployment", "StatefulSet") and c.get("replicas") and not int(spec.get("replicas") or 0))
+        elif (c.get("stopped")
+                or (c["kind"] in ("Deployment", "StatefulSet") and c.get("replicas") and not int(spec.get("replicas") or 0))
                 or (c["kind"] == "CronJob" and spec.get("suspend") and not c.get("suspend"))
-                or (c["kind"] == "VirtualMachine" and spec.get("runStrategy") == "Halted" and c.get("run_strategy") != "Halted"))):
+                or (c["kind"] == "VirtualMachine" and _vm_strategy(spec) == "Halted" and c.get("run_strategy") != "Halted")):
             found.append(c["name"])
-    return found, held
+    return found, held, gone
 
 
 def _review_lost(item, ns, ref, why):
@@ -913,7 +971,7 @@ def _review_lost(item, ns, ref, why):
     ref["review_recheck"] = _clock() + RECHECK
     progress = item.get("progress", 0)
     try:
-        stopped, held = _looks_stopped(ns, ref)
+        stopped, held, gone = _looks_stopped(ns, ref)
     except Exception:
         return "running", progress, (f"{why} Whether its apps were stopped could not be checked, so this move is waiting to "
                                      "check. Nothing was started or retried; Cancel starts them again on the original.")
@@ -931,7 +989,8 @@ def _review_lost(item, ns, ref, why):
             said.append("Cancel leaves what another job holds stopped.")
         return "running", progress, " ".join(said)
     ref["phase"] = "rolled-back"
-    return "failed", 0, f"{why} Every app is as reviewed. Review again."
+    seen = f"{', '.join(gone)} is gone; every other app is as reviewed" if gone else "Every app is as reviewed"
+    return "failed", 0, f"{why} {seen}. Review again."
 
 
 def _resolve(item):
@@ -941,7 +1000,7 @@ def _resolve(item):
     size = _bytes(ref.get("size"))
 
     if phase == "rolling-back":
-        return _rollback(ns, ref, ref.get("rollback_why", ""))
+        return _rollback(ns, ref, ref.get("rollback_why", ""), item)
     if phase == "stop":
         if ref.get("review_fences"):
             if ref.get("stop_attempted"):

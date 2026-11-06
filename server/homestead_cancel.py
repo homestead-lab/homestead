@@ -497,9 +497,7 @@ def reclass_cancel(item, _options):
     ref = item["ref"]
     if ref.get("phase", "stop") in RECLASS.BEFORE_SWAP:
         said = RECLASS._rollback(ref["namespace"], ref, "")[2]
-        # Put back: nothing of this move is left to hold, or the volume stays locked for good.
-        ref.pop("retain_resources", None)
-        return f"Cancelled. {said.strip()}"
+        return said if str(said).startswith("Cancelled.") else f"Cancelled. {said}"
     return "Stopped waiting; the move itself had finished"
 
 

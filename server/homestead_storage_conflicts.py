@@ -59,11 +59,21 @@ def settled(item):
     return (item.get("ref") or {}).get("phase") in _SETTLED.get(item.get("kind"), ())
 
 
+def cancelled_and_put_back(item):
+    """A legacy move someone cancelled, finished putting back. An older Cancel left
+    its retained flag set, which locked its volume for good; there is nothing to retain."""
+    ref = item.get("ref") or {}
+    return (item.get("kind") == "reclass" and item.get("status") == "cancelled"
+            and ref.get("phase") == "rolled-back" and "storage_protocol" not in ref)
+
+
 def unresolved(item):
     """A timeout or stopped tracking is not proof that a storage write ended."""
     if item.get("kind") == "restore-swap":
         return item.get("status") not in TERMINAL    # it puts things back itself when it ends
     if item.get("kind") not in KINDS:
+        return False
+    if cancelled_and_put_back(item):
         return False
     ref = item.get("ref", {})
     if item.get("kind") in _SETTLED:
