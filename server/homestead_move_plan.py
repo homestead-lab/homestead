@@ -308,7 +308,9 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         _add_operation(move)
         if not move["op"]:
             move["message"] = "Queued; Activity was busy, so this move appears there shortly"
-        STATE._store(move)
+        with STATE.recording(f"The move of {name} is recorded and will run", "its Activity item",
+                             "Activity may list it twice." if move["op"] else ""):
+            STATE._store(move)
     return STATE._public(move)
 
 
