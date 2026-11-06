@@ -114,6 +114,7 @@ class ReportOnceTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, F)
         F.bind(self.dir.name)
         for i in range(10):
             F.observe([{"name": "pvc-1", "pvc_name": "media", "filesystem": {"used_bytes": (50 + 2 * i) * GB, "capacity_bytes": 100 * GB}}],

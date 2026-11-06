@@ -181,6 +181,9 @@ class TimedOutStartTests(unittest.TestCase):
     """A move script still running at its limit may be mid-change: the job
     keeps the host held and needs attention, rather than letting go."""
 
+    def setUp(self):
+        keep_bound(self, BRIDGE)
+
     def start_timed_out(self):
         import homestead_pod_exec as POD_EXEC
         host, messages = Host(HostLeaseTests.GOOD), []
