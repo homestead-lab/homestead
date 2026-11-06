@@ -81,6 +81,24 @@ would have without the hold.
 A restart that is still not ready after 15 minutes says so on the status
 page. It does not hold, since a hold would keep the new pods unready.
 
+## A pod that never stops
+
+The waits for Homestead's pods to stop and for the copy pod to release both
+volumes last at most 10 minutes. Then the move holds, and the hold names what
+it waited for. The status page says "Homestead's pods did not stop within 10
+minutes: ...". A pod stuck Terminating usually means a volume that will not
+unmount. A Failed Homestead pod left from before the move looks the same: no
+controller removes it.
+
+Nothing here force-deletes a pod, and recovery cannot start a writer with an
+old mount still in place, so the preview says "still there: <pod>" and writes
+nothing until the pod is gone. Fix the volume, or if you know its host is down
+and the pod cannot be writing, remove the pod yourself. Then preview either
+`resume` or `return-original` as above. A reviewed recovery starts a new 10
+minutes. The hold stays until someone reviews it, even if the pod goes by itself.
+
+A slow copy never holds, however long it takes.
+
 ## If the coordinator is lost
 
 The coordinator is a Job with `backoffLimit: 3`: four tries in all. If its Pod is

@@ -14,6 +14,11 @@ import homestead_self_data_coordinator as C
 from homestead_storage_journal import Held, digest, identity, shape
 
 
+def _still_there(engine):
+    names = ", ".join(engine.waited_for[:3])
+    return "Wait for normal Homestead pod removal before reviewing recovery" + (f" (still there: {names})" if names else "")
+
+
 def review(anchor, read, logs, action, *, clock=time.time):
     """Every held phase has one reviewed way out (stuck-jobs C1, C2):
 
@@ -68,7 +73,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         # The coordinator rechecks admission before its start request; once
         # that is sent, a pod outside Homestead on either volume still holds.
         if engine._entry("start"): engine._ready(dep)
-        elif not engine._quiet(dep): raise Held("Wait for normal Homestead pod removal before reviewing recovery")
+        elif not engine._quiet(dep): raise Held(_still_there(engine))
     elif untouched:
         if dep["spec"].get("replicas") != state["replicas"]:
             raise Held("Homestead's replica count changed after review; inspect it before recovery")
@@ -76,7 +81,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         if action != "return-original": raise Held("Original-volume restart is already committed")
         engine._ready(dep, original=True)  # also detects unexpected data consumers
     elif not engine._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
-        raise Held("Wait for normal Homestead pod removal before reviewing recovery")
+        raise Held(_still_there(engine))
     if cutover:
         if state.get("copy_receipt", {}).get("state") != "verified":
             raise Held("Resuming onto the new volume needs a verified copy receipt")
@@ -89,8 +94,9 @@ def review(anchor, read, logs, action, *, clock=time.time):
             if state["phase"] != "copy" and not receipt:
                 raise Held("The retained copy has no completion evidence")
     elif released:
-        if engine.writer.observe(released) is not None or not restarting and not engine._quiet(dep):
-            raise Held("Wait for the copy Job and its mounts to be removed")
+        names = [p["metadata"]["name"] for p in engine._pods() if known and C.owner(p, "Job", known["after"]["uid"])]
+        if engine.writer.observe(released) is not None or names or not restarting and not engine._quiet(dep):
+            raise Held("Wait for the copy Job and its mounts to be removed" + (f" (still there: {', '.join(names[:3])})" if names else ""))
     result = {"action": action, "operation": state["operation"], "anchor": identity(anchor.obj),
               "phase": state["phase"], "source": state["source"]["name"], "destination": state["destination"],
               "retention_policy": "keep_both_volumes"}

@@ -15,6 +15,9 @@ from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, Journal, identity, settled, shape
 
 READY_WAIT = "Waiting for every Homestead replica to become ready on the new volume"
+# How long pods and mounts may take to go before the move holds, naming them.
+# Nothing here force-deletes: a person decides, in recovery (stuck-jobs C5).
+RELEASE_LIMIT = 600
 
 
 def owner(obj, kind, uid):
@@ -50,6 +53,7 @@ class Coordinator:
         self.job_name = "homestead-data-copy-" + self.state["operation"]
         self.job_path = f"/apis/batch/v1/namespaces/{self.ns}/jobs/{self.job_name}"
         self.writer = Journal(anchor.item(), read, send, anchor.checkpoint)
+        self.waited_for = []  # the pods the latest wait is for
 
     def _entry(self, step):
         return next((e for e in self.writer.entries if e["step"] == step), None)
@@ -202,6 +206,7 @@ class Coordinator:
         sets = self._sets()
         own = {identity(s)["uid"] for s in sets}
         waiting = not zero(dep) or any(not zero(s) for s in sets)
+        self.waited_for = []
         for pod in self._pods():
             own_pod = any(owner(pod, "ReplicaSet", uid) for uid in own)
             using = claims(pod) & {self.state["source"]["name"], self.state["destination"]}
@@ -213,7 +218,25 @@ class Coordinator:
             # normal removal instead of inferring release from its phase.
             if own_pod or using:
                 waiting = True
+                self.waited_for.append(pod["metadata"]["name"])
         return not waiting
+
+    def _wait(self, key, message, *, what="Homestead's pods"):
+        """Still waiting for pods or mounts to go; after RELEASE_LIMIT, hold.
+
+        The start is in the record, so a retried coordinator keeps the deadline,
+        and writing it once is all this costs. Only a reviewed recovery clears it."""
+        started = self.anchor.state.get("waits", {}).get(key)
+        now = int(self.clock())
+        if started is None:
+            self.anchor.wait_started(key, now)
+        elif now - started >= RELEASE_LIMIT:
+            names = list(self.waited_for)
+            named = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+            raise Held(f"{what} did not stop within {RELEASE_LIMIT // 60} minutes: {named or 'the Deployment still counts some'}. "
+                       "Nothing was forced. Both volumes are retained. Once they are gone, review recovery; "
+                       "a pod stuck Terminating usually means a volume that will not unmount.")
+        return self._result(message)
 
     def _admission(self, purpose, proposal):
         if self.admit(purpose, copy.deepcopy(proposal)) is not True:
@@ -305,14 +328,17 @@ class Coordinator:
             self.anchor.advance("quiesce")
             return self._result("Waiting for Homestead and its volume mounts to stop")
         if phase == "quiesce":
-            if self._quiet(dep):
-                self.anchor.advance("copy")
-            return self._result("Homestead is stopped; preparing the verified data copy" if self.anchor.state["phase"] == "copy" else "Waiting for all Homestead pods to release the source")
+            if not self._quiet(dep):
+                return self._wait("quiesce", "Waiting for all Homestead pods to release the source")
+            self.anchor.advance("copy")
+            return self._result("Homestead is stopped; preparing the verified data copy")
         if phase == "copy":
             known = self._entry("copy-job")
             job_uid = known.get("after", {}).get("uid") if known else None
             if not self._quiet(dep, helper_uid=job_uid):
-                return self._result("Waiting for source writers to stop")
+                # With a copy running, a controller's status is catching up: a pod
+                # that returned to a volume holds in _quiet itself.
+                return self._result("Waiting for source writers to stop") if known else self._wait("copy", "Waiting for source writers to stop")
             receipt = self.state.get("copy_receipt")
             if receipt and receipt["state"] == "verified":
                 self.anchor.advance("verify")
@@ -325,7 +351,7 @@ class Coordinator:
                 body = self._copy_manifest()
                 dep = self._admission("copy", body)
                 if not self._quiet(dep):
-                    return self._result("Waiting for source writers to stop")
+                    return self._wait("copy", "Waiting for source writers to stop")
                 self.writer.write("copy-job", "POST", self.job_path.rsplit("/", 1)[0], body)
                 return self._result("Copy Job started; waiting for verified data and metadata")
             job = self.writer.observe(known)
@@ -347,20 +373,23 @@ class Coordinator:
             if not known:
                 raise Held("The verified copy Job has no creation receipt")
             if not self._quiet(dep, helper_uid=known["after"]["uid"]):
-                return self._result("Waiting for Homestead to remain stopped")
+                return self._wait("verify", "Waiting for Homestead to remain stopped")
             if not deletion:
                 job = self.writer.observe(known)
                 self.writer.write("release-copy", "DELETE", self.job_path,
                                   {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
                 return self._result("Waiting for the copy pod to release both volumes")
-            if self.writer.observe(deletion) is not None or any(owner(p, "Job", known["after"]["uid"]) for p in self._pods()):
-                return self._result("Waiting for the copy pod to release both volumes")
-            if self._quiet(dep):
-                self.anchor.advance("switch")
+            copy_pods = [p for p in self._pods() if owner(p, "Job", known["after"]["uid"])]
+            if self.writer.observe(deletion) is not None or copy_pods:
+                self.waited_for = [p["metadata"]["name"] for p in copy_pods] or [known["target"]["name"]]
+                return self._wait("verify", "Waiting for the copy pod to release both volumes", what="The data copy")
+            if not self._quiet(dep):
+                return self._wait("verify", "Waiting for volume mounts to be released after the copy")
+            self.anchor.advance("switch")
             return self._result("Copy pod released; ready to select the new data volume")
         if phase == "switch":
             if not self._quiet(dep):
-                return self._result("Waiting for volume mounts to be released before switching")
+                return self._wait("switch", "Waiting for volume mounts to be released before switching")
             if not self._entry("switch"):
                 proposed = copy.deepcopy(dep)
                 pin_app_image(proposed, self.plan["copy_image"])
@@ -380,7 +409,7 @@ class Coordinator:
         if phase == "start":
             if not self._entry("start"):
                 if not self._quiet(dep):
-                    return self._result("Waiting for volume mounts to be released before starting")
+                    return self._wait("start", "Waiting for volume mounts to be released before starting")
                 proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
                 built_from, dep = dep, self._admission("start", proposed)
                 if not self._quiet(dep):
@@ -415,17 +444,19 @@ class Coordinator:
         known = self._entry("copy-job")
         release = self._entry("release-copy") or self._entry("recover-release-copy")
         if not self._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
-            return self._result("Waiting for Homestead's original writers to stop")
+            return self._wait("recover", "Waiting for Homestead's original writers to stop")
         if known and not release:
             job = self.writer.observe(known)
             self.writer.write("recover-release-copy", "DELETE", self.job_path,
                               {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
             return self._result("Releasing the copy mounts before original-volume recovery")
-        if release and (self.writer.observe(release) is not None or any(
-                owner(p, "Job", known["after"]["uid"]) for p in self._pods())):
-            return self._result("Waiting for the copy pod to release both retained volumes")
+        if release:
+            copy_pods = [p for p in self._pods() if owner(p, "Job", known["after"]["uid"])]
+            if self.writer.observe(release) is not None or copy_pods:
+                self.waited_for = [p["metadata"]["name"] for p in copy_pods] or [known["target"]["name"]]
+                return self._wait("recover", "Waiting for the copy pod to release both retained volumes", what="The data copy")
         if not self._quiet(dep):
-            return self._result("Waiting for normal removal of all data-volume mounts")
+            return self._wait("recover", "Waiting for normal removal of all data-volume mounts")
         proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
         pin_app_image(proposed, self.plan["copy_image"])
         volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]

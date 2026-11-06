@@ -18,6 +18,8 @@ from homestead_storage_journal import RETRIES, Held, identity, target
 
 PHASES = ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
 LABEL = "homestead.io/self-data-handoff"
+# What may wait for pods and mounts to go: a phase, or a return to the original volume.
+WAITS = frozenset(PHASES[1:-1]) | {"recover"}
 MAX_BYTES = 262144
 
 
@@ -137,7 +139,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery", "waits"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -177,6 +179,9 @@ def _validate(state, namespace):
                                  "reviews": {"copy": recovery["restart"], "restart": recovery["restart"]}})
         elif "restart" in recovery:
             raise Held("Resume cannot replace the reviewed restart approval")
+    if "waits" in state and (not isinstance(state["waits"], dict) or not state["waits"]
+                             or any(k not in WAITS or type(v) is not int or v < 0 for k, v in state["waits"].items())):
+        raise Held("The data handoff wait record is invalid")
     if "setup_aborted" in state and (state["setup_aborted"] is not True or state["phase"] != "prepare"
             or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]):
         raise Held("Only unpublished setup can be abandoned")
@@ -455,6 +460,15 @@ class Anchor:
         state["pointer_receipt"] = digest
         self._replace(state)
 
+    def wait_started(self, key, now):
+        """When a wait began, in the record, so a retried coordinator keeps its deadline."""
+        self.handle()
+        if key not in WAITS or key in self.state.get("waits", {}):
+            raise Held("The data handoff wait record cannot be rewritten")
+        state = copy.deepcopy(self.state)
+        state.setdefault("waits", {})[key] = int(now)
+        self._replace(state)
+
     def take_over(self, pod_uid, checked_at):
         """A retry's Pod becomes the one that acts (stuck-jobs C4). This CAS is the
         fence: the previous Pod's next write of this record is refused, so it can
@@ -506,6 +520,7 @@ class Anchor:
         state["recovery"] = {"action": review["action"], "review": review["fingerprint"],
                              "previous_hold": state["runtime"]["message"], "reviewed_at": checked_at}
         if "restart" in review: state["recovery"]["restart"] = copy.deepcopy(review["restart"])
+        state.pop("waits", None)  # a reviewed recovery starts its own deadlines
         state["runtime"].update(state="running", checked_at=checked_at, message="Reviewed recovery accepted")
         self._replace(state)
 
