@@ -339,6 +339,15 @@ class OperationTests(unittest.TestCase):
         item["ref"]["backup"] = "another-backup"
         self.assertEqual("running", operations._volume_restore(item)[0])
         item["ref"]["backup"] = "backup-123"
+        # Attached again by the app: the engine details stay cleared.
+        volume["status"].update(state="attached", robustness="healthy")
+        self.assertEqual(("succeeded", 100), operations._volume_restore(item)[:2])
+        volume["status"]["robustness"] = "degraded"
+        self.assertEqual(("running", 96), operations._volume_restore(item)[:2])
+        item["ref"]["backup"] = "another-backup"
+        self.assertEqual(("running", 20), operations._volume_restore(item)[:2])
+        item["ref"]["backup"] = "backup-123"
+        volume["status"].update(state="detached", robustness="unknown")
         self.objects[engines_path]["items"][0]["status"]["restoreStatus"] = {
             "replica-a": {"error": "restore failed", "progress": 30}}
         self.assertEqual("failed", operations._volume_restore(item)[0])
