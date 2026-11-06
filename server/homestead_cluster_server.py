@@ -415,13 +415,29 @@ def reviewed_image_update(body, action):
     return ROLLOUTS.commit_prepared(prepared)
 
 
+# How long an upgrade Homestead started may be missing from Harvester's list. It
+# was created before its job started, so it is there at once unless it was
+# deleted. The clock is a seam for the tests.
+UPGRADE_MISSING_LIMIT = 15 * 60
+_clock = time.time
+
+
 def _harvester_upgrade_status(item):
     """A Harvester upgrade Homestead started, followed as the Cluster page
     follows any: Harvester's own steps, then each node."""
-    name = item["ref"].get("upgrade", "")
+    ref = item["ref"]
+    name = ref.get("upgrade", "")
     row = next((row for row in UPGRADES.upgrades() if row["name"] == name), None)
     if not row:
+        # Timed from when it was first missing, over Homestead restarts too. A
+        # read that failed raises above, so it does not count as missing.
+        now = _clock()
+        if now - ref.setdefault("missing_since", now) >= UPGRADE_MISSING_LIMIT:
+            return "failed", 1, (f"Harvester has no upgrade named {name} after {UPGRADE_MISSING_LIMIT // 60} minutes: "
+                                 "it was deleted, or Harvester never took it. Homestead has stopped following it; "
+                                 "Harvester's own dashboard shows whether anything is upgrading")
         return "running", 1, "Waiting for Harvester to take the upgrade"
+    ref.pop("missing_since", None)
     step = next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")
     message = row["message"] or (f"{step}" if step else f"Harvester {row['version']}")
     return row["state"], row["progress"], message
