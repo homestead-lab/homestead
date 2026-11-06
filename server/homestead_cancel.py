@@ -588,10 +588,13 @@ def _no_put_back(item, action, name, chart):
     if not chart:
         return f"{name}'s chart is gone, so there is nothing to put back"
     meta = chart.get("metadata") or {}
-    if HELM.previous_spec(chart) is None:
+    kept = HELM.previous_spec(chart)
+    if kept is None:
         return f"No earlier settings of {name} were kept to go back to"
     if not ref.get("chart_uid"):
         return f"This upgrade is from an older Homestead and kept no record of the chart it wrote, so {name} is not put back from here"
+    if HELM.settings({"spec": kept}) == HELM.settings(chart):
+        return f"{name}'s settings are already the ones that were kept, so there is nothing to put back"
     if meta.get("uid") != ref["chart_uid"] or meta.get("generation") != ref.get("chart_generation"):
         return f"{name} has changed since this upgrade was written, so putting it back would undo that; nothing was changed"
     return ""
@@ -625,11 +628,14 @@ def helm_plan(item):
     if item.get("status") == "failed":
         why = _no_put_back(item, action, name, chart)
         if why:
-            return {"can": False, "needs": "admin", "why_not": why}
+            return {"can": False, "needs": "admin", "review_title": "Put back earlier settings", "why_not": why}
     if action == "uninstall" or not chart:
         return {"mode": "forget", "needs": "admin", "keeps": [
             f"{name} is being removed already, and Kubernetes cannot take that back; install it again once it is gone"]}
     if action == "upgrade":
+        if item["ref"].get("no_change"):
+            return {"mode": "forget", "needs": "admin", "keeps": [
+                f"This upgrade changed nothing on {name}, so there is nothing of its own to put back"]}
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"No earlier settings of {name} were kept to go back to; the upgrade carries on"]}
@@ -671,6 +677,8 @@ def helm_cancel(item, _options):
         return "Stopped following it; the removal carries on"
     ns = _helm_ns(item)
     if action == "upgrade":
+        if item["ref"].get("no_change"):
+            return "Stopped following it; it changed nothing"
         if not HELM.restore_previous(chart):
             return "Stopped following it; the upgrade carries on"
         return f"{name} is going back to its settings from before the upgrade"

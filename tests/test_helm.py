@@ -155,8 +155,10 @@ class HelmJobTests(unittest.TestCase):
         return DEPLOY._helm(request)["operation"]["id"]
 
     def upgraded(self):
+        # As on a real cluster: a chart's last Job sits there, Complete, for weeks.
         self.cancelling()
         self.chart()
+        self.job_object({"succeeded": 1})
         return self.route("upgrade", version="8.0.0")
 
     def failed_upgrade(self):
@@ -170,6 +172,7 @@ class HelmJobTests(unittest.TestCase):
     def refused(self, ident, words):
         plan = OPS.cancel_plan(ident)
         self.assertFalse(plan["can"])
+        self.assertEqual("Put back earlier settings", plan["review_title"], "not \"Stop tracking\"")
         self.assertIn(words, plan["why_not"])
         before = self.kube.object(self.CHART)
         with self.assertRaises(ValueError):
@@ -299,6 +302,8 @@ class HelmJobTests(unittest.TestCase):
         self.assertTrue(plan["can"], plan.get("why_not"))
         self.assertEqual("rollback", plan["mode"])
         self.assertEqual("Close it", plan["action"])
+        self.assertEqual("Close it", plan["review_title"])
+        self.assertTrue(plan["cleanup_says_action"], "or the button reads \"Remove what it made\"")
         self.assertIn("are back already", plan["lead"])
         self.assertEqual([], plan["undo"])
         self.assertEqual([], plan["keeps"], "nothing is left going for it to name")
@@ -364,6 +369,213 @@ class HelmJobTests(unittest.TestCase):
         chart["metadata"]["annotations"].pop(HELM.PREVIOUS_SPEC)
         self.kube.add(chart)
         self.refused(ident, "No earlier settings")
+
+    # Asking for the same settings again.
+    def kept(self):
+        return self.kube.object(self.CHART)["metadata"]["annotations"][HELM.PREVIOUS_SPEC]
+
+    def test_the_same_settings_again_keep_what_can_be_put_back(self):
+        first = self.failed_upgrade()
+        kept = self.kept()
+        generation = self.kube.object(self.CHART)["metadata"]["generation"]
+        self.route("upgrade", version="8.0.0")
+        self.assertEqual(kept, self.kept())
+        self.assertEqual(generation, self.kube.object(self.CHART)["metadata"]["generation"])
+        self.assertEqual("Put back earlier settings", OPS.cancel_plan(first)["action"])
+        OPS.cancel(first)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"], "the good settings, not the same ones again")
+
+    def test_settings_really_changed_are_kept_as_before(self):
+        self.failed_upgrade()
+        self.route("upgrade", version="9.0.0")
+        self.assertEqual('{"version":"8.0.0"}', self.kept())
+
+    def no_change_upgrade(self):
+        self.failed_upgrade()
+        ident = self.route("upgrade", version="8.0.0")
+        return ident
+
+    def test_an_upgrade_that_changed_nothing_ends_at_once_and_says_why(self):
+        ident = self.no_change_upgrade()
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"], "nothing went wrong")
+        self.assertEqual("This upgrade changed none of grafana's settings, so nothing ran; if its last upgrade failed, it still has", job["message"])
+
+    def test_empty_values_from_an_unchanged_dialog_are_no_change_on_a_chart_with_none(self):
+        # The dialog sends values "" for a chart with no valuesContent.
+        self.cancelling()
+        self.chart()
+        self.job_object({"succeeded": 1})
+        self.kube.writes.clear()
+        ident = self.route("upgrade", values="")
+        self.assertEqual([], self.kube.writes)
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertIn("changed none of", job["message"])
+
+    def test_emptying_values_a_chart_has_is_a_change(self):
+        self.cancelling()
+        chart = {"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                 "metadata": {"namespace": "kube-system", "name": "grafana"},
+                 "spec": {"chart": "grafana", "valuesContent": "a: 1\n"}}
+        self.kube.add(chart)
+        self.route("upgrade", values="")
+        written = self.kube.object(self.CHART)
+        self.assertEqual("", written["spec"]["valuesContent"])
+        self.assertEqual('{"valuesContent":"a: 1\\n"}', written["metadata"]["annotations"][HELM.PREVIOUS_SPEC])
+
+    def test_kept_empty_values_the_same_as_none_are_not_put_back(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["spec"].pop("version")
+        chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = '{"valuesContent":""}'
+        self.kube.add(chart)
+        self.refused(ident, "already the ones that were kept")
+
+    def test_an_upgrade_that_changed_nothing_writes_nothing(self):
+        ident = self.no_change_upgrade()
+        self.assertEqual([], self.kube.writes)
+        self.look(ident)
+        self.assertEqual([], self.kube.writes)
+
+    def test_an_upgrade_that_changed_nothing_is_not_held_up_by_its_job(self):
+        # It follows no Job, so it neither reads one first nor takes an old one for its own.
+        self.cancelling()
+        self.chart()
+        self.job_object({"failed": 1})
+        self.kube.fail("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana", 500)
+        ident = self.route("upgrade")
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana")
+        self.assertEqual("succeeded", self.look(ident)["status"])
+
+    def test_an_upgrade_that_changed_nothing_has_nothing_of_its_own_to_put_back(self):
+        ident = self.no_change_upgrade()
+        job = self.look(ident)
+        self.assertFalse(job["cleanable"])
+        with self.assertRaises(ValueError):
+            OPS.cancel_plan(ident)
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_cancelling_an_upgrade_that_changed_nothing_before_it_ended_writes_nothing(self):
+        ident = self.no_change_upgrade()
+        plan = OPS.cancel_plan(ident)
+        self.assertEqual("forget", plan["mode"])
+        self.assertIn("changed nothing", plan["keeps"][0])
+        OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+        self.assertNotIn("carries on", self.look(ident)["message"])
+
+    def test_kept_settings_the_same_as_the_chart_are_not_put_back(self):
+        # What an older Homestead left: it overwrote them on a same-settings upgrade.
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = '{"version":"8.0.0"}'
+        self.kube.add(chart)
+        self.refused(ident, "already the ones that were kept")
+
+    def test_kept_settings_that_are_not_a_mapping_wipe_nothing(self):
+        ident = self.failed_upgrade()
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = "[1]"
+        self.kube.add(chart)
+        self.refused(ident, "No earlier settings")
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    # A Job from before this job's write is not its Job.
+    def test_an_old_complete_job_does_not_finish_an_upgrade(self):
+        ident = self.upgraded()
+        job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertEqual("Waiting for the Helm controller", job["message"])
+        self.job_object({"failed": 1})
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], "the Job it caused decides")
+        self.assertTrue(job["cleanable"])
+
+    def test_an_old_failed_job_does_not_fail_an_upgrade_or_offer_a_put_back(self):
+        self.cancelling()
+        self.chart()
+        self.job_object({"failed": 1})
+        ident = self.route("upgrade", version="9.0.0")
+        job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertFalse(job["cleanable"])
+        self.job_object({"succeeded": 1})
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_a_job_never_replaced_ends_at_the_limit_in_true_words(self):
+        ident = self.upgraded()
+        self.look(ident)
+        self.now += self.LIMIT
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("did not replace its earlier job helm-install-grafana in kube-system", job["message"])
+        self.assertIn("15 minutes", job["message"])
+        self.assertIn("Check that the controller is running", job["message"])
+        self.assertNotIn("had no job", job["message"], "it has one: the old one")
+
+    def test_the_old_job_going_does_not_start_the_wait_again(self):
+        ident = self.upgraded()
+        self.look(ident)
+        self.now += self.LIMIT - 1
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.now += 1
+        self.assertEqual("failed", self.look(ident)["status"])
+
+    def test_an_older_job_with_no_record_follows_the_job_it_finds(self):
+        # It kept no record of the Job before it: as it always did.
+        ident = self.start("upgrade")
+        self.job_object({"succeeded": 1})
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+
+    def test_an_upgrade_refused_when_the_job_before_it_cannot_be_read_writes_nothing(self):
+        self.cancelling()
+        self.chart()
+        self.kube.writes.clear()
+        self.kube.fail("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana", 500)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.route("upgrade", version="8.0.0")
+        self.assertEqual([], self.kube.writes)
+
+    def test_an_install_does_not_follow_a_job_left_from_before(self):
+        self.cancelling()
+        self.job_object({"succeeded": 1})
+        ident = self.route("install", repo="https://example.com/charts", chart="grafana")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.job_object({"active": 1})
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_a_delete_job_left_from_before_is_no_proof_of_an_uninstall(self):
+        self.cancelling()
+        self.chart()
+        self.job_object({"succeeded": 1}, name="helm-delete-grafana")
+        ident = self.route("uninstall")
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("did not see its uninstall run", job["message"])
+
+    def test_a_job_that_cannot_be_read_is_not_a_job_that_is_missing(self):
+        ident = self.start("upgrade", chart=False)
+        self.kube.fail("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana", 500, times=5)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], "with no chart either, a 404 would fail it at once")
+        self.assertIn("temporarily unavailable", job["message"])
+
+    def test_a_running_upgrade_is_never_told_it_went_back(self):
+        ident = self.upgraded()
+        self.look(ident)
+        HELM.restore_previous(self.kube.object(self.CHART))
+        plan = OPS.cancel_plan(ident)
+        self.assertEqual("forget", plan["mode"])
+        self.assertNotIn("review_title", plan)
 
     def test_a_failed_install_does_not_offer_to_delete_its_chart(self):
         self.cancelling()
@@ -544,6 +756,8 @@ class HelmTests(unittest.TestCase):
             if "/secrets" in path:
                 ns = path.split("/namespaces/")[1].split("/")[0] if "/namespaces/" in path else None
                 return {"items": [s for s in self.secrets if ns is None or s["metadata"]["namespace"] == ns]}
+            if "/jobs/" in path:   # no Job there before the write
+                raise urllib.error.HTTPError(path, 404, "NotFound", None, None)
             raise AssertionError(path)
 
         HELM.bind(get, lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body)

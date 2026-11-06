@@ -80,7 +80,6 @@ ALLOWED = {
     "tests/test_fleet_relay.py: import time": UNUSED,
     "tests/test_forecast.py: import time": UNUSED,
     "tests/test_guest_readiness.py: import json": UNUSED,
-    "tests/test_helm.py: import urllib": UNUSED,
     "tests/test_host_fixes.py: import urllib": UNUSED,
     "tests/test_hostrun_pods.py: import urllib": UNUSED,
     "tests/test_housekeeping.py: import server": SIDE_EFFECT,
