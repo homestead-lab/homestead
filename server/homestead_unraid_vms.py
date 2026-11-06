@@ -82,10 +82,11 @@ def cancel_plan(item):
         return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
     where = _where(ref)
     disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
-    if ref.get("phase") == "leaving":
+    if ref.get("phase") in ("leaving", "clearing"):
         # The copy is over and the job has told the person these disks are kept.
         return {"mode": "stop", "action": "Finish ending the import and keep its disks", "severity": "low", "needs": "operator",
-                "undo": ["Removes its copy Job and Secret: the copy is over"],
+                "undo": ["Removes its copy Job and Secret: the copy is over"] +
+                        (["Clears CDI's temporary storage: the disks are finished"] if ref["phase"] == "clearing" else []),
                 "keeps": [f"The disks ({disks}) are kept, with what CDI has of them: this doesn't remove them",
                           f"The VM on {where} is unchanged"]}
     return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
@@ -100,6 +101,12 @@ def cancel_run(item, _options):
         state, _, detail = CDI_CLEANUP.leave(item, kget, ksend)
         if state == "running":
             raise ValueError("its copy Job can't be removed yet, and the job keeps trying. Its disks are kept")
+        return detail
+    if ref.get("phase") == "clearing":
+        # A job being cancelled refuses checkpoints, and the store saves this one when it ends.
+        state, _, detail = _clear_finished(ref, item, checkpoint=lambda _: None)
+        if state == "running":
+            raise ValueError("its temporary storage can't be cleared yet, and the job keeps trying. Its disks are kept")
         return detail
     ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
     paths = []
@@ -941,6 +948,7 @@ def _fail(ref, message, item=None):
 READY_LIMIT = 30 * 60
 FINISH_LIMIT = 6 * 60 * 60
 MESSAGE_LIMIT = 500   # what the job list keeps of a message
+CLEAR_LIMIT = 30 * 60   # for clearing finished disks' temporary storage, which no VM waits on
 _clock = time.time   # a seam for the tests
 
 
@@ -962,6 +970,14 @@ def _delete_command(ns, disks, before):
     return command if len(before) + len(command) <= MESSAGE_LIMIT else None
 
 
+def _what_then(ref):
+    # Import's Create VM takes one disk, and nothing attaches another to a VM yet.
+    return ("make the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried over. If not, "
+            "import again under another name" if len(ref["disks"]) == 1 else
+            "a VM can be made from one disk under Import, and Homestead can't attach the others yet; otherwise import "
+            "again under another name")
+
+
 def _stop_following(ref, item, phases):
     """CDI has not finished the disks in time. End the import and let go of the
     name, removing only the import's own copy Job and Secret: the DataVolumes, their
@@ -969,11 +985,7 @@ def _stop_following(ref, item, phases):
     Only an unfinished disk is ever offered for removal, never a finished copy."""
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
-    # Import's Create VM takes one disk, and nothing attaches another to a VM yet.
-    then = ("make the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried over. If not, "
-            "import again under another name" if len(ref["disks"]) == 1 else
-            "a VM can be made from one disk under Import, and Homestead can't attach the others yet; otherwise import "
-            "again under another name")
+    then = _what_then(ref)
 
     def words(not_done, done, are):
         kept = f"{done} {are} finished and kept. " if finished else ""
@@ -985,13 +997,70 @@ def _stop_following(ref, item, phases):
     if command is None:
         what = words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")
         command = f"`kubectl -n {ref['namespace']} delete datavolume <name>` for each disk CDI has not finished"
-    detail = what + command
+    return _end_keeping_disks(ref, item, what + command)
+
+
+def _end_keeping_disks(ref, item, detail):
+    """End the import and let go of its name, removing only its own copy Job and Secret."""
     if not ref.get("cdi_cleanup"):
         ref["phase"] = "failed"
         return "failed", 100, detail
     _save_output(ref)
     ref.update(phase="leaving", cleanup_detail=detail)
     return CDI_CLEANUP.leave(item, kget, ksend)
+
+
+def _gone_words(gone):
+    return (f"The copy Job for {gone[0]} is gone" if len(gone) == 1
+            else f"The copy Jobs for {', '.join(gone)} are gone")
+
+
+def _copy_job_gone(ref, item, gone, phases):
+    """A Job goes an hour after it ends, or when someone deletes it, and nothing says
+    which. Its exit status was the only proof of a whole copy: curl ends an upload cleanly
+    when ssh dies under it, so CDI calling a disk finished doesn't prove that either."""
+    one = len(gone) == 1
+
+    def head(jobs):
+        return (f"{jobs}, so Homestead can't tell how {'that copy' if one else 'those copies'} ended. No VM was made. "
+                f"The VM on {_where(ref)} is unchanged. ")
+    unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
+    finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
+    if unfinished:
+        # Only an unfinished disk is offered for removal: a finished one is named as kept.
+        def words(jobs, done):
+            kept = (f"CDI reports {done} finished, and {'it is' if len(finished) == 1 else 'they are'} kept. "
+                    if finished else "")
+            return (f"{head(jobs)}{kept}No disk was removed. If CDI does finish, {_what_then(ref)}. "
+                    "Homestead can't remove an unfinished disk yet: ")
+        ns = ref["namespace"]
+        before = words(_gone_words(gone), ", ".join(finished))
+        command = _delete_command(ns, unfinished, before)
+        if command is None:
+            before = words(f"The copy Job{'' if one else 's'} for {_count(gone)} {'is' if one else 'are'} gone", _count(finished))
+            command = f"`kubectl -n {ns} delete datavolume <name>` for each disk CDI has not finished"
+        return _end_keeping_disks(ref, item, before + command)
+    single = len(ref["disks"]) == 1
+    named = "it" if single else "them" if len(gone) == len(ref["disks"]) else ", ".join(finished)
+    then = _what_then(ref)
+    what = head(_gone_words(gone)) + (f"CDI reports {named} finished, but that doesn't prove all the data arrived. "
+             f"{'It is kept and holds its' if single else 'They are kept and hold their'} storage. "
+             f"{then[0].upper()}{then[1:]}. Only kubectl can remove {'it' if single else 'them'} for now")
+    work = ref.get("cdi_cleanup")
+    if not work:
+        return _end_keeping_disks(ref, item, what)
+    # Finished, so CDI's workers and scratch only hold storage now. The clean-up refuses
+    # a claim that isn't Bound: then nothing of CDI's is touched at all.
+    if not CDI_CLEANUP.claims_bound(kget, ref["namespace"], work):
+        return _end_keeping_disks(ref, item, what + CDI_CLEANUP.NOT_CLEARED)
+    _save_output(ref)   # the workers' pods go with the clean-up
+    ref.update(phase="clearing", cleanup_detail=what)
+    return _clear_finished(ref, item)
+
+
+def _clear_finished(ref, item, checkpoint=None):
+    return CDI_CLEANUP.clear_finished(item, kget, ksend, checkpoint or OPS.checkpoint,
+                                      overdue=_waited(ref, "clear_since", CLEAR_LIMIT))
 
 
 def status(item):
@@ -1004,6 +1073,8 @@ def status(item):
         return "failed", 100, item.get("message", "Import failed")
     if ref["phase"] == "leaving":
         return CDI_CLEANUP.leave(item, kget, ksend)
+    if ref["phase"] == "clearing":
+        return _clear_finished(ref, item)
     if ref.get("cdi_cleanup"):
         if ref["phase"] == "creating":
             ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail="Import setup was interrupted")
@@ -1038,9 +1109,19 @@ def status(item):
         ref["phase"] = "copy"
         return "running", 3, "Copying from " + ref["source"]
     if ref["phase"] == "copy":
-        done, running, failed = 0, 0, ""
+        done, running, failed, gone = 0, 0, "", []
         for disk in ref["disks"]:
-            job = IMP._get_or_none(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}") or {}
+            if disk.get("copied"):
+                # Seen to succeed; its Job only goes after that. Disks can end hours apart.
+                done += 1
+                continue
+            job = IMP._get_or_none(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}")
+            if job is None:
+                # A 404, as any other failed read raises. Never a lag: the copy phase starts
+                # only once Kubernetes has answered for every Job, and an interrupted start
+                # stays in "disks", which says so.
+                gone.append(disk["dv"])
+                continue
             st = job.get("status") or {}
             if any(c.get("type") == "Failed" and c.get("status") == "True" for c in st.get("conditions") or []) or (
                     st.get("failed") and not st.get("active")):
@@ -1050,17 +1131,20 @@ def status(item):
                 failed = failure_reason(log, reason or "the copy stopped; inspect its disk copy output")
                 break
             if st.get("succeeded"):
-                disk["pct"] = 100
+                disk.update(pct=100, copied=True)
                 done += 1
             else:
                 disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
             return _fail(ref, f"Copying {ref.get('vm_name', ref['vm'])} failed: {failed}", item)
+        if gone and not running:
+            return _copy_job_gone(ref, item, gone, phases)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
             gib = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1024 ** 3
-            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gib:.1f} of {total / 1024 ** 3:.1f} GiB"
+            still = f". {_gone_words(gone)}: this import stops when the others end" if gone else ""
+            return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gib:.1f} of {total / 1024 ** 3:.1f} GiB{still}"
         ref["phase"] = "convert"
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":
