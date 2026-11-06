@@ -766,18 +766,23 @@ window.vipAddGo = async () => {
   result.textContent = "Saving addresses…";
   try {
     const r = await api("/api/network/vips/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    // A range may partially succeed. Never silently default to a different address.
-    if (makeDefault) {
+    // A range may partially succeed. Never silently default to a different address,
+    // and ask for the default only when the start address was really added.
+    const startAdded = (r.added || []).includes(body.start);
+    const defaultSkipped = makeDefault && !startAdded ? ` · Default not changed: ${body.start} was not added` : "";
+    if (makeDefault && startAdded) {
       try {
         await api("/api/network/vips/default", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ip: body.start }) });
         if (STATE.data.ov) STATE.data.ov.lb_ip = body.start;
       } catch (e) {
-        result.textContent = `${r.detail}. Default was not changed: ${e.message}. Saved addresses remain available; you can use Make default on their cards.`;
+        // A failed default stops the dialog here, so the Homestead move is skipped too: say so.
+        const selfSkipped = $("#va_self")?.checked ? " Homestead was not moved either." : "";
+        result.textContent = `${r.detail}. Default not changed: ${e.message}.${selfSkipped} Saved addresses remain available; you can use Make default on their cards.`;
         await viewNetworking(); return;
       }
     }
     let self = "";
-    if ($("#va_self")?.checked && r.added.includes(body.start)) {
+    if ($("#va_self")?.checked && startAdded) {
       try {
         const moved = await api("/api/self/address", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vip: body.start }) });
         const refused = moved.steps.filter(s => s.action === "refused");
@@ -785,10 +790,10 @@ window.vipAddGo = async () => {
       } catch (e) { self = ` · Homestead was not moved: ${e.message}`; }
     }
     if ((r.skipped || []).length || !r.added.length) {
-      result.textContent = `${r.detail}${makeDefault ? ` · Default workload VIP: ${body.start}` : ""}${self}`;
+      result.textContent = `${r.detail}${makeDefault && startAdded ? ` · Default workload VIP: ${body.start}` : defaultSkipped}${self}`;
       await viewNetworking(); return;
     }
-    closeModal(); toast((makeDefault ? `${r.detail} · ${body.start} is the default workload VIP` : `${r.detail} · Choose Use this VIP to connect a workload`) + self, "ok");
+    closeModal(); toast((makeDefault && startAdded ? `${r.detail} · ${body.start} is the default workload VIP` : `${r.detail}${defaultSkipped || " · Choose Use this VIP to connect a workload"}`) + self, "ok");
     await viewNetworking();
   } catch (e) { result.textContent = e.message; }
   finally { save.disabled = false; }
