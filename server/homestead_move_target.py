@@ -7,8 +7,8 @@ journal on Homestead's own volume says which, so a restart still gives it back.
 
 Split out of homestead_move_engine (#623).
 """
-import json
 import os
+import re
 import secrets
 import urllib.error
 import urllib.parse
@@ -23,16 +23,33 @@ _target_lock = SHARED.SharedLock("move-backup-target", strict=True, directory=la
 TARGET_STORE = "move-backup-target.json"
 
 
+class JournalUnreadable(SHARED.Unreadable):
+    """move-backup-target.json is there but cannot be read: which transfer
+    holds the backup storage, and what to put back, is not known. It is read
+    before anything is borrowed or put back, so STATE.recording leaves its
+    words alone; why says what was wrong with it."""
+    not_a_write = True
+
+    def __init__(self, message, why=""):
+        super().__init__(message)
+        self.why = why
+
+
 def _target_journal(value=None):
     path = os.path.join(STATE.DATA_DIR, TARGET_STORE)
     if value is not None:
         SHARED.write_json(path, value, durable=True, mode=0o600)
         return value
+    # A missing file is nobody borrowing; one that is there but unreadable
+    # raises SHARED.Unreadable and is never written over: it says what to
+    # put back.
     try:
-        with open(path, encoding="utf-8") as handle:
-            return json.load(handle)
-    except FileNotFoundError:
-        return {}
+        return SHARED.read_json(path, {})
+    except SHARED.Unreadable as error:
+        cause = error.__cause__
+        why = (getattr(cause, "strerror", None) or str(cause)) if isinstance(cause, OSError) else \
+            "it is not valid JSON" if isinstance(cause, ValueError) else "it does not hold what Homestead saved there"
+        raise JournalUnreadable(str(error), why) from error
 
 
 def _borrow_target(move, there=None):
@@ -126,12 +143,17 @@ def _release_target(move):
             move.pop("transfer_target", None)
 
 
+PENDING = re.compile(r"; Backup storage cleanup is pending[^;]*; Homestead will retry automatically")
+
+
 def _cleanup_target(move):
     pending = "; Backup storage cleanup is pending; Homestead will retry automatically"
     try:
         _release_target(move)
-        move["message"] = move.get("message", "").replace(pending, "")
-    except Exception:
+        move["message"] = PENDING.sub("", move.get("message", ""))
+    except Exception as error:
         move.setdefault("flags", {})["target_cleanup_pending"] = True
-        if "Backup storage cleanup is pending" not in move.get("message", ""):
-            move["message"] = move.get("message", "") + pending
+        if isinstance(error, JournalUnreadable):
+            pending = (f"; Backup storage cleanup is pending: {TARGET_STORE} on the data volume cannot be read "
+                       f"({error.why}); Homestead will retry automatically")
+        move["message"] = PENDING.sub("", move.get("message", "")) + pending
