@@ -14,10 +14,3 @@
 # not on dev yet, or leaks only in the PR's form. Allowed so that combined run passes; not
 # counted against CEILING and never stale (tests/bound_guard.py pending). Remove each once its PR
 # merges, with a keep_bound (tests/rebind.py) in that file.
-homestead_api_keys.DATA_DIR	test_auth_store	fake	from #1110, not on dev yet: remove once it merges with a keep_bound there
-homestead_move_engine.STATE.DATA_DIR	test_move_gives_up	fake	from #1095, not on dev yet: remove once it merges with a keep_bound there
-homestead_operations.DATA_DIR	test_host_network_deadline	fake	from #1094, not on dev yet: remove once it merges with a keep_bound there
-homestead_operations.deployment_progress	test_host_network_deadline	fake	from #1094, not on dev yet: remove once it merges with a keep_bound there
-homestead_reclass.storage_classes	test_revert_stop	fake	from #1100, not on dev yet: remove once it merges with a keep_bound there
-homestead_revert.is_self	test_revert_stop	fake	from #1100, not on dev yet: remove once it merges with a keep_bound there
-homestead_revert.lh_call	test_revert_stop	fake	from #1100, not on dev yet: remove once it merges with a keep_bound there

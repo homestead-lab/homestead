@@ -57,7 +57,7 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 CEILING = 0
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
-PENDING_CEILING = 7
+PENDING_CEILING = 0
 # On since 3 Nov: recording every share of CI's 4-way and the gate's 8-way split found
 # no fake pair the whole-suite list lacks. (Advisory before that: test_smart_readings'
 # Base bound SMART, and through it NAMES, to its module-level probe_pods and kept it, so
@@ -135,8 +135,6 @@ class BoundStateClean(unittest.TestCase):
 # away: move one onto tests/rebind.py and take it off this list. A file listed here
 # that is not in the tree yet comes with an open PR of ours, so the combined run passes.
 UNRESTORED_FILES = frozenset({
-    # From #1095 (fix/move-retries-end), not on dev yet: restore its source/engine binds once it merges (wrap-up gaps).
-    "test_move_gives_up",
     "test_hostrun_lease",
     "test_hostrun_retry",
     "test_iso_storage",

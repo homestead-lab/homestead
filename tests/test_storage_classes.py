@@ -6,7 +6,7 @@ import server
 import homestead_storage_classes as STORAGE_CLASSES
 from fakes.platform import plain_platform
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from rebind import keep, keep_bound
+from rebind import keep_bound
 
 CLASSES = {"items": [
     {"metadata": {"name": "harvester-longhorn", "annotations": {
@@ -26,9 +26,7 @@ CLASSES = {"items": [
 
 class StorageClassTests(unittest.TestCase):
     def setUp(self):
-        # Reading the classes picks the default class and hands it to server.LC and server.LH.
         keep_bound(self, server.LC, server.LH)
-        keep(self, server, ("STORAGE_CLASS",))
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))
@@ -147,9 +145,7 @@ class StorageClassTests(unittest.TestCase):
 class LonghornV2Tests(unittest.TestCase):
     def setUp(self):
         plain_platform(self)
-        # Reading the classes picks the default class and hands it to server.LC and server.LH.
         keep_bound(self, server.LC, server.LH)
-        keep(self, server, ("STORAGE_CLASS",))
         # STORAGE_CLASSES reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE_CLASSES, name, getattr(STORAGE_CLASSES, name))

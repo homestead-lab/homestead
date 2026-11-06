@@ -26,6 +26,7 @@ import homestead_kube as K
 import homestead_reclass as RECLASS
 import homestead_revert as REVERT
 from fakes.kube import Kube
+from rebind import keep_bound
 
 NS, CLAIM, VOLUME = "lab", "data", "pvc-1"
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -61,6 +62,7 @@ class Clock:
 
 class RevertStopTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, RECLASS, REVERT)
         self.kube = self.enterContext(Kube(
             deployment("app-a", 2), deployment("app-b", 1),
             {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": CLAIM, "namespace": NS},
