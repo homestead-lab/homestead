@@ -49,6 +49,7 @@ TEMP_SUFFIX = "-reclass"
 # A copy that has not begun by then never will: the new volume could not be
 # made or attached. Everything is put back rather than left stopped.
 START_LIMIT = 600
+_clock = time.time   # a seam for the tests
 GiB = 1024 ** 3
 STEPS = [("stop", "Stop what uses it"), ("create", "Make the new volume"), ("copy", "Copy the data"),
          ("verify", "Check the copy"), ("swap", "Swap the new volume in"), ("start", "Start everything again")]
@@ -690,17 +691,50 @@ def copy_progress(log, size_bytes):
             "verified": "==> verified" in log}
 
 
+def _remove_temp(ns, ref):
+    """Remove the temporary claim if it is this move's: it carries this move's
+    labels and, where the uid was kept, that uid. False if one of that name stays."""
+    path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}"
+    found = KUBE.get_optional(path, read=kget)
+    if not found:
+        return True
+    meta = found.get("metadata") or {}
+    labels = meta.get("labels") or {}
+    if (any(labels.get(key) != value for key, value in NAMES.labels("reclass", ref["claim"]).items())
+            or (ref.get("temp_uid") and meta.get("uid") != ref["temp_uid"])):
+        return False
+    try:
+        ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta.get("uid")}})
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            return False
+        if error.code != 404:
+            raise
+    return True
+
+
 def _rollback(ns, ref, why):
-    paths = [f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}"]
-    if ref.get("job"):
-        paths.insert(0, f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}?propagationPolicy=Background")
-    for path in paths:
-        try:
-            ksend("DELETE", path)
-        except urllib.error.HTTPError:
-            pass
+    # From here a retry can only carry on putting things back: if starting an app
+    # fails, the next round must not take this move on to the copy.
+    if ref.get("phase") != "rolling-back":
+        ref.update(rollback_from=ref.get("phase", "stop"), rollback_why=why, phase="rolling-back")
+    made_nothing = ref["rollback_from"] in ("stop", "stopping")   # no claim or copy job yet
+    removed = True
+    if not made_nothing:
+        if ref.get("job"):
+            try:
+                ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}?propagationPolicy=Background")
+            except urllib.error.HTTPError:
+                pass
+        removed = _remove_temp(ns, ref)
     _start(ns, ref)
     ref["phase"] = "rolled-back"
+    why = ref.get("rollback_why", why)
+    if made_nothing:
+        return "failed", 0, f"{why} Nothing changed: everything started again on the original."
+    if not removed:
+        return "failed", 0, (f"{why} Everything started again on the original. A volume named {ref['temp']} is there that "
+                             "this move did not make, so it was left.")
     return "failed", 0, f"{why} Nothing changed: the new volume was removed and everything started again on the original."
 
 
@@ -708,7 +742,7 @@ def _rollback(ns, ref, why):
 # replaced, a job cleaned up), so the step is tried again; this many in a row
 # is not, and the job stops saying what was missing.
 MISS_LIMIT = 12
-BEFORE_SWAP = ("stop", "stopping", "create", "copy")
+BEFORE_SWAP = ("stop", "stopping", "create", "copy", "rolling-back")
 
 
 def _missing(error):
@@ -755,12 +789,68 @@ def resumable(item):
     return ""
 
 
+def _waited_out(ref, key):
+    """Has this wait lasted START_LIMIT? When it has, its start is dropped, so a
+    Carry on gets the time again."""
+    now = _clock()
+    if now - ref.setdefault(key, now) < START_LIMIT:
+        return False
+    ref.pop(key)
+    return True
+
+
+COPY_MARK = "homestead.io/storage-copy-job"
+
+
+def _looks_stopped(ns, ref):
+    """The apps this move would stop that are not as its review recorded them."""
+    found = []
+    for c in ref["consumers"]:
+        name = c["name"]
+        if c["kind"] in ("Deployment", "StatefulSet"):
+            plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
+            obj = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", read=kget)
+            stopped = obj and c.get("replicas") and not int((obj.get("spec") or {}).get("replicas") or 0)
+        elif c["kind"] == "CronJob":
+            obj = KUBE.get_optional(f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", read=kget)
+            stopped = obj and (obj.get("spec") or {}).get("suspend") and not c.get("suspend")
+        elif c["kind"] == "VirtualMachine":
+            obj = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}", read=kget)
+            stopped = obj and (obj.get("spec") or {}).get("runStrategy") == "Halted" and c.get("run_strategy") != "Halted"
+        else:
+            continue
+        if c.get("stopped") or stopped or COPY_MARK in (((obj or {}).get("metadata") or {}).get("annotations") or {}):
+            found.append(name)
+    return found
+
+
+def _review_lost(ns, ref, why):
+    """The review no longer holds, before this step stopped anything. That alone
+    is no proof nothing stopped: a restart after the first stop write can lose the
+    note that it was tried. So this ends only with every app seen as reviewed; any
+    other answer stays with a person, whose Cancel starts them again."""
+    try:
+        stopped = _looks_stopped(ns, ref)
+    except Exception:
+        ref["retain_resources"] = True
+        raise ValueError(f"{why} Whether its apps were stopped could not be checked, so this move waits for you. "
+                         "Nothing was started or retried; Cancel starts them again on the original.") from None
+    if stopped:
+        ref["retain_resources"] = True
+        raise ValueError(f"{why} An app looks stopped ({', '.join(stopped)}), perhaps by an earlier try of this move, so "
+                         "this move waits for you. Nothing was started or retried; Cancel starts it again on the original.")
+    ref["phase"] = "rolled-back"
+    return "failed", 0, f"{why} Nothing was stopped by this attempt. Review again."
+
+
 def _resolve(item):
     ref = item["ref"]
     ns, claim = ref["namespace"], ref["claim"]
     phase = ref.get("phase", "stop")
     size = _bytes(ref.get("size"))
 
+    if phase == "rolling-back":
+        return _rollback(ns, ref, ref.get("rollback_why", ""))
     if phase == "stop":
         if ref.get("review_fences"):
             if ref.get("stop_attempted"):
@@ -769,13 +859,19 @@ def _resolve(item):
                 current = plan(ns, claim, ref["target"], capture=True)
             except Exception as error:
                 # Preflight has made no writes. In particular, a 404 must not
-                # enter the older copy-phase rollback/restart handler.
+                # enter the older copy-phase rollback/restart handler. A read can
+                # pass, so this gets its time.
+                if _waited_out(ref, "review_since"):
+                    return _review_lost(ns, ref, f"The initial review could not be verified for {START_LIMIT // 60} minutes.")
                 raise ValueError("The initial review could not be verified; nothing was stopped. Review again.") from error
             if not current["ok"] or current["_fences"] != ref["review_fences"]:
-                raise ValueError("Volume use or identity changed before stopping workloads; nothing was stopped by this attempt. Review again.")
+                return _review_lost(ns, ref, "Volume use or identity changed before stopping workloads.")
         _steps(item, "stop")
         if ref.get("review_fences"):
             ref["stop_attempted"] = True
+            # Saved before the first write, or a restart forgets it tried. If this
+            # can't be saved it raises, and nothing is stopped.
+            OPS.checkpoint(item)
         try:
             _stop(ns, ref)
         except Exception as error:
@@ -790,7 +886,11 @@ def _resolve(item):
         _close_helpers(ns, claim)
         left = _using_pods(ns, claim)
         if left:
-            return "running", 8, f"Waiting for {len(left)} pod{'s' if len(left) != 1 else ''} to let go of {claim}"
+            pods = f"{len(left)} pod{'s' if len(left) != 1 else ''}"
+            if _waited_out(ref, "stopping_since"):
+                return _rollback(ns, ref, f"{pods} did not let go of {claim} within {START_LIMIT // 60} minutes.")
+            return "running", 8, f"Waiting for {pods} to let go of {claim}"
+        ref.pop("stopping_since", None)
         ref["phase"] = "create"
         return "running", 10, f"{claim} is free"
     if phase == "create":
@@ -800,7 +900,8 @@ def _resolve(item):
                 "spec": {**ref["claim_spec"], "storageClassName": ref["target"],
                          "resources": {"requests": {"storage": ref["size"]}}}}
         try:
-            ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+            made = ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+            ref["temp_uid"] = ((made or {}).get("metadata") or {}).get("uid", "")
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 return _rollback(ns, ref, f"The new volume could not be made (HTTP {error.code}).")
@@ -847,7 +948,17 @@ def _resolve(item):
             f"Copying {progress['percent']}%" + (f" at {progress['speed']}" if progress["speed"] else ""))
     if phase == "swap":
         _steps(item, "swap")
-        return _swap(item, ns, ref)
+        result = _swap(item, ns, ref)
+        if ref["phase"] != "swap":
+            ref.pop("swap_since", None)
+        elif _waited_out(ref, "swap_since"):
+            # With no new volume yet nothing has been swapped, so it can all go back.
+            if not ref.get("new_pv"):
+                return _rollback(ns, ref, f"The new volume was not bound within {START_LIMIT // 60} minutes.")
+            return "failed", item.get("progress", 0), (
+                f"Stopped at 'swap' after {START_LIMIT // 60} minutes: {result[2]}. Nothing is lost - the original is "
+                "kept as an old copy - and Carry on picks up from this step.")
+        return result
     if phase == "start":
         _steps(item, "start")
         _start(ns, ref)
