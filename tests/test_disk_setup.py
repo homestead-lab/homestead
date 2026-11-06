@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_disk_setup as SETUP
 import homestead_disks as DISKS
+from fakes.disk_guards import disk_guards
 
 TOOLS = "TOOL mkfs.ext4\nTOOL mkfs.xfs\nTOOL wipefs\nTOOL chattr\nTOOL findmnt\nEND"
 
@@ -387,6 +388,7 @@ class RegionTests(unittest.TestCase):
 class LonghornTests(unittest.TestCase):
     def setUp(self):
         no_v2(self)
+        disk_guards(self)
         self.tmp = tempfile.TemporaryDirectory()
         self.patched = []
         # Adding a disk takes the operations lock in the data folder: this

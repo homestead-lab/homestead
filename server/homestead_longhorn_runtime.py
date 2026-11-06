@@ -283,13 +283,12 @@ def retire(body):
 
 
 def protect_mutations(disks):
-    previous = disks.mutation_scope
     @contextmanager
     def scope(node, disk, device):
         with ops.transaction():
             if _pending(node): raise ValueError('Finish the saved Longhorn runtime maintenance before changing this host’s disks')
-            with previous(node, disk, device): yield
-    disks.mutation_scope = scope
+            yield
+    disks.add_guard('longhorn_runtime', scope)
 
 
 def register(operations):

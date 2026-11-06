@@ -1,6 +1,5 @@
 import copy
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -10,7 +9,7 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "server" / "probe"))
 import homestead_disks as DISKS
 import homestead_kube as K
-import homestead_operations as OPS
+from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
 
 GiB = 1024 ** 3
@@ -56,11 +55,10 @@ def cluster(test, harvester=True, lh=None, *objects):
     on the shared fake API (tests/fakes/kube.py)."""
     kube = test.enterContext(Kube(copy.deepcopy(lh or LH_NODE), *objects, *([copy.deepcopy(BD_SDB)] if harvester else []),
                                   absent_groups=() if harvester else ("harvesterhci.io",)))
-    # The shared fake runs the real write guards; the storage guard takes the job
-    # store's lock, which lives under its DATA_DIR.
-    test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
-    saved = (DISKS.kget, DISKS.ksend, DISKS.temps, DISKS.mutation_scope, DISKS.v2_tasks)
-    test.addCleanup(lambda: (DISKS.bind(*saved[:3]), setattr(DISKS, "mutation_scope", saved[3]), setattr(DISKS, "v2_tasks", saved[4])))
+    # The shared fake runs the real write guards; the server's disk guards take
+    # the job store's lock (fakes/disk_guards.py).
+    disk_guards(test)
+    test.enterContext(mock.patch.multiple(DISKS, kget=DISKS.kget, ksend=DISKS.ksend, temps=DISKS.temps))
     DISKS.bind(K.kget, K.ksend, lambda: PROBE)
     return kube
 

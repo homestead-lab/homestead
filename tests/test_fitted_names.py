@@ -14,6 +14,7 @@ import homestead_nodeshell as SHELL
 import homestead_imports as imports
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_disks as DISKS
+from fakes.disk_guards import disk_guards
 
 LONG_A = "data-postgres-cluster-production-database-instance-0"
 LONG_B = "data-postgres-cluster-production-database-instance-1"
@@ -132,6 +133,7 @@ class DiskIdTests(unittest.TestCase):
     B = "/dev/disk/by-id/nvme-Samsung_SSD_980_PRO_2TB_S6B0NL0W654321B"
 
     def setUp(self):
+        disk_guards(self)
         self.disks, self.sent = {}, []
         self.data = tempfile.TemporaryDirectory()
         self.addCleanup(self.data.cleanup)
