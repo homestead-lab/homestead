@@ -27,7 +27,7 @@ def _backup(name):
         raise ValueError("backup name is invalid")
     item = KUBE.get_optional(f"{LH.API}/namespaces/{LH.LHNS}/backups/{name}", read=LH.kget)
     if item is None:
-        raise ValueError("backup was not found")
+        raise CSI_RESTORE.Refused("backup was not found")
     return item
 
 
@@ -88,7 +88,8 @@ def restore_backup(cfg, discard_on_failure=False):
         raise ValueError("Choose a namespace and a new PVC name")
     plan = restore_plan(backup, namespace, pvc_name)
     if plan["conflict"]:
-        raise ValueError(plan["conflict"]["message"])
+        # A namespace that is gone stays gone; a claim of that name is the job's own next look to judge.
+        raise (CSI_RESTORE.Refused if plan["conflict"]["kind"] == "Namespace" else ValueError)(plan["conflict"]["message"])
     access_mode = str(cfg.get("access_mode") or "ReadWriteOnce")
     if access_mode not in ("ReadWriteOnce", "ReadWriteMany"):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
@@ -97,19 +98,22 @@ def restore_backup(cfg, discard_on_failure=False):
         raise ValueError("storage class name is invalid")
     base = LH.kget(f"/apis/storage.k8s.io/v1/storageclasses/{base_name}")
     if base.get("provisioner") != "driver.longhorn.io":
-        raise ValueError(f"storage class {base_name} is not managed by Longhorn")
+        raise CSI_RESTORE.Refused(f"storage class {base_name} is not managed by Longhorn")
     parameters = dict(base.get("parameters", {}) or {})
     if cfg.get("storage_class") and any(parameters.get(k) for k in ("fromBackup", "backingImage")):
-        raise ValueError("choose a regular Longhorn storage class")
+        raise CSI_RESTORE.Refused("choose a regular Longhorn storage class")
     size_gb = int(cfg.get("size_gb") or plan["minimum_size_gb"])
     if size_gb < plan["minimum_size_gb"]:
-        raise ValueError(f"restored PVC cannot be smaller than {plan['minimum_size_gb']} GiB")
+        raise CSI_RESTORE.Refused(f"restored PVC cannot be smaller than {plan['minimum_size_gb']} GiB")
     if cfg.get("size_gb") and size_gb * 1073741824 > plan["volume_size_bytes"] and base.get("allowVolumeExpansion") is not True:
-        raise ValueError("A larger restore needs a storage class that allows volume expansion")
+        raise CSI_RESTORE.Refused("A larger restore needs a storage class that allows volume expansion")
     volume_mode = str(cfg.get("volume_mode") or "Filesystem")
     if volume_mode not in ("Filesystem", "Block"):
         raise ValueError("volume mode must be Filesystem or Block")
-    validate_restore_class(base, volume_mode)
+    try:
+        validate_restore_class(base, volume_mode)
+    except ValueError as error:
+        raise CSI_RESTORE.Refused(str(error)) from None
     status, url, _ = _restore_source(_backup(backup))
     # Replica count, tags and migratability come from the configured class.
     # Longhorn's restore webhook recovers backingImage/backupTargetName from

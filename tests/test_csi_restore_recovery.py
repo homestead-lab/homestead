@@ -1,9 +1,12 @@
 """A restart cannot repeat a restore into an unrelated or deleted claim."""
+import json
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -54,8 +57,9 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.pvc["metadata"]["annotations"] = {}
         with patch.object(KUBE, "get_optional", return_value=self.pvc), \
              patch.object(RESTORE, "restore_backup") as restore:
-            with self.assertRaisesRegex(ValueError, "another operation"):
-                server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())
+            result = server.STORAGE_ROUTES._restore_then_tidy(self.item, Mock())
+            self.assertEqual("failed", result[0])
+            self.assertIn("another operation", result[2])
             restore.assert_not_called()
         self.item["ref"]["restore_started"] = True
         with patch.object(KUBE, "get_optional", return_value=None), \
@@ -166,6 +170,213 @@ class CleanupControllerRaceTests(unittest.TestCase):
             CSI._delete(self.content, content)
         self.assertEqual(409, error.exception.code)
         self.assertEqual("replacement", self.kube.object(self.content)["metadata"]["uid"])
+
+
+class RefusedRestoreTests(unittest.TestCase):
+    """A plain restore that gets refused ends as failed, in the refusal's own
+    words, and keeps whichever claim is there. It used to raise, so the job
+    stayed running ("Needs attention") for good and only a cancel ended it,
+    which deletes the claim."""
+    CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/example-data"
+
+    def setUp(self):
+        self.enterContext(patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("longhorn.io", "snapshot.storage.k8s.io")))
+        self.enterContext(patch.multiple(OPS, kget=KUBE.kget))
+        self.enterContext(patch.multiple(server.LH, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.enterContext(patch.dict(OPS.RESOLVERS, {"volume-restore": server.STORAGE_ROUTES._restore_then_tidy}))
+
+    def start(self, started=False, **cfg):
+        ref = {"namespace": "lab", "name": "example-data", "backup": "backup-a", "restore_started": started,
+               "restore_config": {"backup": "backup-a", "namespace": "lab", "name": "example-data",
+                                  "restore_id": "this-restore", **cfg}}
+        return OPS.start("volume-restore", "Restore example-data",
+                         {"kind": "PersistentVolumeClaim", "name": "example-data", "namespace": "lab"}, "/volumes", ref)["id"]
+
+    def job(self, ident):
+        return next(job for job in OPS.list_operations() if job["id"] == ident)
+
+    def claim(self, restore_id=None):
+        annotations = {"homestead.io/restore-id": restore_id} if restore_id else {}
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim", "status": {"phase": "Pending"},
+                       "metadata": {"name": "example-data", "namespace": "lab", "annotations": annotations}})
+
+    def assert_failed_keeping_the_claim(self, job, words):
+        self.assertEqual("failed", job["status"])
+        self.assertIn(words, job["message"])
+        self.assertNotIn("Needs attention", job["message"])
+        self.assertNotIn("temporarily unavailable", job["message"])
+        self.assertEqual([], [write for write in self.kube.writes if write[0] == "DELETE"])
+
+    def test_a_claim_another_operation_made_fails_the_job_and_stays(self):
+        self.claim()
+        self.assert_failed_keeping_the_claim(self.job(self.start()), "created by another operation")
+        self.assertIsNotNone(self.kube.object(self.CLAIM))
+
+    def test_a_claim_replaced_after_the_restore_started_fails_the_job_and_stays(self):
+        self.claim("someone-else")
+        self.assert_failed_keeping_the_claim(self.job(self.start(started=True)), "replaced by another operation")
+        self.assertIsNotNone(self.kube.object(self.CLAIM))
+
+    def waiting_for_csi_setup(self):
+        """A job past its first look, still waiting for snapshot setup, its 15 minutes up."""
+        waiting = {"created": False, "message": "Installing CSI snapshots"}
+        with patch.object(RESTORE, "restore_backup", return_value=waiting):
+            ident = self.start()
+            self.assertEqual("running", self.job(ident)["status"])
+        now = time.time()
+        self.enterContext(patch.object(server.STORAGE_ROUTES, "time", SimpleNamespace(time=lambda: now + 16 * 60)))
+        return ident
+
+    def test_csi_setup_that_never_gets_ready_fails_and_says_what_to_do(self):
+        job = self.job(self.waiting_for_csi_setup())
+        self.assert_failed_keeping_the_claim(job, "CSI snapshot setup did not become ready")
+        self.assertIn("resume this restore", job["message"])
+
+    def fifteen_minutes_on(self):
+        now = time.time()
+        self.enterContext(patch.object(server.STORAGE_ROUTES, "time", SimpleNamespace(time=lambda: now + 16 * 60)))
+
+    def test_fifteen_minutes_waiting_on_something_else_names_it_not_csi(self):
+        # Through the real restore_backup: its reason was the job's last answer.
+        self.add_namespace(), self.add_backup(url=""), self.add_class()
+        ident = self.start(storage_class="example-class")
+        self.assertIn("not available yet", self.job(ident)["message"])
+        self.fifteen_minutes_on()
+        job = self.job(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("The restore could not start within 15 minutes (backup URL is not available yet); "
+                         "resume once it has cleared", job["message"])
+
+    def test_fifteen_minutes_of_kubernetes_errors_names_them_not_csi(self):
+        self.kube.fail(self.CLAIM, 503, times=3)
+        ident = self.start()
+        self.assertIn("temporarily unavailable", self.job(ident)["message"])
+        self.fifteen_minutes_on()
+        job = self.job(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("could not start within 15 minutes (HTTP 503)", job["message"])
+        self.assertNotIn("CSI", job["message"])
+
+    def test_a_snapshot_set_up_differently_is_named_at_fifteen_minutes(self):
+        self.add_namespace(), self.add_backup(), self.add_class()
+        refusal = "Restore snapshot x already exists with different settings or is being deleted"
+        with patch.object(CSI, "ensure_support", return_value={"ready": True}), \
+                patch.object(CSI, "import_backup", side_effect=ValueError(refusal)):
+            ident = self.start(storage_class="example-class")
+            self.assertEqual("running", self.job(ident)["status"])
+        self.fifteen_minutes_on()
+        self.assertIn(f"could not start within 15 minutes ({refusal})", self.job(ident)["message"])
+
+    def test_after_a_passing_error_clears_it_is_csi_again(self):
+        # The last answer counts: an error that cleared is not why it timed out.
+        self.kube.fail(self.CLAIM, 503, times=1)
+        ident = self.start()
+        self.job(ident)
+        with patch.object(RESTORE, "restore_backup", return_value={"created": False, "message": "Installing CSI snapshots"}):
+            self.assertEqual("Installing CSI snapshots", self.job(ident)["message"])
+        self.fifteen_minutes_on()
+        self.assertIn("CSI snapshot setup did not become ready", self.job(ident)["message"])
+
+    def test_resuming_after_the_csi_setup_is_repaired_waits_afresh(self):
+        # The message says to resume: the old start time would refuse it again at once.
+        ident = self.waiting_for_csi_setup()
+        job = self.job(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertTrue(job["resumable"])
+        OPS.resume(ident)
+        with patch.object(RESTORE, "restore_backup", return_value={"created": False, "message": "Installing CSI snapshots"}):
+            job = self.job(ident)
+        self.assertEqual(("running", "Installing CSI snapshots"), (job["status"], job["message"]))
+
+    def test_a_refusal_from_the_restore_itself_fails_in_its_words(self):
+        # The backup was deleted while the job waited for CSI snapshot setup.
+        self.assert_failed_keeping_the_claim(self.job(self.start()), "backup was not found")
+
+    def test_a_passing_kubernetes_error_is_still_waited_out(self):
+        self.kube.fail(self.CLAIM, 500, times=1)
+        job = self.job(self.start())
+        self.assertEqual("running", job["status"])
+        self.assertIn("temporarily unavailable", job["message"])
+
+    def test_only_a_marked_refusal_ends_the_job(self):
+        # Anything else restore_backup raises may pass: it waits, as it did.
+        for error in (KUBE.Incomplete("the list came back incomplete"), json.JSONDecodeError("cut short", "{", 1),
+                      ValueError("backup URL is not available yet"),
+                      ValueError("Cluster shutdown is active; open Cluster for progress or recovery")):
+            with self.subTest(error=error):
+                with patch.object(RESTORE, "restore_backup", side_effect=error):
+                    job = self.job(self.start())
+                self.assertEqual("running", job["status"])
+                self.assertIn("temporarily unavailable", job["message"])
+                OPS.cancel(job["id"], {})
+
+    def add_backup(self, **status):
+        self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
+                       "metadata": {"name": "backup-a", "namespace": "longhorn-system"},
+                       "status": {"state": "Completed", "url": "s3://example/backup-a", "volumeName": "disk-a",
+                                  "volumeSize": str(5 * 1024 ** 3), **status}})
+
+    def add_class(self, **fields):
+        self.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "example-class"},
+                       "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2"}, **fields})
+
+    def add_namespace(self):
+        self.kube.add({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "lab"}})
+
+    def test_an_incomplete_inventory_during_the_real_restore_waits(self):
+        # CSI._items turns KUBE.Incomplete into a plain ValueError: "could not be checked" is not a refusal.
+        self.add_namespace(), self.add_backup(), self.add_class()
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        read = KUBE.items
+
+        def items(path, **kwargs):
+            if "/deployments" in path:
+                raise KUBE.Incomplete("the list came back incomplete")
+            return read(path, **kwargs)
+        with patch.object(KUBE, "items", items):
+            job = self.job(self.start(storage_class="example-class"))
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("could not be checked", job["message"])
+        self.assertEqual([], self.kube.writes)
+
+    def test_a_backup_url_not_there_yet_waits(self):
+        self.add_namespace(), self.add_backup(url=""), self.add_class()
+        job = self.job(self.start(storage_class="example-class"))
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("not available yet", job["message"])
+
+    def test_a_class_a_restore_cannot_use_is_a_refusal(self):
+        self.add_namespace(), self.add_backup(), self.add_class(parameters={"migratable": "true"})
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class")), "migratable disabled")
+
+    def test_a_class_longhorn_does_not_manage_is_a_refusal(self):
+        self.add_namespace(), self.add_backup(), self.add_class(provisioner="rancher.io/local-path")
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class")), "not managed by Longhorn")
+
+    def test_a_namespace_that_is_gone_is_a_refusal(self):
+        self.add_backup(), self.add_class()
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class")), "does not exist")
+
+    def test_a_class_that_is_not_a_regular_one_is_a_refusal(self):
+        self.add_namespace(), self.add_backup(), self.add_class(parameters={"fromBackup": "backup-a"})
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class")), "regular Longhorn storage class")
+
+    def test_a_size_above_the_backup_on_a_class_that_cannot_grow_is_a_refusal(self):
+        self.add_namespace(), self.add_backup(), self.add_class()
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class", size_gb=8)), "allows volume expansion")
+
+    def test_a_size_below_the_backup_is_a_refusal(self):
+        self.add_namespace(), self.add_backup(), self.add_class()
+        self.assert_failed_keeping_the_claim(self.job(self.start(storage_class="example-class", size_gb=1)), "cannot be smaller")
+
+    def test_a_snapshot_being_deleted_waits(self):
+        self.add_namespace(), self.add_backup(), self.add_class()
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        with patch.object(CSI, "ensure_support", return_value={"ready": True}), \
+                patch.object(CSI, "import_backup", side_effect=ValueError("Restore snapshot x already exists with different settings or is being deleted")):
+            job = self.job(self.start(storage_class="example-class"))
+        self.assertEqual("running", job["status"], job["message"])
 
 
 class StoppedRestoreTests(unittest.TestCase):

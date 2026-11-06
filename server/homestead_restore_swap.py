@@ -50,6 +50,7 @@ import urllib.parse
 import homestead_alerts as ALERTS
 import homestead_autoupdate as AUTOUPDATE
 import homestead_cancel as CANCEL
+import homestead_job_errors as JOB_ERRORS
 import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn_restore as RESTORE
@@ -669,7 +670,7 @@ def resolve(item, checkpoint, now=None):
         checkpoint(item)
 
     if phase == "restoring":
-        sub = {"id": item.get("id"), "status": item.get("status"), "ref": ref["restore"]}
+        sub = {"id": item.get("id"), "status": item.get("status"), "ref": ref["restore"], JOB_ERRORS.KEY: item.get(JOB_ERRORS.KEY)}
         try:
             status, progress, message = restore_resolver(sub)
         except ValueError as error:          # refused, not a passing error: the name is taken, CSI never ready

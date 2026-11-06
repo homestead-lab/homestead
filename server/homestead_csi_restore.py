@@ -19,6 +19,13 @@ CRDS = ("volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses")
 kget = ksend = None
 
 
+class Refused(ValueError):
+    """A restore job must end on this: the backup or the class says no, and
+    asking again will not change it. Any other ValueError from a restore may
+    pass (an incomplete list, a snapshot still being deleted, a cluster
+    shutdown), so its job waits."""
+
+
 def bind(read, send):
     global kget, ksend
     kget, ksend = read, send
