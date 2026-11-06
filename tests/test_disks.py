@@ -11,6 +11,7 @@ import homestead_disks as DISKS
 import homestead_kube as K
 from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
+from rebind import keep_bound
 
 GiB = 1024 ** 3
 LONGHORN, HARVESTER = "longhorn.io/v1beta2", "harvesterhci.io/v1beta1"
@@ -53,6 +54,7 @@ def replica(name, **spec):
 def cluster(test, harvester=True, lh=None, *objects):
     """Longhorn's node, and Harvester's block device where there is Harvester,
     on the shared fake API (tests/fakes/kube.py)."""
+    keep_bound(test, DISKS)
     kube = test.enterContext(Kube(copy.deepcopy(lh or LH_NODE), *objects, *([copy.deepcopy(BD_SDB)] if harvester else []),
                                   absent_groups=() if harvester else ("harvesterhci.io",)))
     # The shared fake runs the real write guards; the server's disk guards take
