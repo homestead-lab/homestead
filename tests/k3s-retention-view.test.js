@@ -72,6 +72,13 @@ test("a failed disk retire's Clean up does not read as removing anything",()=>{
   assert.match(html,/Says what it puts back/);
   assert.doesNotMatch(html,/what cleanup removes|btn sm danger/);
 });
+test("a failed Helm upgrade's Clean up says it puts back, and is not red",()=>{
+  const t=setup({kind:"helm",tracking:false});t.ctx.renderOperations();
+  const html=t.elements["#jobList"].innerHTML;
+  assert.match(html,/>Clean up</);
+  assert.match(html,/Says what it puts back/);
+  assert.doesNotMatch(html,/what cleanup removes|btn sm danger/);
+});
 test("another kind's Clean up still warns",()=>{
   const t=setup({tracking:false});t.ctx.renderOperations();
   const html=t.elements["#jobList"].innerHTML;
