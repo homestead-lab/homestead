@@ -1,6 +1,6 @@
 "use strict";
 const test=require("node:test"),assert=require("node:assert/strict"),fs=require("node:fs"),vm=require("node:vm");
-function setup({cleanup=true,mode="forget",copy=false,blocked=false}={}) {
+function setup({cleanup=true,mode="forget",copy=false,blocked=false,named=false}={}) {
   const elements={};
   for(const id of ["jobTray","jobSummary","jobClear","jobList","oc_go","oc_confirm"])
     elements[`#${id}`]={innerHTML:"",value:"",disabled:true,classList:{add(){},remove(){},toggle(){}},setAttribute(){}};
@@ -16,7 +16,7 @@ function setup({cleanup=true,mode="forget",copy=false,blocked=false}={}) {
       calls.push({path,body:JSON.parse(options.body)});
       if(path.endsWith("cancel-plan"))return {id:"old",title:"Legacy build",mode,cleanup,can:!blocked,severity:"low",
         ...(copy?{copy_recovery:true,lead:"Release the hold only; no app is started and no data is deleted.",why_not:"Copy is still active."}:{}),
-        action:mode==="forget"?"Stop tracking it":"Cancel and put back",needs:"admin",confirm:"k3s-lab",
+        action:named?"Let replicas back":mode==="forget"?"Stop tracking it":"Cancel and put back",cleanup_says_action:named,needs:"admin",confirm:"k3s-lab",
         undo:mode==="forget"?[]:["Deletes owned resources"],keeps:["All VMs, disks, Secrets and IP-address records remain"],options:[]};
       return {operation:{...job,cleanable:false,dismissible:true,tracking_stopped:true}};
     }};
@@ -48,6 +48,11 @@ test("failed tracking-only confirmation does not claim cleanup and requires the 
 test("actual destructive cleanup plans still say what they remove",async()=>{
   const t=setup({mode:"rollback"});await t.ctx.cancelOperation("old");
   assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Remove what it made/);
+});
+test("a cleanup that says its own action does not claim to remove anything",async()=>{
+  const t=setup({mode:"rollback",named:true});await t.ctx.cancelOperation("old");
+  assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Let replicas back/);
+  assert.doesNotMatch(t.modal.body,/Remove what it made|What cleaning up removes/);
 });
 
 test("copy recovery needs typed name AND partial-data acknowledgement without promising rollback",async()=>{

@@ -40,7 +40,7 @@ import homestead_storage_conflicts as CONFLICTS
 # name: why it may write without the guards
 EXEMPT = {
     ("homestead_disks", "retire_step"): "the retire job's own steps; its start was guarded and it holds the host; "
-                                         "failed, it holds nothing, so Resume asks the guards again (retire_resumable)",
+                                         "failed, it holds nothing, so Carry on asks the guards again (retire_held)",
     ("homestead_cancel", "disk_retire_cancel"): "puts scheduling back on the disk the retire job holds; "
                                                    "failed, it holds nothing, so its plan asks the guards again (retire_held)",
     ("homestead_root_guard", "_schedule"): "stops placement on a root-filesystem folder disk that is nearly full, "
@@ -152,7 +152,7 @@ class DiskWritesGuardedTests(unittest.TestCase):
         scope = mock.MagicMock(side_effect=ValueError("held"))
         with mock.patch.dict(DISKS.GUARDS, {name: scope for name in DISKS.REQUIRED_GUARDS}), \
                 mock.patch.object(DISKS.OPS, "stored", return_value=[retire]):
-            self.assertIn("held", DISKS.retire_resumable(retire))
+            self.assertIn("held", DISKS.retire_held(retire))
             self.assertFalse(CANCEL.disk_retire_plan(retire).get("can", True))
 
     def test_and_a_retire_cannot_start_past_the_guards(self):

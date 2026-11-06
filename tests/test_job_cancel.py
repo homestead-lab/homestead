@@ -457,7 +457,7 @@ class OtherKindTests(Store):
     def test_a_disk_retirement_cancelled_early_lets_replicas_onto_the_disk_as_before(self):
         op = self.job("disk-retire", {"node": "n1", "disk": "d1", "phase": "replicas", "removed": ["r1"],
                                       "was_scheduling": True})
-        with mock.patch.object(DISKS, "_patch") as patch:
+        with mock.patch.object(DISKS, "_patch") as patch, mock.patch.object(DISKS, "_lh_disk"):
             OPS.cancel(op)
         self.assertEqual({"spec": {"disks": {"d1": {"allowScheduling": True}}}}, patch.call_args[0][1])
 

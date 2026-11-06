@@ -524,20 +524,35 @@ def disk_retire_plan(item):
     if held:
         return {"can": False, "needs": "admin", "why_not": held}
     removed = len(ref.get("removed") or [])
-    return {"mode": "rollback", "needs": "admin",
-            "undo": ["Lets Longhorn place replicas on the disk again, as before"],
-            "keeps": ([f"The {_s(removed, 'failed replica')} already let go of cannot come back; "
-                       f"{'its volume rebuilds' if removed == 1 else 'their volumes rebuild'} from healthy copies"]
-                      if removed else ["No replica has been removed yet"])}
+    back = bool(ref.get("was_scheduling", True))
+    plan = {"mode": "rollback", "needs": "admin",
+            "undo": ["Lets Longhorn place replicas on the disk again, as before"] if back else [],
+            "keeps": ([] if back else ["Scheduling stays off on the disk, as it was when the retire started"])
+            + ([f"The {_s(removed, 'failed replica')} already let go of cannot come back; "
+                f"{'its volume rebuilds' if removed == 1 else 'their volumes rebuild'} from healthy copies"]
+               if removed else ["No replica has been removed yet"])}
+    if item.get("status") == "failed":
+        plan.update(action="Let replicas back" if back else "Close the retire", cleanup_says_action=True,
+                    lead=("This retire failed. Cleaning up lets replicas onto the disk again; "
+                          if back else "This retire failed. Cleaning up closes it and changes nothing on the disk; ")
+                    + "the job stays in the list as failed.")
+    return plan
 
 
 def disk_retire_cancel(item, _options):
     ref = item["ref"]
-    DISKS._patch(f"{DISKS.LH}/nodes/{ref['node']}",
-                 {"spec": {"disks": {ref["disk"]: {"allowScheduling": bool(ref.get("was_scheduling", True))}}}},
+    back = bool(ref.get("was_scheduling", True))
+    try:
+        DISKS._lh_disk(ref["node"], ref["disk"])
+    except ValueError:  # a merge patch would make a disk with no path
+        ref["phase"] = "cancelled"
+        return f"The disk is no longer in Longhorn on {ref['node']}, so there was nothing to put back"
+    DISKS._patch(f"{DISKS.LH}/nodes/{ref['node']}", {"spec": {"disks": {ref["disk"]: {"allowScheduling": back}}}},
                  "letting replicas onto it again")
     ref["phase"] = "cancelled"
-    return f"The disk on {ref['node']} takes replicas again, as before"
+    if back:
+        return f"The disk on {ref['node']} takes replicas again, as before"
+    return f"The disk on {ref['node']} stays off new replicas, as it was when the retire started"
 
 
 # --------------------------------------------------------------- the rest

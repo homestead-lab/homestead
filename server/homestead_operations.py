@@ -1354,6 +1354,11 @@ def dismiss_finished():
 # Kinds whose steps are each safe to run again, and which say whether a
 # stopped job of theirs can carry on: kind -> function(item) -> reason or "".
 RESUMABLE = {}
+# Kinds with more to check, or to note, when a job really carries on. Unlike
+# RESUMABLE, which the job list asks on every read and so must take no lock, this
+# runs only in resume(), under the store's lock: kind -> function(item), which may
+# change the item and raises ValueError to refuse.
+RESUMING = {}
 
 
 def resume(operation_id):
@@ -1371,6 +1376,9 @@ def resume(operation_id):
         why_not = check(match)
         if why_not:
             raise ValueError(why_not)
+        resuming = RESUMING.get(match.get("kind"))
+        if resuming:
+            resuming(match)
         match.update(status="running", finished_at="", updated_at=_now(),
                      message="Carrying on from where it stopped")
         _note(match, "running", match.get("progress", 0), match["message"])
@@ -1431,6 +1439,8 @@ CLEANUPS = set()
 def _cleanable(item):
     return (item.get("status") == "failed" and item.get("kind") in CLEANUPS and not item.get("cleaned")
             and not item.get("tracking_stopped")
+            # A disk already being taken out of Longhorn cannot be put back.
+            and not (item.get("kind") == "disk-retire" and item.get("ref", {}).get("phase") in ("remove", "cleanup"))
             and (item.get("kind") in ("k3s-cluster", "workload-rename", "workload-copy", "restructure") or not item.get("ref", {}).get("retain_resources")))
 MODES = {"rollback": "Cancel and put back", "stop": "Cancel it", "forget": "Stop tracking it"}
 
