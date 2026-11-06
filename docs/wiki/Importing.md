@@ -245,8 +245,17 @@ a copy fails, cleanup of its destination disks is requested. New imports also
 reclaim their own CDI staging and scratch storage, including temporary space
 on a **Retain** storage class. Completed disks keep their chosen storage policy.
 If copying finishes but VM creation fails, the completed disks are kept so you
-can create the VM from them under Import. The failed import can be retried
-without changing the source VM once its cleanup finishes.
+can create the VM from them under Import. An import whose disks were cleared
+can be retried without changing the source VM once its cleanup finishes; one
+whose disks are kept is retried under another name, as those disks keep theirs.
+
+If CDI is not ready within 30 minutes, the import fails and clears what it made.
+If CDI has not finished 6 hours after the copy, the import fails and leaves the
+disks as they are, removing only its copy Job and Secret; cancelling it at that
+point keeps the disks too. If CDI then finishes, Import can make a VM from one
+disk: check it boots, as its bus, MAC and TPM aren't carried over, and Homestead
+can't attach any other disks yet. Homestead can't remove an unfinished disk yet,
+so the job gives the `kubectl` command for it.
 
 The job stays active while temporary import storage is being removed, and
 cleanup continues after a Homestead restart. Do not retry with the same disk

@@ -259,7 +259,7 @@ class ImportWaitTests(unittest.TestCase):
         # <name>-disk is a prefix of <name>-disk-2, and the shorter one may be the finished
         # one. A whole name or none: the message is read as the job list keeps it.
         kinds = set()
-        for length in range(30, 64):   # either side of where the command stops fitting
+        for length in range(15, 64):   # either side of where the command stops fitting
             for first_finished in (False, True):
                 with self.subTest(length=length, first_finished=first_finished):
                     message = self.ended_with_vm_name(("f" if first_finished else "n") * length, first_finished)
@@ -336,21 +336,74 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIsNone(self.kube.object(copies[0][0]))
         self.assertFalse(self.ref()["retain_resources"])
 
-    def test_cancel_while_the_copy_job_cant_be_removed_yet_removes_the_disks_as_its_review_says(self):
+    def ending_held_up(self, times=1):
+        """Past the limit, told the disks are kept, the copy Job not removed yet."""
         copies = self.to_convert()
         kept = self.populator_disk(DVS[0])
         self.look()
         self.now += CONVERT_LIMIT
-        self.kube.fail(copies[0][0], 500, method="DELETE")
+        self.kube.fail(copies[0][0], 500, times=times, method="DELETE")
         job = self.look()
         self.assertEqual("running", job["status"])
         self.assertTrue(job["cancellable"])
+        return copies, kept
+
+    def test_cancel_while_ending_finishes_the_ending_and_keeps_the_disks_as_its_review_says(self):
+        copies, kept = self.ending_held_up()
+        plan = JOBS.cancel_plan(self.ident)
+        review = " ".join([plan["action"], *plan["undo"], *plan["keeps"]])
+        self.assertNotIn("remove its disks", review)
+        for words in ("copy Job", DVS[0], DVS[1], "kept", "Unraid"):
+            self.assertIn(words, review)
+        JOBS.cancel(self.ident, {}, by="a person")
+        job = self.look()
+        self.assertEqual("cancelled", job["status"])
+        for path in kept + [self.path(name) for name in DVS]:
+            self.assertTrue(self.kube.object(path), path + ": the job said it stays")
+        for job_path, secret in copies:
+            self.assertIsNone(self.kube.object(job_path))
+            self.assertIsNone(self.kube.object(secret))
+        self.assertIn("delete datavolume", job["message"], "what to do next is still said")
+        self.assertFalse(self.ref()["retain_resources"], "it lets go of the name")
+
+    def test_cancel_while_ending_that_cant_remove_the_copy_job_says_so_and_the_ending_goes_on(self):
+        copies, _ = self.ending_held_up(times=2)
+        with self.assertRaisesRegex(ValueError, "copy Job"):
+            JOBS.cancel(self.ident, {}, by="a person")
+        self.assertEqual("leaving", self.ref()["phase"])
+        job = self.look()
+        self.assertEqual("failed", job["status"], "the ending finishes by itself")
+        self.assertTrue(self.kube.object(self.path(DVS[0])))
+        self.assertIsNone(self.kube.object(copies[0][0]))
+
+    def test_cancel_before_the_ending_still_removes_the_disks_as_its_review_says(self):
+        self.phase("UploadReady")
+        self.look()
         self.assertIn("remove its disks", JOBS.cancel_plan(self.ident)["action"])
         JOBS.cancel(self.ident, {}, by="a person")
         self.assertEqual("cancelled", self.look()["status"])
         self.assertIsNone(self.kube.object(self.path(DVS[0])))
-        self.assertIsNone(self.kube.object(copies[0][0]))
-        self.assertIsNone(self.kube.object(kept[0]), "taken with its DataVolume")
+
+    def test_one_disk_is_told_to_make_its_vm_and_check_it_boots(self):
+        self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "single", "skip_disks": [1]})["id"]
+        self.dvs = ("single-disk",)
+        self.to_convert()
+        self.look()
+        self.now += CONVERT_LIMIT
+        message = self.look()["message"]
+        for words in ("make the VM from it under Import", "check it boots", "bus, MAC and TPM", "under another name"):
+            self.assertIn(words, message)
+        self.assertNotIn("attach", message)
+        self.assertTrue(message.endswith("delete datavolume single-disk`"), message)
+
+    def test_several_disks_are_not_promised_a_vm_with_all_of_them(self):
+        self.to_convert()
+        self.look()
+        self.now += CONVERT_LIMIT
+        message = self.look()["message"]
+        for words in ("from one disk", "can't attach the others", "under another name"):
+            self.assertIn(words, message)
+        self.assertNotIn("make the VM from them", message)
 
     def real_disk_check(self):
         self.imp.vm_disk_import_plan = VM_CREATE.vm_disk_import_plan

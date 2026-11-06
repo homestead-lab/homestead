@@ -82,6 +82,12 @@ def cancel_plan(item):
         return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
     where = _where(ref)
     disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
+    if ref.get("phase") == "leaving":
+        # The copy is over and the job has told the person these disks are kept.
+        return {"mode": "stop", "action": "Finish ending the import and keep its disks", "severity": "low", "needs": "operator",
+                "undo": ["Removes its copy Job and Secret: the copy is over"],
+                "keeps": [f"The disks ({disks}) are kept, with what CDI has of them: this doesn't remove them",
+                          f"The VM on {where} is unchanged"]}
     return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
             "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
             "keeps": [f"The VM on {where} is unchanged",
@@ -90,6 +96,11 @@ def cancel_plan(item):
 
 def cancel_run(item, _options):
     ref = item["ref"]
+    if ref.get("phase") == "leaving":
+        state, _, detail = CDI_CLEANUP.leave(item, kget, ksend)
+        if state == "running":
+            raise ValueError("its copy Job can't be removed yet, and the job keeps trying. Its disks are kept")
+        return detail
     ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
     paths = []
     for disk in ref.get("disks") or []:
@@ -958,13 +969,17 @@ def _stop_following(ref, item, phases):
     Only an unfinished disk is ever offered for removal, never a finished copy."""
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
+    # Import's Create VM takes one disk, and nothing attaches another to a VM yet.
+    then = ("make the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried over. If not, "
+            "import again under another name" if len(ref["disks"]) == 1 else
+            "a VM can be made from one disk under Import, and Homestead can't attach the others yet; otherwise import "
+            "again under another name")
 
     def words(not_done, done, are):
         kept = f"{done} {are} finished and kept. " if finished else ""
         return (f"CDI has not finished {not_done} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no "
                 f"VM was made. The VM on {_where(ref)} is unchanged. {kept}Nothing of the disks was removed. If CDI does "
-                "finish, make the VM from them under Import. If not, import again under another name. Homestead can't "
-                "remove an unfinished disk yet: ")
+                f"finish, {then}. Homestead can't remove an unfinished disk yet: ")
     what = words(", ".join(unfinished), ", ".join(finished), "is" if len(finished) == 1 else "are")
     command = _delete_command(ref["namespace"], unfinished, what)
     if command is None:
