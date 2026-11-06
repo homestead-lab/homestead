@@ -497,6 +497,8 @@ class EngineTests(unittest.TestCase):
                 identity = {key: body[key] for key in ("transfer_id", "expected_uid") if key in body}
                 if body["action"] == "quiesce":
                     identity["expected_version"] = body.get("expected_version", "")
+                    if body.get("live") is True:
+                        identity["live"] = True
                 if body["action"] == "backup":
                     return source.in_namespace(body.get("namespace"), source.backup, body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"), **identity, cleanup_id=body.get("cleanup_id", ""))
                 if body["action"] == "cleanup":

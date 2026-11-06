@@ -58,7 +58,8 @@ def _plan_or_start(request, starting):
         b.get("namespace") or STATE.NS, b.get("address_mode") or "shared",
         b.get("address") or "", b.get("storage_class") or "",
         b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
-        b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
+        b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices"),
+        stop_source=b.get("stop_source") is True))
 
 
 # Its routes and who may use them (homestead_routes.py).

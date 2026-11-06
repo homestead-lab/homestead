@@ -58,12 +58,15 @@ def _quiescing(move):
                 flags["quiesce_version"] = definition.get("source_version", "")
             flags["quiesce_requested"] = True
             STATE._store(move)  # A lost reply must still offer source recovery.
-        stopped = STATE._source_action(move, "quiesce")
+        stopped = STATE._source_action(move, "quiesce", **({"live": True} if move.get("live") else {}))
         if stopped.get("origin"):
             move["origin"] = stopped["origin"]
         flags["quiesced"] = True
     status = STATE._source_status(move)
-    if status.get("running"):
+    if move.get("live") and not (status.get("origin") or {}).get("_copy_live"):
+        # A source that ignored the request to keep running stopped it instead.
+        raise ValueError(f"{move['cluster']} did not hold {move['name']} for a live copy; update Homestead there, then retry")
+    if status.get("running") and not move.get("live"):
         return STATE._note(move, 6, f"Waiting for {move['name']} to stop on {move['cluster']}")
     if move["kind"] == "volume":
         return STATE._advance(move, "backing-up", 10, f"{move['name']} is held on {move['cluster']}")
@@ -75,6 +78,8 @@ def _quiescing(move):
         if [tuple(c.get(k) for k in keys) for c in definition["claims"]] != [tuple(c.get(k) for k in keys) for c in move["claims"]]:
             raise ValueError("The source disks changed; cancel this copy and review it again")
         move["definition"] = definition
+    if move.get("live"):
+        return STATE._advance(move, "backing-up", 10, f"{move['name']} keeps running on {move['cluster']}; snapshotting its disks")
     return STATE._advance(move, "backing-up", 10, f"{move['name']} stopped on {move['cluster']}")
 
 

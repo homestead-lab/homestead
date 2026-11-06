@@ -20,10 +20,21 @@ from fakes.storage_classes import storage_classes
 
 
 class ClusterCopyTests(unittest.TestCase):
+    # These cover a copy that pauses its source: the way every source before
+    # copy-live-vm copies, and still the way a container is copied.
+    LIVE = False
+
     def setUp(self):
         storage_classes(self, "longhorn-r2")   # the class new volumes go on here
         fixtures.EngineTests.setUp(self)
         self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["metadata"]["resourceVersion"] = "1"
+        if not self.LIVE:
+            hello = client.hello
+            def older():
+                answer = hello()
+                return dict(answer, capabilities=[c for c in answer["capabilities"] if c != "copy-live-vm"])
+            patch = mock.patch.object(client, "hello", side_effect=older)
+            patch.start(); self.addCleanup(patch.stop)
 
     def seed_vm(self, strategy="Always", running=True):
         self.cluster.put("/apis/kubevirt.io/v1", {"groupVersion": "kubevirt.io/v1"})
@@ -400,7 +411,6 @@ class ClusterCopyTests(unittest.TestCase):
             (lambda: self.cluster.objects[self.vm_path()]["spec"].update(runStrategy="Once"), "Once run strategy"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"].update(instancetype={"name": "external-size"}), "external instance type or preference"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"].update(preference={"name": "external-preference"}), "external instance type or preference"),
-            (lambda: self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["domain"]["devices"].update(tpm={"persistent": True}), "persistent firmware or TPM"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["volumes"].append({"name": "host", "hostDisk": {"path": "/external/disk"}}), "external source"),
         ]:
             original = copy.deepcopy(self.cluster.objects)

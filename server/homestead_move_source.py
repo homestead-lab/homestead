@@ -4,6 +4,12 @@ The destination drives. This side only ever does four things, each of them
 safe to ask twice: describe a workload, stop it, back up its volumes, and -
 once the destination confirms - either restart it or remove it.
 
+A VM being copied need not stop: a live copy holds it without stopping it and
+backs up snapshots taken while it runs. With the guest agent connected, the
+guest's filesystems are frozen for the moment the snapshots are taken, so
+every disk holds the guest as it was at one instant; without it, the disks
+are as a power cut would have left them.
+
 A volume can move on its own too. It has nothing to stop: it is held for the
 move only while nothing uses it, and refused while something does.
 
@@ -38,6 +44,11 @@ ORIGIN = "move-origin"
 BACKUPS = "move-backups"
 OWNER = "move-owner"
 RELEASED = "copy-released"
+# A frozen guest thaws itself after this even if the thaw below is lost.
+FREEZE_GRACE = "30s"
+# How long a frozen guest waits for its snapshots; well inside the 20 s the
+# destination gives a source step.
+SNAPSHOT_WAIT = 8
 
 
 class PendingRecovery(ValueError):
@@ -322,6 +333,7 @@ def definition(kind, name):
         "object": body, "origin": origin,
         "services": [_clean_service(s) for s in _services_for(pod_labels)] if kind == "container" else [],
         "secrets": secrets,
+        **({"guest_agent": _agent_connected(name), "vm_running": bool(_remaining(kind, obj))} if kind == "vm" else {}),
         **({"vbios": VM_DEVICES.export(dict(obj, metadata={**obj["metadata"], "namespace": _namespace()}), lambda path: KUBE.get_optional(path, read=kget))} if kind == "vm" else {}),
         "claims": [_claim_row(claim) for claim in _claims_of(kind, obj)],
         "node_selector": (template.get("spec", {}) or {}).get("nodeSelector", {}) or {},
@@ -355,13 +367,16 @@ def _remaining(kind, obj):
     return len(pods)
 
 
-def quiesce(kind, name, transfer_id="", expected_uid="", expected_version=""):
+def quiesce(kind, name, transfer_id="", expected_uid="", expected_version="", live=False):
     """Stop the workload so its data is at rest, remembering how it was running.
 
     Asked twice, it does not overwrite what it remembered the first time -
     otherwise a retry would record the workload as stopped, and putting it
     back would leave it stopped.
+
+    live (a VM copy only) holds the VM for the copy without stopping it.
     """
+    live = bool(live) and bool(transfer_id) and _kind(kind) == "vm"
     kind = _kind(kind)
     obj = _object(kind, name)
     _owner(obj, transfer_id, expected_uid)
@@ -381,6 +396,8 @@ def quiesce(kind, name, transfer_id="", expected_uid="", expected_version=""):
             origin["_copy_completed"] = bool(vmi) and (vmi.get("status") or {}).get("phase") == "Succeeded" and origin.get("runStrategy") in ("Once", "RerunOnFailure")
             if origin.get("runStrategy") == "Once" and not origin["_copy_completed"]:
                 raise ValueError("A VM with the Once run strategy cannot safely resume after copying. Change its run strategy before copying")
+            if live:
+                origin["_copy_live"] = True
     if kind == "volume":
         users = _users(name)
         if users:
@@ -394,6 +411,9 @@ def quiesce(kind, name, transfer_id="", expected_uid="", expected_version=""):
     if kind == "volume":
         _merge(kind, name, patch)
         return {"ok": True, "origin": origin, "detail": f"{name} is held for the move"}
+    if kind == "vm" and origin.get("_copy_live"):
+        _merge(kind, name, patch)
+        return {"ok": True, "origin": origin, "detail": f"{name} is held for the copy and keeps running"}
     if kind == "vm":
         if transfer_id and origin.get("_copy_completed"):
             pass  # Keep the completed VMI: its presence prevents another run.
@@ -435,7 +455,8 @@ def _backup_backing_image(image, cleanup_id="", source_uid=""):
 def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected_uid="", cleanup_id=""):
     """Back up the claims the workload mounts - all of them, or those named
     (the ones a move brings; the rest are skipped or made blank there).
-    Refuses while it still runs."""
+    Refuses while it still runs, unless a live copy holds it: then its
+    snapshots are taken together, inside one guest freeze when it can."""
     kind = _kind(kind)
     obj = _object(kind, name)
     _owner(obj, transfer_id, expected_uid)
@@ -447,9 +468,10 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
     cleanup_args = {"cleanup_id": cleanup_id, "source_uid": obj["metadata"]["uid"]} if cleanup else {}
     if not _origin(obj):
         raise ValueError(f"{name} has not been stopped for a move")
-    if _remaining(kind, obj):
+    live = kind == "vm" and bool(transfer_id) and bool(_origin(obj).get("_copy_live"))
+    if not live and _remaining(kind, obj):
         raise ValueError(f"{name} is still running; its data is not at rest yet")
-    if transfer_id:
+    if transfer_id and not live:
         for claim in _claims_of(kind, obj):
             if _users(claim):
                 raise ValueError(f"Volume {claim} is still in use; stop its other users before copying")
@@ -464,6 +486,7 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
         updated = _merge(kind, name, patch)
         if updated:
             obj["metadata"] = updated.get("metadata", obj.get("metadata", {}))
+    fresh = []
     for claim in [c for c in _claims_of(kind, obj) if claims is None or c in claims]:
         previous = next((r for r in recorded if r.get("claim") == claim), None)
         state = states.get(claim, {})
@@ -490,10 +513,86 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
         # Save stable names BEFORE either create. A lost reply or reboot then
         # resumes the same request; completed backups are never deleted.
         save()
+        if live:
+            fresh.append(row)
+            continue
         LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"], **cleanup_args)
         if row["backing_image"]:
             _backup_backing_image(row["backing_image"], **cleanup_args)
+    if fresh:
+        # Every disk's snapshot in one go, so they agree with each other.
+        with _frozen(name) as frozen:
+            for row in fresh:
+                LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"], **cleanup_args)
+            taken = _snapshots_taken([row["snapshot"] for row in fresh]) if frozen else False
+        for row in fresh:
+            row["frozen"] = bool(frozen and taken)
+        save()
+        for row in fresh:
+            # The snapshot exists now; this asks for its backup once it is usable.
+            LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"], **cleanup_args)
+            if row["backing_image"]:
+                _backup_backing_image(row["backing_image"], **cleanup_args)
     return {"ok": True, "backups": recorded}
+
+
+def _vmi_path(name):
+    return f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"
+
+
+def _agent_connected(name):
+    """Whether the VM runs with its guest agent answering, so it can be frozen."""
+    vmi = KUBE.get_optional(_vmi_path(name), read=kget) or {}
+    status = vmi.get("status") or {}
+    return status.get("phase") == "Running" and any(
+        c.get("type") == "AgentConnected" and str(c.get("status")) == "True" for c in status.get("conditions") or [])
+
+
+class _frozen:
+    """Freeze the guest's filesystems for a block, if its guest agent answers.
+
+    Yields whether it froze. A failed freeze is not fatal: the snapshots are
+    then crash-consistent, as without an agent. A lost thaw does no lasting
+    harm: KubeVirt thaws the guest itself after FREEZE_GRACE.
+    """
+    def __init__(self, name):
+        self.path = f"/apis/subresources.kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"
+        self.name, self.done = name, False
+
+    def __enter__(self):
+        if _agent_connected(self.name):
+            try:
+                ksend("PUT", self.path + "/freeze", {"unfreezeGracePeriod": FREEZE_GRACE})
+                self.done = True
+            except Exception:
+                self.done = False
+        return self.done
+
+    def __exit__(self, *exc):
+        if self.done:
+            try:
+                ksend("PUT", self.path + "/unfreeze", {})
+            except Exception:
+                pass
+        return False
+
+
+def _snapshots_taken(names):
+    """Wait briefly until Longhorn has taken each snapshot; whether it did."""
+    deadline = time.monotonic() + SNAPSHOT_WAIT
+    waiting = list(names)
+    while waiting:
+        snap = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/snapshots/{waiting[0]}", read=kget) or {}
+        status = snap.get("status") or {}
+        if status.get("creationTime") or status.get("readyToUse"):
+            waiting.pop(0)
+            continue
+        if snap and move_snapshot_error(snap):
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+    return True
 
 
 def cleanup(transfer_id, expected_uid):
@@ -558,6 +657,10 @@ def release(kind, name, transfer_id="", expected_uid=""):
     if kind == "volume":
         _merge(kind, name, patch)
         return {"ok": True, "detail": f"{name} is no longer held for a move"}
+    if kind == "vm" and origin.get("_copy_live"):
+        # Nothing was stopped: give up the hold and leave it running as it is.
+        _merge(kind, name, patch)
+        return {"ok": True, "detail": f"{name} kept running throughout the copy"}
     patch["spec"] = {key: value for key, value in origin.items() if not key.startswith("_copy_")}
     if transfer_id and kind == "vm" and origin.get("_copy_running") and origin.get("runStrategy") == "Manual":
         # Manual does not boot merely by restoring its run strategy. Retain
@@ -681,7 +784,8 @@ def _act(request):
                 "expected_uid": str(b.get("expected_uid") or "")}
     claims = b.get("claims") if isinstance(b.get("claims"), list) else None
     actions = {"quiesce": lambda: quiesce(kind, name, **identity,
-                                          expected_version=str(b.get("expected_version") or "")),
+                                          expected_version=str(b.get("expected_version") or ""),
+                                          live=b.get("live") is True),
                "backup": lambda: backup(kind, name, bool(b.get("retry_failed")), claims,
                                         **identity, cleanup_id=str(b.get("cleanup_id") or "")),
                "cleanup": lambda: cleanup(identity["transfer_id"], identity["expected_uid"]),

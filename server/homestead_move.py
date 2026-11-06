@@ -254,7 +254,7 @@ def _volume_rows(users):
 def hello():
     """Which Homestead this is, as another one asks before moving anything."""
     return {"version": VERSION, "protocol": PROTOCOL, "namespace": NS,
-            "capabilities": ["copy-source-lease", "copy-source-fence", "copy-destination"]}
+            "capabilities": ["copy-source-lease", "copy-source-fence", "copy-destination", "copy-live-vm"]}
 
 
 # --------------------------------------------------------------- the far side
