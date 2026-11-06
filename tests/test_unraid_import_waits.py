@@ -131,10 +131,12 @@ class ImportWaitTests(unittest.TestCase):
         self.now += 1
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        for words in ("6 hours", "not finished", DVS[0], "under Import", "under Volumes", "Unraid"):
+        for words in ("6 hours", "not finished", DVS[0], "under Import", "under another name", "Unraid", "unchanged"):
             self.assertIn(words, job["message"])
         self.assertNotIn("cleared", job["message"], "nothing of the disk's was cleared")
-        self.assertTrue(job["message"].endswith("unchanged"), "the message fits a job's limit: " + job["message"])
+        self.assertNotIn("Volumes", job["message"], "that page lists no Pending claim and removes no DataVolume")
+        self.assertTrue(job["message"].endswith(f"`kubectl -n {NS} delete datavolume {DVS[0]} {DVS[1]}`"),
+                        "the command is whole, within a job's limit: " + job["message"])
         for path in kept + [self.path(name) for name in DVS]:
             self.assertTrue(self.kube.object(path), path + " is CDI's or the disk's, and stays")
         for job_path, secret in copies:
@@ -207,6 +209,36 @@ class ImportWaitTests(unittest.TestCase):
         self.look()
         self.assertTrue(any("copy" in row["title"] for row in self.ref()["diagnostics"]), self.ref().get("diagnostics"))
 
+    def test_a_disk_cdi_did_finish_is_named_as_finished_and_never_offered_for_removal(self):
+        self.to_convert()
+        dv = self.kube.object(self.path(DVS[0]))
+        dv["status"] = {"phase": "Succeeded"}
+        self.kube.add(dv)
+        self.look()
+        self.now += CONVERT_LIMIT
+        job = self.look()
+        self.assertEqual("failed", job["status"])
+        self.assertIn(f"CDI has not finished {DVS[1]} after", job["message"])
+        self.assertIn(f"{DVS[0]} is finished", job["message"])
+        self.assertTrue(job["message"].endswith(f"delete datavolume {DVS[1]}`"), job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])))
+
+    def test_a_copy_job_held_on_a_finalizer_keeps_the_job_running_until_it_has_gone(self):
+        copies = self.to_convert()
+        job = self.kube.object(copies[0][0])
+        job["metadata"]["finalizers"] = ["example.com/held"]
+        self.kube.add(job)
+        self.look()
+        self.now += CONVERT_LIMIT
+        seen = self.look(2)
+        self.assertEqual("running", seen["status"], "the delete was accepted, but the Job is still there")
+        self.assertIn("Still removing", seen["message"])
+        self.assertTrue(self.kube.object(copies[0][0])["metadata"].get("deletionTimestamp"))
+        self.assertTrue(self.ref()["retain_resources"])
+        self.kube.discard(copies[0][0])   # its finalizer let go
+        self.assertEqual("failed", self.look()["status"])
+        self.assertFalse(self.ref()["retain_resources"])
+
     def test_a_copy_job_already_gone_is_no_obstacle(self):
         copies = self.to_convert()
         self.kube.discard(copies[0][0])   # its time to live is an hour
@@ -277,17 +309,22 @@ class ImportWaitTests(unittest.TestCase):
         uid = self.kube.object(self.path(DVS[0]))["metadata"]["uid"]
         with self.assertRaises(ValueError) as refused:
             UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
-        for words in (DVS[0], "already exists", "earlier import", "under Volumes", "another name"):
+        for words in (DVS[0], "already exists", "earlier import", "under another name", "finished disk", "under Import"):
             self.assertIn(words, str(refused.exception))
+        self.assertNotIn("emove", str(refused.exception), "it may be a finished copy, and Volumes can't remove one")
         self.assertEqual(before, [item["id"] for item in JOBS._read()], "no job that can only fail")
         self.assertEqual(uid, self.kube.object(self.path(DVS[0]))["metadata"]["uid"])
 
-    def test_it_lets_go_of_the_name_so_another_name_or_a_removed_disk_can_run(self):
+    def test_it_lets_go_of_the_name_so_another_name_or_a_disk_removed_by_hand_can_run(self):
         self.real_disk_check()
+        for name in DVS:
+            self.populator_disk(name)
         self.ended_after_six_hours()
         other = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11b"})
         self.assertEqual("running", other["status"])
         self.assertTrue(self.kube.object(self.path("win11b-disk")))
+        # A person running the kubectl command the job gives: Homestead has no way to
+        # do this yet. Deleting a DataVolume takes its claims and pods with it.
         for name in DVS:
             self.kube.discard(self.path(name))
         UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})

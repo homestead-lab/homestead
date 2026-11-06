@@ -589,8 +589,8 @@ def start(body, actor=""):
         plan_ = IMP.vm_disk_import_plan(ns, dv)
         if not plan_["ready"]:
             # An import names its disks after the VM, so a new disk name means a new VM name.
-            raise ValueError(f"A disk named {dv} already exists in {ns}, perhaps left by an earlier import: "
-                             "remove it under Volumes, or import under another name")
+            raise ValueError(f"A disk named {dv} already exists in {ns}, perhaps from an earlier import. Import under "
+                             "another name. A finished disk no VM uses can become a VM under Import")
     cores = int(body.get("cores") or found["cores"])
     memory = str(body.get("memory") or found["memory"])
     if not 1 <= cores <= 128:
@@ -937,15 +937,20 @@ def _waited(ref, key, limit):
     return now - ref.setdefault(key, now) >= limit
 
 
-def _stop_following(ref, item):
+def _stop_following(ref, item, phases):
     """CDI has not finished the disks in time. End the import and let go of the
     name, removing only the import's own copy Job and Secret: the DataVolumes, their
-    claims, CDI's pods and its work space may still be in use, and may hold the copy."""
-    names = ", ".join(d["dv"] for d in ref["disks"])
-    detail = (f"CDI has not finished {names} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no VM "
-              "was made. The disks are not finished and are left as they are. If CDI does finish them, make the VM "
-              "from them under Import. If not, remove them under Volumes, or import again under another name. "
-              f"The VM on {_where(ref)} is unchanged")
+    claims, CDI's pods and its work space may still be in use, and may hold the copy.
+    Only an unfinished disk is ever offered for removal, never a finished copy."""
+    unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
+    finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
+    done = f"{', '.join(finished)} {'is' if len(finished) == 1 else 'are'} finished and kept. " if finished else ""
+    # The command last, so a job's limit on its message can't cut it short unnoticed.
+    detail = (f"CDI has not finished {', '.join(unfinished)} after {FINISH_LIMIT // 3600} hours, so this import has "
+              f"stopped and no VM was made. The VM on {_where(ref)} is unchanged. {done}Nothing of the disks was "
+              "removed. If CDI does finish, make the VM from them under Import. If not, import again under another "
+              "name. Homestead can't remove an unfinished disk yet: "
+              f"`kubectl -n {ref['namespace']} delete datavolume {' '.join(unfinished)}`")
     if not ref.get("cdi_cleanup"):
         ref["phase"] = "failed"
         return "failed", 100, detail
@@ -1026,7 +1031,7 @@ def status(item):
     if ref["phase"] == "convert":
         if not all(p == "Succeeded" for p in phases):
             if _waited(ref, "finish_since", FINISH_LIMIT):
-                return _stop_following(ref, item)
+                return _stop_following(ref, item, phases)
             return "running", 96, "CDI is finishing the disk"
         try:
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
