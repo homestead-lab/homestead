@@ -20,6 +20,11 @@ READY_WAIT = "Waiting for every Homestead replica to become ready on the new vol
 RELEASE_LIMIT = 600
 
 
+class HostDown(Held):
+    """A host the move needs is down, and only its being up matters: no pod listed on it can
+    be writing. The move waits and sends nothing; to a recovery review it is a refusal."""
+
+
 def owner(obj, kind, uid):
     return any(o.get("controller") is True and o.get("kind") == kind and o.get("uid") == uid
                for o in obj.get("metadata", {}).get("ownerReferences", []))
@@ -108,8 +113,13 @@ class Coordinator:
         had when the copy was requested, so a reboot before the copy holds nothing.
         Homestead's own pods after the start request are new, so a reboot before
         them holds nothing either. A pod that left the API was removed normally
-        (nothing here force-deletes), so its writer stopped. A PV pinned by a
-        hostname that names no reviewed node checks every reviewed node, as before."""
+        (nothing here force-deletes), so its writer stopped.
+
+        A volume pinned to a host needs that host up with a fresh heartbeat; its boot
+        id alone holds nothing. Only a pod listed in the API can write to it, and those
+        are measured above, and the copy fsyncs before its receipt, so a reboot loses
+        nothing the move relies on. A PV pinned by something that names no reviewed
+        host checks every reviewed host and its boot id, as before."""
         pins = {n["name"]: n["boot_id"] for n in self.plan["nodes"]}
         target = A.worker_target(self.state)
         job_worker = bool(target) and target["kind"] == "Job"
@@ -143,8 +153,7 @@ class Coordinator:
                     if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - set(pins):
                         return {**pins, **{k: v for k, v in hosts.items() if v}}  # a topology this can't map to reviewed hosts: check them all
                     for value in values:
-                        if hosts.get(value) is None:
-                            hosts[value] = pins[value]
+                        hosts.setdefault(value, None)
         return hosts
 
     def _hosts(self):
@@ -154,9 +163,12 @@ class Coordinator:
                 continue
             node = self.read("/api/v1/nodes/" + pinned["name"])
             wanted = involved[pinned["name"]]
-            if (identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp")
-                    or wanted is not None and node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted
-                    or not any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))):
+            ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))
+            if identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp"):
+                raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
+            if wanted is None and not ready:
+                raise HostDown(f"Host {pinned['name']} is down. The move waits for it and carries on when it is back.")
+            if wanted is not None and (not ready or node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted):
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             lease = self.read("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + pinned["name"])
             spec = lease.get("spec", {})
@@ -167,6 +179,8 @@ class Coordinator:
             except (KeyError, ValueError, TypeError):
                 fresh = False
             if spec.get("holderIdentity") != pinned["name"] or not fresh:
+                if wanted is None:
+                    raise HostDown(f"Host {pinned['name']} has stopped reporting. The move waits for it and carries on when it is back.")
                 raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
 
     def _environment(self):

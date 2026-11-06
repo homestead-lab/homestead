@@ -178,6 +178,7 @@ class Runner:
         # worker_uid is the Job's, the same for every try; pod_uid is this try's.
         self.pod_uid, self.config = pod_uid, config
         self.replacing = False
+        self.host_down = None
         self.clock = clock
         self.lock = threading.Lock()
         self.hold = None
@@ -211,6 +212,8 @@ class Runner:
                     view.pop("recovery_command", None)
                     view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
                                 **recovery_fields(self.namespace, anchor.state))
+            elif self.host_down and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message=self.host_down)
             elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message="A new coordinator is waiting for the previous one to stop; it changes nothing until then. " + view["message"])
             elif self.outage_since is not None and view["status"] != "done":
@@ -349,7 +352,15 @@ class Runner:
                 self.start_wait = (self.start_wait or self.clock()) if waiting else None
                 anchor.report(self.worker_uid, self._checked_at(anchor),
                               "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
-                self.outage_since = None
+                self.outage_since = self.host_down = None
+            except C.HostDown as error:
+                # Sent nothing; every check runs again next tick. Never a hold: it would
+                # need a person, and after the switch would keep the new pods unready.
+                self.host_down = str(error)
+                try:
+                    anchor.report(self.worker_uid, self._checked_at(anchor), "running", self.host_down, pod_uid=self.pod_uid)
+                except Exception:
+                    pass  # the next tick writes again from a fresh read
             except Held as error:
                 if not self._retry_later(error):
                     self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."

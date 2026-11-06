@@ -106,7 +106,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         from homestead_self_data_fence import pin_app_image
         pin_app_image(proposed, state["plan"]["copy_image"])
         report = capacity(current, anchor.namespace, "restart", proposed, state["plan"]["nodes"],
-                          state["plan"]["admission"]["threshold"], clock=clock)
+                          state["plan"]["admission"]["threshold"], clock=clock, boots=False)
         result["restart"], result["warnings"] = report["receipt"], report["warnings"]
     if not 0 <= clock() - started <= 30:
         raise Held("Recovery inspection took too long; obtain a fresh review")

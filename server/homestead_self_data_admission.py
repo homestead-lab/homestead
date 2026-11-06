@@ -103,7 +103,10 @@ def _inventory(read, path, *, metric=False):
     return result["items"]
 
 
-def _nodes(read, pinned, now):
+def _nodes(read, pinned, now, *, boots=True):
+    """boots: the review before anything stops compares every reviewed host's boot id.
+    During the move only a replaced or removed host matters here: the coordinator
+    measures reboots itself, on the hosts actually in use (Coordinator._involved)."""
     raw = _inventory(read, "/api/v1/nodes")
     expected = {n["name"]: n for n in pinned}
     if len(expected) != len(pinned) or {n["metadata"]["name"] for n in raw} != set(expected):
@@ -116,7 +119,7 @@ def _nodes(read, pinned, now):
     for node in raw:
         meta, status, spec = node["metadata"], node.get("status", {}), node.get("spec", {})
         pin = expected[meta["name"]]
-        if (meta["uid"] != pin["uid"] or status.get("nodeInfo", {}).get("bootID") != pin["boot_id"]
+        if (meta["uid"] != pin["uid"] or boots and status.get("nodeInfo", {}).get("bootID") != pin["boot_id"]
                 or meta.get("deletionTimestamp")):
             raise Held("A reviewed capacity host was replaced, rebooted or removed")
         alloc = status.get("allocatable", {})
@@ -185,7 +188,7 @@ def _review_key(fingerprint, threshold, nodes):
     return digest({"workload": fingerprint, "threshold": threshold, "nodes": sorted(nodes, key=lambda n: n["name"])})
 
 
-def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time):
+def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time, boots=True):
     """Return displayable fresh evidence plus an unsigned receipt for approval.
 
     Never filters old or terminating pods out of the inventory. The phase engine
@@ -200,7 +203,7 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
         if path not in cache:
             cache[path] = copy.deepcopy(read(path))
         return copy.deepcopy(cache[path])
-    nodes = _nodes(current, pinned_nodes, started)
+    nodes = _nodes(current, pinned_nodes, started, boots=boots)
     pods = _inventory(current, "/api/v1/pods")
     # Do not let a planner's unknown-storage caution become a RAM override.
     for volume in dep["spec"]["template"]["spec"].get("volumes", []):
@@ -283,7 +286,7 @@ class Admitter:
                     raise Held("Copy or restart approval no longer matches; Homestead has not been stopped")
             return True
         stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
-        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock)
+        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False)
         approved = self.policy["reviews"][stage]
         if purpose == "recover-start":
             approved = (self.handoff or {}).get("recovery", {}).get("restart")

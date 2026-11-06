@@ -124,14 +124,21 @@ class AdmissionTests(unittest.TestCase):
             changed = copy.deepcopy(self.dep); change(changed)
             with self.assertRaisesRegex(Held, "workload changed"): admit("start", changed)
 
-    def test_new_deleted_rebooted_or_replaced_nodes_hold(self):
+    def test_new_deleted_or_replaced_nodes_hold(self):
         admit = self.admit()
         for change in (lambda: self.nodes[0]["metadata"].update(uid="replacement"),
-                       lambda: self.nodes[0]["status"]["nodeInfo"].update(bootID="other"),
                        lambda: self.nodes.append(obj("Node", "new", ns=None)), lambda: self.nodes.clear()):
             saved = copy.deepcopy(self.nodes); change()
             with self.assertRaises(Held): admit("start", self.dep)
             self.nodes = saved
+
+    def test_a_reboot_is_measured_at_the_review_before_the_stop_and_not_at_each_step_of_the_move(self):
+        """During the move the coordinator measures reboots, on the hosts in use."""
+        admit = self.admit()
+        self.nodes[0]["status"]["nodeInfo"]["bootID"] = "other"
+        self.assertTrue(admit("start", self.dep))
+        with self.assertRaisesRegex(Held, "rebooted"):
+            self.review()
 
     def test_taints_affinity_and_cordon_are_hard_blockers(self):
         for change in (lambda: self.nodes[0]["spec"].update(unschedulable=True),

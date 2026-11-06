@@ -199,6 +199,14 @@ class ReviewTests(unittest.TestCase):
             self.review.preview(self.body)
         self.assertEqual(before, len(self.c.sent))
 
+    def test_a_finished_homestead_pod_with_no_mount_is_still_refused(self):
+        """The move's wait counts every pod of Homestead's own, mounted or not."""
+        pod = self.leftover("homestead-no-mount")
+        pod["spec"]["volumes"] = []
+        self.f.pods.append(pod)
+        with self.assertRaisesRegex(Held, "homestead-no-mount"):
+            self.review.preview(self.body)
+
     def test_a_finished_pod_of_anything_else_that_mounts_a_data_volume_is_refused(self):
         pod = self.leftover("old-backup")
         pod["status"]["phase"] = "Succeeded"

@@ -158,6 +158,8 @@ import json
 import sys
 
 job = json.load(sys.stdin)
+if not any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
+    sys.exit("This Job has not failed: it starts its own next try")
 meta, template = job["metadata"], job["spec"]["template"]
 json.dump({"apiVersion": "v1", "kind": "Pod", "metadata": {
     "generateName": meta["name"] + "-by-hand-", "namespace": meta["namespace"],
@@ -185,18 +187,23 @@ kubectl -n <namespace> get configmap <deployment>-data-handoff -o jsonpath='{.da
   | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["journal"]["ref"]["storage_writes"][-1], indent=2))'
 ```
 
-Read `step` and `target.path`, then read that object:
+Read `step`, then read the object it names and decide with this table. The script
+below checks your answer against it and refuses a mismatch, because a wrong answer here
+can't be undone.
 
-| `step` | It was **applied** if | Otherwise **not-sent** |
+| `step` | It was **applied** if | It was **not sent** if |
 |---|---|---|
 | `stop` | the Deployment's `spec.replicas` is 0 | it still has its replica count |
 | `copy-job` | the copy Job exists | no such Job |
 | `release-copy`, `recover-release-copy` | the copy Job is gone or has a `deletionTimestamp` | it is there with none |
 | `switch` | the Deployment's data volume names the new claim | it names the original |
 | `start` | the claim is the new one and `spec.replicas` is back to its count | `spec.replicas` is 0 |
-| `recover-start` | `spec.replicas` is back to its count | `spec.replicas` is 0 |
+| `recover-start` | the claim is the original and `spec.replicas` is back to its count | `spec.replicas` is 0 |
 
 If you cannot tell, stop and keep everything as it is. Then record what you found.
+The move must be held and no other Pod of the Job may still be running, and the
+script refuses otherwise: a request still on its way would make your answer wrong. A
+Pod stuck Terminating counts. If its host is down, remove it once you know that.
 This needs a running coordinator: if there is none, start a try as above first.
 Save this as `settle.py`:
 
@@ -205,6 +212,7 @@ Save this as `settle.py`:
 import json
 import os
 import sys
+import urllib.error
 
 sys.path.insert(0, "/srv")
 import homestead_self_data_kube as K
@@ -216,21 +224,64 @@ if outcome not in ("applied", "not-sent"):
     sys.exit("Say applied or not-sent")
 _, scope = L.parse_configuration(os.environ[L.CONFIG_ENV])
 client = K.Client(scope)
+
+
+def optional(path):
+    try:
+        return client.read(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
 record = client.read(scope.anchor)
 state = json.loads(record["data"]["state.json"])
+if state.get("runtime", {}).get("state") != "held":
+    sys.exit("The move is not held, so a request may still be on its way. Nothing was changed")
 entries = state["journal"]["ref"]["storage_writes"]
 if not entries or entries[-1]["state"] == "accepted":
     sys.exit("Nothing to settle: the last request has a recorded outcome")
+others = [p["metadata"]["name"] for p in client.read(scope.core + "/pods")["items"]
+          if any(o.get("uid") == os.environ[L.JOB_UID_ENV] for o in p["metadata"].get("ownerReferences", []))
+          and p["metadata"]["uid"] != os.environ[L.UID_ENV] and p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
+if others:
+    sys.exit("Another Pod of this Job has not finished: " + ", ".join(others) + ". Nothing was changed")
+
+entry, count = entries[-1], state["replicas"]
+step, found = entry["step"], optional(entry["target"]["path"])
+if step in ("stop", "switch", "start", "recover-start"):
+    replicas = found["spec"].get("replicas")
+    claim = next(v for v in found["spec"]["template"]["spec"]["volumes"] if v["name"] == state["plan"]["data_volume"])["persistentVolumeClaim"]["claimName"]
+    applied = {"stop": replicas == 0, "switch": claim == state["destination"],
+               "start": claim == state["destination"] and replicas == count,
+               "recover-start": claim == state["source"]["name"] and replicas == count}[step]
+    not_sent = {"stop": replicas == count, "switch": claim == state["source"]["name"],
+                "start": replicas == 0, "recover-start": replicas == 0}[step]
+elif step == "copy-job":
+    applied, not_sent = found is not None, found is None
+elif step in ("release-copy", "recover-release-copy"):
+    applied = found is None or bool(found["metadata"].get("deletionTimestamp"))
+    not_sent = not applied
+else:
+    sys.exit("This script does not know the step " + step + ". Nothing was changed")
+if not (applied if outcome == "applied" else not_sent):
+    says = "applied" if applied else "not-sent" if not_sent else "neither"
+    sys.exit("The cluster does not say that for " + step + ": it says " + says + ". Nothing was changed")
+
 if outcome == "not-sent":
     entries.pop()
 else:
-    entry = entries[-1]
     entry["state"] = "accepted"
     if entry["method"] != "DELETE":
-        current = client.read(entry["target"]["path"])
-        entry.update(after=identity(current), shape=shape(current))
+        entry.update(after=identity(found), shape=shape(found))
 record["data"]["state.json"] = json.dumps(state, sort_keys=True, separators=(",", ":"))
-client.send("PUT", scope.anchor, record)
+try:
+    client.send("PUT", scope.anchor, record)
+except urllib.error.HTTPError as error:
+    if error.code == 409:
+        sys.exit("The record changed while this ran, and nothing was written. Check again, then run it again")
+    raise
 print("Recorded. Now preview recovery.")
 ```
 
@@ -239,7 +290,6 @@ kubectl -n <namespace> exec -i job/<coordinator> -- python3 - applied < settle.p
 ```
 
 Then preview and confirm `--action resume` or `--action return-original` as above.
-The write is conditional: if the record moved meanwhile it is refused, so run it again.
 
 ## Going back to an earlier release
 
@@ -266,10 +316,37 @@ host: it mounts nothing, and its next try carries on. A reboot of the copy host
 before the copy or after its pod has gone holds nothing either, and nor does one
 before Homestead's new pods start on it.
 
-**A reboot during the copy still needs hand work:** while a copy pod is on that
-host, the move holds and recovery refuses, because it can't prove what the copy
-did. The same goes for a host that rebooted with one of Homestead's old pods still
-listed on it, and for a volume pinned to a rebooted host. A pod that has left the API was removed
+**A volume pinned to a host** (local-path keeps both volumes on one host's disk) needs
+that host up with a fresh heartbeat; its reboot alone holds nothing, at any phase. While
+it is down the status page says so, the move sends nothing and it carries on by itself
+when the host is back. No pod listed in the API can be writing unnoticed, since those
+are measured, and the copy flushes to disk before its receipt. A pin that names no
+reviewed host, a zone for example, still measures every host's boot id.
+
+**One limit on all of this:** a host just back has no live memory figure for a minute
+or two. If the move reaches a capacity check on that host in that time, it holds:
+"new warning: live memory usage is unavailable". Nothing was sent. Wait for the figure
+to return, then preview and confirm `--action resume`.
+
+**A reboot during the copy, or with one of Homestead's old pods still listed on that
+host, still needs hand work:** the move holds and recovery refuses while that pod is
+listed. The changed boot id is itself the proof that the pod's process is dead, so
+removing it is safe. Compare the node's boot id with the record's:
+
+```sh
+kubectl get node <host> -o jsonpath='{.status.nodeInfo.bootID}'
+kubectl -n <namespace> get configmap <deployment>-data-handoff -o jsonpath='{.data.state\.json}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["plan"]["nodes"])'
+kubectl -n <namespace> delete pod <the pod the hold is about>
+```
+
+Check the Pod is not somewhere else first, and only delete it if it is on the host
+whose boot id changed. Then preview recovery. After a copy pod dies, its Job
+has failed and a copy is never repeated, so `resume` refuses: use
+`return-original`, and move again afterwards. After an old Homestead pod, both are
+offered.
+
+A pod that has left the API was removed
 normally (nothing force-deletes one), so its writer had stopped. If a volume's
 placement names no reviewed host, every reviewed host is checked.
 

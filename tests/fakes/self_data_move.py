@@ -20,6 +20,8 @@ from unittest import mock
 import homestead_self_data_anchor as A
 import homestead_self_data_admission as D
 import homestead_self_data_bootstrap as B
+import homestead_self_data_copy as COPY
+from homestead_self_data_fence import pin_app_image
 import homestead_self_data_kube as HK
 import homestead_self_data_worker as W
 from homestead_storage_journal import identity, shape
@@ -50,8 +52,10 @@ def _obj(kind, name, spec=None, *, ns=NS, version="v1", owner=None, status=None,
 
 
 class Move:
-    def __init__(self, kube, *, hosts=("node-a", "node-b"), now=100000, handed_over=True):
+    def __init__(self, kube, *, hosts=("node-a", "node-b"), now=100000, handed_over=True, pinned_to=None):
         self.kube, self.now, self.hosts = kube, now, tuple(hosts)
+        self.pinned_to = pinned_to  # both volumes on one host's disk, as local-path has them
+        self.down = set()
         self.logs_text = "HOMESTEAD_SELF_DATA_COPY " + OP + " " + json.dumps(RECEIPT)
         self.dep_path = f"/apis/apps/v1/namespaces/{NS}/deployments/homestead"
         self.pods_path = f"/api/v1/namespaces/{NS}/pods"
@@ -67,8 +71,10 @@ class Move:
     def _cluster(self):
         kube = self.kube
         for host in self.hosts:
-            kube.add(_obj("Node", host, ns=None, status={"nodeInfo": {"bootID": "boot-" + host},
-                                                         "conditions": [{"type": "Ready", "status": "True"}]}))
+            kube.add(_obj("Node", host, ns=None, labels={"kubernetes.io/hostname": host}, status={"nodeInfo": {"bootID": "boot-" + host},
+                                                         "conditions": [{"type": "Ready", "status": "True"}],
+                                                         "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "110"},
+                                                         "capacity": {"cpu": "8", "memory": "16Gi", "pods": "110"}}))
             kube.add(_obj("Lease", host, {"holderIdentity": host, "leaseDurationSeconds": 40, "renewTime": _stamp(self.now)},
                           ns="kube-node-lease", version="coordination.k8s.io/v1"))
         self.pins = [{"name": h, "uid": kube.object("/api/v1/nodes/" + h)["metadata"]["uid"], "boot_id": "boot-" + h} for h in self.hosts]
@@ -91,7 +97,11 @@ class Move:
         for claim, volume in (("source", "old-pv"), ("target", "new-pv")):
             kube.add(_obj("PersistentVolumeClaim", claim, {"volumeName": volume, "accessModes": ["ReadWriteMany"]}, status={"phase": "Bound"}))
             uid = kube.object(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{claim}")["metadata"]["uid"]
-            kube.add(_obj("PersistentVolume", volume, {"claimRef": {"namespace": NS, "name": claim, "uid": uid}}, ns=None))
+            spec = {"claimRef": {"namespace": NS, "name": claim, "uid": uid}}
+            if self.pinned_to:
+                spec["nodeAffinity"] = {"required": {"nodeSelectorTerms": [{"matchExpressions": [
+                    {"key": "kubernetes.io/hostname", "operator": "In", "values": [self.pinned_to]}]}]}}
+            kube.add(_obj("PersistentVolume", volume, spec, ns=None))
 
     # What the API server adds -----------------------------------------------------
 
@@ -157,9 +167,22 @@ class Move:
                 "destination_pv": fact(read("/api/v1/persistentvolumes/new-pv")),
                 "worker": self.setup.worker_fact(), "nodes": self.pins, "data_volume": "data", "target_shareable": True,
                 "copy_image": IMAGE, "copy_node": self.hosts[0]}
+        plan["admission"] = self._policy(plan)
         plan["copy_preflight"] = self.setup.preflight_copy(plan)
         self.anchor.configure(plan)
         self.anchor.pointer_published(A.pointer_digest(NS, self.anchor.state, self.handle["uid"]))
+
+    def _policy(self, plan):
+        """What the review before the stop approved, from the real capacity check."""
+        copying = COPY.job(NS, "homestead-data-copy-" + OP, "source", "target", IMAGE, OP, plan["copy_node"])
+        restart = self.kube.object(self.dep_path)
+        pin_app_image(restart, IMAGE)
+        restart["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "target"
+        restart["spec"]["strategy"] = {"type": "Recreate"}
+        restart["spec"]["replicas"] = 1
+        reviews = {stage: D.review(self.read, NS, stage, proposed, self.pins, 88, clock=lambda: self.now)["receipt"]
+                   for stage, proposed in (("copy", copying), ("restart", restart))}
+        return {"threshold": 88, "reviews": reviews}
 
     # The Job controller -----------------------------------------------------------
 
@@ -199,14 +222,17 @@ class Move:
     def pass_time(self, seconds):
         self.now += seconds
         for host in self.hosts:
+            if host in self.down:
+                continue  # its kubelet renews nothing
             path = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + host
             lease = self.kube.object(path)
             lease["spec"]["renewTime"] = _stamp(self.now)
             self.kube.add(lease)
 
-    def runner(self, pod=None, *, clock=None, worker_uid=None, config=None):
+    def runner(self, pod=None, *, clock=None, worker_uid=None, config=None, real_admission=False):
+        """real_admission: what production runs, the real Admitter, with no stand-in."""
         pod = pod or self.first_pod
-        return W.Runner(self.read, self.send, lambda _: self.logs_text, lambda purpose, proposal: True,
+        return W.Runner(self.read, self.send, lambda _: self.logs_text, None if real_admission else (lambda purpose, proposal: True),
                         namespace=NS, deployment="homestead", operation=OP, anchor_uid=self.handle["uid"],
                         worker_uid=worker_uid or self.job["metadata"]["uid"], pod_uid=pod[0],
                         config=config or self.setup.config, clock=clock or (lambda: self.now), require_setup_receipts=True)
@@ -239,11 +265,22 @@ class Move:
                    status={"phase": "Running"})
         self.copy_pod = self.kube.add(pod)
 
+    def host_down(self, host):
+        """As a reboot looks first: NotReady, and its lease stops being renewed."""
+        self.down.add(host)
+        node = self.kube.object("/api/v1/nodes/" + host)
+        node["status"]["conditions"] = [{"type": "Ready", "status": "Unknown"}]
+        self.kube.add(node)
+        self.pass_time(60)
+
     def rebooted(self, host):
         """It came back: Ready, a fresh lease, another boot id."""
+        self.down.discard(host)
         node = self.kube.object("/api/v1/nodes/" + host)
         node["status"]["nodeInfo"]["bootID"] = "another-boot-of-" + host
+        node["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
         self.kube.add(node)
+        self.pass_time(0)
 
     def copy_finished(self):
         job = self.kube.object(self.copy_path)
