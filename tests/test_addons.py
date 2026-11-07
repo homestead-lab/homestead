@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_addons as ADDONS
 import homestead_k3scluster as K3S
+from rebind import keep_bound
 
 OPERATOR = """---
 apiVersion: v1
@@ -33,6 +34,12 @@ metadata:
   annotations:
     note: "{{ not a template }}"
 """
+
+
+class Kept(unittest.TestCase):
+    """Fake() binds the add-ons module and ClusterCreatorTests the k3s one: put both back after each test."""
+    def setUp(self):
+        keep_bound(self, ADDONS, K3S)
 
 
 class Fake:
@@ -76,7 +83,7 @@ def unpack(chart):
     return files
 
 
-class KubeVirtTests(unittest.TestCase):
+class KubeVirtTests(Kept):
     def test_kubevirt_and_cdi_become_charts_with_their_crds_first(self):
         fake = Fake()
         result = ADDONS.install_kubevirt()
@@ -143,7 +150,7 @@ class KubeVirtTests(unittest.TestCase):
         )
 
 
-class LonghornTests(unittest.TestCase):
+class LonghornTests(Kept):
     def test_one_copy_per_node_up_to_three(self):
         for nodes, copies in ((1, 1), (2, 2), (5, 3)):
             fake = Fake(nodes=nodes)
@@ -160,7 +167,7 @@ class LonghornTests(unittest.TestCase):
         self.assertFalse(status["longhorn"]["installed"])
 
 
-class PreemptionTests(unittest.TestCase):
+class PreemptionTests(Kept):
     """A chart's install job outranks Longhorn's default priority: on a node
     with no CPU to spare it would preempt the instance manager serving the
     volumes attached there (the release suite saw Homestead's own data lost
@@ -215,7 +222,7 @@ class PreemptionTests(unittest.TestCase):
         self.assertEqual([], ADDONS.preemption_risk(), "the Succeeded pod's 4 CPUs are free again")
 
 
-class ClusterCreatorTests(unittest.TestCase):
+class ClusterCreatorTests(Kept):
     CFG = {"name": "lab", "servers": 1, "agents": 1, "network": "lan", "addresses": ["192.0.2.50", "192.0.2.51"],
            "password": "long enough pass", "setup": "homestead"}
 
@@ -249,7 +256,7 @@ class ClusterCreatorTests(unittest.TestCase):
             K3S.plan(dict(self.CFG, setup="k3s", kubevirt=True))
 
 
-class MultusTests(unittest.TestCase):
+class MultusTests(Kept):
     """A LAN network needs Multus, which k3s leaves out: an add-on now."""
 
     def test_k3s_gets_the_chart_with_its_own_cni_folders(self):

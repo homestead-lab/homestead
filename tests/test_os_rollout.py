@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_history as HISTORY
 import homestead_os_rollout as ROLLOUT
+from rebind import keep_bound
 
 
 def node(name, ready=True, cordoned=False):
@@ -75,6 +76,7 @@ def own_history(test):
 
 class RolloutTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, ROLLOUT)
         self.data = tempfile.mkdtemp()
         self.nodes = {"node-1": node("node-1"), "node-2": node("node-2"), "node-3": node("node-3")}
         self.hosts = Hosts({"node-1": facts(["curl", "linux-image-6.8"]), "node-2": facts(["curl"]), "node-3": facts()})
@@ -516,6 +518,7 @@ class RolloutTests(unittest.TestCase):
 
 class ScheduleTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, ROLLOUT)
         self.data = tempfile.mkdtemp()
         ROLLOUT.bind(None, None, None, None, None, None, lambda: "", self.data)
 

@@ -21,6 +21,7 @@ import homestead_mcp as MCP
 import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
 import homestead_audit as AUDIT_LOG
+from rebind import keep_bound
 
 
 def key(scopes=("read",), mcp=True, role="viewer", kid="k1", name="claude"):
@@ -39,6 +40,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.settings = {"mcp": {"enabled": True}}
+        keep_bound(self, MCP, AUDIT, REQUESTS, TOOLS)   # MCP.bind() hands its fakes to these
         MCP.bind(self.folder.name, lambda: self.settings, "9.9.9", ROUTE_POLICY.role, lambda m, p, b: None,
                  self.kget, self.delete_workload)
         MCP._calls.clear()
