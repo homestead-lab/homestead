@@ -187,6 +187,201 @@ class MaintenanceTests(UptimeCase):
         self.assertEqual({"OS update, Harvester maintenance"}, {o["maintenance"] for o in node["outages"] if o.get("maintenance")})
 
 
+class DeclaredMaintenanceTests(UptimeCase):
+    """Maintenance a person declared (#535 part 2): it has a reason and an end,
+    and outlives the job that opened it."""
+
+    HOUR = 3600
+
+    def at(self, minute):
+        return self.start + minute * 60
+
+    def declare(self, op="op-1", minute=60, hours=2, reason="Drive swap", **extra):
+        fields = {"cordoned_before": False, "node_uid": "uid-1", "held": ["apps/web"], "apps": ["apps/web"], **extra}
+        return H.maintenance_declare("node1", reason, op, self.at(minute) + hours * self.HOUR, now=self.at(minute), **fields)
+
+    def test_declared_event_is_counted_as_maintenance(self):
+        self.declare(hours=4)
+        now = self.run_for(180, down_between=(60, 180))
+        node = H.uptime(now)["nodes"]["node1"]
+        self.assertEqual(100.0, node["windows_excluding_maintenance"]["24h"])
+        self.assertEqual(120 * 60, node["maintenance_s"]["24h"])
+        row = node["maintenance"][-1]
+        self.assertEqual((True, self.at(60) + 4 * self.HOUR, True), (row["declared"], row["until"], row["ongoing"]))
+        for private in ("held", "apps", "node_uid", "cordoned_before"):
+            self.assertNotIn(private, row)
+
+    def test_a_job_caused_row_gets_no_new_fields(self):
+        H.maintenance_open("node1", "OS update", "op-2", now=self.at(10))
+        now = self.run_for(30)
+        self.assertEqual({"start", "end", "reason", "job", "ongoing"}, set(H.uptime(now)["nodes"]["node1"]["maintenance"][-1]))
+
+    def test_declared_runs_out_at_until(self):
+        self.declare(hours=1)
+        now = self.run_for(180, down_between=(60, 180))
+        node = H.uptime(now)["nodes"]["node1"]
+        row = node["maintenance"][-1]
+        self.assertEqual((self.at(120), False), (row["end"], row["ongoing"]))
+        self.assertEqual(60 * 60, node["outages"][-1]["down_s"], "what comes after its end is an outage")
+        self.assertNotIn("maintenance", node["outages"][-1])
+        self.assertIsNone(H.maintenance_open_for("node1", now=now))
+        self.assertEqual("limit", H.maintenance_events("node1")[-1]["outcome"], "and record() kept it")
+        self.assertEqual(({}, ["node1"]), (H.declared_view(now)["open"], list(H.declared_view(now)["ran_out"])))
+
+    def test_it_runs_out_on_read_with_no_sample_written(self):
+        self.declare(hours=1)
+        view = H.declared_view(self.at(121))
+        self.assertEqual("limit", view["ran_out"]["node1"]["outcome"])
+        self.assertEqual(self.at(120), H.maintenance_since(0, now=self.at(121))[0]["end"])
+        self.assertIsNone(H.maintenance_since(0, now=self.at(119))[0]["end"])
+
+    def test_end_just_after_until_does_not_hide_the_overrun(self):
+        self.declare(hours=1)
+        event, asked = H.maintenance_end("op-1", now=self.at(125))
+        self.assertTrue(asked)
+        self.assertEqual((self.at(120), "limit"), (event["end"], event["outcome"]))
+        self.assertEqual("limit", H.maintenance_events("node1")[0]["outcome"])
+
+    def test_extend_moves_until_and_refuses_over_the_ceiling_or_shorter(self):
+        self.declare(hours=2)
+        moved = self.at(60) + 4 * self.HOUR
+        self.assertEqual(moved, H.maintenance_extend("op-1", moved, now=self.at(70))["until"])
+        self.assertEqual(moved, H.declared_for("node1", now=self.at(70))["until"])
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("op-1", moved, now=self.at(70))
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("op-1", moved - 60, now=self.at(70))
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("op-1", self.at(70) + H.DECLARED_CEILING + 1, now=self.at(70))
+        self.assertEqual(self.at(70) + H.DECLARED_CEILING,
+                         H.maintenance_extend("op-1", self.at(70) + H.DECLARED_CEILING, now=self.at(70))["until"])
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("nope", moved, now=self.at(70))
+
+    def test_extend_after_it_ran_out_opens_a_new_event_and_the_gap_is_an_outage(self):
+        self.declare(hours=1)
+        self.run_for(180, down_between=(60, 180))
+        event = H.maintenance_extend("op-1", self.at(180) + self.HOUR, now=self.at(180))
+        self.assertEqual(("op-1:1", "op-1", self.at(180), None, ["apps/web"]),
+                         (event["job"], event["op"], event["start"], event["end"], event["held"]))
+        events = H.maintenance_events("node1")
+        self.assertEqual([self.at(120), None], [e["end"] for e in events], "history stays honest")
+        self.assertEqual(self.at(120), H.uptime(self.at(180))["nodes"]["node1"]["outages"][-1]["start"])
+        self.assertEqual("op-1:1", H.declared_for("node1", now=self.at(181))["job"])
+        self.assertEqual({"node1"}, set(H.declared_view(self.at(181))["open"]))
+
+    def test_extend_after_end_is_refused(self):
+        self.declare(hours=1)
+        H.maintenance_end("op-1", now=self.at(70))
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("op-1", self.at(70) + self.HOUR, now=self.at(71))
+        H.maintenance_release("op-1", now=self.at(72))
+        with self.assertRaises(ValueError):
+            H.maintenance_extend("op-1", self.at(72) + self.HOUR, now=self.at(73))
+
+    def test_end_fixes_the_end_once_and_stays_until_released(self):
+        self.declare(hours=2)
+        first, asked = H.maintenance_end("op-1", now=self.at(70))
+        self.assertTrue(asked)
+        self.assertEqual((self.at(70), "ended", False), (first["end"], first["outcome"], first["released"]))
+        again, asked = H.maintenance_end("op-1", now=self.at(71))
+        self.assertFalse(asked)
+        self.assertEqual(self.at(70), again["end"], "the first call's time stands")
+        self.assertEqual("op-1", H.declared_for("node1", now=self.at(72))["op"], "still there to end again")
+        self.assertEqual(["node1"], list(H.declared_view(self.at(72))["ending"]))
+        self.assertTrue(H.maintenance_release("op-1", now=self.at(73)))
+        self.assertFalse(H.maintenance_release("op-1", now=self.at(74)))
+        self.assertIsNone(H.declared_for("node1", now=self.at(75)))
+        self.assertEqual(self.at(73), H.maintenance_events("node1")[0]["released_at"])
+        with self.assertRaises(KeyError):
+            H.maintenance_end("nope", now=self.at(76))
+        with self.assertRaises(KeyError):
+            H.maintenance_release("nope", now=self.at(76))
+
+    def test_a_row_says_when_ending_has_not_finished(self):
+        self.declare(hours=2)
+        now = self.run_for(70)
+        H.maintenance_end("op-1", now=now)
+        row = H.uptime(now + 1)["nodes"]["node1"]["maintenance"][-1]
+        self.assertEqual((True, False), (row["ending"], row["released"]))
+        H.maintenance_release("op-1", now=now + 2)
+        row = H.uptime(now + 3)["nodes"]["node1"]["maintenance"][-1]
+        self.assertEqual((False, True), (row["ending"], row["released"]))
+
+    def test_end_of_what_ran_out_keeps_it_apart_from_what_ran_out(self):
+        self.declare(hours=1)
+        H.maintenance_end("op-1", now=self.at(125))
+        view = H.declared_view(self.at(126))
+        self.assertEqual(({}, ["node1"]), (view["ran_out"], list(view["ending"])))
+
+    def test_a_strict_read_says_a_bad_file_rather_than_nothing(self):
+        import os
+        self.declare(hours=1)
+        with open(os.path.join(self.tmp.name, H.FILE), "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.assertIsNone(H.declared_for("node1", now=self.at(61)))
+        with self.assertRaises(H.SHARED.Unreadable):
+            H.declared_for("node1", now=self.at(61), strict=True)
+
+    def test_declare_is_idempotent_per_op(self):
+        first = self.declare()
+        self.assertEqual(first, self.declare(minute=61))
+        self.assertEqual(1, len(H.maintenance_events("node1")))
+
+    def test_a_person_can_declare_again_after_ending(self):
+        self.declare()
+        H.maintenance_end("op-1", now=self.at(70))
+        H.maintenance_release("op-1", now=self.at(70))
+        self.declare(op="op-2", minute=80)
+        self.assertEqual("op-2", H.declared_for("node1", now=self.at(81))["op"])
+
+    def test_declared_view_tells_open_from_ran_out(self):
+        self.declare(hours=1)
+        self.assertEqual(["node1"], list(H.declared_view(self.at(90))["open"]))
+        self.assertEqual({}, H.declared_view(self.at(90))["ran_out"])
+        self.assertEqual({}, H.declared_view(self.at(120))["open"])
+        self.assertEqual("op-1", H.declared_for("node1", now=self.at(121))["op"], "ran out, still not released")
+
+    def test_a_job_caused_event_is_not_declared(self):
+        H.maintenance_open("node1", "OS update", "op-2", now=self.at(10))
+        self.assertIsNone(H.declared_for("node1", now=self.at(11)))
+
+    def test_declared_reason_equal_to_a_reserved_one_is_left_alone(self):
+        self.declare(reason="Harvester maintenance", hours=8)
+        self.run_for(120)
+        self.assertIsNone(H.maintenance_events("node1")[0]["end"], "the samples don't close it")
+        self.declare(op="op-2", reason="host reboot", hours=8, minute=60)
+        late = self.at(60) + H.MAX_OPEN + 60
+        self.assertEqual("op-2", H.declared_for("node1", now=late)["op"])
+        self.assertIsNone(H.declared_for("node1", now=late)["end"], "no job limit on it")
+        self.declare(op="op-3", reason="cluster shutdown", hours=8, minute=60)
+        H.record(overview(True, "boot-9"), now=self.at(130))
+        self.assertIsNone(next(e for e in H.maintenance_events("node1") if e["job"] == "op-3")["end"])
+
+    def test_a_declared_event_written_badly_is_left_out(self):
+        import json, os
+        good = {"id": "a", "job": "a", "node": "node1", "reason": "Drive swap", "start": self.at(1), "end": None}
+        with open(os.path.join(self.tmp.name, H.FILE), "w", encoding="utf-8") as handle:
+            json.dump({"maintenance": [{**good, "declared": True}, {**good, "declared": True, "until": "soon"},
+                                       {**good, "job": "b", "declared": True, "until": self.at(60)}]}, handle)
+        self.assertEqual(["b"], [e["job"] for e in H.maintenance_events("node1")])
+
+    def test_one_copy_opens_and_another_ends(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("homestead_history_other_copy", H.__file__)
+        other = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(other)
+        other.bind(self.tmp.name)
+        self.declare(hours=2)
+        self.assertEqual("op-1", other.declared_for("node1", now=self.at(61))["op"])
+        other.maintenance_extend("op-1", self.at(60) + 3 * self.HOUR, now=self.at(62))
+        self.assertEqual(self.at(60) + 3 * self.HOUR, H.declared_for("node1", now=self.at(63))["until"])
+        self.assertTrue(other.maintenance_end("op-1", now=self.at(64))[1])
+        self.assertFalse(H.maintenance_end("op-1", now=self.at(65))[1])
+        self.assertTrue(other.maintenance_release("op-1", now=self.at(66)))
+        self.assertFalse(H.maintenance_release("op-1", now=self.at(67)))
+
+
 class HarvesterMaintenanceTests(UptimeCase):
     """Harvester's own maintenance mode counts as maintenance (#535)."""
 
