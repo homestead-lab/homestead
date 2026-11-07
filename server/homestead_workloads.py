@@ -565,6 +565,8 @@ def get_workloads(pods=None):
             "platform": "Homestead" if homestead_part(ns, name) else PLATFORM_NS.get(ns, ""),
             "homestead": homestead_part(ns, name),
             "failover": FAILOVER.mode_of(pspec),
+            "prefers": PLACE.preferred_host(pspec),
+            "prefers_balance": bool(PLACE.balance_preference(d)),
             "lan": (LAN.read(d) or {}).get("address", ""),
             # Starts after (#746): its setting, its gate, and whether a pod waits.
             **_start_fields(d, mine, deps),
@@ -928,7 +930,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         # How it is monitored, so Edit shows it rather than Automatic - and
         # saving an edit keeps it.
         "answer_check": NAMES.read(annotations, "uptime"),
-        "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
+        # Its pin, or else its preference: Edit only sends this back when a person changes it.
+        "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", "") or PLACE.preferred_host(pspec),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),
         # Homestead's own follows the apps': critical once any is (PRIORITY.protect).

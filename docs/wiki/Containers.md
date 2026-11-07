@@ -868,8 +868,10 @@ their multi-host rules instead. Soft preferences remain soft; Kubernetes may
 choose another eligible host, including the current one. Hard pins prevent failover.
 
 Moves save the **Recreate** strategy: old pods stop before replacements start,
-so every container in the workload has downtime. Clearing a host preference
-can also restart pods. A stopped workload stays stopped; paused workloads and
+so every container in the workload has downtime. A host preference stays on
+the app until someone clears it, through later updates and, for an app Flux
+applies, through its syncs. Its row says **Prefers host-a** and Edit's Placement
+shows it; clear it there with **any host**, which restarts the app. A stopped workload stays stopped; paused workloads and
 templates with a direct `nodeName` binding must be resolved before moving.
 Other required node selectors and affinity rules are preserved, not cleared.
 Host-path files are not copied and pod-local `emptyDir` contents are lost.
@@ -896,6 +898,13 @@ evens out a cluster where one host ended up running most of the busy apps -
 after a reboot, say. It proposes the fewest moves (ten at most) that bring the
 busiest host down, each one worth its restart, by what the hosts and apps use
 now. Untick any move you do not want, then start it.
+
+Each move leaves a preference for the new host, on apps Flux applies too, and
+that lasts until someone clears it: the row then says **Prefers host-a**, and
+clearing it in Edit restarts the app. Balance hosts marks its own preferences,
+which restarts nothing; a Move, alone or several at once, or an Edit of the host
+takes the mark off, and a preference without one is never changed by anything
+automatic.
 
 Only what the scheduler could already place elsewhere moves: a Deployment with
 one copy, not pinned to its host, not on host-local storage, and only to hosts

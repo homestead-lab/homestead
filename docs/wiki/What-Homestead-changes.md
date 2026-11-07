@@ -154,6 +154,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/held-for-power`, `held-as` | `Deployment`, `StatefulSet`, `VirtualMachine` | a host goes down for a reboot or shutdown; removed when the app is given back |
 | `homestead.io/restore-tested` | `Deployment` | a restore test of the app finishes |
 | `homestead.io/renamed-from`, `renamed-at` | `Deployment` | you rename an app |
+| `homestead.io/balance-preference` | the `Deployment` (restarts nothing) | Balance hosts leaves a host preference on an app it moves; a person's Move or Edit of the host takes it off |
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |
 | `homestead.io/one-host-copies` | Longhorn `Volume` | on a one-host cluster Homestead lowers its own data volume to one copy, or an admin lowers app volumes with **Match copies to hosts** in Cluster Health; it holds the count asked for before, and is removed when **Put copies back** restores it |
 | `homestead.io/iso-unused-since` | ISO `PersistentVolumeClaim` | an ISO volume no VM uses |
