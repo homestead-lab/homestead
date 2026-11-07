@@ -23,3 +23,12 @@ test("no engine button's onclick is escaped twice", () => {
     .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
   assert.deepEqual(found, [], "use jsArg(...) in an onclick UI.button or UI.dialog escapes");
 });
+
+// A dialog's title and a notice's plain-text title are escaped where they are
+// shown; an esc() in them is escaped twice, and a name with & reads &amp;.
+test("no dialog or notice title is escaped twice", () => {
+  const twice = /(?:childModal|modal)\(`[^`]*\$\{esc\(|UI\.callout\("[a-z]+", `[^`]*\$\{esc\(/;
+  const found = files.flatMap(file => fs.readFileSync(file, "utf8").split("\n")
+    .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
+  assert.deepEqual(found, [], "pass the plain name; use { html } for a notice title with markup");
+});
