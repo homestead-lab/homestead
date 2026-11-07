@@ -257,6 +257,16 @@ disk: check it boots, as its bus, MAC and TPM aren't carried over, and Homestead
 can't attach any other disks yet. Homestead can't remove an unfinished disk yet,
 so the job gives the `kubectl` command for it.
 
+A copy Job goes an hour after it ends. If one has gone before Homestead saw how it
+ended, because Homestead was down or someone deleted it, Homestead can't tell how
+that copy ended. Once any other copy still running has ended, the import fails, makes
+no VM and keeps the disks, as CDI reporting a disk finished doesn't prove all its data
+arrived. If CDI has finished every disk, it also clears CDI's temporary storage;
+otherwise it removes only its copy Job and Secret. Cancelling it at that point keeps
+the disks too. What you can do with them is as above, so check the VM's data as well as
+that it boots. A VM with several disks that finish over an hour apart isn't affected:
+Homestead saw those copies succeed, and goes on to make the VM.
+
 The job stays active while temporary import storage is being removed, and
 cleanup continues after a Homestead restart. Do not retry with the same disk
 names while cleanup is pending. Storage used by another workload, with changed

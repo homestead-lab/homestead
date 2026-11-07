@@ -333,6 +333,55 @@ def leave(item, read, send):
     return "failed", 100, detail
 
 
+def claims_bound(read, ns, work):
+    """Every disk's own claim is Bound, the keep-disks cleanup's condition, read now."""
+    bound = {claim["metadata"].get("uid") for claim in RESOURCES.items(read, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
+             if (claim.get("status") or {}).get("phase") == "Bound"}
+    return all(disk.get("target_uid") in bound for disk in work["disks"].values())
+
+
+NOT_CLEARED = "; temporary storage not all cleared"
+
+
+def clear_finished(item, read, send, checkpoint, overdue=False):
+    """End an import whose disks CDI reports finished but which makes no VM from them:
+    the keep-disks cleanup gives the storage back. No VM waits on it, so unlike finish()
+    it can't hold the job and its name: what it refuses, or hasn't done by the limit,
+    stays for the person, and the import ends as leave() ends it. A failed call to
+    Kubernetes is only retried."""
+    ref = item["ref"]
+    detail, ns, work = ref.get("cleanup_detail", "Import ended"), ref["namespace"], ref["cdi_cleanup"]
+    stop, complete = overdue, False
+
+    def unconfirmed():
+        ref["retain_resources"] = True
+        return "running", 99, detail + "; cleanup pending: Kubernetes could not confirm cleanup"
+    if not stop:
+        try:
+            observe(read, ns, work)
+        except ValueError:
+            stop = True
+        except Exception:
+            return unconfirmed()
+    if not stop:
+        checkpoint(item)  # A job someone else changed refuses here: that isn't a refused cleanup.
+        try:
+            complete = cleanup(read, send, ns, work, keep_disks=True)
+        except ValueError:
+            stop = True
+        except Exception:
+            return unconfirmed()
+    if stop:
+        ref.update(phase="leaving", cleanup_detail=detail + NOT_CLEARED)
+        return leave(item, read, send)
+    ref["retain_resources"] = not complete
+    if not complete:
+        return "running", 99, detail + "; removing temporary import storage"
+    ref["phase"] = "failed"
+    ref["detail"] = detail + "; temporary storage cleared"
+    return "failed", 100, ref["detail"]
+
+
 def track(item, read, checkpoint):
     """An unavailable inventory must not end the job and lose reclamation."""
     try:
