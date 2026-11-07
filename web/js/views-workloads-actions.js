@@ -3,10 +3,9 @@
    start it again - so it is said plainly, with restart offered instead. */
 window.wlStopSelf = (ns, name) => {
   modal("Stop Homestead?", `
-    <div class="note bad"><b>This takes Homestead down, and this page with it.</b> Nothing here can start it again:
-      it stays down until someone runs this on the cluster -
-      <pre class="mono xs" style="white-space:pre-wrap;margin:8px 0">kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</pre>
-      Your apps keep running; jobs in the tray, alerts and moves pause until it is back.</div>
+    ${UI.callout("bad", "This takes Homestead down, and this page with it", `<p>Nothing here can start it again. It stays down until someone runs
+      <code>kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</code> on the cluster.</p>
+      <p>Your apps keep running. Jobs in the tray, alerts and moves pause until it is back.</p>`)}
     <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
     <label class="switch"><input type="checkbox" id="ss_ok"> Stop it anyway</label>
     ${UI.actions(`<button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
@@ -39,9 +38,9 @@ window.wlFailover = async () => {
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
-    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(unread)) : lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
+    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Volume attachment blocks failover", `${moving
       ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
-      : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
+      : "Single-node volumes stay attached to the failed host until Longhorn releases them."}`, moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Let Longhorn release them</button>` })}` : ""}
     ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
     ${UI.actions(`<button class="btn" onclick="wlFailover()">Try again</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}` : `
@@ -141,9 +140,8 @@ window.wlDelete = async (ns, name) => {
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
   const claims = vols.error ? [] : (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
-    <div class="note dependency-danger"><b>This removes the app, not its data.</b>
-      The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
-      removed afterwards from Volumes.</div>
+    ${UI.callout("bad", { html: `This removes the app, not its data.` }, `The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
+      removed afterwards from Volumes.`)}
     <div class="dependency-list" style="margin-top:12px">
       <div class="dependency-row"><span>Deployment</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
       <div class="dependency-row"><span>Containers</span><b>${(workload.images || []).length || 1}</b></div>

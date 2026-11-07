@@ -210,7 +210,7 @@ def dismiss(move_id=None):
             raise ValueError("Wait for temporary resource cleanup before dismissing this transfer")
         if any(m.get("status") == "failed" and m.get("cleanup_protocol") == 1
                and ((m.get("flags") or {}).get("quiesced") or (m.get("flags") or {}).get("quiesce_requested")) for m in gone):
-            raise ValueError("Cancel or put back the failed transfer before dismissing it, so its resources can be cleaned up")
+            raise ValueError("Cancel or put back the failed transfer before dismissing it. That cleans up what it made")
         STATE._write([m for m in rows if m not in gone])
     failed = [m for m in gone if m.get("status") == "failed"]
     if failed:
@@ -258,9 +258,9 @@ def _remove_source(move_id, volumes):
         except ValueError:
             new_enough = False
         if not new_enough:
-            raise ValueError(f"{move['cluster']} runs Homestead {there or 'of an unknown release'}, which would delete every "
-                             f"volume of {move['name']}, not only the moved ones; update it to 2.8.250 or later, "
-                             "or remove the original without its volumes")
+            raise ValueError(f"Update {move['cluster']}'s Homestead to 2.8.250 or later first. "
+                             f"Its release ({there or 'unknown'}) would delete every volume of {move['name']}, "
+                             "not only the moved ones; or remove the original without its volumes")
         body["claims"] = moved
     done = STATE.CLIENT.remote(move["cluster"], "/api/move/source", body)
     move.update(source_removed=True, updated_at=STATE._now(),

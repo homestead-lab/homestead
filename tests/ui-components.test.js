@@ -18,8 +18,50 @@ test("a callout escapes its title and keeps its tone", () => {
   const html = UI.callout("warn", "<b>tight</b>", "<ul><li>kept</li></ul>");
   assert.match(html, /ui-callout warn/);
   assert.match(html, /&lt;b&gt;tight&lt;\/b&gt;/);
-  assert.match(html, /<ul><li>kept<\/li><\/ul>/, "the body is HTML the caller built");
+  assert.match(html, /<li class="ui-issue"><span class="ui-issue-short">kept<\/span><\/li>/, "a plain list becomes a line each");
+  assert.match(UI.callout("info", "x", "<ul><li>kept</li></ul>"), /<ul><li>kept<\/li><\/ul>/, "information is the HTML the caller built");
   assert.match(UI.callout("nonsense", "x"), /ui-callout info/, "an unknown tone is information");
+});
+
+/* A warning or an error shows one short line each; the rest waits behind More. */
+const RECREATE = "Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart";
+test("a long warning shows its first sentence, and the rest only once More is open", () => {
+  assert.deepEqual([...UI.splitIssue(RECREATE)], ["Recreate stops all old pods before replacements start.", "All containers in this workload will be unavailable during the restart"]);
+  const html = UI.callout("warn", "Check first", `<ul class="ui-list"><li>${RECREATE}</li><li>Short and whole</li></ul>`);
+  assert.match(html, /ui-issue-short">Recreate stops all old pods before replacements start\.<\/span><span class="ui-issue-more"> All containers/);
+  assert.match(html, /ui-issue-short">Short and whole<\/span><\/li>/, "a short line has nothing behind More");
+  assert.equal((html.match(/ui-issue-toggle/g) || []).length, 1, "one More for the notice, not one per line");
+  assert.match(html, /<details class="ui-issue-toggle" data-disclosure="notice:Check first">/, "its state survives a repaint");
+});
+
+test("a short warning, or one with no sentence to break at, has no More", () => {
+  assert.doesNotMatch(UI.callout("bad", "Could not read storage", "Longhorn is not answering"), /ui-issue-toggle|ui-issue-more/);
+  const long = "x".repeat(UI.SHORT_CHARS + 20);
+  assert.deepEqual([...UI.splitIssue(long)], [long, ""]);
+});
+
+test("the short line breaks only outside markup, entities and abbreviations", () => {
+  const html = '<span class="mono">a.b; c</span> was asked to stop, e.g. by a person, then left alone for a long while. It is still stopped';
+  const [short, more] = UI.splitIssue(html);
+  assert.equal(short, '<span class="mono">a.b; c</span> was asked to stop, e.g. by a person, then left alone for a long while.');
+  assert.equal(more, "It is still stopped");
+  assert.deepEqual([...UI.splitIssue("Tom &amp; Jerry share one volume that every host has to mount at the same time; move one of them first")],
+    ["Tom &amp; Jerry share one volume that every host has to mount at the same time.", "Move one of them first"]);
+});
+
+test("a long title keeps its first sentence and puts the rest behind More", () => {
+  const html = UI.callout("warn", "This app is set to wait for its host to come back; this overrides that once, for this restart only, and then it waits again");
+  assert.match(html, /<b>This app is set to wait for its host to come back\.<span class="ui-issue-more"> This overrides/);
+});
+
+test("a body with controls of its own is left whole, with nothing hidden", () => {
+  const body = '<p>Pick one</p><button class="btn">Retry</button>';
+  assert.ok(UI.callout("bad", "Stopped", body).includes(body));
+});
+
+test("notices take a short line and its detail from the server as they are", () => {
+  const html = UI.notices([["warn", { short: "Restarts the app", more: "Recreate stops the old pod first <b>" }]], "Check first");
+  assert.match(html, /ui-issue-short">Restarts the app<\/span><span class="ui-issue-more"> Recreate stops the old pod first &lt;b&gt;/);
 });
 
 test("table cells carry their column's label for the phone layout", () => {

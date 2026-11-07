@@ -316,7 +316,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
                 if ((facts.get("files") or {}).get(path, {}).get("ethernets") or {}).get(key, {}).get("addressed"):
                     refusals.append(f"{m} has an address of its own in {path}: it carries something else")
             if nic["carrier"] is None and m not in current:
-                warnings.append(f"{m} is switched off, so its link cannot be seen yet: the bond turns it on, "
+                warnings.append(f"{m} is switched off, so its link cannot be seen yet. The bond turns it on, "
                                 "and the checks afterwards say whether it has link")
             elif not nic["carrier"] and m not in current:
                 if req.get("allow_down"):
@@ -345,7 +345,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
         refusals.append(f"k3s or RKE2 is set to a flannel interface by name; the host's interface becomes "
                         f"{bond if action == 'create' else keep}, so change flannel-iface by hand first")
     if renamed and len(facts.get("services") or []):
-        warnings.append(f"the host's address moves to {bond if action == 'create' else keep}: kube-vip restarts there, "
+        warnings.append(f"the host's address moves to {bond if action == 'create' else keep}. kube-vip restarts there, "
                         f"and on a cluster of several hosts {facts['services'][0]} restarts so flannel follows. Containers keep running")
     if any(f.get("cloud_init") for f in (facts.get("files") or {}).values()):
         warnings.append("cloud-init wrote this host's netplan; it is told not to write it again at boot")

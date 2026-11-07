@@ -696,7 +696,7 @@ const EDIT_REVIEW = UI.reviewFlow({
       ${!rename && startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty) ? `<p>${esc(startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty))}</p>` : ""}
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
-      ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
+      ${rename ? `${UI.callout(review.capacity.blocked ? "bad" : "", "", `${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both app names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}`)}
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${gitopsYamlBlock(review.yaml, review.secret)}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
@@ -732,10 +732,10 @@ const EDIT_REVIEW = UI.reviewFlow({
       button.disabled = true;
       button.textContent = "Inspect before saving again";
       button.onclick = null;
-      $("#mbody").insertAdjacentHTML("beforeend", `<div id="editSaveNotice" class="note warn" role="alert"><b>${esc(e.message)}</b><p>${renaming
+      $("#mbody").insertAdjacentHTML("beforeend", `${UI.callout("warn", { html: `${esc(e.message)}` }, `<p>${renaming
       ? "The rename may have partly completed. Inspect both app names and Recent jobs before another action."
       : "Some changes may already be saved, including new containers or volumes. Reload the saved app to inspect what applied before making another change. Reload replaces this form's unsaved edits; the app does not need a new name."}</p>
-      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect apps" : "Reload saved app"}</button></div>`);
+      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect apps" : "Reload saved app"}</button>`, { id: "editSaveNotice", attrs: 'role="alert"' })}`);
       $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
     }
   },

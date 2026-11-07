@@ -23,6 +23,7 @@
      UI.sectionForm section rail, phone selector, mounted panes and footer
      UI.masterDetail grouped list and a selected detail, stacked on phones
      UI.reviewFlow  review, then apply: the state behind a review dialog (no HTML)
+     UI.dialog      a whole dialog from one spec, in one of five shapes (below)
 
    and for pages:
 
@@ -51,7 +52,8 @@ function withControlId(html) {
 const UI = (() => {
   const text = value => esc(value ?? "");
   const TONES = new Set(["info", "ok", "warn", "bad"]);
-  const tone = value => (TONES.has(value) ? value : "info");
+  const TONE_ALIASES = { good: "ok", crit: "bad", danger: "bad" };
+  const tone = value => (TONES.has(value) ? value : TONE_ALIASES[value] || "info");
   const TONE_ICON = { info: "info", ok: "check", warn: "alert", bad: "alert" };
   const svg = name => `<svg class="ui-icon" aria-hidden="true"><use href="#i-${name}"/></svg>`;
 
@@ -81,24 +83,110 @@ const UI = (() => {
   /* The opening sentences: what this dialog does, plainly. */
   const lead = html => `<p class="ui-lead">${html}</p>`;
 
+  /* A warning or an error reads as one short line; the rest waits behind
+     More (design.md, Notices). The short line is the first sentence: the
+     text up to the first ". " or "; " outside a tag, once the whole is
+     longer than SHORT_CHARS. It works on HTML, so escaped names and inline
+     markup survive, and on {short, more} from the server as it is. */
+  const SHORT_CHARS = 90;
+  const visible = html => String(html ?? "").replace(/<[^>]*>/g, "").replace(/&[#\w]+;/g, "x").replace(/\s+/g, " ").trim();
+  const ABBREVIATED = /(?:\be\.g|\bi\.e|\betc|\bvs|\bapprox|\bincl|\bNo|\bv\d+(?:\.\d+)*)$/i;
+  const capital = html => html.replace(/^([a-z])/, c => c.toUpperCase());
+  const splitIssue = html => {
+    const s = String(html ?? "").trim();
+    if (visible(s).length <= SHORT_CHARS) return [s, ""];
+    let depth = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c === "<") {
+        const end = s.indexOf(">", i);
+        if (end < 0) break;
+        const tag = s.slice(i, end + 1);
+        if (tag.startsWith("</")) depth = Math.max(0, depth - 1);
+        else if (!/\/>$|^<(?:br|img|input|hr|wbr)\b/i.test(tag)) depth++;
+        i = end;
+        continue;
+      }
+      if (depth || (c !== "." && c !== ";") || !/\s/.test(s[i + 1] || "")) continue;
+      const before = s.slice(0, i);
+      if (c === ";" && /&[#\w]+$/.test(before)) continue;
+      if (c === "." && (ABBREVIATED.test(before) || !/^\s+["'(<0-9A-Z]/.test(s.slice(i + 1)))) continue;
+      if (visible(before).length < 20) continue;
+      const rest = s.slice(i + 1).trim();
+      if (!visible(rest)) return [s, ""];
+      return [`${before}.`, c === ";" ? capital(rest) : rest];
+    }
+    return [s, ""];
+  };
+  const issueParts = item => item && typeof item === "object"
+    ? [text(item.short), text(item.more || "")]
+    : splitIssue(item);
+  /* One concern as HTML: the short line, and the rest hidden until More. */
+  const issueHtml = (html, tag = "p") => {
+    const [short, more] = issueParts(html);
+    return `<${tag} class="ui-issue"><span class="ui-issue-short">${short}</span>${more ? `<span class="ui-issue-more"> ${more}</span>` : ""}</${tag}>`;
+  };
+  /* A body that is only text, paragraphs or one plain list becomes concerns;
+     anything with controls or structure of its own is left as written. */
+  const BLOCK = /<(?:div|table|ol|button|input|select|textarea|details|pre|section|form|label|dl|figure|h\d)\b/i;
+  const issuesOf = bodyHtml => {
+    const s = String(bodyHtml ?? "").trim();
+    if (!s || BLOCK.test(s) || /class="ui-issues?[\s"]/.test(s)) return null;
+    const list = s.match(/^<ul\b[^>]*>([\s\S]*)<\/ul>$/i);
+    if (list && !/<ul\b/i.test(list[1]) && !/<p\b/i.test(list[1])) {
+      const items = list[1].split(/<\/li>\s*/i).map(part => part.replace(/^\s*<li\b[^>]*>/i, "").trim()).filter(Boolean);
+      if (items.every(item => !/<li\b/i.test(item))) return { tag: "li", items };
+      return null;
+    }
+    if (/<(?:ul|li)\b/i.test(s)) return null;
+    if (/^<p\b/i.test(s)) {
+      const items = s.split(/<\/p>\s*/i).map(part => part.replace(/^\s*<p\b[^>]*>/i, "").trim()).filter(Boolean);
+      return items.some(item => /<p\b/i.test(item)) ? null : { tag: "p", items };
+    }
+    return /<p\b/i.test(s) ? null : { tag: "p", items: [s] };
+  };
+  let NOTICE_KEYS = 0;
+  const titleHtml = title => title && typeof title === "object" ? String(title.html ?? "") : text(title);
+  const shortNotice = (title, bodyHtml) => {
+    const [titleShort, titleMore] = issueParts(titleHtml(title));
+    const found = issuesOf(bodyHtml);
+    const rows = found ? found.items.map(item => issueHtml(item, found.tag)) : [];
+    const body = found ? (found.tag === "li" ? `<ul class="ui-list ui-issues">${rows.join("")}</ul>` : rows.join("")) : bodyHtml;
+    const hasMore = !!titleMore || body.includes("ui-issue-more");
+    const key = `notice:${visible(titleShort) || visible(rows[0] || "").slice(0, 40) || ++NOTICE_KEYS}`;
+    return `${title ? `<b>${titleShort}${titleMore ? `<span class="ui-issue-more"> ${titleMore}</span>` : ""}</b>` : ""}`
+      + `${body ? `<div class="ui-callout-body">${body}</div>` : ""}`
+      + (hasMore ? `<details class="ui-issue-toggle" data-disclosure="${text(key)}"><summary><span class="ui-issue-open">More</span><span class="ui-issue-close">Less</span></summary></details>` : "");
+  };
+
   /* One notice. tone: info | ok | warn | bad. Use warn and bad only for real
-     risk; information that is merely useful is info, or goes in UI.more. */
-  const callout = (kind, title, bodyHtml = "") => {
+     risk; information that is merely useful is info, or goes in UI.more.
+     A warning or an error shows its short lines only (shortNotice). title is
+     plain text, or {html} when it carries markup of its own; className, id
+     and attrs go on the notice; actions is the HTML of the buttons that fix
+     it, kept apart from the lines so they stay short. */
+  const callout = (kind, title, bodyHtml = "", { className = "", id = "", attrs = "", actions = "" } = {}) => {
     const t = tone(kind);
-    return `<div class="ui-callout ${t}" role="${t === "bad" || t === "warn" ? "alert" : "note"}">
+    const heading = titleHtml(title);
+    const inner = (t === "warn" || t === "bad" ? shortNotice(title, bodyHtml)
+      : `${heading ? `<b>${heading}</b>` : ""}${bodyHtml ? `<div class="ui-callout-body">${bodyHtml}</div>` : ""}`)
+      + (actions ? `<div class="ui-callout-actions">${actions}</div>` : "");
+    return `<div class="ui-callout ${t}${className ? ` ${text(className)}` : ""}"${id ? ` id="${text(id)}"` : ""} role="${t === "bad" || t === "warn" ? "alert" : "note"}"${attrs ? ` ${attrs}` : ""}>
       <span class="ui-callout-icon">${svg(TONE_ICON[t])}</span>
-      <div>${title ? `<b>${text(title)}</b>` : ""}${bodyHtml ? `<div class="ui-callout-body">${bodyHtml}</div>` : ""}</div>
+      <div>${inner}</div>
     </div>`;
   };
 
   /* Several concerns as one notice (design.md: one per dialog): the worst
-     tone, a line each. items: [[tone, text], ...]; "" when there are none. */
-  const notices = (items, title = "") => {
-    const rows = (items || []).filter(([, text]) => text);
+     tone, a line each. items: [[tone, text or {short, more}], ...]; "" when
+     there are none. */
+  const notices = (items, title = "", options = {}) => {
+    const rows = (items || []).filter(([, said]) => said && (typeof said !== "object" || said.short));
     if (!rows.length) return "";
     const worst = ["bad", "warn", "info"].find(t => rows.some(([tone]) => tone === t)) || "info";
-    if (rows.length === 1) return callout(worst, title, `<p>${text(rows[0][1])}</p>`);
-    return callout(worst, title, `<ul class="ui-list">${rows.map(([, t]) => `<li>${text(t)}</li>`).join("")}</ul>`);
+    const html = said => typeof said === "object" ? said : text(said);
+    if (rows.length === 1) return callout(worst, title, issueHtml(html(rows[0][1])), options);
+    return callout(worst, title, `<ul class="ui-list ui-issues">${rows.map(([, said]) => issueHtml(html(said), "li")).join("")}</ul>`, options);
   };
 
   const section = (title, bodyHtml, asideHtml = "") => `<section class="ui-section">
@@ -528,7 +616,81 @@ const UI = (() => {
     document.addEventListener("focusout", event => { const box = event.target.closest?.(".qty"); if (box) quantityUpdate(box); });
   }
 
-  return { lead, callout, notices, section, facts, checklist, steps, progress, meter, table, more, ack,
+  /* The dialog engine (design.md, Dialog shapes). Every dialog is one of
+     five shapes, built from one spec, so they read the same way:
+
+       review   before something happens: what, where, the one notice, the
+                objects, Details, the tick when there is something to accept,
+                and a button named for the result
+       form     a change to fill in: its fields, then Save or Next
+       watch    a job under way: where it has got to, what it is doing now
+       confirm  one question with a yes and a no
+       info     something to read, and Close
+
+     spec:
+       shape     one of the five
+       subject   what the dialog asks about or edits: { kind, name, where,
+                 chips: [[label, tone]], change: [was, now] }
+       lead      the one sentence, as HTML
+       steps     { list: [{ title, detailHtml }], current } - a multi-step job
+                 or form, and where it is
+       progress  { value, label, detail, kind } - a bar for work under way
+       issues    [[tone, text or {short, more}]] - the one notice, short lines
+       issuesTitle, issueActions   its title and the buttons that fix it
+       body      the content, as HTML: fields, objects, a host table
+       details   HTML, or [{ summary, html, open, key }] - behind disclosures
+       ack       { id, sentence, onchange } - asked only for a review or a
+                 confirm, and only when there is a warning to accept or an
+                 interruption the action always causes
+       actions   { dismiss: label or { label, onclick }, primary: { label,
+                 onclick, id, danger, disabled }, start: HTML }
+     Returns HTML for modal() or #mbody; UI.openDialog(title, spec) opens it. */
+  const SHAPES = new Set(["review", "form", "watch", "confirm", "info"]);
+  const DISMISS = { review: "Cancel", form: "Cancel", confirm: "Cancel", watch: "Close", info: "Close" };
+  const subjectHtml = subject => {
+    if (!subject) return "";
+    const chips = (subject.chips || []).filter(Boolean).map(([label, tone]) => chip(label, tone, { size: "slim" })).join("");
+    const change = subject.change ? `<span class="ui-subject-change"><code>${text(subject.change[0])}</code><span aria-hidden="true">→</span><code>${text(subject.change[1])}</code></span>` : "";
+    return `<div class="ui-subject">${subject.kind ? `<span class="ui-subject-kind">${text(subject.kind)}</span>` : ""}`
+      + `<span class="ui-subject-name"><b>${text(subject.name)}</b>${subject.where ? `<span class="ui-subject-where">${text(subject.where)}</span>` : ""}</span>`
+      + `${chips ? `<span class="ui-subject-chips">${chips}</span>` : ""}${change}</div>`;
+  };
+  const detailsHtml = details => {
+    if (!details) return "";
+    if (typeof details === "string") return more("Details", details);
+    return details.filter(Boolean).map(d => more(d.summary, d.html, !!d.open, d.key || d.summary)).join("");
+  };
+  const dialog = (spec = {}) => {
+    const shape = SHAPES.has(spec.shape) ? spec.shape : "info";
+    const issues = (spec.issues || []).filter(([, said]) => said);
+    const blocked = issues.some(([t]) => t === "bad");
+    const warned = issues.some(([t]) => t === "warn");
+    const title = spec.issuesTitle || (blocked ? ({ review: "Can't go ahead", confirm: "Can't go ahead" }[shape] || "Something is wrong") : warned ? "Check first" : "");
+    const act = spec.actions || {};
+    const dismissed = act.dismiss === undefined ? DISMISS[shape] : act.dismiss;
+    const dismissButton = !dismissed ? "" : typeof dismissed === "string" ? cancel(dismissed)
+      : button(dismissed.label, dismissed.onclick || "closeModal()", { attrs: 'data-dialog-dismiss="true"' });
+    const p = act.primary;
+    // A blocked review or confirm offers nothing to press but the way out.
+    const primary = p && !(blocked && (shape === "review" || shape === "confirm"))
+      ? button(p.label, p.onclick, { kind: p.danger ? "danger" : "pri", id: p.id || "", disabled: !!p.disabled, attrs: p.attrs || "" }) : "";
+    const asks = spec.ack && !blocked && (shape === "review" || shape === "confirm");
+    return `<div class="ui-dialog ui-dialog-${shape} ui-stack">`
+      + subjectHtml(spec.subject)
+      + (spec.lead ? lead(spec.lead) : "")
+      + (spec.steps ? steps(spec.steps.list || [], spec.steps.current ?? -1) : "")
+      + (spec.progress ? progress(spec.progress.value ?? null, spec.progress) : "")
+      + (issues.length ? notices(issues, title, { actions: spec.issueActions || "" }) : "")
+      + (spec.body || "")
+      + detailsHtml(spec.details)
+      + (asks ? ack(spec.ack.id, spec.ack.sentence, { onchange: spec.ack.onchange || "" }) : "")
+      + (dismissButton || primary || act.start ? actions(`${dismissButton}${primary}`, act.start || "") : "")
+      + `</div>`;
+  };
+  const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
+    (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
+
+  return { dialog, openDialog, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

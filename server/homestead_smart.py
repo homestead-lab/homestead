@@ -349,7 +349,7 @@ def abort_test(node, name):
     except ValueError as error:
         if "short or long" in str(error):
             # A helper from before aborting existed only knows how to start.
-            raise ValueError(f"the SMART helper on {node} is too old to abort a test: update it on the "
+            raise ValueError(f"the SMART helper on {node} is too old to abort a test. Update it on the "
                              "node's page, or let the test finish") from error
         raise
     forget(node)

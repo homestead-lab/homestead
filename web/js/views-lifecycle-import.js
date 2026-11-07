@@ -345,8 +345,7 @@ window.imageCleanupReview = digest => {
   if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
   const perNode = bytesText(image.size_mb * 1024 ** 2);
   modal("Clean cached image", `<div class="update-review">
-    <div class="note dependency-danger"><b>This deletes only the cached image layers, not an app.</b>
-      A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.</div>
+    ${UI.callout("bad", { html: `This deletes only the cached image layers, not an app.` }, `A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.`)}
     <div class="update-image"><div><span>Image</span><code>${esc(image.name)}</code></div>
       <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per host</span><code>${esc(perNode)}</code></div></div>
     <div class="f"><label>Remove from hosts</label><div class="cleanup-nodes">${image.nodes.map(node =>
@@ -704,8 +703,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose Source data safety", "How the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.")}</div>
     <div id="im_map_picture"></div>
     <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
-    ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
-      so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.</div>` : ""}
+    ${keeps && cfg.guessed_path ? `${UI.callout("warn", "", `Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
+      so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.`)}` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>
@@ -801,7 +800,7 @@ window.clusterCheck = async name => {
   // A reason to act gets a note; a harmless difference gets a quiet line.
   const trouble = check.compatible === false || ["unreachable", "refused"].includes(check.state);
   if (!note) return;
-  if (trouble) note.innerHTML = `<div class="note ${tone === "warn" ? "warn" : "bad"} clvernote">${esc(check.message || "")}</div>`;
+  if (trouble) note.innerHTML = `${UI.callout(tone === "warn" ? "warn" : "bad", "", `${esc(check.message || "")}`, { className: "clvernote" })}`;
   else if (check.state === "differs") note.innerHTML = `<div class="dim xs clverdim">This cluster runs v${esc(HOMESTEAD_VERSION)}. Moves work between the two.</div>`;
   if (!trouble) clusterReady(name);
 };
@@ -1169,7 +1168,7 @@ const MOVE_PLAN = UI.reviewFlow({
     if (stopChoice) stopChoice.hidden = plan.can_live !== true;
     if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
       plan.unusable = true;
-      host.innerHTML = '<div class="note bad">Update Homestead on this destination before copying. It only supports moves.</div>';
+      host.innerHTML = UI.callout("bad", "Update Homestead here before copying", "This destination only supports moves.");
       return;
     }
     // A plan without each volume's action is from before there was a choice: every volume moves.
@@ -1187,23 +1186,24 @@ const MOVE_PLAN = UI.reviewFlow({
     }
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
-      ${plan.blockers?.length ? `<div class="note bad"><b>This ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"} cannot start.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
-        ${fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(cluster)},${fix.kind === "source-address"},() => movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)}))">${fix.kind === "source-address"
-          ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
-      ${plan.warnings?.length ? `<div class="note warn"><b>Before you start</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-      ${plan.ok ? `<div class="note good"><b>Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.</b>
-        ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GiB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+      ${UI.notices([...(plan.blockers || []).map(b => ["bad", b]), ...(plan.warnings || []).map(w => ["warn", w])],
+        plan.blockers?.length ? `This ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"} cannot start` : "Before you start",
+        { actions: plan.blockers?.length && fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(cluster)},${fix.kind === "source-address"},() => movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)}))">${fix.kind === "source-address"
+          ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : "" })}
+      ${plan.ok ? `${(plan.warnings?.length
+        // Ready with warnings: the one notice is the warnings, and this is said plainly.
+        ? (t, b) => `<p class="ui-lead"><b>${t}</b> ${b}</p>` : (t, b) => UI.callout("ok", { html: t }, b))(`Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.`, `${kind === "volume" ? `${esc(name)} (${plan.total_gb} GiB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
           : volumes.some(c => c.action === "move") ? (() => { const moving = volumes.filter(c => c.action === "move");
             return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GiB) ${moving.length === 1 ? "goes" : "go"}
           through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`; })()
           : volumes.length ? "No volume's data is moved, so only its definition travels."
           : "It has no volumes, so only its definition travels."}
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
-        ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
+        ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}`)}` : ""}
       ${moveVolumesTable(plan, cluster, kind, name)}${moveDevicesTable(plan, cluster, kind, name)}`;
     MOVE_PLAN.ready();
   },
-  failed: (e, { host }) => { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; },
+  failed: (e, { host }) => { host.innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; },
   // Start follows the plan: enabled only when it says the move can go ahead.
   blocked: plan => !plan.ok || !!plan.unusable, button: "mv_go",
   apply: async () => {
@@ -1293,8 +1293,8 @@ function movesHtml(moves) {
 
 /* A failed read of the moves is not "no moves": say so, with Retry. */
 function movesUnreadHtml(error) {
-  return `<div class="note bad">The moves could not be read: ${esc(error)}
-    <button class="btn sm" onclick="movesRepaint()">Retry</button></div>`;
+  return `${UI.callout("bad", "", `The moves could not be read: ${esc(error)}
+    <button class="btn sm" onclick="movesRepaint()">Retry</button>`)}`;
 }
 window.movesUnreadHtml = movesUnreadHtml;
 

@@ -85,7 +85,7 @@ def _capacity_warning(message):
             or re.fullmatch(r"\d+ unscheduled pod\(s\) also compete for capacity", message)
             or re.fullmatch(r"projected RAM reaches [\d.]+% \(warning at \d+%\)", message)
             or re.fullmatch(r"less than [\d.]+ GiB host reserve remains", message)
-            or re.fullmatch(r"[a-z0-9.-]+: conservative batch RAM upper estimate [\d.]+% exceeds warning threshold \d+%", message))
+            or re.fullmatch(r"[a-z0-9.-]+: batch RAM could reach [\d.]+%, over the \d+% warning\. This is a conservative upper estimate", message))
 
 
 def _inventory(read, path, *, metric=False):

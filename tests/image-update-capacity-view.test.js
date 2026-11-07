@@ -74,7 +74,9 @@ test("routine rollout estimates stay in details while actual memory risks remain
     assert.doesNotMatch(visible, /post-stop capacity|updated pod estimates|live RAM still|intermediate rolling|RollingUpdate permits/);
     assert.match(html, /Capacity becomes available after old pods stop/);
     assert.match(html, /Homestead will be briefly unavailable/);
-    assert.equal(visible.includes("upd-flag"), extra[0]?.startsWith("projected") || false);
+    // One app is named at the top, its change beside it: no row, no flag to point at the notice.
+    assert.equal(visible.includes("upd-flag"), false);
+    assert.match(visible, /ui-subject-name"><b>homestead<\/b>/);
     // An update does not change whether a container has a memory limit.
     if (extra[0]?.startsWith("memory")) {
       assert.doesNotMatch(visible, /No memory limit/);
@@ -83,6 +85,18 @@ test("routine rollout estimates stay in details while actual memory risks remain
     if (extra[0]?.startsWith("projected")) assert.match(visible, /projected RAM reaches 95%/);
     assert.equal(t.ctx.imageReviewReady(), false, "restart acknowledgement remains required");
   }
+});
+test("a host folder and a Recreate restart are Details, so an ordinary update asks only to restart", async () => {
+  const t = setup({capacity: {blocked:false, candidates:[], warnings:[
+    "hostPath contents are node-local and their data availability is unverified",
+    "Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart"],
+    rollout:{strategy:"Recreate", replicas:1, ownership_known:true, owned_pods:["old-pod"], release_request_gb:0.1, max_surge:0, max_unavailable:1}}});
+  await t.ctx.imageUpdateReview("lab", "immich-stack");
+  const html = t.fields["#mbody"].innerHTML, visible = html.split('<details class="ui-more"')[0];
+  assert.doesNotMatch(visible, /Check first|hostPath|Recreate stops|upd-flag/);
+  assert.match(html, /hostPath contents are node-local/, "still said, in Details");
+  assert.match(html, /Restart it now/);
+  assert.doesNotMatch(html, /Update despite the warnings/);
 });
 test("blocked or missing plans cannot be forced through with a checkbox",async()=>{
   for(const options of [{blocked:true},{missing:true}]){

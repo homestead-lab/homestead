@@ -547,7 +547,7 @@ def _plan_filesystem_freeze(args, ctx):
     if not status.get("supported"):
         raise ToolError(status.get("why") or "this Longhorn cannot freeze filesystems for snapshots")
     old = [f"{k['host']} ({k['kernel']})" for k in status.get("old_kernels") or []]
-    warning = ("Kernel 5.17 or older on " + ", ".join(old) + ": if a volume fails mid-freeze, its filesystem can stay stuck "
+    warning = ("Kernel 5.17 or older on " + ", ".join(old) + ". If a volume fails mid-freeze, its filesystem can stay stuck "
                "until that host restarts.") if old else ""
     if volume:
         if not isinstance(volume, str):

@@ -350,7 +350,8 @@ def _placements(inv):
             target_uuid = inv['lhs'][target[0]]['status']['diskStatus'][target[1]]['diskUUID']
             planned.setdefault(name, []).append((target[0], target_uuid))
         else:
-            blockers.append(f'{name}: no other eligible V1 disk has room for its full {round(size / GiB, 1)} GiB replica and placement rules')
+            blockers.append(f'{name}: no other V1 disk can take its {round(size / GiB, 1)} GiB replica. '
+                            'None has room for it within its placement rules')
         rows.append({'volume': name, 'uid': volume['metadata'].get('uid'), 'replica': replica['metadata']['name'],
                      'size_bytes': size, 'replicas': int(vs.get('numberOfReplicas') or 1),
                      'destination': ' / '.join(target) if target else 'No eligible destination'})

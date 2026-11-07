@@ -41,7 +41,7 @@ const HOST_MOVE = UI.reviewFlow({
   render: review => {
     const config = review.config;
     childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
-      <div class="note warn">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>
+      ${UI.callout("warn", "", `This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.`)}
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Move it despite the warnings</label>` : ""}
@@ -93,7 +93,7 @@ window.moveWorkload = async (name, ns) => {
       ${(req.devices || []).map(d => UI.chip(d.label, "hw")).join("")}
       ${(req.features || []).filter(id => !(req.devices || []).some(d => d.id === id)).map(id => UI.chip(hardwareName(id), "hw")).join("")}
       ${Object.entries(req.labels || {}).map(([k,v]) => UI.chip(`${k}=${v}`, "hw")).join("")}</div>` : '<div class="constraintbar"><span class="dim small">No host-specific hardware requirements.</span></div>'}
-    ${!viable.length ? `<div class="note dependency-danger" style="margin-top:12px"><b>No failover destination.</b> No other ready, schedulable host satisfies every dependency shown above. If <span class="mono">${esc(here)}</span> stops, <b>${esc(name)}</b> will remain Pending and will not come back up until compatible hardware is available.</div>` : ""}
+    ${!viable.length ? `${UI.callout("bad", { html: `No failover destination.` }, `No other ready, schedulable host satisfies every dependency shown above. If <span class="mono">${esc(here)}</span> stops, <b>${esc(name)}</b> will remain Pending and will not come back up until compatible hardware is available.`, { attrs: 'style="margin-top:12px"' })}` : ""}
 
     <div class="movegrid" style="margin-top:16px">
       ${plan.candidates.map(n => {
@@ -229,7 +229,7 @@ window.evacuateNode = async node => {
     The host is cordoned first so nothing lands back on it.</p>
     ${wls.length ? `<div class="dependency-list" style="margin-top:14px">${impactRows(impact)}</div>`
       : '<div class="empty">Nothing of yours is running here.</div>'}
-    ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} app${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
+    ${impact.stranded.length ? `${UI.callout("bad", { html: `${impact.stranded.length} app${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.` }, `Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.`, { attrs: 'style="margin-top:14px"' })}
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> Leave ${impact.stranded.map(w => esc(w.name)).join(", ")} down for now</label>` : ""}
     ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "app")}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}

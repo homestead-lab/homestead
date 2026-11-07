@@ -305,7 +305,7 @@ class ShutdownTests(unittest.TestCase):
 
     def test_a_vm_no_virtualmachine_manages_blocks_before_any_mutation(self):
         self.f.vmis = [pod("vm")]
-        self.assertIn("stop them by hand first: lab/vm", " ".join(self.f.s.review()["blockers"]))
+        self.assertIn("Stop these by hand first. No VirtualMachine manages them, so they could not be started again: lab/vm", " ".join(self.f.s.review()["blockers"]))
         self.assertFalse(self.f.calls)
 
     def managed_vm(self):

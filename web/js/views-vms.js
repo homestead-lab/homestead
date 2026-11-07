@@ -21,8 +21,8 @@ const vmFilling = v => (v.filling || []).map(f => `<div class="vm-filling ${f.st
     ${f.seconds ? `<span class="dim xs">· ${esc(vmWaited(f.seconds))}</span>` : ""}</span>
   ${f.progress != null ? `<span class="mono">${f.progress.toFixed(1)}%</span>` : ""}
   <div class="rollout-meter"><span style="width:${Math.max(2, f.progress || 0)}%"></span></div>
-  ${f.why?.length ? `<div class="note ${f.stuck ? "warn" : ""} vm-why">${f.stuck ? "<b>Stuck.</b> " : ""}${f.why.map(w => esc(w)).join("<br>")}</div>`
-    : f.stuck ? '<div class="note warn vm-why"><b>Stuck</b>, and CDI says nothing about why. The events of its importer pod, on the Resources page, may.</div>' : ""}</div>`).join("");
+  ${f.why?.length ? UI.callout(f.stuck ? "warn" : "info", f.stuck ? "Stuck" : "", `<ul class="ui-list">${f.why.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`, { className: "vm-why" })
+    : f.stuck ? UI.callout("warn", "Stuck, and CDI says nothing about why", "The events of its importer pod, on the Resources page, may.", { className: "vm-why" }) : ""}</div>`).join("");
 
 async function viewVMs() {
   if (platformLacks("kubevirt", "Virtual machines")) return;
@@ -292,7 +292,7 @@ function vmCard(v) {
       <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})">${vmAvatar(v)}
         <div class="vm-name"><b title="${esc(v.description || v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc(sub)}">${esc(sub)}</div></div></a>
       <span class="row nowrap" style="gap:6px">${clusterTag(v)}${UI.chip(v.status, vmTone(v.status), { tip: v.problem || "" })}</span></div>
-    ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
+    ${v.problem ? `${UI.callout("bad", "", `${esc(v.problem)}`, { className: "vm-problem" })}` : ""}
     ${vmFilling(v)}
     ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
     ${answerCardRow(v, true)}
@@ -310,7 +310,7 @@ window.vmStateInitHtml = (plan, prefix, changed) => {
   const state = plan.vm?.state_initialization;
   if (!state || plan.blocked) return "";
   return `<div class="reviewbox vm-state-confirm"><b>Initialize fresh VM state?</b>
-    <div class="note warn">${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.</div>
+    ${UI.callout("warn", "", `${esc(state.reason)} Cancel and inspect the original state volume and backups if this VM has run before.`)}
     <label class="check"><input type="checkbox" id="${prefix}StateAck" onchange="${changed}()"> I intend to initialize fresh state, not recover the original TPM/EFI or backup state</label>
     ${UI.typedConfirm({ id: `${prefix}StateName`, expect: state.name, oninput: `${changed}()` })}</div>`;
 };
@@ -366,7 +366,7 @@ const VM_POWER = UI.reviewFlow({
     vmPowerReviewReady();
   },
   failed: error => {
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`;
+    $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}`)}${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`;
   },
   // The tickbox is there only when there is a warning to accept.
   blocked: review => review.capacity.blocked, ack: "vmPowerApprove", button: "vmPowerApply",
@@ -386,7 +386,7 @@ const VM_POWER = UI.reviewFlow({
       // lost. Inspect the current VM state before initiating a fresh review.
       if ($("#vmPowerApply") === button) {
         button.textContent = "Inspect VM before retrying";
-        $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>`);
+        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(error.message)}. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.`)}`);
         if ($(".modalbox")) $(".modalbox").scrollTop = 0;
       }
       toast(error.message, "bad");
@@ -526,7 +526,7 @@ function vmEditResourceFields(v) {
   const explanation = v.profile_error || (profile.name
     ? `CPU and memory are managed by instance type ${profile.name}. This form keeps that profile; it does not replace it with manual values.`
     : v.preference_profile?.name ? `Defaults come from preference ${v.preference_profile.name}. Unchanged CPU and memory are left as they are.` : "");
-  return `${explanation ? `<div class="note ${v.profile_error ? "warn" : "small"}">${esc(explanation)}</div>` : ""}
+  return `${explanation ? `${UI.callout(v.profile_error ? "warn" : "small", "", `${esc(explanation)}`)}` : ""}
     <div class="f2"><div class="f"><label>vCPUs</label>${locked
       ? `<div class="mono">${esc(v.cores ?? "Unavailable")}</div>`
       : `<input id="ve_cores" type="number" min="1" max="128" value="${esc(v.cores)}">`}</div>
@@ -567,7 +567,7 @@ window.vmEdit = async (ns, name) => {
     {key:"network", title:`Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`, html:`
       <label class="check"><input id="ve_isolated" type="checkbox" ${v.isolated ? "checked" : ""} onchange="vmIsolationChanged()"> Isolated VM</label>
       <p class="dim small">Removes virtual network cards at the next start. Clear this option to add a card. Passthrough may still provide a physical network device.</p>
-      ${v.implicit_network ? '<div class="note warn">No network card is saved, but KubeVirt currently adds its default pod-network card at boot. Select Isolated VM to disable it, or add an explicit interface.</div>' : ""}
+      ${v.implicit_network ? UI.callout("warn", "KubeVirt adds a pod-network card at boot", "No network card is saved, so KubeVirt adds its default one. Select Isolated VM to disable it, or add an explicit interface.") : ""}
       <div id="ve_network_controls">
       <div class="note small"><b>Service VIP (default or selected address)</b><p>Uses a masquerade pod-network interface and forwards the ports you select. It is not the guest's own IP or MAC. Configure this separately from NIC changes; save those first if you are adding a pod interface.</p>
         <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)},'VirtualMachine')">Configure default / selected VIP</button></div>
@@ -577,7 +577,7 @@ window.vmEdit = async (ns, name) => {
       ${UI.more("Direct LAN addressing", "<p>A bridge/VLAN interface gets its IP from LAN DHCP or the guest OS. Reserve its MAC in DHCP for a stable address. Changing the MAC does not set an IP. Cloud-init may not rerun on an existing VM.</p>")}</div>`},
     {key:"devices", title:`Passthrough · ${(v.host_devices || []).length}`, html:window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""},
     {key:"cloud", title:"Cloud-init", html:`
-      ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
+      ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `${UI.callout("bad", "", `This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.`)}` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>
@@ -713,7 +713,7 @@ const VM_EDIT = UI.reviewFlow({
     vmEditReviewReady();
   },
   failed: error => {
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
+    $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}`)}<button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
   },
   // The tickbox is there only when there is something to accept.
   blocked: review => review.capacity.blocked, ack: "vmEditApprove", button: "vmEditApply",
@@ -731,7 +731,7 @@ const VM_EDIT = UI.reviewFlow({
       if (error?.status === 409) throw error; // conflict() below
       if ($("#vmEditApply") === button) {
         button.textContent = "Inspect VM before retrying";
-        $("#mbody").insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>`);
+        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(error.message)}. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.`)}`);
       }
       toast(error.message, "bad");
       return false;
@@ -912,7 +912,7 @@ const K3S = UI.reviewFlow({
       if (window.refreshOperations) refreshOperations(true);
       if (e?.status === 409) throw e; // conflict() below
       toast(e.message, "bad"); button.disabled = true; button.textContent = "Inspect batch before retrying";
-      $("#mbody")?.insertAdjacentHTML("afterbegin", `<div class="note bad">${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>`);
+      $("#mbody")?.insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(e.message)}. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.`)}`);
     }
   },
   // The server says the review is out of date: offer a fresh one of the same batch.
@@ -999,7 +999,7 @@ const VM_DISK_REMOVE = UI.reviewFlow({
       ${UI.actions(UI.cancel() + (blocked ? "" : '<button class="btn danger" id="vmDiskRemoveGo" disabled onclick="vmDiskRemoveSend()">Remove disk</button>'))}`;
   },
   failed: error => {
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div>${UI.actions(UI.cancel("Close"))}`;
+    $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}`)}${UI.actions(UI.cancel("Close"))}`;
   },
   blocked: review => review.blocking.length > 0, button: "vmDiskRemoveGo",
   check: () => typedConfirmMatches("vmDiskRemoveName"),
@@ -1010,7 +1010,7 @@ const VM_DISK_REMOVE = UI.reviewFlow({
       toast(result.message, "ok");
       closeModal(); resetPaint(); viewVmImport();
     } catch (error) {
-      $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}. It was not sent again: check the job list and the disk, then review it again.</div>${UI.actions(UI.cancel("Close"))}`;
+      $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}. It was not sent again: check the job list and the disk, then review it again.`)}${UI.actions(UI.cancel("Close"))}`;
       toast(error.message, "bad");
     }
   },

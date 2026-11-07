@@ -832,7 +832,7 @@
       return { node: req.node, action: req.action, bond: "bond0", members, mode: req.mode || "active-backup", primary: req.primary, keep: "",
         address: "192.0.2.12/24", carries_on: "bond0", renamed: true, refusals, digest: "demo", rollback_seconds: 240,
         shape: { iface: "enp1s0", shape: "nic", bridge: "", carrier_nic: "enp1s0" },
-        warnings: ["the host's address moves to bond0: kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
+        warnings: ["the host's address moves to bond0. kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
     },
     "/api/node/bond": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node}'s network is changing; follow it under Jobs` }),
     "/api/network/uplinks": () => demoUplinks(),
@@ -1220,7 +1220,7 @@
       all_storage_classes: ["longhorn-r2", "longhorn-r3", "local-path"],
       namespace: body.namespace || "lab", joined: false, will_run: !copy, addresses: isVm ? [] : ["frigate on 192.0.2.242"],
       warnings: [...(copy && isVm ? ["The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it"] : []),
-        "this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
+        "this cluster's Longhorn backup target changes for this transfer. It moves from (none) to s3://homestead-backups@us-east-1/, then returns to its previous setting; backups already written to the old one stay there"],
       claims: [{ claim: isVm ? "haos-disk-0" : "frigate-config", size_gb: isVm ? 32 : 10, access_mode: isVm ? "ReadWriteMany" : "ReadWriteOnce",
         volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
       })(),
@@ -3368,14 +3368,14 @@ ssh_pwauth: true
           candidates: [{name: "h-node1", eligible: true, metrics_available: true,
             used_gb: 12, projected_gb: 14, capacity_gb: 16, projected_percent: 87.5,
             reservations_known: true, reserved_gb: 5, request_slots: 4}],
-          warnings: ["Recreate stops the old pod before its replacement starts.", "Projected RAM is above the configured warning level."],
+          warnings: ["Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart", "projected RAM reaches 91% (warning at 88%)"],
           rollout: {strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["app-old"], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1}}};
       if (window.__demoImageReviewCordoned) {
         window.__demoImageReviewCordoned = false;
         review.capacity.blocked = true;
         review.capacity.candidates = [{...review.capacity.candidates[0], name:"node-1", eligible:false, reasons:["cordoned"]}];
         review.capacity.warnings = ["no ready host satisfies this workload's placement requirements",
-          "no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules",
+          "no scheduling order fits all requested replicas. The observed pod affinity and topology spread rules rule it out",
           "updated pod estimates include every container, not only the added container",
           "post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed",
           "memory is not limited for data-permissions"];

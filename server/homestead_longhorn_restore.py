@@ -184,7 +184,7 @@ def validate_restore_class(base, volume_mode="Filesystem", migration=False):
     if base.get("provisioner") != "driver.longhorn.io" or any(parameters.get(k) for k in ("fromBackup", "backingImage")):
         raise ValueError("Choose a regular Longhorn storage class")
     if migration and base.get("volumeBindingMode") == "WaitForFirstConsumer":
-        raise ValueError("Migrated volumes need an Immediate storage class so they can restore before the workload starts")
+        raise ValueError("Migrated volumes need an Immediate storage class. They restore before the workload starts")
     refusal = class_refusal(base, volume_mode)
     if refusal:
         raise ValueError(f"{refusal}; choose another storage class")

@@ -48,7 +48,7 @@ test("several concerns make one notice, in the worst tone, with a line each", ()
   const html = c.UI.notices([["warn", "Hugepages need a reboot"], ["bad", "GPU output needs UEFI"], ["info", "Serial is on"]], "Check before saving");
   assert.equal((html.match(/class="ui-callout /g) || []).length, 1);
   assert.match(html, /ui-callout bad/);
-  assert.equal((html.match(/<li>/g) || []).length, 3);
+  assert.equal((html.match(/<li class="ui-issue">/g) || []).length, 3);
   assert.match(c.UI.notices([["warn", "Only one"]]), /ui-callout warn[\s\S]*Only one/);
 });
 

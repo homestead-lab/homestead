@@ -50,7 +50,7 @@ window.clusterOnboarding = async () => {
   modal("Add a Harvester host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true, "onboard");
   let g;
   try { g = await api("/api/onboard/guide"); } catch (e) {
-    $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return;
+    $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; return;
   }
   ONBOARD.known = new Set(g.nodes.map(n => n.name));
   $("#mbody").innerHTML = `
@@ -232,11 +232,10 @@ window.nodeRemoval = async name => {
   try { plan = await api(`/api/cluster/removal?node=${encodeURIComponent(name)}`); }
   catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not check</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   $("#mbody").innerHTML = `
-    ${plan.blockers.length ? `<div class="note bad"><b>Not now.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>` : ""}
-    ${plan.warnings.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-    ${plan.ok && (plan.disk_jobs || []).length ? `<div class="note bad"><b>Saved disk ${plan.disk_jobs.length === 1 ? "job" : "jobs"} on ${esc(name)}.</b>
-      ${tip("These jobs hold this host's disks. Most can't be cancelled once started; a disk retire can be rolled back early. A host that may come back keeps them so they can resume; removing a host gone for good leaves them with nothing to finish on.")}
-      <ul>${plan.disk_jobs.map(j => `<li>${esc(j.text)}</li>`).join("")}</ul><span id="rm_jobs_hint"></span></div>` : ""}
+    ${plan.blockers.length ? `${UI.callout("bad", { html: `Not now.` }, `<ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)}` : ""}
+    ${plan.warnings.length ? `${UI.callout("warn", { html: `Worth knowing first.` }, `<ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`)}` : ""}
+    ${plan.ok && (plan.disk_jobs || []).length ? `${UI.callout("bad", { html: `Saved disk ${plan.disk_jobs.length === 1 ? "job" : "jobs"} on ${esc(name)}.` }, `${tip("These jobs hold this host's disks. Most can't be cancelled once started; a disk retire can be rolled back early. A host that may come back keeps them so they can resume; removing a host gone for good leaves them with nothing to finish on.")}
+      <ul>${plan.disk_jobs.map(j => `<li>${esc(j.text)}</li>`).join("")}</ul><span id="rm_jobs_hint"></span>`)}` : ""}
     ${plan.ok ? `<div class="sec">Is it coming back?</div>
     <div class="removal-modes">
       <label class="removal-mode"><input type="radio" name="rm_mode" value="standard" checked onchange="nodeRemovalMode()">
@@ -279,15 +278,13 @@ function removalLosses(plan) {
     return plan.ok ? '<div class="note good" style="margin-top:10px"><b>No data is lost.</b> Every volume it held has a healthy copy elsewhere, and nothing is tied to it.</div>' : "";
   }
   return `<div class="sec">What is lost</div><div class="removal-losses">
-    ${lost.length ? `<div class="note bad"><b>${lost.length} volume${lost.length === 1 ? "" : "s"} with no other copy.</b>
-      ${tip("Longhorn kept every healthy copy of these on this host. Removing it gives up on that data; a backup is the way back - restore it under Data protection afterwards.")}
-      <ul>${lost.map(v => `<li><span class="mono">${esc(v.claim ? `${v.namespace}/${v.claim}` : v.volume)}</span>${who(v.users)}</li>`).join("")}</ul></div>` : ""}
-    ${pinned.length ? `<div class="note bad"><b>${pinned.length} volume${pinned.length === 1 ? " was" : "s were"} kept on the host itself.</b>
-      ${tip("Volumes like k3s's local-path live on one host's disk, so their data went with it. Gone for good makes each again under the same name, empty, so its app can start on another host.")}
-      <ul>${pinned.map(v => `<li><span class="mono">${esc(`${v.namespace}/${v.claim}`)}</span> <span class="dim xs">${esc(v.class)} · ${esc(v.size)}</span>${who(v.users)}</li>`).join("")}</ul></div>` : ""}
-    ${apps.length ? `<div class="note warn"><b>${apps.length} app${apps.length === 1 ? " is" : "s are"} pinned to it</b> and would wait for it.
+    ${lost.length ? `${UI.callout("bad", { html: `${lost.length} volume${lost.length === 1 ? "" : "s"} with no other copy.` }, `${tip("Longhorn kept every healthy copy of these on this host. Removing it gives up on that data; a backup is the way back - restore it under Data protection afterwards.")}
+      <ul>${lost.map(v => `<li><span class="mono">${esc(v.claim ? `${v.namespace}/${v.claim}` : v.volume)}</span>${who(v.users)}</li>`).join("")}</ul>`)}` : ""}
+    ${pinned.length ? `${UI.callout("bad", { html: `${pinned.length} volume${pinned.length === 1 ? " was" : "s were"} kept on the host itself.` }, `${tip("Volumes like k3s's local-path live on one host's disk, so their data went with it. Gone for good makes each again under the same name, empty, so its app can start on another host.")}
+      <ul>${pinned.map(v => `<li><span class="mono">${esc(`${v.namespace}/${v.claim}`)}</span> <span class="dim xs">${esc(v.class)} · ${esc(v.size)}</span>${who(v.users)}</li>`).join("")}</ul>`)}` : ""}
+    ${apps.length ? `${UI.callout("warn", { html: `${apps.length} app${apps.length === 1 ? " is" : "s are"} pinned to it and would wait for it` }, `
       ${tip("They were told to run only on this host - by a Pin in Edit, or for hardware it had. Gone for good takes the pin off, so they start on another host if one suits them.")}
-      <ul>${apps.map(w => `<li>${esc(w.name)} <span class="dim xs">${esc(w.namespace)}</span></li>`).join("")}</ul></div>` : ""}
+      <ul>${apps.map(w => `<li>${esc(w.name)} <span class="dim xs">${esc(w.namespace)}</span></li>`).join("")}</ul>`)}` : ""}
   </div>`;
 }
 
@@ -339,7 +336,7 @@ window.nodeRemove = async name => {
       body: JSON.stringify({ node: name, accept_loss: !!$("#rm_loss")?.checked, gone,
         // Jobs it leaves, by id, as the review listed them: one started since still refuses.
         accept_jobs: gone && $("#rm_jobs")?.checked ? (window.__removalPlan?.disk_jobs || []).map(j => j.id) : [] }) });
-    $("#mbody").innerHTML = `<div class="note good"><b>${esc(name)} is out of the cluster.</b></div>
+    $("#mbody").innerHTML = `${UI.callout("ok", { html: `${esc(name)} is out of the cluster.` }, ``)}
       <ol class="removal-steps done">${result.log.map(l => `<li>${esc(l)}</li>`).join("")}</ol>
       <div class="sec">Anything left over</div><div id="rm_left"><div class="dim small"><span class="spin2"></span> checking</div></div>
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal(); if (STATE.view === 'cluster') { resetPaint(); viewCluster(); }">Done</button>`)}`;

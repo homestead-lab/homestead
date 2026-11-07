@@ -96,8 +96,16 @@ function imagePlacementBlocker(plan) {
   return "No host can accept this update. Review the host, storage and placement requirements in Details.";
 }
 /* The same concern for several updates is said once. A blocked review leads
-   only with blockers; warnings for otherwise eligible apps remain in Details. */
-const UNCHANGED_BY_UPDATE = /^No memory limit is set/;
+   only with blockers; warnings for otherwise eligible apps remain in Details.
+   A note about what an update does not change - a missing memory limit, a
+   host folder or a volume it already mounts, the restart every update makes
+   (the lead says it restarts) - goes in Details, not in the warning, so an
+   ordinary update asks for no tick. */
+const UNCHANGED_BY_UPDATE = new RegExp([
+  /^No memory limit is set/, /^hostPath contents are node-local/, /^Recreate stops all old pods before replacements start/,
+  /^PVC \S+ uses local storage without verified node affinity/, /^PVC \S+'s volume topology could not be verified/,
+  /^ephemeral PVC provisioning and capacity need scheduler review/,
+].map(re => re.source).join("|"));
 const updateConcerns = plan => capacityNotes(plan).concerns.filter(text => !UNCHANGED_BY_UPDATE.test(text));
 function groupedConcerns(rows) {
   const byText = new Map();
@@ -169,7 +177,6 @@ const IMAGE_REVIEW = UI.reviewFlow({
     const blocked = rows.some(row => row.preview.capacity.blocked);
     const many = rows.length > 1;
     const concerns = groupedConcerns(rows);
-    const list = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
     // One line per app: its name, and what its image moves from and to -
     // once, when every container moves between the same two images.
     const changeWords = i => imageChangeWords(i.before, i.after, i.before_tag, i.after_tag);
@@ -190,20 +197,26 @@ const IMAGE_REVIEW = UI.reviewFlow({
       UI.facts(images(preview).flatMap(i => [[`Image ${rollback ? "back to" : "now"}`, `<code title="${esc(rollback ? i.after : i.before)}">${esc(short(rollback ? i.after : i.before))}</code>`],
         [rollback ? "From" : "New", `<code title="${esc(rollback ? i.before : i.after)}">${esc(short(rollback ? i.before : i.after))}</code>`]]))
       + capacityHostTable(preview.capacity))).join("");
-    $("#mbody").innerHTML = `<div class="update-review ui-stack">
-      <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
-      ${blocked ? UI.callout("bad", "Update blocked", list)
-        : concerns.length ? UI.callout("warn", "Check first", list) : ""}
-      ${rows.filter(r => r.preview.unread).map(({config, preview}) => UI.callout("warn", "Installed by its tag",
-        `Homestead could not read the registry (${esc(preview.unread)}), so ${esc(config.version)} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`)).join("")}
-      <ul class="upd-apps">${apps}</ul>
-      ${rollback ? "" : '<div id="updNotes"></div>'}
-      ${UI.more("Details", `${details}
+    // One app names itself and its change at the top; several are listed.
+    const one = !many && rows[0], oneWords = one && one.preview.images.map(changeWords).filter(Boolean);
+    const sameChange = oneWords && oneWords.length && oneWords.every(w => w.join() === oneWords[0].join());
+    const unread = rows.filter(r => r.preview.unread).map(({config, preview}) => ["warn", {
+      short: `${config.name} is installed by its tag`,
+      more: `Homestead could not read the registry (${preview.unread}), so ${config.version} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`}]);
+    $("#mbody").innerHTML = `<div class="update-review">${UI.dialog({ shape: "review",
+      subject: one ? { kind: "App", name: one.config.name, where: `${one.config.clusterName ? `${one.config.clusterName} · ` : ""}${one.config.ns}`,
+        change: sameChange ? oneWords[0] : null }
+        : { kind: "Apps", name: rows.length > 3 ? `${rows.slice(0, 3).map(r => r.config.name).join(", ")} and ${rows.length - 3} more` : rows.map(r => r.config.name).join(", ") },
+      lead: `${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.`,
+      issues: [...concerns.map(c => [blocked ? "bad" : "warn", c]), ...unread],
+      issuesTitle: blocked ? "Update blocked" : "",
+      body: `${one && sameChange ? "" : `<ul class="upd-apps">${apps}</ul>`}${rollback ? "" : '<div id="updNotes"></div>'}`,
+      details: `${details}
         ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`)}
-      ${blocked ? "" : UI.ack("imageCapacityApprove", concerns.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", { onchange: "imageReviewReady()" })}
-      ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
-    </div>`;
+        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`,
+      ack: { id: "imageCapacityApprove", sentence: concerns.length || unread.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", onchange: "imageReviewReady()" },
+      actions: { primary: { label: rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", onclick: "imageReviewedApply()", id: "imageCapacityApply", disabled: true } },
+    })}</div>`;
     // What is in the update: read beside the review, never waited for.
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   },

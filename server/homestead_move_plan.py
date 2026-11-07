@@ -185,8 +185,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         vm_spec = ((((definition.get("object") or {}).get("spec") or {}).get("template") or {}).get("spec")) or {}
         state = _persistent_state(vm_spec)
         if state:
-            warnings.append(f"This VM keeps its {state} in a small volume of its own, outside its disks, and that is "
-                            f"not brought across: here it starts with {_fresh(state)}. Anything sealed to the TPM, "
+            warnings.append(f"The copy starts with {_fresh(state)}. This VM keeps its {state} in a small volume "
+                            "of its own, outside its disks, and that is not brought across. Anything sealed to the TPM, "
                             "such as BitLocker or Windows Hello, then asks for its recovery key")
             problem = _state_storage_problem()
             origin = definition.get("origin") or {}
@@ -210,8 +210,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                             "give its object store a LAN address first")
             fixes.append({"kind": "source-address", "cluster": cluster})
         if here.get("configured"):
-            warnings.append(f"this cluster's Longhorn backup target changes from {here.get('url')} "
-                            f"to {there.get('url')} for this transfer, then returns to its previous setting; "
+            warnings.append("this cluster's Longhorn backup target changes for this transfer. "
+                            f"It moves from {here.get('url')} to {there.get('url')}, then returns to its previous setting; "
                             "backups already written to the old one stay there")
 
     if not KUBE.get_optional(f"/api/v1/namespaces/{namespace}", read=STATE.kget):

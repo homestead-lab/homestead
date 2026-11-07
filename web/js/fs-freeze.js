@@ -78,7 +78,7 @@ window.fsFreezeReview = on => {
     ${UI.facts([["Frozen for each snapshot", String(count("yes"))], ["Synced instead", String(count("sync"))], ...(count("later") ? [["Frozen once attached", String(count("later"))]] : []), ["Not frozen", String(count("no"))]])}
     ${UI.notices([
       d.unknown_value ? ["warn", `Longhorn's setting holds "${d.value}", which this replaces.`] : null,
-      old ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => k.host).join(", ")}: if a volume fails mid-freeze, its filesystem can stay stuck until that host restarts.`] : null,
+      old ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => k.host).join(", ")}. If a volume fails mid-freeze, its filesystem can stay stuck until that host restarts.`] : null,
       on ? ["info", "If a freeze fails, Longhorn fails that snapshot rather than take it unfrozen; the job says so."] : null,
       !on && stay.length ? ["info", `Still frozen, set to always: ${stay.join(", ")}.`] : null,
       d.from_chart ? ["info", "Longhorn's chart sets this too: applying the chart again puts its value back."] : null].filter(Boolean))}

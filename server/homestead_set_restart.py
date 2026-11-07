@@ -289,7 +289,7 @@ def plan(state, now):
     else:
         lh = state["lh_nodes"].get(node)
         if lh is None:
-            blockers.append(f"Longhorn does not report {node} as down, so Homestead cannot tell whether its volumes are still attached.")
+            blockers.append(f"Longhorn does not report {node} as down. Homestead cannot tell whether its volumes are still attached.")
         elif lh:
             blockers.append(f"Longhorn still sees {node} as Ready, so its volumes may still be in use.")
     host_down = _host_down(state, node, now)
@@ -321,7 +321,7 @@ def plan(state, now):
                 if e["node"] == node and e["state"] == "unknown" and down_ok:
                     relied_on.append(f"Longhorn reports the engine of {vol} on {node} as unknown, as it does for a host that is down.")
                 elif e["node"] == node and e["state"] != "stopped":
-                    blockers.append(f"{pvc}: Longhorn can't confirm the engine of {vol} on {node} has stopped (state: {e['state']}).")
+                    blockers.append(f"{pvc}: Longhorn can't confirm its engine has stopped. It is {vol} on {node} (state: {e['state']}).")
                     break
             rob = state["robustness"].get(vol)
             if rob == "unknown" and down_ok and engines and all(e["node"] == node for e in engines):

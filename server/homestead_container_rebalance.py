@@ -708,8 +708,8 @@ def reviewed(moves, exclude, token, role=None):
     if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
         raise ValueError("Review the containers to move again")
     if not _token_ok(moves, exclude, token):
-        raise ValueError("The moves differ from the review, it is more than ten minutes old, "
-                         "or a container was edited since; review again")
+        raise ValueError("This review is out of date; review again. The moves differ from it, it is more than "
+                         "ten minutes old, or a container was edited since")
     hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}

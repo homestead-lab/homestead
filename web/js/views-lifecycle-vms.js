@@ -395,7 +395,7 @@ const VM_CREATE = UI.reviewFlow({
     } catch(error) {
       if($("#vmCreateApply") === button) {
         button.textContent = "Inspect before creating again";
-        $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.</div>`);
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.`)}`);
       }
       toast(error.message,"bad");
     }

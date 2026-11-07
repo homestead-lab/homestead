@@ -175,12 +175,12 @@ window.storeDetails = async key => {
     ${app.spotlight ? `<div class="store-spot"><div class="store-spot-badge"><b>Monthly<br>spotlight</b><span>${esc(app.spotlight.month)}</span></div>
       <div><b>Why it was picked</b><p>${esc(app.spotlight.reason || "")}</p>${app.spotlight.who ? `<span class="dim xs">— ${esc(app.spotlight.who)}</span>` : ""}</div></div>` : ""}
     <div class="store-overview">${esc(app.overview || app.desc || "No description provided.")}</div>
-    ${app.comment ? `<div class="note warn"><b>From the catalogue moderators:</b> ${esc(app.comment)}</div>` : ""}
+    ${app.comment ? `${UI.callout("warn", { html: `From the catalogue moderators:` }, `${esc(app.comment)}`)}` : ""}
     ${app.requires ? `<div class="note"><b>Requires:</b> ${esc(app.requires)}</div>` : ""}
-    ${profile ? `<div class="note ${profile.level === "dependency" ? "warn" : ""}"><b>${esc(profile.label)}.</b> ${esc(
+    ${profile ? `${UI.callout(profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` }, `${esc(
       [...(profile.blocked || []), ...(profile.dependencies || []), ...(profile.notes || [])].slice(0, 4)
         .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean).join(" · ")
-      || "Homestead reviews its storage, ports and hardware when you configure it.")}</div>` : ""}
+      || "Homestead reviews its storage, ports and hardware when you configure it.")}`)}` : ""}
     ${(app.screenshots || []).length ? `<div class="sec">Screenshots</div><div class="store-shots">${app.screenshots.map(src =>
       `<a href="${safeHref(src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}
     <div class="sec">Details</div>

@@ -331,7 +331,7 @@ function upgradeProgress(up) {
         <span class="dim xs">${up.started ? `started ${esc(fmtAgo(Math.max(0, (Date.now() - Date.parse(up.started)) / 1000)))}` : ""}</span></div></div>
       ${clusterPill(up.state === "succeeded" ? "healthy" : up.state === "failed" ? "critical" : "attention", `${up.progress}%`)}</div>
     <div class="upgrade-bar ${esc(up.state)}"><span style="width:${Math.max(0, Math.min(100, +up.progress || 0))}%"></span></div>
-    ${up.message ? `<div class="note ${up.state === "failed" ? "bad" : ""}">${esc(up.message)}</div>` : ""}
+    ${up.message ? `${UI.callout(up.state === "failed" ? "bad" : "", "", `${esc(up.message)}`)}` : ""}
     <div class="upgrade-steps">${up.steps.map(step => `<span class="upgrade-step ${esc(step.state)}" ${step.message ? `data-tip="${esc(step.message)}"` : ""}>${esc(step.label)}</span>`).join("")}</div>
     ${up.nodes.length ? `<table class="tbl dense stack upgrade-nodes"><thead><tr><th>Host</th><th>State</th><th data-nosort>Detail</th></tr></thead><tbody>
       ${up.nodes.map(node => `<tr><td><b>${esc(node.name)}</b></td>

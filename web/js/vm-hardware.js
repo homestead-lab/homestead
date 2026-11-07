@@ -287,7 +287,7 @@ window.vmIsoLibrary = async () => {
       ${lib.folders.length ? table(["Folder"], lib.folders.map((f, i) => `<tr><td class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</td>
         <td data-actions>${actionBar([{ label: "Remove", run: `vmIsoRemoveFolder(${i})`, need: "admin", tip: "Stop listing this folder; its files and copies stay" }], { label: `Actions for ${f.share}${f.path ? ` / ${f.path}` : ""}` })}</td></tr>`).join(""))
         : `<div class="dim small">${lib.shares.length ? "No folders chosen yet. Add a folder from one of your shares." : "No Network Shares yet: make one under Storage → Network shares, then choose a folder on it here."}</div>`}
-      ${(lib.problems || []).map(p => `<div class="note small bad">${esc(p.share)}${p.path ? ` / ${esc(p.path)}` : ""}: ${esc(p.error)}</div>`).join("")}</div>
+      ${(lib.problems || []).map(p => `${UI.callout("bad", "", `${esc(p.share)}${p.path ? ` / ${esc(p.path)}` : ""}: ${esc(p.error)}`, { className: "small" })}`).join("")}</div>
     ${lib.files.length ? `<div class="iso-files">${table(["File", "Copy"], lib.files.map(f => `<tr><td><b>${esc(f.name)}</b>
         <div class="dim xs mono">${esc(f.share)}${f.folder ? ` / ${esc(f.folder)}` : ""} · ${size(f.size)}${f.volume && (volumeOf(f)?.used_by || []).length
           ? ` · in ${esc(volumeOf(f).used_by.join(", "))}` : esc(unused(volumeOf(f)))}</div></td>

@@ -626,7 +626,7 @@ class HarvesterTargetTests(unittest.TestCase):
         BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1", secret="whatever")
         value = json.loads(self.sent[-1][2]["value"])
         self.assertEqual(("AK", "SK", "http://x:9000"), (value["accessKeyId"], value["secretAccessKey"], value["endpoint"]))
-        with self.assertRaisesRegex(ValueError, "leave any path off"):
+        with self.assertRaisesRegex(ValueError, "s3://bucket@region, with no path"):
             BACKUP_TARGET.set_backup_target("s3://homelab@us-east-1/longhorn", keys={"access_key": "A", "secret_key": "S"})
 
     def test_harvester_validation_explains_the_failure_without_disclosing_keys(self):

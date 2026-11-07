@@ -76,11 +76,10 @@ function baselineHtml(r, where = "addons", harvester = STATE.platform?.harvester
   if (r?.unread) return harvester ? "" : `<div class="baseline-note" style="margin-bottom:12px">${UI.callout("warn", "Could not check the required components", esc(r.unread))}</div>`;
   if (!r?.applies || !(r.missing || []).length) return "";
   const missing = r.parts.filter(p => p.missing);
-  return `<div class="note warn baseline-note" style="margin-bottom:12px"><b>Required components not installed</b>
-    <ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
+  return `${UI.callout("warn", { html: `Required components not installed` }, `<ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
     <div class="dim xs">Installed with the ${esc(platformName({ distribution: r.distribution }))} Helm controller at tested versions. Upgrades are available under System → Cluster → Platform versions.
       ${where === "network" ? "Until installed, applications are published on host addresses only." : ""}</div>
-    ${can("admin") ? `<div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="baselineInstall()">Install components</button></div>` : '<div class="dim xs">Installation requires the admin role.</div>'}</div>`;
+    ${can("admin") ? `<div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="baselineInstall()">Install components</button></div>` : '<div class="dim xs">Installation requires the admin role.</div>'}`, { className: "baseline-note", attrs: 'style="margin-bottom:12px"' })}`;
 }
 window.baselineHtml = baselineHtml;
 
@@ -170,7 +169,7 @@ window.addonsPaint = async () => {
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
       : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
     const diagnostic = key === "multus" && !state.ready && state.diagnostic_command
-      ? `<div class="note warn addon-diagnostic"><b>${esc(state.detail || "Multus is not ready")}</b> ${esc((state.issues || []).join("; "))} SSH to a server host to gather Helm, node-agent status and logs:</div>
+      ? `${UI.callout("warn", { html: `${esc(state.detail || "Multus is not ready")}` }, `${esc((state.issues || []).join("; "))} SSH to a server host to gather Helm, node-agent status and logs:`, { className: "addon-diagnostic" })}
          ${guideCopy(state.diagnostic_command)}` : "";
     const emulation = key === "kubevirt" && state.installed && state.emulation != null
       ? `<div class="dim xs" style="margin-top:4px">${state.emulation
@@ -376,7 +375,7 @@ window.platformJoinGuide = async (role = "app") => {
   // closing it never asks about unsaved changes.
   window.__modalGuard = () => "";
   let g;
-  try { g = await api("/api/platform/join"); } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  try { g = await api("/api/platform/join"); } catch (e) { $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; return; }
   STATE.data.joinGuide = g;
   const k3s = g.distribution === "k3s";
   if (!["k3s", "rke2"].includes(g.distribution)) {

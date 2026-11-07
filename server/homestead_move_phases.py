@@ -194,7 +194,7 @@ def _image_class():
     except Exception as error:
         # Not "no Longhorn class": a ValueError would end the move, and a read
         # that failed is asked again on the next pass.
-        raise RuntimeError(f"Homestead could not read the storage classes, so it did not choose one "
+        raise RuntimeError(f"Homestead could not read the storage classes. It did not choose one "
                            f"for the restored image: {error}") from error
     rows = [STORAGE_CLASSES.class_row(c) for c in classes]
     longhorn = [row for row in rows if row["provisioner"] == STORAGE_CLASSES.LONGHORN_PROVISIONER

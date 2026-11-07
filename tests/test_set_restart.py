@@ -577,7 +577,7 @@ class SetRestartDownHostTests(unittest.TestCase):
         st["nodes_ready"]["host-3"] = False
         st["engines"]["pv-b"] = [{"node": "host-1", "state": "unknown"}]
         st["robustness"]["pv-b"] = "unknown"
-        p = self.blocked(st, "engine of pv-b on host-1 has stopped (state: unknown)")
+        p = self.blocked(st, "engine has stopped. It is pv-b on host-1 (state: unknown)")
         self.blocked(st, "pv-b as unknown")
         self.assertFalse(any("pv-a" in b for b in p["blockers"]), p["blockers"])
         relied = " ".join(p["relied_on"])

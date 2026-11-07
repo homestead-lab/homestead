@@ -390,6 +390,31 @@ Use rail sections when the user must complete several tasks. Never hide a
 blocker, destructive consequence, recovery instruction or required consent in
 a tooltip. Keep examples concise and use neutral, professional wording.
 
+### Notices
+
+A warning or an error reads as **short lines**: the title, and one line per
+concern - its first sentence. The rest of each concern waits behind one
+**More** under the notice, opened in place; its state survives a repaint.
+`UI.callout` and `UI.notices` do this for every `warn` and `bad` notice, so a
+dialog never builds a warning box by hand (no `.note.warn` or `.note.bad`).
+
+- **The first sentence is the short version.** Write it to stand alone, under
+  90 characters: what is wrong or what happens. The reason and the way out
+  follow it - `The copy starts with blank UEFI settings. This VM keeps…`. Server
+  messages (warnings, blockers and errors) follow the same rule; the page cuts
+  at the first `. ` or `; `.
+- **Structured is welcome.** A server can send `{short, more}` instead of a
+  sentence; `UI.notices` shows it as it is.
+- **Buttons that fix it** go in `actions` (`UI.callout(tone, title, body,
+  { actions })`), not in the body: a body with controls of its own is left
+  whole, with nothing behind More.
+- **What the action does not change is not a warning.** A note about something
+  already true - a host folder an update leaves alone, the restart every update
+  makes - goes in Details, and asks for no tick.
+
+The dialog audit fails a warning line over 120 characters with More closed,
+and any old note box still on screen.
+
 ### Show the decision; disclose the explanation
 
 Keep essential inputs, affected objects, interruption/data-loss consequences,
@@ -535,7 +560,8 @@ in the same module shell so controls do not change location as data arrives.
 | Component | Use it for | Not for |
 |---|---|---|
 | `UI.lead(html)` | A dialog's opening sentences | Long explanations |
-| `UI.callout(tone, title, html)` | The one thing that needs attention. `warn` and `bad` for real risk; `ok` a check passed; `info` a notice that must be seen | Merely useful information |
+| `UI.callout(tone, title, html, { actions })` | The one thing that needs attention. `warn` and `bad` for real risk, shown as short lines with More (Notices); `ok` a check passed; `info` a notice that must be seen | Merely useful information |
+| `UI.notices(items, title, { actions })` | Several concerns as that one notice, in the worst tone: `[[tone, text or {short, more}], …]` | A notice per concern |
 | `UI.section(title, html)` | A titled group in a dialog | A single line |
 | `UI.facts([[label, value]])` | A handful of values in a dialog (`.about-grid` on a page) | Long text |
 | `UI.table(columns, rows)` | Items with the same fields in a dialog (`tbl stack` on a page) | Two or three values |

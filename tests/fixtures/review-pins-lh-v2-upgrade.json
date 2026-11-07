@@ -287,7 +287,7 @@
   [
    "state",
    "failed",
-   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Could not check the upgrade</b><div class=\"ui-callout-body\">Longhorn is not answering</div></div>\n    </div>",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Could not check the upgrade</b><div class=\"ui-callout-body\"><p class=\"ui-issue\"><span class=\"ui-issue-short\">Longhorn is not answering</span></p></div></div>\n    </div>",
    0
   ]
  ],

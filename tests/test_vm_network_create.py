@@ -81,7 +81,7 @@ class HostInterfaceNetworkTests(VmNetworkTests):
     def test_a_plain_nic_gives_containers_macvlan(self):
         config = self.make(interface="eth0")
         self.assertEqual(("macvlan", "eth0", "bridge"), (config["type"], config["master"], config["mode"]))
-        with self.assertRaisesRegex(ValueError, "no eth0.20 interface"):
+        with self.assertRaisesRegex(ValueError, "no interface for VLAN 20. Add eth0.20 on eth0"):
             self.make(interface="eth0", vlan="20")
         self.PROBES["n1"]["interfaces"].append({"name": "eth0.20", "kind": "vlan", "master": ""})
         try:

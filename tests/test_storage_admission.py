@@ -204,7 +204,7 @@ class StorageAdmissionTests(unittest.TestCase):
         result = self.plan()
         self.assertTrue(result["blocked"])
         self.assertEqual(3, result["pods"])
-        self.assertIn("one next execution", " ".join(result["warnings"]))
+        self.assertIn("only its next scheduled run is checked", " ".join(result["warnings"]))
 
     def test_missing_or_replaced_controller_ownership_blocks_admission(self):
         first = self.controller("Deployment", "one"); self.restarted(first)

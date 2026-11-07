@@ -167,8 +167,8 @@ def plan():
         cpu_need = int(cpu_alloc * cpu_percent / 100 + 0.999)
         problems = ([] if ready else ["Host is not Ready"]) + ([] if cpu else ["CPU support needs verification"]) + ([] if modules else ["Kernel modules need preparation"])
         if cpu_alloc and not engine_ready and cpu_alloc - cpu_used < cpu_need:
-            problems.append(f"V2's instance manager reserves {cpu_need}m of CPU and Kubernetes has {max(0, cpu_alloc - cpu_used)}m "
-                            f"left on this host: free some, give the host more CPUs, or lower guaranteed-instance-manager-cpu")
+            problems.append(f"Not enough CPU for V2's instance manager on this host. It reserves {cpu_need}m and Kubernetes has "
+                            f"{max(0, cpu_alloc - cpu_used)}m left: free some, give the host more CPUs, or lower guaranteed-instance-manager-cpu")
         if not memory_ready:
             problems.append(f"Kubernetes reports {capacity} MiB capacity / {allocatable} MiB allocatable; V2 needs {required} MiB plus other hugepage requests")
         if not (managed or configured or engine_ready):

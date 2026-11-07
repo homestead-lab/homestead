@@ -515,15 +515,15 @@ def claim_warnings(pvc_name):
         modes = (pvc.get("spec") or {}).get("accessModes") or []
         if spec.get("migratable"):
             warnings.append(
-                f"{pvc_name} is attached on {attached} and its storage class is migratable, so "
-                f"Longhorn will try to live-migrate it to {here} instead of attaching it. That "
-                "mount usually fails; if it does, this change is rolled back and your existing "
-                "shares keep serving.")
+                f"{pvc_name} may not mount on {here}. It is attached on {attached} and its storage "
+                "class is migratable, so Longhorn will try to live-migrate it instead of attaching "
+                "it. That mount usually fails; if it does, this change is rolled back and your "
+                "existing shares keep serving.")
         elif "ReadWriteMany" not in modes:
             warnings.append(
-                f"{pvc_name} is ReadWriteOnce and already attached on {attached}, so Samba on "
-                f"{here} cannot mount it at the same time. If the mount fails, this change is "
-                "rolled back and your existing shares keep serving.")
+                f"Samba on {here} cannot mount {pvc_name} while it is attached on {attached}. "
+                "It is ReadWriteOnce. If the mount fails, this change is rolled back and your "
+                "existing shares keep serving.")
     if status.get("robustness") and status["robustness"] not in ("healthy", ""):
         warnings.append(f"{pvc_name} is {status['robustness']} in Longhorn; repair its replicas "
                         "before relying on this share.")

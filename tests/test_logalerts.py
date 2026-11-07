@@ -518,7 +518,7 @@ class PreviewBounds(Base):
 
     def test_a_preview_out_of_time_says_why(self):
         with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("x")):
-            with self.assertRaisesRegex(ValueError, "too many lines, or too slow an expression"):
+            with self.assertRaisesRegex(ValueError, "Too many lines, or too slow an expression"):
                 LA.preview(dict(self.BODY, regex=True))
 
 

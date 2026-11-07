@@ -335,8 +335,8 @@ class WarningKeyTests(unittest.TestCase):
     def test_a_new_kind_of_warning_or_another_host_is_not(self):
         self.assertNotEqual(D.warning_key("projected RAM reaches 83.2% (warning at 80%)"),
                             D.warning_key("less than 1.3 GiB host reserve remains"))
-        self.assertNotEqual(D.warning_key("node-2: conservative batch RAM upper estimate 91% exceeds warning threshold 80%"),
-                            D.warning_key("node-3: conservative batch RAM upper estimate 91% exceeds warning threshold 80%"))
+        self.assertNotEqual(D.warning_key("node-2: batch RAM could reach 91%, over the 80% warning. This is a conservative upper estimate"),
+                            D.warning_key("node-3: batch RAM could reach 91%, over the 80% warning. This is a conservative upper estimate"))
 
 if __name__ == "__main__":
     unittest.main()

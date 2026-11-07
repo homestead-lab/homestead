@@ -125,7 +125,7 @@ def read_claim_class(what):
     try:
         return claim_class()
     except Exception as error:
-        raise RuntimeError(f"Homestead could not read the storage classes, so it did not choose one for {what}: "
+        raise RuntimeError(f"Homestead could not read the storage classes. It did not choose one for {what}: "
                            f"{error}. Try again in a moment.") from error
 
 

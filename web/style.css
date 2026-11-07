@@ -2225,6 +2225,31 @@ div.ipam-line.dim{display:block}
 .ui-callout.warn{border-color:rgba(255,176,32,.32);background:rgba(255,176,32,.07)}.ui-callout.warn .ui-callout-icon{background:rgba(255,176,32,.16);color:var(--med)}
 .ui-callout.bad{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.07)}.ui-callout.bad .ui-callout-icon{background:rgba(255,77,79,.16);color:var(--crit)}
 .ui-callout.warn b{color:#ffd48a}.ui-callout.bad b{color:#ffb4b8}
+/* A warning's short lines; the rest shows once More is open (UI.callout). */
+.ui-issue-more{display:none}
+.ui-callout:has(.ui-issue-toggle[open]) .ui-issue-more{display:inline}
+.ui-callout-body .ui-issue{margin:0}
+.ui-callout-body .ui-issues{margin:0;padding-left:18px}
+.ui-callout-body .ui-issues li+li{margin-top:2px}
+.ui-issue-toggle{margin-top:4px}
+.ui-callout-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+/* UI.dialog: what the dialog asks about or edits, first and once. */
+.ui-subject{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
+.ui-subject-kind{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
+.ui-subject-name{display:inline-flex;align-items:baseline;gap:8px;min-width:0;overflow-wrap:anywhere}
+.ui-subject-name b{font-size:15px;color:var(--tx)}
+.ui-subject-where{color:var(--mut);font-size:12.5px}
+.ui-subject-chips{display:inline-flex;flex-wrap:wrap;gap:4px}
+.ui-subject-change{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:var(--mut)}
+.ui-subject-change code{color:var(--tx)}
+.ui-issue-toggle>summary{display:inline-flex;align-items:center;gap:4px;list-style:none;cursor:pointer;color:var(--mut);font-size:12.5px;font-weight:600;border-radius:4px}
+.ui-issue-toggle>summary::-webkit-details-marker{display:none}
+.ui-issue-toggle>summary::after{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px);margin-left:2px}
+.ui-issue-toggle[open]>summary::after{transform:rotate(-135deg) translateY(-1px)}
+.ui-issue-toggle>summary:hover{color:var(--tx)}
+.ui-issue-toggle>summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.ui-issue-toggle .ui-issue-close,.ui-issue-toggle[open] .ui-issue-open{display:none}
+.ui-issue-toggle[open] .ui-issue-close{display:inline}
 
 .ui-section{display:grid;gap:10px}
 .ui-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px}

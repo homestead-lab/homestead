@@ -116,7 +116,7 @@ test("a destination without copy support cannot enable Start copy", async () => 
   t.replies.shift()({ok:true,will_run:true,claims:[]});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(t.fields["#mv_go"].disabled,true);
-  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead on this destination/);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead here before copying/);
 });
 
 test("copy activity has cleanup actions and never offers source removal", () => {

@@ -403,8 +403,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
         blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}; "
                         "only a volume one app uses can be swapped")
     if loose:
-        blockers.append(f"{', '.join(loose[:3])} use{'s' if len(loose) == 1 else ''} {claim} and belong"
-                        f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again; stop it first")
+        blockers.append(f"Stop {', '.join(loose[:3])} first. It use{'s' if len(loose) == 1 else ''} {claim} and belong"
+                        f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again")
     if app and is_self(ns, app) or claim == "homestead-data":
         blockers.append("this is Homestead's own data: swapping it would stop Homestead part-way")
     name, found = _free_name(item["metadata"]["name"], ns, claim, new_name)
@@ -447,8 +447,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     if size > minimum and chosen_class:
         sc = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{chosen_class}", read=kget) or {}
         if sc.get("allowVolumeExpansion") is not True:
-            blockers.append(f"{claim} is {size} GiB, larger than this backup's {minimum} GiB, and {chosen_class} "
-                            "cannot grow a restored volume; choose a class that allows expansion")
+            blockers.append(f"Choose a class that allows expansion. {claim} is {size} GiB, larger than this backup's "
+                            f"{minimum} GiB, and {chosen_class} cannot grow a restored volume")
     days = keep_days()
     answers = uptime_report().get(f"{ns}/{app}") or {}
     meta = dep.get("metadata") or {}
@@ -967,8 +967,8 @@ def _swap_blockers(ns, app, claims, dep):
             blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}; "
                             "only a volume one app uses can be swapped")
         if loose:
-            blockers.append(f"{', '.join(loose[:3])} use{'s' if len(loose) == 1 else ''} {claim} and belong"
-                            f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again; stop it first")
+            blockers.append(f"Stop {', '.join(loose[:3])} first. It use{'s' if len(loose) == 1 else ''} {claim} and belong"
+                            f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again")
     return blockers
 
 

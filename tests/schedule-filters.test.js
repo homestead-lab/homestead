@@ -2,6 +2,7 @@
 // an honest State. Kind and range are kept in the address; App and Host for the session.
 "use strict";
 process.env.TZ = "Europe/London";
+const seen = require("./helpers/seen");
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
@@ -273,7 +274,7 @@ test("re-review 2: the window is said to be maybe missing only when it is set an
     assert.equal((html.match(/Could not read the apps list/g) || []).length, 1, `${what}: one line`);
   }
   const html = await page(window_("auto", "off"));
-  assert.match(html, /Could not read the apps list: no run names its app; the maintenance window may be missing: whether an app updates itself in it is not known\./);
+  assert.match(seen(html), /Could not read the apps list: no run names its app\. The maintenance window may be missing: whether an app updates itself in it is not known\./);
   assert.equal((html.match(/Could not read the apps list/g) || []).length, 1, "a window that may be missing: still one line");
 });
 

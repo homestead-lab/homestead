@@ -59,12 +59,11 @@ function objectStoreCard(store, target) {
       <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GiB" : "—"}</b></div>
       <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
-    ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
-      ${store.longhorn?.endpoint ? `Its current endpoint is <span class="mono">${esc(store.longhorn.endpoint)}</span>. ` : ""}
+    ${pointed ? "" : `${UI.callout("warn", { html: `Longhorn is not writing here.` }, `${store.longhorn?.endpoint ? `Its current endpoint is <span class="mono">${esc(store.longhorn.endpoint)}</span>. ` : ""}
       ${esc(store.longhorn?.detail || "Backups will not reach this bucket until the target is changed.")}
       ${switching ? '<div class="dim xs">Homestead retries automatically for up to ten minutes, even with this page closed.</div>' : ""}
       <div class="row"><button class="btn sm" data-need="admin" onclick="objectStorePoint()">${switching || store.longhorn?.state === "failed" ? "Retry target switch" : "Point Longhorn at it"}</button>
-        <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
+        <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div>`, { attrs: 'style="margin-top:12px"' })}`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
       restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
@@ -229,9 +228,8 @@ function protectTop(d, objects, tgt, cover) {
         <div class="drow"><div class="dl">Status</div><div class="dv">
           ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}</div></div>
         ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
-        ${tgt.secret_missing ? `<div class="note warn" style="margin-top:10px"><b>Its keys are missing.</b>
-          The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
-          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button></div>` : ""}`
+        ${tgt.secret_missing ? `${UI.callout("warn", { html: `Its keys are missing.` }, `The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
+          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button>`, { attrs: 'style="margin-top:10px"' })}` : ""}`
       : `<div class="note" style="margin-top:12px"><b>No backup target.</b> Snapshots work without one —
          they live on the volume. <b>Backups need somewhere to go</b>: an NFS share or S3 bucket.
          Until you set one, backup jobs will fail.</div>`}

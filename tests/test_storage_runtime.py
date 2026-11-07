@@ -104,11 +104,11 @@ class RuntimeTests(unittest.TestCase):
         dispatch = mock.Mock()
         for method, path in (("PUT", base + "/homestead"), ("PATCH", base + "/homestead"),
                              ("PUT", base + "/homestead/scale"), ("DELETE", base + "/homestead"), ("DELETE", base)):
-            with self.assertRaisesRegex(ValueError, "before updating"):
+            with self.assertRaisesRegex(ValueError, "Homestead cannot be updated, restarted or rescaled"):
                 guard.send(method, path, {}, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         # Stop now writes the Deployment itself, with who made it (#621).
         stop = {"metadata": {"annotations": {"homestead.io/changedBy": "{}"}}, "spec": {"replicas": 0}}
-        with self.assertRaisesRegex(ValueError, "before updating"):
+        with self.assertRaisesRegex(ValueError, "Homestead cannot be updated, restarted or rescaled"):
             guard.send("PATCH", base + "/homestead", stop, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         dispatch.assert_not_called()
         # No exemption for the move's dispatcher: a stop must never target its

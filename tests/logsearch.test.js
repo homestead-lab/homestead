@@ -5,7 +5,8 @@ const vm = require("vm");
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const ctx = { console, esc, jsq: s => esc(JSON.stringify(String(s))), window: {}, STATE: { data: {} }, Date, RegExp };
-ctx.UI = { callout: (kind, title, body) => `<callout ${kind}>${title}|${body}</callout>` };
+ctx.UI = { callout: (kind, title, body) => `<callout ${kind}>${title}|${body}</callout>`,
+  notices: (items, title) => items.length ? `<callout ${items[0][0]}>${title}|${items.map(i => i[1]).join(" / ")}</callout>` : "" };
 ctx.globalThis = ctx;
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync("web/js/logsearch.js", "utf8"), ctx);
@@ -25,7 +26,7 @@ test("a partial search says what was missed", () => {
   const gaps = run(`logSearchGaps({skipped_pods: 2, capped: ["frigate"], errors: ["a (a-1): refused"]})`);
   assert.equal(gaps.length, 3);
   assert.match(gaps[0], /2 more containers were not searched/);
-  assert.match(gaps[1], /frigate wrote more than Homestead reads at once/);
+  assert.match(gaps[1], /^Only the newest output of frigate was searched; choose a shorter time\. It wrote more than Homestead reads at once$/);
   assert.match(gaps[2], /a \(a-1\): refused/);
   assert.equal(run(`logSearchGaps({skipped_pods: 0, capped: [], errors: []})`).length, 0);
 });
@@ -33,9 +34,9 @@ test("a partial search says what was missed", () => {
 test("an expression that ran out of time says which apps were only partly searched (#929)", () => {
   const one = run(`logSearchGaps({skipped_pods: 0, capped: [], errors: [], cut: ["frigate"], cut_seconds: 10})`);
   assert.equal(one.length, 1);
-  assert.equal(one[0], "The expression took more than 10 seconds, so frigate was only partly searched, newest lines first; try plain text or a simpler expression");
+  assert.equal(one[0], "frigate was only partly searched; try plain text or a simpler expression. The expression took more than 10 seconds, so the newest lines were searched first");
   const two = run(`logSearchGaps({cut: ["frigate", "paperless"], cut_seconds: 10})`);
-  assert.match(two[0], /so frigate, paperless were only partly searched/);
+  assert.match(two[0], /^frigate, paperless were only partly searched/);
   assert.equal(run(`logSearchGaps({skipped_pods: 0, capped: [], errors: []})`).length, 0, "an older server sends no cut");
 });
 
