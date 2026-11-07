@@ -86,7 +86,7 @@ def save(kind, ns, name, url, read, send, now=_UNREAD):
     if now is _UNREAD:
         now = current(kind, ns, name, read)
     if now is not None and not _ours(now, kind):
-        raise ValueError(f"Secret {ref} already exists in {ns} and is not the one Homestead keeps "
+        raise ValueError(f"Secret {ref} already exists in {ns}. It is not the one Homestead keeps "
                          f"for {name}'s outage webhook")
     data = {DATA_KEY: base64.b64encode(url.encode()).decode()}
     labels = {LABEL: kind, "app.kubernetes.io/managed-by": "homestead"}

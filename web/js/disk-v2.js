@@ -47,7 +47,7 @@ function diskV2Volumes(rows, destinations=false) {
 window.diskV2Open = async (node,disk) => {
   diskV2Reset(); const sequence=diskV2Sequence;
   if(typeof MODAL_STACK!=='undefined') MODAL_STACK.length=0;
-  modal('Prepare a disk for V2','<div id="diskV2Review"><div class="empty"><span class="spin2"></span>Checking disk and V1 capacity</div>'+UI.actions(UI.cancel('Close'))+'</div>',true,'disk-v2');
+  modal('Prepare a disk for V2',UI.head({kind:'Disk',name:disk,where:node})+'<div id="diskV2Review"><div class="empty"><span class="spin2"></span>Checking disk and V1 capacity</div>'+UI.actions(UI.cancel('Close'))+'</div>',true,'disk-v2');
   const host=$('#diskV2Review');
   try {
     const plan=await diskV2Post('plan',{node,disk});
@@ -122,7 +122,7 @@ window.diskV2EraseReview = async id => {
     const plan=await diskV2Post('prepare-review',{id});
     if(sequence!==diskV2Sequence || !$('#diskV2Status') || $('#modal')?.classList.contains('hidden')) return;
     diskV2Approval=plan;
-    childModal('Erase and prepare device',UI.lead(`V1 replicas have moved off <b class="mono">${esc(plan.device)}</b>. Review the device before preparing it for V2.`) +
+    childModal('Erase and prepare device',UI.head({kind:plan.region_kind==='lvm'?'Logical volume':plan.region_kind==='part'?'Partition':'Device',name:plan.device,where:plan.node})+UI.lead(`V1 replicas have moved off <b class="mono">${esc(plan.device)}</b>. Review the device before preparing it for V2.`) +
       UI.facts([['Host',esc(plan.node)],[plan.region_kind==='lvm'?'Logical volume':plan.region_kind==='part'?'Partition':'Device',`<span class="mono">${esc(plan.device)}</span>`],['Size',esc(diskV2GiB(plan.size_bytes))],['Result','Longhorn V2 block disk']]) +
       UI.callout('warn','The filesystem will be erased','Remove the V1 entry, unmount this filesystem, remove its mount from fstab and erase its signatures. Remaining replica or other data files block erasure. The blank device will be registered with V2.') +
       diskV2Region(plan) + UI.typedConfirm({ id: 'diskV2Device', expect: plan.device, oninput: 'diskV2EraseReady()' }) +

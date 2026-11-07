@@ -16,10 +16,16 @@ import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
 from rebind import keep_bound
 import test_vm_network_create as network_fixture
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 
 KV = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
 CHART_PATH = f"/apis/helm.cattle.io/v1/namespaces/{MACVTAP.NS}/helmcharts/{MACVTAP.CHART}"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Scene:
@@ -165,7 +171,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
             self.assertEqual("bridge", self.make(interface="br0", **{"for": "vms"})["type"], "a bridge carries VMs as it is")
 
     def test_without_macvtap_it_says_how_to_get_it(self):
-        with mock.patch.object(VMNET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "install it"):
+        with mock.patch.object(VMNET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "Install macvtap first"):
             self.make(interface="eth0", **{"for": "vms"})
 
     test_options_list_the_hosts_interfaces_those_on_every_host_first = None

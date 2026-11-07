@@ -85,6 +85,13 @@ curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy
 3. The `kube-vip.io/loadbalancerIPs` annotation - delete it unless kube-vip is
    your load balancer.
 
+Homestead installs the node probe soon after it starts: a privileged
+DaemonSet on every node, for temperatures, drive health and each node's
+network interfaces. To leave it out, add
+`HOMESTEAD_NODEPROBE_AUTO_INSTALL` with the value `"false"` to the `env` of
+the `homestead` container before applying, and keep it there when you apply
+the manifest again; add the probe later under **Settings > Cluster > Add-ons**.
+
 ```bash
 kubectl apply -f deploy.yaml
 kubectl -n lab rollout status deployment/homestead --timeout=5m

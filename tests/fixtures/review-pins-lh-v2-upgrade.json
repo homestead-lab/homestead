@@ -5,7 +5,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -75,7 +75,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -101,7 +101,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -166,7 +166,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -222,7 +222,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -277,7 +277,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -287,7 +287,7 @@
   [
    "state",
    "failed",
-   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Could not check the upgrade</b><div class=\"ui-callout-body\">Longhorn is not answering</div></div>\n    </div>",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><div class=\"ui-notice-line ui-notice-whole\"><b class=\"ui-notice-head\">Could not check the upgrade</b><span class=\"ui-notice-first ui-issue-short\">Longhorn is not answering</span></div></div>\n    </div>",
    0
   ]
  ],
@@ -297,7 +297,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -360,7 +360,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -383,7 +383,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -442,7 +442,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -481,7 +481,7 @@
   ],
   [
    "modal",
-   "Upgrade Longhorn to v1.13.0",
+   "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [
@@ -534,7 +534,7 @@
   ],
   [
    "modal",
-   "Longhorn V2 live upgrade",
+   "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
   ],
   [

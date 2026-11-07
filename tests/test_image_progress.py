@@ -7,11 +7,18 @@ import homestead_imports as IMP
 import homestead_image_cache as IMAGES
 import homestead_operations as OPS
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 A, B, C = "a" * 64, "b" * 64, "c" * 64
 LAYERS = [{"digest": f"sha256:{A}", "size": 100 * 1024 ** 2}, {"digest": f"sha256:{B}", "size": 50 * 1024 ** 2},
           {"digest": f"sha256:{C}", "size": 50 * 1024 ** 2}]
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class WatchParseTests(unittest.TestCase):

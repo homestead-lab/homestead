@@ -37,8 +37,8 @@ function logSearchWhen(at) {
 function logSearchGaps(d) {
   const gaps = [];
   if (d.skipped_pods) gaps.push(`${d.skipped_pods} more container${d.skipped_pods === 1 ? " was" : "s were"} not searched; choose an app to search it`);
-  if ((d.capped || []).length) gaps.push(`${d.capped.join(", ")} wrote more than Homestead reads at once, so only the newest of ${d.capped.length === 1 ? "its" : "their"} output was searched; choose a shorter time`);
-  if ((d.cut || []).length) gaps.push(`The expression took more than ${d.cut_seconds} seconds, so ${d.cut.join(", ")} ${d.cut.length === 1 ? "was" : "were"} only partly searched, newest lines first; try plain text or a simpler expression`);
+  if ((d.capped || []).length) gaps.push(`Only the newest output of ${d.capped.join(", ")} was searched; choose a shorter time. ${d.capped.length === 1 ? "It" : "They"} wrote more than Homestead reads at once`);
+  if ((d.cut || []).length) gaps.push(`${d.cut.join(", ")} ${d.cut.length === 1 ? "was" : "were"} only partly searched; try plain text or a simpler expression. The expression took more than ${d.cut_seconds} seconds, so the newest lines were searched first`);
   if ((d.errors || []).length) gaps.push(`Could not read: ${d.errors.slice(0, 4).join("; ")}${d.errors.length > 4 ? ` and ${d.errors.length - 4} more` : ""}`);
   return gaps;
 }
@@ -56,7 +56,7 @@ function logSearchResults(d) {
         <span class="dim xs">${esc(r.ns)}${r.container && r.container !== r.app ? ` · ${esc(r.container)}` : ""}</span></div>
       <code class="ls-line">${logSearchMark(r.line, LOGSEARCH.query, LOGSEARCH.regex, LOGSEARCH.case)}</code></div>`).join("")}</div>`
     : `<div class="empty small">Nothing in the last ${esc(span)} matches. Kubernetes keeps only what each running pod still holds, so older lines, and those of pods since replaced, are not searched.</div>`;
-  return `${head}${gaps.length ? UI.callout("warn", "Part of the logs was not searched", gaps.map(g => `<div>${esc(g)}</div>`).join("")) : ""}${body}`;
+  return `${head}${UI.notices(gaps.map(g => ["warn", g]), "Part of the logs was not searched")}${body}`;
 }
 
 window.logSearch = (ns = "", name = "") => {

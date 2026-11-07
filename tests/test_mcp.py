@@ -22,6 +22,14 @@ import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
 import homestead_audit as AUDIT_LOG
 from rebind import keep_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def key(scopes=("read",), mcp=True, role="viewer", kid="k1", name="claude"):
@@ -731,6 +739,7 @@ class CatalogueTests(unittest.TestCase):
     # Admin routes deliberately not tools, and why (#930 follow-up). Each path
     # is named, so a new admin route still fails until someone decides.
     ADMIN_UI_ONLY = {
+        "/api/recovery/resume": "resuming after a stop means a person has looked",
         **dict.fromkeys((
             "/api/disks/add", "/api/disks/evict", "/api/disks/inspect", "/api/disks/name", "/api/disks/node-tags",
             "/api/disks/os-space", "/api/disks/os-space/use", "/api/disks/remove", "/api/disks/retire",

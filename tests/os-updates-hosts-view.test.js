@@ -424,7 +424,7 @@ test("a skipped window is said beside Last run, or alone; not over a run going",
   const last = { id: "os-2", status: "succeeded", reason: "asked", nodes: ["node-a"], message: "1 host done", results: [] };
   const beside = await opened({ state: { window_skip, rollout: last } });
   assert.match(beside.html(), /Last run succeeded[\s\S]*Window skipped because Prepare disk is in the way \(Finish disk preparation\)/);
-  assert.equal((beside.html().match(/class="note /g) || []).length, 1, "one notice");
+  assert.equal((beside.html().match(/class="(?:note|ui-callout) /g) || []).length, 1, "one notice");
   const alone = await opened({ state: { window_skip } });
   assert.match(alone.html(), /Window skipped because/);
   const going = await opened({ state: { window_skip, rollout: running } });

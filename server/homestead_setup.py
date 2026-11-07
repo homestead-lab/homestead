@@ -166,7 +166,8 @@ def https_check(url, fetch=None):
     url = str(url or "").strip().rstrip("/")
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("Enter an HTTPS address without credentials, a query or a fragment, for example https://homestead.example.com")
+        raise ValueError("Enter an HTTPS address, for example https://homestead.example.com. "
+                         "It takes no credentials, query or fragment")
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", parts.hostname):
         raise ValueError("Enter a valid hostname")
     fetch = fetch or (lambda target: urllib.request.urlopen(urllib.request.Request(target, headers={"Accept": "application/json"}), timeout=8))

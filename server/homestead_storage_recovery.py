@@ -148,7 +148,7 @@ def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_
         plan, context, decisions = _snapshot(item, read, actor, helper_admission, restart_admission, runtime_check)
         config = {"id": ident, "action": action, "capacity_token": body.get("capacity_token")}
         if not plan["can_" + action] or body.get("confirm_capacity") is not True or not REVIEW.valid(config, context):
-            raise ValueError("Review this storage move again and acknowledge its current state before continuing or pausing")
+            raise ValueError("Review this storage move again. Acknowledge its current state before continuing or pausing")
         ref = item["ref"]
         ref["retain_resources"] = True
         ref["storage_recovery"] = {"action": action, "by": actor, "at": time.time(),

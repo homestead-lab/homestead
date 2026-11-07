@@ -243,6 +243,97 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("HS_SERVER", out)
 
 
+@unittest.skipUnless(SH and os.name == "posix", "needs a POSIX system")
+class NodeProbeKeptTests(unittest.TestCase):
+    """#1279: installing again on a running cluster keeps its earlier "no node
+    probe" (homestead-install survives a reinstall that keeps Homestead's data)."""
+
+    def reinstall(self, kept, env=None, person=False, status=0):
+        """Installing Homestead on a running k3s without it (a dry run), whose
+        homestead-install says node-probe: kept ("" for no ConfigMap). The
+        summary is printed instead of shown; person: a terminal is there and
+        every question is answered with Enter (its default); status: the
+        read's exit status (1: the API did not answer)."""
+        bin_dir = self.cluster(kept, status)
+        terminal = "TTY=/dev/null; interactive() { true; }" if person else "interactive() { false; }"
+        return functions(terminal + "\nsummary() { printf '%s\\n' \"$1\"; }\nDIST=k3s; ROLE=addons; add_to_cluster",
+                         env, path_extra=bin_dir)
+
+    def cluster(self, kept, status=0):
+        """A stand-in k3s for a running cluster without Homestead."""
+        bin_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, bin_dir, ignore_errors=True)
+        stand_in(bin_dir, "k3s", 'case "$*" in\n'
+                 '  *"get deployment homestead"*) exit 1 ;;\n'
+                 '  *"get configmap homestead-install"*) printf %s "' + kept + '"; exit ' + str(status) + ' ;;\n'
+                 'esac\nexit 0')
+        return bin_dir
+
+    def test_a_cluster_that_cannot_be_asked_stops_the_install(self):
+        for person in (True, False):
+            code, out = self.reinstall("", person=person, status=1)
+            self.assertNotEqual(0, code, out)
+            self.assertNotIn("bootstrap-k3s.sh", out)
+            self.assertIn("HS_NODEPROBE", out)
+        code, out = self.reinstall("", {"HS_NODEPROBE": "no"}, status=1)
+        self.assertEqual(0, code, out)
+        self.assertIn(" --no-node-probe", self.bootstrap_line(out))
+
+    def test_a_new_cluster_over_a_running_one_says_the_kept_choice(self):
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5",
+                                                          "HS_LONGHORN": "no", "HS_KUBEVIRT": "no", "HS_YES": "1"},
+                        path_extra=self.cluster("no"))
+        self.assertEqual(0, code, out)
+        self.assertNotIn("node-probe", out)
+        self.assertIn("kube-vip, Multus are installed", out)
+
+    def bootstrap_line(self, out):
+        line = next((l for l in out.splitlines() if "bootstrap-k3s.sh addons" in l), None)
+        self.assertIsNotNone(line, out)
+        return line
+
+    def test_an_unattended_reinstall_keeps_a_cluster_without_the_probe_without_it(self):
+        code, out = self.reinstall("no")
+        self.assertEqual(0, code, out)
+        self.assertNotIn(" --node-probe", self.bootstrap_line(out))
+        self.assertIn("Node probe           Not installed (kept from this cluster)", out)
+        self.assertNotIn("and the node probe are installed", out)
+
+    def test_hs_nodeprobe_yes_still_puts_it_back(self):
+        code, out = self.reinstall("no", {"HS_NODEPROBE": "yes"})
+        self.assertEqual(0, code, out)
+        self.assertIn(" --node-probe", self.bootstrap_line(out))
+        self.assertNotIn("--no-node-probe", out)
+        self.assertIn("Node probe           Installed by Homestead\n", out)
+
+    def test_hs_nodeprobe_no_is_said_to_bootstrap(self):
+        code, out = self.reinstall("", {"HS_NODEPROBE": "no"})
+        self.assertEqual(0, code, out)
+        self.assertIn(" --no-node-probe", self.bootstrap_line(out))
+        self.assertIn("Node probe           Not installed\n", out)
+
+    def test_without_an_earlier_choice_the_probe_is_installed(self):
+        code, out = self.reinstall("")
+        self.assertEqual(0, code, out)
+        self.assertNotIn("node-probe", self.bootstrap_line(out))
+        self.assertIn("and the node probe are installed", out)
+        code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5",
+                                                          "HS_LONGHORN": "no", "HS_KUBEVIRT": "no", "HS_YES": "1"})
+        self.assertEqual(0, code, out)
+        self.assertNotIn("node-probe", out)
+        self.assertIn("and the node probe are installed", out)
+
+    def test_a_person_is_offered_the_earlier_choice(self):
+        code, out = self.reinstall("no", person=True)
+        self.assertEqual(0, code, out)
+        self.assertIn(" --no-node-probe", self.bootstrap_line(out))
+        self.assertIn("Node probe           Not installed (kept from this cluster)", out)
+        code, out = self.reinstall("", person=True)
+        self.assertEqual(0, code, out)
+        self.assertIn(" --node-probe", self.bootstrap_line(out))
+        self.assertIn("Node probe           Installed by Homestead\n", out)
+
+
 @unittest.skipUnless(SH and sys.platform != "win32", "package-manager stand-ins need POSIX")
 class MenuBootstrapTests(unittest.TestCase):
     """Run the actual startup over stdin, without root or real package changes."""

@@ -9,10 +9,15 @@ It holds objects by API path and answers the way the API server does: 404,
 409 AlreadyExists and Conflict, 422 for a JSON patch that does not apply,
 merge, JSON and strategic-merge patches, delete preconditions, finalizers,
 owner garbage collection, label and field selectors, limit/continue pages,
-a Secret's stringData kept as data, and /apis discovery. It replaces
-homestead_kube.transport, so a read goes
+a Secret's stringData kept as data, /apis discovery, /version, pod logs (log(),
+with tailLines and limitBytes) and a list asked as a Table (ktable: the Name and
+Created At columns the API server prints for a kind with no printer columns of
+its own). It replaces homestead_kube.transport, so a read goes
 through kget (and its 429 retry) and a write goes round WRITE_GUARDS first,
-as in the app. While it is in use the helpers server.py binds into
+as in the app. It also replaces homestead_kube._request, which raw_get and
+ktable call themselves (#1280): every request homestead_kube makes is answered
+here while the fake is in use, and a path it does not model is the API server's
+404 (kept in kube.unknown), never a connection. While it is in use the helpers server.py binds into
 homestead_kube (the self-data fence and the cluster shutdown state) are
 stand-ins that let every write through; the rest of the guards are real.
 
@@ -20,15 +25,20 @@ A test that patches kget or ksend itself goes round the fake, as before.
 
 Not modelled (add it when a test needs it): watches, server-side apply,
 admission and validation, namespace existence and termination, the
-$setElementOrder / $retainKeys strategic-merge directives, and subresources
-other than status and pod eviction (answer those with react())."""
+$setElementOrder / $retainKeys strategic-merge directives, a log's other
+options (container, previous, sinceSeconds, timestamps), a kind's own printer
+columns, and subresources other than status, pod eviction and pod log (answer
+those with react(); it may answer a raw read with text)."""
 import base64
+import collections
 import contextlib
 import copy
 import io
 import itertools
 import json
 import re
+import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -45,12 +55,65 @@ MERGE_KEYS = {"containers": "name", "initContainers": "name", "ephemeralContaine
               "ports": ("containerPort", "port")}
 MERGED_PRIMITIVE_LISTS = {"finalizers"}
 LIST_KINDS = {"endpoints": "Endpoints"}
+# GET /version, as a k3s API server answers it (homestead_readyz reads it to see the API is up).
+VERSION = {"major": "1", "minor": "31", "gitVersion": "v1.31.4+k3s1", "gitCommit": "", "gitTreeState": "clean",
+           "buildDate": "2025-01-01T00:00:00Z", "goVersion": "go1.22.9", "compiler": "gc", "platform": "linux/amd64"}
 # Kinds with no namespace: the API server deletes these as a collection without one.
 CLUSTER_SCOPED = {"nodes", "namespaces", "persistentvolumes", "storageclasses", "clusterroles", "clusterrolebindings",
                   "customresourcedefinitions", "priorityclasses", "volumesnapshotclasses", "ingressclasses", "runtimeclasses"}
 # Resources whose name in the path is not the kind made plural.
 PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions",
           "nodemetrics": "nodes", "podmetrics": "pods"}
+
+
+_turned_away = []   # (test, method, path) of every request no_cluster() refused, this process
+
+
+def _running_test():
+    """The test to name, as tests/network_guard.py blames a refused call: the one that
+    started this thread (None outside a test, or without the guard)."""
+    guard = sys.modules.get("network_guard")
+    return guard.origin() if guard is not None else None
+
+
+def no_cluster():
+    """No API server at all, said by the test rather than left to the machine: every
+    request (kget, ksend, raw_get, ktable) fails at once, as one does on CI, where the
+    API server's name has no address. Without it such a test looks the name up for
+    real (tests/network_guard.py refuses that). A test that needs no cluster, or reads
+    one only on the way to what it checks, puts it on its module:
+
+        def setUpModule():
+            unittest.enterModuleContext(no_cluster())
+
+    Kube() inside it still answers, raw_get and ktable included (#1280): it replaces
+    transport and _request itself while it is in use, and puts this refusal back when
+    it ends. Entered the other way round (no_cluster() inside a Kube()), the inner
+    no_cluster() refuses until it ends.
+
+    The trade-off: a file under it is no longer seen by the network guard, so a new
+    test whose code reads the cluster without a fake passes on the fallback path.
+    Each refused request is kept (no_cluster_reads) and scripts/run_tests.py prints
+    a summary, so a later sweep can find the reads a Kube() should answer."""
+    def unreachable(method, path, *args, **kwargs):
+        _turned_away.append((_running_test(), method, path))
+        raise socket.gaierror(socket.EAI_NONAME, f"no cluster in this test: {method} {path} (tests/fakes/kube.py no_cluster)")
+    return mock.patch.object(K, "_request", unreachable)
+
+
+def no_cluster_reads():
+    """[(test, method, path)] of every request no_cluster() turned away in this process."""
+    return list(_turned_away)
+
+
+def summarise_reads(reads, top=3):
+    """One advisory line about what no_cluster() turned away ("" when nothing)."""
+    if not reads:
+        return ""
+    paths = collections.Counter(path for _, _, path in reads).most_common(top)
+    tests = {test for test, _, _ in reads}
+    return (f"no_cluster: {len(reads)} requests from {len(tests)} tests turned away (top: "
+            + ", ".join(f"{path} x{count}" for path, count in paths) + "); advisory, tests/fakes/kube.py")
 
 
 def plural(kind):
@@ -80,6 +143,10 @@ class Kube:
         self.reads = []   # (path, accept) of every read that reached the fake
         self._failures = []  # [path, method, code, times left]
         self._reactions = []
+        self._logs = {}   # the pod's key -> its log text
+        # (method, path) of every request answered 404 because the fake does not model
+        # its path (not a missing object): seen here even when the caller swallows the 404.
+        self.unknown = []
         self._stack = None
         for obj in objects:
             self.add(obj)
@@ -89,6 +156,7 @@ class Kube:
     def __enter__(self):
         self._stack = contextlib.ExitStack()
         self._stack.enter_context(mock.patch.object(K, "transport", self))
+        self._stack.enter_context(mock.patch.object(K, "_request", self.request))
         self._stack.enter_context(mock.patch.object(K, "self_data_activity", contextlib.nullcontext, create=True))
         self._stack.enter_context(mock.patch.object(K, "require_self_data_write", lambda: None, create=True))
         self._stack.enter_context(mock.patch.object(
@@ -153,6 +221,24 @@ class Kube:
         method) in place of the fake; returning None lets the fake answer."""
         self._reactions.append((method, path, answer))
 
+    def log(self, pod_path, text):
+        """The pod at pod_path's log, as GET <pod_path>/log answers it (raw_get)."""
+        self._logs[self._key(self._parse(pod_path))] = text
+
+    # The client's own request function ------------------------------------
+
+    def request(self, method, path, data, headers, timeout, max_bytes=None):
+        """homestead_kube._request while the fake is in use: what raw_get and
+        ktable send, answered as bytes the way the API server's body is (text
+        as it is, anything else as JSON), cut at max_bytes + 1 as the real one
+        is. A failure is the same HTTPError or exception the transport gets."""
+        headers = headers or {}
+        body = json.loads(data) if data else None
+        answer = self(method, path, body, headers.get("Content-Type"), timeout, headers.get("Accept"))
+        payload = answer if isinstance(answer, bytes) else (
+            answer.encode() if isinstance(answer, str) else json.dumps(answer).encode())
+        return payload if max_bytes is None else payload[:max_bytes + 1]
+
     # The transport ----------------------------------------------------------
 
     def __call__(self, method, path, body=None, ctype=None, timeout=15, accept=None):
@@ -183,7 +269,11 @@ class Kube:
                 return self._discovery()
             if path_only == "/api":
                 return {"kind": "APIVersions", "versions": ["v1"]}
+            if path_only == "/version" and method == "GET":
+                return dict(VERSION)
             req = self._parse(path_only)
+            if req is None:
+                self.unknown.append((method, path))
             if req is None or req["group"] in self.absent_groups:
                 raise self._error(404, "NotFound", "the server could not find the requested resource", path)
             req["query"] = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
@@ -198,6 +288,8 @@ class Kube:
                         "metadata": done.get("metadata") or {},
                         "items": [{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1",
                                    "metadata": item.get("metadata") or {}} for item in done.get("items") or []]}
+            if method == "GET" and accept and "as=Table" in accept and isinstance(done, dict):
+                done = _table(done)
             return done
 
     # Requests ---------------------------------------------------------------
@@ -205,7 +297,19 @@ class Kube:
     def _get(self, req, body, ctype, path):
         if req["name"] is None:
             return self._list(req)
+        if req["sub"] == "log" and req["plural"] == "pods" and not req["group"]:
+            self._existing(dict(req, sub=None), path)
+            text = self._logs.get(self._key(req), "")
+            tail = req["query"].get("tailLines")
+            if tail is not None:   # the last tail lines; more than there are is all of them, 0 none
+                lines = text.splitlines(keepends=True)
+                text = "".join(lines[-int(tail):] if int(tail) else [])
+            limit = req["query"].get("limitBytes")
+            if limit is not None:  # at most limit bytes, cut where it falls (applied after tailLines)
+                return text.encode()[:int(limit)]
+            return text
         if req["sub"] not in (None, "status"):
+            self.unknown.append(("GET", path))
             raise self._error(404, "NotFound", "the server could not find the requested resource", path)
         return self._existing(req, path)
 
@@ -229,6 +333,7 @@ class Kube:
         if req["name"] is not None:
             if req["plural"] == "pods" and req["sub"] == "eviction":
                 return self._delete(dict(req, sub=None), None, ctype, path)
+            self.unknown.append(("POST", path))
             raise self._error(404, "NotFound", "the server could not find the requested resource", path)
         meta = body.setdefault("metadata", {})
         if not meta.get("name") and meta.get("generateName"):
@@ -427,6 +532,29 @@ class Kube:
                   "message": message, "reason": reason, "code": code}
         headers = {"Retry-After": "0"} if code == 429 else {}
         return urllib.error.HTTPError(path, code, reason, headers, io.BytesIO(json.dumps(status).encode()))
+
+
+# Tables -----------------------------------------------------------------------
+
+def _table(answer):
+    """A list or one object as the API server prints it for Accept: as=Table, with
+    the columns it gives a kind that has no printer columns of its own: Name and
+    Created At, each row carrying its object's metadata (includeObject=Metadata)."""
+    if answer.get("kind") == "Table":
+        return answer
+    rows = answer.get("items") if "items" in answer else [answer]
+    return {"kind": "Table", "apiVersion": "meta.k8s.io/v1",
+            "metadata": {k: v for k, v in (answer.get("metadata") or {}).items()
+                         if k in ("resourceVersion", "continue")} if "items" in answer else {},
+            "columnDefinitions": [
+                {"name": "Name", "type": "string", "format": "name", "priority": 0,
+                 "description": "Name must be unique within a namespace."},
+                {"name": "Created At", "type": "date", "format": "", "priority": 0,
+                 "description": "CreationTimestamp is a timestamp representing the server time when this object was created."}],
+            "rows": [{"cells": [(row.get("metadata") or {}).get("name", ""),
+                                (row.get("metadata") or {}).get("creationTimestamp", "")],
+                      "object": {"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1",
+                                 "metadata": copy.deepcopy(row.get("metadata") or {})}} for row in rows or []]}
 
 
 # Patches ----------------------------------------------------------------------

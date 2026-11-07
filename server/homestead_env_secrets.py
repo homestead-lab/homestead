@@ -173,7 +173,7 @@ def externalize(ns, dep, read, send, masked=()):
         return dep
     owner = dep["metadata"]["name"]
     if current is not None and ((current.get("metadata") or {}).get("labels") or {}).get(LABEL) is None:
-        raise ValueError(f"Secret {name} already exists in {ns} and is not the one Homestead keeps for {owner}'s variables")
+        raise ValueError(f"Secret {name} already exists in {ns}. It is not the one Homestead keeps for {owner}'s variables")
     used = _refs(dep, name)
     data = {key: value for key, value in {**((current or {}).get("data") or {}), **moved}.items() if key in used}
     labels = {LABEL: owner, "app.kubernetes.io/managed-by": "homestead"}

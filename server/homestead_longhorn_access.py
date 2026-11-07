@@ -146,5 +146,5 @@ def require(kget, ksend, namespace, what):
         change = ""
     hint = (" Homestead has just let itself through Longhorn's network policies; try again in a minute."
             if change in ("made", "updated") else "")
-    raise ValueError(f"{what}: Homestead cannot reach Longhorn's API (longhorn-backend, port {PORT}): {why}. "
-                     f"Nothing was changed.{hint}")
+    raise ValueError(f"{what}: Homestead cannot reach Longhorn's API. Nothing was changed. "
+                     f"longhorn-backend, port {PORT}: {why}.{hint}")

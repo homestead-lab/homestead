@@ -74,7 +74,8 @@ def additional_container_configs(cfg):
         allowed = {"name", "image", "env", "ports", "volumes", "hardware", "cpu", "memory", "memory_limit",
                    "privileges", "privileged", "cap_add", "tun", "volume_owners", "new", "container_name"}
         if set(row) - allowed - {"namespace", "workload_name", "network_mode", "target_mode", "app_profile", "env_bindings"}:
-            raise ValueError("additional containers use their own image, resources, ports, environment, hardware and storage; pod settings are shared")
+            raise ValueError("additional containers take only their own settings. Image, resources, ports, environment, "
+                             "hardware and storage are theirs; pod settings are shared")
         item = {key: copy.deepcopy(value) for key, value in row.items() if key in allowed}
         item.update(namespace=cfg.get("namespace") or DEFAULT_NS,
                     workload_name=cfg.get("workload_name") or cfg.get("name"),
@@ -122,7 +123,8 @@ def import_capacity_plan(body):
     cfg = SVC.prepare_deploy(cfg)  # read-only VIP selection and validation
     prepared = CONTAINER_IMPORT.prepare_import(cfg)
     if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
-        raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
+        raise ValueError("Choose how the source stays still while it is copied. Its writers are stopped, "
+                         "or the copied paths are a consistent snapshot")
     inventory, pods = CONTAINER_IMPORT.import_inventory(prepared, kget)
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}

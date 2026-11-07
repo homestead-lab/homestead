@@ -116,7 +116,7 @@ window.composeCheck = async (now = false) => {
   } catch (e) {
     if (asked !== COMPOSE.asked) return;
     if (state) state.textContent = "";
-    $("#composeResult").innerHTML = `<div class="note bad">${esc(e.message)}</div>`;
+    $("#composeResult").innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`;
   }
 };
 
@@ -260,12 +260,11 @@ window.composeCreate = async () => {
 };
 
 function composeCapacityHtml(plan) {
-  return `<div class="note ${plan.blocked ? "bad" : "warn"}"><b>${plan.status === "fits" ? "A joint placement example fits" : plan.status === "unknown" ? "Complete placement could not be verified" : "Batch cannot fit the checked constraints"}</b>
-    <p>${plural(plan.pods, "planned pod")}. This is not a scheduler reservation or an OOM guarantee.</p></div>
+  return `${UI.callout(plan.blocked ? "bad" : "warn", { html: `${plan.status === "fits" ? "A joint placement example fits" : plan.status === "unknown" ? "Complete placement could not be verified" : "Batch cannot fit the checked constraints"}` }, `<p>${plural(plan.pods, "planned pod")}. This is not a scheduler reservation or an OOM guarantee.</p>`)}
     <div class="dependency-list">${(plan.services || []).map(s => `<div class="drow"><div class="dl mono">${esc(s.name)} · ${plural(s.replicas, "pod")}</div><div class="dv">Each pod: ${s.pod_request_gb} GiB requested / ${s.pod_memory_gb} GiB estimated · ${s.pod_cpu_request_percent}% CPU</div></div>`).join("")}</div>
     <div class="sec">Conservative RAM upper estimates</div><p class="dim small">Each host's upper estimate includes every batch pod that could individually fit there. The estimates can exceed a possible joint placement; they are not assigned memory.</p>
     <div class="dependency-list">${(plan.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${n.baseline_gb} → up to ${n.upper_gb} GiB (${n.upper_percent}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
-    ${(plan.warnings || []).map(w => `<div class="note warn">${esc(w)}</div>`).join("")}
+    ${UI.notices((plan.warnings || []).map(w => ["warn", w]))}
     ${(plan.reasons || []).length ? `<details><summary>Checked conflicts</summary>${plan.reasons.map(r => `<div class="small">${esc(r)}</div>`).join("")}</details>` : ""}
     ${(plan.example || []).length ? `<details><summary>Example only — Kubernetes is not pinned to these hosts</summary>${plan.example.map(p => `<div class="small mono">${esc(p.service)} → ${esc(p.host)}</div>`).join("")}</details>` : ""}`;
 }
@@ -299,8 +298,7 @@ window.composeConfirm = async () => {
       body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
     if (!result.ok) {
       toast(`${result.failed} could not be created: ${result.error}`, "bad");
-      $("#composeApplyResult").innerHTML = `<div class="note bad"><b>Batch stopped at ${esc(result.failed)}.</b>
-        ${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Keep them; remove their definitions and satisfied depends_on references from the next batch, or deploy the remaining services individually.` : ""}<br>Volumes created before an error are retained; inspect them before retrying.</div>`;
+      $("#composeApplyResult").innerHTML = `${UI.callout("bad", { html: `Batch stopped at ${esc(result.failed)}.` }, `${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Keep them; remove their definitions and satisfied depends_on references from the next batch, or deploy the remaining services individually.` : ""}<br>Volumes created before an error are retained; inspect them before retrying.`)}`;
       return;
     }
     Object.assign(COMPOSE, { text: "", variables: "", report: null });

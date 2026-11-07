@@ -367,15 +367,15 @@ def create_pvc(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce", send=Non
         chosen = next((row for row in storage_classes() if row["name"] == sc), None)
         if chosen and not serves_many(chosen):
             usable = ", ".join(shared_storage_classes()) or "none in this cluster"
-            raise ValueError(f"storage class {sc} ({chosen['provisioner']}) serves one node at a time, so a shared "
-                             f"(ReadWriteMany) volume on it would never be made. Use one node's access, or a class "
+            raise ValueError(f"storage class {sc} serves one node at a time. A shared (ReadWriteMany) volume on it "
+                             f"({chosen['provisioner']}) would never be made: use one node's access, or a class "
                              f"that shares: {usable}")
         if chosen and chosen["migratable"]:
             usable = ", ".join(shared_storage_classes()) or "none in this cluster"
             raise ValueError(
-                f"storage class {sc} creates live-migratable volumes for VM disks, and "
-                "Longhorn cannot mount those into a pod. Shared (ReadWriteMany) storage "
-                f"needs a class without migratable=true — available: {usable}")
+                f"storage class {sc} cannot make shared storage. It creates live-migratable "
+                "volumes for VM disks, and Longhorn cannot mount those into a pod. Shared "
+                f"(ReadWriteMany) storage needs a class without migratable=true — available: {usable}")
     return (send or KUBE_HELPERS.ksend)("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims",
                                         CLAIMS.manifest(ns, name, size_gb, sc, access_mode))
 

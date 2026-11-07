@@ -271,12 +271,11 @@ function networkOverviewHtml(data, baseline) {
 
 /* Things wrong with the cluster's own addresses, said where they matter. */
 function networkProblemsHtml(data) {
-  return `${(data.platform_clashes || []).length ? `<div class="note bad"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
-      ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
+  return `${(data.platform_clashes || []).length ? `${UI.callout("bad", { html: `${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.` }, `${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
       <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join
-      through it, so sharing it can stop hosts joining. Give ${data.platform_clashes.length === 1 ? "it an address" : "each an address"} of its own (Edit → Network).</div>` : ""}
-    ${(data.shared_vip || {}).problem ? `<div class="note bad"><b>Homestead's shared address is the cluster's own.</b> ${esc(data.shared_vip.problem)}.
-      Choose a separate default workload VIP under Workload VIPs; do not use the control-plane address.</div>` : ""}`;
+      through it, so sharing it can stop hosts joining. Give ${data.platform_clashes.length === 1 ? "it an address" : "each an address"} of its own (Edit → Network).`)}` : ""}
+    ${(data.shared_vip || {}).problem ? `${UI.callout("bad", { html: `Homestead's shared address is the cluster's own.` }, `${esc(data.shared_vip.problem)}.
+      Choose a separate default workload VIP under Workload VIPs; do not use the control-plane address.`)}` : ""}`;
 }
 
 function networkServicesHtml(data) {
@@ -420,7 +419,7 @@ window.selfAddressGo = async () => {
 
 /* A VIP's new address, and everything on it moved with it. */
 window.vipChange = ip => {
-  modal(`Change ${ip}`, `<div class="ui-stack">
+  modal(`Change address · ${ip}`, `<div class="ui-stack">
     ${UI.lead("A new address for this VIP. Everything on it moves with it, and open connections drop for a moment.")}
     ${window.Diagram ? Diagram.vip(ip, vipRoutes(ip), { caption: "What moves with it" }) : ""}
     <div class="f"><label for="vc_new">New address</label><input id="vc_new" class="mono" placeholder="e.g. 192.0.2.210" autocomplete="off" data-ipam oninput="vipChangeReset()"></div>

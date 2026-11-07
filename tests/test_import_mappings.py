@@ -317,7 +317,7 @@ class ImportCapacityTests(unittest.TestCase):
         return CONTAINER_IMPORT.import_container(cfg)
 
     def test_an_import_that_cannot_fit_is_refused_before_it_starts(self):
-        with self.assertRaisesRegex(ValueError, "11.8 GiB but ha-appdata has"):
+        with self.assertRaisesRegex(ValueError, "ha-appdata is too small for the source. The source measures 11.8 GiB"):
             self._import()
         self.assertEqual([], self.sent, "no job is created for a copy that must fail")
 

@@ -309,7 +309,10 @@ function osUpdatesStatusHtml(r) {
       { label: run.nodes.length === 1 ? `Updating ${run.nodes[0]}` : `Updating ${osuHosts(run.nodes.length)}, one at a time`, detail: run.message || "" })}
     ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}
     ${osUpdatesHoldsHtml(run)}`;
-  return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>${esc(osUpdatesLastRun(last))}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}${osuSmaller(last) ? " · " : "<br>"}${esc(last.message || "")}${osUpdatesSkipLine(r, "<br>")}</div>`
+  // The last run as a notice: a failed one is an error, the rest information (UI.callout).
+  return last ? UI.callout(last.status === "failed" ? "bad" : "info",
+      { html: `${esc(osUpdatesLastRun(last))}${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}` },
+      `${esc(last.message || "")}${osUpdatesSkipLine(r, last.message ? "<br>" : "")}`, { className: "small" })
     : r.window_skip ? `<div class="note small">${osUpdatesSkipLine(r)}</div>` : "";
 }
 // The weekly window something was in the way of, until a window or every host runs.
@@ -319,8 +322,8 @@ const osUpdatesSkipLine = (r, before = "") => !r.window_skip ? "" : r.window_ski
 // A hold that has kept failing during the run: that host could restart itself.
 function osUpdatesHoldsHtml(run) {
   const failing = Object.entries(run.hold_failed || {}).filter(([, row]) => row.noted);
-  return failing.length ? `<div class="note bad small"><b>Automatic updates could not be held on ${esc(failing.map(([name]) => name).join(", "))}.</b>
-    ${failing.length === 1 ? "It" : "They"} could restart by ${failing.length === 1 ? "itself" : "themselves"} during this run; Homestead keeps trying. ${esc(failing[0][1].error || "")}</div>` : "";
+  return failing.length ? UI.callout("bad", `Automatic updates could not be held on ${failing.map(([name]) => name).join(", ")}`,
+    `${failing.length === 1 ? "It" : "They"} could restart by ${failing.length === 1 ? "itself" : "themselves"} during this run; Homestead keeps trying. ${esc(failing[0][1].error || "")}`, { className: "small" }) : "";
 }
 // A run of the hosts someone chose, not of every host.
 const osuSmaller = run => run.reason === "asked-hosts" && (run.nodes || []).length;

@@ -99,6 +99,16 @@ class Cluster:
         # covers this file only; the files that just import Cluster need it
         # here. The two tests about the record patch it themselves.
         test.enterContext(mock.patch.object(RESTARTS, "observe_later", lambda pods: True))
+        # This cluster fakes the Kubernetes API and nothing else. What the overview and
+        # alerts read beyond it fails at once, as an unreachable host does: GitHub's
+        # releases, an image registry, the API server's TLS certificate and the node probes.
+        import homestead_expiry as EXPIRY
+        import homestead_node_probes as PROBES
+        import homestead_update_registry as REGISTRY
+        for module, name in ((server.UPGRADES, "fetch"), (REGISTRY, "_open"), (EXPIRY, "_peer_cert"),
+                             (PROBES, "_read")):
+            test.enterContext(mock.patch.object(module, name, side_effect=OSError(
+                f"no {module.__name__}.{name} in the tests (test_page_snapshot.Cluster)")))
         # Other test files bind homestead_lhcapacity to their own fakes and
         # leave it so: read through this cluster whatever ran before.
         LHCAP = server.LHCAP

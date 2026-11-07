@@ -159,7 +159,8 @@ def save(cfg, *, allow_v2_enable=False):
     done = []
     current = settings()
     if cfg.get("v2") and not current["v2"].get("enabled") and not allow_v2_enable:
-        raise ValueError("Use Set up Longhorn V2 to prepare hosts, verify hugepage capacity and review enabling the engine")
+        raise ValueError("Use Set up Longhorn V2 to turn the engine on. It prepares hosts, checks hugepage capacity "
+                         "and reviews the change")
     if "over_provisioning" in cfg:
         over = _int(cfg["over_provisioning"], -1)
         if not 100 <= over <= 1000:
@@ -197,9 +198,8 @@ def save(cfg, *, allow_v2_enable=False):
             v2_disks = [f"{n['metadata']['name']}:{d.get('path')}" for n in nodes
                         for d in ((n.get("spec") or {}).get("disks") or {}).values() if d.get("diskType") == "block"]
             if v2_volumes or v2_disks:
-                raise ValueError("the V2 engine stays on while it holds data: "
-                                 + ", ".join((v2_volumes + v2_disks)[:5])
-                                 + " - move those volumes to V1 and remove the V2 disks first")
+                raise ValueError("the V2 engine stays on while it holds data. Move these volumes to V1 and "
+                                 "remove the V2 disks first: " + ", ".join((v2_volumes + v2_disks)[:5]))
         if current["v2"].get("harvester_setting") is not None:
             # Harvester's setting drives Longhorn's and prepares each host;
             # writing Longhorn's alone would be put back.

@@ -12,6 +12,13 @@ import homestead_shared as shared
 import homestead_storage_runtime as runtime
 import homestead_storage_guard as guard
 from homestead_storage_journal import Held
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def pod(name, *, image_id="sha256:amd64", container_id=None):
@@ -104,11 +111,11 @@ class RuntimeTests(unittest.TestCase):
         dispatch = mock.Mock()
         for method, path in (("PUT", base + "/homestead"), ("PATCH", base + "/homestead"),
                              ("PUT", base + "/homestead/scale"), ("DELETE", base + "/homestead"), ("DELETE", base)):
-            with self.assertRaisesRegex(ValueError, "before updating"):
+            with self.assertRaisesRegex(ValueError, "Homestead cannot be updated, restarted or rescaled"):
                 guard.send(method, path, {}, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         # Stop now writes the Deployment itself, with who made it (#621).
         stop = {"metadata": {"annotations": {"homestead.io/changedBy": "{}"}}, "spec": {"replicas": 0}}
-        with self.assertRaisesRegex(ValueError, "before updating"):
+        with self.assertRaisesRegex(ValueError, "Homestead cannot be updated, restarted or rescaled"):
             guard.send("PATCH", base + "/homestead", stop, dispatch, ops, self.read, own_controller=("lab", "homestead"))
         dispatch.assert_not_called()
         # No exemption for the move's dispatcher: a stop must never target its

@@ -42,7 +42,7 @@ test("Priority tiers shows what is wrong in one notice", () => {
     warnings: ["lab/ha name gone, which isn't a class on the cluster: their new pods are refused",
                "homestead-critical (1000) is no longer the class for its tier; lab/db still use it"] });
   assert.equal((html.match(/class="ui-callout /g) || []).length, 1);
-  assert.match(html, /Check first[^]*lab\/ha name gone[^]*homestead-critical \(1000\)/);
+  assert.match(html, /2 things to check[^]*lab\/ha name gone[^]*homestead-critical \(1000\)/);
 });
 
 test("a class Homestead couldn't check is left as it is", () => {

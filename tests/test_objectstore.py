@@ -14,7 +14,15 @@ import homestead_objectstore as store
 import homestead_network_services as SVC
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_network_state as STATE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from fakes.storage_classes import storage_classes
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class ObjectStoreTests(unittest.TestCase):
@@ -51,6 +59,9 @@ class ObjectStoreTests(unittest.TestCase):
         reads = mock.patch.object(STATE, "kget", side_effect=lambda path, **kw: self._get(path))
         reads.start()
         self.addCleanup(reads.stop)
+        # No object store answers in the tests: its S3 client fails at once, as an
+        # unreachable store does (a test that wants answers patches _s3 itself).
+        self.enterContext(mock.patch.object(store, "_s3", side_effect=urllib.error.URLError("no object store in the tests")))
 
     def _get(self, path):
         key = path.split("?")[0]

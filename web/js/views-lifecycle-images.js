@@ -58,14 +58,13 @@ async function viewImages() {
         <div class="csub">${n.count} images cached${n.scanned_at ? ` · scanned ${esc(fmtAgo(Date.now() / 1000 - n.scanned_at))}` : " · not scanned yet"}</div></div>`).join("")}
     </div>
     ${(d.scanning || []).length ? `<div class="note" style="margin-bottom:12px"><span class="spin2"></span> Asking containerd on ${d.scanning.length} host${d.scanning.length === 1 ? "" : "s"} for every image it holds…</div>`
-      : !d.complete ? `<div class="note warn between" style="margin-bottom:12px"><span>Kubernetes reports only each host's largest images, so some - running ones included - are missing here.
-          A scan asks each host's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every host</button></div>` : ""}
-    ${(d.pulls || []).map(pull => `<div class="note warn between prepull-note" style="margin-bottom:12px">
-      <span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} host${pull.desired === 1 ? "" : "s"} done.
+      : !d.complete ? `${UI.callout("warn", "", `<span>Kubernetes reports only each host's largest images, so some - running ones included - are missing here.
+          A scan asks each host's containerd for all of them.</span><button class="btn sm" data-need="admin" onclick="imageScan()">Scan every host</button>`, { className: "between", attrs: 'style="margin-bottom:12px"' })}` : ""}
+    ${(d.pulls || []).map(pull => `${UI.callout("warn", "", `<span>Pre-pulling <span class="mono">${esc(pull.image)}</span> · ${pull.ready} of ${pull.desired} host${pull.desired === 1 ? "" : "s"} done.
         It runs until every host has the image; its pods come straight back if you delete them.</span>
-      <button class="btn sm danger" data-need="admin" onclick="prepullStop(${jsq(pull.name)})">Stop</button></div>`).join("")}
-    ${(d.pulls_finished || []).length ? `<div class="note good" style="margin-bottom:12px">Finished pre-pulling
-      ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.</div>` : ""}
+      <button class="btn sm danger" data-need="admin" onclick="prepullStop(${jsq(pull.name)})">Stop</button>`, { className: "between prepull-note", attrs: 'style="margin-bottom:12px"' })}`).join("")}
+    ${(d.pulls_finished || []).length ? `${UI.callout("ok", "", `Finished pre-pulling
+      ${d.pulls_finished.map(pull => `<span class="mono">${esc(pull.image)}</span>`).join(", ")} — cleared away.`, { attrs: 'style="margin-bottom:12px"' })}` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="images" class="tbl stack imgtable"><thead><tr>
       <th>Image</th><th>Size</th><th>Cached on</th><th>Retention</th><th></th></tr></thead><tbody>
       ${imgs.map(i => {

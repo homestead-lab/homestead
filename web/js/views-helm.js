@@ -156,7 +156,7 @@ async function helmSearch() {
         <span><b>${esc(r.name)}</b> <span class="dim xs">${esc(r.version)}</span> ${r.official ? UI.chip("official", "neutral") : r.verified ? UI.chip("verified", "neutral") : ""}
           <span class="dim xs"> · ${esc(r.publisher || r.repo_name)}</span><div class="dim xs">${esc(r.description)}</div></span></button>`).join("")
       || '<div class="dim small">No charts found.</div>';
-  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  } catch (e) { host.innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; }
 }
 window.helmPick = async i => {
   const r = STATE.data.helmResults[i];

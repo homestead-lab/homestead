@@ -84,7 +84,7 @@ class VmDiskImportTests(unittest.TestCase):
             raise urllib.error.URLError("connection refused")
         storage_classes(self)
         self.enterContext(mock.patch.object(VM_CREATE.STORAGE_CLASSES, "storage_classes", unread))
-        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes, so it did not "
+        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes. It did not "
                                                   "choose one for the disk: .*connection refused"):
             VM_CREATE.import_vm_disk({"namespace": "lab", "name": "server-disk",
                                       "source_url": "https://images.example.test/server.qcow2"}, ops=self.ops)

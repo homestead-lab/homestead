@@ -156,7 +156,10 @@ what to do next.
   nothing uses yet, with **Add to Longhorn**. See [Storage](Storage).
 - **Check drive health.** Homestead installs the node probe automatically with
   either the Helm chart or manifest. See
-  [Dashboard and nodes](Dashboard-and-nodes).
+  [Dashboard and nodes](Dashboard-and-nodes). It runs a privileged container
+  on every node; to leave it out, set `nodeprobe.enabled=false` with the chart,
+  or with the manifest add `HOMESTEAD_NODEPROBE_AUTO_INSTALL: "false"` to the
+  `homestead` container's `env` (and keep it at every reinstall).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.
 - **Know what Homestead changes.** [What Homestead changes](What-Homestead-changes)

@@ -34,7 +34,8 @@
 #   HS_LONGHORN=yes|no  HS_KUBEVIRT=yes|no      components for a new cluster
 #   HS_KUBEVIP=yes|no  HS_MULTUS=yes|no         kube-vip and Multus, installed by Homestead (default yes)
 #   HS_KUBEVIP_VERSION=0.11.1  HS_MULTUS_VERSION=v4.3.102   their chart versions (default: tested)
-#   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes)
+#   HS_NODEPROBE=yes|no                         the node probe, installed by Homestead (default yes;
+#                                               installing again keeps this cluster's earlier choice)
 #   HS_CONSOLE=yes|no                           local host status screen (default yes; native on Harvester)
 #   HS_LONGHORN_VOLUME=200|0                    GB for Longhorn's own LVM volume where there is room (0: none)
 #   HS_LONGHORN_DATA_PATH=/mnt/longhorn-os       joining: match the cluster's Longhorn default-data-path
@@ -65,7 +66,7 @@
 set -u
 
 RAW="https://raw.githubusercontent.com/homestead-lab/homestead"
-REF="${HOMESTEAD_REF:-v2.8.335-dev.7}"
+REF="${HOMESTEAD_REF:-v2.8.335-dev.8}"
 DRY=0
 DIST=k3s
 ROLE=""
@@ -746,9 +747,40 @@ homestead_url() { if [ -n "${VIP:-}" ]; then echo "http://$VIP:8088 (and http://
 network_args() {
   case "$(given HS_KUBEVIP)" in n*|N*|0|false) printf ' --no-kube-vip' ;; esac
   case "$(given HS_MULTUS)" in n*|N*|0|false) printf ' --no-multus' ;; esac
-  case "${NODEPROBE:-$(given HS_NODEPROBE)}" in n*|N*|0|false) printf ' --no-node-probe' ;; esac
+  case "${NODEPROBE:-$(given HS_NODEPROBE)}" in n*|N*|0|false) printf ' --no-node-probe' ;; ?*) printf ' --node-probe' ;; esac
   v=$(given HS_KUBEVIP_VERSION); [ -n "$v" ] && printf ' --kube-vip-version %s' "$v"
   v=$(given HS_MULTUS_VERSION); [ -n "$v" ] && printf ' --multus-version %s' "$v"
+  true
+}
+
+# The node probe (#1279). homestead-install outlives a reinstall that keeps
+# Homestead's data, so on a running cluster its node-probe is this cluster's
+# earlier choice: offered as the default, and kept when nobody says otherwise
+# (NODEPROBE stays empty; bootstrap-k3s.sh keeps the ConfigMap's value).
+pick_node_probe() { # [kubectl...] for a running cluster
+  NODEPROBE=""; PROBE_KEPT=""
+  if [ $# -gt 0 ]; then
+    # A failed read is never taken as "no earlier choice": that would offer Yes.
+    if kept=$("$@" -n lab get configmap homestead-install --ignore-not-found -o jsonpath='{.data.node-probe}' 2>/dev/null); then
+      case "$(printf '%s' "$kept" | tr '[:upper:]' '[:lower:]')" in
+        no|false|0|skip) PROBE_KEPT=no ;;
+        ?*) PROBE_KEPT=yes ;;
+      esac
+    elif [ -z "$(given HS_NODEPROBE)" ]; then
+      fail "Could not read homestead-install to keep this cluster's node probe choice. Run again, or set HS_NODEPROBE=yes or HS_NODEPROBE=no."
+    fi
+  fi
+  if [ -n "$(given HS_NODEPROBE)" ] || interactive; then
+    if yesno HS_NODEPROBE "Node Probe" "Install the node probe on every node?
+
+It reports temperatures, disk SMART health and each node's network interfaces to Homestead, and keeps kube-vip announcing on the right interface as nodes join. It runs a privileged container on each node to read them.$([ "$PROBE_KEPT" = no ] && printf '\n\nThis cluster was installed without it, so No is the default.')" "${PROBE_KEPT:-yes}"
+    then NODEPROBE=yes; else NODEPROBE=no; fi
+  fi
+}
+node_probe_word() { printf '%s' "${NODEPROBE:-${PROBE_KEPT:-yes}}"; }
+node_probe_line() {
+  if [ "$(node_probe_word)" = yes ]; then printf 'Installed by Homestead'; else printf 'Not installed'; fi
+  if [ -n "${PROBE_KEPT:-}" ] && [ -z "$(given HS_NODEPROBE)" ] && [ "$(node_probe_word)" = "$PROBE_KEPT" ]; then printf ' (kept from this cluster)'; fi
   true
 }
 
@@ -973,14 +1005,11 @@ new_cluster() {
 
 Longhorn replicates volumes across nodes and provides snapshots and backups. The Homestead Volumes and Data Protection pages require it. Without Longhorn, k3s local-path storage keeps each volume on a single node." yes || longhorn=no
   fi
-  # Unattended, it is installed unless HS_NODEPROBE says no, as kube-vip and Multus are.
-  NODEPROBE=yes
   [ "$longhorn" = yes ] && pick_longhorn_volume
-  if [ -n "$(given HS_NODEPROBE)" ] || interactive; then
-    yesno HS_NODEPROBE "Node Probe" "Install the node probe on every node?
-
-It reports temperatures, disk SMART health and each node's network interfaces to Homestead, and keeps kube-vip announcing on the right interface as nodes join. It runs a privileged container on each node to read them." yes || NODEPROBE=no
-  fi
+  # Unattended, it is installed unless HS_NODEPROBE says no, as kube-vip and
+  # Multus are. No cluster to ask yet: bootstrap-k3s.sh asks once it is up.
+  # shellcheck disable=SC2046
+  if $(kube_cmd) get nodes >/dev/null 2>&1; then pick_node_probe $(kube_cmd); else pick_node_probe; fi
   yesno HS_KUBEVIRT "Virtual Machines" "Install KubeVirt and CDI to run virtual machines alongside containers?$(kvm || printf '\n\nHardware virtualisation is not available on this machine. Virtual machines would run in emulation mode, with reduced performance.')" "$kubevirt" && kubevirt=yes || kubevirt=no
   pick_vip
   pick_console
@@ -997,7 +1026,7 @@ It reports temperatures, disk SMART health and each node's network interfaces to
   Storage              $([ "$longhorn" = yes ] && echo "Longhorn${LH_LINE:+, $LH_LINE}" || echo "k3s local-path")
   Virtual machines     $([ "$kubevirt" = yes ] && echo "KubeVirt and CDI" || echo "Not installed")
   Networking           $(network_line)
-  Node probe           $([ "$NODEPROBE" = yes ] && echo "Installed by Homestead" || echo "Not installed")
+  Node probe           $(node_probe_line)
   Host console         $(console_line)
   Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
   Homestead URL        $(homestead_url "$NODE_IP")" $comps
@@ -1051,6 +1080,8 @@ add_to_cluster() {
   fi
   comps="homestead"; storage="Longhorn (already installed)"
   if ! $kcmd get crd volumes.longhorn.io >/dev/null 2>&1; then comps="longhorn homestead"; storage="Longhorn (to be installed)"; fi
+  # shellcheck disable=SC2086
+  pick_node_probe $kcmd
   pick_vip
   pick_console
   # shellcheck disable=SC2086
@@ -1060,6 +1091,7 @@ add_to_cluster() {
   Host console         $(console_line)
   Storage              $storage
   Networking           $(network_line)
+  Node probe           $(node_probe_line)
   Apps VIP             $([ -n "${VIP:-}" ] && echo "$VIP - Homestead, its storage and shares, and apps" || echo "None yet - the nodes' own addresses")
   Homestead URL        $(homestead_url "$(default_ip)")" $comps
   # shellcheck disable=SC2086,SC2046
@@ -1084,7 +1116,7 @@ To add a node, run the installer on the new machine and select Join an existing 
 
   sudo cat $(token_file)
 
-kube-vip, Multus$(case "${NODEPROBE:-$(given HS_NODEPROBE)}" in n*|N*|0|false) ;; *) printf ' and the node probe' ;; esac) are installed by Homestead after it starts; their progress is shown in its job tray. Anything left out can be added under Settings > Cluster > Add-ons."
+kube-vip, Multus$([ "$(node_probe_word)" = no ] || printf ' and the node probe') are installed by Homestead after it starts; their progress is shown in its job tray. Anything left out can be added under Settings > Cluster > Add-ons."
 }
 
 flow_harvester() {

@@ -209,7 +209,7 @@ window.wgApply = into => {
 window.wgRename = i => {
   const g = WG.keys[i], members = wgMembers(i), names = workloadGroupNames(wgRows()).filter(n => n !== g);
   window.__wgGroup = { items: wgItems(members), from: g };
-  modal(`Rename ${g}`, `<div class="ui-stack">
+  modal(`Rename group · ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} move to the new name. A name another group has merges the two.`))}
     ${UI.field("New name", `<input id="wg_rename" maxlength="40" value="${esc(g)}" list="wg_rename_names"><datalist id="wg_rename_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`)}
     ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
@@ -227,7 +227,7 @@ window.wgRenameApply = () => {
 window.wgUngroupAll = i => {
   const g = WG.keys[i], members = wgMembers(i);
   window.__wgGroup = { items: wgItems(members), from: g };
-  modal(`Ungroup ${g}`, `<div class="ui-stack">
+  modal(`Ungroup · ${g}`, `<div class="ui-stack">
     ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} leave the group, and ${g} is gone: a group lasts while something is in it. Nothing restarts.`))}
     ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
 };
@@ -275,7 +275,7 @@ window.groupTier = async index => {
   // "None" is never saved by mistake; Save waits for a choice.
   const known = (STATE.data.wl || []).find(w => w.group === group)?.group_tier, now = known === null ? "" : known || "none";
   Object.assign(GROUP_TIER, { group, plan: null });
-  modal(`Tier for ${group}`, `<div class="ui-stack">
+  modal(`Tier · ${group}`, `<div class="ui-stack">
     ${UI.lead(esc(`Apps that follow ${group} take this tier. Apps with a tier of their own keep it.`))}
     ${UI.field("Tier", `<select id="gt_tier" aria-label="Tier for ${esc(group)}" onchange="groupTierEffect()">${now ? "" : '<option value="" selected disabled>Choose a tier</option>'}${["critical", "normal", "low", "none"].map(t =>
       `<option value="${t}" ${t === now ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select>`)}
@@ -389,7 +389,7 @@ window.mvPlan = async () => {
     `<label class="rb-app"><input type="checkbox" value="${esc(r.id)}" ${r.why ? "disabled" : "checked"}
       onchange="mvUntick(${jsq(r.id)})"> <span class="mono">${esc(r.id)}</span></label>`,
     r.why ? `<span class="ui-help">${esc(r.why)}</span>`
-      : `<span class="mono">${esc(r.from)} → ${esc(r.to)}</span> <span class="sub">${r.reserves ? `${esc(r.cpu_m)}m CPU · ${esc(r.mem_mb)} MiB reserved` : "reserves nothing"}</span>`,
+      : `<span class="mono">${esc(r.from)} → ${esc(r.to)}</span> <span class="sub">${r.reserves ? `${esc(r.cpu_m)}m CPU · ${esc(r.mem_mb)} MiB reserved` : "reserves nothing"}${r.replaces ? ` · replaces its preference for ${esc(r.replaces)}` : ""}</span>`,
     hostSelect(MV.over[r.id] || MV.to, `mvOverride(${jsq(r.id)},this.value)`, `Host for ${r.id}`)]);
   const notice = !moves.length ? UI.callout("bad", "Can't move", "Choose another host for them, or untick them.")
     : stays.length || (plan.hosts || []).some(h => h.over) ? UI.callout("warn", "Check first",

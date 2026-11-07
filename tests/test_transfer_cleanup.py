@@ -27,6 +27,13 @@ from fakes.kube import Kube
 
 ID, OTHER, UID = "0123456789ab", "abcdef012345", "original-source-uid"
 
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # A read on the way to what these tests check fails at once, as on CI (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
+
 
 def artifact(name, transfer=ID, source_uid=UID, **fields):
     return {"metadata": {"name": name, "uid": name + "-uid", "resourceVersion": "1",

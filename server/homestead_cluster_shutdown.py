@@ -233,7 +233,7 @@ class Shutdown:
                                           for o in v.get("metadata", {}).get("ownerReferences") or [])]
         loose = ["/".join(identity(v)[:2]) for v in vmis if v not in managed]
         if loose:
-            problems.append("No VirtualMachine manages these, so they could not be started again: stop them by hand first: "
+            problems.append("Stop these by hand first. No VirtualMachine manages them, so they could not be started again: "
                             + ", ".join(loose[:12]))
         live_vms = ["/".join(identity(v)[:2]) for v in vmis]
         maintenance = M.inventory(self.get, targets, namespace=self.ns)

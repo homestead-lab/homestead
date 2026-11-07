@@ -577,8 +577,8 @@ def plan(exclude=(), avoid=(), role=None, restart=None, back=(), may_restart=Fal
                 if may_restart:
                     restart[app["id"]] = ""     # no tool: a restart leaves the preference alone
                 else:
-                    kept[app["id"]] = app["why"] = ("it has a host preference someone chose, which only a restart "
-                                                    "leaves alone, and restarts run under Spread by capacity")
+                    kept[app["id"]] = app["why"] = ("it has a host preference someone chose, which only a restart leaves "
+                                                    "alone, and restarts run only under Spread by capacity with every host back")
     requested = _requested(hosts) if restart else {}
     for app in apps:
         if app["id"] not in restart or app["why"] or app["id"] in exclude:
@@ -638,6 +638,12 @@ def plan(exclude=(), avoid=(), role=None, restart=None, back=(), may_restart=Fal
             continue
         _, app, target, _near = best
         _take(app, target, load, moves, moved)
+    for move in () if unattended else moves:
+        # What a person is told: Balance's own preference goes unremarked.
+        dep = next(a["dep"] for a in apps if a["id"] == move["id"])
+        wanted = PLACE.preferred_host(((dep.get("spec") or {}).get("template") or {}).get("spec") or {}, ignoring=PLACE.balance_preference(dep))
+        if wanted and wanted != move["to"]:
+            move["replaces"] = wanted
     for move in moves if unattended else ():
         # With its generation: an edit since the plan skips it, as after a review. A run
         # can last over an hour, and a placement move would write over a pin set meanwhile.
@@ -708,8 +714,8 @@ def reviewed(moves, exclude, token, role=None):
     if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
         raise ValueError("Review the containers to move again")
     if not _token_ok(moves, exclude, token):
-        raise ValueError("The moves differ from the review, it is more than ten minutes old, "
-                         "or a container was edited since; review again")
+        raise ValueError("This review is out of date; review again. The moves differ from it, it is more than "
+                         "ten minutes old, or a container was edited since")
     hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -797,7 +803,9 @@ def picked(picks, role=None):
             why = f"at most {MAX_MOVES} at a time"
         if not why:
             going.setdefault(to, []).append(app["id"])
+        wanted = PLACE.preferred_host(template, ignoring=PLACE.balance_preference(app["dep"]))
         rows.append({"id": app["id"], "ns": app["ns"], "name": app["name"], "from": app["host"], "to": to, "why": why,
+                     **({"replaces": wanted} if wanted and wanted != to else {}),
                      "cpu_m": round(cpu_r), "mem_mb": round(mem_r / GI_MB), "reserves": bool(cpu_r or mem_r),
                      "near": bool(app["near"] and to in app["near"])})
     # The destinations, with every pick sent there counted together.
@@ -859,7 +867,8 @@ def start(plan, why="", role=None, unless=()):
     return operations.start(KIND, f"{verb} {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
                             {"kind": "Deployment", "name": "rebalance"}, "/containers",
                             {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role,
-                             "stop_on_failure": bool(plan.get("stop_on_failure")), "results": []},
+                             "stop_on_failure": bool(plan.get("stop_on_failure")), "results": [],
+                             **({"automatic": True} if plan.get("automatic") else {})},
                             "Starting with the first container", unless=unless)
 
 
@@ -893,6 +902,16 @@ def _pull_first(dep, node):
         return [], []
 
 
+def _cooldown(ref, move, now):
+    """An automatic run's app stays put for a day from when it was sent or refused, so a
+    cancel in between counts. A failure to note it must not lose a send already made."""
+    if ref.get("automatic"):
+        try:
+            RECOVERY.moved_back(move["id"], now)
+        except Exception as error:
+            print(f"recovery: {str(error)[:160]}", flush=True)
+
+
 def _restart_mark(dep):
     return NAMES.read((((dep.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("annotations"), "restartedAt")
 
@@ -917,6 +936,7 @@ def _send_restart(ref, move, dep, role, skip, progress, i, total, now):
     except Exception as error:
         ref["send_error"] = str(error)[:160]
     ref.update(stage="starting", started=now, unwatched=True)
+    _cooldown(ref, move, now)
     if written:
         _watch(ref, move, written, now)
     return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should land on {move['to']}"
@@ -966,11 +986,17 @@ def status(item):
         rest not reached; Balance's own plan skips it and carries on."""
         if ref.get("stop_on_failure"):
             return _halt(ref, i, move, reason)
+        # A refusal each look would otherwise be a new job every 15 minutes.
+        _cooldown(ref, move, now)
         _note(ref, move, "skipped", reason)
         ref.setdefault("skipped", []).append(f"{move['id']}: {reason}")
         ref.update(index=i + 1)
         return "running", progress, f"Skipped {move['id']}: {reason}"
     if stage == "move":
+        if ref.get("automatic") or move.get("how") == "restart":
+            why = RECOVERY.may_go_on()
+            if why:
+                return "succeeded", progress, f"Stopped: {why}. Moved {done}"
         seen = {}
         settled = False
         try:
@@ -1027,6 +1053,7 @@ def status(item):
         except ValueError as error:
             return skip(str(error)[:160])
         ref.update(stage="starting", started=now)
+        _cooldown(ref, move, now)
         if ref.get("stop_on_failure"):
             moved = [r["id"] for r in ref.get("results") or [] if r["result"] == "moved"]
             return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")

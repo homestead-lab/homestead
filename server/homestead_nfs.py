@@ -169,7 +169,7 @@ def recovery_report(nodes, volumes, replicas, platform, node_down, errors=(), po
     controls = [n for n in nodes if any(key in labels(n) for key in (
         "node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
     if len([n for n in controls if ready(n)]) < 2:
-        blockers.append("Fewer than two Ready control-plane nodes: losing the only API/scheduler host prevents automatic recovery.")
+        blockers.append("Fewer than two Ready control-plane nodes. Losing the only API/scheduler host prevents automatic recovery.")
     etcd = [n for n in nodes if "node-role.kubernetes.io/etcd" in labels(n)]
     if etcd and sum(ready(n) for n in etcd) - (len(etcd) // 2 + 1) < 1:
         blockers.append("The visible etcd members cannot lose one member and keep quorum.")

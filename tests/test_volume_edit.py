@@ -1,6 +1,7 @@
 import sys, unittest, urllib.error
 import copy
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_storage as STORAGE
@@ -16,6 +17,11 @@ class VolumeEditTests(unittest.TestCase):
     a Longhorn path without its namespace, after the size had changed."""
 
     def setUp(self):
+        # The Longhorn live-upgrade guard reads the installed version through
+        # homestead_components' own client, the real one unless an earlier file
+        # left a fake bound: these tests are about what is sent, so no guard
+        # (as test_vm_edit_admission does).
+        self.enterContext(mock.patch.object(server.STORAGE_RESIZE, "upgrade_guard", None))
         # STORAGE reads the cluster through server.py's client in these tests.
         for name in ("kget", "ksend"):
             self.addCleanup(setattr, STORAGE, name, getattr(STORAGE, name))

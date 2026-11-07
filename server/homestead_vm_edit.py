@@ -320,8 +320,8 @@ def _network_kind(network):
     found = KUBE.get_optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{ns}/network-attachment-definitions/{urllib.parse.quote(name)}", read=V.kget)
     config = ((found or {}).get("spec") or {}).get("config") or ""
     if '"macvlan"' in config:
-        raise ValueError(f"{network} is a macvlan network, which carries containers only: "
-                         "a VM needs a macvtap network or one on a host bridge")
+        raise ValueError(f"{network} carries containers only. A VM needs a macvtap network "
+                         "or one on a host bridge, and this one is macvlan")
     return "macvtap" if '"macvtap"' in config else "bridge"
 
 

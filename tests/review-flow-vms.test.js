@@ -3,6 +3,7 @@
 /* #619 step 6b: VM Edit, New k3s cluster and the VM import's room check run
    on UI.reviewFlow(). The "pinned" tests were written against the dialogs as
    they were and passed there; the move keeps them green. */
+const seen = require("./helpers/seen");
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 
@@ -71,17 +72,18 @@ test("pinned: VM Edit's review opens over the form with the same title and loadi
 test("pinned: VM Edit's review reads the same, with and without new room on a host", async () => {
   let t = edit();
   await t.ctx.vmEditReview(change, true);
-  assert.match(t.html(), /Saves <b>guest<\/b>/);
+  // The header names the VM; the sentence says what happens to it.
+  assert.match(t.html(), /<span class="ui-head-name">guest<\/span><span class="ui-head-where">VM · lab<\/span>[\s\S]*<p class="ui-lead">Saves it/);
   assert.match(t.html(), /4 vCPUs · 6Gi/);
   assert.match(t.html(), /Halted → Always/);
   assert.match(t.html(), /<span class="mono">guest-disk-2<\/span> · 20Gi · fast/);
   assert.match(t.html(), /After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart\./);
   assert.match(t.html(), /id="vmEditApprove"[^>]*onchange="vmEditReviewReady\(\)"/);
-  assert.match(t.html(), /<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack\(\)">Back to edit<\/button><\/div><div class="ui-actions-end"><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply\(\)">Save changes<\/button>/);
+  assert.match(t.html(), /<button type="button" class="btn" onclick="vmEditReviewBack\(\)" data-dialog-dismiss="true">Back to edit<\/button><\/div><div class="ui-actions-end"><button type="button" class="btn pri" id="vmEditApply" onclick="vmEditReviewedApply\(\)" disabled >Save changes<\/button>/);
   assert.equal(t.fields["#vmEditApply"].disabled, true);
   t = edit({ admission: false });
   await t.ctx.vmEditReview(change);
-  assert.match(t.html(), /Saves <b>guest<\/b>\. It needs no new room on a host\./);
+  assert.match(t.html(), /<p class="ui-lead">Saves it\. It needs no new room on a host\./);
   assert.match(t.html(), /Saving sends no restart\. Restart the VM from its power controls if a change needs it\./);
   assert.match(t.html(), /High RAM/);
   assert.match(t.html(), /id="vmEditApprove"/);
@@ -115,7 +117,7 @@ test("pinned: a failed VM Edit save says what may be saved and is not repeated",
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.fields["#vmEditApply"].textContent, "Inspect VM before retrying");
-  assert.ok(t.html().startsWith('<div class="note bad">lost response. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again.</div>'));
+  assert.ok(seen(t.html()).startsWith("lost response. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again."));
   assert.deepEqual(t.toasts, [["lost response", "bad"]]);
   assert.deepEqual(t.calls, ["refreshOperations"]);
   assert.deepEqual(t.restarts, []);
@@ -129,7 +131,8 @@ test("pinned: blocked and missing VM Edit reviews send nothing", async () => {
   assert.equal(t.ctx.vmEditReviewReady(), false);
   t = edit({ missing: true });
   await t.ctx.vmEditReview(change);
-  assert.equal(t.html(), '<div class="note bad">VM edit review unavailable. Nothing was saved; go back and review again.</div><button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>');
+  assert.equal(seen(t.html()), "VM edit review unavailable. Nothing was saved; go back and review again. Back to edit");
+  assert.match(t.html(), /ui-callout bad[\s\S]*onclick="vmEditReviewBack\(\)">Back to edit<\/button>$/);
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.sent.length, 1);
 });
@@ -176,13 +179,13 @@ test("a 409 from VM Edit's save offers a fresh review of the same change", async
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.deepEqual(t.toasts, [["The VM changed during admission; review it again", "bad"]]);
-  assert.match(t.html(), /The VM changed during admission; review it again\. The review was out of date\. Some VM, disk or Secret changes may already be saved; no request was repeated and no Restart was sent\. Review again to see the VM as it is now\./);
+  assert.match(seen(t.html()), /The VM changed during admission\. Review it again\. The review was out of date\. Some VM, disk or Secret changes may already be saved; no request was repeated and no Restart was sent\. Review again to see the VM as it is now\./);
   assert.match(t.html(), /onclick="vmEditReviewAgain\(\)">Review again<\/button>/);
   assert.deepEqual(t.body.focused, [".ui-actions-end .btn.pri"], "focus moves to Review again");
   assert.deepEqual(t.restarts, []);
   await t.ctx.vmEditReviewAgain();
   assert.deepEqual(t.sent.at(-1), { path: "/api/vm/edit/preview", body: change }, "the same change, previewed again");
-  assert.match(t.html(), /id="vmEditApply" disabled/);
+  assert.match(t.html(), /id="vmEditApply"[^>]*disabled/);
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.sent.filter(s => s.path === "/api/vm/edit").length, 2, "only after a fresh review and tick");
@@ -275,7 +278,7 @@ test("pinned: a failed k3s create is not repeated and says what may exist", asyn
   assert.deepEqual(t.toasts, [["lost response", "bad"]]);
   assert.equal(t.fields["#k_go"].textContent, "Inspect batch before retrying");
   assert.equal(t.fields["#k_go"].disabled, true);
-  assert.ok(t.html().startsWith('<div class="note bad">lost response. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review.</div>'));
+  assert.ok(seen(t.html()).startsWith("lost response. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review."));
   assert.deepEqual(t.calls, ["refreshOperations"]);
   t.fields["#k_go"].disabled = false;
   await t.ctx.k3sCreate();
@@ -311,7 +314,7 @@ test("a 409 from k3s create offers a fresh review of the same batch", async () =
   await t.ctx.k3sReview();
   await t.ctx.k3sCreate();
   assert.deepEqual(t.toasts, [["VM batch dependencies changed; retain partial resources and review again", "bad"]]);
-  assert.match(t.html(), /VM batch dependencies changed; retain partial resources and review again\. The review was out of date\. Some VMs or their disks and Secrets may already exist; no request was repeated\. Review again to see the batch as it is now\./);
+  assert.match(seen(t.html()), /VM batch dependencies changed\. Retain partial resources and review again\. The review was out of date\. Some VMs or their disks and Secrets may already exist; no request was repeated\. Review again to see the batch as it is now\./);
   assert.match(t.html(), /onclick="k3sReviewAgain\(\)">Review again<\/button>/);
   assert.deepEqual(t.body.focused, [".ui-actions-end .btn.pri"], "focus moves to Review again");
   assert.deepEqual(t.calls, ["refreshOperations"]);

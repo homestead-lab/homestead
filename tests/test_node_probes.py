@@ -90,11 +90,14 @@ class Base(unittest.TestCase):
                       mock.patch.object(PROBES.SMART.SHARED, "DIR", store.name)):
             patch.start()
             self.addCleanup(patch.stop)
-        # Stop the loop, then let a SMART pass still running (its own thread,
-        # #974) end, while the fakes are in place: cleanups run last-added
-        # first, and a read after the fakes are gone waits out a real timeout.
+        # Cleanups run last first: stop the loops before the patches above come off,
+        # or a round runs against the real urlopen first; then let a SMART pass
+        # still running (its own thread, #974) end while the fakes are in place,
+        # or a read after the fakes are gone waits out a real timeout.
         self.addCleanup(PROBES.smart_settled, 5)
         self.addCleanup(PROBES.stop)
+        self.addCleanup(KUBE_METRICS.stop)
+        self.addCleanup(KSTATS.stop)
 
     def misses(self, node):
         return PROBES.status()[node]["misses"]

@@ -18,9 +18,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hook_queue import own_hook_queue
 import homestead_routes as ROUTES
 import homestead_shared as SHARED
+from fakes.kube import no_cluster
 
 SECRETS = ("Pw-0123456789", "SETUP-4F7Q-9KZD", "Old-pw-0123456", "New-pw-6543210", "hs_live_NEWKEYSECRET",
            "sessiontoken123", "cfjwt.a.b", "hsk_abc", "Basic-Pw-0123456789")
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class NothingSecret(unittest.TestCase):

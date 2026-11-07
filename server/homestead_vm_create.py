@@ -443,8 +443,8 @@ def prepare_vm(cfg, platform=None, default_class=""):
         raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
     # On Harvester a URL becomes one of its images, which needs no CDI.
     if (imported_dv or (image_url and not harvester)) and not cdi:
-        raise ValueError("CDI (the containerized data importer) is not installed, so disk images cannot be "
-                         "downloaded or imported; install it from kubevirt.io, or start from a blank disk")
+        raise ValueError("CDI is not installed, so disk images cannot be downloaded or imported. "
+                         "Install the containerized data importer from kubevirt.io, or start from a blank disk")
 
     if imported_dv:
         _required_name(imported_dv, "imported disk")
@@ -547,8 +547,8 @@ def prepare_vm(cfg, platform=None, default_class=""):
                 raise ValueError(f"there is no LAN network {network}")
             config_text = (found.get("spec") or {}).get("config") or ""
             if '"macvlan"' in config_text:
-                raise ValueError(f"{network} is a macvlan network, which carries containers only: "
-                                 "a VM needs a macvtap network or one on a host bridge")
+                raise ValueError(f"{network} carries containers only. A VM needs a macvtap network "
+                                 "or one on a host bridge, and this one is macvlan")
             # macvtap is joined through KubeVirt's binding for it, a bridge directly.
             binding = {"binding": {"name": "macvtap"}} if '"macvtap"' in config_text else {"bridge": {}}
             interface = {"name": "default", **binding, "model": nic_model, "macAddress": mac}

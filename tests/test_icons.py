@@ -14,9 +14,17 @@ import homestead_icons as icons
 import server
 import homestead_deploy_manifests as MANIFESTS
 import homestead_deploy_appstore as APPSTORE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"homestead-test-icon"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class IconCacheTests(unittest.TestCase):

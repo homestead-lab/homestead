@@ -143,7 +143,7 @@ def plan(current, proposed, namespace, get, get_nodes, planner, threshold, plann
                 if known and unavailable == 0 and stable(current, owned, replicas):
                     details["start_blocked"] = True
                     result["blocked"] = True
-                    warnings.append("rollout cannot start in this snapshot: no replacement pod fits while maxUnavailable=0 keeps every healthy old replica running")
+                    warnings.append("rollout cannot start now: no replacement pod fits. maxUnavailable=0 keeps every healthy old replica running")
                 else:
                     warnings.append("a replacement cannot currently fit alongside old pods; progress depends on allowed old-pod removal, termination and volume release")
         warnings.append("intermediate rolling-update placement and readiness are not fully simulated; a fitting first pod is not a completion guarantee")

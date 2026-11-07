@@ -521,6 +521,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/push/unsubscribe` | viewer |  | homestead_push |
 | GET | `/api/pvcs` | viewer |  | homestead_storage |
 | GET | `/api/quorum` | viewer |  | homestead_lifecycle |
+| GET | `/api/recovery` | viewer |  | homestead_recovery |
+| POST | `/api/recovery/resume` | admin |  | homestead_recovery |
 | POST | `/api/resources/create` | admin |  | homestead_resources |
 | POST | `/api/resources/delete` | admin |  | homestead_resources |
 | GET | `/api/resources/events` | viewer |  | homestead_resources |

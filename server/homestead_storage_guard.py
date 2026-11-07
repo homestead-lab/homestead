@@ -139,7 +139,7 @@ def send(method, path, body, dispatch, ops, read, own_controller=None):
     with ops.transaction():
         if own_change:
             if _active(ops.stored()):
-                raise ValueError("Finish or recover the storage move before updating, restarting or changing Homestead's replicas")
+                raise ValueError("Finish or recover the storage move first. Homestead cannot be updated, restarted or rescaled until then")
             return dispatch()
         items = [item for item in ops.stored() if item["id"] != getattr(_local, "job", None)]
         if snapshot and _active(items) and (snapshot[2] or method == "POST"):

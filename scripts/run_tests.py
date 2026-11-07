@@ -160,6 +160,12 @@ def run(files):
     suite = unittest.defaultTestLoader.loadTestsFromNames([path.stem for path in files])
     print(f"{len(files)} test files", flush=True)
     passed = unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+    # Files under tests/fakes/kube.py no_cluster() are not seen by the guard: say what
+    # it turned away, so a sweep can find reads a Kube() should answer (advisory).
+    fakes_kube = sys.modules.get("fakes.kube")
+    summary = fakes_kube.summarise_reads(fakes_kube.no_cluster_reads()) if fakes_kube else ""
+    if summary:
+        print(summary, flush=True)
     return NETWORK.report() and passed
 
 

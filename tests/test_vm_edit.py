@@ -12,6 +12,8 @@ import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
 import homestead_vm_list as VM_LIST
 from rebind import bound_names, keep_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 # A VM whose DataVolume CDI refused: its URL was a file name.
 VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVersion": "10"},
@@ -33,6 +35,12 @@ VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVers
                                  "message": "Error encountered while creating DataVolumes: Invalid source URL"}]}}
 MADE = {"metadata": {"name": "web-old"}, "spec": {"resources": {"requests": {"storage": "10Gi"}}},
         "status": {"capacity": {"storage": "10Gi"}}}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Cluster:
@@ -223,6 +231,9 @@ class ClusterFixtureTests(unittest.TestCase):
         before = _vms_bound()
         Cluster({"harvester": False, "cdi": True})
         self.assertNotEqual(before, _vms_bound())
+        # Running the module cleanups ends the file's no_cluster() too: put it back
+        # when this test ends, pass or fail, for the rest of the file.
+        self.addCleanup(lambda: unittest.enterModuleContext(no_cluster()))
         unittest.doModuleCleanups()
         self.assertEqual(before, _vms_bound())
 

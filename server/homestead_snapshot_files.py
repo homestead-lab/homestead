@@ -134,7 +134,7 @@ def review(volume, snapshot):
         raise ValueError("Temporary browsing requires a Longhorn storage class")
     if (any(sc.get("parameters", {}).get(k) for k in ("fromBackup", "dataSource"))
             or sc.get("parameters", {}).get("encrypted", "false") != "false" or source["spec"].get("encrypted")):
-        raise ValueError("This storage class needs a custom restore or encryption configuration and cannot be browsed here")
+        raise ValueError("This storage class cannot be browsed here. It needs a custom restore or encryption configuration")
     size = str(state.get("restoreSize") or source["spec"]["size"])
     if not size.isdigit() or int(size) <= 0:
         raise ValueError("Snapshot volume size is unavailable")

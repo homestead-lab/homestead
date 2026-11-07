@@ -16,10 +16,16 @@ import homestead_imports as IMPORTS
 import homestead_image_cache as IMAGES
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_names as NAMES
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 
 TASK = NAMES.key("task")
 LISTING = {"images": [{"repoTags": ["example.test/app:1"], "repoDigests": [], "size": "10"}]}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def node(name="node1"):

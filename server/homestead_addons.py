@@ -181,8 +181,8 @@ def _can_install(what):
     if p.get("harvester"):
         raise ValueError(f"Harvester includes {what} already")
     if not p.get("helm_controller"):
-        raise ValueError(f"this cluster has no Helm controller (k3s and RKE2 have one), so Homestead cannot "
-                         f"install {what}; install it with its own instructions")
+        raise ValueError(f"this cluster has no Helm controller, so Homestead cannot install {what}. "
+                         "k3s and RKE2 have one; elsewhere, install it with its own instructions")
     return p
 
 

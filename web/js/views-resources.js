@@ -45,7 +45,7 @@ function renderResources() {
             <span class="dim xs"> · ${rows.length}${list.more ? "+" : ""} shown</span></div>
           ${k.namespaced ? `<select aria-label="Namespace" onchange="resNamespace(this.value)"><option value="">All namespaces</option>${(STATE.data.namespacesAll || (RES.ns ? [RES.ns] : [])).map(n =>
             `<option ${n === RES.ns ? "selected" : ""}>${esc(n)}</option>`).join("")}${STATE.data.namespacesAll ? "" : '<option disabled>Could not read the namespaces</option>'}</select>` : '<span class="dim xs">cluster-wide</span>'}</div>
-        ${list.error ? `<div class="note bad">${esc(list.error)}</div>` : ""}
+        ${list.error ? `${UI.callout("bad", "", `${esc(list.error)}`)}` : ""}
         <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="res-${esc(k.resource)}"><thead><tr>
           ${k.namespaced && !RES.ns ? "<th>Namespace</th>" : ""}${list.columns.map(c => `<th title="${esc(c.description)}">${esc(c.name)}</th>`).join("")}</tr></thead><tbody>
           ${rows.map(r => `<tr class="clickable" onclick="resOpen(${jsq(r.namespace)},${jsq(r.name)})">

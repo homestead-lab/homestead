@@ -11,6 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_unraid_vms as UVMS
 from rebind import keep_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 # A Windows 11 VM as Unraid's VM manager writes it.
 WIN11 = """<domain type='kvm'>
@@ -58,6 +60,12 @@ WIN11 = """<domain type='kvm'>
 </domain>"""
 
 PATH1, PATH2 = "/mnt/user/domains/Windows 11/vdisk1.img", "/mnt/user/domains/Windows 11/vdisk2.img"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def b64(text):

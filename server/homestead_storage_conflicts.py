@@ -123,7 +123,7 @@ def require_clear(items, kind, ref, resource=None):
                   and saved.get('phase') in ('staged', 'retire-staged'))
         if _holds_v2(kind, ref) or (same_host and kind in ('disk-v2-convert', 'disk-allocation', 'node-power', 'host-os',
                 'host-promote', 'longhorn-v2-prepare', 'disk-retire', 'longhorn-runtime') and not reboot):
-            raise ValueError('Finish the saved Longhorn runtime maintenance before changing this host or upgrading Longhorn.')
+            raise ValueError('Finish the saved Longhorn runtime maintenance first. This host and Longhorn wait for it.')
     if (_holds_v2(kind, ref) and any(i.get("kind") in ("disk-v2-convert", "disk-allocation") and unresolved(i) for i in items)
             or kind in ("disk-v2-convert", "disk-allocation") and any(_holds_v2(i.get("kind"), i.get("ref")) and i.get("status") not in TERMINAL for i in items)):
         raise ValueError("Finish disk preparation before upgrading V2 instance managers or shutting down hosts.")

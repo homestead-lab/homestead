@@ -101,8 +101,8 @@ def harvester_target_value(url, keys, poll, current=None):
     if not url.startswith("s3://"):
         raise ValueError("Harvester writes backups to NFS or S3: nfs://host:/path or s3://bucket@region")
     if not match:
-        raise ValueError("on Harvester an S3 target is s3://bucket@region - Harvester writes to the top of the bucket, "
-                         "so leave any path off")
+        raise ValueError("on Harvester an S3 target is s3://bucket@region, with no path. "
+                         "Harvester writes to the top of the bucket")
     access = keys.get("access_key") or current.get("accessKeyId", "")
     secret = keys.get("secret_key") or current.get("secretAccessKey", "")
     if not (access and secret):

@@ -272,7 +272,8 @@ says so: set `HS_APPS_NAMESPACE` if yours is elsewhere.
   Removing it on the page is recorded at once; deleting it with kubectl is
   recorded when Homestead next restarts. To keep it away for certain, reinstall
   with `HS_NODEPROBE=no` on k3s or RKE2, which sets `node-probe: no` in
-  `homestead-install`, and say so again at each reinstall; with the plain manifest
+  `homestead-install`; installing again keeps that choice, unless the run says
+  `HS_NODEPROBE=yes`. With the plain manifest
   or on Harvester, set `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`. Homestead on a
   release that doesn't record its install yet leaves the probe away after a
   reinstall: install it from **Settings › Cluster › Add-ons**. A Helm reinstall brings the probe back

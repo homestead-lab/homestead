@@ -88,7 +88,7 @@ class MoveReadinessTests(unittest.TestCase):
         calls = []
         with mock.patch.object(move, "remote", lambda *a, **k: calls.append(a)), \
                 mock.patch.object(move, "check_cluster", lambda name: {"version": "2.8.100"}):
-            with self.assertRaisesRegex(ValueError, "MinIO's images can no longer be downloaded"):
+            with self.assertRaisesRegex(ValueError, "MinIO, whose images can no longer be downloaded"):
                 move.setup_storage("oldcluster")
         self.assertFalse([c for c in calls if c[1] == "/api/objectstore/deploy"], "nothing is deployed that could not start")
 

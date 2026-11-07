@@ -6,7 +6,7 @@ async function mqttPaint() {
   const host = $("#mqttCard");
   if (!host) return;
   let m;
-  try { m = await api("/api/mqtt"); } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  try { m = await api("/api/mqtt"); } catch (e) { host.innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; return; }
   STATE.data.mqtt = m;
   host.innerHTML = mqttCardHtml(m);
 }

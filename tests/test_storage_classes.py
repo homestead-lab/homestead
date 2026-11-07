@@ -6,6 +6,7 @@ import server
 import homestead_storage_classes as STORAGE_CLASSES
 from fakes.platform import plain_platform
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 CLASSES = {"items": [
@@ -22,6 +23,12 @@ CLASSES = {"items": [
         "harvesterhci.io/is-reserved-storageclass": "true"}},
      "provisioner": "driver.longhorn.io", "parameters": {"migratable": "true"}},
 ]}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class StorageClassTests(unittest.TestCase):
@@ -175,6 +182,9 @@ class LonghornV2Tests(unittest.TestCase):
 
         server.KUBE_HELPERS.kget = get
         server.KUBE_HELPERS.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or body
+        # No node probe answers here (it would connect to a pod address): a test that
+        # wants probe readings patches node_temps itself.
+        self.enterContext(mock.patch.object(STORAGE_CLASSES, "node_temps", return_value={}))
 
     def test_quantities_read_in_mebibytes(self):
         self.assertEqual([2048, 1024, 0, 0], [STORAGE_CLASSES._quantity_mb(v) for v in ("2Gi", "1024Mi", "0", "bogus")])

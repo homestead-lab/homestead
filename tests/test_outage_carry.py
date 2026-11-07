@@ -26,6 +26,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_outage as O
 import homestead_outage_carry as C
+from fakes.kube import Kube, no_cluster
 from rebind import keep_bound
 from fakes.kube import Kube
 
@@ -40,6 +41,12 @@ STORE = f"/api/v1/namespaces/lab/configmaps/{NAMES.object_name('outage-carry')}"
 COLLECTION = "/api/v1/namespaces/lab/configmaps"
 T0 = 1_800_000_000
 DAY = 24 * 3600
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def down(path):

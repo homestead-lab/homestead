@@ -90,6 +90,7 @@ MODULES = (
     "homestead_deploy",
     "homestead_deploy_server",
     "homestead_diagnostics",
+    "homestead_recovery",
     "homestead_disk_v2",
     "homestead_host_gone",
     "homestead_disk_allocation",
@@ -550,7 +551,7 @@ def table():
             if "*" in path and not (path.endswith("/*") and path.count("*") == 1):
                 raise ValueError(f"{method} {path} in {name}: a prefix route ends in /* and has no other *")
             if path.startswith("/api/v1/") and name != "homestead_api_v1":
-                raise ValueError(f"{method} {path} in {name}: /api/v1 is homestead_api_v1's, where a key's scopes are checked")
+                raise ValueError(f"{method} {path} in {name}: /api/v1 is homestead_api_v1's. A key's scopes are checked there")
             if path.endswith("/*") and _covers(key[0], path[:-1]):
                 raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)

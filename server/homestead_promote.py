@@ -257,7 +257,7 @@ def plan(node):
     if not _ready(host):
         blockers.append(f"{node} is not Ready")
     if own_node() == node:
-        blockers.append(f"Homestead runs on {node}: move it to another host first (Host actions › Move all off), then review again")
+        blockers.append(f"Homestead runs on {node}. Move it to another host first (Host actions › Move all off), then review again")
     shared, known = PLATFORM.shared_server_args(nodes)
     if not known:
         blockers.append("The servers' shared settings could not be read from k3s.io/node-args")
@@ -268,8 +268,8 @@ def plan(node):
                         "upgrade so the versions match first")
     down = [m for m in members if m not in (q.get("ready") or [])]
     if down:
-        blockers.append(f"etcd member{'s' if len(down) != 1 else ''} {', '.join(down)} not Ready: "
-                        "the cluster takes no new member while short of a vote")
+        blockers.append(f"etcd member{'s' if len(down) != 1 else ''} {', '.join(down)} not Ready. "
+                        "The cluster takes no new member while short of a vote")
     jobs = [o for o in OPS.snapshot() if o.get("status") not in OPS.TERMINAL]
     if any(o.get("kind") == KIND for o in jobs):
         blockers.append("A host is being made a server already")
@@ -282,7 +282,7 @@ def plan(node):
     elif forecast.get("verdict") == "tight":
         warnings.append(forecast.get("sentence", ""))
     if not _exists(f"/api/v1/namespaces/kube-system/secrets/{node}.node-password.k3s"):
-        blockers.append(f"kube-system/{node}.node-password.k3s is missing: the host would not register as the same Node")
+        blockers.append(f"kube-system/{node}.node-password.k3s is missing. The host would not register as the same Node")
     if _ready(host):
         out, _ = hostrun.run(node, CHECK, timeout=45, wait=30)
         if "PASSWORD" not in out:

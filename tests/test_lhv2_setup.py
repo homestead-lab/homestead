@@ -182,7 +182,7 @@ class SetupTests(unittest.TestCase):
                         'status': {'phase': 'Running'}})
         plan = V.plan()
         self.assertFalse(plan['can_enable'])
-        self.assertIn("reserves 240m of CPU and Kubernetes has 125m left", ' '.join(plan['blockers']))
+        self.assertIn("It reserves 240m and Kubernetes has 125m left", ' '.join(plan['blockers']))
         self.c.change('/api/v1/namespaces/lab/pods/pod-0', lambda pod: pod['spec']['containers'][0]['resources']['requests'].update(cpu='1500m'))
         self.assertTrue(V.plan()['can_enable'], "room for it: enable")
 

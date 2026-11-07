@@ -139,7 +139,7 @@ def service_plan(cfg, require_workload=True):
                              "Homestead's own, or give this app an address of its own")
     elif mode == "automatic":
         if not state["available_vips"]:
-            raise ValueError("there is no free address to give it: add some under Networking › Virtual IPs "
+            raise ValueError("there is no free address to give it. Add some under Networking › Virtual IPs "
                              "(＋ Add VIPs), or choose a specific address")
         vip = state["available_vips"][0]
     elif mode == "manual":

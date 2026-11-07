@@ -26,10 +26,17 @@ import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
 import server
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 from rebind import keep_bound
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/tunnel"
 SECRET = "/api/v1/namespaces/lab/secrets/tunnel-env"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def b64(text):

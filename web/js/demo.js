@@ -436,8 +436,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/homestead-lab/homestead:2.8.335-dev.7"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.335-dev.7")] },
+      images: ["ghcr.io/homestead-lab/homestead:2.8.335-dev.8"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.335-dev.8")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -806,7 +806,7 @@
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
-      info: { version: "2.8.335-dev.7", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.335-dev.8", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -839,7 +839,7 @@
       return { node: req.node, action: req.action, bond: "bond0", members, mode: req.mode || "active-backup", primary: req.primary, keep: "",
         address: "192.0.2.12/24", carries_on: "bond0", renamed: true, refusals, digest: "demo", rollback_seconds: 240,
         shape: { iface: "enp1s0", shape: "nic", bridge: "", carrier_nic: "enp1s0" },
-        warnings: ["the host's address moves to bond0: kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
+        warnings: ["the host's address moves to bond0. kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
     },
     "/api/node/bond": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node}'s network is changing; follow it under Jobs` }),
     "/api/network/uplinks": () => demoUplinks(),
@@ -1174,13 +1174,13 @@
       { name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.335-dev.7", local_protocol: 1,
+      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.335-dev.8", local_protocol: 1,
         state: "unreachable", message: "could not reach dr-site: no answer from http://192.0.2.251:8088" };
-      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.335-dev.7",
+      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.335-dev.8",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "staging runs 2.8.190 and this one 2.8.335-dev.7. Moves work between them; this Homestead is the newer of the two." };
-      return { name, version: "2.8.335-dev.7", protocol: 1, local_version: "2.8.335-dev.7", local_protocol: 1,
-        state: "same", compatible: true, message: "Both run Homestead 2.8.335-dev.7." };
+        message: "staging runs 2.8.190 and this one 2.8.335-dev.8. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.335-dev.8", protocol: 1, local_version: "2.8.335-dev.8", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.335-dev.8." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // branch is ready to move from; staging has no backup storage yet.
@@ -1195,7 +1195,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on staging at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "branch", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.335-dev.7", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.335-dev.8", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -1253,14 +1253,14 @@
       all_storage_classes: ["longhorn-r2", "longhorn-r3", "local-path"],
       namespace: body.namespace || "lab", joined: false, will_run: !copy, addresses: isVm ? [] : ["frigate on 192.0.2.242"],
       warnings: [...(copy && isVm ? ["The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it"] : []),
-        "this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
+        "this cluster's Longhorn backup target changes for this transfer. It moves from (none) to s3://homestead-backups@us-east-1/, then returns to its previous setting; backups already written to the old one stay there"],
       claims: [{ claim: isVm ? "haos-disk-0" : "frigate-config", size_gb: isVm ? 32 : 10, access_mode: isVm ? "ReadWriteMany" : "ReadWriteOnce",
         volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
       })(),
     "/api/move/start": { id: "d1", status: "running" },
-    "/api/host-console": { version: "2.8.335-dev.7", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
+    "/api/host-console": { version: "2.8.335-dev.8", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
-      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.335-dev.7", detail: "Installed 2.8.335-dev.7; matches this release" },
+      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.335-dev.8", detail: "Installed 2.8.335-dev.8; matches this release" },
       { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
     "/api/compose/preview": () => ({ capacity_token: "demo-compose-review", capacity: {
       status: "fits", blocked: false, requires_confirmation: true, pods: 3,
@@ -1939,7 +1939,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.335-dev.7", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.335-dev.8", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -2647,6 +2647,8 @@ ssh_pwauth: true
         sentence: "If harvester-node3 fails, harvester-node1 would have 13.6 of 15 GiB of memory reserved. Tight, but it fits.",
         hosts: [{ name: "harvester-node1", mem_gib: 13.6, mem_before_gib: 7.9, mem_alloc_gib: 15, cpu_m: 4300, cpu_alloc_m: 8000, full: 0.907, received: true },
           { name: "harvester-node2", mem_gib: 11.2, mem_before_gib: 8.1, mem_alloc_gib: 15, cpu_m: 3800, cpu_alloc_m: 8000, full: 0.747, received: true }] }] },
+    "/api/recovery": { mode: "off", hosts: [], waiting: [], later: 0, left_out: 0, paused: null, undone: null, job: "" },
+    "/api/recovery/resume": { mode: "off", hosts: [], waiting: [], later: 0, left_out: 0, paused: null, undone: null, job: "" },
     "/api/placement": { mode: "standby", unreserved: 4, notes: [], applies: true, hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: true, tainted: true, takes_work: true }] },
     "/api/workloads/priority/plan": url => {
       const picks = Object.fromEntries((url.searchParams.get("chosen") || "").split(",").filter(x => x.includes("=")).map(x => x.split("=")));
@@ -3401,14 +3403,14 @@ ssh_pwauth: true
           candidates: [{name: "h-node1", eligible: true, metrics_available: true,
             used_gb: 12, projected_gb: 14, capacity_gb: 16, projected_percent: 87.5,
             reservations_known: true, reserved_gb: 5, request_slots: 4}],
-          warnings: ["Recreate stops the old pod before its replacement starts.", "Projected RAM is above the configured warning level."],
+          warnings: ["Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart", "projected RAM reaches 91% (warning at 88%)"],
           rollout: {strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["app-old"], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1}}};
       if (window.__demoImageReviewCordoned) {
         window.__demoImageReviewCordoned = false;
         review.capacity.blocked = true;
         review.capacity.candidates = [{...review.capacity.candidates[0], name:"node-1", eligible:false, reasons:["cordoned"]}];
         review.capacity.warnings = ["no ready host satisfies this workload's placement requirements",
-          "no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules",
+          "no scheduling order fits all requested replicas. The observed pod affinity and topology spread rules rule it out",
           "updated pod estimates include every container, not only the added container",
           "post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed",
           "memory is not limited for data-permissions"];
@@ -3430,9 +3432,9 @@ ssh_pwauth: true
             env: {added: ["FRIGATE_AUTH"], removed: ["FRIGATE_LEGACY_UI"], changed: ["LIBVA_DRIVER_NAME", "TZ"], set_by_app: ["TZ"]},
             user: {was: "root", now: "1000"}, build_env_changed: 3, none: false}}],
         // Homestead's own: same settings, only build details moved.
-        homestead: [{container: "homestead", from_tag: "2.8.331", to_tag: "2.8.335-dev.7", from_version: "2.8.331", to_version: "2.8.335-dev.7",
+        homestead: [{container: "homestead", from_tag: "2.8.331", to_tag: "2.8.335-dev.8", from_version: "2.8.331", to_version: "2.8.335-dev.8",
           source: "https://github.com/example/homestead",
-          links: {release: "https://github.com/example/homestead/releases?q=2.8.335-dev.7&expanded=true"},
+          links: {release: "https://github.com/example/homestead/releases?q=2.8.335-dev.8&expanded=true"},
           changes: {...none, build_env_changed: 1}}],
       }[name];
       // Others: an image that carries no labels.
@@ -3463,7 +3465,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.335-dev.7"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.335-dev.8"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
@@ -3694,7 +3696,7 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.335-dev.7", site: "Main site",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.335-dev.8", site: "Main site",
       created: new Date().toISOString(), parts: [] },
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
@@ -3913,7 +3915,7 @@ ssh_pwauth: true
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);
     const moves = responses["/api/move/moves"];
     responses["/api/move/moves"] = (...args) => moves(...args).filter(row => row.status !== "failed");
-    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.335-dev.7", error: "", checking: false, answered: true });
+    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.335-dev.8", error: "", checking: false, answered: true });
     const mqtt = responses["/api/mqtt/preview"].states[0].payload;
     Object.assign(mqtt, { health: "healthy", vol_total: storage.volumes, vol_degraded: 0, vol_faulted: 0 });
   } else {

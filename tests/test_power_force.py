@@ -26,7 +26,7 @@ class ForcedPlanTests(unittest.TestCase):
         self.assertEqual([], plan["hard_blockers"])
         forced = power.plan("node1", "reboot", force=True)
         self.assertTrue(forced["ready"])
-        self.assertTrue(any(w.startswith("Forced: no cordon or drain") and "only etcd member" in w for w in forced["warnings"]))
+        self.assertTrue(any(w.startswith("Forced: apps and VMs on it stop with the host. There is no cordon or drain") and "only etcd member" in w for w in forced["warnings"]))
         self.assertNotEqual(plan["review_token"], forced["review_token"], "a forced review is its own review")
 
     def test_what_cannot_be_sent_safely_is_never_overridden(self):

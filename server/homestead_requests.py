@@ -310,7 +310,7 @@ def room(dep, changes):
             return
         best = max(best, free["memory"])
     if not allowed:
-        raise ValueError("no host it may run on takes apps now (its pins, selectors or the hosts' taints rule them out)")
+        raise ValueError("no host it may run on takes apps now. Its pins, selectors or the hosts' taints rule them out")
     raise ValueError(f"no host it may run on has room for its new reservation ({need['memory'] // 2 ** 20} MiB; "
                      f"the most any of them has free is {max(0, best) // 2 ** 20} MiB)")
 

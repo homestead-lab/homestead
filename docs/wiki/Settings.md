@@ -261,6 +261,9 @@ after it has been seen working before (a new host finishing joining is not
   only included. The run can go on after the window closes: each move waits up
   to ten minutes for its container to start.
 
+- **Automatically** - no window: the moves run by themselves once the host has
+  settled. See [below](#moving-back-automatically).
+
 Apps a tool applies: under **Spread by capacity**, the run also moves apps Flux
 applies, by restarting them. It writes no placement, so the scheduler picks the
 host, and a Flux sync keeps Homestead's restart mark. If one lands back where it
@@ -275,7 +278,18 @@ syncs keep, until someone clears it in Edit, which restarts the app.
 An app a restart can't move stays where it is, with why: it prefers its own host,
 or a host other than the one that came back (a preference a person set is never
 touched; one Balance hosts left is cleared in the restart), reservations favour its
-host, the likely host has no copy of its volumes, or it is paused or mid-rollout.
+host, the likely host has no copy of its volumes, it starts a new copy before
+stopping the old on a volume that attaches to one host, or it is paused or
+mid-rollout. On a cluster that has used Move or Balance hosts for a while, that can
+be about half of the apps Flux applies. Settings lists them; Balance hosts can still
+move them by hand.
+
+In a window or automatic run, whatever applies it, an app keeps a host preference
+someone set: it moves only by a restart, to a returned host it prefers, under Spread
+by capacity. An app whose volume has a copy still being rebuilt stays too. In the
+window, apps Flux applies wait for the next opening while a copy is rebuilt on the
+returned host or another host is away, and Settings says so; a run stops before a
+restart if a host leaves or the choice changes. Nothing in `flux-system` ever moves.
 
 In the window, an app is left where it is when a scheduled job (a CronJob)
 mounts its volume and is running, or runs while the rebalance may still be
@@ -289,7 +303,43 @@ where it is moves at the next opening.
 
 Only moves worth a restart are made, with the same checks as Balance hosts. A
 returned host is remembered until the rebalance finds nothing worth moving,
-and for a week at most; the alert clears then.
+and for a week at most; the alert clears then, and Balance hosts shows anything that
+could still move.
+
+### Moving back automatically
+
+The first move starts within about 20 minutes of a host's return: 15 steady, and
+up to 5 for the plan. It moves one container at a time, and the job shows in Jobs as
+*Rebalance N containers after host came back*. Nothing starts while:
+
+- a returned host has been Ready and not cordoned for under 15 minutes (a flap
+  starts the count again), or Longhorn is rebuilding a copy on it, or a copy on it
+  has failed on an attached, degraded volume;
+- Longhorn can't be read: the Settings health row shows the error;
+- any other host that has worked is away, however long ago it left; the alert
+  names it, and the returned host is forgotten after a week as above;
+- another job that moves or restarts apps or changes hosts is running, or the last
+  automatic run ended under 15 minutes ago;
+- the CPU and memory figures aren't current.
+
+Then each app stays where it is if it is **critical**, or its tier can't be read,
+until the next opening of the update window (with no days set, until you move it); if
+a scheduled job on its volume is running or runs within the run; if it moved
+automatically in the last 24 hours; or if a restart can't move it, as above. A
+restart may land on another host than planned, which counts as moved; landing back
+where it was stops the run.
+
+Settings shows what it is waiting for, and the alert under *Hosts joining* says what
+is moving, what waits and what is left out. Once a look has passed all of this and
+finds nothing to move, that return is done: no more plans and no more runs for it, so
+a reboot doesn't turn into a week of rebalancing, and the alert clears. Settings keeps
+its list of apps left out for the week.
+
+**Stop rebalancing** in Jobs lets the current restart finish and moves nothing more.
+A stop, a failed run, or a run whose job has gone from Jobs stays stopped until an
+admin presses **Resume** here, or someone changes the choice. A run that ends because a host
+left, the choice changed or another job started isn't a stop: it goes on when things
+settle. To keep one app put, pin it, or give it an *Updated elsewhere* mark.
 
 ## Homestead's own health
 

@@ -4,7 +4,7 @@ window.nodeActions = async name => {
   let qr = {}, impact = { workloads: [], stranded: [] };
   try { [qr, impact] = await Promise.all([api("/api/quorum"), api(`/api/node/impact?node=${encodeURIComponent(name)}`)]); }
   catch (e) {
-    return childModal("Host actions unavailable", `<div class="note bad">The host-impact checks could not be completed: ${esc(e.message)}. No power action is available until they work.</div>
+    return childModal("Host actions unavailable", `${UI.callout("bad", "", `The host-impact checks could not be completed: ${esc(e.message)}. No power action is available until they work.`)}
       <button class="btn" onclick="closeModal()">Close</button>`);
   }
   window.__nodeImpact = impact;

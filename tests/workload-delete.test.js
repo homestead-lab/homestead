@@ -12,7 +12,7 @@ async function review(answers) {
   const body = { innerHTML: "" };
   const ctx = { STATE: { data: { wl: [{ ns: "lab", name: "frigate", images: ["frigate"] }] } },
     modal() {}, $: () => body, esc: x => String(x), jsq: x => JSON.stringify(String(x)),
-    UI: { typedConfirm: () => '<input id="wd_confirm">', actions: html => html },
+    UI: { typedConfirm: () => '<input id="wd_confirm">', actions: html => html, callout: (tone, title, body) => `<div class="ui-callout ${tone}">${typeof title === "object" ? title.html : title} ${body}</div>` },
     api: async url => { const a = answers[url]; if (a instanceof Error) throw a; return a; } };
   ctx.window = ctx;
   vm.createContext(ctx);

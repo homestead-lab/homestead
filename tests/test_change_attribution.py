@@ -17,11 +17,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_auth as AUTH
 import homestead_changes as CH
 import homestead_kube as K
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster
 from rebind import keep_bound
 
 PATH = "/apis/apps/v1/namespaces/lab/deployments/sonarr"
 AUTHOR_KEY = CH._author_key   # the real one, for the fresh-install test
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def dep(image="example/sonarr:4.0"):

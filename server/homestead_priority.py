@@ -131,8 +131,8 @@ def ladder(items=None, now=None):
         value = min(d + STEP, SYSTEM_VALUE - 1)   # 1e9 itself is the platform's (Longhorn's)
         critical = _made("critical", value, rows) if value > d else None
         if critical is None:
-            warnings.append(f"Critical can't rank above the cluster default ({default['name'] or 'none'}, {d}): "
-                            "there is no room, or its name is taken")
+            warnings.append(f"Critical can't rank above the cluster default. There is no room above "
+                            f"{default['name'] or 'none'} ({d}), or its name is taken")
     below = sorted((r for r in rows if not r["system"] and r["value"] < d and ours_for(r, "low")),
                    key=lambda r: (r["preempts"], -r["value"], not r["homestead"], r["name"]))
     if below:
@@ -471,8 +471,8 @@ def plan(chosen=None, role=None):
     if own_seen and own_seen[0] and not own_seen[1] and own_seen[2] is not None:
         above = sorted((v, i) for v, i in values if v is not None and v > own_seen[2] and v < SYSTEM_VALUE)
         if above:
-            warnings.append(f"Homestead ({own_seen[0]}, {own_seen[2]}) ranks below {above[-1][1]} ({above[-1][0]}), which can "
-                            "evict it: give it a class at least as high, or remove its class so Homestead sets its own")
+            warnings.append(f"{above[-1][1]} can evict Homestead. Homestead ({own_seen[0]}, {own_seen[2]}) ranks below it "
+                            f"({above[-1][0]}): give it a class at least as high, or remove its class so Homestead sets its own")
     groups = [{"name": g, "tier": None if tiers is None else tiers.get(g, ""), "apps": n} for g, n in sorted(members.items())]
     return {"apps": apps, "skipped": sorted(skipped, key=lambda s: s["id"]), "max": MAX_APPS,
             "changes": len(changes), "review_token": review_token(changes), "warnings": warnings, "groups": groups}

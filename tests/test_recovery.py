@@ -5,13 +5,19 @@ import re
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_audit as AUDIT
+import homestead_data_copies as DATA_COPIES
 import homestead_names as NAMES
+import homestead_priority as PRIORITY
 import homestead_recovery as recovery
+import homestead_routes
+import homestead_recovery_auto as AUTO
 import homestead_recovery_marks as MARKS
 from rebind import keep_bound, rebind
 import server
@@ -284,7 +290,13 @@ class RestartMoveTests(TickCase):
         self.settings["placement"]["mode"] = "spread"
         self.deployments = [app("web", "web-data"), app("db", "db-data")]
         real = recovery.read
-        recovery.read = lambda path: {"items": self.deployments} if path == "/apis/apps/v1/deployments" else real(path)
+        def read(path):
+            if path == "/apis/apps/v1/deployments":
+                return {"items": self.deployments}
+            if "longhorn" in path:
+                raise urllib.error.HTTPError(path, 404, "no Longhorn here", {}, None)
+            return real(path)
+        recovery.read = read
         self.addCleanup(setattr, recovery, "read", real)
 
     def stamped(self, name, value):
@@ -382,6 +394,748 @@ class RestartMoveTests(TickCase):
         offenders = [path.name for path in (Path(__file__).resolve().parents[1] / "server").glob("*.py")
                      if re.search(r"""(User-Agent|fieldManager)["'=:\s,]+[^\n]*kubectl""", path.read_text())]
         self.assertEqual([], offenders)
+
+
+def tiered(name, claim, tier=""):
+    dep = app(name, claim)
+    if tier:
+        dep["spec"]["template"]["spec"]["priorityClassName"] = tier
+    return dep
+
+
+class AutoCase(TickCase):
+    """Mode auto: a host that went away at 11:00 and came back at 12:00, on a Wednesday
+    whose window is 02:00-04:00 UTC; nothing else in the way."""
+    LADDER = PRIORITY.ladder([{"metadata": {"name": "important"}, "value": 1000},
+                              {"metadata": {"name": "everyday"}, "value": 0, "globalDefault": True}])
+
+    def setUp(self):
+        super().setUp()
+        self.settings = {"placement": {"rebalance": "auto", "mode": "spread"}, "updates": {"maintenance": WINDOW}}
+        self.deployments = [tiered("web", "web-data"), tiered("db", "db-data")]
+        self.cronjobs, self.copies = [], ([], [], [])
+        self.state = {"metrics": True, "metrics_state": {"state": "ok"}}
+        self.exclude, self.would = [], ["lab/web", "lab/db"]
+        self.job = {"id": "job-1", "status": "running", "message": "", "kind": "container-rebalance"}
+        self.start.side_effect = self.started
+        self.chosen = []
+
+        self.kept, self.may = [], []
+
+        def plan(exclude=(), avoid=(), restart=None, back=(), may_restart=False):
+            self.exclude.append(sorted(exclude))
+            self.may.append(may_restart)
+            return {"moves": [{"id": a} for a in self.would if a not in exclude], "excluded": sorted(exclude), "kept": self.kept, **self.state}
+
+        lists = {AUTO.VOLUMES: lambda: self.copies[0], AUTO.REPLICAS: lambda: self.copies[1], DATA_COPIES.ENGINES: lambda: self.copies[2],
+                 "/apis/apps/v1/deployments": lambda: self.deployments, "/apis/batch/v1/cronjobs": lambda: self.cronjobs,
+                 "/api/v1/nodes": lambda: self.nodes}
+        recovery.read = lambda path: {"items": lists[path]()}
+        recovery.plan = plan
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(PRIORITY, "ladder", lambda *a, **k: self.LADDER).start()
+
+    def started(self, chosen, why="", unless=()):
+        self.chosen.append(chosen)
+        self.running.append(self.job)
+        return self.job
+
+    def back_at_noon(self):
+        self.nodes = [node("a"), node("b")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b")]
+        recovery.tick(at(12))
+        self.start.reset_mock()
+        recovery._planned[0] = 0.0
+
+    def go(self, when=None):
+        """A look with the plan's five-minute throttle out of the way."""
+        recovery._planned[0] = 0.0
+        return recovery.tick(when if when is not None else at(12, 16))
+
+    def waiting(self):
+        return " ".join(recovery._load()["auto"].get("waiting", {}).get("reasons", []))
+
+
+class AutoTickTests(AutoCase):
+    def test_auto_waits_fifteen_minutes(self):
+        self.back_at_noon()
+        self.go(at(12, 14))
+        self.start.assert_not_called()
+        self.assertIn("b steady in 1 min", self.waiting())
+        self.go(at(12, 15))
+        self.start.assert_called_once()
+
+    def test_it_says_who_for(self):
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(" after b came back", self.start.call_args[0][1])
+        self.assertTrue(self.chosen[0]["automatic"])
+        self.assertIn("container-rebalance", self.start.call_args.kwargs["unless"])
+
+    def test_a_flap_restarts_the_clock(self):
+        self.back_at_noon()
+        self.nodes = [node("a"), node("b", ready=False)]
+        self.go(at(12, 10))
+        self.nodes = [node("a"), node("b")]
+        self.go(at(12, 11))
+        self.go(at(12, 16))
+        self.start.assert_not_called()
+        self.go(at(12, 26))
+        self.start.assert_called_once()
+
+    def test_a_short_flap_between_looks_is_seen_from_ready_time(self):
+        self.back_at_noon()
+        ready = node("b")
+        ready["status"]["conditions"][0]["lastTransitionTime"] = "2026-10-07T12:10:00Z"
+        self.nodes = [node("a"), ready]
+        self.go(at(12, 16))
+        self.start.assert_not_called()
+        self.go(at(12, 25))
+        self.start.assert_called_once()
+
+    def test_auto_waits_for_copies_on_that_host(self):
+        self.back_at_noon()
+        self.copies = ([], [{"metadata": {"name": "r1"}, "spec": {"volumeName": "v1", "nodeID": "b", "failedAt": ""}}],
+                       [{"spec": {"volumeName": "v1"}, "status": {"replicaModeMap": {"r1": "WO"}}}])
+        self.go()
+        self.start.assert_not_called()
+        self.assertIn("1 copy rebuilding on b", self.waiting())
+        self.copies = ([], [], [])
+        self.go(at(12, 17))
+        self.start.assert_called_once()
+
+    def test_longhorn_unreadable_holds_and_says_so_in_health(self):
+        self.back_at_noon()
+        def broken(path):
+            raise urllib.error.HTTPError(path, 503, "no", {}, None)
+        lists = recovery.read
+        recovery.read = lambda path: broken(path) if "longhorn" in path else lists(path)
+        with self.assertRaises(urllib.error.HTTPError):
+            self.go()
+        self.start.assert_not_called()
+
+    def test_auto_holds_while_another_host_is_away(self):
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b", ready=False), node("c", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(12))
+        self.go()
+        self.start.assert_not_called()
+        self.assertIn("c is away", self.waiting())
+
+    def test_a_host_away_for_days_still_holds_it(self):
+        # Andreas, 7 Nov: everything holds, even for a long-dead host, and says which.
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b", ready=False), node("c", ready=False)]
+        recovery.tick(at(11, 30))
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(12))
+        self.go(at(12) + 6 * 86400)
+        self.start.assert_not_called()
+        self.assertIn("c is away", self.waiting())
+
+    def test_auto_holds_beside_each_job_kind(self):
+        self.back_at_noon()
+        for kind in recovery.WAITS_FOR:
+            with self.subTest(kind):
+                self.running[:] = [{"id": "other", "kind": kind, "status": "running"}]
+                self.go()
+                self.start.assert_not_called()
+        self.running[:] = [{"id": "other", "kind": "os-rollout", "status": "succeeded"}]
+        self.go()
+        self.start.assert_called_once()
+
+    def test_auto_holds_when_metrics_are_stale(self):
+        self.back_at_noon()
+        for state in ({"metrics": False, "metrics_state": {"state": "ok"}}, {"metrics": True, "metrics_state": {"state": "stale"}}):
+            self.state = state
+            self.go()
+            self.start.assert_not_called()
+            self.assertTrue(recovery._load()["returned"], "the host stays remembered")
+        self.assertIn("figures", self.waiting())
+
+    def test_critical_apps_wait_outside_the_window(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "everyday")]
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(["lab/db"], [m["id"] for m in self.chosen[0]["moves"]])
+        self.assertEqual(1, recovery._load()["auto"]["waiting"]["later"])
+
+    def test_an_unknown_tier_waits_too(self):
+        self.deployments = [tiered("web", "web-data", "gone"), tiered("db", "db-data")]
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(["lab/db"], [m["id"] for m in self.chosen[0]["moves"]])
+
+    def test_only_critical_apps_left_outside_the_window_keeps_the_host_remembered(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "important")]
+        self.back_at_noon()
+        self.go()
+        self.start.assert_not_called()
+        self.assertTrue(recovery._load()["returned"])
+        self.assertEqual(2, recovery._load()["auto"]["waiting"]["later"])
+
+    def test_critical_apps_move_once_in_the_opening(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data")]
+        self.back_at_noon()
+        self.go()
+        recovery.moved_back("lab/db", at(12, 16))
+        self.chosen.clear(); self.start.reset_mock()
+        self.job["status"] = "succeeded"
+        self.go(at(12, 17))               # sees it end
+        self.go(at(2, 30) + 86400)        # the next day's window: db has moved, cooled off
+        self.assertEqual(["lab/web"], [m["id"] for m in self.chosen[0]["moves"]])
+        self.assertTrue(recovery.already_ran(recovery.window_key(WINDOW, at(2, 30) + 86400)))
+        self.chosen.clear(); self.start.reset_mock()
+        self.job["status"] = "succeeded"
+        self.go(at(2, 31) + 86400)        # sees it end
+        self.go(at(3, 30) + 86400)
+        self.assertEqual([], [m for c in self.chosen for m in c["moves"] if m["id"] == "lab/web"], "once an opening")
+
+    def test_a_window_with_no_days_never_moves_critical_apps(self):
+        self.settings["updates"]["maintenance"] = {**WINDOW, "days": []}
+        self.deployments = [tiered("web", "web-data", "important")]
+        self.would = ["lab/web"]
+        self.back_at_noon()
+        self.go()
+        self.start.assert_not_called()
+
+    def test_a_backup_due_within_the_run_keeps_the_app(self):
+        self.cronjobs = [cronjob("backup-web", "20 12 * * *", "web-data", tz="UTC")]
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(["lab/db"], [m["id"] for m in self.chosen[0]["moves"]])
+
+    def test_an_app_moves_once_a_day(self):
+        self.back_at_noon()
+        recovery.moved_back("lab/web", at(12, 16))
+        self.go(at(12, 40))
+        self.assertEqual(["lab/db"], [m["id"] for m in self.chosen[0]["moves"]])
+        self.chosen.clear(); self.job["status"] = "succeeded"; self.start.reset_mock()
+        self.go(at(12, 41))               # sees it end
+        self.go(at(12, 16) + recovery.APP_COOLDOWN + 1)
+        self.assertEqual(["lab/db", "lab/web"], sorted(m["id"] for m in self.chosen[0]["moves"]))
+
+    def test_the_cooldown_is_dropped_when_old(self):
+        recovery.moved_back("lab/web", at(1))
+        self.nodes = [node("a")]
+        recovery.tick(at(1) + recovery.APP_COOLDOWN + 1)
+        self.assertEqual({}, recovery._load()["auto"].get("moved", {}))
+
+    def test_runs_are_fifteen_minutes_apart(self):
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(1, self.start.call_count)
+        self.job["status"] = "succeeded"       # still in the job list
+        recovery.moved_back("lab/web", at(12, 16)); recovery.moved_back("lab/db", at(12, 16))
+        self.would.append("lab/other")
+        self.go(at(12, 17))                 # sees it ended now
+        self.go(at(12, 31))
+        self.assertEqual(1, self.start.call_count)
+        self.go(at(12, 33))
+        self.assertEqual(2, self.start.call_count)
+
+    def test_steady_time_survives_a_leader_change(self):
+        # Clocks live in recovery.json: nothing runs early, and time isn't lost.
+        self.back_at_noon()
+        self.go(at(12, 10))
+        fresh = [0.0]
+        with mock.patch.object(recovery, "_planned", fresh):
+            recovery.tick(at(12, 11))
+            self.start.assert_not_called()
+            fresh[0] = 0.0
+            recovery.tick(at(12, 15))
+            self.start.assert_called_once()
+
+    def test_a_new_host_is_not_back(self):
+        self.nodes = [node("a")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b")]
+        self.go(at(12))
+        self.go(at(13))
+        self.start.assert_not_called()
+
+    def test_nothing_to_move_forgets_the_host_only_once_it_passed(self):
+        self.back_at_noon()
+        self.would = []
+        self.go(at(12, 5))
+        self.assertTrue(recovery._load()["returned"], "a just-returned host often has no figures yet")
+        self.go(at(12, 16))
+        self.assertEqual({}, recovery._load()["returned"])
+
+    def test_a_flux_app_moves_by_restart_only_under_spread(self):
+        recovery.managed_by = lambda dep: {"by": "Flux", "detected": True} if dep["metadata"]["name"] == "db" else {}
+        self.addCleanup(setattr, recovery, "managed_by", lambda dep: {})
+        self.settings["placement"]["mode"] = "default"
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(["lab/web"], [m["id"] for m in self.chosen[0]["moves"]])
+
+    def test_auto_is_accepted_and_nonsense_refused_by_settings(self):
+        self.assertEqual("auto", server.APP_SETTINGS.validate({"placement": {"rebalance": "auto"}})["placement"]["rebalance"])
+        with self.assertRaises(ValueError):
+            server.APP_SETTINGS.validate({"placement": {"rebalance": "whenever"}})
+
+
+class AutoKeptTests(AutoCase):
+    KEPT = [{"id": "lab/web", "why": "its host preference keeps it on a, so a restart would not move it"}]
+
+    def test_nothing_to_move_settles_the_host_with_no_more_plans_or_runs(self):
+        # Remembering it is for Settings' list; it is no leave to rebalance for a week.
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go()
+        plans = len(self.exclude)
+        self.would = ["lab/db"]           # day 5: the figures say something could move now
+        self.go(at(12) + 5 * 86400)
+        self.start.assert_not_called()
+        self.assertEqual(plans, len(self.exclude), "no more plans")
+        self.assertEqual(self.KEPT, recovery.status()["kept"], "Settings keeps the list for the week")
+
+    def test_a_settled_host_leaves_no_alert(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go()
+        self.assertEqual([], recovery.alert_facts("auto", WINDOW))
+
+    def test_a_hold_does_not_settle_it(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go(at(12, 5))
+        self.would = ["lab/db"]
+        self.go()
+        self.start.assert_called_once()
+
+    def test_critical_apps_waiting_for_the_window_stay_active(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "important")]
+        self.kept = self.KEPT
+        self.back_at_noon()
+        self.go()
+        self.start.assert_not_called()
+        self.go(at(2, 30) + 86400)
+        self.start.assert_called_once()
+
+    def test_the_host_returning_again_is_a_new_return(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go()
+        self.nodes = [node("a"), node("b", ready=False)]
+        self.go(at(13))
+        self.nodes = [node("a"), node("b")]
+        self.go(at(14))
+        self.would = ["lab/db"]
+        self.go(at(14, 16))
+        self.start.assert_called_once()
+
+    def test_a_second_host_returning_runs_for_that_host_alone(self):
+        self.kept, self.would = self.KEPT, []
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b", ready=False), node("c")]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(11, 30))
+        self.go(at(11, 50))                # b settled
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(12))
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(12, 5))
+        self.would = ["lab/db"]
+        self.go(at(12, 25))
+        self.assertEqual(" after c came back", self.start.call_args[0][1])
+
+    def test_the_true_count_is_kept_when_the_list_is_cut(self):
+        self.kept = [{"id": f"lab/app-{i}", "why": "no"} for i in range(recovery.KEPT_SHOWN + 10)]
+        self.would = ["lab/db"]
+        self.back_at_noon()
+        self.go()
+        status = recovery.status()
+        self.assertEqual((recovery.KEPT_SHOWN, recovery.KEPT_SHOWN + 10), (len(status["kept"]), status["kept_total"]))
+
+    def test_an_app_left_out_with_why_is_stored_for_settings(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(self.KEPT, recovery._load()["auto"]["waiting"]["kept"])
+
+    def test_an_app_left_out_keeps_the_host_remembered_for_settings(self):
+        # Nothing to move, but only because of them: not "nothing needs to move".
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go()
+        self.assertEqual(["b"], list(recovery._load()["returned"]))
+
+    def test_restarts_are_on_only_under_spread(self):
+        self.back_at_noon()
+        self.go()
+        self.assertTrue(self.may[-1])
+        self.settings["placement"]["mode"] = "default"
+        self.job["status"] = "succeeded"
+        self.go(at(12, 17))
+        self.go(at(12, 33))
+        self.assertFalse(self.may[-1])
+
+    def test_each_of_the_moving_kinds_is_waited_for(self):
+        for kind in ("restore-swap", "host-move", "set-restart", "volume-rebalance", "volume-copy-move"):
+            self.assertIn(kind, recovery.MOVES_OR_RESTARTS)
+
+    def test_reasons_use_a_jobs_title_not_its_kind(self):
+        self.back_at_noon()
+        self.running[:] = [{"id": "x", "kind": "os-rollout", "title": "Update 3 hosts", "status": "running"}]
+        self.go()
+        self.assertEqual("Update 3 hosts is running", self.waiting())
+        self.assertEqual("Update 3 hosts started", recovery.may_go_on())
+
+
+class WindowRestartGates(AutoCase):
+    """The window's run keeps its behaviour, but its restarts get the copies gate."""
+    def setUp(self):
+        super().setUp()
+        self.settings["placement"]["rebalance"] = "window"
+        recovery.managed_by = lambda dep: {"by": "Flux", "detected": True} if dep["metadata"]["name"] == "db" else {}
+        self.addCleanup(setattr, recovery, "managed_by", lambda dep: {})
+        self.restarted = []
+        real = recovery.plan
+        recovery.plan = lambda *a, **k: (self.restarted.append((dict(k.get("restart") or {}), k.get("may_restart"))), real(*a, **k))[1]
+
+    def rebuilding(self):
+        self.copies = ([], [{"metadata": {"name": "r1"}, "spec": {"volumeName": "v1", "nodeID": "b", "failedAt": ""}}],
+                       [{"spec": {"volumeName": "v1"}, "status": {"replicaModeMap": {"r1": "WO"}}}])
+
+    def test_restarts_wait_while_a_copy_is_rebuilt_on_the_returned_host(self):
+        self.back_at_noon()
+        self.rebuilding()
+        self.go(at(2, 30) + 86400)
+        self.assertEqual(({}, False), self.restarted[-1])
+        self.assertIn("lab/db", self.exclude[-1])
+        self.start.assert_called_once()
+
+    def test_restarts_go_once_the_copies_are_done(self):
+        self.back_at_noon()
+        self.go(at(2, 30) + 86400)
+        self.assertEqual(({"lab/db": "Flux"}, True), self.restarted[-1])
+
+    def test_a_held_window_says_so(self):
+        self.back_at_noon()
+        self.rebuilding()
+        self.go(at(2, 30) + 86400)
+        self.assertIn("rebuilding on b, so apps Flux applies wait for the next opening", " ".join(recovery.status()["waiting"]))
+
+    def test_restarts_are_left_out_at_plan_time_while_a_host_is_away(self):
+        # A restart in the job would stop it on the spot, placement moves and all.
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b", ready=False), node("c", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(12))
+        self.go(at(2, 30) + 86400)
+        self.assertEqual(({}, False), self.restarted[-1])
+        self.assertIn("lab/db", self.exclude[-1])
+        self.start.assert_called_once()
+        self.assertIn("c is away", " ".join(recovery.status()["waiting"]))
+
+    def test_the_window_stores_what_it_keeps_for_settings(self):
+        self.kept = [{"id": "lab/web", "why": "its host preference keeps it on a"}]
+        self.back_at_noon()
+        self.go(at(2, 30) + 86400)
+        status = recovery.status()
+        self.assertEqual(self.kept, status["kept"])
+        self.assertEqual(1, status["kept_total"])
+
+    def test_the_window_alert_promises_only_what_it_can(self):
+        self.back_at_noon()
+        recovery.suggest(["lab/db"], at(12, 5))
+        self.assertIn("Those it can move in the next update window", recovery.alert_facts("window", WINDOW)[0]["body"])
+
+    def test_outside_spread_longhorn_is_not_read_for_it(self):
+        self.settings["placement"]["mode"] = "default"
+        self.back_at_noon()
+        real = recovery.read
+        recovery.read = lambda path: (_ for _ in ()).throw(TimeoutError("longhorn")) if "longhorn" in path else real(path)
+        self.go(at(2, 30) + 86400)
+        self.start.assert_called_once()
+
+
+class AutoStaysStopped(AutoCase):
+    def ran_and_ended(self, status, message="Stopped after moving 1 container"):
+        self.back_at_noon()
+        self.go()
+        self.start.assert_called_once()
+        self.job.update(status=status, message=message)
+        self.running.clear()
+        self.running.append(self.job)
+        self.start.reset_mock()
+
+    def test_after_a_cancel_no_new_run_starts(self):
+        self.ran_and_ended("cancelled")
+        for later in (at(12, 17), at(13), at(13) + 86400):
+            self.go(later)
+        self.start.assert_not_called()
+        self.assertIn("Stopped after moving 1", recovery._load()["auto"]["paused"]["why"])
+
+    def test_after_a_failed_run_no_new_run_starts(self):
+        self.ran_and_ended("failed", "lab/web restarted on b, not a; the rest were not moved")
+        self.go(at(13))
+        self.start.assert_not_called()
+        self.assertIn("restarted on b", recovery._load()["auto"]["paused"]["why"])
+
+    def test_the_stop_outlasts_the_job_leaving_the_list(self):
+        self.ran_and_ended("cancelled")
+        self.go(at(12, 20))
+        self.running.clear()
+        self.go(at(13))
+        self.start.assert_not_called()
+        self.assertTrue(recovery._load()["auto"]["paused"])
+
+    def test_a_new_return_does_not_lift_it(self):
+        self.ran_and_ended("failed")
+        self.go(at(12, 20))
+        self.nodes = [node("a"), node("b", ready=False)]
+        self.go(at(13))
+        self.nodes = [node("a"), node("b")]
+        self.go(at(14))
+        self.go(at(14, 30))
+        self.start.assert_not_called()
+
+    def test_a_run_whose_ending_was_not_seen_stays_stopped(self):
+        # Its job gone from the list, dismissed say: it may have failed or been stopped.
+        self.back_at_noon()
+        self.go()
+        self.running.clear()
+        self.start.reset_mock()
+        self.go(at(12, 17))
+        self.start.assert_not_called()
+        self.assertIn("could not see", recovery._load()["auto"]["paused"]["why"])
+
+    def test_a_finished_run_leaves_no_pause(self):
+        self.ran_and_ended("succeeded", "Moved 2 containers")
+        self.go(at(12, 17))
+        self.assertEqual("", recovery._load()["auto"]["job"])
+        self.assertFalse(recovery._load()["auto"].get("paused"))
+
+    def test_choosing_no_clears_the_pause(self):
+        self.ran_and_ended("cancelled")
+        self.go(at(12, 20))
+        self.assertTrue(recovery._load()["auto"]["paused"])
+        self.settings["placement"]["rebalance"] = "off"
+        self.go(at(12, 21))
+        self.assertFalse(recovery._load()["auto"].get("paused"))
+        self.assertFalse(recovery._load()["auto"].get("job"))
+
+    def test_changing_the_choice_stops_the_run_before_the_next_move(self):
+        self.back_at_noon()
+        self.assertEqual("", recovery.may_go_on())
+        for mode in ("off", "suggest"):
+            self.settings["placement"]["rebalance"] = mode
+            self.assertIn("choice", recovery.may_go_on(), mode)
+        self.settings["placement"]["rebalance"] = "window"
+        self.assertEqual("", recovery.may_go_on())
+
+    def test_a_host_leaving_mid_run_stops_it(self):
+        self.back_at_noon()
+        self.nodes = [node("a"), node("b", ready=False)]
+        self.assertIn("b", recovery.may_go_on())
+
+    def test_another_job_starting_mid_run_stops_it(self):
+        self.back_at_noon()
+        self.running[:] = [{"id": "me", "kind": "container-rebalance", "status": "running"}]
+        self.assertEqual("", recovery.may_go_on(), "its own kind")
+        self.running.append({"id": "other", "kind": "os-rollout", "title": "Update 3 hosts", "status": "running"})
+        self.assertIn("Update 3 hosts", recovery.may_go_on())
+
+    def test_it_stops_if_it_cannot_tell(self):
+        self.back_at_noon()
+        def broken(path):
+            raise TimeoutError("no")
+        recovery.read = broken
+        self.assertIn("could not read", recovery.may_go_on())
+
+
+class AutoStatusTests(AutoCase):
+    def test_status_says_what_it_waits_for(self):
+        self.back_at_noon()
+        self.go(at(12, 9))
+        status = recovery.status()
+        self.assertEqual("auto", status["mode"])
+        self.assertEqual([{"name": "b", "steady_in": 360, "copies_left": 0}], status["hosts"])
+        self.assertIn("b steady in 6 min", status["waiting"])
+        self.assertIsNone(status["paused"])
+        self.assertIsNone(status["undone"])
+
+    def test_status_reads_nothing_from_the_cluster(self):
+        self.back_at_noon()
+        self.go(at(12, 9))
+        recovery.read = mock.Mock(side_effect=AssertionError("no cluster reads"))
+        self.assertEqual(1, len(recovery.status()["hosts"]))
+
+    def test_status_counts_what_waits_and_what_is_left_out(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data")]
+        recovery.managed_by = lambda dep: {"by": "Argo CD", "detected": True} if dep["metadata"]["name"] == "db" else {}
+        self.addCleanup(setattr, recovery, "managed_by", lambda dep: {})
+        self.back_at_noon()
+        self.go()
+        status = recovery.status()
+        self.assertEqual((1, 1), (status["later"], status["left_out"]))
+
+    def test_status_shows_a_stop_and_its_job(self):
+        self.back_at_noon()
+        self.go()
+        self.assertEqual("job-1", recovery.status()["job"])
+        self.job.update(status="cancelled", message="Stopped after moving 1 container")
+        self.go(at(12, 17))
+        self.assertIn("Stopped after moving 1", recovery.status()["paused"]["why"])
+
+    def test_resume_needs_an_admin(self):
+        self.assertEqual("viewer", recovery.ROUTES[("GET", "/api/recovery")][0])
+        self.assertEqual("admin", recovery.ROUTES[("POST", "/api/recovery/resume")][0])
+
+    def test_resume_clears_a_pause_and_a_removed_mark(self):
+        self.back_at_noon()
+        self.go()
+        self.job.update(status="cancelled", message="Stopped")
+        self.go(at(12, 17))
+        recovery.undone_by("lab/db", "Flux", at(12, 18))
+        self.start.reset_mock()
+        answer = recovery.ROUTES[("POST", "/api/recovery/resume")][1](mock.Mock())
+        self.assertIsNone(answer["paused"])
+        self.assertIsNone(answer["undone"])
+        self.go(at(13))
+        self.start.assert_called_once()
+
+    def test_the_routes_are_registered(self):
+        self.assertIn("homestead_recovery", homestead_routes.MODULES)
+
+
+class AutoAlertTests(AutoCase):
+    def facts(self, key="recovery:rebalance"):
+        return [f for f in recovery.alert_facts("auto", self.settings["updates"]["maintenance"]) if f["key"] == key]
+
+    KEPT = [{"id": "lab/web", "why": "its host preference keeps it on a, so a restart would not move it"},
+            {"id": "lab/db", "why": "the scheduler would put it back on a: reservations favour that host"}]
+
+    def test_apps_left_out_are_said_with_why_while_it_holds(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        self.go(at(12, 5))
+        fact, = self.facts()
+        self.assertIn("2 containers stay where they are", fact["body"])
+        self.assertIn("lab/web: its host preference keeps it on a", fact["body"])
+        self.assertIn("Balance hosts can still move them", fact["body"])
+        self.assertEqual(2, fact["signals"]["kept"])
+        self.assertEqual(2, len(recovery.status()["kept"]))
+
+    def test_the_alert_says_the_true_count(self):
+        self.kept = [{"id": f"lab/app-{i}", "why": "no"} for i in range(recovery.KEPT_SHOWN + 10)]
+        self.would = []
+        self.back_at_noon()
+        self.go(at(12, 5))
+        self.assertIn(f"{recovery.KEPT_SHOWN + 10} containers stay", self.facts()[0]["body"])
+
+    def test_no_title_says_nothing_could_move(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "important")]
+        self.back_at_noon()
+        self.go()
+        fact, = self.facts()
+        self.assertNotIn("0 containers", fact["title"])
+        self.assertIn("2 critical apps wait", fact["title"])
+
+    def test_the_clearing_line_is_true_in_every_mode_and_path(self):
+        self.back_at_noon()
+        recovery.suggest(["lab/db"], at(12, 5))
+        for mode in ("suggest", "window", "auto"):
+            line = recovery.alert_facts(mode, WINDOW)[0]["resolved"]
+            self.assertEqual("This alert has cleared; Balance hosts shows anything that could still move.", line, mode)
+
+    def test_a_hold_with_apps_kept_doesnt_say_they_started_elsewhere_when_nothing_else_is_said(self):
+        self.kept, self.would = self.KEPT, []
+        self.back_at_noon()
+        recovery._auto_wait(["b steady in 6 min"], [], 0, 0, self.KEPT, [], 0, kept_total=2)
+        recovery.suggest([], at(12, 5), forget=False)
+        self.assertNotIn("started elsewhere", self.facts()[0]["body"])
+
+    def test_resume_is_audited(self):
+        self.assertTrue(AUDIT.audited("POST", "/api/recovery/resume"))
+
+    def test_the_alert_says_what_it_waits_for(self):
+        self.back_at_noon()
+        self.go(at(12, 9))
+        fact, = self.facts()
+        self.assertEqual("joins", fact["category"])
+        self.assertIn("b steady in 6 min", fact["body"])
+
+    def test_the_alert_names_a_host_away_in_its_title(self):
+        # Andreas, 7 Nov: everything holds, with an alert naming it.
+        self.nodes = [node("a"), node("b"), node("c")]
+        recovery.tick(at(10))
+        self.nodes = [node("a"), node("b", ready=False), node("c", ready=False)]
+        recovery.tick(at(11))
+        self.nodes = [node("a"), node("b"), node("c", ready=False)]
+        recovery.tick(at(12))
+        self.go()
+        fact, = self.facts()
+        self.assertIn("c is away", fact["title"])
+        self.assertEqual(1, fact["signals"]["away"])
+
+    def test_the_alert_says_what_waits_for_the_window(self):
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data")]
+        self.back_at_noon()
+        self.go()
+        self.assertIn("1 critical app waits for the update window (02:00 UTC)", self.facts()[0]["body"])
+
+    def test_the_alert_says_when_the_window_has_no_days(self):
+        self.settings["updates"]["maintenance"] = {**WINDOW, "days": []}
+        self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "important")]
+        self.back_at_noon()
+        self.go()
+        self.assertIn("The update window has no days set, so 2 critical apps stay until you move them", self.facts()[0]["body"])
+
+    def test_the_alert_says_flux_apps_are_left_out_outside_spread(self):
+        recovery.managed_by = lambda dep: {"by": "Flux", "detected": True} if dep["metadata"]["name"] == "db" else {}
+        self.addCleanup(setattr, recovery, "managed_by", lambda dep: {})
+        self.settings["placement"]["mode"] = "default"
+        self.back_at_noon()
+        self.go()
+        self.assertIn("1 app Flux applies is left out: choose Spread by capacity to include it", self.facts()[0]["body"])
+
+    def test_under_spread_flux_apps_are_not_called_left_out(self):
+        recovery.managed_by = lambda dep: {"by": "Flux", "detected": True} if dep["metadata"]["name"] == "db" else {}
+        self.addCleanup(setattr, recovery, "managed_by", lambda dep: {})
+        self.back_at_noon()
+        self.go()
+        self.assertNotIn("left out", self.facts()[0]["body"])
+
+    def test_the_alert_says_a_run_is_moving_them(self):
+        self.back_at_noon()
+        self.go()
+        fact, = self.facts()
+        self.assertIn("2 containers", fact["title"])
+        self.assertIn("one at a time", fact["body"])
+
+    def test_a_stop_has_its_own_alert_linking_to_settings(self):
+        self.back_at_noon()
+        self.go()
+        self.job.update(status="failed", message="lab/web restarted on b, not a")
+        self.go(at(12, 17))
+        fact, = self.facts("recovery:stopped")
+        self.assertEqual("Moving containers back is stopped: lab/web restarted on b, not a", fact["title"])
+        self.assertEqual("/settings?tab=placement", fact["href"])
+        recovery.resume()
+        self.assertEqual([], self.facts("recovery:stopped"))
+
+    def test_the_alert_clears_when_nothing_is_left(self):
+        self.back_at_noon()
+        self.would = []
+        self.go()
+        self.assertEqual([], recovery.alert_facts("auto", WINDOW))
 
 
 class BindingTests(unittest.TestCase):

@@ -28,7 +28,7 @@ function impactApp(r, node = "") {
 
 window.nodeIfDown = async (node, back = null) => {
   window.__ifDownBack = back;
-  modal(`If ${node} goes down`, '<div class="empty"><span class="spin2"></span> Working it out…</div>', true);
+  modal(`If it goes down · ${node}`, '<div class="empty"><span class="spin2"></span> Working it out…</div>', true);
   let p;
   try { p = await api(`/api/nodes/impact?node=${encodeURIComponent(node)}`); }
   catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It could not be worked out", esc(e.message)) + UI.actions(ifDownClose()); return; }

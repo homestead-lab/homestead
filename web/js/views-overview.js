@@ -787,7 +787,7 @@ async function nodePage(name) {
         ${fact("CPU", cpuSummary(n))}
         ${fact("Serves", nodeDutyTags(n) || "—")}
         ${fact("Takes new work", n.schedulable ? "yes" : UI.chip("cordoned", "warn"))}
-      </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
+      </div>${odd.length ? `${UI.callout("warn", "", `${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}`, { attrs: 'style="margin-top:10px"' })}` : ""}</div>`],
     ["workloads", "Apps and VMs", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
       <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div id="nodeChipsCard">${(nodeRemember(n), nodeWorkloadChips(n))}</div></div>`],
@@ -904,17 +904,14 @@ window.smartDisk = async (node, disk) => {
         ${UI.chip(diskHealthWord(health.state), diskHealthTone(health.state) || "neutral")}</div>
       ${(t => t ? `<div class="note"><b>${esc(t[0].toUpperCase() + t.slice(1))}.</b> Homestead leaves a drive the host has spun down asleep and shows its last reading, without a temperature.</div>` : "")(diskAsleepText(s, health))}
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
-      ${health.issues?.length ? `<div class="note ${health.state === "critical" ? "bad" : "warn"}">
-        <b>${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}</b>
-        <ul class="diskfindings">${health.issues.map(issue =>
+      ${health.issues?.length ? `${UI.callout(health.state === "critical" ? "bad" : "warn", { html: `${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}` }, `<ul class="diskfindings">${health.issues.map(issue =>
           `<li>${UI.chip(issue.severity, issue.severity === "critical" ? "bad" : "warn")} ${esc(issue.reason)}</li>`).join("")}</ul>
-        <span class="dim xs">Measured against the drive-health policy in Settings.</span></div>`
-      : s.available ? `<div class="note good"><b>No defects reported.</b> Every counter is within the
-          thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.</div>` : ""}
+        <span class="dim xs">Measured against the drive-health policy in Settings.</span>`)}`
+      : s.available ? `${UI.callout("ok", { html: `No defects reported.` }, `Every counter is within the
+          thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.`)}` : ""}
       ${active ? UI.callout("info", "Self-test running", `<p>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</p>`) : ""}
-      ${health.stale_probe ? `<div class="note warn"><b>The node probe predates this release.</b>
-        Wear and life figures come from the probe, which has not picked up the current scripts yet.
-        Homestead updates it when it starts; if this persists, check Settings → Homestead.</div>` : ""}
+      ${health.stale_probe ? `${UI.callout("warn", { html: `The node probe predates this release.` }, `Wear and life figures come from the probe, which has not picked up the current scripts yet.
+        Homestead updates it when it starts; if this persists, check Settings → Homestead.`)}` : ""}
       <div class="smartstats">
         ${stat("Life remaining", health.life_pct == null ? null : health.life_pct + "%", lifeTone(health.life_pct))}
         ${health.spare_pct == null ? "" : stat("Spare blocks", health.spare_pct + "%", lifeTone(health.spare_pct))}
@@ -958,7 +955,7 @@ window.probeInstallConfirm = () => childModal("Install the node probe?", `
   <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
     <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
     capability, runs with a read-only root and cannot escalate privilege.</div>
-  <div class="note warn"><b>SMART requires a privileged container</b> to read drive health. It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}</div>
+  ${UI.callout("warn", { html: `SMART needs a privileged container to read drive health` }, `It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}`)}
   ${UI.actions(`<button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not now</button>`)}`);
 
@@ -992,8 +989,8 @@ window.allocationProbeSettings = async () => {
       <div class="note">${esc(current.detail || "Status unavailable")}</div>
       ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
       <p>Uses an extra 32–96 MiB RAM per host. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
-      ${capacity.blockers.map(text=>`<div class="note warn">${esc(text)}</div>`).join("")}
-      ${capacity.warnings.length ? `<div class="note warn">${capacity.warnings.map(esc).join("<br>")}</div><label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
+      ${UI.notices(capacity.blockers.map(text => ["warn", text]))}
+      ${capacity.warnings.length ? `${UI.notices(capacity.warnings.map(text => ["warn", text]))}<label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
       <details class="vm-placement-advanced"><summary>Advanced · host access and socket location</summary>
       <p class="dim small">The helper runs as root with no Linux capabilities and a read-only filesystem. It reads kubelet allocations through a dedicated host socket, authenticated with a separate key. The socket mount is read-only, but permits RPC calls; this helper only implements read operations. It receives no Kubernetes API token.</p>
       <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe host and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}

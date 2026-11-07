@@ -11,10 +11,18 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_schedule_clashes as CLASHES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 # Friday 23 October 2026, 12:00 UTC.
 NOW = calendar.timegm((2026, 10, 23, 12, 0, 0))
 SATURDAY_0200 = calendar.timegm((2026, 10, 24, 2, 0, 0))
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def job(name, task, cron, volumes):

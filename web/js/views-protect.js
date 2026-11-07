@@ -59,12 +59,11 @@ function objectStoreCard(store, target) {
       <div><span>Size</span><b>${store.size_gb ? store.size_gb + " GiB" : "—"}</b></div>
       <div><span>Longhorn target</span><b>${pointed ? "pointed here" : switching ? "switching" : "not pointed here"}</b></div>
     </div>
-    ${pointed ? "" : `<div class="note warn" style="margin-top:12px"><b>Longhorn is not writing here.</b>
-      ${store.longhorn?.endpoint ? `Its current endpoint is <span class="mono">${esc(store.longhorn.endpoint)}</span>. ` : ""}
+    ${pointed ? "" : `${UI.callout("warn", { html: `Longhorn is not writing here.` }, `${store.longhorn?.endpoint ? `Its current endpoint is <span class="mono">${esc(store.longhorn.endpoint)}</span>. ` : ""}
       ${esc(store.longhorn?.detail || "Backups will not reach this bucket until the target is changed.")}
       ${switching ? '<div class="dim xs">Homestead retries automatically for up to ten minutes, even with this page closed.</div>' : ""}
       <div class="row"><button class="btn sm" data-need="admin" onclick="objectStorePoint()">${switching || store.longhorn?.state === "failed" ? "Retry target switch" : "Point Longhorn at it"}</button>
-        <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div></div>`}
+        <button class="btn sm" data-need="admin" onclick="objectStoreSetup()">Storage settings</button></div>`, { attrs: 'style="margin-top:12px"' })}`}
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
       restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
@@ -229,9 +228,8 @@ function protectTop(d, objects, tgt, cover) {
         <div class="drow"><div class="dl">Status</div><div class="dv">
           ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}</div></div>
         ${tgt.reason ? `<div class="dim xs" style="margin-top:8px">${esc(tgt.reason)}</div>` : ""}
-        ${tgt.secret_missing ? `<div class="note warn" style="margin-top:10px"><b>Its keys are missing.</b>
-          The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
-          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button></div>` : ""}`
+        ${tgt.secret_missing ? `${UI.callout("warn", { html: `Its keys are missing.` }, `The Secret ${esc(tgt.secret)} is not in longhorn-system, so backups cannot sign in.
+          <button class="btn sm" data-need="admin" onclick="lhTarget()">Enter the keys</button>`, { attrs: 'style="margin-top:10px"' })}` : ""}`
       : `<div class="note" style="margin-top:12px"><b>No backup target.</b> Snapshots work without one —
          they live on the volume. <b>Backups need somewhere to go</b>: an NFS share or S3 bucket.
          Until you set one, backup jobs will fail.</div>`}
@@ -940,7 +938,7 @@ window.lhRestoreStart = async backup => {
 /* Rolling a volume back to a snapshot: what uses it stops, the volume is
    reverted with the state before kept as a snapshot, and it all starts again. */
 window.lhRevert = async (vol, snap, label) => {
-  childModal(`Roll ${label} back`, '<div class="empty"><span class="spin2"></span>checking what uses it</div>');
+  childModal(`Roll back · ${label}`, '<div class="empty"><span class="spin2"></span>checking what uses it</div>');
   try {
     const p = await api(`/api/lh/snapshot/revert/plan?volume=${encodeURIComponent(vol)}&snapshot=${encodeURIComponent(snap)}`);
     const when = p.created ? localTime(new Date(p.created)) : "the snapshot";
@@ -1219,7 +1217,7 @@ window.lhRestoreInto = async (backup, storageClass = "") => {
   // Not on the list, so the review blocks on it and asks for another (refused, or on neither list).
   const offCatalogue = !p.storage_classes.includes(p.storage_class);
   const app = p.app.name || "the app", title = $("#mtitle");
-  if (title && p.app.name) title.textContent = `Restore into ${p.app.name}`;
+  if (title && p.app.name) { setModalTitle(`Restore into · ${p.app.name}`); syncDialogHead(); }
   const managed = p.managed && p.managed.by;
   $("#mbody").innerHTML = `${UI.lead(`The backup goes into a new volume and ${esc(app)} is moved onto it. If it does not come up, Homestead moves it back on its own.`)}
     ${UI.facts([["App", `${esc(p.app.namespace)}/${esc(app)}`], ["Volume", `<span class="mono small">${esc(p.claim)}</span>`],
@@ -1310,7 +1308,7 @@ window.previousKeep = async (namespace, name, keep) => {
 window.previousSwapBack = (namespace, name) => {
   const v = ((STATE.data.previousVolumes || {}).volumes || []).find(x => x.namespace === namespace && x.name === name);
   if (!v) return toast("That volume is no longer listed; refresh the page", "bad");
-  modal(`Swap ${v.app} back`, `${UI.lead(`${esc(v.app)} is stopped, pointed back at ${esc(v.name)} and started again. If it does not come up, it is moved back to ${esc(v.replaced_by)} on its own.`)}
+  modal(`Swap back · ${v.app}`, `${UI.lead(`${esc(v.app)} is stopped, pointed back at ${esc(v.name)} and started again. If it does not come up, it is moved back to ${esc(v.replaced_by)} on its own.`)}
     ${UI.facts([["App", `${esc(v.namespace)}/${esc(v.app)}`], ["Runs on now", `<span class="mono small">${esc(v.replaced_by)}</span>`],
       ["Moves to", `<span class="mono small">${esc(v.name)}</span>`]])}
     ${UI.notices([...(v.managed ? [["warn", `${v.app} is applied by ${v.managed}: its next sync puts ${v.replaced_by} back.`]] : []),

@@ -113,7 +113,9 @@ try {
       await open();
       await row(page, 'harvester-node2').getByRole('button', {name:'Restart…'}).click();
       await page.waitForSelector('#pw_confirm');
-      assert.match(await page.locator('#mtitle').innerText(), /harvester-node2/);
+      // The title reads "Reboot · harvester-node2"; the host is drawn large in the header under it.
+      assert.match(await page.locator('#mtitle').textContent(), /harvester-node2/);
+      assert.match(await page.locator('#msubject').innerText(), /harvester-node2/);
       await page.locator('#mback').click();
       await page.waitForSelector('#osu_hosts tbody tr');
 
