@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server
 import homestead_alerts as ALERTS
 import homestead_drain_blockers as BLOCKERS
+import homestead_history as HISTORY
 import homestead_kube as K
 import homestead_os_rollout as ROLLOUT
 import homestead_power as power
@@ -1294,6 +1295,40 @@ class StopDuringAWaitTests(Waiting):
         ROLLOUT.stop()
         ROLLOUT.tick(now=1020)
         self.assertNotIn("Stopped while waiting", str(ROLLOUT._load()["rollout"]["results"]))
+
+
+class StopDuringAWaitInMaintenanceTests(Waiting):
+    """Stop during a wait is checked before #535's maintenance check: a host a
+    person put in maintenance meanwhile, or whose maintenance can't be read,
+    still ends the run as stopped, and the maintenance's cordon stays."""
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(HISTORY, "DATA_DIR", self.data.name)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.cordons = []
+        ROLLOUT.set_cordon = lambda name, on: self.cordons.append((name, on))
+        self.add(*engines_elsewhere_on_node_a())
+        self.waiting()
+        ROLLOUT.stop()
+
+    def assert_stopped_keeping_the_cordon(self):
+        ROLLOUT.tick(now=1020)
+        ended = ROLLOUT._load()["rollout"]
+        self.assertEqual("stopped", ended["status"], ended["message"])
+        self.assertIn("Stopped while waiting", ended["results"][0]["note"])
+        self.assertEqual([], self.sent)
+        self.assertNotIn(("node-a", False), self.cordons, "the maintenance's cordon stays")
+
+    def test_a_host_put_in_maintenance_during_the_wait(self):
+        HISTORY.maintenance_declare("node-a", "Drive swap", "op-9", 9_999_999_999, cordoned_before=False, node_uid="u")
+        self.assert_stopped_keeping_the_cordon()
+
+    def test_maintenance_that_cannot_be_read_during_the_wait(self):
+        with open(HISTORY._path(), "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.assert_stopped_keeping_the_cordon()
+        self.assertFalse(ROLLOUT._load()["rollout"].get("failed"), "not left failing")
 
 
 class MixedRefusalTests(FakeCluster):
