@@ -192,7 +192,7 @@ class RevertStopTests(unittest.TestCase):
         self.clock.now += REVERT.WAIT["stopping"] + 1
         status, _, message = self.resolve()
         self.assertEqual("failed", status, message)
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
         self.assertEqual(2, self.replicas("app-a"), "app A is put back when the stop cannot finish")
 
     # Starting again after the rollback ---------------------------------------
@@ -345,7 +345,7 @@ class RevertStopTests(unittest.TestCase):
         self.assertEqual("failed", status, message)
         self.assertLessEqual(len(rounds), REVERT.TRIES)
         self.assertEqual(2, self.replicas("app-a"), "a passing failure is ridden out")
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
 
     def test_the_hosts_reasons_are_named_when_an_app_does_not_fit(self):
         self.fits = False

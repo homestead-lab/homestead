@@ -156,7 +156,7 @@ class RevertTests(unittest.TestCase):
                         "since": time.time() - 3600}}
         status, _, message = self.until_done(item)
         self.assertEqual("failed", status)
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
         self.assertEqual([], self.started(), "never started beside its old pod, still on the volume")
         self.assertIn("paperless-abc still uses paperless-data", message)
         self.assertIn("Containers → paperless → Start with 1 replica", message)
@@ -181,7 +181,7 @@ class RevertTests(unittest.TestCase):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertIn("Connection refused", message)
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
         self.assertEqual([["paperless"]], self.started())
         self.assertEqual(3, self.actions().count("attach"))
         self.assertNotIn("snapshotCreate", self.actions())
@@ -206,7 +206,7 @@ class RevertTests(unittest.TestCase):
         status, _, message = REVERT.resolve(item)
         self.assertEqual("failed", status)
         self.assertEqual(["attach"], self.actions())
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
         self.assertEqual([["paperless"]], self.started())
 
     def test_a_volume_with_no_attachment_record_is_not_reported_as_held(self):
@@ -318,7 +318,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual(1, len({body["name"] for path, body in self.calls if "snapshotCreate" in path}),
                          "one name, so a retry can't leave two")
         self.assertNotIn("snapshotRevert", self.actions())
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
         self.assertEqual([["paperless"]], self.started())
 
     def test_put_back_still_starts_the_app_when_detach_fails(self):
@@ -332,7 +332,7 @@ class RevertTests(unittest.TestCase):
         self.assertEqual([["paperless"]], self.started())
         self.assertIn(("PATCH", f"{API}/volumeattachments/pvc-1",
                        {"spec": {"attachmentTickets": {"homestead-revert": None}}}), self.sent)
-        self.assertIn("Nothing was changed", message)
+        self.assertIn("The volume was not changed", message)
 
     def test_put_back_names_the_ticket_when_it_cannot_be_released(self):
         self.failing["snapshotCreate"] = REVERT.Refused("Longhorn refused it: busy")
@@ -534,7 +534,7 @@ class RevertTests(unittest.TestCase):
         self.calls.clear()
         REVERT.resolve(resumed)
         self.assertEqual(["snapshotRevert", "detach"], self.actions(), "the snapshot Longhorn made is the kept one")
-        self.assertEqual(self.saved[0]["ref"]["keep"], resumed["ref"]["kept"])
+        self.assertEqual(next(row["ref"]["keep"] for row in self.saved if "keep" in row["ref"]), resumed["ref"]["kept"])
 
     def test_a_restart_before_the_snapshot_was_made_makes_it_under_the_same_name(self):
         item = self._to_the_revert()
