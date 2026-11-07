@@ -1,12 +1,15 @@
 """Each share's recycle bin: the image's own bin off, and each share's as its settings say."""
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+import homestead_names as NAMES
+import homestead_operations as JOBS
 import homestead_shares as shares
 import homestead_share_recycle as RECYCLE
 import homestead_share_servers as servers
@@ -16,8 +19,21 @@ DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/homestead-smb"
 CONFIG = "/api/v1/namespaces/lab/configmaps/homestead-shares"
 
 
+def set_up(self):
+    """The share tests' own, and afterwards put back what shares.bind() and servers.bind()
+    set. A restart's job goes in this test's own folder, and a resize asks no real cluster."""
+    for module, names in ((shares, ("kget", "ksend", "create_pvc", "NAMESPACE", "CACHE")), (NAMES, ("kget",)),
+                          (servers, ("kget", "ksend", "build_deployment", "SMB_NAMESPACE", "_cache",
+                                     "shared_classes", "default_class", "storage_options"))):
+        for name in names:
+            self.addCleanup(setattr, module, name, getattr(module, name, None))
+    self.enterContext(mock.patch.object(JOBS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+    self.enterContext(mock.patch.object(shares.RESIZE, "upgrade_guard", None))
+    test_shares.ShareTests.setUp(self)
+
+
 class RecycleBinTests(unittest.TestCase):
-    setUp = test_shares.ShareTests.setUp
+    setUp = set_up
 
     def podspec(self):
         return self.objects[DEPLOYMENT]["spec"]["template"]["spec"]
@@ -106,7 +122,7 @@ class RecycleBinTests(unittest.TestCase):
 
 
 class EmptyingTests(unittest.TestCase):
-    setUp = test_shares.ShareTests.setUp
+    setUp = set_up
 
     def pod(self, ready=True):
         self.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dhomestead-smb"] = {"items": [{

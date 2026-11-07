@@ -1,5 +1,6 @@
 """A transfer gives the backup store its space back: its volumes' folders, and failed copies left alone."""
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -87,6 +88,10 @@ class ReclaimTests(unittest.TestCase):
 
 
 class FailedCopyTests(unittest.TestCase):
+    def setUp(self):
+        # The engine takes the moves store's lock: in this test's own folder, not the real one.
+        self.enterContext(mock.patch.object(STATE, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+
     def move(self, **fields):
         finished = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - PHASE.FAILED_COPY_KEEP - 60))
         return {"id": ID, "status": "failed", "transfer_mode": "copy", "finished_at": finished, "flags": {}, **fields}
