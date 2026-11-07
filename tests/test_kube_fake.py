@@ -111,6 +111,33 @@ class NoClusterTests(unittest.TestCase):
         with no_cluster(), Kube(pod("a")):
             self.assertEqual(K.kget(PODS + "/a")["metadata"]["name"], "a")
 
+    def test_the_shared_fake_answers_raw_and_table_reads_inside_it_and_nothing_is_turned_away(self):
+        # #1280: raw_get and ktable call _request, which both patch; the fake, entered
+        # inside, answers, and no_cluster() refuses again once the fake has gone.
+        original, before = K._request, len(no_cluster_reads())
+        with no_cluster():
+            refusing = K._request
+            with Kube(pod("a")) as kube:
+                kube.log(PODS + "/a", "ready\n")
+                self.assertEqual(K.raw_get(PODS + "/a/log"), "ready\n")
+                self.assertEqual(["a"], [row["cells"][0] for row in K.ktable(PODS)["rows"]])
+            self.assertIs(K._request, refusing)
+            with self.assertRaises(OSError):
+                K.raw_get(PODS + "/a/log")
+        self.assertIs(K._request, original)
+        self.assertEqual([(self.id(), "GET", PODS + "/a/log")], no_cluster_reads()[before:])
+
+    def test_no_cluster_inside_the_fake_wins_until_it_ends(self):
+        # The inner scope's word counts: a test that says "no cluster" inside a fake gets
+        # the refusal, and the fake answers again once that scope ends.
+        original = K._request
+        with Kube(pod("a")) as kube:
+            kube.log(PODS + "/a", "ready\n")
+            with no_cluster(), self.assertRaises(OSError):
+                K.raw_get(PODS + "/a/log")
+            self.assertEqual(K.raw_get(PODS + "/a/log"), "ready\n")
+        self.assertIs(K._request, original)
+
 
 class TransportSeamTests(unittest.TestCase):
     """transport is the one place a request leaves Homestead."""
@@ -418,6 +445,118 @@ class WriteTests(unittest.TestCase):
         self.assertEqual({name: getattr(K, name, None) for name in K.ROUTE_NEEDS}, before)
         self.assertIsNot(K.transport, None)
         self.assertEqual(K.transport.__name__, "transport")
+
+
+class NoSocket:
+    """Fails the test on any lookup or connect: what a read through the fake must never do."""
+    def __init__(self, case):
+        self.case, self.tried = case, []
+
+    def __enter__(self):
+        def refuse(what):
+            def call(*args, **kwargs):
+                self.tried.append((what, repr(args)))
+                raise AssertionError(f"{what} with the fake active: {args!r}")
+            return call
+        self._patches = [mock.patch.object(socket, "getaddrinfo", refuse("lookup")),
+                         mock.patch.object(socket.socket, "connect", refuse("connect")),
+                         mock.patch.object(socket.socket, "connect_ex", refuse("connect")),
+                         # As server.py binds them: an API server that is not this machine.
+                         mock.patch.object(K, "API", "https://api.example.com:6443", create=True),
+                         mock.patch.object(K, "TOKEN", "token", create=True),
+                         mock.patch.object(K, "CTX", None, create=True)]
+        for patch in self._patches:
+            patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        for patch in reversed(self._patches):
+            patch.stop()
+        self.case.assertEqual([], self.tried)
+        return False
+
+
+class RawReadTests(unittest.TestCase):
+    """raw_get and ktable call homestead_kube._request themselves, not transport (#1280):
+    the fake answers them too, and nothing opens a socket while it is in use."""
+
+    def test_a_pod_log_read_through_raw_get_is_the_fakes_answer(self):
+        with NoSocket(self), Kube(pod("a")) as kube:
+            kube.log(PODS + "/a", "one\ntwo\nthree\n")
+            self.assertEqual(K.raw_get(PODS + "/a/log"), "one\ntwo\nthree\n")
+            self.assertEqual(K.raw_get(PODS + "/a/log?tailLines=2"), "two\nthree\n")
+            self.assertIn((PODS + "/a/log?tailLines=2", None), kube.reads)
+
+    def test_tail_lines_past_the_logs_length_is_the_whole_log_and_zero_is_nothing(self):
+        # As the API server: more lines asked than there are gives them all; 0 gives none.
+        with NoSocket(self), Kube(pod("a")) as kube:
+            kube.log(PODS + "/a", "a\nb\nc\n")
+            for tail, want in ((3, "a\nb\nc\n"), (4, "a\nb\nc\n"), (5, "a\nb\nc\n"), (7, "a\nb\nc\n"),
+                               (1, "c\n"), (0, "")):
+                with self.subTest(tail=tail):
+                    self.assertEqual(K.raw_get(f"{PODS}/a/log?tailLines={tail}"), want)
+
+    def test_limit_bytes_returns_at_most_that_many_bytes(self):
+        with NoSocket(self), Kube(pod("a")) as kube:
+            kube.log(PODS + "/a", "0123456789")
+            self.assertEqual(K.raw_get(PODS + "/a/log?limitBytes=3"), "012")
+            self.assertEqual(K.raw_get(PODS + "/a/log?limitBytes=30"), "0123456789")
+
+    def test_a_log_search_read_is_cut_at_its_limit_as_the_real_read_is(self):
+        with NoSocket(self), Kube(pod("a")) as kube:
+            kube.log(PODS + "/a", "0123456789")
+            # limitBytes=4 on the request: the server sends 4 bytes, so the read is not cut.
+            self.assertEqual(K.logsearch_read("lab", "a", None, 60, 4), "0123")
+
+    def test_the_log_of_a_pod_that_is_not_there_is_a_404(self):
+        with NoSocket(self), Kube():
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.raw_get(PODS + "/gone/log")
+        self.assertEqual(caught.exception.code, 404)
+
+    def test_a_ktable_read_is_a_table_of_the_fakes_objects(self):
+        with NoSocket(self), Kube(pod("a"), pod("b"), pod("c", ns="other")) as kube:
+            table = K.ktable(PODS + "?limit=500")
+            self.assertEqual(kube.reads[-1][0], PODS + "?limit=500")
+            self.assertIn("as=Table", kube.reads[-1][1])
+        self.assertEqual(table["kind"], "Table")
+        self.assertEqual([c["name"] for c in table["columnDefinitions"]], ["Name", "Created At"])
+        self.assertEqual([row["cells"][0] for row in table["rows"]], ["a", "b"])
+        self.assertEqual([row["object"]["metadata"]["namespace"] for row in table["rows"]], ["lab", "lab"])
+
+    def test_a_path_the_fake_does_not_know_fails_in_the_test_without_a_socket(self):
+        with NoSocket(self), Kube(pod("a")) as kube:
+            for path in ("/healthz", PODS + "/a/exec"):
+                with self.subTest(path=path), self.assertRaises(urllib.error.HTTPError) as caught:
+                    K.raw_get(path)
+                self.assertEqual(caught.exception.code, 404)
+            # Kept where a test can see them, even when the caller swallows the 404.
+            self.assertEqual([("GET", "/healthz"), ("GET", PODS + "/a/exec")], kube.unknown)
+
+    def test_a_known_missing_object_is_not_an_unknown_path(self):
+        with NoSocket(self), Kube() as kube:
+            with self.assertRaises(urllib.error.HTTPError):
+                K.raw_get(PODS + "/gone/log")
+            self.assertEqual([], kube.unknown)
+
+    def test_version_is_answered_as_the_api_server_does(self):
+        # homestead_readyz reads it to tell whether the API server is up.
+        with NoSocket(self), Kube():
+            version = json.loads(K.raw_get("/version"))
+        self.assertEqual(("1", version["gitVersion"][:2]), (version["major"], "v1"))
+
+    def test_an_injected_failure_reaches_a_raw_read_too(self):
+        with NoSocket(self), Kube(pod("a")) as kube:
+            kube.fail(PODS + "/a/log", 500)
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.raw_get(PODS + "/a/log")
+        self.assertEqual(caught.exception.code, 500)
+
+    def test_the_request_function_is_given_back_afterwards(self):
+        before = K._request
+        with Kube():
+            self.assertIsNot(K._request, before)
+        self.assertIs(K._request, before)
 
 
 class FailureTests(unittest.TestCase):
