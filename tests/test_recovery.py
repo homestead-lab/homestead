@@ -1,6 +1,7 @@
 """Moving containers back after a host returns: noticing it, saying so, and
 in the maintenance window doing it - but not under an app's backup."""
 import calendar
+import re
 import sys
 import tempfile
 import unittest
@@ -9,11 +10,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_names as NAMES
 import homestead_recovery as recovery
+import homestead_recovery_marks as MARKS
 from rebind import keep_bound, rebind
 import server
 
 WINDOW = {"days": [0, 1, 2, 3, 4, 5, 6], "start": "02:00", "duration_minutes": 120}
+RESTARTED = NAMES.key("restartedAt")
 # Wednesday 2026-10-07, at the given UTC time.
 at = lambda h, m=0: calendar.timegm((2026, 10, 7, h, m, 0))
 
@@ -172,7 +176,7 @@ class AlertTests(TempData):
         self.assertEqual({}, recovery.observe_returned())
 
 
-class TickTests(TempData):
+class TickCase(TempData):
     """One pass of the leader's loop, against a fake cluster."""
     def setUp(self):
         super().setUp()
@@ -183,9 +187,13 @@ class TickTests(TempData):
                "/apis/apps/v1/deployments": {"items": [app("web", "web-data"), app("db", "db-data")]}}
         self.avoided = []
 
-        def plan(exclude=(), avoid=()):
+        self.restarts, self.backs = [], []
+
+        def plan(exclude=(), avoid=(), restart=None, back=(), may_restart=False):
             self.plans.append(sorted(exclude))
             self.avoided.append(sorted(avoid))
+            self.restarts.append(dict(restart or {}))
+            self.backs.append(sorted(back))
             return {"moves": [{"id": "lab/db"}], "excluded": sorted(exclude)}
         self.start = mock.Mock(return_value={"id": "job"})
         jobs = mock.Mock(TERMINAL={"succeeded", "failed", "cancelled"}, snapshot=lambda: self.running)
@@ -202,6 +210,8 @@ class TickTests(TempData):
         recovery.tick(at(1))
         self.nodes = [node("a"), node("b")]
 
+
+class TickTests(TickCase):
     def test_an_app_flux_or_argo_applies_is_left_out_of_the_window_run(self):
         self.addCleanup(setattr, recovery, "managed_by", recovery.managed_by)
         recovery.managed_by = lambda dep: {"by": "Flux"} if dep["metadata"]["name"] == "db" else {}
@@ -261,6 +271,118 @@ class TickTests(TempData):
             self.running = [{"kind": kind, "status": "running"}]
             self.assertIsNone(recovery.tick(at(2, 5)), kind)
         self.start.assert_not_called()
+
+class RestartMoveTests(TickCase):
+    """Under Spread by capacity the window's run also moves apps Flux applies, by
+    restarting them; and a tool that takes Homestead's restart mark off stops that."""
+    TOOLS = {"db": {"by": "Flux", "source": "Kustomization flux-system/apps", "detected": True}}
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(setattr, recovery, "managed_by", recovery.managed_by)
+        recovery.managed_by = lambda dep: self.TOOLS.get(dep["metadata"]["name"], {})
+        self.settings["placement"]["mode"] = "spread"
+        self.deployments = [app("web", "web-data"), app("db", "db-data")]
+        real = recovery.read
+        recovery.read = lambda path: {"items": self.deployments} if path == "/apis/apps/v1/deployments" else real(path)
+        self.addCleanup(setattr, recovery, "read", real)
+
+    def stamped(self, name, value):
+        dep = next(d for d in self.deployments if d["metadata"]["name"] == name)
+        template = dep["spec"]["template"]
+        template["metadata"] = {"annotations": {RESTARTED: value}} if value else {}
+
+    def test_under_spread_flux_apps_move_by_restart_in_the_window(self):
+        self.away_and_back()
+        recovery.tick(at(2, 5))
+        self.assertEqual({"lab/db": "Flux"}, self.restarts[-1])
+        self.assertNotIn("lab/db", self.plans[-1])
+        self.assertEqual(["b"], self.backs[-1], "a person's preference may be followed only to a host back")
+
+    def test_under_default_and_hot_spare_flux_apps_stay_out(self):
+        for mode in ("", "default", "standby"):
+            self.settings["placement"]["mode"] = mode
+            left_out, restart = recovery.split_gitops(self.deployments, mode, False)
+            self.assertEqual(({"lab/db"}, {}), (left_out, restart), mode)
+        self.settings["placement"]["mode"] = "default"
+        self.away_and_back()
+        recovery.tick(at(2, 5))
+        self.assertIn("lab/db", self.plans[-1])
+        self.assertEqual({}, self.restarts[-1])
+
+    def test_argo_and_person_marked_apps_stay_out_under_spread(self):
+        for tool in ({"by": "Argo CD", "source": "app", "detected": True}, {"by": "my script", "detected": False}, {"by": "Flux"}):
+            with mock.patch.object(recovery, "managed_by", lambda dep: tool):
+                left_out, restart = recovery.split_gitops([app("db", "d")], "spread", False)
+            self.assertEqual(({"lab/db"}, {}), (left_out, restart), tool)
+
+    def test_an_app_with_no_tool_is_neither(self):
+        self.assertEqual((set(), {}), recovery.split_gitops([app("web", "d")], "spread", False))
+
+    def test_a_removed_mark_stops_restart_moves_and_alerts(self):
+        self.stamped("db", "2026-10-07T02:06:00Z")
+        recovery.marked("lab/db", "2026-10-07T02:06:00Z", "Flux", at(2, 6))
+        self.stamped("db", None)
+        recovery.tick(at(2, 10))
+        left_out, restart = recovery.split_gitops(self.deployments, "spread", recovery._load()["undone"])
+        self.assertEqual(({"lab/db"}, {}), (left_out, restart))
+        self.away_and_back()
+        recovery.tick(at(2, 15))
+        self.assertIn("lab/db", self.plans[-1])
+        self.assertEqual({}, self.restarts[-1])
+        fact = next(f for f in recovery.alert_facts("window", WINDOW) if f["key"] == "recovery:restart-undone")
+        self.assertEqual("degraded", fact["severity"])
+        self.assertIn("Flux removed Homestead's restart mark from lab/db", fact["title"] + fact["body"])
+
+    def test_a_removed_mark_holds_in_every_mode(self):
+        self.settings["placement"]["rebalance"] = "off"
+        self.stamped("db", "2026-10-07T02:06:00Z")
+        recovery.marked("lab/db", "2026-10-07T02:06:00Z", "Flux", at(2, 6))
+        self.stamped("db", None)
+        recovery.tick(at(2, 10))
+        self.assertTrue(recovery._load()["undone"])
+        self.assertTrue([f for f in recovery.alert_facts("off", WINDOW) if f["key"] == "recovery:restart-undone"])
+
+    def test_a_newer_mark_is_a_person_not_a_fight(self):
+        self.stamped("db", "2026-10-07T02:06:00Z")
+        recovery.marked("lab/db", "2026-10-07T02:06:00Z", "Flux", at(2, 6))
+        self.stamped("db", "2026-10-07T02:09:00Z")
+        recovery.tick(at(2, 10))
+        data = recovery._load()
+        self.assertEqual({}, data["marks"])
+        self.assertFalse(data["undone"])
+
+    def test_a_mark_is_forgotten_after_the_watch(self):
+        self.stamped("db", "2026-10-07T02:06:00Z")
+        recovery.marked("lab/db", "2026-10-07T02:06:00Z", "Flux", at(2, 6))
+        recovery.tick(at(3))
+        self.assertIn("lab/db", recovery._load()["marks"], "still in its watch")
+        recovery.tick(at(2, 6) + MARKS.MARK_WATCH + 1)
+        self.assertEqual({}, recovery._load()["marks"])
+        self.assertFalse(recovery._load()["undone"])
+
+    def test_a_deployment_gone_is_forgotten_without_a_word(self):
+        recovery.marked("lab/gone", "2026-10-07T02:06:00Z", "Flux", at(2, 6))
+        recovery.tick(at(2, 10))
+        self.assertEqual({}, recovery._load()["marks"])
+        self.assertFalse(recovery._load()["undone"])
+
+    def test_nothing_reads_deployments_for_marks_when_there_are_none(self):
+        self.settings["placement"]["rebalance"] = "off"
+        reads = []
+        real = recovery.read
+        recovery.read = lambda path: reads.append(path) or real(path)
+        self.addCleanup(setattr, recovery, "read", real)
+        recovery.tick(at(2, 10))
+        self.assertNotIn("/apis/apps/v1/deployments", reads)
+
+    def test_homestead_sends_no_kubectl_user_agent(self):
+        # Flux's Kustomization removes fields a kubectl* field manager owns: that is
+        # why Homestead's mark survives where `kubectl rollout restart`'s does not.
+        offenders = [path.name for path in (Path(__file__).resolve().parents[1] / "server").glob("*.py")
+                     if re.search(r"""(User-Agent|fieldManager)["'=:\s,]+[^\n]*kubectl""", path.read_text())]
+        self.assertEqual([], offenders)
+
 
 class BindingTests(unittest.TestCase):
     def test_homestead_waits_for_every_job_that_moves_or_restarts_apps_or_hosts(self):

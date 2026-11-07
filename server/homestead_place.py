@@ -682,6 +682,14 @@ def balance_preference(dep):
     return host if host and NAMES.read((dep.get("metadata") or {}).get("annotations"), BALANCE_MARK) == host else ""
 
 
+def person_preference(dep):
+    """Whether it has a host preference Balance hosts didn't leave: nothing automatic
+    rewrites that, and a placement move would."""
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    own = balance_preference(dep)
+    return any(one_host(term) != own or not own for term in host_terms(spec))
+
+
 def mark_balance_preference(dep, node):
     dep["metadata"].setdefault("annotations", {})[NAMES.key(BALANCE_MARK)] = node
 

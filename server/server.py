@@ -678,7 +678,7 @@ RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRA
 PLACEMODE.bind(kget, ksend, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
 CAPACITY.bind(kget, NODES.node_impact, NODES._impact_sources, FLOW._flow_owner, lambda pod: NAMES.label_of(pod["metadata"], "task"))
 RECOVERY.bind(DATA_DIR, kget, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), OPS,
-              lambda exclude=(), avoid=(): CREBALANCE.plan(exclude, avoid=avoid), CREBALANCE.start,
+              lambda exclude=(), avoid=(), **unattended: CREBALANCE.plan(exclude, avoid=avoid, **unattended), CREBALANCE.start,
               (CREBALANCE.KIND, RESERVE.KIND, AUTOUPDATE.KIND, "os-rollout", "node-power", "k3s-cluster"), LEADER.is_leader, beat,
               UPDATES.managed_by)
 PRIORITY.bind(kget, ksend, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),

@@ -13,7 +13,8 @@ cordoned - and then, as settings.placement.rebalance says:
   rebalance runs by itself, as the job a person would start, leaving out any
   app whose backup job is due before the window closes - a backup has to run
   on the app's host while its volume is attached there, and a move under it
-  would fail it or the move.
+  would fail it or the move. Under Spread by capacity it also moves apps Flux
+  applies, by restarting them (split_gitops); a placement would be undone.
 
 A returned host is remembered until the rebalance finds nothing worth moving,
 or for RETURN_KEEP at most - long enough for a weekly window. A host is "back"
@@ -29,6 +30,7 @@ import time
 import zoneinfo
 
 import homestead_placement_mode as PLACEMODE
+import homestead_recovery_marks as MARKS
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -92,7 +94,7 @@ def _load():
     data = SHARED.read_json(_path(), {})
     return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
             "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
-            "ran": data.get("ran") or ""}
+            "ran": data.get("ran") or "", "marks": data.get("marks") or {}, "undone": data.get("undone") or {}}
 
 
 def _save(data):
@@ -312,19 +314,91 @@ def already_ran(key):
         return bool(key) and _load()["ran"] == key
 
 
+def split_gitops(deployments, placement_mode, undone):
+    """Which apps a tool applies are left out of the window's run, and which move by
+    restarting ({id: tool}). Only Flux, only under Spread by capacity (Andreas, 6 Nov),
+    and not once a tool has taken a restart mark off. Argo CD stays out until someone
+    has tried it: nothing here can test it. A person's Updated elsewhere mark means
+    leave it alone."""
+    left_out, restart = set(), {}
+    for dep in deployments:
+        meta, tool = dep.get("metadata") or {}, managed_by(dep)
+        if not tool:
+            continue
+        app = f"{meta.get('namespace')}/{meta.get('name')}"
+        if tool.get("by") == "Flux" and tool.get("detected") and placement_mode == "spread" and not undone:
+            restart[app] = tool["by"]
+        else:
+            left_out.add(app)
+    return left_out, restart
+
+
+def marked(app, value, by, now=None):
+    """An app restarted to move it, whose mark is now watched (MARKS)."""
+    with _lock:
+        data = _load()
+        data["marks"][app] = {"value": value, "by": by, "at": int(now or time.time())}
+        _save(data)
+
+
+def undone_by(app, by, now=None):
+    """A tool took a restart's mark off: no more restarts of what it applies."""
+    with _lock:
+        data = _load()
+        data["undone"] = {"app": app, "by": by, "at": int(now or time.time())}
+        _save(data)
+
+
+def restart_why(dep, by="Flux"):
+    """Why an app the plan chose to restart must not be, now; "" when it still may.
+    Asked before each restart, as a run can outlast all of this. by: the tool that
+    applies it, "" for one no tool does."""
+    with _lock:
+        undone = _load()["undone"]
+    if undone and by:
+        return f"{undone['by']} took a restart mark off, so apps it applies are left out"
+    mode = (settings().get("placement") or {}).get("mode", "")
+    if not by:
+        return "" if mode == "spread" and not managed_by(dep) else "it no longer moves by restarting"
+    return "" if split_gitops([dep], mode, undone)[1] else "it no longer moves by restarting"
+
+
+def _watch_marks(now):
+    """In every mode: a mark taken off stops restart moves until someone looks."""
+    with _lock:
+        marks = _load()["marks"]
+    if not marks:
+        return
+    still, undone = MARKS.check(marks, read("/apis/apps/v1/deployments").get("items", []), now)
+    if still == marks:
+        return
+    with _lock:
+        data = _load()
+        # One added meanwhile, by the job's thread, is kept.
+        data["marks"] = {app: mark for app, mark in data["marks"].items() if app in still or app not in marks}
+        for app, mark in sorted(undone.items()):
+            data["undone"] = {"app": app, "by": mark.get("by", ""), "at": int(now)}
+        _save(data)
+
+
 def alert_facts(mode=None, maintenance=None):
-    """A host back, with containers worth moving back to even things out.
-    mode and maintenance are read from the settings when not given."""
+    """A host back, with containers worth moving back to even things out; and a tool
+    that took a restart mark off. mode and maintenance are read from the settings when
+    not given."""
     if mode is None:
         current = settings()
         mode = (current.get("placement") or {}).get("rebalance", "off")
         maintenance = current["updates"]["maintenance"]
-    if mode not in ("suggest", "window"):
-        return []
     with _lock:
-        found = _load()["suggestion"]
-    if not found.get("moves"):
-        return []
+        data = _load()
+    found, undone = data["suggestion"], data["undone"]
+    facts = [{"key": "recovery:restart-undone", "category": "joins", "severity": "degraded",
+              "title": f"{undone['by']} removed Homestead's restart mark from {undone['app']}, so it restarted a second time",
+              "body": f"Apps {undone['by']} applies are left out of moves back until you Resume.",
+              "resolved": "Moves back can restart apps again", "href": "/settings?tab=general",
+              "signals": {"undone": 1}}] if undone else []
+    if mode not in ("suggest", "window") or not found.get("moves"):
+        return facts
     hosts, moves = found["hosts"], found["moves"]
     who = " and ".join(hosts) if len(hosts) < 3 else f"{len(hosts)} hosts"
     if mode != "window" or not maintenance:
@@ -334,7 +408,7 @@ def alert_facts(mode=None, maintenance=None):
     else:
         then = (f"They move in the next update window ({maintenance['start']} UTC) unless you start it sooner - "
                 "apart from any whose scheduled job runs then.")
-    return [{"key": "recovery:rebalance", "category": "joins", "severity": "info",
+    return facts + [{"key": "recovery:rebalance", "category": "joins", "severity": "info",
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
                      f"Balance hosts shows the moves; each restarts its container once. {then}",
@@ -358,6 +432,7 @@ def tick(now=None):
         print(f"placement: {str(error)[:160]}", flush=True)
     standby = sorted(PLACEMODE.standby_of(placement))
     returned = observe(nodes, now, standby)
+    _watch_marks(now)
     if not returned or mode == "off":
         return None
     # Not beside other work that moves or restarts apps or hosts: a host
@@ -374,16 +449,20 @@ def tick(now=None):
         return None
     closes = window(maintenance, now)[1]
     deployments = read("/apis/apps/v1/deployments").get("items", [])
-    # An app Flux or Argo CD applies is left: its next sync could put it back,
-    # restarting it twice for nothing. A person can still move it by hand.
-    gitops = {f"{(d.get('metadata') or {}).get('namespace')}/{(d.get('metadata') or {}).get('name')}"
-              for d in deployments if managed_by(d)}
+    # An app a tool applies keeps what the tool wrote, a restart's mark included;
+    # a new placement is another matter. Flux's apps can move by restarting under
+    # Spread by capacity; a person can still move any of them by hand.
+    with _lock:
+        undone = _load()["undone"]
+    left_out, restart = split_gitops(deployments, placement.get("mode", ""), undone)
+    back = sorted(returned)
     # A scheduled job is guarded for as long as the run may take - a move can
     # wait MOVE_WAIT for its container - not only until the window closes.
-    first = plan(sorted(gitops), avoid=standby)
+    may_restart = placement.get("mode") == "spread"
+    first = plan(sorted(left_out), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     until = max(closes, now + MOVE_WAIT * len(first["moves"]))
     keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, until)
-    chosen = plan(sorted(gitops | set(keep)), avoid=standby)
+    chosen = plan(sorted(left_out | set(keep)), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     if not chosen["moves"]:
         ran(key)
         return None

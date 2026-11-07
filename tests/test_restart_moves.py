@@ -3,7 +3,10 @@ placement, but the scheduler can place it again. The plan says where a restart
 would land it, or why it can't; the job restarts it once and looks where it went.
 On the shared fake API."""
 import sys
+import tempfile
+import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -11,9 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_container_rebalance as C
 import homestead_kube as K
 import homestead_names as NAMES
+import homestead_operations as OPS
 import homestead_place as PLACE
+import homestead_recovery as RECOVERY
 import server
-from rebind import keep_bound
+from rebind import keep_bound, rebind
 from test_container_rebalance import Hosts, bind, deployment, pod
 
 FLUX = {"lab/frigate": "Flux"}
@@ -97,11 +102,11 @@ class Landing(unittest.TestCase):
         self.c.edit_dep("frigate", stale)
         self.assertIn("preference keeps it on k2", why_of(self.plan())["lab/frigate"])
 
-    def test_a_preference_naming_several_hosts_leaves_it_with_why(self):
+    def test_a_preference_not_for_one_host_leaves_it_with_why(self):
         term = preference("k1")
         term["preference"]["matchExpressions"][0]["values"] = ["k1", "k2"]
         self.c.edit_dep("frigate", lambda d: prefers(d, term))
-        self.assertIn("several hosts", why_of(self.plan())["lab/frigate"])
+        self.assertIn("isn't for one host", why_of(self.plan())["lab/frigate"])
 
     def test_reservations_favouring_its_host_leave_it_with_why(self):
         for host in ("k1", "k3"):
@@ -113,6 +118,7 @@ class Landing(unittest.TestCase):
     def test_its_own_requests_are_not_counted_against_its_host(self):
         # Each host has 1 CPU reserved by something else, so a tie: it stays. Counting
         # its own 3 CPUs against k2 as well would send it away.
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(strategy={"type": "Recreate"}))
         for host in ("k1", "k3"):
             self.c.kube.add(reserving(f"same-{host}", host, cpu="1", memory="4Gi"))
         own = [{"name": "c", "resources": {"requests": {"cpu": "3"}}}]
@@ -128,6 +134,7 @@ class Landing(unittest.TestCase):
     def test_a_restart_app_stays_when_the_likely_host_has_no_copy(self):
         self.c.kube.add(reserving("full", "k1"))
         self.c.kube.add(deployment("frigate", claim="data"))
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(strategy={"type": "Recreate"}))
         self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": "v1"},
                          "spec": {"dataLocality": "best-effort"}, "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": "data"}}})
         self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Replica", "metadata": {"namespace": "longhorn-system", "name": "r1"},
@@ -163,12 +170,96 @@ class Landing(unittest.TestCase):
             self.assertNotIn("lab/frigate", moves_of(plan), word)
             self.assertIn(word.strip(), why_of(plan)["lab/frigate"])
 
+    def stranded(self, plan, app="lab/frigate"):
+        return {k["id"]: k["why"] for k in plan["kept"]}.get(app, "")
+
+    def test_a_persons_preference_on_an_app_no_tool_applies_is_left_out(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        plan = C.plan(restart={}, back=("k1",), may_restart=True)
+        self.assertNotIn("lab/frigate", moves_of(plan))
+        self.assertIn("preference keeps it on k2", self.stranded(plan))
+
+    def test_a_persons_preference_for_the_returned_host_uses_a_restart_never_a_placement(self):
+        self.c.kube.add(reserving("full", "k3"))
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k1")))
+        move = moves_of(C.plan(restart={}, back=("k1",), may_restart=True))["lab/frigate"]
+        self.assertEqual(("k1", "restart", ""), (move["to"], move["how"], move["by"]))
+
+    def test_without_restarts_a_persons_preference_is_left_out_with_why(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k1")))
+        plan = C.plan(restart={}, back=("k1",), may_restart=False)
+        self.assertNotIn("lab/frigate", moves_of(plan))
+        self.assertIn("Spread by capacity", self.stranded(plan))
+
+    def test_balances_own_preference_on_an_app_no_tool_applies_moves_by_placement(self):
+        def own(dep):
+            prefers(dep, preference("k2"))
+            mark(dep, "k2")
+        self.c.edit_dep("frigate", own)
+        move = moves_of(C.plan(restart={}, back=("k1",)))["lab/frigate"]
+        self.assertNotIn("how", move)
+
+    def test_a_person_reviewing_balance_hosts_still_sees_it_as_movable(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        self.assertIn("lab/frigate", moves_of(C.plan()))
+        self.assertNotIn("kept", C.plan())
+
+    def test_every_move_of_an_unattended_run_carries_its_generation(self):
+        for move in C.plan(restart={}, back=("k1",))["moves"]:
+            self.assertEqual(1, move["generation"], move["id"])
+        self.assertFalse([m for m in C.plan()["moves"] if "generation" in m], "a person's plan binds it at review")
+
+    def rolling_with_a_volume(self, access):
+        self.c.kube.add(reserving("full", "k1"))
+        self.c.kube.add(deployment("frigate", claim="data"))
+        self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": "v1"},
+                         "spec": {"dataLocality": "disabled", **({"accessMode": access} if access else {})},
+                         "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": "data"}}})
+
+    def test_a_rolling_update_on_a_one_host_volume_is_not_restarted(self):
+        # The new pod waits for a volume the old one holds: Multi-Attach, then ten minutes lost.
+        for access in ("rwo", None):
+            self.rolling_with_a_volume(access)
+            plan = self.plan(("k1", "k3"))
+            self.assertNotIn("lab/frigate", moves_of(plan), access)
+            self.assertIn("attaches to one host", self.stranded(plan))
+
+    def test_a_rolling_update_on_a_shared_volume_or_a_recreate_is_fine(self):
+        self.rolling_with_a_volume("rwx")
+        self.assertIn("lab/frigate", moves_of(self.plan(("k1", "k3"))))
+        self.rolling_with_a_volume("rwo")
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(strategy={"type": "Recreate"}))
+        self.assertIn("lab/frigate", moves_of(self.plan(("k1", "k3"))))
+
+    def test_an_app_whose_volume_has_a_copy_being_rebuilt_anywhere_stays(self):
+        self.rolling_with_a_volume("rwx")
+        for mode in ("WO", "ERR"):
+            self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Engine", "metadata": {"namespace": "longhorn-system", "name": "v1-e-0"},
+                             "spec": {"volumeName": "v1"}, "status": {"replicaModeMap": {"r1": "RW", "r3": mode}}})
+            plan = self.plan(("k1", "k3"))
+            self.assertNotIn("lab/frigate", moves_of(plan), mode)
+            self.assertIn("still being rebuilt", self.stranded(plan))
+
+    def test_flux_system_never_moves(self):
+        self.c.kube.add(deployment("frigate"))
+        self.c.edit_dep("frigate", lambda d: d["metadata"].update(namespace="flux-system"))
+        self.assertEqual(set(), {a["id"] for a in C.inventory()[1]} & {"flux-system/frigate"})
+
+    def test_a_rolling_app_keeps_its_own_requests_against_its_host_while_it_rolls(self):
+        for host in ("k1", "k3"):
+            self.c.kube.add(reserving(f"same-{host}", host, cpu="2", memory="4Gi"))
+        own = [{"name": "c", "resources": {"requests": {"cpu": "2"}}}]
+        self.c.edit_pod("frigate", lambda p: p["spec"].update(containers=own))
+        self.c.edit_dep("frigate", lambda d: d["spec"]["template"]["spec"].update(containers=own))
+        self.assertIn("lab/frigate", moves_of(self.plan(("k1", "k3"))), "the old pod is still there when the new one is placed")
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(strategy={"type": "Recreate"}))
+        self.assertNotIn("lab/frigate", moves_of(self.plan(("k1", "k3"))))
+
     def test_manual_plan_output_is_unchanged_without_restart(self):
         plain = C.plan()
         self.assertTrue(plain["moves"])
         self.assertFalse([m for m in plain["moves"] if "how" in m or "by" in m])
         self.assertEqual(plain["moves"], C.plan(restart=None, back=())["moves"])
-        self.assertEqual(plain["moves"], C.plan(restart={})["moves"])
 
 
 class RestartJob(unittest.TestCase):
@@ -177,6 +268,11 @@ class RestartJob(unittest.TestCase):
         self.c = Hosts(self)
         bind(self.c)
         C.restart = server.OVERVIEW_ROUTES.restart_workload
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.settings = {"placement": {"mode": "spread"}}
+        self.tool = {"by": "Flux", "detected": True}
+        rebind(self, RECOVERY, folder.name, K.kget, lambda: self.settings, OPS, None, None, (), _managed_by=lambda dep: self.tool)
         self.item = {"id": "job", "ref": {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1",
                                                      "how": "restart", "by": "Flux"}],
                                           "index": 0, "moved": 0, "stage": "move", "results": []}}
@@ -233,6 +329,27 @@ class RestartJob(unittest.TestCase):
         self.assertEqual(required, affinity["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"])
         self.assertEqual([hardware], affinity["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"])
 
+    def test_clearing_keeps_the_rest_of_the_affinity_when_no_node_rule_is_left(self):
+        apart = {"requiredDuringSchedulingIgnoredDuringExecution": [{"topologyKey": "kubernetes.io/hostname", "labelSelector": {"matchLabels": {"app": "x"}}}]}
+        def own(dep):
+            prefers(dep, preference("k2"))
+            dep["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"] = apart
+            mark(dep, "k2")
+        self.c.edit_dep("frigate", own)
+        C.status(self.item)
+        self.assertEqual({"podAntiAffinity": apart}, self.c.kube.object(PATH)["spec"]["template"]["spec"]["affinity"])
+
+    def test_clearing_is_refused_after_someone_changes_the_app(self):
+        def own(dep):
+            prefers(dep, preference("k2"))
+            mark(dep, "k2")
+        self.c.edit_dep("frigate", own)
+        also = PLACE.balance_clear_patch(self.c.kube.object(PATH))
+        self.c.edit_dep("frigate", lambda d: d["metadata"].update(resourceVersion="999"))
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            K.ksend("PATCH", PATH, also, ctype="application/merge-patch+json")
+        self.assertEqual(409, caught.exception.code)
+
     def test_clearing_refuses_a_change_made_after_it_read_the_app(self):
         def own(dep):
             prefers(dep, preference("k2"))
@@ -271,6 +388,128 @@ class RestartJob(unittest.TestCase):
         result = self.item["ref"]["results"][0]
         self.assertEqual("moved", result["result"])
         self.assertIn("landed on k3", result["detail"])
+
+    def watched(self):
+        return RECOVERY._load()["marks"].get("lab/frigate")
+
+    def mark_now(self):
+        return self.c.kube.object(PATH)["spec"]["template"]["metadata"]["annotations"][RESTARTED]
+
+    def test_a_restart_is_watched_from_the_moment_it_is_sent(self):
+        C.status(self.item)
+        self.assertEqual((self.mark_now(), "Flux"), (self.watched()["value"], self.watched()["by"]))
+
+    def test_a_restart_landing_back_or_timing_out_is_still_watched(self):
+        C.status(self.item)
+        self.restarted("k2")
+        self.assertEqual("failed", C.status(self.item)[0])
+        self.assertTrue(self.watched())
+
+    def test_a_run_cancelled_during_a_restart_is_still_watched(self):
+        C.status(self.item)
+        C.cancel_run(self.item, {})
+        self.assertTrue(self.watched())
+
+    def test_a_sync_taking_the_mark_off_before_it_lands_is_noticed(self):
+        C.status(self.item)
+        self.restarted("k1")
+        self.c.edit_dep("frigate", lambda d: d["spec"]["template"]["metadata"]["annotations"].pop(RESTARTED))
+        C.status(self.item)
+        self.assertEqual(1, self.item["ref"]["moved"])
+        RECOVERY._watch_marks(time.time())
+        self.assertEqual("lab/frigate", RECOVERY._load()["undone"]["app"])
+
+    def test_a_lost_reply_is_watched_once_the_mark_shows(self):
+        self.c.kube.fail(PATH, TimeoutError("reply lost"), method="PATCH", applied=True)
+        C.status(self.item)
+        self.assertIsNone(self.watched())
+        C.status(self.item)
+        self.assertEqual(self.mark_now(), self.watched()["value"])
+
+    def test_a_lost_reply_whose_mark_has_gone_counts_as_undone(self):
+        self.c.kube.fail(PATH, TimeoutError("reply lost"), method="PATCH", applied=True)
+        C.status(self.item)
+        self.restarted("k1")
+        self.c.edit_dep("frigate", lambda d: d["spec"]["template"]["metadata"]["annotations"].pop(RESTARTED))
+        C.status(self.item)
+        self.assertEqual("lab/frigate", RECOVERY._load()["undone"]["app"])
+
+    def test_a_send_that_never_landed_is_not_watched(self):
+        self.c.kube.fail(PATH, TimeoutError("no answer"), method="PATCH")
+        C.status(self.item)
+        C.status(self.item)
+        self.assertIsNone(self.watched())
+        self.assertEqual({}, RECOVERY._load()["undone"])
+
+    def test_an_old_mark_is_not_taken_for_a_restart_that_never_landed(self):
+        self.c.edit_dep("frigate", lambda d: d["spec"]["template"].setdefault("metadata", {}).update(annotations={RESTARTED: "2026-01-01T00:00:00Z"}))
+        self.c.kube.fail(PATH, TimeoutError("no answer"), method="PATCH")
+        C.status(self.item)
+        C.status(self.item)
+        self.assertIsNone(self.watched())
+
+    def skipped_without_a_write(self, word):
+        C.status(self.item)
+        self.assertEqual([], self.writes())
+        result = self.item["ref"]["results"][0]
+        self.assertEqual("skipped", result["result"])
+        self.assertIn(word, result["detail"])
+
+    def test_a_mark_removed_earlier_in_the_run_skips_the_later_restarts(self):
+        RECOVERY.marked("lab/other", "v", "Flux", time.time())
+        RECOVERY.undone_by("lab/other", "Flux", time.time())
+        self.skipped_without_a_write("restart mark")
+
+    def test_a_person_marking_it_updated_elsewhere_mid_run_skips_it(self):
+        self.tool = {"by": "my script", "detected": False}
+        self.skipped_without_a_write("no longer moves by restarting")
+
+    def test_a_restart_for_no_tool_goes_on_only_while_no_tool_applies_it(self):
+        self.item["ref"]["moves"][0]["by"] = ""
+        self.tool = {"by": "Flux", "detected": True}
+        self.skipped_without_a_write("no longer moves by restarting")
+
+    def test_a_restart_for_no_tool_is_not_watched_for_a_tool_removing_its_mark(self):
+        self.item["ref"]["moves"][0]["by"] = ""
+        self.tool = {}
+        C.status(self.item)
+        self.assertEqual(1, len(self.writes()))
+        self.assertIsNone(self.watched())
+
+    def test_a_tool_going_away_mid_run_skips_it(self):
+        self.tool = {}
+        self.skipped_without_a_write("no longer moves by restarting")
+
+    def test_leaving_spread_mid_run_skips_it(self):
+        self.settings["placement"]["mode"] = "default"
+        self.skipped_without_a_write("no longer moves by restarting")
+
+    def test_paused_mid_run_skips_it(self):
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(paused=True))
+        self.skipped_without_a_write("paused")
+
+    def test_a_pin_set_after_the_plan_is_not_removed_by_a_placement_move(self):
+        self.item["ref"]["moves"][0].update(how="", generation=1)
+        self.item["ref"]["moves"][0].pop("how")
+        def pinned(dep):
+            dep["metadata"]["generation"] = 2
+            dep["status"]["observedGeneration"] = 2
+            dep["spec"]["template"]["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "k2"}
+        self.c.edit_dep("frigate", pinned)
+        C.status(self.item)
+        self.assertEqual([], self.c.moved)
+        self.assertEqual("skipped", self.item["ref"]["results"][0]["result"])
+
+    def test_an_edit_since_the_plan_skips_it(self):
+        self.c.kube.add(reserving("busy", "k2", cpu="1", memory="4Gi"))
+        move = moves_of(C.plan(restart=FLUX, back=("k1", "k3")))["lab/frigate"]
+        self.assertEqual(1, move["generation"])
+        self.item["ref"]["moves"][0]["generation"] = 1
+        def edited(dep):
+            dep["metadata"]["generation"] = 2
+            dep["status"]["observedGeneration"] = 2
+        self.c.edit_dep("frigate", edited)
+        self.skipped_without_a_write("changed since")
 
     def test_a_lost_reply_is_not_sent_twice(self):
         self.c.kube.fail(PATH, TimeoutError("reply lost"), method="PATCH", applied=True)

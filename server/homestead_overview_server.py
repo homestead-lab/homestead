@@ -726,11 +726,11 @@ def restart_workload(ns, name, also=None):
     require_workload_target(ns, name)
     body = copy.deepcopy(also or {})
     template = body.setdefault("spec", {}).setdefault("template", {})
-    template.setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("restartedAt")] = \
-        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    template.setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("restartedAt")] = stamp
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", body, ctype="application/merge-patch+json")
     _cache.pop("wl", None)
-    return {"ok": True}
+    return {"ok": True, "restartedAt": stamp}
 
 
 def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleting=False, moving=False):
