@@ -20,7 +20,7 @@ import homestead_place as PLACE
 import homestead_recovery as RECOVERY
 import server
 from rebind import keep_bound, rebind
-from test_container_rebalance import Hosts, bind, deployment, pod
+from test_container_rebalance import Hosts, bind, deployment, pod, replicaset
 
 FLUX = {"lab/frigate": "Flux"}
 PATH = "/apis/apps/v1/namespaces/lab/deployments/frigate"
@@ -242,9 +242,15 @@ class Landing(unittest.TestCase):
             self.assertIn("still being rebuilt", self.stranded(plan))
 
     def test_flux_system_never_moves(self):
-        self.c.kube.add(deployment("frigate"))
-        self.c.edit_dep("frigate", lambda d: d["metadata"].update(namespace="flux-system"))
-        self.assertEqual(set(), {a["id"] for a in C.inventory()[1]} & {"flux-system/frigate"})
+        controller = deployment("controller")
+        controller["metadata"]["namespace"] = "flux-system"
+        running = pod("controller", "k2")
+        running["metadata"]["namespace"] = "flux-system"
+        made = replicaset("controller")
+        made["metadata"]["namespace"] = "flux-system"
+        for obj in (controller, running, made):
+            self.c.kube.add(obj)
+        self.assertNotIn("flux-system/controller", {a["id"] for a in C.inventory()[1]})
 
     def test_a_rolling_app_keeps_its_own_requests_against_its_host_while_it_rolls(self):
         for host in ("k1", "k3"):
@@ -271,7 +277,7 @@ class RestartJob(unittest.TestCase):
         C.restart = server.OVERVIEW_ROUTES.restart_workload
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        self.settings = {"placement": {"mode": "spread"}}
+        self.settings = {"placement": {"mode": "spread", "rebalance": "window"}}
         self.tool = {"by": "Flux", "detected": True}
         rebind(self, RECOVERY, folder.name, K.kget, lambda: self.settings, OPS, None, None, (), _managed_by=lambda dep: self.tool)
         self.item = {"id": "job", "ref": {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1",
@@ -543,6 +549,92 @@ class RestartJob(unittest.TestCase):
         self.assertIn("Stopped after moving 0", C.cancel_run(self.item, {}))
         self.assertEqual(1, len(self.writes()))
         self.assertIn("finishes its restart", " ".join(C.cancel_plan(self.item)["keeps"]))
+
+
+class AutomaticJob(unittest.TestCase):
+    """A run Homestead started by itself asks before each move whether it may go on."""
+    def setUp(self):
+        keep_bound(self, C, CAPACITY_REVIEW)
+        self.c = Hosts(self)
+        bind(self.c)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        rebind(self, RECOVERY, folder.name)
+        self.ref = {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"},
+                              {"ns": "lab", "name": "ha", "id": "lab/ha", "from": "k2", "to": "k3"}],
+                    "index": 0, "moved": 0, "stage": "move", "results": [], "automatic": True}
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(C, "_pull_first", return_value=([], [])).start()
+
+    def test_it_stops_as_succeeded_with_why_and_moves_nothing_more(self):
+        self.ref.update(moved=1)
+        with mock.patch.object(RECOVERY, "may_go_on", return_value="b no longer takes work"):
+            state, _, message = C.status({"id": "job", "ref": self.ref})
+        self.assertEqual("succeeded", state, "the condition is gone once the host settles: no pause")
+        self.assertEqual("Stopped: b no longer takes work. Moved 1", message)
+        self.assertEqual([], self.c.moved)
+
+    def test_it_goes_on_when_nothing_says_not_to(self):
+        with mock.patch.object(RECOVERY, "may_go_on", return_value=""):
+            C.status({"id": "job", "ref": self.ref})
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+
+    def test_a_restart_finishing_is_not_stopped(self):
+        self.ref.update(stage="starting", started=time.time())
+        self.c.edit_pod("frigate", lambda p: p["spec"].update(nodeName="k1"))
+        with mock.patch.object(RECOVERY, "may_go_on", return_value="the choice changed") as asked:
+            state = C.status({"id": "job", "ref": self.ref})[0]
+        self.assertEqual("running", state)
+        asked.assert_not_called()
+        self.assertEqual(1, self.ref["moved"])
+
+    def test_a_move_starts_its_cooldown_when_sent_so_a_cancel_counts(self):
+        with mock.patch.object(RECOVERY, "may_go_on", return_value=""):
+            C.status({"id": "job", "ref": self.ref})
+        self.assertIn("lab/frigate", RECOVERY._load()["auto"]["moved"])
+
+    def test_a_skipped_move_starts_its_cooldown_so_empty_runs_do_not_loop(self):
+        def refused(ns, name, to):
+            raise ValueError("k1 cannot take it now")
+        self.c.apply = refused
+        C.bind(K.kget, lambda dep: {}, lambda n, r: (True, []), refused, ("lab", "homestead"), lambda: True)
+        with mock.patch.object(RECOVERY, "may_go_on", return_value=""):
+            C.status({"id": "job", "ref": self.ref})
+        self.assertEqual("skipped", self.ref["results"][0]["result"])
+        self.assertIn("lab/frigate", RECOVERY._load()["auto"]["moved"])
+
+    def test_a_cooldown_that_cannot_be_written_does_not_lose_the_send(self):
+        with mock.patch.object(RECOVERY, "may_go_on", return_value=""), \
+                mock.patch.object(RECOVERY, "moved_back", side_effect=OSError("disk")):
+            C.status({"id": "job", "ref": self.ref})
+        self.assertEqual("starting", self.ref["stage"])
+
+    def test_a_restart_in_a_window_run_asks_too(self):
+        # No automatic mark: the window's own run, whose placement moves go on as they did.
+        self.ref.pop("automatic")
+        self.ref["moves"][0].update(how="restart", by="Flux")
+        with mock.patch.object(RECOVERY, "may_go_on", return_value="b no longer takes work"):
+            state = C.status({"id": "job", "ref": self.ref})[0]
+        self.assertEqual("succeeded", state)
+
+    def test_manual_balance_hosts_ignores_all_of_this(self):
+        self.ref.pop("automatic")
+        with mock.patch.object(RECOVERY, "may_go_on", return_value="the choice changed") as asked:
+            C.status({"id": "job", "ref": self.ref})
+        asked.assert_not_called()
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+        self.ref.update(stage="starting", started=time.time())
+        self.c.edit_pod("frigate", lambda p: p["spec"].update(nodeName="k1"))
+        C.status({"id": "job", "ref": self.ref})
+        self.assertEqual({}, RECOVERY._load()["auto"].get("moved", {}))
+
+    def test_start_keeps_the_automatic_mark(self):
+        started = []
+        with mock.patch.object(C, "operations", mock.Mock(start=lambda *a, **k: started.append(a))):
+            C.start({"moves": [], "excluded": [], "automatic": True})
+            C.start({"moves": [], "excluded": []})
+        self.assertTrue(started[0][4]["automatic"])
+        self.assertFalse(started[1][4].get("automatic"))
 
 
 if __name__ == "__main__":
