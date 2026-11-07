@@ -146,7 +146,7 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
-    ${a.state === "off" ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>
+    ${a.state === "off" ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}</div>
     <div class="answer-figures"><div><span class="dim xs">LAST 24 HOURS</span><b class="mono">${answerShare(a.uptime_24h)}</b></div>
       <div><span class="dim xs">LAST 30 DAYS</span><b class="mono">${answerShare(a.uptime_30d)}</b></div></div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
@@ -217,7 +217,7 @@ window.vmMonitoring = (ns, name, back = null) => {
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
-    ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}
+    ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}</div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
       ${option("auto", "Automatic", `The first usual port that answers${a.port ? ` (${a.port} now)` : ""}`, `<span class="dim xs">${tip("SSH, RDP, HTTPS, HTTP, Proxmox and Home Assistant, in that order. A VM none of them answer on is not monitored.")}</span>`)}
       ${option("tcp", "A port", "The port takes a connection")}
@@ -270,15 +270,14 @@ function outageSectionHtml(kind, row) {
     <div class="outage-restart"${r ? "" : " hidden"}>${UI.fields(
       UI.field("After it has been down for", `<div class="outage-unit"><input id="oa_after" type="number" inputmode="numeric" min="1" max="1440" value="${r?.after_min || 5}"><span class="dim small">minutes</span></div>`),
       UI.field("At most", `<div class="outage-unit"><input id="oa_max" type="number" inputmode="numeric" min="1" max="10" value="${r?.max || 3}"><span class="dim small">times</span></div>`,
-        { help: "Then an alert says it gave up. The count starts again after 30 minutes up." }))}
+        { help: "Then it alerts and stops trying until it has been up 30 minutes." }))}
       <p class="dim xs">${kind === "vm" ? "A clean reboot, only with a port chosen above. " : ""}Never while a job is working on it.</p></div>
-    <label class="switch"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
+    <label class="switch" title="Called when it goes down, comes back, is restarted or gives up, and after an automatic update"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
       ${UI.field("Format", webhookFormatSelect("oa_format", a.format))}
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
         ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
       <label class="switch" data-need="admin" title="For a self-hosted ntfy or Gotify"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address</label>
-      <p class="dim xs">Called when it goes down, comes back, is restarted or gives up, and after an automatic update.</p>
       ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries a sentence as text, content and message, for chat services and Home Assistant; ntfy gets it as the message, Gotify with a title and priority. Once saved, the address shows only up to its host: the rest, where tokens sit, is kept and shows as (hidden). It never reaches this host, link-local or metadata addresses, and a LAN address only when an admin allows it.</p>`, false)}</div>
     ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
 }

@@ -116,7 +116,7 @@ function syncDialogHead() {
    controls of its own, or inside a notice (which is a summary bar already)
    or Details, is left as it is. */
 const PROSE_CHARS = 100;
-const PROSE = "p, .ui-help, small, div.dim, div.dim.xs, div.dim.small, .ui-step-detail, .ui-track-detail";
+const PROSE = "p, .ui-help, small, span.small, div.dim, div.dim.xs, div.dim.small, .ui-step-detail, .ui-track-detail";
 function condenseDialogProse(body) {
   if (!body || !window.UI?.splitIssue) return;
   for (const p of body.querySelectorAll(PROSE)) {
