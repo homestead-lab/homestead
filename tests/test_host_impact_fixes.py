@@ -6,8 +6,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_place as place
 import homestead_lhcapacity as LHCAP
+from rebind import keep_bound
 
 
 def node(name, taints=None, cpu="4", memory="8Gi"):
@@ -30,6 +32,9 @@ TIEBREAKER = [{"key": "node-role/tiebreaker", "value": "true", "effect": "NoSche
 
 class PlaceImpactTests(unittest.TestCase):
     def setUp(self):
+        # Put server's readers back after: a later capacity check (test_cycle_readers)
+        # otherwise lists these three hosts, not its own cluster's.
+        keep_bound(self, place)
         place.hardware_features = lambda: []
         self.nodes = [node("k3s-01"), node("k3s-02", memory="16Gi"), node("k3s-03", TIEBREAKER)]
         self.pods = [pod("lab", "web", "k3s-01"), pod("lab", "db", "k3s-01", memory="4Gi"), pod("lab", "other", "k3s-02", memory="2Gi")]

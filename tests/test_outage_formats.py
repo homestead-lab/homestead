@@ -15,8 +15,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_names as NAMES
 import homestead_outage as O
+from rebind import keep_bound
 
 SECRET = "AbCdEf123SECRET"
 ITEM = {"kind": "app", "ns": "lab", "name": "frigate"}
@@ -355,6 +357,12 @@ class RouteBase(FakeCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         self.stored, self.secrets = {}, {}
+        # bind() keeps kget/ksend/dns_name/guard in O._bound, which keep_bound does not
+        # see (the keys are set in a loop): put the dict back too, or server's OUTAGE
+        # goes on calling this finished test's fakes (test_outage's ServerTests, reversed).
+        keep_bound(self, O)
+        saved = dict(O._bound)
+        self.addCleanup(lambda: (O._bound.clear(), O._bound.update(saved)))
         O.bind(self.dir.name, kget=self.kget, ksend=self.ksend, dns_name=lambda value, what: value,
                guard=lambda ns, name: None)
         self.sent = []

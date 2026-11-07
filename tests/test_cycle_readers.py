@@ -55,6 +55,11 @@ class ShortReadersTests(unittest.TestCase):
         self.cluster = Cluster(self)
         self.PAGES = clean_snapshot(self)
         self.OV = self.cluster.server.OVERVIEW_ROUTES
+        # The alert loop's twice-a-day update scan, as just made on this test's clock:
+        # these tests are about the alert reads, and the loop writes the time of its
+        # scan into _last_update_scan. Left at this clock's 1.8e9 it stopped every
+        # later alert loop from scanning (test_alerts_unread_guard, reversed order).
+        self.enterContext(mock.patch.object(self.OV, "_last_update_scan", [self.clock.now]))
         COMPUTED.clear()
         self.addCleanup(lambda: self.assertEqual([], COMPUTED, "nothing computed"))
 

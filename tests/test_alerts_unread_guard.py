@@ -132,6 +132,13 @@ class UnreadNeverClearsTests(unittest.TestCase):
         self.clock = FakeClock()
         self.enterContext(mock.patch.object(ALERTS, "time", self.clock))
         self.enterContext(mock.patch.object(self.OV, "time", self.clock))
+        # The loop scans for updates when UPDATE_SCAN_EVERY has passed since the last
+        # scan this process made. Another test's alert loop leaves that at today's real
+        # time, after which the fake clock never reaches it, so "updates" would answer
+        # None unless an update report happened to be left behind. Every test here
+        # starts with no scan made and no report, and leaves both as they were.
+        self.enterContext(mock.patch.object(self.OV, "_last_update_scan", [0.0]))
+        self.enterContext(mock.patch.dict(self.OV.CHECKS._LATEST, {"report": None, "number": 0, "finished": 0.0}))
         self.enterContext(mock.patch.object(self.OV.LEADER, "is_leader", lambda: True))
         self.enterContext(mock.patch.object(self.OV.LOGALERTS, "start", lambda: None))
         self.pushed = []
