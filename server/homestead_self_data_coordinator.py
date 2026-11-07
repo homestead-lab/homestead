@@ -56,6 +56,24 @@ def zero(obj):
             and all(status.get(k, 0) == 0 for k in ("replicas", "readyReplicas", "availableReplicas", "terminatingReplicas")))
 
 
+def return_proposal(dep, state, plan):
+    """The Deployment going back to the original volume, in one write: the claim back and
+    the replica count together, so the cluster is only ever at new volume/0 or original/N.
+    The capacity review and the write both build it here, as admission compares the two.
+    The strategy stays as the switch set it: Homestead puts its own back at startup."""
+    proposed = copy.deepcopy(dep)
+    proposed["spec"]["replicas"] = state["replicas"]
+    pin_app_image(proposed, plan["copy_image"])
+    allowed = {state["source"]["name"]}
+    if any(e["step"] == "switch" for e in state["journal"]["ref"]["storage_writes"]):
+        allowed.add(state["destination"])
+    volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == plan["data_volume"]]
+    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") not in allowed:
+        raise Held("Recovery can start only the reviewed data mount")
+    volumes[0]["persistentVolumeClaim"]["claimName"] = state["source"]["name"]
+    return proposed
+
+
 class Coordinator:
     def __init__(self, anchor, read, send, logs, admit, *, worker_uid, clock=time.time):
         self.anchor, self.read, self.send, self.logs, self.admit = anchor, read, send, logs, admit
@@ -539,7 +557,7 @@ class Coordinator:
         """Release mounts normally, then start only the unchanged source."""
         if self.state["phase"] == "done":
             return self._result("Homestead is ready on its original volume; both volumes are retained")
-        if any(e["step"] in ("switch", "start") for e in self.writer.entries):
+        if self._entry("start"):
             raise Held("Original-volume recovery is prohibited after cutover")
         if not self.writer.entries:
             # Held before the stop request: Homestead still runs its reviewed
@@ -570,11 +588,7 @@ class Coordinator:
                 return self._wait("recover", "Waiting for the copy pod to release both retained volumes", what="The data copy")
         if not self._quiet(dep):
             return self._wait("recover", "Waiting for normal removal of all data-volume mounts")
-        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
-        pin_app_image(proposed, self.plan["copy_image"])
-        volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]
-        if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]:
-            raise Held("Recovery can start only the unchanged original data mount")
+        proposed = return_proposal(dep, self.anchor.state, self.plan)
         built_from, dep = dep, self._admission("recover-start", proposed)
         if not self._quiet(dep): raise Held("A writer returned during recovery admission")
         self._update_dep("recover-start", dep, proposed, built_from)

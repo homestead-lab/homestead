@@ -1943,7 +1943,7 @@ class LostPodTests(MoveTest):
         self.assertEqual("verify", self.replaced().tick()["phase"])
         self.assertEqual((1, "verified"), (self.counts()["copy-post"], m.state()["copy_receipt"]["state"]))
 
-    def test_died_after_the_switch_goes_forward_and_never_back(self):
+    def test_died_after_the_switch_goes_forward(self):
         m = self.m
         run = m.runner(self.current)
         run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick()

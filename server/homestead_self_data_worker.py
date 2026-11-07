@@ -130,8 +130,8 @@ def recovery_help(namespace, state):
     if _goes_back_first(state):
         return (f" To review going back, run: {command}, then run it again with --confirm <fingerprint>. "
                 "It writes nothing until confirmed. Then start a new move.")
-    cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
-    return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
+    started = any(e["step"] == "start" for e in state["journal"]["ref"]["storage_writes"])
+    return (f" To review recovery, run: {command}" + ("" if started else " (or --action return-original)")
             + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
 
 
@@ -154,7 +154,7 @@ def progress(anchor, now):
         writes = state["journal"]["ref"]["storage_writes"]
         # No write at all: held before the stop, so Homestead never stopped.
         if (all(e["state"] == "accepted" for e in writes) and (not writes or any(e["step"] == "recover-start" for e in writes))
-                and not any(e["step"] in ("switch", "start") for e in writes)):
+                and not any(e["step"] == "start" for e in writes)):
             return {"operation": state["operation"], "phase": "done", "status": "cancelled", "stale": False,
                     "message": "Homestead is ready on its original volume. Both data volumes are retained.",
                     "stages": [], "copy_percent": None, "retention_policy": "keep_both_volumes", "requires_review": False, "can_cancel": False}

@@ -179,8 +179,8 @@ def _validate(state, namespace):
             raise Held("The data move recovery receipt is invalid")
         if recovery["action"] == "return-original":
             entries = state["journal"]["ref"]["storage_writes"]
-            if (state["phase"] not in ("prepare", "quiesce", "copy", "verify", "switch", "done")
-                    or any(e["step"] in ("switch", "start") for e in entries)):
+            if (state["phase"] not in ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
+                    or any(e["step"] == "start" for e in entries)):
                 raise Held("Returning to the original volume is prohibited after cutover")
             # An empty journal: held before the stop, so nothing was restarted.
             if state["phase"] == "done" and (any(e["state"] != "accepted" for e in entries)

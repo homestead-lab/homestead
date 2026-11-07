@@ -25,9 +25,11 @@ def review(anchor, read, logs, action, *, clock=time.time):
 
     - prepare, nothing sent: Homestead was never stopped. return-original
       keeps it as it is, with no write; resume retries the stop's checks.
-    - prepare after the stop, quiesce, copy, verify, switch before its
-      request: resume, or return-original (restart on the original volume).
-    - after the switch request: only resume, forward to the new volume;
+    - prepare after the stop, quiesce, copy, verify, switch, and after the
+      switch request up to the start request: resume, or return-original (restart
+      on the original volume). After the switch Homestead has stayed at 0 copies,
+      so nothing was written to the new volume, and one write goes back.
+    - after the start request: only resume, forward to the new volume;
       returning to the original volume could lose writes made on the new one.
     """
     state = anchor.state
@@ -36,9 +38,11 @@ def review(anchor, read, logs, action, *, clock=time.time):
             or state["phase"] not in ("prepare", "quiesce", "copy", "verify", "switch", "start")
             or any(e["state"] != "accepted" for e in writes)):
         raise Held("Recovery needs a held move with known request outcomes")
-    cutover = any(e["step"] in ("switch", "start") for e in writes)
+    switched = any(e["step"] == "switch" for e in writes)
+    start_requested = any(e["step"] == "start" for e in writes)
+    cutover = action == "resume" and (switched or start_requested)
     untouched = state["phase"] == "prepare" and not writes
-    if cutover and action != "resume":
+    if start_requested and action != "resume":
         raise Held("Cutover has been requested; Homestead can only resume onto its new volume, never return to the original")
     if action == "resume" and (state.get("copy_receipt", {}).get("state") == "uncertain"
                                or state.get("recovery", {}).get("action") == "return-original"):
@@ -67,8 +71,8 @@ def review(anchor, read, logs, action, *, clock=time.time):
         raise Held("The copy check expired before Homestead was stopped, so resuming can't get past it: going back is the only "
                    "way. It changes nothing, as Homestead was not stopped. Preview --action return-original, then start a new move")
     target = A.worker_target(state)
-    # After the switch there is no going back, so resuming ignores host changes; _hosts
-    # below still measures the new volume's host and every pod in use.
+    # Forward from the switch on, nothing more is placed against the review, so resuming
+    # ignores host changes; _hosts below still measures the new volume's host and every pod in use.
     if action == "resume" and not cutover and target and target["kind"] == "Job":
         changes = engine.cluster_changes()
         if changes:
@@ -82,13 +86,14 @@ def review(anchor, read, logs, action, *, clock=time.time):
             raise Held(f"Going back needs {names}, which is down: the original volume or one of Homestead's pods is on it. "
                        "Bring it back, then preview again. Nothing was changed") from None
         raise Held(f"Resuming needs {names}, which is down. Bring it back, then preview again. Nothing was changed"
-                   + (". If it was removed, wait for Homestead's pod on it to leave Kubernetes" if down.removed else "." if cutover else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
+                   + (". If it was removed, wait for Homestead's pod on it to leave Kubernetes" if down.removed else "." if start_requested else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
     volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v["name"] == state["plan"]["data_volume"]]
-    selected = state["destination"] if cutover else state["source"]["name"]
-    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:
-        raise Held("The Deployment no longer selects the reviewed " + ("new" if cutover else "original") + " volume")
-    known = engine._entry("copy-job")
     restarting = engine._entry("recover-start")
+    on_new = switched and not restarting
+    selected = state["destination"] if on_new else state["source"]["name"]
+    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:
+        raise Held("The Deployment no longer selects the reviewed " + ("new" if on_new else "original") + " volume")
+    known = engine._entry("copy-job")
     released = engine._entry("release-copy") or engine._entry("recover-release-copy")
     if cutover:
         # The coordinator rechecks admission before its start request; once
@@ -108,6 +113,8 @@ def review(anchor, read, logs, action, *, clock=time.time):
             raise Held("Resuming onto the new volume needs a verified copy receipt")
         if not released or engine.writer.observe(released) is not None:
             raise Held("The verified copy Job has no completed release; inspect it before recovery")
+    elif switched and not released:
+        raise Held("The verified copy Job has no completed release; inspect it before recovery")
     elif known and not released:
         job = engine.writer.observe(known)
         if action == "resume":
@@ -123,10 +130,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
               "retention_policy": "keep_both_volumes"}
     if action == "return-original" and not restarting and not untouched and "admission" in state["plan"]:
         from homestead_self_data_admission import review as capacity
-        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = state["replicas"]
-        from homestead_self_data_fence import pin_app_image
-        pin_app_image(proposed, state["plan"]["copy_image"])
-        report = capacity(current, anchor.namespace, "restart", proposed, state["plan"]["nodes"],
+        report = capacity(current, anchor.namespace, "restart", C.return_proposal(dep, state, state["plan"]), state["plan"]["nodes"],
                           state["plan"]["admission"]["threshold"], clock=clock, boots=False, members=False)
         result["restart"], result["warnings"] = report["receipt"], report["warnings"]
     if not 0 <= clock() - started <= 30:
