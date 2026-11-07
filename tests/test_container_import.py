@@ -49,7 +49,7 @@ class ContainerImportStorageTests(unittest.TestCase):
         def build_deployment(cfg):
             return ({"metadata": {"name": cfg["name"], "namespace": cfg["namespace"]}}, None)
 
-        keep_bound(self, imports)   # put back what imports.bind() sets
+        keep_bound(self, imports, imports.NAMES)   # put back what imports.bind() sets, and the names client it hands on
         imports.bind(get, send, create_pvc, build_deployment, "lab", {})
         self.original_sleep = imports.time.sleep
         imports.time.sleep = lambda _: None
@@ -159,7 +159,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                 return self.job
             return {}
 
-        keep_bound(self, imports)   # put back what imports.bind() sets
+        keep_bound(self, imports, imports.NAMES)   # put back what imports.bind() sets, and the names client it hands on
         imports.bind(get, lambda method, path, body=None, **kw:
                      self.sent.append((method, path)) or {},
                      lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
@@ -188,7 +188,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                 pods["items"] = []
             return {}
 
-        keep_bound(self, imports)   # put back what imports.bind() sets
+        keep_bound(self, imports, imports.NAMES)   # put back what imports.bind() sets, and the names client it hands on
         imports.bind(get, send, lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
         result = CONTAINER_IMPORT.delete_import("homestead-import-obsidian")

@@ -16,6 +16,8 @@ import homestead_platform as PLATFORM
 import homestead_operations as OPS
 from fakes.kube import Kube
 from fakes.platform import plain_platform
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NODE = "192.0.2.201"
 MGMT = "192.0.2.210"
@@ -68,9 +70,7 @@ class ClusterAddressTests(unittest.TestCase):
         # The shared fake runs the real write guards; the storage guard takes the job
         # store's lock, which lives under its DATA_DIR.
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
-        saved = (STATE.kget, STATE.ksend, STATE.SYSTEM_NAMESPACES, STATE.DEFAULT_NAMESPACE, STATE.SHARED_VIP,
-                 NET.guard_managed, NET.node_probes)
-        self.addCleanup(lambda: NET.bind(*saved))
+        keep_bound(self, NET)
         NET.bind(K.kget, K.ksend, {"kube-system", "harvester-system"}, "lab", shared)
         return self.kube
 

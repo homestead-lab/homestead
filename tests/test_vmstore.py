@@ -6,6 +6,8 @@ import homestead_kube as K
 import homestead_operations as OPS
 import homestead_vmstore as STORE
 from fakes.kube import Kube
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 FEDORA = [
     {"version": "44", "arch": "x86_64", "variant": "Cloud", "subvariant": "Cloud_Base",
@@ -33,6 +35,7 @@ class Cluster:
         self.builds = {UBUNTU: {"etag": "aaa", "modified": "Sat, 26 Sep 2026 13:13:58 GMT", "size": 600}}
         self.disks = {}
         self.harvester = harvester
+        keep_bound(case, STORE)
         STORE._heads.clear()
         STORE._fedora.update(at=0.0, value={})
         STORE.bind(K.kget, K.ksend, "lab", lambda force=False: {"harvester": self.harvester, "arch": ["amd64"]},

@@ -8,6 +8,8 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_snapshot_delete as sd
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class SnapshotDeleteTests(unittest.TestCase):
@@ -38,6 +40,7 @@ class SnapshotDeleteTests(unittest.TestCase):
                         f"{sd.API}/engines": {"items": [self.engine]},
                         f"{sd.API}/settings/disable-snapshot-purge": {"value": "false"}}
         self.sent = []
+        keep_bound(self, sd)
         sd.bind(self.get, lambda *a, **kw: self.sent.append((a, kw)))
         self.cfg = dict(volume="vol", name="expand-200", uid="snap-uid", volume_uid="vol-uid", confirmation="expand-200")
 

@@ -16,6 +16,7 @@ import homestead_auth as AUTH
 import homestead_api_keys as API_KEYS
 import homestead_kube as K
 from fakes.kube import Kube
+from rebind import keep_bound
 
 
 def store_secret(store):
@@ -112,6 +113,7 @@ class StoreReadTests(unittest.TestCase):
 
     def setUp(self):
         reset_store()
+        keep_bound(self, API_KEYS)
         API_KEYS.bind(self.enterContext(tempfile.TemporaryDirectory()))
         self.saved = (AUTH.kget, AUTH.ksend, AUTH.SECRET_NAME, AUTH.time)
         self.kube = self.enterContext(Kube(store_secret(self.STORE)))

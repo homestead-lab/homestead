@@ -14,6 +14,9 @@ import test_disk_v2 as FIXTURES
 import homestead_disk_v2 as V
 import homestead_disk_region as R
 import homestead_kube as K
+import homestead_capacity_review as REVIEW
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def region(kind='lvm'):
@@ -40,6 +43,7 @@ class RegionConversionTests(unittest.TestCase):
     def setUp(self):
         for name in ('kget', 'ksend', 'platform', 'ops', 'NS', 'read_log'):
             saved = patch.object(V, name, getattr(V, name)); saved.start(); self.addCleanup(saved.stop)
+        keep_bound(self, REVIEW)   # Cluster binds the review key
         self.cluster = Cluster(self)
         self.host = patch.object(V.HOST, 'run', side_effect=self.cluster.host)
         self.host_mock = self.host.start(); self.addCleanup(self.host.stop)

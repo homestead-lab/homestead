@@ -22,6 +22,8 @@ except ImportError:
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_agent_audit as agent_audit
 import homestead_signins as signins
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 LINES = 1000         # per process
 KEEP = 50            # what a trim keeps
@@ -104,6 +106,7 @@ class NewestFromTheEndTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, agent_audit)
         agent_audit.bind(self.dir.name)
 
     def test_the_newest_calls_are_read_from_the_end_of_a_large_log(self):
@@ -162,6 +165,7 @@ class LostLinesAndDurableTrimTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, agent_audit, signins)
         agent_audit.bind(self.dir.name)
         signins.bind(self.dir.name)
 

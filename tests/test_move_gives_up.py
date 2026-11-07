@@ -28,6 +28,7 @@ import homestead_move_source as source
 import homestead_move_state as STATE
 import homestead_operations as OPS
 from fakes.kube import Kube
+from rebind import keep_bound
 
 SOURCE = "/apis/apps/v1/namespaces/lab/deployments/frigate"
 HERE = "/apis/apps/v1/namespaces/moved/deployments/frigate"
@@ -47,6 +48,7 @@ def http_error(code, message):
 
 class MoveGivesUpTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, source, engine)
         self.kube = self.enterContext(Kube(deployment("lab", 3), deployment("moved", 0, ready=3)))
         data = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", data))

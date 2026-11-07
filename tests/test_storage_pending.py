@@ -10,6 +10,8 @@ import homestead_updates as UPDATES
 import homestead_update_rollouts as ROLLOUTS
 import homestead_operations as OPS
 from fakes.kube import Kube
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NOW = 1_790_000_000
 STAMP = lambda seconds_ago: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - seconds_ago))
@@ -90,6 +92,9 @@ class StoragePendingTests(unittest.TestCase):
 
 
 class WaitingPodTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, UPDATES)   # a test sets UPDATES.kget by hand
+
     def test_longhorn_missing_on_a_node_is_said_plainly_and_is_not_a_failure_yet(self):
         pod = {"metadata": {"name": "homestead-1", "creationTimestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 300))},
                "spec": {"nodeName": "k3s-2"}}

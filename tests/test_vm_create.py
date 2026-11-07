@@ -8,6 +8,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_vm_create as VM_CREATE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 HARVESTER = {"harvester": True, "cdi": True}
 K3S_CDI = {"harvester": False, "cdi": True}
@@ -31,6 +33,7 @@ class VmCreateTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
+        keep_bound(self, imports)
         imports.kget, imports.ksend, imports.NS, imports._cache = get, send, "lab", {}
 
     def vm(self):

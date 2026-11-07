@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_shares as SHARES
 from fakes.kube import Kube
+from rebind import keep_bound
 
 MAP = "/api/v1/namespaces/lab/configmaps/homestead-shares"
 SECRET = "/api/v1/namespaces/lab/secrets/homestead-share-credentials"
@@ -41,9 +42,7 @@ def stored_credentials(kube):
 
 class ShareWriteTests(unittest.TestCase):
     def setUp(self):
-        saved = (getattr(SHARES, "kget", None), getattr(SHARES, "ksend", None),
-                 getattr(SHARES, "create_pvc", None), SHARES.NAMESPACE, SHARES.CACHE)
-        self.addCleanup(lambda: SHARES.bind(*saved) if saved[0] else None)
+        keep_bound(self, SHARES, SHARES.NAMES)
 
     def bind(self, send=None):
         SHARES.bind(K.kget, send or K.send, lambda *a, **k: None, "lab", {})
@@ -68,8 +67,7 @@ class ShareWriteTests(unittest.TestCase):
 
     def test_nfs_does_not_depend_on_the_passwords(self):
         import homestead_share_servers as SERVERS
-        saved = (SERVERS.kget, SERVERS.ksend, SERVERS.build_deployment, SERVERS.SMB_NAMESPACE, SERVERS._cache)
-        self.addCleanup(lambda: SERVERS.bind(*saved))
+        keep_bound(self, SERVERS)
         with Kube(config([{"name": "media", "pvc": "media-data", "user": "ada", "nfs_clients": "192.0.2.0/24"}]),
                   secret(raw=base64.b64encode(b"not json").decode())):
             self.bind()

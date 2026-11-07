@@ -8,6 +8,7 @@ import test_vm_resources as fixtures
 import test_vm_edit as edit_fixtures
 import homestead_vm_profiles as profiles
 import homestead_vms as vms
+from rebind import keep_bound
 
 
 class VMProfileTests(unittest.TestCase):
@@ -64,6 +65,7 @@ class VMProfileTests(unittest.TestCase):
         self.read.assert_not_called()
 
     def test_detail_shows_profile_values_or_explicit_unknown(self):
+        keep_bound(self, vms)
         cluster = edit_fixtures.Cluster({"harvester": False, "cdi": True})
         cluster.vm["spec"]["instancetype"] = {"name": "medium"}
         with mock.patch.object(vms.PROFILES, "expand", return_value={"domain": {"cpu": {"cores": 3}, "memory": {"guest": "6Gi"}}}):

@@ -22,6 +22,7 @@ import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_smart as SMART
 from test_smart_readings import Base, ROWS, _Response, load_helper, probe_pods
+from rebind import keep_bound
 
 CFG = APP_SETTINGS.DEFAULTS["smart"]
 AWAKE = {"name": "sda", "available": True, "health": "passed", "temperature_c": 38,
@@ -263,6 +264,7 @@ class AsleepAlertTests(Base):
         super().setUp()
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
+        keep_bound(self, ALERTS)
         ALERTS.bind(folder.name)
         self.clock = 1_000_000.0
 

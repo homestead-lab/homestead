@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_vm_create as VM_CREATE
 import homestead_k3scluster as K3S
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NAD = "/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/vlan1"
 
@@ -28,6 +30,7 @@ class StaticAddressTests(unittest.TestCase):
             if path.endswith("/secrets"):
                 return dict(body, metadata=dict(body["metadata"], uid="secret-1", resourceVersion="10"))
             return body
+        keep_bound(self, imports)
         imports.kget, imports.ksend, imports.NS, imports._cache = get, send, "lab", {}
 
     def create(self, **cfg):
@@ -99,6 +102,7 @@ class K3sClusterTests(unittest.TestCase):
         def create(cfg):
             self.made.append(cfg)
             return {"vm_identity": {"namespace": "lab", "name": cfg["name"], "uid": cfg["name"] + "-uid", "resourceVersion": "1"}}
+        keep_bound(self, K3S)
         K3S.bind(lambda path: {}, create, lambda ip: self.taken.get(ip, ""))
 
     def test_the_plan_gives_each_node_a_role_and_address(self):

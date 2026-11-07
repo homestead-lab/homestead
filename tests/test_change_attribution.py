@@ -18,6 +18,7 @@ import homestead_auth as AUTH
 import homestead_changes as CH
 import homestead_kube as K
 from fakes.kube import Kube
+from rebind import keep_bound
 
 PATH = "/apis/apps/v1/namespaces/lab/deployments/sonarr"
 AUTHOR_KEY = CH._author_key   # the real one, for the fresh-install test
@@ -34,6 +35,7 @@ class AttributionTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, CH)
         CH.bind(self.dir.name)
         CH._known.clear()
         self.addCleanup(CH._known.clear)
@@ -395,6 +397,7 @@ class KeyCacheTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, CH)
         CH.bind(self.dir.name)
         CH._known.clear()
         self.addCleanup(CH._known.clear)

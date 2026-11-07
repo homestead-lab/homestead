@@ -19,6 +19,8 @@ import homestead_passthrough as PASS
 import homestead_setup as SETUP
 import homestead_shared as SHARED
 from test_passthrough import Host, Scene
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class OtherCopy:
@@ -101,6 +103,7 @@ class UpdateFileTests(Folder):
 class AgentRequestTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, REQUESTS)
         REQUESTS.bind(self.dir.name)
 
     def test_filing_a_request_waits_for_another_copy(self):
@@ -114,6 +117,7 @@ class AgentRequestTests(Folder):
 class KeyUsageTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, KEYS)
         KEYS.bind(self.dir.name)
         KEYS._usage_written.clear()
 
@@ -128,6 +132,7 @@ class KeyUsageTests(Folder):
 class SetupTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, SETUP)
         SETUP.bind(self.dir.name)
 
     def test_skipping_a_step_waits_for_another_copy(self):

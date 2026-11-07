@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_config_backup as config
 import homestead_kube as K
 from fakes.kube import Kube
+from rebind import keep_bound
 
 
 KINDS = {"configmaps": "ConfigMap", "secrets": "Secret"}
@@ -35,8 +36,7 @@ class ConfigBackupTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube())
         self.restored = []
-        self.addCleanup(config.bind, config.kget, config.ksend, config.VERSION, config.PARTS,
-                        config._site, config._after_restore)
+        keep_bound(self, config)
         config.bind(K.kget, K.ksend, "2.8.212", PARTS, site=lambda: "Loft rack",
                     after_restore=self.restored.extend)
         self.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Loft rack"}'})

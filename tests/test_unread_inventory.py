@@ -311,9 +311,8 @@ class MoveSourceServicesTests(unittest.TestCase):
         self.kube = self.enterContext(Kube({"apiVersion": "v1", "kind": "Service",
                                             "metadata": {"namespace": "lab", "name": "web"},
                                             "spec": {"selector": {"app": "web"}, "ports": [{"port": 80}]}}))
-        saved = (MOVE_SOURCE.kget, MOVE_SOURCE.ksend, MOVE_SOURCE.LH, MOVE_SOURCE.NS)
+        keep_bound(self, MOVE_SOURCE, MOVE_SOURCE.NAMES)   # and the names client it hands on
         MOVE_SOURCE.bind(K.kget, K.ksend, None, "lab")
-        self.addCleanup(MOVE_SOURCE.bind, *saved)
 
     def test_read_services_are_found(self):
         self.assertEqual(["web"], [s["metadata"]["name"] for s in MOVE_SOURCE._services_for({"app": "web"})])

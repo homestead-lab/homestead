@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_usage as usage
 import server
 import homestead_workload_edit as WORKLOAD_EDIT
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 DAY = 86400
 NOW = 1_760_000_000
@@ -34,8 +36,8 @@ class UsageTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.folder = Path(folder.name)
+        keep_bound(self, usage)
         usage.bind(folder.name, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
-        self.addCleanup(usage.bind, "/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
 
     def week(self, cpu_m=100, mem_mi=400, days=7, spikes=0, container="web"):
         """A reading every five minutes for days, the last few of them spikes."""
@@ -188,9 +190,9 @@ class UsageTests(unittest.TestCase):
 class LoopTests(unittest.TestCase):
     def run_rounds(self, read, rounds=3):
         beats, now = [], [1000.0]
+        keep_bound(self, usage)
         usage.bind("/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem, read, server.FLOW._flow_owner, (), lambda: True,
                    lambda *args, **kwargs: beats.append(args))
-        self.addCleanup(usage.bind, "/data", server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
 
         class Stop(Exception):
             pass

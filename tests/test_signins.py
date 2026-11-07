@@ -9,12 +9,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_signins as signins
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class HistoryTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, signins)
         signins.bind(self.dir.name)
 
     def test_newest_first_one_person_or_only_failures(self):
@@ -65,6 +68,7 @@ class LoginRouteTests(unittest.TestCase):
         self.server = server
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, signins)   # server.SIGNINS is this module too
         signins.bind(self.dir.name)
         server.SIGNINS.bind(self.dir.name)
 

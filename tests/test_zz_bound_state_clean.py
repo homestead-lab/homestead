@@ -51,10 +51,13 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # 239 -> 120 on 5 Nov (sweep 4, up to test_setup): test files from test_node_probe_upgrade on, in name order,
 # skipping test_revert_stop (its lines are all in the open-PR block), plus two files cleared through shared
 # fixtures (test_outage_sweep, test_storage_initial), now keep what their bind() calls set.
-CEILING = 120
+# 120 -> 0 on 5 Nov (sweep 5, test_change_attribution to test_weekly_trim_run): the last 39 test files on the
+# list now keep what their bind() calls set. The list of today's suite is empty: at 0, any line added there
+# fails this check, and a fake a test leaves fails the fake check (ENFORCE_FAKES).
+CEILING = 0
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
-PENDING_CEILING = 7
+PENDING_CEILING = 0
 # On since 3 Nov: recording every share of CI's 4-way and the gate's 8-way split found
 # no fake pair the whole-suite list lacks. (Advisory before that: test_smart_readings'
 # Base bound SMART, and through it NAMES, to its module-level probe_pods and kept it, so
@@ -132,19 +135,10 @@ class BoundStateClean(unittest.TestCase):
 # away: move one onto tests/rebind.py and take it off this list. A file listed here
 # that is not in the tree yet comes with an open PR of ours, so the combined run passes.
 UNRESTORED_FILES = frozenset({
-    # From #1095 (fix/move-retries-end), not on dev yet: restore its source/engine binds once it merges (wrap-up gaps).
-    "test_move_gives_up",
     "test_hostrun_lease",
     "test_hostrun_retry",
     "test_iso_storage",
     "test_longhorn_tags",
-    "test_smart",
-    "test_snapshot_delete",
-    "test_vip_places",
-    "test_vm_lan",
-    "test_vmstore",
-    "test_volume_deletion",
-    "test_volume_files",
 })
 
 
