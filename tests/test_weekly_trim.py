@@ -85,5 +85,41 @@ class WeeklyTrimTests(unittest.TestCase):
         backend.assert_not_called()
 
 
+
+# Longhorn's refusal on the Dashboard (#749): a summary first, the full error
+# kept after it, and never its JSON, links or the address it answered from.
+REFUSED = ('{"actions":{},"code":"Internal Server Error","detail":"","links":{"self":"http://192.0.2.70:9500/v1/volumes/'
+           'pvc-105c55af-35a1-4607-8711-83d106d0dbea"},"message":"unable to trim filesystem for volume '
+           'pvc-105c55af-35a1-4607-8711-83d106d0dbea: rpc error: code = DeadlineExceeded desc = context deadline exceeded"}')
+
+
+class RefusalWordsTests(unittest.TestCase):
+    def test_a_timeout_is_said_as_one_and_the_full_message_is_kept(self):
+        summary, full = LH_JOBS.refusal(REFUSED)
+        self.assertEqual("it timed out", summary)
+        self.assertTrue(full.startswith("unable to trim filesystem for volume pvc-105c55af"))
+        self.assertNotIn("192.0.2.70", full)
+        self.assertNotIn('"links"', full)
+
+    def test_an_answer_cut_short_is_read_as_far_as_it_goes(self):
+        summary, full = LH_JOBS.refusal(REFUSED[:300])
+        self.assertEqual("it timed out", summary)
+        self.assertIn("rpc error", full)
+
+    def test_a_plain_answer_is_its_own_words(self):
+        self.assertEqual(("volume is not attached", "volume is not attached"), LH_JOBS.refusal("volume is not attached"))
+        self.assertEqual("Bad Gateway", LH_JOBS.refusal("", "Bad Gateway")[0])
+
+    def test_the_issue_opens_with_the_summary_and_ends_with_the_full_error(self):
+        import homestead_weekly_trim as TRIM
+        for stored in ("Longhorn refused the trim: " + REFUSED[:300],
+                       "Longhorn could not trim it: it timed out. Longhorn said: unable to trim filesystem for volume "
+                       "pvc-105c55af-35a1-4607-8711-83d106d0dbea: rpc error: code = DeadlineExceeded"):
+            reason = TRIM.weekly_trim_reason(stored, "Saturday")
+            self.assertTrue(reason.startswith("Weekly trim failed: it timed out. It is tried again next Saturday;"), reason)
+            self.assertIn("Longhorn said: unable to trim filesystem", reason)
+            self.assertNotIn("{", reason)
+
+
 if __name__ == "__main__":
     unittest.main()

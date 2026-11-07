@@ -56,12 +56,15 @@ function dashboardAlert(items) {
   if (!list.length) return "";
   const [lead, ...rest] = list;
   const tone = list.some(item => item.tone === "bad") ? "bad" : "warn";
-  const body = `${lead.text ? `<p>${esc(lead.text)}</p>` : ""}
-    ${rest.length ? `<ul>${rest.map(item => `<li><b>${esc(item.title)}.</b> ${esc(item.text || "")}</li>`).join("")}</ul>` : ""}
-    ${list.some(item => item.action) ? `<div class="row dash-alert-actions">${list.map(item => item.action || "").join("")}</div>` : ""}`;
+  // One short line per concern - each health issue, then the other notices -
+  // in the summary bar (design.md, Notices); its buttons stay under it.
+  const lines = [...(lead.lines?.length ? lead.lines : lead.text ? [lead.text] : []),
+    ...rest.map(item => `${item.title}. ${item.text || ""}`.trim())];
+  const actions = list.map(item => item.action || "").join("");
   // The health item leads when there is one; insights.js marks it
   // acknowledged once every issue in it has been.
-  return `<div class="dash-alert"${lead.health ? " data-health" : ""}>${UI.callout(tone, lead.title, body)}</div>`;
+  return `<div class="dash-alert"${lead.health ? " data-health" : ""}>${UI.callout(tone, lead.title,
+    lines.length ? `<ul class="ui-list">${lines.map(line => `<li>${esc(line)}</li>`).join("")}</ul>` : "", { actions })}</div>`;
 }
 
 /* The sidebar's health pill, on every page (#940). The Dashboard paints it
@@ -206,6 +209,7 @@ async function viewDash() {
   ${dashboardAlert([
     (o.health_issues || []).length && { health: true, tone: o.health === "critical" ? "bad" : "warn",
       title: o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded", text: o.health_summary,
+      lines: (o.health_issues || []).slice(0, 4).map(x => `${x.kind} ${x.name}: ${x.reason}`),
       action: `<button class="btn sm" onclick="HealthInsights.open('health')">Review</button>` },
     hist === null ? { title: "Chart history could not be loaded", text: "Current overview values are shown; history will retry on the next refresh." }
       : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? { title: `Charts last sampled ${fmtAgo(sampleAge)}`, text: "Check Live charts in Settings → About." } : null,

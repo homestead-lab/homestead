@@ -212,8 +212,31 @@ def _backend(method, path, body=None):
         with urllib.request.urlopen(request, timeout=60) as response:
             return json.loads(response.read().decode() or "{}")
     except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")[:300]
-        raise ValueError(f"Longhorn refused the trim: {detail or error.reason}") from error
+        summary, full = refusal(error.read().decode(errors="replace")[:4000], error.reason)
+        raise ValueError(f"Longhorn could not trim it: {summary}." + (f" Longhorn said: {full}" if full and full != summary else "")) from error
+
+
+def refusal(body, fallback=""):
+    """Longhorn's error answer as (summary, full) (#749): the summary in a
+    few words - a deadline said as a timeout - and the full message as
+    Longhorn wrote it, without the JSON, links or the address it answered
+    from wrapped round it. A truncated answer is read as far as it goes."""
+    text = str(body or "")
+    full = ""
+    try:
+        answer = json.loads(text)
+        if isinstance(answer, dict):
+            full = str(answer.get("message") or answer.get("detail") or "")
+    except ValueError:
+        found = re.search(r'"message"\s*:\s*"((?:[^"\\]|\\.)*)', text)
+        full = found.group(1).replace('\\"', '"') if found else ("" if text.lstrip().startswith(("{", "[")) else text)
+    full = re.sub(r"\s+", " ", full).strip()
+    said = re.sub(r"^unable to trim filesystem for volume \S+:\s*", "", full)
+    if re.search(r"DeadlineExceed|deadline exceeded|context deadline", said, re.I):
+        summary = "it timed out"
+    else:
+        summary = re.sub(r"\s+", " ", re.sub(r"https?://\S+", "", said)).strip(" .")[:120].rstrip(" .")
+    return summary or str(fallback or "no reason given"), full
 
 
 def trim_volume(volume):
