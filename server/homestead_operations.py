@@ -558,6 +558,8 @@ def _receipt_needed(item):
 
 
 def _recovery_needed(item):
+    if STORAGE_CONFLICTS.cancelled_and_put_back(item):
+        return False
     if item.get("status") in TERMINAL and STORAGE_CONFLICTS.unresolved(item):
         return True
     if item.get("tracking_stopped"):

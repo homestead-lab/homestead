@@ -49,6 +49,7 @@ TEMP_SUFFIX = "-reclass"
 # A copy that has not begun by then never will: the new volume could not be
 # made or attached. Everything is put back rather than left stopped.
 START_LIMIT = 600
+_clock = time.time   # a seam for the tests
 GiB = 1024 ** 3
 STEPS = [("stop", "Stop what uses it"), ("create", "Make the new volume"), ("copy", "Copy the data"),
          ("verify", "Check the copy"), ("swap", "Swap the new volume in"), ("start", "Start everything again")]
@@ -66,6 +67,10 @@ def _items(path, optional_group=None):
         return KUBE.items(path, optional_group, read=kget)
     except KUBE.Incomplete as error:
         raise ValueError("Volume inventory is incomplete; refresh before moving data") from error
+
+
+def _vm_strategy(spec):
+    return spec.get("runStrategy") or ("Always" if spec.get("running") else "Halted")
 
 
 def _pin(fences, path, obj):
@@ -142,7 +147,7 @@ def consumers(ns, claim, fences=None):
             continue
         _pin(fences, f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{vm['metadata']['name']}", vm)
         spec = vm.get("spec") or {}
-        strategy = spec.get("runStrategy") or ("Always" if spec.get("running") else "Halted")
+        strategy = _vm_strategy(spec)
         out.append({"kind": "VirtualMachine", "name": vm["metadata"]["name"], "run_strategy": strategy,
                     "running": (vm.get("status") or {}).get("printableStatus") == "Running", "via": via})
     return out
@@ -600,7 +605,7 @@ def _start(ns, ref):
                       ctype="application/merge-patch+json")
             elif c["kind"] == "VirtualMachine":
                 ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
-                      {"spec": {"runStrategy": c["run_strategy"]}}, ctype="application/merge-patch+json")
+                      {"spec": {"runStrategy": c["run_strategy"], "running": None}}, ctype="application/merge-patch+json")
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
@@ -690,25 +695,120 @@ def copy_progress(log, size_bytes):
             "verified": "==> verified" in log}
 
 
-def _rollback(ns, ref, why):
-    paths = [f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}"]
-    if ref.get("job"):
-        paths.insert(0, f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}?propagationPolicy=Background")
-    for path in paths:
+def _remove_temp(ns, ref):
+    """Remove the temporary claim if it is this move's: it carries this move's
+    labels and, where the uid was kept, that uid. False if one of that name stays."""
+    path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}"
+    found = KUBE.get_optional(path, read=kget)
+    if not found:
+        return True
+    meta = found.get("metadata") or {}
+    labels = meta.get("labels") or {}
+    if (any(labels.get(key) != value for key, value in NAMES.labels("reclass", ref["claim"]).items())
+            or (ref.get("temp_uid") and meta.get("uid") != ref["temp_uid"])):
+        return False
+    try:
+        ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta.get("uid")}})
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            return False
+        if error.code != 404:
+            raise
+    return True
+
+
+def _made_nothing(ref):
+    """Rolling back from here, this move has no claim or copy job of its own yet."""
+    return ref.get("rollback_from", ref.get("phase", "stop")) in ("stop", "stopping")
+
+
+def _put_apps_back(ns, ref):
+    """Start each app this rollback hasn't yet, one at a time, so one that can't be
+    read or started keeps no other down. Those started are noted, so a retry leaves
+    them as they are by then. Returns ({(kind, name): the job holding it}, {name: why it's down})."""
+    started = ref.setdefault("rollback_started", [])
+    held, down = {}, {}
+    for c in ref["consumers"]:
+        key = f"{c['kind']}/{c['name']}"
+        # Off at the review and not stopped by this move: anything on now is someone's
+        # choice since, and the cancel review never said this would turn it off.
+        if key in started or (_off_at_review(c) and not c.get("stopped")):
+            continue
         try:
-            ksend("DELETE", path)
-        except urllib.error.HTTPError:
-            pass
-    _start(ns, ref)
+            job = _other_job(_live(ns, c) or {})
+            if job:
+                held[(c["kind"], c["name"])] = job
+                continue
+            _start(ns, {"consumers": [c]})
+            started.append(key)
+        except Exception as error:
+            down[c["name"]] = error
+    return held, down
+
+
+def _rollback(ns, ref, why, item=None):
+    """Put everything back. item is the resolver's job: Cancel passes none, as its
+    job is marked as being cancelled, so no round runs beside it and a save is refused."""
+    # From here a retry can only carry on putting things back: if starting an app
+    # fails, the next round must not take this move on to the copy. Saved before
+    # the first write, so a restart finds it too. If it can't be saved this raises,
+    # and nothing is written.
+    if ref.get("phase") != "rolling-back":
+        ref.update(rollback_from=ref.get("phase", "stop"), rollback_why=why, phase="rolling-back")
+        if item is not None:
+            OPS.checkpoint(item)
+    notes, removed = [], not _made_nothing(ref)
+    if not _made_nothing(ref):
+        job = ref.get("job") or ref.get("job_name")
+        if job:
+            try:
+                ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{job}?propagationPolicy=Background")
+            except Exception as error:
+                code = getattr(error, "code", None)
+                if code != 404:
+                    # A blip is tried again, for its time; a lasting fault can't keep the
+                    # apps down. The start stays saved: no retry or Cancel gets new time.
+                    if code is None or code == 429 or code >= 500:
+                        now = _clock()
+                        if now - ref.setdefault("job_delete_since", now) < START_LIMIT:
+                            raise
+                    removed = False
+                    notes.append(f"The copy job {job} could not be stopped ({error}), so it may still be using the volumes.")
+        # A claim that can't be deleted is no reason to leave the apps down.
+        try:
+            if not _remove_temp(ns, ref):
+                removed = False
+                notes.append(f"A volume named {ref['temp']} is there that this move did not make, so it was left.")
+        except Exception as error:
+            removed = False
+            notes.append(f"The new volume {ref['temp']} could not be confirmed removed ({error}), so it may still be there.")
+    held, down = _put_apps_back(ns, ref)
+    if down:
+        said = (f"Putting things back: {', '.join(down)} still down ({next(iter(down.values()))}), and trying again. "
+                "What could be started has been.")
+        if item is None:
+            raise ValueError(said)
+        return "running", item.get("progress", 0), said
     ref["phase"] = "rolled-back"
-    return "failed", 0, f"{why} Nothing changed: the new volume was removed and everything started again on the original."
+    # Put back: nothing of this move is left to hold, or the volume stays locked for good.
+    ref.pop("retain_resources", None)
+    why = ref.get("rollback_why", why)
+    apps = ("everything else started again on the original" if held
+            else "everything started again on the original")
+    notes += [_stays_stopped(c, held[(c["kind"], c["name"])]) for c in ref["consumers"] if (c["kind"], c["name"]) in held]
+    if notes:
+        said = f"{apps[0].upper()}{apps[1:]}.{' The new volume was removed.' if removed else ''} {' '.join(notes)}"
+    else:
+        said = f"Nothing changed: {'the new volume was removed and ' if removed else ''}{apps}."
+    # With no reason of its own this is a Cancel that took more than one try.
+    return ("failed", 0, f"{why} {said}") if why else ("cancelled", 0, f"Cancelled. {said}")
 
 
 # Kubernetes answering "not found" part-way: once is a race (a claim being
 # replaced, a job cleaned up), so the step is tried again; this many in a row
 # is not, and the job stops saying what was missing.
 MISS_LIMIT = 12
-BEFORE_SWAP = ("stop", "stopping", "create", "copy")
+BEFORE_SWAP = ("stop", "stopping", "create", "copy", "rolling-back")
 
 
 def _missing(error):
@@ -739,7 +839,7 @@ def resolve(item):
             return "running", item.get("progress", 0), f"Kubernetes did not find {what}; trying again"
         ref.pop("misses", None)
         if ref.get("phase", "stop") in BEFORE_SWAP:
-            return _rollback(ref["namespace"], ref, f"Kubernetes kept answering that {what} does not exist.")
+            return _rollback(ref["namespace"], ref, f"Kubernetes kept answering that {what} does not exist.", item)
         return "failed", item.get("progress", 0), (
             f"Stopped at '{ref.get('phase')}': Kubernetes kept answering that {what} does not exist. "
             "Nothing is lost - the original is kept as an old copy - and Carry on picks up from this step.")
@@ -755,27 +855,190 @@ def resumable(item):
     return ""
 
 
+def _waited_out(ref, key):
+    """Has this wait lasted START_LIMIT? When it has, its start is dropped, so a
+    Carry on gets the time again."""
+    now = _clock()
+    if now - ref.setdefault(key, now) < START_LIMIT:
+        return False
+    ref.pop(key)
+    return True
+
+
+COPY_MARK = "homestead.io/storage-copy-job"
+# A review on hold is asked again this often, not every round: it reads a lot.
+RECHECK = 60
+
+
+def _live(ns, c):
+    """A workload this move would stop, as it is now; None if gone or not one it stops."""
+    path = {"Deployment": f"/apis/apps/v1/namespaces/{ns}/deployments/{c['name']}",
+            "StatefulSet": f"/apis/apps/v1/namespaces/{ns}/statefulsets/{c['name']}",
+            "CronJob": f"/apis/batch/v1/namespaces/{ns}/cronjobs/{c['name']}",
+            "VirtualMachine": f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{c['name']}"}.get(c["kind"])
+    return KUBE.get_optional(path, read=kget) if path else None
+
+
+def _job_named(ident):
+    try:
+        return next((job.get("title") for job in OPS.stored() if job.get("id") == ident), "") or ident
+    except Exception:
+        return ident
+
+
+def _other_job(obj):
+    """The job holding this workload. This engine never writes the mark, so it is
+    always another job's."""
+    mark = ((obj.get("metadata") or {}).get("annotations") or {}).get(COPY_MARK)
+    return _job_named(mark) if mark else ""
+
+
+def _held_elsewhere(ns, ref):
+    """{(kind, name): the job holding it}: the apps a rollback must not start."""
+    held = {}
+    for c in ref["consumers"]:
+        job = _other_job(_live(ns, c) or {})
+        if job:
+            held[(c["kind"], c["name"])] = job
+    return held
+
+
+def _named(held):
+    return ", ".join(f"{name} ({job})" for (_, name), job in held.items())
+
+
+def _was(c):
+    """How an app was at its review, for one left for a person to start."""
+    if "replicas" in c:
+        return f"it was at {c['replicas']} replica{'' if c['replicas'] == 1 else 's'}"
+    if c["kind"] == "CronJob":
+        return "it was suspended" if c.get("suspend") else "it was not suspended"
+    return f"its run strategy was {c.get('run_strategy')}"
+
+
+def _stays_stopped(c, job):
+    return f"{c['name']} ({job}) stays stopped because another job holds it; {_was(c)}."
+
+
+def _off_at_review(c):
+    return (c.get("replicas") == 0 or (c["kind"] == "CronJob" and c.get("suspend"))
+            or (c["kind"] == "VirtualMachine" and c.get("run_strategy") == "Halted"))
+
+
+def cancel_starts(ref):
+    """What Cancel says about the apps: the count it starts each at, and any it leaves."""
+    try:
+        held = _held_elsewhere(ref["namespace"], ref)
+    except Exception:
+        held = {}
+        words = ["Leaves stopped any app another job holds; that could not be read just now"]
+    else:
+        words = [f"Leaves {c['name']} stopped: another job holds it ({held[(c['kind'], c['name'])]}); {_was(c)}"
+                 for c in ref.get("consumers") or [] if (c["kind"], c["name"]) in held]
+    starts = []
+    for c in ref.get("consumers") or []:
+        if (c["kind"], c["name"]) in held or _off_at_review(c):
+            continue
+        if "replicas" in c:
+            starts.append(f"{c['name']} at {c['replicas']} replica{'' if c['replicas'] == 1 else 's'}")
+        else:
+            starts.append(f"{c['name']} as it was")
+    if starts:
+        words.insert(0, f"Starts {', '.join(starts)}, on the original {ref['claim']}")
+    return words
+
+
+def _looks_stopped(ns, ref):
+    """The apps this move would stop that are not as its review recorded them, those
+    another job holds, and those gone: (names, {(kind, name): job}, names)."""
+    found, held, gone = [], {}, []
+    for c in ref["consumers"]:
+        if c["kind"] not in ("Deployment", "StatefulSet", "CronJob", "VirtualMachine"):
+            continue
+        obj = _live(ns, c)
+        if obj is None:
+            gone.append(c["name"])
+            continue
+        spec = obj.get("spec") or {}
+        job = _other_job(obj)
+        if job:
+            held[(c["kind"], c["name"])] = job
+        elif (c.get("stopped")
+                or (c["kind"] in ("Deployment", "StatefulSet") and c.get("replicas") and not int(spec.get("replicas") or 0))
+                or (c["kind"] == "CronJob" and spec.get("suspend") and not c.get("suspend"))
+                or (c["kind"] == "VirtualMachine" and _vm_strategy(spec) == "Halted" and c.get("run_strategy") != "Halted")):
+            found.append(c["name"])
+    return found, held, gone
+
+
+def _review_lost(item, ns, ref, why):
+    """The review no longer holds, before this step stopped anything. That alone
+    is no proof nothing stopped: a restart after the first stop write can lose the
+    note that it was tried. So this ends only with every app seen as reviewed; any
+    other answer stays with a person, whose Cancel starts them again. A job on hold
+    is still running, which is all that keeps its guards."""
+    ref["review_recheck"] = _clock() + RECHECK
+    progress = item.get("progress", 0)
+    try:
+        stopped, held, gone = _looks_stopped(ns, ref)
+    except Exception:
+        return "running", progress, (f"{why} Whether its apps were stopped could not be checked, so this move is waiting to "
+                                     "check. Nothing was started or retried; Cancel starts them again on the original.")
+    if held or stopped:
+        said = [why]
+        if stopped:
+            said.append(f"An app looks stopped ({', '.join(stopped)}), perhaps by an earlier try of this move.")
+        if held:
+            said.append(f"Another job holds {_named(held)}.")
+        said.append("This move waits for you. Nothing was started or retried.")
+        if stopped:
+            said.append("Cancel starts it again on the original." if not held else
+                        f"Cancel starts {', '.join(stopped)} again on the original.")
+        if held:
+            said.append("Cancel leaves what another job holds stopped.")
+        return "running", progress, " ".join(said)
+    ref["phase"] = "rolled-back"
+    seen = f"{', '.join(gone)} is gone; every other app is as reviewed" if gone else "Every app is as reviewed"
+    return "failed", 0, f"{why} {seen}. Review again."
+
+
 def _resolve(item):
     ref = item["ref"]
     ns, claim = ref["namespace"], ref["claim"]
     phase = ref.get("phase", "stop")
     size = _bytes(ref.get("size"))
 
+    if phase == "rolling-back":
+        return _rollback(ns, ref, ref.get("rollback_why", ""), item)
     if phase == "stop":
         if ref.get("review_fences"):
             if ref.get("stop_attempted"):
                 raise ValueError("Stopping workloads was interrupted; inspect their state and this job before recovery. Nothing was retried.")
+            if _clock() < ref.get("review_recheck", 0):
+                return "running", item.get("progress", 0), item.get("message", "")
             try:
                 current = plan(ns, claim, ref["target"], capture=True)
             except Exception as error:
                 # Preflight has made no writes. In particular, a 404 must not
-                # enter the older copy-phase rollback/restart handler.
-                raise ValueError("The initial review could not be verified; nothing was stopped. Review again.") from error
+                # enter the older copy-phase rollback/restart handler. A read can
+                # pass, so this gets its time.
+                # Once its time is up it stays up: it has seen too much to go back to waiting.
+                now = _clock()
+                if now - ref.setdefault("review_since", now) >= START_LIMIT:
+                    return _review_lost(item, ns, ref, f"The initial review could not be verified for {START_LIMIT // 60} minutes.")
+                raise ValueError("The initial review could not be verified; waiting to check. Nothing was started or retried.") from error
             if not current["ok"] or current["_fences"] != ref["review_fences"]:
-                raise ValueError("Volume use or identity changed before stopping workloads; nothing was stopped by this attempt. Review again.")
+                return _review_lost(item, ns, ref, "Volume use or identity changed before stopping workloads.")
         _steps(item, "stop")
         if ref.get("review_fences"):
             ref["stop_attempted"] = True
+            # Saved before the first write, or a restart forgets it tried. If this
+            # can't be saved it raises, and nothing is stopped, so this is no attempt.
+            try:
+                OPS.checkpoint(item)
+            except Exception:
+                ref.pop("stop_attempted")
+                raise
         try:
             _stop(ns, ref)
         except Exception as error:
@@ -790,7 +1053,11 @@ def _resolve(item):
         _close_helpers(ns, claim)
         left = _using_pods(ns, claim)
         if left:
-            return "running", 8, f"Waiting for {len(left)} pod{'s' if len(left) != 1 else ''} to let go of {claim}"
+            pods = f"{len(left)} pod{'s' if len(left) != 1 else ''}"
+            if _waited_out(ref, "stopping_since"):
+                return _rollback(ns, ref, f"{pods} did not let go of {claim} within {START_LIMIT // 60} minutes, "
+                                 "perhaps because of a long shutdown grace period.", item)
+            return "running", 8, f"Waiting for {pods} to let go of {claim}"
         ref["phase"] = "create"
         return "running", 10, f"{claim} is free"
     if phase == "create":
@@ -800,22 +1067,23 @@ def _resolve(item):
                 "spec": {**ref["claim_spec"], "storageClassName": ref["target"],
                          "resources": {"requests": {"storage": ref["size"]}}}}
         try:
-            ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+            made = ksend("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", body)
+            ref["temp_uid"] = ((made or {}).get("metadata") or {}).get("uid", "")
         except urllib.error.HTTPError as error:
             if error.code != 409:
-                return _rollback(ns, ref, f"The new volume could not be made (HTTP {error.code}).")
+                return _rollback(ns, ref, f"The new volume could not be made (HTTP {error.code}).", item)
         name, job = job_body(ns, ref)
         try:
             ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", job)
         except urllib.error.HTTPError as error:
             if error.code != 409:
-                return _rollback(ns, ref, f"The copy could not start (HTTP {error.code}).")
+                return _rollback(ns, ref, f"The copy could not start (HTTP {error.code}).", item)
         ref.update(phase="copy", job=name, copy_since=time.time())
         return "running", 12, f"Making the new volume on {ref['target']}"
     if phase == "copy":
         job = KUBE.get_optional(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}", read=kget)
         if not job:
-            return _rollback(ns, ref, "The copy job went missing.")
+            return _rollback(ns, ref, "The copy job went missing.", item)
         status = job.get("status") or {}
         log = _log(ns, ref["job"])
         progress = copy_progress(log, size)
@@ -827,7 +1095,7 @@ def _resolve(item):
             why = next((line[4:] for line in reversed(log.splitlines()) if line.startswith("==> differs")), "")
             tail = " ".join(log.split()[-30:])
             return _rollback(ns, ref, (f"The copy did not match the original ({why})." if why
-                                       else f"The copy failed. Last output: {tail[-240:]}"))
+                                       else f"The copy failed. Last output: {tail[-240:]}"), item)
         if progress["verifying"]:
             return "running", 70, "Checking the copy against the original"
         # A job counts a pod that cannot start - its new volume never made -
@@ -841,13 +1109,21 @@ def _resolve(item):
                 tmp = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}", read=kget) or {}
                 phase = (tmp.get("status") or {}).get("phase", "missing")
                 return _rollback(ns, ref, f"The copy never started: after {int(waited // 60)} min {int(waited % 60)} s the new volume on "
-                                 f"{ref['target']} is still {phase}.")
+                                 f"{ref['target']} is still {phase}.", item)
             return "running", 13, "Waiting for the new volume to attach"
         return "running", 15 + int(progress["percent"] * 0.5), (
             f"Copying {progress['percent']}%" + (f" at {progress['speed']}" if progress["speed"] else ""))
     if phase == "swap":
         _steps(item, "swap")
-        return _swap(item, ns, ref)
+        result = _swap(item, ns, ref)
+        if ref["phase"] == "swap" and _waited_out(ref, "swap_since"):
+            # With no new volume yet nothing has been swapped, so it can all go back.
+            if not ref.get("new_pv"):
+                return _rollback(ns, ref, f"The new volume was not bound within {START_LIMIT // 60} minutes.", item)
+            return "failed", item.get("progress", 0), (
+                f"Stopped at 'swap' after {START_LIMIT // 60} minutes: {result[2]}. Nothing is lost - the original is "
+                "kept as an old copy - and Carry on picks up from this step.")
+        return result
     if phase == "start":
         _steps(item, "start")
         _start(ns, ref)
@@ -876,6 +1152,9 @@ def _swap(item, ns, ref):
         if not (tmp.get("spec") or {}).get("volumeName"):
             return "running", 82, "Waiting for the new volume to be bound"
         ref["new_pv"] = tmp["spec"]["volumeName"]
+        # Saved before the first write, or a restart after the temporary claim goes
+        # no longer knows which volume holds the copy.
+        OPS.checkpoint(item)
     old_pv, new_pv = ref["old_pv"], ref["new_pv"]
     # 1. Both volumes keep their data whatever happens to their claims.
     for pv in (old_pv, new_pv):

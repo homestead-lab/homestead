@@ -88,9 +88,11 @@ class ReviewTests(unittest.TestCase):
         item=rc.start_reviewed(self.approved(),'admin',self.ops)
         self.assertIn('review_fences',item['ref'])
         self.cluster.deps['frigate']['metadata']['uid']='replacement'
-        with self.assertRaises(ValueError):rc.resolve(item)
+        state,_,message=rc.resolve(item)
+        self.assertEqual('failed',state)
+        self.assertIn('Review again',message)
         self.assertEqual([],self.cluster.sent)
-        self.assertIn('fresh review',rc.resumable(item))
+        self.assertTrue(rc.resumable(item),'it is over: a new review starts a new move')
 
     def test_inventory_failure_pagination_and_malformed_lists_fail_closed(self):
         for value in (urllib.error.HTTPError('',403,'forbidden',{},None),
@@ -105,11 +107,13 @@ class ReviewTests(unittest.TestCase):
         self.extra['/api/v1/namespaces/lab/pods']=urllib.error.HTTPError('',404,'missing',{},None)
         with mock.patch.object(rc,'_rollback') as rollback:
             for _ in range(rc.MISS_LIMIT+1):
-                with self.assertRaisesRegex(ValueError,'nothing was stopped'):rc.resolve(item)
+                with self.assertRaisesRegex(ValueError,'waiting to check'):rc.resolve(item)
             rollback.assert_not_called()
         self.assertEqual([],self.cluster.sent)
 
     def test_partial_stop_is_held_and_never_blindly_replayed(self):
+        # Its saved note has no job store here; test_reclass_legacy_waits uses the real one.
+        self.enterContext(mock.patch.object(rc.OPS,'checkpoint',lambda item:None))
         item=rc.start_reviewed(self.approved(),'admin',self.ops)
         with mock.patch.object(rc,'_stop',side_effect=RuntimeError('uncertain write')) as stop:
             with self.assertRaisesRegex(ValueError,'Nothing was restarted'):rc.resolve(item)
