@@ -976,12 +976,49 @@ async function viewVmImport() {
         <td data-label="State">${UI.chip(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase(), done ? "ok" : failed ? "bad" : "warn")}${failed && d.message ? `<div class="dim xs">${esc(d.message)}</div>` : ""}</td>
         <td class="mono" data-label="Size">${esc(d.capacity || "—")}</td>
         <td data-label="Attached to">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
-        <td data-actions>${done && !d.in_use ? actionBar([{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }]) : ""}</td></tr>`;
+        <td data-actions>${d.in_use ? "" : actionBar([...(done ? [{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }] : []),
+          { label: "Remove", run: `vmDiskRemove(${jsq(d.namespace)},${jsq(d.name)})`, need: "admin", danger: true, tip: "Remove this disk and what it holds" }])}</td></tr>`;
     }).join("")}</tbody></table></div></div>` : '<div class="dim small">None yet. ＋ Import brings one from a web address: qcow2, vmdk, raw, vdi, vhd or vhdx.</div>'}`);
   uvmCopiesPaint();
   servers.filter(s => s.ssh_trust).forEach(s => uvmLoad(s.name));
 }
 window.viewVmImport = viewVmImport;
+
+/* Removing an import disk: a review naming what goes, then the job that clears it. A
+   review that is out of date, or a reply that is lost, is never sent again from here. */
+const VM_DISK_REMOVE = UI.reviewFlow({
+  loading: frozen => modal(`Remove ${frozen.name}`, '<div id="vmDiskRemoveLoading" class="empty"><span class="spin2"></span>Checking what uses this disk…</div>', true),
+  live: () => !!$("#vmDiskRemoveLoading"),
+  preview: frozen => api("/api/vm-disks/remove-plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(frozen) }),
+  render: review => {
+    const blocked = review.blocking.length > 0;
+    $("#mbody").innerHTML = `${blocked ? "" : UI.lead(esc(review.note))}
+      ${blocked ? UI.callout("bad", "This disk can't be removed", `<ul class="ui-list">${review.blocking.map(why => `<li>${esc(why)}</li>`).join("")}</ul>`)
+        : `<div class="sec">What goes</div><ul class="ui-list">${review.goes.map(line => `<li>${esc(line)}</li>`).join("")}</ul>
+           ${UI.typedConfirm({ id: "vmDiskRemoveName", expect: review.confirm, oninput: "vmDiskRemoveReady()" })}`}
+      ${UI.actions(UI.cancel() + (blocked ? "" : '<button class="btn danger" id="vmDiskRemoveGo" disabled onclick="vmDiskRemoveSend()">Remove disk</button>'))}`;
+  },
+  failed: error => {
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div>${UI.actions(UI.cancel("Close"))}`;
+  },
+  blocked: review => review.blocking.length > 0, button: "vmDiskRemoveGo",
+  check: () => typedConfirmMatches("vmDiskRemoveName"),
+  apply: async review => {
+    try {
+      const result = await api("/api/vm-disks/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ namespace: review.namespace, name: review.name, uid: review.uid, confirmation: $("#vmDiskRemoveName").value }) });
+      toast(result.message, "ok");
+      closeModal(); resetPaint(); viewVmImport();
+    } catch (error) {
+      $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}. It was not sent again: check the job list and the disk, then review it again.</div>${UI.actions(UI.cancel("Close"))}`;
+      toast(error.message, "bad");
+    }
+  },
+  after: () => { if (window.startOperationChecks) startOperationChecks(); },
+});
+window.vmDiskRemove = (namespace, name) => VM_DISK_REMOVE.open({ namespace, name });
+window.vmDiskRemoveReady = () => VM_DISK_REMOVE.ready();
+window.vmDiskRemoveSend = () => VM_DISK_REMOVE.apply();
 
 /* Copies in progress, from the jobs the bell follows too. */
 function uvmCopiesPaint() {
