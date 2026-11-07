@@ -18,26 +18,37 @@ test("a callout escapes its title and keeps its tone", () => {
   const html = UI.callout("warn", "<b>tight</b>", "<ul><li>kept</li></ul>");
   assert.match(html, /ui-callout warn/);
   assert.match(html, /&lt;b&gt;tight&lt;\/b&gt;/);
-  assert.match(html, /<li class="ui-issue"><span class="ui-issue-short">kept<\/span><\/li>/, "a plain list becomes a line each");
+  assert.match(html, /<div class="ui-notice-line ui-notice-whole"><b class="ui-notice-head">&lt;b&gt;tight&lt;\/b&gt;<\/b><span class="ui-notice-first ui-issue-short">kept<\/span><\/div>/, "one short concern is read whole beside its heading");
+  assert.doesNotMatch(html, /<details/, "with nothing to open");
   assert.match(UI.callout("info", "x", "<ul><li>kept</li></ul>"), /<ul><li>kept<\/li><\/ul>/, "information is the HTML the caller built");
   assert.match(UI.callout("nonsense", "x"), /ui-callout info/, "an unknown tone is information");
 });
 
-/* A warning or an error shows one short line each; the rest waits behind More. */
+/* A warning or an error is a summary bar: its heading and first short line,
+   opening to every concern in full (design.md, Notices). */
 const RECREATE = "Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart";
-test("a long warning shows its first sentence, and the rest only once More is open", () => {
+test("several warnings are counted in a bar that opens to each in full", () => {
   assert.deepEqual([...UI.splitIssue(RECREATE)], ["Recreate stops all old pods before replacements start.", "All containers in this workload will be unavailable during the restart"]);
   const html = UI.callout("warn", "Check first", `<ul class="ui-list"><li>${RECREATE}</li><li>Short and whole</li></ul>`);
-  assert.match(html, /ui-issue-short">Recreate stops all old pods before replacements start\.<\/span><span class="ui-issue-more"> All containers/);
-  assert.match(html, /ui-issue-short">Short and whole<\/span><\/li>/, "a short line has nothing behind More");
-  assert.equal((html.match(/ui-issue-toggle/g) || []).length, 1, "one More for the notice, not one per line");
-  assert.match(html, /<details class="ui-issue-toggle" data-disclosure="notice:Check first">/, "its state survives a repaint");
+  assert.match(html, /<details class="ui-notice" data-disclosure="notice:2 things to check"><summary><span class="ui-notice-line"><b class="ui-notice-head">2 things to check<\/b><span class="ui-notice-first">Recreate stops all old pods before replacements start\.<\/span>/,
+    "the generic title becomes a count, and its state survives a repaint");
+  assert.match(html, /<li class="ui-issue"><span class="ui-issue-short">Recreate stops all old pods before replacements start\.<\/span><span class="ui-issue-more"> All containers/);
+  assert.match(html, /ui-issue-short">Short and whole<\/span><\/li>/);
+  assert.equal((html.match(/<details/g) || []).length, 1, "one bar for the notice, not one per line");
 });
 
-test("a short warning, or one with no sentence to break at, has no More", () => {
-  assert.doesNotMatch(UI.callout("bad", "Could not read storage", "Longhorn is not answering"), /ui-issue-toggle|ui-issue-more/);
+test("a title of its own stays the heading; one with nothing more to say opens nothing", () => {
+  assert.doesNotMatch(UI.callout("bad", "Could not read storage", "Longhorn is not answering"), /<details|ui-issue-more/);
+  assert.match(UI.callout("warn", "Installed by its tag", `<ul><li>${RECREATE}</li></ul>`), /<b class="ui-notice-head">Installed by its tag<\/b><span class="ui-notice-first">Recreate stops/);
   const long = "x".repeat(UI.SHORT_CHARS + 20);
   assert.deepEqual([...UI.splitIssue(long)], [long, ""]);
+});
+
+test("an error with no title is its own heading, its reason inside", () => {
+  const html = UI.callout("bad", "", `lost response. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent.`);
+  // A first sentence under 20 characters says too little alone: the next one joins it.
+  assert.match(html, /<b class="ui-notice-head">lost response\. Some VM, disk or Secret changes may already be saved\.<\/b><\/span><span class="ui-notice-chev"/);
+  assert.match(html, /<p class="ui-issue">No request was repeated and no Restart was sent\.<\/p>/);
 });
 
 test("the short line breaks only outside markup, entities and abbreviations", () => {
@@ -49,9 +60,14 @@ test("the short line breaks only outside markup, entities and abbreviations", ()
     ["Tom &amp; Jerry share one volume that every host has to mount at the same time.", "Move one of them first"]);
 });
 
-test("a long title keeps its first sentence and puts the rest behind More", () => {
+test("a long title keeps its first sentence as the heading and the rest inside", () => {
   const html = UI.callout("warn", "This app is set to wait for its host to come back; this overrides that once, for this restart only, and then it waits again");
-  assert.match(html, /<b>This app is set to wait for its host to come back\.<span class="ui-issue-more"> This overrides/);
+  assert.match(html, /<b class="ui-notice-head">This app is set to wait for its host to come back\.<\/b>[\s\S]*<p class="ui-issue">This overrides/);
+});
+
+test("the buttons that fix it stay outside the bar", () => {
+  const html = UI.notices([["bad", "One"], ["bad", "Two"]], "This copy cannot start", { actions: '<button class="btn">Release</button>' });
+  assert.match(html, /<\/details><div class="ui-callout-actions"><button class="btn">Release<\/button><\/div>/);
 });
 
 test("a body with controls of its own is left whole, with nothing hidden", () => {
@@ -61,6 +77,7 @@ test("a body with controls of its own is left whole, with nothing hidden", () =>
 
 test("notices take a short line and its detail from the server as they are", () => {
   const html = UI.notices([["warn", { short: "Restarts the app", more: "Recreate stops the old pod first <b>" }]], "Check first");
+  assert.match(html, /<b class="ui-notice-head">1 thing to check<\/b><span class="ui-notice-first">Restarts the app<\/span>/);
   assert.match(html, /ui-issue-short">Restarts the app<\/span><span class="ui-issue-more"> Recreate stops the old pod first &lt;b&gt;/);
 });
 
@@ -79,7 +96,8 @@ test("a UI.table is a stack table, so it folds on a phone like every other list 
 test("steps mark what is done and what is current", () => {
   const html = UI.steps([{ title: "Copy" }, { title: "Verify" }, { title: "Switch" }], 1);
   assert.match(html, /<li class="done">/);
-  assert.match(html, /<li class="current">/);
+  assert.match(html, /<li class="current" aria-current="step">/);
+  assert.match(html, /class="ui-track"/, "progress steps are a track");
   assert.match(html, /<li class="todo">/);
   assert.match(UI.steps([{ title: "Read" }]), /ui-steps guide/, "no current step is a plain guide");
 });

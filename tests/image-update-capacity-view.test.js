@@ -76,7 +76,7 @@ test("routine rollout estimates stay in details while actual memory risks remain
     assert.match(html, /Homestead will be briefly unavailable/);
     // One app is named at the top, its change beside it: no row, no flag to point at the notice.
     assert.equal(visible.includes("upd-flag"), false);
-    assert.match(visible, /ui-subject-name"><b>homestead<\/b>/);
+    assert.match(visible, /ui-head-name">homestead<\/span>/);
     // An update does not change whether a container has a memory limit.
     if (extra[0]?.startsWith("memory")) {
       assert.doesNotMatch(visible, /No memory limit/);

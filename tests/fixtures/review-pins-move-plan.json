@@ -122,7 +122,7 @@
   [
    "state",
    "blocked",
-   "\n      <div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>This move cannot start</b><div class=\"ui-callout-body\"><ul class=\"ui-list ui-issues\"><li class=\"ui-issue\"><span class=\"ui-issue-short\">No capacity</span></li><li class=\"ui-issue\"><span class=\"ui-issue-short\">Slow disk</span></li></ul></div><div class=\"ui-callout-actions\"><button class=\"btn sm pri\" data-need=\"admin\" onclick=\"clusterStorage(&quot;source&quot;,true,() => movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;))\">Give source's backup storage an address</button></div></div>\n    </div>\n      \n      ",
+   "\n      <div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><details class=\"ui-notice\" data-disclosure=\"notice:This move cannot start\"><summary><span class=\"ui-notice-line\"><b class=\"ui-notice-head\">This move cannot start</b><span class=\"ui-notice-count\" aria-label=\"2 concerns\">2</span><span class=\"ui-notice-first\">No capacity</span></span><span class=\"ui-notice-chev\" aria-hidden=\"true\"></span></summary><div class=\"ui-callout-body\"><ul class=\"ui-list ui-issues\"><li class=\"ui-issue\"><span class=\"ui-issue-short\">No capacity</span></li><li class=\"ui-issue\"><span class=\"ui-issue-short\">Slow disk</span></li></ul></div></details><div class=\"ui-callout-actions\"><button class=\"btn sm pri\" data-need=\"admin\" onclick=\"clusterStorage(&quot;source&quot;,true,() => movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;))\">Give source's backup storage an address</button></div></div>\n    </div>\n      \n      ",
    true,
    null,
    true
@@ -157,7 +157,7 @@
   [
    "state",
    "old destination",
-   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Update Homestead here before copying</b><div class=\"ui-callout-body\"><p class=\"ui-issue\"><span class=\"ui-issue-short\">This destination only supports moves.</span></p></div></div>\n    </div>",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><div class=\"ui-notice-line ui-notice-whole\"><b class=\"ui-notice-head\">Update Homestead here before copying</b><span class=\"ui-notice-first ui-issue-short\">This destination only supports moves.</span></div></div>\n    </div>",
    true,
    null,
    true
@@ -253,7 +253,7 @@
   [
    "state",
    "failed",
-   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><div class=\"ui-callout-body\"><p class=\"ui-issue\"><span class=\"ui-issue-short\">no route to the other cluster</span></p></div></div>\n    </div>",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><div class=\"ui-notice-line ui-notice-whole\"><b class=\"ui-notice-head\">no route to the other cluster</b></div></div>\n    </div>",
    true,
    null,
    true
@@ -419,7 +419,7 @@
   [
    "state",
    "after",
-   "\n      <div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>This move cannot start</b><div class=\"ui-callout-body\"><p class=\"ui-issue\"><span class=\"ui-issue-short\">No capacity</span></p></div></div>\n    </div>\n      \n      ",
+   "\n      <div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><div class=\"ui-notice-line ui-notice-whole\"><b class=\"ui-notice-head\">This move cannot start</b><span class=\"ui-notice-first ui-issue-short\">No capacity</span></div></div>\n    </div>\n      \n      ",
    true,
    "<option value=\"fast\" >fast</option><option value=\"longhorn-r2\" selected>longhorn-r2</option>",
    false

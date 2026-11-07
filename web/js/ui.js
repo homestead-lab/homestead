@@ -145,36 +145,62 @@ const UI = (() => {
     }
     return /<p\b/i.test(s) ? null : { tag: "p", items: [s] };
   };
+  /* A warning or an error is a summary bar (design.md, Notices): its
+     heading - its own title, or "2 things to check" - and its first short
+     line; opened, every concern in full. A bar with only one short line has
+     nothing to open. The buttons that fix it stay under the bar, and a body
+     with controls of its own stays open. Information and checks that passed
+     read in full. parts: [[short, more]] as HTML, or null for such a body. */
   let NOTICE_KEYS = 0;
   const titleHtml = title => title && typeof title === "object" ? String(title.html ?? "") : text(title);
-  const shortNotice = (title, bodyHtml) => {
-    const [titleShort, titleMore] = issueParts(titleHtml(title));
-    const found = issuesOf(bodyHtml);
-    const rows = found ? found.items.map(item => issueHtml(item, found.tag)) : [];
-    const body = found ? (found.tag === "li" ? `<ul class="ui-list ui-issues">${rows.join("")}</ul>` : rows.join("")) : bodyHtml;
-    const hasMore = !!titleMore || body.includes("ui-issue-more");
-    const key = `notice:${visible(titleShort) || visible(rows[0] || "").slice(0, 40) || ++NOTICE_KEYS}`;
-    return `${title ? `<b>${titleShort}${titleMore ? `<span class="ui-issue-more"> ${titleMore}</span>` : ""}</b>` : ""}`
-      + `${body ? `<div class="ui-callout-body">${body}</div>` : ""}`
-      + (hasMore ? `<details class="ui-issue-toggle" data-disclosure="${text(key)}"><summary><span class="ui-issue-open">More</span><span class="ui-issue-close">Less</span></summary></details>` : "");
+  const GENERIC = new Set(["", "Check first"]);
+  const count = (n, tone) => tone === "bad" ? `${n} problems` : n === 1 ? "1 thing to check" : `${n} things to check`;
+  const lineHtml = ([short, more], tag) => `<${tag} class="ui-issue"><span class="ui-issue-short">${short}</span>${more ? `<span class="ui-issue-more"> ${more}</span>` : ""}</${tag}>`;
+  const noticeInner = (t, title, parts, bodyHtml) => {
+    const heading = titleHtml(title);
+    if (t !== "warn" && t !== "bad") {
+      const body = parts ? (parts.length > 1 ? `<ul class="ui-list">${parts.map(p => lineHtml(p, "li")).join("")}</ul>` : lineHtml(parts[0], "p")) : bodyHtml;
+      return `${heading ? `<b>${heading}</b>` : ""}${body ? `<div class="ui-callout-body">${body}</div>` : ""}`;
+    }
+    if (!parts) return `${heading ? `<b>${heading}</b>` : ""}${bodyHtml ? `<div class="ui-callout-body">${bodyHtml}</div>` : ""}`;
+    let [head, headMore] = issueParts(heading), lines = parts;
+    // No title of its own: one concern is its own heading; several are counted.
+    if (!visible(head)) {
+      if (lines.length === 1) { [head, headMore] = lines[0]; lines = []; }
+      else head = count(lines.length, t);
+    } else if (t === "warn" && GENERIC.has(visible(head)) && lines.length) head = count(lines.length, t);
+    // A title of its own over several concerns says how many are inside.
+    const counted = /^\d+ (things? to check|problems)$/.test(visible(head));
+    const tally = lines.length > 1 && !counted ? `<span class="ui-notice-count" aria-label="${lines.length} concerns">${lines.length}</span>` : "";
+    const opens = !!headMore || lines.length > 1 || lines.some(([, more]) => more);
+    // Nothing to open: the same bar, its one line read whole beside the heading.
+    if (!opens) return `<div class="ui-notice-line ui-notice-whole"><b class="ui-notice-head">${head}</b>${lines.length ? `<span class="ui-notice-first ui-issue-short">${lines[0][0]}</span>` : ""}</div>`;
+    const key = `notice:${visible(head).slice(0, 60) || ++NOTICE_KEYS}`;
+    const list = lines.length > 1 ? `<ul class="ui-list ui-issues">${lines.map(p => lineHtml(p, "li")).join("")}</ul>` : lines.length ? lineHtml(lines[0], "p") : "";
+    return `<details class="ui-notice" data-disclosure="${text(key)}"><summary><span class="ui-notice-line"><b class="ui-notice-head">${head}</b>${tally}`
+      + `${lines.length ? `<span class="ui-notice-first">${lines[0][0]}</span>` : ""}</span><span class="ui-notice-chev" aria-hidden="true"></span></summary>`
+      + `<div class="ui-callout-body">${headMore ? `<p class="ui-issue">${headMore}</p>` : ""}${list}</div></details>`;
+  };
+  const noticeBox = (kind, title, parts, bodyHtml, { className = "", id = "", attrs = "", actions = "" } = {}) => {
+    const t = tone(kind);
+    return `<div class="ui-callout ${t}${className ? ` ${text(className)}` : ""}"${id ? ` id="${text(id)}"` : ""} role="${t === "bad" || t === "warn" ? "alert" : "note"}"${attrs ? ` ${attrs}` : ""}>
+      <span class="ui-callout-icon">${svg(TONE_ICON[t])}</span>
+      <div>${noticeInner(t, title, parts, bodyHtml)}${actions ? `<div class="ui-callout-actions">${actions}</div>` : ""}</div>
+    </div>`;
   };
 
   /* One notice. tone: info | ok | warn | bad. Use warn and bad only for real
      risk; information that is merely useful is info, or goes in UI.more.
-     A warning or an error shows its short lines only (shortNotice). title is
-     plain text, or {html} when it carries markup of its own; className, id
-     and attrs go on the notice; actions is the HTML of the buttons that fix
-     it, kept apart from the lines so they stay short. */
-  const callout = (kind, title, bodyHtml = "", { className = "", id = "", attrs = "", actions = "" } = {}) => {
-    const t = tone(kind);
-    const heading = titleHtml(title);
-    const inner = (t === "warn" || t === "bad" ? shortNotice(title, bodyHtml)
-      : `${heading ? `<b>${heading}</b>` : ""}${bodyHtml ? `<div class="ui-callout-body">${bodyHtml}</div>` : ""}`)
-      + (actions ? `<div class="ui-callout-actions">${actions}</div>` : "");
-    return `<div class="ui-callout ${t}${className ? ` ${text(className)}` : ""}"${id ? ` id="${text(id)}"` : ""} role="${t === "bad" || t === "warn" ? "alert" : "note"}"${attrs ? ` ${attrs}` : ""}>
-      <span class="ui-callout-icon">${svg(TONE_ICON[t])}</span>
-      <div>${inner}</div>
-    </div>`;
+     A warning or an error is a summary bar (noticeInner). title is plain
+     text, or {html} when it carries markup of its own; className, id and
+     attrs go on the notice; actions is the HTML of the buttons that fix it,
+     kept apart from the lines so they stay short. */
+  const callout = (kind, title, bodyHtml = "", options = {}) => {
+    const t = tone(kind), warning = t === "warn" || t === "bad";
+    const found = warning ? issuesOf(bodyHtml) : null;
+    // A title alone is a notice with no lines: its own first sentence heads it.
+    const parts = found ? found.items.map(splitIssue) : warning && !String(bodyHtml ?? "").trim() ? [] : null;
+    return noticeBox(t, title, parts, bodyHtml, options);
   };
 
   /* Several concerns as one notice (design.md: one per dialog): the worst
@@ -184,9 +210,7 @@ const UI = (() => {
     const rows = (items || []).filter(([, said]) => said && (typeof said !== "object" || said.short));
     if (!rows.length) return "";
     const worst = ["bad", "warn", "info"].find(t => rows.some(([tone]) => tone === t)) || "info";
-    const html = said => typeof said === "object" ? said : text(said);
-    if (rows.length === 1) return callout(worst, title, issueHtml(html(rows[0][1])), options);
-    return callout(worst, title, `<ul class="ui-list ui-issues">${rows.map(([, said]) => issueHtml(html(said), "li")).join("")}</ul>`, options);
+    return noticeBox(worst, title, rows.map(([, said]) => issueParts(typeof said === "object" ? said : text(said))), "", options);
   };
 
   const section = (title, bodyHtml, asideHtml = "") => `<section class="ui-section">
@@ -207,7 +231,27 @@ const UI = (() => {
 
   /* [{ title, detailHtml }] and the index of the current step; steps before it
      are done. current = -1 shows a plain numbered guide. */
-  const steps = (list, current = -1) => `<ol class="ui-steps${current < 0 ? " guide" : ""}">${list.map((step, i) => {
+  /* Where a job or a stepped form has got to: a track across the top, the
+     current step and its detail under it, with a bar when the step has a
+     measure. Other steps' detail is on hover. */
+  const track = (list, current = 0, { value = null, label = "", unit = "Step" } = {}) => {
+    const finished = current >= list.length, now = list[current] || {};
+    const measured = !finished && value !== null && value !== undefined;
+    const stateOf = (step, i) => step.state || (i < current ? "done" : i === current ? "current" : "todo");
+    const failed = list.some((step, i) => stateOf(step, i) === "failed");
+    return `<div class="ui-track"><ol class="ui-track-bar" aria-label="${text(unit)}s">${list.map((step, i) => {
+      const state = stateOf(step, i);
+      const tip = step.detailHtml && i !== current ? ` title="${text(String(step.detailHtml).replace(/<[^>]*>/g, ""))}"` : "";
+      return `<li class="${state}"${i === current ? ' aria-current="step"' : ""}${tip}><i${state === "current" && measured ? ` style="--p:${Math.max(0, Math.min(100, value))}%"` : ""}></i>`
+        + `<span>${state === "done" ? svg("check") : state === "failed" ? svg("x") : ""}${text(step.title)}</span></li>`;
+    }).join("")}</ol><div class="ui-track-now"${measured || (finished && !failed)
+      ? ` role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${finished ? 100 : Math.round(Math.max(0, Math.min(100, value)))}" aria-label="${text(finished ? "Done" : now.title || unit)}"` : ""}><div class="ui-track-head">`
+      + (finished ? `<b>${failed ? "Stopped" : "Done"}</b>` : `<span class="ui-track-count">${text(unit)} ${current + 1} of ${list.length}</span><b>${text(now.title || "")}</b>`)
+      + `${measured ? `<span class="ui-track-value">${Math.round(value)}%</span>` : ""}</div>`
+      + `${!finished && (now.detailHtml || label) ? `<div class="ui-track-detail">${now.detailHtml || ""}${now.detailHtml && label ? " · " : ""}${text(label)}</div>` : ""}</div></div>`;
+  };
+  /* A numbered guide (no current step), or a job's progress (a track). */
+  const steps = (list, current = -1) => current >= 0 ? track(list, current) : `<ol class="ui-steps guide">${list.map((step, i) => {
     const state = current < 0 ? "" : i < current ? "done" : i === current ? "current" : "todo";
     return `<li class="${state}"><span class="ui-step-num">${state === "done" ? svg("check") : i + 1}</span>
       <div><div class="ui-step-title">${text(step.title)}</div>${step.detailHtml ? `<div class="ui-step-detail">${step.detailHtml}</div>` : ""}</div></li>`;
@@ -629,12 +673,13 @@ const UI = (() => {
 
      spec:
        shape     one of the five
-       subject   what the dialog asks about or edits: { kind, name, where,
+       subject   what the dialog asks about or edits, shown in its header
+                 under the title: { kind, name, where, status: [label, tone],
                  chips: [[label, tone]], change: [was, now] }
        lead      the one sentence, as HTML
        steps     { list: [{ title, detailHtml }], current } - a multi-step job
-                 or form, and where it is
-       progress  { value, label, detail, kind } - a bar for work under way
+                 or form, as a track; progress then fills its current step
+       progress  { value, label } - a bar for work under way
        issues    [[tone, text or {short, more}]] - the one notice, short lines
        issuesTitle, issueActions   its title and the buttons that fix it
        body      the content, as HTML: fields, objects, a host table
@@ -647,13 +692,17 @@ const UI = (() => {
      Returns HTML for modal() or #mbody; UI.openDialog(title, spec) opens it. */
   const SHAPES = new Set(["review", "form", "watch", "confirm", "info"]);
   const DISMISS = { review: "Cancel", form: "Cancel", confirm: "Cancel", watch: "Close", info: "Close" };
+  /* What the dialog acts on, for its header: the object, its kind and
+     where it is, its state and the change. In a dialog the header shows it
+     under the title (syncDialogHead); the body keeps it hidden. */
   const subjectHtml = subject => {
     if (!subject) return "";
-    const chips = (subject.chips || []).filter(Boolean).map(([label, tone]) => chip(label, tone, { size: "slim" })).join("");
-    const change = subject.change ? `<span class="ui-subject-change"><code>${text(subject.change[0])}</code><span aria-hidden="true">→</span><code>${text(subject.change[1])}</code></span>` : "";
-    return `<div class="ui-subject">${subject.kind ? `<span class="ui-subject-kind">${text(subject.kind)}</span>` : ""}`
-      + `<span class="ui-subject-name"><b>${text(subject.name)}</b>${subject.where ? `<span class="ui-subject-where">${text(subject.where)}</span>` : ""}</span>`
-      + `${chips ? `<span class="ui-subject-chips">${chips}</span>` : ""}${change}</div>`;
+    const chips = [...(subject.status ? [subject.status] : []), ...(subject.chips || [])].filter(Boolean)
+      .map(([label, t]) => chip(label, t, { size: "slim" })).join("");
+    const where = [subject.kind, subject.where].filter(Boolean).map(text).join(" · ");
+    const change = subject.change ? `<span class="ui-head-change"><code>${text(subject.change[0])}</code><span aria-hidden="true">→</span><code>${text(subject.change[1])}</code></span>` : "";
+    return `<div class="ui-dialog-head"><span class="ui-head-name">${text(subject.name)}</span>`
+      + `${where ? `<span class="ui-head-where">${where}</span>` : ""}${chips ? `<span class="ui-head-chips">${chips}</span>` : ""}${change}</div>`;
   };
   const detailsHtml = details => {
     if (!details) return "";
@@ -678,8 +727,8 @@ const UI = (() => {
     return `<div class="ui-dialog ui-dialog-${shape} ui-stack">`
       + subjectHtml(spec.subject)
       + (spec.lead ? lead(spec.lead) : "")
-      + (spec.steps ? steps(spec.steps.list || [], spec.steps.current ?? -1) : "")
-      + (spec.progress ? progress(spec.progress.value ?? null, spec.progress) : "")
+      + (spec.steps ? track(spec.steps.list || [], spec.steps.current ?? 0, { ...(spec.progress || {}), unit: spec.steps.unit || "Step" }) : "")
+      + (spec.progress && !spec.steps ? progress(spec.progress.value ?? null, spec.progress) : "")
       + (issues.length ? notices(issues, title, { actions: spec.issueActions || "" }) : "")
       + (spec.body || "")
       + detailsHtml(spec.details)
@@ -690,7 +739,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { dialog, openDialog, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { dialog, openDialog, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

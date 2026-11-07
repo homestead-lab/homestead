@@ -61,9 +61,25 @@ function modal(t, h, wide, contextClass = "") {
   $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
   paintModalBack();
-  modalHeadHeight();
+  syncDialogHead();
   if (opening || retitled) focusModal();
 }
+
+/* A dialog built by UI.dialog names what it acts on in its header
+   (design.md, Dialog shapes): the title becomes the line above, saying what
+   happens, and the object sits under it. The object is written in the body,
+   so it travels with the body through the dialog stack and any redraw; this
+   copies it up whenever the body changes. */
+function syncDialogHead() {
+  const slot = $("#msubject"), box = $(".modalbox"), body = $("#mbody");
+  if (!slot || !box || !body) return;
+  const head = body.querySelector(".ui-dialog-head"), html = head ? head.innerHTML : "";
+  if (slot.innerHTML !== html) slot.innerHTML = html;
+  slot.hidden = !head;
+  box.classList.toggle("titled", !!head);
+  modalHeadHeight();
+}
+if (typeof MutationObserver === "function" && $("#mbody")) new MutationObserver(() => syncDialogHead()).observe($("#mbody"), { childList: true, subtree: true });
 
 /* Focus in a dialog (#486): opening one moves focus into it - its first
    field, or its title on a touch screen, where a field would raise the
@@ -299,7 +315,7 @@ function closeModal(updateRoute = true) {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  toast, liftToasts, modal, MODAL_OPENER, MODAL_FOCUSABLE, focusModal, restoreFocus, MODAL_EDITS, MODAL_UNKNOWN,
+  toast, liftToasts, modal, syncDialogHead, MODAL_OPENER, MODAL_FOCUSABLE, focusModal, restoreFocus, MODAL_EDITS, MODAL_UNKNOWN,
   fieldValue, noteModalField, modalChanged, modalHeadHeight, MODAL_STACK, modalIsOpen, pushModal, childModal,
   modalBack, paintModalBack, LAYOUT_DEFAULT, viewLayout, layoutSwitch, askDialog, dismissModal, closeModal
 };

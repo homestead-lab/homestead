@@ -19,8 +19,8 @@ const only = process.argv[2] || "";
 // design.md, Verbosity budget. Visible words count names and rows too, so the
 // budgets sit above today's longest dialogs: they stop growth, not content.
 const DIALOG_WORDS = 300, REVIEW_WORDS = 200;
-// design.md, Notices: a warning or an error reads as short lines, the rest
-// behind More. A line a person sees with More closed stays under this.
+// design.md, Notices: a warning or an error is a summary bar of short
+// lines that opens to the rest. Its heading and short lines stay under this.
 const NOTICE_CHARS = 120;
 const REVIEW = /review|start|update|reboot|shutdown|power|delete|remove|confirm/;
 const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
@@ -254,7 +254,7 @@ const DIALOGS = [
   ["homestead-updates", "workloads", "homesteadUpdateDialog()"],
   ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
   ["image-update-cordoned", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')"],
-  ["image-update-cordoned-details", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')", "document.querySelector('#mbody > .update-review > details').open=true"],
+  ["image-update-cordoned-details", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')", "document.querySelector('#mbody .update-review details.ui-more').open=true"],
   ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Review selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],
@@ -457,11 +457,12 @@ async function audit([label, width, height, mobile], items) {
           })(),
           // Warning and error lines as they show with More closed, and the
           // older note boxes that have no short form at all.
+          // A notice's heading and every short line, open or not; a body
+          // left whole (it has controls of its own) as it shows.
           longNotices: [...body.querySelectorAll(".ui-callout.warn, .ui-callout.bad")].filter(e => e.checkVisibility()).flatMap(callout => {
-            const title = callout.querySelector(":scope > div > b");
-            const lines = callout.querySelectorAll(".ui-callout-body .ui-issue, .ui-callout-body p, .ui-callout-body li");
-            const blocks = lines.length ? [...lines].filter(e => !e.querySelector("p, li")) : [...callout.querySelectorAll(".ui-callout-body")];
-            return [title, ...blocks].filter(e => e?.checkVisibility()).map(e => e.innerText.trim().replace(/\s+/g, " ")).filter(t => t.length > maxChars);
+            const shorts = [...callout.querySelectorAll(":scope > div > b, .ui-notice-head, .ui-issue-short")];
+            const whole = callout.querySelector(".ui-issue") ? [] : [...callout.querySelectorAll(".ui-callout-body")].filter(e => e.checkVisibility());
+            return [...shorts, ...whole].map(e => e.textContent.trim().replace(/\s+/g, " ")).filter(t => t.length > maxChars);
           }).map(t => `"${t.slice(0, 70)}…" (${t.length})`).slice(0, 4),
           oldNotes: [...body.querySelectorAll(".note.warn, .note.bad, .note.crit, .note.dependency-danger")].filter(e => e.checkVisibility()).length,
           overflow: [...new Set(wide)].slice(0, 6),
@@ -480,7 +481,7 @@ async function audit([label, width, height, mobile], items) {
       const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
       if (metrics.attention > 1) failures.push(`${name} (${label}): ${metrics.attention} visible notices: combine them into one UI.callout`);
-      if (metrics.longNotices.length) failures.push(`${name} (${label}): a warning line over ${NOTICE_CHARS} characters with More closed - give it a short first sentence: ${metrics.longNotices.join("; ")}`);
+      if (metrics.longNotices.length) failures.push(`${name} (${label}): a warning heading or short line over ${NOTICE_CHARS} characters - give it a short first sentence: ${metrics.longNotices.join("; ")}`);
       if (metrics.oldNotes) failures.push(`${name} (${label}): ${metrics.oldNotes} old .note warning box(es): use UI.callout, which shows the short form`);
       if (metrics.repeated.length) failures.push(`${name} (${label}): says the same thing twice: "${metrics.repeated[0]}"`);
     } catch (error) {

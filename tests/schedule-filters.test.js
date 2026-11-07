@@ -275,7 +275,7 @@ test("re-review 2: the window is said to be maybe missing only when it is set an
   }
   const html = await page(window_("auto", "off"));
   assert.match(seen(html), /Could not read the apps list: no run names its app\. The maintenance window may be missing: whether an app updates itself in it is not known\./);
-  assert.equal((html.match(/Could not read the apps list/g) || []).length, 1, "a window that may be missing: still one line");
+  assert.equal((seen(html).match(/Could not read the apps list/g) || []).length, 1, "a window that may be missing: still one line");
 });
 
 test("re-review minor: the hidden count of another namespace's runs counts runs, an all-day job by its runs", async () => {

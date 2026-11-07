@@ -2225,31 +2225,60 @@ div.ipam-line.dim{display:block}
 .ui-callout.warn{border-color:rgba(255,176,32,.32);background:rgba(255,176,32,.07)}.ui-callout.warn .ui-callout-icon{background:rgba(255,176,32,.16);color:var(--med)}
 .ui-callout.bad{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.07)}.ui-callout.bad .ui-callout-icon{background:rgba(255,77,79,.16);color:var(--crit)}
 .ui-callout.warn b{color:#ffd48a}.ui-callout.bad b{color:#ffb4b8}
-/* A warning's short lines; the rest shows once More is open (UI.callout). */
-.ui-issue-more{display:none}
-.ui-callout:has(.ui-issue-toggle[open]) .ui-issue-more{display:inline}
+/* A warning or an error: a summary bar - heading and first short line -
+   that opens to every concern in full (UI.callout, design.md Notices). */
 .ui-callout-body .ui-issue{margin:0}
 .ui-callout-body .ui-issues{margin:0;padding-left:18px}
-.ui-callout-body .ui-issues li+li{margin-top:2px}
-.ui-issue-toggle{margin-top:4px}
+.ui-callout-body .ui-issues li+li{margin-top:3px}
+.ui-issue-more{color:var(--mut)}
+.ui-callout b.ui-notice-head{display:inline;margin:0}
+.ui-notice>summary{display:flex;align-items:center;gap:10px;list-style:none;cursor:pointer;min-height:26px;border-radius:6px}
+.ui-notice>summary::-webkit-details-marker{display:none}
+.ui-notice>summary:focus-visible{outline:2px solid var(--focus);outline-offset:3px}
+.ui-notice-line{display:flex;align-items:baseline;gap:10px;flex:1;min-width:0}
+.ui-notice-head{flex:none;max-width:100%}
+.ui-notice-first{flex:1;min-width:0;color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ui-notice[open] .ui-notice-first{display:none}
+.ui-notice-count{flex:none;align-self:center;font-size:11px;font-weight:700;min-width:18px;height:18px;padding:0 5px;border-radius:9px;display:inline-grid;place-items:center;background:rgba(255,255,255,.08);color:var(--tx)}
+.ui-notice-whole{min-height:26px;align-items:baseline;flex-wrap:wrap;gap:2px 10px}
+.ui-notice-whole .ui-notice-first{white-space:normal;overflow:visible;flex:1 1 220px}
+.ui-notice-chev{flex:none;width:7px;height:7px;border-right:1.5px solid var(--mut);border-bottom:1.5px solid var(--mut);transform:rotate(45deg) translateY(-2px);margin-right:4px}
+.ui-notice[open] .ui-notice-chev{transform:rotate(-135deg) translateY(-1px)}
+.ui-notice>summary:hover .ui-notice-chev{border-color:var(--tx)}
+.ui-notice>.ui-callout-body{margin-top:6px}
+@media (max-width:560px){.ui-notice-line{flex-wrap:wrap;gap:2px 10px}.ui-notice-first{flex-basis:100%}}
 .ui-callout-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-/* UI.dialog: what the dialog asks about or edits, first and once. */
-.ui-subject{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;min-width:0}
-.ui-subject-kind{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--mut)}
-.ui-subject-name{display:inline-flex;align-items:baseline;gap:8px;min-width:0;overflow-wrap:anywhere}
-.ui-subject-name b{font-size:15px;color:var(--tx)}
-.ui-subject-where{color:var(--mut);font-size:12.5px}
-.ui-subject-chips{display:inline-flex;flex-wrap:wrap;gap:4px}
-.ui-subject-change{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;margin-left:auto;font-size:12px;color:var(--mut)}
-.ui-subject-change code{color:var(--tx)}
-.ui-issue-toggle>summary{display:inline-flex;align-items:center;gap:4px;list-style:none;cursor:pointer;color:var(--mut);font-size:12.5px;font-weight:600;border-radius:4px}
-.ui-issue-toggle>summary::-webkit-details-marker{display:none}
-.ui-issue-toggle>summary::after{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px);margin-left:2px}
-.ui-issue-toggle[open]>summary::after{transform:rotate(-135deg) translateY(-1px)}
-.ui-issue-toggle>summary:hover{color:var(--tx)}
-.ui-issue-toggle>summary:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
-.ui-issue-toggle .ui-issue-close,.ui-issue-toggle[open] .ui-issue-open{display:none}
-.ui-issue-toggle[open] .ui-issue-close{display:inline}
+/* UI.dialog: the object it acts on sits in the header, under the title,
+   which becomes the line saying what happens (syncDialogHead). */
+#mbody .ui-dialog-head{display:none}
+.modalsubject{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
+.modalsubject[hidden]{display:none}
+.modalbox.titled #mtitle{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+.ui-head-name{font-size:18px;font-weight:700;color:var(--tx);overflow-wrap:anywhere;min-width:0}
+.ui-head-where{color:var(--mut);font-size:12.5px}
+.ui-head-chips{display:inline-flex;flex-wrap:wrap;gap:4px;align-self:center}
+.ui-head-change{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12px;color:var(--mut)}
+.ui-head-change code{color:var(--tx)}
+/* UI.track: where a job or a stepped form has got to. */
+.ui-track{display:grid;gap:10px}
+.ui-track-bar{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:6px;margin:0;padding:0;list-style:none}
+.ui-track-bar li{display:grid;gap:6px;min-width:0;font-size:12px;color:var(--mut)}
+.ui-track-bar i{display:block;height:4px;border-radius:4px;background:var(--line2)}
+.ui-track-bar .done i{background:var(--ok)}
+.ui-track-bar .failed i{background:var(--crit)}
+.ui-track-bar .failed{color:var(--tone-bad)}
+.ui-track-bar .failed .ui-icon{color:var(--crit)}
+.ui-track-bar .current i{background:linear-gradient(90deg,var(--low) var(--p,100%),var(--line2) var(--p,100%))}
+.ui-track-bar .current{color:var(--tx);font-weight:600}
+.ui-track-bar span{display:flex;align-items:center;gap:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ui-track-bar .ui-icon{width:12px;height:12px;flex:none;color:var(--ok)}
+.ui-track-now{display:grid;gap:3px}
+.ui-track-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+.ui-track-head b{color:var(--tx);font-size:13.5px}
+.ui-track-count{color:var(--mut);font-size:12px}
+.ui-track-value{margin-left:auto;color:var(--mut);font-size:12.5px;font-variant-numeric:tabular-nums}
+.ui-track-detail{color:var(--mut);font-size:12.5px}
+@media (max-width:560px){.ui-track-bar span{display:none}}
 
 .ui-section{display:grid;gap:10px}
 .ui-section>header{display:flex;justify-content:space-between;align-items:center;gap:12px}
