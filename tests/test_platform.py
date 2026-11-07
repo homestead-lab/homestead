@@ -241,5 +241,12 @@ class FailedReadTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "could not read"):
             PLATFORM.detect()
 
+def setUpModule():
+    """These tests leave the platform unbound with an empty cache. Other modules hold server.py's
+    PLATFORM.detect, so put back the reader and the cache this file found."""
+    kept = PLATFORM.kget, dict(PLATFORM._cached)
+    unittest.addModuleCleanup(lambda: (PLATFORM.bind(kept[0]), PLATFORM._cached.update(kept[1])))
+
+
 if __name__ == "__main__":
     unittest.main()
