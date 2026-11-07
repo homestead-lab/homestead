@@ -18,7 +18,6 @@ import homestead_names as NAMES
 
 kget = ksend = None
 NS = "lab"
-VERSION = ""
 SCRIPTS = os.environ.get("NODEPROBE_SCRIPTS",
                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe"))
 NAME = "homestead-nodeprobe"
@@ -28,12 +27,10 @@ LAST = {"state": "pending", "detail": "the node probe has not been checked yet"}
 _helper_key = None
 
 
-def bind(_kget, _ksend, namespace, helper_key=None, version=""):
-    global kget, ksend, NS, _helper_key, VERSION
+def bind(_kget, _ksend, namespace, helper_key=None):
+    global kget, ksend, NS, _helper_key
     kget, ksend, NS = _kget, _ksend, namespace
     _helper_key = helper_key
-    # The release the probe is installed at, for the install route.
-    VERSION = version
     NAMES.bind(_kget)
 
 
@@ -158,6 +155,17 @@ def installed():
     return ""
 
 
+def presence():
+    """Whether the probe is there: True, False only on the API's own 404, None if unknown."""
+    try:
+        found = kget("/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + NAMES.NODEPROBE)
+    except urllib.error.HTTPError as error:
+        return False if error.code == 404 else None
+    except Exception:
+        return None
+    return bool((found.get("metadata", {}) or {}).get("name"))
+
+
 def install(version="dev"):
     """Create the probe for automatic installation or an administrator's retry."""
     if installed():
@@ -254,10 +262,3 @@ def ensure_helper_key():
         meta["resourceVersion"] = current["metadata"]["resourceVersion"]
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": meta, "data": data}
     ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
-
-
-# Its routes and who may use them (homestead_routes.py).
-ROUTES = {
-    ("POST", "/api/node/probe/remove"): ("admin", lambda request: remove()),
-    ("POST", "/api/node/probe/install"): ("admin", lambda request: install(VERSION)),
-}

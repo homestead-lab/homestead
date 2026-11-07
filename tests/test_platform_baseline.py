@@ -13,6 +13,8 @@ import homestead_baseline as BASELINE
 import homestead_components as C
 import homestead_kube as K
 import homestead_lhv2_upgrade as V2
+import homestead_probe as PROBE
+import homestead_self as SELF
 from fakes.kube import Kube
 
 KUBE_VIP_INDEX = """apiVersion: v1
@@ -318,7 +320,8 @@ class BaselineTests(unittest.TestCase):
         self.enterContext(patch.multiple(BASELINE, kget=BASELINE.kget, addons=BASELINE.addons, platform=BASELINE.platform,
                                          DEFAULT_NS=BASELINE.DEFAULT_NS, DATA_DIR=BASELINE.DATA_DIR,
                                          macvtap=BASELINE.macvtap, probe=BASELINE.probe,
-                                         probe_version=BASELINE.probe_version))
+                                         probe_version=BASELINE.probe_version,
+                                         _install_checked=False, create=True))
         self.platform = {"distribution": "k3s", "helm_controller": True, "load_balancer": "servicelb", "multus": False}
         self.addons = FakeAddons({"kube_vip": {"installing": False}, "multus": {"installed": False, "installing": False}})
         BASELINE.bind(K.kget, self.addons, lambda force=False: self.platform, "lab", self.tmp.name)
@@ -436,6 +439,344 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(["kube-vip"], [row["id"] for row in BASELINE.tick()])
         self.assertEqual(["multus", "kube-vip"], [part for part, _ in self.addons.installed])
         self.assertEqual([], BASELINE.tick(), "and then, as any part, never again")
+
+
+class StandInProbe:
+    """The node probe as baseline sees it: there or not, and what was asked of it."""
+
+    def __init__(self, present=False):
+        self.present, self.made, self.removals, self.install_errors = present, [], 0, []
+        self.unreadable = False
+
+    def installed(self):
+        return "homestead-nodeprobe" if self.present else ""
+
+    def presence(self):
+        return None if self.unreadable else self.present
+
+    def install(self, version):
+        if self.install_errors:
+            raise self.install_errors.pop(0)
+        self.made.append(version)
+        self.present = True
+        return {"detail": "installed"}
+
+    def remove(self):
+        self.removals += 1
+        self.present = False
+        return {"state": "absent", "detail": "the node probe was removed"}
+
+
+class ProbePresenceTests(unittest.TestCase):
+    """The real read, as the first look uses it: only the API's own 404 says absent."""
+
+    DS = "/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.enterContext(patch.multiple(PROBE, kget=K.kget, NS="lab"))
+
+    def test_it_says_what_the_api_says(self):
+        self.assertIs(False, PROBE.presence())
+        self.kube.add(daemonset("example.test/probe:1", "homestead-nodeprobe", "lab"))
+        self.assertIs(True, PROBE.presence())
+
+    def test_a_failed_read_is_unknown_not_absent(self):
+        for failure in (500, 403, TimeoutError("timed out")):
+            with self.subTest(failure=failure):
+                self.kube.fail(self.DS, failure, times=1, method="GET")
+                self.assertIsNone(PROBE.presence())
+
+
+class ProbeAfterReinstallTests(unittest.TestCase):
+    """/data survives a reinstall, so baseline.json still says the probe is done:
+    Homestead's own Deployment uid is what says this is a new install."""
+
+    OWN = "/apis/apps/v1/namespaces/lab/deployments/homestead"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.kube = self.enterContext(Kube())
+        self.enterContext(patch.multiple(BASELINE, kget=BASELINE.kget, addons=BASELINE.addons, platform=BASELINE.platform,
+                                         DEFAULT_NS=BASELINE.DEFAULT_NS, DATA_DIR=BASELINE.DATA_DIR,
+                                         macvtap=BASELINE.macvtap, probe=BASELINE.probe,
+                                         probe_version=BASELINE.probe_version,
+                                         _install_checked=False, create=True))
+        self.enterContext(patch.object(SELF, "NS", "lab"))
+        self.probe = StandInProbe()
+        self.start("old")
+
+    def start(self, uid):
+        """A new process, running under a Deployment with this uid (None: none yet)."""
+        self.kube.discard(self.OWN)
+        if uid:
+            self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment",
+                           "metadata": {"name": "homestead", "namespace": "lab", "uid": uid}})
+        BASELINE.bind(K.kget, None, lambda force=False: {}, "lab", self.tmp.name, None, self.probe, "2.9.0")
+
+    def row(self, **fields):
+        BASELINE._save({"done": {"node-probe": dict({"at": 1, "version": "2.8.0", "reason": "automatic", "error": ""},
+                                                    **fields)}})
+
+    def saved(self):
+        return BASELINE._load()["done"]["node-probe"]
+
+    def route(self, path):
+        return BASELINE.ROUTES[("POST", path)][1](None)
+
+    def test_a_reinstall_keeping_its_data_puts_the_probe_back(self):
+        self.row(install="old")
+        self.start("new")
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertEqual(("reinstalled", "new", ""), tuple(self.saved()[key] for key in ("reason", "install", "error")))
+
+    def test_the_same_install_leaves_a_missing_probe_alone_and_records_the_removal(self):
+        """Deleted with kubectl: the first look of the next process sees it, so a reinstall leaves it away."""
+        self.row(install="old")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertTrue(self.saved()["removed"])
+        self.start("new")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+
+    def test_the_same_install_with_the_probe_there_records_nothing(self):
+        self.row(install="old")
+        self.probe.present = True
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertNotIn("removed", self.saved())
+
+    def test_a_probe_deleted_with_no_restart_before_the_reinstall_comes_back(self):
+        """What can't be recorded: no process looked between the delete and the reinstall."""
+        self.row(install="old")
+        self.probe.present = True
+        self.assertIsNone(BASELINE.probe_tick())
+        self.probe.present = False
+        self.assertIsNone(BASELINE.probe_tick(), "this process has looked already")
+        self.assertNotIn("removed", self.saved())
+        self.start("new")
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+
+    def test_a_failed_read_of_the_probe_marks_nothing_and_asks_again(self):
+        for row in ({"install": "old"}, {}):
+            with self.subTest(row=row):
+                self.row(**row)
+                self.start("old")
+                self.probe.present, self.probe.unreadable = False, True
+                self.assertIsNone(BASELINE.probe_tick())
+                self.assertNotIn("removed", self.saved())
+                self.assertEqual(row.get("install"), self.saved().get("install"), "decided nothing, so stamped nothing")
+                self.probe.unreadable = False
+                self.probe.present = True
+                self.assertIsNone(BASELINE.probe_tick())
+                self.assertEqual("old", self.saved()["install"])
+                self.assertNotIn("removed", self.saved())
+
+    def test_a_recorded_removal_needs_no_look_at_the_probe(self):
+        self.row(install="old", removed=5)
+        self.probe.unreadable = True
+        self.start("new")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual(("new", 5), (self.saved()["install"], self.saved()["removed"]))
+
+    def opted_out(self):
+        self.kube.add({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "homestead-install", "namespace": "lab"},
+                       "data": {"node-probe": "no"}})
+
+    def test_a_failed_read_of_the_opt_out_installs_nothing_after_a_reinstall(self):
+        """A privileged DaemonSet on a cluster that said no, for one 500 or time-out."""
+        self.opted_out()
+        self.row(install="old")
+        self.start("new")
+        for failure in (500, TimeoutError("timed out")):
+            with self.subTest(failure=failure):
+                self.kube.fail(REQUEST, failure, times=1, method="GET")
+                self.assertIsNone(BASELINE.probe_tick())
+                self.assertEqual([], self.probe.made)
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+
+    def test_a_failed_read_of_the_opt_out_installs_nothing_on_a_first_install(self):
+        self.opted_out()
+        self.kube.fail(REQUEST, 500, times=1, method="GET")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertNotIn("node-probe", BASELINE._load().get("done", {}))
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+
+    def test_a_failed_read_of_the_request_retries_when_it_was_not_opted_out(self):
+        self.kube.fail(REQUEST, 500, times=1, method="GET")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertTrue(BASELINE.probe_tick()["ok"], "no request at all (a 404) means the default: installed")
+        self.assertEqual(["2.9.0"], self.probe.made)
+
+    def test_homesteads_own_namespace_is_where_it_looks_when_the_apps_are_elsewhere(self):
+        """The apps' namespace can differ, and reading it would silently stop this working."""
+        self.row(install="old")
+        self.kube.discard(self.OWN)
+        self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment",
+                       "metadata": {"name": "homestead", "namespace": "own-ns", "uid": "new"}})
+        with patch.object(SELF, "NS", "own-ns"):
+            BASELINE.bind(K.kget, None, lambda force=False: {}, "lab", self.tmp.name, None, self.probe, "2.9.0")
+            self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertEqual("new", self.saved()["install"])
+
+    def test_a_removal_from_before_this_release_stays_removed_after_a_reinstall(self):
+        self.row()
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual("old", self.saved()["install"])
+        self.assertTrue(self.saved()["removed"], "absent at the first look counts as removed on purpose")
+        self.start("new")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertEqual("new", self.saved()["install"])
+
+    def test_a_probe_there_at_the_first_look_on_this_release_comes_back_after_a_reinstall(self):
+        self.row()
+        self.probe.present = True
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual("old", self.saved()["install"])
+        self.assertNotIn("removed", self.saved())
+        self.probe.present = False
+        self.start("new")
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+
+    def test_a_probe_removed_on_the_page_stays_removed_after_a_reinstall(self):
+        self.row(install="old")
+        self.probe.present = True
+        self.assertEqual("absent", self.route("/api/node/probe/remove")["state"])
+        self.assertEqual(1, self.probe.removals)
+        self.assertTrue(self.saved()["removed"])
+        self.start("new")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertEqual("new", self.saved()["install"])
+        self.assertTrue(self.saved()["removed"])
+        self.route("/api/node/probe/install")
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertNotIn("removed", self.saved(), "installing it on the page takes the removal back")
+        self.probe.present = False
+        self.start("newer")
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0", "2.9.0"], self.probe.made)
+
+    def test_a_removal_ends_a_failed_install_s_retries(self):
+        self.row(install="old", error="API temporarily unavailable")
+        self.route("/api/node/probe/remove")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+
+    def test_a_removal_before_the_first_look_stays_removed(self):
+        self.route("/api/node/probe/remove")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertEqual("old", self.saved()["install"])
+
+    def test_a_reinstall_whose_chart_brought_the_probe_makes_nothing(self):
+        self.row(install="old")
+        self.probe.present = True
+        self.start("new")
+        BASELINE.probe_tick()
+        self.assertEqual([], self.probe.made)
+        self.assertEqual(("present", "new"), (self.saved()["reason"], self.saved()["install"]))
+
+    def test_an_unreadable_deployment_decides_nothing_and_asks_again(self):
+        self.row(install="old")
+        self.start("new")
+        self.kube.fail(self.OWN, 500, times=1, method="GET")
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertEqual("old", self.saved()["install"])
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+
+    def test_no_deployment_of_its_own_decides_nothing(self):
+        self.row(install="old")
+        self.start(None)
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        self.assertEqual("old", self.saved()["install"])
+
+    def test_a_first_install_with_no_deployment_of_its_own_still_installs(self):
+        self.start(None)
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertEqual("", self.saved()["install"])
+        self.assertIsNone(BASELINE.probe_tick())
+
+    def test_an_install_recorded_with_no_uid_is_stamped_and_not_put_back(self):
+        self.row(install="")
+        self.probe.present = True
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual("old", self.saved()["install"])
+        self.assertEqual([], self.probe.made)
+
+    def test_a_failed_install_after_a_reinstall_retries_with_the_new_uid(self):
+        self.row(install="old")
+        self.start("new")
+        self.probe.install_errors.append(ValueError("API temporarily unavailable"))
+        self.assertFalse(BASELINE.probe_tick()["ok"])
+        self.assertEqual(("API temporarily unavailable", "new"), (self.saved()["error"], self.saved()["install"]))
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertEqual(("", "new"), (self.saved()["error"], self.saved()["install"]))
+        self.assertIsNone(BASELINE.probe_tick())
+
+    def test_it_reads_the_deployment_once_per_process(self):
+        self.row(install="old")
+        reads = []
+        self.kube.react("GET", self.OWN, lambda method, path, body: reads.append(path) or
+                        self.kube.object(self.OWN))
+        for _ in range(3):
+            self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual(1, len(reads))
+
+    def test_a_first_install_reads_the_deployment_once_too(self):
+        reads = []
+        self.kube.react("GET", self.OWN, lambda method, path, body: reads.append(path) or
+                        self.kube.object(self.OWN))
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual(1, len(reads))
+
+    def test_a_retry_that_cant_read_the_deployment_keeps_the_uid_it_had(self):
+        self.row(install="old", error="API temporarily unavailable")
+        self.kube.fail(self.OWN, 500, times=1, method="GET")
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual("old", self.saved()["install"])
+
+    def test_a_removal_that_cant_be_recorded_deletes_nothing(self):
+        self.row(install="old")
+        self.probe.present = True
+        with patch.object(BASELINE, "_save", side_effect=OSError("the data volume is read-only")):
+            with self.assertRaises(OSError):
+                self.route("/api/node/probe/remove")
+        self.assertEqual(0, self.probe.removals)
+        self.assertTrue(self.probe.present)
+
+    def test_an_opted_out_install_ignores_a_reinstall(self):
+        self.opted_out()
+        self.row(install="old")
+        self.start("new")
+        self.kube.react("GET", self.OWN, lambda method, path, body: self.fail("read the Deployment"))
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], self.probe.made)
+        with patch.dict(BASELINE.os.environ, {"HOMESTEAD_NODEPROBE_AUTO_INSTALL": "false"}):
+            self.assertIsNone(BASELINE.probe_tick())
+
+    def test_the_two_routes_are_admin_only_and_go_to_the_release_it_runs(self):
+        for path in ("/api/node/probe/remove", "/api/node/probe/install"):
+            self.assertEqual("admin", BASELINE.ROUTES[("POST", path)][0])
+        self.route("/api/node/probe/install")
+        self.assertEqual(["2.9.0"], self.probe.made)
+        self.assertNotIn("node-probe", BASELINE._load().get("done", {}), "the page's install leaves the tick's first look alone")
 
 
 if __name__ == "__main__":

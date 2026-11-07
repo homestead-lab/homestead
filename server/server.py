@@ -469,7 +469,7 @@ import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
-PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key, version=HOMESTEAD_VERSION)
+PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key)
 ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, version=HOMESTEAD_VERSION,
                       current_hosts=lambda: PLACE.get_nodes(), inspect=ALLOCATION_EVIDENCE.inspect)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)

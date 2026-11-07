@@ -17,14 +17,19 @@ put back. An installation from before this asks once, on Add-ons and the
 Networking page, rather than changing every node's network by itself.
 
 The node probe is installed by default, including on existing clusters and
-Harvester. It needs no Helm controller. An explicit installer opt-out or a
-probe removed after successful installation stays removed.
+Harvester. It needs no Helm controller. An explicit installer opt-out stays
+out. A probe removed on the page, or found missing when a process first looks
+(deleted with kubectl, or from before this was recorded), stays removed, across
+a reinstall too. A probe otherwise missing after a reinstall (a new Deployment,
+with /data kept) is installed again.
 """
 import os
 import threading
 import time
+import urllib.error
 
 import homestead_operations as OPS
+import homestead_self as SELF
 import homestead_shared as SHARED
 import homestead_routes
 
@@ -43,6 +48,7 @@ macvtap = None           # homestead_macvtap
 probe = None             # homestead_probe
 probe_version = "dev"
 PROBE = "node-probe"
+_install_checked = False  # this process has compared its Deployment with the probe's record
 # The address the installer was given for Homestead and apps: reserved, made
 # the apps' default, and Homestead's own services put on it (bound by the
 # server: vip -> what happened) - once kube-vip is there to answer on it.
@@ -52,9 +58,10 @@ _lock = threading.Lock()
 
 
 def bind(_kget, _addons, _platform, default_ns="lab", data_dir="/data", _macvtap=None, _probe=None, version="dev"):
-    global kget, addons, platform, DEFAULT_NS, DATA_DIR, macvtap, probe, probe_version
+    global kget, addons, platform, DEFAULT_NS, DATA_DIR, macvtap, probe, probe_version, _install_checked
     kget, addons, platform, DEFAULT_NS, DATA_DIR = _kget, _addons, _platform, default_ns, data_dir
     macvtap, probe, probe_version = _macvtap, _probe, version
+    _install_checked = False
 
 
 def _path():
@@ -142,17 +149,85 @@ def vip_tick():
     return {"id": "vip", "ok": not row["error"], "detail": detail}
 
 
+def _own_install():
+    """Homestead's own Deployment's uid: a reinstall makes a new one while /data
+    survives. "" when it can't be read, or it doesn't run as a Deployment."""
+    try:
+        found = kget(f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{SELF.BRAND}") or {}
+    except Exception:
+        return ""
+    return str((found.get("metadata") or {}).get("uid") or "")
+
+
+def _reinstalled(state, row):
+    """The new install's uid when this process finds it is one and the probe's
+    finished row is to be acted on, else "". Asked until one good look, then
+    never again: a Deployment's uid can't change under its own pods. A read that
+    fails decides nothing, and it asks again next tick."""
+    global _install_checked
+    if _install_checked:
+        return ""
+    own = _own_install()
+    if not own:
+        return ""
+    recorded = row.get("install")
+    if recorded and recorded != own and "removed" not in row:
+        _install_checked = True
+        return own
+    # The same install, or the first look on this release, or removed already. A probe
+    # missing now was removed by someone: with kubectl, or before removals were recorded.
+    # The uninstaller can't be what is seen: it waits for these pods to go before it
+    # removes the probe.
+    was = dict(row)
+    if "removed" not in row:
+        there = probe.presence()
+        if there is None:
+            return ""
+        if not there:
+            row["removed"] = int(time.time())
+    row["install"] = own
+    _install_checked = True
+    if row != was:
+        _save(state)
+    return ""
+
+
+def _asked_for_probe():
+    """False when the installer's request says no, or can't be read: a privileged DaemonSet
+    goes in only on a known answer. No request at all (a 404) is the default, yes."""
+    try:
+        data = (kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{REQUEST}") or {}).get("data") or {}
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            return False
+        data = {}
+    except Exception:
+        return False
+    return str(data.get(PROBE, "yes")).lower() not in ("no", "false", "0", "skip")
+
+
 def probe_tick():
-    """Install the default node probe once, retrying unsuccessful attempts."""
+    """Install the default node probe once, retrying unsuccessful attempts, and
+    again after a reinstall unless it was removed on purpose."""
+    global _install_checked
     if (probe is None or os.environ.get("HOMESTEAD_NODEPROBE_AUTO_INSTALL", "true").lower() in ("no", "false", "0")
-            or str(_request().get(PROBE, "yes")).lower() in ("no", "false", "0", "skip")):
+            or not _asked_for_probe()):
         return None
     with _lock:
         state = _load()
         done = state.setdefault("done", {})
-        if PROBE in done and not done[PROBE].get("error"):
-            return None
-        row = {"at": int(time.time()), "version": probe_version, "reason": "automatic", "error": ""}
+        before = done.get(PROBE)
+        reason = "automatic"
+        if before and not before.get("error"):
+            own = _reinstalled(state, before)
+            if not own:
+                return None
+            reason = "reinstalled"
+        else:
+            own = _own_install()
+            _install_checked = bool(own)
+        row = {"at": int(time.time()), "version": probe_version, "reason": reason, "error": "",
+               "install": own or (before or {}).get("install", "")}
         try:
             if probe.installed():
                 row["reason"], detail = "present", "the node probe is installed already"
@@ -163,6 +238,28 @@ def probe_tick():
         done[PROBE] = row
         _save(state)
     return {"id": PROBE, "ok": not row["error"], "detail": detail}
+
+
+def _probe_remove_route(request):
+    """Recorded first, so a reinstall leaves it removed: if that can't be written
+    nothing is deleted. A delete that then fails leaves a row saying removed while
+    the probe runs, which a retry finishes and only a later reinstall would see."""
+    with _lock:
+        state = _load()
+        row = state.setdefault("done", {}).setdefault(PROBE, {"at": int(time.time()), "version": probe_version,
+                                                               "reason": "removed"})
+        row.update(removed=int(time.time()), error="")
+        _save(state)
+        return probe.remove()
+
+
+def _probe_install_route(request):
+    with _lock:
+        state = _load()
+        row = state.get("done", {}).get(PROBE) or {}
+        if row.pop("removed", None) is not None:
+            _save(state)
+        return probe.install(probe_version)
 
 
 def report():
@@ -280,4 +377,6 @@ def _install_route(request):
 ROUTES = {
     ("GET", "/api/platform/baseline"): ("viewer", lambda request: homestead_routes.cached("baseline", 10, report)),
     ("POST", "/api/platform/baseline/install"): ("admin", _install_route),
+    ("POST", "/api/node/probe/remove"): ("admin", _probe_remove_route),
+    ("POST", "/api/node/probe/install"): ("admin", _probe_install_route),
 }
