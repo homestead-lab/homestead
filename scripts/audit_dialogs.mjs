@@ -369,6 +369,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
+    const errorsBefore = errors.length;
     await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; window.__demoUpgradeCheck = false; STATE.operationsStale = false; delete window.__demoOps; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
@@ -475,6 +476,23 @@ async function audit([label, width, height, mobile], items) {
             return [...shorts, ...whole].map(e => e.textContent.trim().replace(/\s+/g, " ")).filter(t => t.length > maxChars);
           }).map(t => `"${t.slice(0, 70)}…" (${t.length})`).slice(0, 4),
           oldNotes: [...body.querySelectorAll(".note.warn, .note.bad, .note.crit, .note.dependency-danger")].filter(e => e.checkVisibility()).length,
+          // Every control's click handler in the dialog compiles, and each
+          // function it calls is there: a handler escaped twice, or naming a
+          // function that is gone, makes a button that does nothing.
+          brokenHandlers: (() => {
+            const SKIP = new Set(["if", "for", "while", "switch", "return", "typeof", "await", "function", "new", "catch", "void", "delete", "in", "of"]);
+            const resolve = path => path.split(".").reduce((at, key) => (at == null ? undefined : at[key]), window);
+            return [...document.querySelectorAll("#modal [onclick], #modal [onchange], #modal [oninput]")].flatMap(el => {
+              return ["onclick", "onchange", "oninput"].filter(a => el.hasAttribute(a)).flatMap(a => {
+                const code = el.getAttribute(a), where = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""} ${a}="${code.slice(0, 70)}"`;
+                try { new Function("event", code); } catch (err) { return [`${where}: ${err.message}`]; }
+                const bare = code.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""');
+                return [...bare.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(/g)].map(m => m[1])
+                  .filter(fn => !SKIP.has(fn) && !/^(this|event|el|e)\b/.test(fn) && typeof resolve(fn) !== "function")
+                  .map(fn => `${where}: ${fn} is not a function here`);
+              });
+            });
+          })().slice(0, 4),
           overflow: [...new Set(wide)].slice(0, 6),
           tiny: [...new Set(tiny)].slice(0, 6),
           squeezed: [...new Set(squeezed)].slice(0, 6),
@@ -492,6 +510,8 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
       if (metrics.attention > 1) failures.push(`${name} (${label}): ${metrics.attention} visible notices: combine them into one UI.callout`);
       if (metrics.longNotices.length) failures.push(`${name} (${label}): a warning heading or short line over ${NOTICE_CHARS} characters - give it a short first sentence: ${metrics.longNotices.join("; ")}`);
+      if (metrics.brokenHandlers.length) failures.push(`${name} (${label}): a control does nothing when used: ${metrics.brokenHandlers.join("; ")}`);
+      if (errors.length > errorsBefore) failures.push(`${name} (${label}): the page threw while it opened: ${errors.slice(errorsBefore, errorsBefore + 2).join(" | ").slice(0, 200)}`);
       if (!metrics.shape) failures.push(`${name} (${label}): not drawn by the dialog engine (no shape)`);
       if (metrics.oldNotes) failures.push(`${name} (${label}): ${metrics.oldNotes} old .note warning box(es): use UI.callout, which shows the short form`);
       if (metrics.repeated.length) failures.push(`${name} (${label}): says the same thing twice: "${metrics.repeated[0]}"`);
