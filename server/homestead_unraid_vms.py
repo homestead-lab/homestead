@@ -608,7 +608,7 @@ def start(body, actor=""):
         if not plan_["ready"]:
             # An import names its disks after the VM, so a new disk name means a new VM name.
             raise ValueError(f"A disk named {dv} already exists in {ns}, perhaps from an earlier import. Import under "
-                             "another name. A finished disk no VM uses can become a VM under Import")
+                             "another name. A finished disk no VM uses can become a VM under Import, and an admin can remove any disk no VM uses there")
     cores = int(body.get("cores") or found["cores"])
     memory = str(body.get("memory") or found["memory"])
     if not 1 <= cores <= 128:
@@ -948,6 +948,7 @@ def _fail(ref, message, item=None):
 READY_LIMIT = 30 * 60
 FINISH_LIMIT = 6 * 60 * 60
 MESSAGE_LIMIT = 500   # what the job list keeps of a message
+REMOVE_THERE = "An admin can remove what you don't want under Import > Disk images."
 CLEAR_LIMIT = 30 * 60   # for clearing finished disks' temporary storage, which no VM waits on
 _clock = time.time   # a seam for the tests
 
@@ -961,13 +962,10 @@ def _count(disks):
     return f"{len(disks)} disk" + ("" if len(disks) == 1 else "s")
 
 
-def _delete_command(ns, disks, before):
-    """The command that removes these disks, or None when it wouldn't fit whole after
-    before in a job's message. A cut would leave a name short, which could read as
-    another disk, even a finished one: <vm>-disk-2 becomes <vm>-disk. The caller then
-    names no disk in the command."""
-    command = f"`kubectl -n {ns} delete datavolume {' '.join(disks)}`"
-    return command if len(before) + len(command) <= MESSAGE_LIMIT else None
+def _fit(named, counted):
+    """The message naming the disks, or counting them when it wouldn't fit whole in a
+    job's message: a cut would lose the end, which says what to do."""
+    return named if len(named) <= MESSAGE_LIMIT else counted
 
 
 def _what_then(ref):
@@ -981,8 +979,7 @@ def _what_then(ref):
 def _stop_following(ref, item, phases):
     """CDI has not finished the disks in time. End the import and let go of the
     name, removing only the import's own copy Job and Secret: the DataVolumes, their
-    claims, CDI's pods and its work space may still be in use, and may hold the copy.
-    Only an unfinished disk is ever offered for removal, never a finished copy."""
+    claims, CDI's pods and its work space may still be in use, and may hold the copy."""
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
     then = _what_then(ref)
@@ -991,13 +988,10 @@ def _stop_following(ref, item, phases):
         kept = f"{done} {are} finished and kept. " if finished else ""
         return (f"CDI has not finished {not_done} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no "
                 f"VM was made. The VM on {_where(ref)} is unchanged. {kept}Nothing of the disks was removed. If CDI does "
-                f"finish, {then}. Homestead can't remove an unfinished disk yet: ")
-    what = words(", ".join(unfinished), ", ".join(finished), "is" if len(finished) == 1 else "are")
-    command = _delete_command(ref["namespace"], unfinished, what)
-    if command is None:
-        what = words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")
-        command = f"`kubectl -n {ref['namespace']} delete datavolume <name>` for each disk CDI has not finished"
-    return _end_keeping_disks(ref, item, what + command)
+                f"finish, {then}. {REMOVE_THERE}")
+    return _end_keeping_disks(ref, item, _fit(
+        words(", ".join(unfinished), ", ".join(finished), "is" if len(finished) == 1 else "are"),
+        words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")))
 
 
 def _end_keeping_disks(ref, item, detail):
@@ -1027,25 +1021,19 @@ def _copy_job_gone(ref, item, gone, phases):
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
     if unfinished:
-        # Only an unfinished disk is offered for removal: a finished one is named as kept.
         def words(jobs, done):
             kept = (f"CDI reports {done} finished, and {'it is' if len(finished) == 1 else 'they are'} kept. "
                     if finished else "")
-            return (f"{head(jobs)}{kept}No disk was removed. If CDI does finish, {_what_then(ref)}. "
-                    "Homestead can't remove an unfinished disk yet: ")
-        ns = ref["namespace"]
-        before = words(_gone_words(gone), ", ".join(finished))
-        command = _delete_command(ns, unfinished, before)
-        if command is None:
-            before = words(f"The copy Job{'' if one else 's'} for {_count(gone)} {'is' if one else 'are'} gone", _count(finished))
-            command = f"`kubectl -n {ns} delete datavolume <name>` for each disk CDI has not finished"
-        return _end_keeping_disks(ref, item, before + command)
+            return f"{head(jobs)}{kept}No disk was removed. If CDI does finish, {_what_then(ref)}. {REMOVE_THERE}"
+        return _end_keeping_disks(ref, item, _fit(
+            words(_gone_words(gone), ", ".join(finished)),
+            words(f"The copy Job{'' if one else 's'} for {_count(gone)} {'is' if one else 'are'} gone", _count(finished))))
     single = len(ref["disks"]) == 1
     named = "it" if single else "them" if len(gone) == len(ref["disks"]) else ", ".join(finished)
     then = _what_then(ref)
     what = head(_gone_words(gone)) + (f"CDI reports {named} finished, but that doesn't prove all the data arrived. "
              f"{'It is kept and holds its' if single else 'They are kept and hold their'} storage. "
-             f"{then[0].upper()}{then[1:]}. Only kubectl can remove {'it' if single else 'them'} for now")
+             f"{then[0].upper()}{then[1:]}. Or an admin can remove {'it' if single else 'them'} under Import > Disk images")
     work = ref.get("cdi_cleanup")
     if not work:
         return _end_keeping_disks(ref, item, what)

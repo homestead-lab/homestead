@@ -139,8 +139,8 @@ class ImportWaitTests(unittest.TestCase):
             self.assertIn(words, job["message"])
         self.assertNotIn("cleared", job["message"], "nothing of the disk's was cleared")
         self.assertNotIn("Volumes", job["message"], "that page lists no Pending claim and removes no DataVolume")
-        self.assertTrue(job["message"].endswith(f"`kubectl -n {NS} delete datavolume {DVS[0]} {DVS[1]}`"),
-                        "the command is whole, within a job's limit: " + job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), "what to do is whole, within a job's limit: " + job["message"])
+        self.assertNotIn("kubectl", job["message"])
         for path in kept + [self.path(name) for name in DVS]:
             self.assertTrue(self.kube.object(path), path + " is CDI's or the disk's, and stays")
         for job_path, secret in copies:
@@ -213,7 +213,7 @@ class ImportWaitTests(unittest.TestCase):
         self.look()
         self.assertTrue(any("copy" in row["title"] for row in self.ref()["diagnostics"]), self.ref().get("diagnostics"))
 
-    def test_a_disk_cdi_did_finish_is_named_as_finished_and_never_offered_for_removal(self):
+    def test_a_disk_cdi_did_finish_is_named_as_finished(self):
         self.to_convert()
         dv = self.kube.object(self.path(DVS[0]))
         dv["status"] = {"phase": "Succeeded"}
@@ -224,7 +224,7 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertIn(f"CDI has not finished {DVS[1]} after", job["message"])
         self.assertIn(f"{DVS[0]} is finished", job["message"])
-        self.assertTrue(job["message"].endswith(f"delete datavolume {DVS[1]}`"), job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), job["message"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
 
     def ended_with_vm_name(self, name, first_finished=False):
@@ -243,48 +243,34 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"], job["message"])
         return job["message"]
 
-    def test_past_a_jobs_message_limit_the_command_names_no_disk_and_the_message_counts_them(self):
-        message = self.ended_with_vm_name("a-long-vm-name-" + "x" * 45)
-        self.assertLessEqual(len(message), 500)
-        self.assertTrue(message.startswith("CDI has not finished 2 disks after 6 hours"), message)
-        self.assertTrue(message.endswith(f"`kubectl -n {NS} delete datavolume <name>` for each disk CDI has not finished"), message)
-        self.assertNotIn(self.dvs[0], message)
+    def test_the_names_are_given_only_when_they_fit_to_the_last_character(self):
+        self.assertEqual("x" * 500, UVMS._fit("x" * 500, "counted"))
+        self.assertEqual("counted", UVMS._fit("x" * 501, "counted"))
 
-    def test_past_the_limit_a_finished_disk_is_counted_too_and_the_rest_are_still_not_named(self):
-        message = self.ended_with_vm_name("a-long-vm-name-" + "y" * 45, first_finished=True)
+    def test_past_the_limit_a_finished_disk_is_counted_too(self):
+        message = self.ended_with_vm_name("a-long-vm-name-" + "y" * 48, first_finished=True)
         self.assertLessEqual(len(message), 500)
-        self.assertIn("<name>", message)
         self.assertTrue(message.startswith("CDI has not finished 1 disk after 6 hours"), message)
         self.assertIn("1 disk is finished and kept", message)
         self.assertNotIn(self.dvs[0], message)
 
-    def test_a_cut_can_never_turn_one_disk_into_another_at_any_name_length(self):
-        # <name>-disk is a prefix of <name>-disk-2, and the shorter one may be the finished
-        # one. A whole name or none: the message is read as the job list keeps it.
+    def test_a_cut_can_never_lose_what_to_do_at_any_name_length(self):
+        # A whole name or none, and the end of the message always there: it is read as
+        # the job list keeps it.
         kinds = set()
-        for length in range(15, 64):   # either side of where the command stops fitting
+        for length in range(15, 64):   # either side of where the names stop fitting
             for first_finished in (False, True):
                 with self.subTest(length=length, first_finished=first_finished):
                     message = self.ended_with_vm_name(("f" if first_finished else "n") * length, first_finished)
                     self.assertLessEqual(len(message), 500)
-                    if "<name>" in message:
-                        kinds.add("no name")
-                        self.assertNotIn(self.dvs[0], message)
-                        self.assertTrue(message.endswith("for each disk CDI has not finished"), message)
-                    else:
+                    self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
+                    self.assertNotIn("kubectl", message)
+                    if self.dvs[1] in message:
                         kinds.add("named")
-                        wanted = self.dvs[1] if first_finished else f"{self.dvs[0]} {self.dvs[1]}"
-                        self.assertTrue(message.endswith(f"delete datavolume {wanted}`"), message)
-                    history = next(i for i in JOBS._read() if i["id"] == self.ident)["history"]
-                    self.assertFalse(any("delete datavolume" in row["m"] for row in history),
-                                     "the log keeps 240 characters: too few for the command to be cut in it")
-        self.assertEqual({"named", "no name"}, kinds, "both sides of the limit were walked")
-
-    def test_the_command_is_given_only_when_it_fits_to_the_last_character(self):
-        command = f"`kubectl -n {NS} delete datavolume {DVS[0]} {DVS[1]}`"
-        fits = "x" * (500 - len(command))
-        self.assertEqual(command, UVMS._delete_command(NS, DVS, fits))
-        self.assertIsNone(UVMS._delete_command(NS, DVS, fits + "x"))
+                    else:
+                        kinds.add("counted")
+                        self.assertNotIn(self.dvs[0], message)
+        self.assertEqual({"named", "counted"}, kinds, "both sides of the limit were walked")
 
     def test_a_copy_job_held_on_a_finalizer_keeps_the_job_running_until_it_has_gone(self):
         copies = self.to_convert()
@@ -366,7 +352,7 @@ class ImportWaitTests(unittest.TestCase):
         for job_path, secret in copies:
             self.assertIsNone(self.kube.object(job_path))
             self.assertIsNone(self.kube.object(secret))
-        self.assertIn("delete datavolume", job["message"], "what to do next is still said")
+        self.assertIn("Disk images", job["message"], "what to do next is still said")
         self.assertFalse(self.ref()["retain_resources"], "it lets go of the name")
 
     def test_cancel_while_ending_that_cant_remove_the_copy_job_says_so_and_the_ending_goes_on(self):
@@ -397,7 +383,7 @@ class ImportWaitTests(unittest.TestCase):
         for words in ("make the VM from it under Import", "check it boots", "bus, MAC and TPM", "under another name"):
             self.assertIn(words, message)
         self.assertNotIn("attach", message)
-        self.assertTrue(message.endswith("delete datavolume single-disk`"), message)
+        self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
 
     def test_several_disks_are_not_promised_a_vm_with_all_of_them(self):
         self.to_convert()
@@ -427,7 +413,8 @@ class ImportWaitTests(unittest.TestCase):
             UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         for words in (DVS[0], "already exists", "earlier import", "under another name", "finished disk", "under Import"):
             self.assertIn(words, str(refused.exception))
-        self.assertNotIn("emove", str(refused.exception), "it may be a finished copy, and Volumes can't remove one")
+        self.assertIn("can remove any disk no VM uses there", str(refused.exception))
+        self.assertNotIn("Volumes", str(refused.exception), "that page removes no DataVolume")
         self.assertEqual(before, [item["id"] for item in JOBS._read()], "no job that can only fail")
         self.assertEqual(uid, self.kube.object(self.path(DVS[0]))["metadata"]["uid"])
 
@@ -439,8 +426,8 @@ class ImportWaitTests(unittest.TestCase):
         other = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11b"})
         self.assertEqual("running", other["status"])
         self.assertTrue(self.kube.object(self.path("win11b-disk")))
-        # A person running the kubectl command the job gives: Homestead has no way to
-        # do this yet. Deleting a DataVolume takes its claims and pods with it.
+        # Remove on the page has gone (tests/test_vm_disk_remove.py walks that): deleting
+        # a DataVolume takes its claims and pods with it.
         for name in DVS:
             self.kube.discard(self.path(name))
         UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})

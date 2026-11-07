@@ -175,9 +175,7 @@ class CopyJobGoneTests(unittest.TestCase):
             "The copy Jobs for win11-disk, win11-disk-2 are gone, so Homestead can't tell how those copies ended. "
             "No VM was made. The VM on Unraid is unchanged. "
             "No disk was removed. If CDI does finish, a VM can be made from one disk under Import, and Homestead can't "
-            "attach the others yet; otherwise import again under another name. Homestead can't remove an unfinished "
-            "disk yet: "
-            f"`kubectl -n {NS} delete datavolume win11-disk win11-disk-2`",
+            "attach the others yet; otherwise import again under another name. An admin can remove what you don't want under Import > Disk images.",
             job["message"])
         self.assert_kept_and_let_go(jobs)
 
@@ -197,9 +195,9 @@ class CopyJobGoneTests(unittest.TestCase):
             "No VM was made. The VM on Unraid is unchanged. "
             "CDI reports them finished, but that doesn't prove all the data arrived. They are kept "
             "and hold their storage. A VM can be made from one disk under Import, and Homestead can't attach the "
-            "others yet; otherwise import again under another name. Only kubectl can remove them for now"
+            "others yet; otherwise import again under another name. Or an admin can remove them under Import > Disk images"
             "; temporary storage not all cleared", job["message"])
-        self.assertNotIn("delete datavolume", job["message"], "a finished copy is never offered for removal")
+        self.assertNotIn("kubectl", job["message"])
         self.assertNotIn("Volumes", job["message"], "that page removes no DataVolume")
         self.assert_kept_and_let_go(jobs)
 
@@ -210,7 +208,7 @@ class CopyJobGoneTests(unittest.TestCase):
         jobs, kept, temporary = self.finished_and_gone()
         job = self.end()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("for now; temporary storage cleared"), job["message"])
+        self.assertTrue(job["message"].endswith("under Import > Disk images; temporary storage cleared"), job["message"])
         self.assertIn("The VM on Unraid is unchanged", job["message"])
         self.imp.commit_vm.assert_not_called()
         for path in temporary:
@@ -238,8 +236,8 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("failed", job["status"], job["message"])
         self.assertNotIn("temporary", job["message"])
         self.assertIn(f"CDI reports {DVS[0]} finished, and it is kept.", job["message"])
-        self.assertTrue(job["message"].endswith(f"`kubectl -n {NS} delete datavolume {DVS[1]}`"),
-                        "only the unfinished disk is offered for removal: " + job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), job["message"])
+        self.assertNotIn("kubectl", job["message"])
         for path in kept + temporary:
             self.assertTrue(self.kube.object(path), path)
         self.assert_kept_and_let_go(jobs)
@@ -466,18 +464,11 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         return job["message"], names
 
-    def test_the_command_is_whole_within_a_jobs_limit(self):
+    def test_the_disks_are_named_within_a_jobs_limit(self):
         # A job's message is cut at 500 characters.
         message, names = self.gone_under("w" * 20)
-        self.assertTrue(message.endswith(f"delete datavolume {names[0]} {names[1]}`"), message)
-
-    def test_too_long_a_message_never_cuts_a_name_short_in_the_command(self):
-        # Cut at 500, "delete datavolume a-disk-2" could read "delete datavolume a-disk",
-        # another disk altogether, and that one may be finished.
-        message, names = self.gone_under("w" * 60)
-        self.assertLessEqual(len(message), 500)
-        self.assertNotIn(f"delete datavolume {names[0]}", message)
-        self.assertTrue(message.endswith(f"`kubectl -n {NS} delete datavolume <name>` for each disk CDI has not finished"), message)
+        self.assertIn(f"{names[0]}, {names[1]}", message)
+        self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
 
     def test_a_finished_message_fits_a_jobs_limit(self):
         message, _ = self.gone_under("x" * 15, finished=True)
