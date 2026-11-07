@@ -22,7 +22,7 @@ window.nodeActions = async name => {
     `<div class="ui-insight-row">${UI.statusDot(tone)}<div><b>${esc(title)}</b><small>${esc(detail)}</small></div><div class="ui-insight-action">${buttonHtml}</div></div>`;
   const actions = `<div class="ui-insight-list">
     ${cordoned
-      ? action("Cordoned", "New pods do not land here. Allow scheduling again when the host is ready for work.", UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
+      ? action("Cordoned", `${declared ? "Uncordoning doesn't end its maintenance. " : ""}New pods do not land here. Allow scheduling again when the host is ready for work.`, UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
       : action("Cordon", "Stop new pods landing here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
     ${action("If this host goes down", "What stops, what waits, what moves and where, which volumes are at risk and which addresses move.",
       UI.button("Preview", `nodeIfDown(${jsArg(name)},() => nodeActions(${jsArg(name)}))`))}

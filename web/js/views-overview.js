@@ -306,7 +306,7 @@ function dashboardNodes(nodes, display="compact") {
     const network=ready&&known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
     return `<article class="node-compact-host"${clusterAttr(n)}>
       <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
-      <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${esc(status)}</div>
+      <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${window.hostMaintenanceChip?.(n.name)||esc(status)}</div>
       ${percent("CPU",live(n.cpu_pct),"cpu")}${percent("Memory",live(n.mem_pct),"memory")}${percent("Node filesystem",live(n.fs_pct),"disk")}
       ${line("Network",network,"Receive / transmit")}${line(temp.label,temp.text+(temp.extra?` · ${temp.extra}`:""),"The CPU's temperature, and the hottest sensor when it runs hotter")}
       ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
@@ -367,7 +367,8 @@ window.nodeUptimePaint = async n => {
   const now = n.status === "Ready"
     ? `${UI.chip("Up now", "neutral")}<span class="mono small">${esc(nodeUpFor(n))}</span>`
     : UI.chip(`${n.status || "Down"} now`, "bad");
-  const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${now}</div></div>`;
+  const declared = window.hostMaintenanceLine?.(u) || "";
+  const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${declared}${now}</div></div>`;
   if (all?.unread) { host.innerHTML = `${head}<div class="dim small">Could not read uptime: ${esc(all.unread)}</div>`; return; }
   if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
@@ -454,7 +455,7 @@ function nodeCard(n) {
           <div class="dim xs" title="${esc(n.roles.join(" · "))}">${esc([n.roles.join(" · "), up].filter(Boolean).join(" · "))}</div></div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
-        ${n.schedulable === false ? UI.chip("cordoned", "warn") : ""}
+        ${window.hostMaintenanceChip?.(n.name) || (n.schedulable === false ? UI.chip("cordoned", "warn") : "")}
         ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? UI.chip("host OS", n.host_os.tone === "bad" ? "bad" : "warn", { tip: n.host_os.text }) : ""}
         ${UI.chip(n.status, bad ? "bad" : "ok")}
         <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
@@ -542,7 +543,8 @@ function nodeComparisonRows(nodes) {
   const live = (n, value) => n.status === "Ready" ? value : null;
   return [
     metric("Status", n => { const h = nodeHealth(n);
-      return UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues, n.host_os && h.tone !== "ok" ? n.host_os.text : ""].filter(Boolean).join(" · ") }); }),
+      return UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues, n.host_os && h.tone !== "ok" ? n.host_os.text : ""].filter(Boolean).join(" · ") })
+        + (window.hostMaintenanceChip?.(n.name) || ""); }),
     metric("CPU", n => percent(live(n, n.cpu_pct), "cpu")),
     metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>${n.temps?.cpu_model ? `<span class="comparison-note">${esc(n.temps.cpu_model)}</span>` : ""}`),
     metric("Memory", n => n.status === "Ready" ? `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>` : percent(null)),
@@ -858,7 +860,8 @@ function nodePageSummary(n) {
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
     <span class="sumitem" data-tip="${esc(NODE_FS_TIP)}">Node filesystem <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
     ${h.ready && nodeTemp(n).value != null ? `<span class="sumitem">${nodeTemp(n).label} <b class="${tempCls(nodeTemp(n).value)}">${esc(nodeTemp(n).text)}</b>${nodeTemp(n).extra ? ` <span class="dim xs">${esc(nodeTemp(n).extra)}</span>` : ""}</span>` : ""}
-    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip("cordoned", "warn")}</span>`}`;
+    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip("cordoned", "warn")}</span>`}
+    ${window.hostMaintenanceChip?.(n.name) ? `<span class="sumitem">${window.hostMaintenanceChip(n.name)}</span>` : ""}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */
 window.nodeDriveBack = () => {

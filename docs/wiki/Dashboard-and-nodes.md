@@ -159,6 +159,44 @@ maintenance shows as **rebooted (planned)**; one Homestead didn't cause shows
 as **unexpected reboot**. While a host is in maintenance, its "not ready"
 alert waits.
 
+#### Declaring maintenance yourself
+
+For a drive swap or an upgrade, **Host actions › Maintenance** puts a host in
+maintenance for as long as you say, with a reason. It gets the same review as a
+reboot: quorum, VMs, Longhorn copies, disruption budgets. Homestead then cordons
+and drains the host, stopping what you chose to have wait, and marks it **in
+maintenance**, on its card, its page and the dashboard. The time counts from
+when the drain has finished.
+
+- **It sends no power.** Reboot and Shut down stay in Host actions, and the
+  host stays cordoned through them.
+- **How long:** 1, 2, 4 or 8 hours, or "until I end it", which is at most 24
+  hours. **Extend** moves the end later, to at most 24 hours from now.
+- **While it's open:** the host's uptime counts it as maintenance, and its "not
+  ready" alert stays quiet. An OS update of every host leaves it alone and lists
+  it as skipped.
+- **When it runs out:** the host stays cordoned, and any downtime from then on
+  is an outage. If the host is down, a critical alert says the maintenance ran
+  out with the host down. If it's up and apps are still stopped waiting for it,
+  a plain alert says so, because a stopped app reads as stopped and nothing else
+  would. With nothing stopped, it raises no alert. Extending after that starts a
+  new maintenance from now, and the gap stays an outage.
+- **End maintenance** allows scheduling again, unless the host was cordoned
+  before, and starts what waited. On a host that's down it's allowed, and its
+  downtime is an outage from then on. If the host was replaced under the same
+  name, its cordon is left alone. If End can't finish, its time still stands and
+  the host says **maintenance not finished**: ask End again, which is safe to
+  repeat.
+- **Cordon, Uncordon, Drain and Move** stay offered during maintenance.
+  Uncordoning doesn't end it.
+- **On a cluster's only host** there's nowhere to drain to: nothing is cordoned
+  or stopped, and it only records the maintenance, once you've acknowledged
+  that what you do next takes the whole cluster with it.
+
+A host must be Ready to declare it, and there's no force: fix what stops the
+review, or cordon by hand. It isn't a cluster-wide mode, and on Harvester, its
+own maintenance mode is still read as it always was.
+
 Maintenance ends when the host is back on a new boot. If it isn't back within
 the job's own limit (ten minutes for a reboot), the rest is an outage and the
 alert is raised straight away. A host still not back half an hour after

@@ -1968,7 +1968,9 @@ ssh_pwauth: true
       return { ok: true, until: event.until };
     },
     "/api/node/maintenance/end": (url, init) => {
-      delete (window.__demoDeclared ??= {})[JSON.parse(init?.body || "{}").node];
+      const ended = JSON.parse(init?.body || "{}").node, host = nodes.find(n => n.name === ended);
+      delete (window.__demoDeclared ??= {})[ended];
+      if (host) host.schedulable = true;
       return { ok: true, detail: "Scheduling is allowed on it again", started: [], left: [] };
     },
     // A reviewed reboot or shutdown: a job that walks through the real phases.
@@ -1983,6 +1985,8 @@ ssh_pwauth: true
         setTimeout(() => {
           const start = Math.floor(Date.now() / 1000);
           (window.__demoDeclared ??= {})[body.node] = { reason: body.reason, start, until: start + body.hours * 3600 };
+          const cordoned = nodes.find(n => n.name === body.node);
+          if (cordoned && !window.__demoSingleHostOutage) cordoned.schedulable = false;
           Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(), message: `In maintenance: ${body.reason}`,
             power: { ...op.power, phase: "maintained" } });
         }, 800);

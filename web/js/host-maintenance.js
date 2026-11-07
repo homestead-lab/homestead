@@ -14,9 +14,11 @@
     return hours ? `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""} left` : `${minutes}m left`;
   }
   const isOpen = event => event.state ? event.state === "open" : event.ongoing && event.until > seconds();
+  // A person ended it and that hasn't finished: End stays offered.
+  const isEnding = event => event.state === "ending" || !!event.ending;
   /* "Drive swap · 1h 20m left", from /api/node/maintenance's answer or a row of
      /api/nodes/uptime's. Plain text: whoever shows it escapes it. */
-  window.hostMaintenanceWords = event => `${event.reason} · ${isOpen(event) ? leftWords(event.until - seconds()) : "ran out"}`;
+  window.hostMaintenanceWords = event => `${event.reason} · ${isEnding(event) ? "not finished" : isOpen(event) ? leftWords(event.until - seconds()) : "ran out"}`;
 
   /* The maintenance a person declared on this host and hasn't ended, from its
      uptime record. Maintenance Homestead caused itself is not this. */
@@ -24,16 +26,17 @@
   window.hostMaintenanceChip = name => {
     const event = declaredIn(STATE.data.nodeUptime?.nodes?.[name]);
     if (!event) return "";
-    return UI.chip(isOpen(event) ? "in maintenance" : "maintenance ran out", isOpen(event) ? "warn" : "bad",
+    return UI.chip(isEnding(event) ? "maintenance not finished" : isOpen(event) ? "in maintenance" : "maintenance ran out", isOpen(event) ? "warn" : "bad",
       { tip: window.hostMaintenanceWords(event) });
   };
   // The line at the head of a host's page, from the uptime record just read.
   window.hostMaintenanceLine = uptime => {
     const event = declaredIn(uptime);
     if (!event) return "";
-    return `<span class="small">${isOpen(event)
-      ? `In maintenance: ${esc(window.hostMaintenanceWords(event))}`
-      : `Maintenance ran out: ${esc(event.reason)}. Still cordoned until it is ended`}</span>`;
+    return `<span class="small">${isEnding(event)
+      ? `Ending maintenance did not finish: ${esc(event.reason)}. End it again`
+      : isOpen(event) ? `In maintenance: ${esc(window.hostMaintenanceWords(event))}`
+      : `Maintenance ran out: ${esc(event.reason)}. End or extend it in Host actions`}</span>`;
   };
 
   /* Host actions' row. declared: /api/node/maintenance's answer, or undefined
@@ -43,11 +46,12 @@
     const row = (tone, title, detail, buttons) => `<div class="ui-insight-row">${UI.statusDot(tone)}<div><b>${esc(title)}</b><small>${esc(detail)}</small></div><div class="ui-insight-action">${buttons}</div></div>`;
     if (!declared) return row("neutral", "Maintenance", "Drain this host for a drive swap or an upgrade, with a reason and an end. Sends no power.",
       UI.button("Maintenance…", `hostMaintenanceReview(${jsArg(name)})`, { attrs: 'data-need="admin"' }));
-    const change = UI.button("Extend…", `hostMaintenanceExtend(${jsArg(name)})`, { attrs: 'data-need="admin"' })
-      + UI.button("End…", `hostMaintenanceEnd(${jsArg(name)})`, { attrs: 'data-need="admin"' });
+    const end = UI.button("End…", `hostMaintenanceEnd(${jsArg(name)})`, { attrs: 'data-need="admin"' });
+    const change = UI.button("Extend…", `hostMaintenanceExtend(${jsArg(name)})`, { attrs: 'data-need="admin"' }) + end;
+    if (isEnding(declared)) return row("bad", "Ending maintenance did not finish", `${declared.reason}. End it again: that is safe to repeat.`, end);
     return declared.state === "open"
       ? row("warn", "In maintenance", window.hostMaintenanceWords(declared), change)
-      : row("bad", "Maintenance ran out", `${declared.reason}. The host is still cordoned until it is ended.`, change);
+      : row("bad", "Maintenance ran out", `${declared.reason}. End it, or extend it.`, change);
   };
 
   const refreshHost = async node => {
@@ -142,6 +146,7 @@
 
   /* The job's own words as it goes. The drain may evict the copy this page is
      talking to, so a failed read is said and the next one tries again. */
+  window.hostMaintenanceFollow = (id, node) => follow(id, node);
   function follow(id, node) {
     modal("Maintenance", '<div id="mmProgress"><div class="empty"><span class="spin2"></span>Starting…</div></div>' + UI.actions(UI.cancel("Close")), true);
     const paint = html => { const box = $("#mmProgress"); if (box) box.innerHTML = html; };
@@ -151,7 +156,9 @@
       catch (_) { paint(UI.lead("Homestead is not answering yet; it may be moving off this host. Still trying.")); return; }
       if (!op) { paint(UI.callout("warn", "This job is no longer listed", "Check the host's page for its maintenance.")); return false; }
       const stopped = op.status === "failed" || op.status === "cancelled", done = op.status === "succeeded";
-      paint(stopped ? UI.callout("bad", "Maintenance was not opened", esc(op.message || ""))
+      // A job that failed only at recording it: the event is open and what waited stays stopped.
+      const opened = /^In maintenance:/.test(op.message || "");
+      paint(stopped ? UI.callout(opened ? "warn" : "bad", opened ? "In maintenance, but its job did not finish" : "Maintenance was not opened", esc(op.message || ""))
         : done ? UI.callout("ok", "In maintenance", `${esc(op.message || "")}. Power is up to you: Reboot and Shut down stay in Host actions.`)
         : `<p class="ui-lead"><span class="spin2"></span> ${esc(op.message || "Preparing the host")}</p>`);
       if (!stopped && !done) return;
@@ -176,8 +183,9 @@
   window.hostMaintenanceEnd = node => {
     const host = (STATE.data.nodes || []).find(n => n.name === node);
     const down = host && host.status !== "Ready";
-    childModal(`End maintenance · ${node}`, UI.lead("Scheduling is allowed on this host again, and what waited for it starts again, unless it was cordoned before.")
+    childModal(`End maintenance · ${node}`, UI.lead("Ending it allows scheduling on this host again and starts what waited for it, unless it was cordoned before.")
       + (down ? UI.callout("warn", "This host is not Ready", "From now on its downtime counts as an outage, and its alert fires.") : "")
+      + '<div id="mm_end_result"></div>'
       + UI.typedConfirm({ id: "mm_end_confirm", expect: node, button: "mm_end_go" })
       + UI.actions(UI.cancel() + UI.button("End maintenance", `hostMaintenanceEndGo(${jsArg(node)})`, { kind: "pri", id: "mm_end_go", disabled: true })));
   };
@@ -185,8 +193,15 @@
     if (!typedConfirmMatches("mm_end_confirm")) return;
     try {
       const reply = await api("/api/node/maintenance/end", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
-      closeModal();
-      toast(`Maintenance ended. ${reply.detail}`, reply.ok ? "ok" : "bad");
+      if (reply.ok) {
+        closeModal();
+        toast(`Maintenance ended. ${reply.detail}`, "ok");
+      } else {
+        // Not ended: said where it stays, with End still there to ask again.
+        const box = $("#mm_end_result");
+        if (box) box.innerHTML = UI.callout("bad", "Not finished", esc(reply.detail));
+        toast("Ending maintenance did not finish", "bad");
+      }
       await refreshHost(node);
     } catch (error) { toast(error.message, "bad"); }
   };

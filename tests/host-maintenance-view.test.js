@@ -112,6 +112,19 @@ test("a reason with markup is shown as text", () => {
   }
 });
 
+test("a ran-out or unfinished reason with markup is text too", () => {
+  const mark = "<img src=x>";
+  const out = record(declared({ reason: mark, end: NOW() - 60, ongoing: false, until: NOW() - 60 }));
+  const ending = record(declared({ reason: mark, end: NOW() - 60, ongoing: false, ending: true }));
+  const t = setup();
+  for (const html of [t.c.hostMaintenanceLine(out), t.c.hostMaintenanceLine(ending),
+    t.c.hostMaintenanceRow("node1", { reason: mark, until: NOW() - 60, state: "ran_out" }),
+    t.c.hostMaintenanceRow("node1", { reason: mark, until: NOW() - 60, state: "ending" })]) {
+    assert.doesNotMatch(html, /<img/);
+    assert.match(html, /&lt;img src=x>/);
+  }
+});
+
 test("a reason with markup stays text in the page's log", async () => {
   const u = { ...record(declared({ reason: "<img src=x>" })), windows: { "24h": 100 }, days: [] };
   const t = setup({ uptime: u, answers: { "/api/nodes/uptime": { nodes: { node1: u } } } });
@@ -136,9 +149,120 @@ test("ran out reads as ran out, offering End and Extend", () => {
   const t = setup();
   const row = t.c.hostMaintenanceRow("node1", { reason: "Drive swap", until: NOW() - 10, state: "ran_out" });
   assert.match(row, /ran out/);
-  assert.match(row, /still cordoned/);
+  assert.doesNotMatch(row, /cordoned/, "not so on a single host, or after a hand uncordon");
   assert.match(row, /hostMaintenanceExtend/);
   assert.match(row, /hostMaintenanceEnd/);
+});
+
+test("an End that did not finish offers End again, and no Extend", () => {
+  const t = setup();
+  const row = t.c.hostMaintenanceRow("node1", { reason: "Drive swap", until: NOW() + 60, state: "ending" });
+  assert.match(row, /did not finish/);
+  assert.match(row, /hostMaintenanceEnd/);
+  assert.doesNotMatch(row, /hostMaintenanceExtend/);
+  const u = record(declared({ end: NOW() - 5, ongoing: false, ending: true }));
+  const shown = setup({ uptime: u });
+  assert.match(shown.c.hostMaintenanceChip("node1"), /maintenance not finished/);
+  assert.match(shown.c.hostMaintenanceLine(u), /did not finish/);
+});
+
+test("every button that changes anything is for admins", () => {
+  const t = setup();
+  const needsAdmin = html => {
+    const buttons = html.match(/<button\b[^>]*>/g) || [];
+    assert.ok(buttons.length > 0);
+    for (const button of buttons) assert.match(button, /data-need="admin"/, button);
+  };
+  needsAdmin(t.c.hostMaintenanceRow("node1", null));
+  needsAdmin(t.c.hostMaintenanceRow("node1", { reason: "x", until: NOW() + 60, state: "open" }));
+  needsAdmin(t.c.hostMaintenanceRow("node1", { reason: "x", until: NOW() - 60, state: "ran_out" }));
+  needsAdmin(t.c.hostMaintenanceRow("node1", { reason: "x", until: NOW() - 60, state: "ending" }));
+});
+
+test("an End that failed says so where it stays, and offers it again", async () => {
+  const t = setup({ answers: { "/api/node/maintenance/end": { ok: false, detail: "It is still cordoned", started: [], left: [] }, "/api/nodes/uptime": {} } });
+  const name = t.element("mm_end_confirm"); name.dataset.typedExpect = "node1"; name.value = "node1";
+  const box = t.element("mm_end_result");
+  let closed = 0; t.c.closeModal = () => { closed += 1; };
+  await t.c.hostMaintenanceEndGo("node1");
+  assert.equal(closed, 0, "the dialog stays");
+  assert.match(box.innerHTML, /still cordoned/);
+  assert.match(box.innerHTML, /not finished/i);
+  assert.ok(!t.shown.toasts.some(([text]) => /^Maintenance ended/.test(text)), "not said to have ended");
+  assert.ok(t.shown.toasts.every(([, tone]) => tone !== "ok"));
+});
+
+test("End's lead says what it will do, not what has happened", () => {
+  const t = setup({ nodes: [{ name: "node1", status: "Ready" }] });
+  t.c.hostMaintenanceEnd("node1");
+  const html = t.shown.modal.at(-1)[1];
+  assert.doesNotMatch(html, /Scheduling is allowed/);
+  assert.match(html, /Ending it allows scheduling/);
+});
+
+function followed(op) {
+  const t = setup({ answers: { "/api/operations": [op], "/api/nodes/uptime": {} } });
+  const box = t.element("mmProgress");
+  t.c.UI.poll = read => { read({}); return {}; };
+  return { t, box };
+}
+
+test("a job that failed before opening anything says Maintenance was not opened", async () => {
+  const { t, box } = followed({ id: "op-1", status: "failed", message: "Maintenance was not opened. Inspect the host's cordon state: refused" });
+  t.c.hostMaintenanceFollow("op-1", "node1");
+  await new Promise(done => setTimeout(done, 5));
+  assert.match(box.innerHTML, /Maintenance was not opened/);
+});
+
+test("a job that failed only at recording it doesn't say it wasn't opened", async () => {
+  const { t, box } = followed({ id: "op-1", status: "failed", message: "In maintenance: Drive swap. Its job could not record that (disk full)" });
+  t.c.hostMaintenanceFollow("op-1", "node1");
+  await new Promise(done => setTimeout(done, 5));
+  assert.doesNotMatch(box.innerHTML, /was not opened/);
+  assert.match(box.innerHTML, /In maintenance: Drive swap/);
+  assert.match(box.innerHTML, /job did not finish/);
+});
+
+test("an End that worked closes and says so", async () => {
+  const t = setup({ answers: { "/api/node/maintenance/end": { ok: true, detail: "Scheduling is allowed on it again", started: [], left: [] }, "/api/nodes/uptime": {} } });
+  const name = t.element("mm_end_confirm"); name.dataset.typedExpect = "node1"; name.value = "node1";
+  let closed = 0; t.c.closeModal = () => { closed += 1; };
+  await t.c.hostMaintenanceEndGo("node1");
+  assert.equal(closed, 1);
+  assert.deepEqual(t.shown.toasts.at(-1), ["Maintenance ended. Scheduling is allowed on it again", "ok"]);
+});
+
+/* nodeActions itself, so a read that fails is proved to leave it as it is. */
+function hostActions({ maintenance, schedulable = true }) {
+  const t = setup({ nodes: [{ name: "node1", status: "Ready", schedulable, roles: [] }], answers: {
+    "/api/quorum": { members: [], total: 3 }, "/api/node/impact": { workloads: [], stranded: [] },
+    ...(maintenance === undefined ? {} : { "/api/node/maintenance": { declared: maintenance } }) } });
+  t.c.hostAppsHtml = () => ""; t.c.impactRows = () => "";
+  vm.runInContext(fs.readFileSync("web/js/views-lifecycle-node-power.js", "utf8"), t.c);
+  return t;
+}
+
+test("Host actions opens the same when its maintenance can't be read", async () => {
+  const t = hostActions({});
+  await t.c.nodeActions("node1");
+  const html = t.shown.modal.at(-1)[1];
+  assert.match(html, /nodePowerReview/, "the rest is all there");
+  assert.doesNotMatch(html, /hostMaintenance/, "and it offers nothing that acts on a guess");
+});
+
+test("Host actions offers Maintenance from a read of none", async () => {
+  const t = hostActions({ maintenance: null });
+  await t.c.nodeActions("node1");
+  assert.match(t.shown.modal.at(-1)[1], /hostMaintenanceReview/);
+});
+
+test("Uncordon says it doesn't end a maintenance", async () => {
+  const on = hostActions({ schedulable: false, maintenance: { reason: "Drive swap", until: NOW() + 600, state: "open" } });
+  await on.c.nodeActions("node1");
+  assert.match(on.shown.modal.at(-1)[1], /Uncordoning doesn't end its maintenance/);
+  const off = hostActions({ schedulable: false, maintenance: null });
+  await off.c.nodeActions("node1");
+  assert.doesNotMatch(off.shown.modal.at(-1)[1], /doesn't end its maintenance/);
 });
 
 test("a failed read leaves Host actions as it is", () => {
@@ -167,7 +291,8 @@ test("the page's head says in maintenance with reason and time left, or that it 
   const t = setup();
   assert.match(t.c.hostMaintenanceLine(record(declared())), /In maintenance: Drive swap · 1h 20m left/);
   const out = record(declared({ end: NOW() - 60, ongoing: false, until: NOW() - 60 }));
-  assert.match(t.c.hostMaintenanceLine(out), /ran out: Drive swap\. Still cordoned/);
+  assert.match(t.c.hostMaintenanceLine(out), /ran out: Drive swap/);
+  assert.doesNotMatch(t.c.hostMaintenanceLine(out), /cordoned/);
 });
 
 test("End says what it means on a host that is down", () => {
