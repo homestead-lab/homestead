@@ -205,5 +205,127 @@ class Recorder(unittest.TestCase):
         self.assertLessEqual({"ALERTS.AGENTS[0]", "_settings[0]"}, set(REBIND.bound_targets(MCP)))
 
 
+MADE_UP_MODULE = '''
+KIND = "made-up-job"
+NEEDS = ("reader", "writer")
+RESOLVERS = {}
+_bound = {"kget": None, "ksend": None}
+_extra = {"plan": None}
+_given = {}
+
+
+def bind(kget=None, ksend=None, plan=None, helpers=None, **given):
+    for key, value in (("kget", kget), ("ksend", ksend)):
+        if value:
+            _bound[key] = value
+    _extra.update(plan=plan)
+    RESOLVERS[KIND] = plan
+    _given.update(given)
+    if helpers:
+        globals().update({name: helpers[name] for name in NEEDS})
+'''
+
+# A module whose bind() sets nothing but entries of a dict that starts empty
+# (homestead_api_v1's ctx): before the test, the guard sees no name of it at all.
+ONLY_A_DICT = '''
+_given = {}
+
+
+def bind(**given):
+    _given.update(given)
+'''
+
+
+class DictEntries(unittest.TestCase):
+    """What a bind() sets in a dict without naming the key on that line: in a loop over
+    a fixed tuple, with .update(), under a module constant, or with globals().update()."""
+
+    def setUp(self):
+        import importlib
+        import tempfile
+        folder = self.enterContext(tempfile.TemporaryDirectory())
+        for name, source in (("homestead_made_up_dicts", MADE_UP_MODULE), ("homestead_made_up_only_dict", ONLY_A_DICT)):
+            (Path(folder) / f"{name}.py").write_text(source, encoding="utf-8")
+            self.addCleanup(sys.modules.pop, name, None)
+            self.addCleanup(GUARD._targets.pop, name, None)
+        sys.path.insert(0, folder)
+        self.addCleanup(sys.path.remove, folder)
+        importlib.invalidate_caches()
+        import homestead_made_up_dicts as MADE_UP
+        import homestead_made_up_only_dict as ONLY
+        self.module, self.only = MADE_UP, ONLY
+        MADE_UP.bind(kget=len, ksend=print, plan=min, helpers={"reader": max, "writer": sum})
+
+    def record(self, leak):
+        """The (name, test file) pairs the recorder credits as fakes to a made-up test file
+        whose one test runs leak(); the recorder's state is put back as it was."""
+        if not GUARD._installed:
+            GUARD.install()
+            self.addCleanup(lambda: (setattr(unittest.TestCase, "run", GUARD._installed.pop("run"))))
+
+        class Leaky(unittest.TestCase):
+            def test_leaks(self):
+                leak()
+
+        Leaky.__module__ = "test_made_up_dict_leaker"
+        unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Leaky))
+        found = {pair for pair in GUARD.left if pair[1] == "test_made_up_dict_leaker"}
+        # The recorder only records: take the made-up pairs out again.
+        for record in (GUARD.left, GUARD.others):
+            for key in [key for key in record if key[1] == "test_made_up_dict_leaker"]:
+                record.pop(key)
+        GUARD.ran.discard("test_made_up_dict_leaker")
+        GUARD.covered.difference_update({"homestead_made_up_dicts", "homestead_made_up_only_dict"})
+        return found
+
+    def test_bound_targets_name_each_entry(self):
+        import rebind as REBIND
+        self.assertLessEqual({"_bound['kget']", "_bound['ksend']", "_extra['plan']", "RESOLVERS['made-up-job']",
+                              "reader", "writer", "_given[*]"}, set(REBIND.bound_targets(self.module)))
+
+    def test_keep_bound_puts_back_an_entry_set_in_a_loop_and_one_set_by_update(self):
+        import rebind as REBIND
+        module = self.module
+        given = module._given
+
+        class Leaky(unittest.TestCase):
+            def test_leaks(self):
+                REBIND.keep_bound(self, module)
+                module.bind(kget=lambda path: {}, plan=lambda: "fake", helpers={"reader": id, "writer": id}, more=id)
+
+        result = unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Leaky))
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual({"kget": len, "ksend": print}, module._bound)
+        self.assertEqual({"plan": min}, module._extra)
+        self.assertEqual({"made-up-job": min}, module.RESOLVERS)
+        self.assertEqual({}, module._given, "an entry the test added is taken out again")
+        self.assertIs(given, module._given, "the same dict, which other modules may hold, is put back in place")
+        self.assertEqual((max, sum), (module.reader, module.writer))
+
+    def test_the_recorder_sees_a_fake_left_in_a_loop_set_entry_and_in_an_added_one(self):
+        module = self.module
+        saved = dict(module._bound)
+
+        def leak():
+            module.bind(kget=lambda path: {"made": "up"}, more=lambda: None)   # fakes, never put back
+        found = self.record(leak)
+        module._bound.update(saved)
+        module._given.clear()
+        self.assertEqual({("homestead_made_up_dicts._bound['kget']", "test_made_up_dict_leaker"),
+                          ("homestead_made_up_dicts._given['more']", "test_made_up_dict_leaker")}, found,
+                         "an entry set in a loop, and one the test added, are seen")
+
+    def test_the_recorder_sees_an_entry_added_to_a_modules_only_dict_while_it_was_empty(self):
+        only = self.only
+
+        def leak():
+            only.bind(kget=lambda path: {"made": "up"})   # a fake, never put back
+        found = self.record(leak)
+        only._given.clear()
+        self.assertEqual({("homestead_made_up_only_dict._given['kget']", "test_made_up_dict_leaker")}, found)
+
+
 if __name__ == "__main__":
     unittest.main()

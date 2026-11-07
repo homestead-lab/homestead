@@ -29,6 +29,12 @@ homestead_agent_audit.DATA_DIR	test_shared_logs	fake
 homestead_agent_requests.DATA_DIR	test_mcp	fake
 homestead_agent_requests.DATA_DIR	test_read_json	fake
 homestead_agent_requests.DATA_DIR	test_update_file	fake
+# Seen since keep_bound and the guard read dict entries a bind() sets with .update() or in a
+# loop (4 Nov): MCP.bind() hands test_mcp's fakes to homestead_agent_tools.bind(), which keeps
+# them in its _bound dict. Fix with keep_bound(self, MCP, TOOLS) in test_mcp's Base.setUp.
+homestead_agent_tools._bound['delete_workload']	test_mcp	fake
+homestead_agent_tools._bound['kget']	test_mcp	fake
+homestead_agent_tools._bound['precheck']	test_mcp	fake
 homestead_alerts.DATA_DIR	test_alert_acknowledgement	fake
 homestead_alerts.DATA_DIR	test_alert_maintenance	fake
 homestead_alerts.DATA_DIR	test_logalerts	fake

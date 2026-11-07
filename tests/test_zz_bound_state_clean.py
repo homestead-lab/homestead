@@ -37,7 +37,10 @@ LISTED = GUARD.allowed()
 # combined run passes, but not counted, not stale and not checked as bound (bound_guard.pending).
 SIDES = GUARD.sides(LISTED, GUARD.pending())
 GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
-CEILING = 524
+# 524 -> 527 on 4 Nov: keep_bound and the recorder now see dict entries a bind() sets in a
+# loop or with .update(); the three homestead_agent_tools._bound lines from test_mcp were
+# there before, unseen (the commented block in bound_leaks.txt). Lower it as they are fixed.
+CEILING = 527
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7

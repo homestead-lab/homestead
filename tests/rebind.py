@@ -4,8 +4,11 @@
     rebind(self, MODULE, *args, **kwargs)  keep_bound, then MODULE.bind(*args, **kwargs)
 
 The names come from the AST of the module's bind() (and bind_routes()): the names
-it declares global, and the attributes it sets on another object of the module
-(STATE.kget = ..., ALERTS.AGENTS = ...). A new one is kept without changing this file. They are put back by name with
+it declares global, the attributes it sets on another object of the module
+(STATE.kget = ..., ALERTS.AGENTS = ...), and the entries it sets in a dict, also in a
+loop over a fixed tuple, with .update(), under a module constant (RESOLVERS[KIND]) or
+with globals().update({n: ... for n in NEEDS}); a dict .update() fills from an argument
+is kept whole ("X[*]"). A new one is kept without changing this file. They are put back by name with
 addCleanup, not by calling bind() again: a bind() may skip an argument that is left
 out, and the point is to restore exactly what was there before the test.
 """
@@ -33,9 +36,41 @@ def bound_names(module):
 
 @functools.lru_cache(maxsize=None)
 def _attributes_of(function):
-    """"HOLDER.attr" for each assignment HOLDER.attr = ... in the function (HOLDER a plain name)."""
+    """What the function sets on a plain name's object, as found in its AST:
+    "HOLDER.attr" for HOLDER.attr = ...; "X[k]" / "X.Y[k]" for an entry set under a
+    literal key, under a loop variable that runs over a literal tuple (for key, value
+    in (("kget", kget), ...): X[key] = value), or by X.update(k=..., **{"k": ...});
+    "X[@NAME]" for one under a module constant NAME (resolved by bound_targets);
+    "X[*]" for a dict that .update() fills with keys only known when it runs; and
+    "@globals:NAME" for globals().update({n: ... for n in NAME})."""
     tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    loops = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.iter, (ast.Tuple, ast.List)):
+            names = node.target.elts if isinstance(node.target, ast.Tuple) else [node.target]
+            for index, name in enumerate(names):
+                if not isinstance(name, ast.Name):
+                    continue
+                values = []
+                for element in node.iter.elts:
+                    if isinstance(node.target, ast.Tuple):
+                        element = element.elts[index] if isinstance(element, (ast.Tuple, ast.List)) \
+                            and len(element.elts) > index else None
+                    if not isinstance(element, ast.Constant):
+                        values = None
+                        break
+                    values.append(element.value)
+                if values is not None:
+                    loops.setdefault(name.id, set()).update(values)
     found = set()
+
+    def holder(base):
+        if isinstance(base, ast.Name):
+            return base.id
+        if isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
+            return f"{base.value.id}.{base.attr}"
+        return None
+
     for node in ast.walk(tree):
         targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AugAssign) else []
         for target in targets:
@@ -43,12 +78,35 @@ def _attributes_of(function):
                 if isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name):
                     found.add(f"{t.value.id}.{t.attr}")
                 # An element of a list or dict another module (or this one) keeps: X[0] = ..., X.Y[0] = ...
-                if isinstance(t, ast.Subscript) and isinstance(t.slice, ast.Constant):
-                    base = t.value
-                    if isinstance(base, ast.Name):
-                        found.add(f"{base.id}[{t.slice.value!r}]")
-                    elif isinstance(base, ast.Attribute) and isinstance(base.value, ast.Name):
-                        found.add(f"{base.value.id}.{base.attr}[{t.slice.value!r}]")
+                if isinstance(t, ast.Subscript) and holder(t.value):
+                    if isinstance(t.slice, ast.Constant):
+                        found.add(f"{holder(t.value)}[{t.slice.value!r}]")
+                    elif isinstance(t.slice, ast.Name) and t.slice.id in loops:
+                        found.update(f"{holder(t.value)}[{key!r}]" for key in loops[t.slice.id])
+                    elif isinstance(t.slice, ast.Name):
+                        found.add(f"{holder(t.value)}[@{t.slice.id}]")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update":
+            base = node.func.value
+            if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "globals":
+                for arg in node.args:
+                    if isinstance(arg, ast.DictComp) and len(arg.generators) == 1 \
+                            and isinstance(arg.generators[0].iter, ast.Name):
+                        found.add(f"@globals:{arg.generators[0].iter.id}")
+                found.update(keyword.arg for keyword in node.keywords if keyword.arg)
+                continue
+            name = holder(base)
+            if name is None:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg:
+                    found.add(f"{name}[{keyword.arg!r}]")
+                else:
+                    found.add(f"{name}[*]")
+            for arg in node.args:
+                if isinstance(arg, ast.Dict) and all(isinstance(k, ast.Constant) for k in arg.keys):
+                    found.update(f"{name}[{k.value!r}]" for k in arg.keys)
+                else:
+                    found.add(f"{name}[*]")
     return tuple(sorted(found))
 
 
@@ -60,17 +118,51 @@ def bound_targets(module):
         function = getattr(module, fn, None)
         if inspect.isfunction(function) and function.__module__ == module.__name__:
             for name in _attributes_of(function):
+                if name.startswith("@globals:"):
+                    # globals().update({n: ... for n in NEEDS}): the globals NEEDS names.
+                    listed = getattr(module, name.split(":", 1)[1], None)
+                    if isinstance(listed, (tuple, list, frozenset)) and all(isinstance(n, str) for n in listed):
+                        names.update(listed)
+                    continue
+                if "[@" in name:
+                    # X[KIND] = ...: the key is the module's constant KIND.
+                    path, constant = name[:-1].split("[@", 1)
+                    key = getattr(module, constant, None)
+                    if not isinstance(key, (str, int)):
+                        continue
+                    name = f"{path}[{key!r}]"
                 head = name.split("[", 1)[0].split(".", 1)[0]
                 if head in vars(module) and not inspect.isfunction(getattr(module, head)):
                     names.add(name)
     return tuple(sorted(names))
 
 
+def expand(module, targets):
+    """(target, value) for each of targets, with "X[*]" as one "X[k]" per key the dict
+    holds now: what the bound-state guard compares."""
+    for target in targets:
+        if target.endswith("[*]"):
+            owner = get(module, target)
+            if owner is not MISSING:
+                for key, value in owner.items():
+                    if isinstance(key, (str, int)):
+                        yield f"{target[:-3]}[{key!r}]", value
+        else:
+            yield target, get(module, target)
+
+
 MISSING = object()
+ALL = object()   # the key of "X[*]": the whole dict, every key it holds
 
 
 def _container(module, name):
-    """For "X[k]" / "X.Y[k]": (the list or dict, k); for a plain or dotted name: (holder, attribute)."""
+    """For "X[k]" / "X.Y[k]": (the list or dict, k); for "X[*]": (the dict, ALL); for a
+    plain or dotted name: (holder, attribute)."""
+    if name.endswith("[*]"):
+        path = name[:-3]
+        holder, _, attribute = path.rpartition(".")
+        owner = getattr(module, holder, None) if holder else module
+        return getattr(owner, attribute, None), ALL, True
     if name.endswith("]") and "[" in name:
         path, key = name[:-1].split("[", 1)
         holder, _, attribute = path.rpartition(".")
@@ -84,6 +176,8 @@ def get(module, name):
     owner, key, item = _container(module, name)
     if owner is None:
         return MISSING
+    if key is ALL:
+        return dict(owner) if isinstance(owner, dict) else MISSING
     if item:
         try:
             return owner[key]
@@ -95,6 +189,12 @@ def get(module, name):
 def put(module, name, value):
     owner, key, item = _container(module, name)
     if owner is None:
+        return
+    if key is ALL:
+        # Put back exactly what the dict held: an entry the test added goes too.
+        if isinstance(owner, dict) and value is not MISSING:
+            owner.clear()
+            owner.update(value)
         return
     if item:
         if value is MISSING:
