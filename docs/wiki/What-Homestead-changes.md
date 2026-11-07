@@ -225,18 +225,84 @@ And it deletes what you delete.
 
 ## What removing Homestead leaves behind
 
-**Before you uninstall,** make sure no OS update, host reboot or cluster
-shutdown is running, and that no app is stopped by a power schedule. An app
+**Before you uninstall,** make sure no OS update, host reboot, cluster shutdown
+or other Homestead job (a copy, an import, a restore, a rollback) is running,
+and that no app is stopped by a power schedule. An app
 Homestead stopped stays stopped once Homestead is gone. Its
 `homestead.io/held-as`, `schedule-copies` or `autostart-replicas` annotation
 says how many copies it had, so you can scale it back up yourself.
 
-`helm uninstall` removes Homestead's Deployment, Service, permissions and the
-node probe the chart installed. It keeps your apps, the `lab` namespace,
+**`install.sh --uninstall`**, run on a server node, removes Homestead and the
+leftovers listed below as safe. It lists every object by exact name and asks
+first: type `yes`, or nothing happens. `--dry-run` prints the list and stops.
+It goes through `helm uninstall` if Homestead was installed with Helm. It stops
+Homestead first and waits for its pods to go, so nothing puts anything back; if
+stopping it fails, it stops there. Run again, it finds nothing left and says so.
+
+It warns, and goes on if you say so, about what is stopped: apps with a mark
+saying Homestead stopped them, suspended CronJobs among them, and anything with
+`homestead.io/held-for-power`, which it names as "a job holds this" whatever
+state it is in.
+
+It refuses, removing nothing, when it cannot tell what is Homestead's:
+
+- **Homestead running in more than one namespace.** They share a `ClusterRole`,
+  so even naming one with `HS_NAMESPACE` would break the other.
+- **`HS_NAMESPACE` naming a namespace** while Homestead, or its data volume, is
+  in another.
+- **Neither a Homestead `Deployment` nor a `homestead-data` claim**, when objects
+  with these names are there. A cluster with none of them simply has nothing to
+  remove.
+- **A `Deployment` named `homestead` that is not Homestead's** (no `app=homestead`
+  label), when there is anything else to remove, marks on the hosts included. It
+  may be what mounts a `homestead-data` claim, so that claim proves nothing either.
+
+Nothing overrides these: remove any leftovers by hand, with the steps below, and
+skip anything named `homestead` that is not Homestead's.
+
+It looks in Homestead's namespace, in your apps' namespace and in `lab`. Once the
+`Deployment` has gone, it can no longer read where your apps' namespace is, and
+says so: set `HS_APPS_NAMESPACE` if yours is elsewhere.
+
+- **By default (`--keep-data`)** the data volume, the accounts and Homestead's
+  records stay, so a reinstall picks them up. **That reinstall does not put the
+  node probe back**: Homestead has it recorded as installed once, as it does any
+  add-on removed later. Install it again from **Settings › Cluster › Add-ons**.
+- **`--everything`** removes them too, for good, once you type `everything`.
+  It deletes Homestead's own namespace only when nothing else is left in it:
+  with the plain manifest that is `lab`, which holds your apps, so it stays and
+  the script says what is in it. It never deletes `default`, `kube-*` or
+  `longhorn-system`.
+- **Data on another claim.** After Homestead's data has moved, or with the chart's
+  `existingClaim`, the script reads the claim from the `Deployment`, names it as
+  staying on every run, and does not delete it, nor any claim named
+  `homestead-data`. A later run cannot recognise this, as the `Deployment` that said
+  so has gone: it may offer an old `homestead-data` claim as Homestead's data volume,
+  listed and asked about as usual, or refuse if there is none. To remove the accounts
+  and records with no such surprise, choose `--everything` on the first run.
+- **A failed `--everything`** keeps `homestead-data`: it goes last, and only when
+  everything else went, because a later run needs it to recognise the install.
+- **If Flux, Argo CD or a k3s `HelmChart` manages Homestead,** stop that first: it
+  would put Homestead back after the script has checked it is gone.
+- **It leaves the `homestead.io/*` annotations on your apps.** They are harmless,
+  and they are the only record of how many copies a stopped app had.
+- It never touches anything under "do not delete" below. A `Service` that selects
+  something else stays, and so does a `ClusterRoleBinding` (with its `ClusterRole`)
+  for any subject but `ServiceAccount` `homestead` in Homestead's namespace.
+- **The ticket `homestead-revert` stays while Homestead's `Deployment` was there
+  when the run began**, as a rollback may be running. Once Homestead has gone,
+  wait at least 5 minutes after any rollback, then run it again to take the ticket.
+  The app on that volume may be stopped, and nothing else says so: a rollback
+  leaves no annotation.
+- `/etc/apt/apt.conf.d/99-homestead-hold` goes on the host you run it on, and
+  only if Homestead wrote it. The script says to remove it on each other host.
+
+`helm uninstall` alone removes Homestead's Deployment, Service, permissions and
+the node probe the chart installed. It keeps your apps, the `lab` namespace,
 Homestead's data volume and the `homestead-auth` Secret
-([Removing Homestead](Installing-Homestead#removing-homestead)). A plain
-manifest install is removed by hand, and a node probe Homestead installed
-itself stays until you delete it.
+([Removing Homestead](Installing-Homestead#removing-homestead)). By hand, a
+plain manifest install is removed object by object, and a node probe Homestead
+installed itself stays until you delete it.
 
 > **Do not delete by any Homestead label** (`homestead.io/managed=true`,
 > another `homestead.io/*` label, or `app.kubernetes.io/managed-by=homestead`).
@@ -244,18 +310,18 @@ itself stays until you delete it.
 > their Secrets and restored volumes. Only the objects named under "Safe to
 > delete" below can go.
 
-What Homestead made after the install stays, and nothing removes it yet.
-Much of it is still working for your apps and data. Below, `lab` means your
-apps' namespace: `lab` unless you changed `workloadNamespace` in the chart.
+Much of what Homestead made after the install is still working for your apps
+and data, and stays. Below, `lab` means your apps' namespace: `lab` unless you
+changed `workloadNamespace` in the chart.
 
 ### Safe to delete once Homestead is gone
 
-Only Homestead uses these.
+Only Homestead uses these. `install.sh --uninstall` removes them, and
+`tests/test_what_homestead_changes.py` fails if its list and this one part ways.
 
 | Object | Where | Why it is safe |
 |---|---|---|
-| `Secret` `homestead-auth` | `lab` | Homestead's user accounts; only Homestead reads them. Keep it if you may reinstall and want the same accounts |
-| `ConfigMap` `homestead-install` | `lab` | the installer's request to Homestead; only Homestead reads it |
+| `Deployment`, `Service`, `ServiceAccount` `homestead`; `ClusterRole`, `ClusterRoleBinding` `homestead` | Homestead's namespace (`lab` with the plain manifest); the cluster | Homestead itself and what it may do. These go first; `helm uninstall` takes them with a chart install |
 | The node probe: `DaemonSet` and `ConfigMap` `homestead-nodeprobe`, `Secret`s `homestead-smart-key` and `homestead-allocation-auth` | `lab` | the probe only reports to Homestead, and only the probe uses the two Secrets. Delete all four together |
 | Longhorn `RecurringJob` `homestead-weekly-trim` | `longhorn-system` | only there from an earlier release, when you changed it (Homestead removes an unchanged one). Nothing refers to it; keep it if you want the weekly trim without Homestead |
 | `NetworkPolicy` `homestead-backend-access` | `longhorn-system` | it only lets Homestead's pods reach Longhorn's API; Longhorn's own policies are separate and stay |
@@ -263,17 +329,53 @@ Only Homestead uses these.
 | The Longhorn attachment tickets `homestead-rebuild` and `homestead-revert` | `longhorn-system` | Homestead holds a volume attached with these while it rebuilds copies or reverts a volume, and lets go itself. One left behind keeps the volume attached where it is, so its app cannot start on another host. Remove it (below) |
 | `/etc/apt/apt.conf.d/99-homestead-hold` on each host | the host | only there if Homestead managed OS updates. Removing it gives Ubuntu its own automatic updates back, with the host's own settings: if those reboot automatically, hosts reboot without being drained first |
 | `Role` and `RoleBinding` `homestead-console` | `lab` | they give only Homestead's own account the container consoles |
+| `ConfigMap` `homestead-shell-sessions` | `lab` | which node shells are open, for Homestead alone. It holds nothing a reinstall needs |
 | `Secret`, `Role` and `RoleBinding` `homestead-setup` | Homestead's namespace (`lab` with the plain manifest) | the one-time setup code and the permission to use it; only Homestead reads them. The Secret is only still there if no account was ever made |
 
+#### Safe, but kept unless you ask (`--everything`)
+
+Nothing but Homestead reads these: no manifest, chart, script or other part of
+the install names them, so nothing breaks without them. They stay by default
+because a reinstall picks them up, and because some cannot be made again.
+
+| Object | Where | What goes with it |
+|---|---|---|
+| `PersistentVolumeClaim` `homestead-data` | Homestead's namespace | settings, job history, stats and the audit log. Depending on the volume's reclaim policy, the data is gone for good |
+| `Secret` `homestead-auth` | `lab` | Homestead's user accounts. Keep it if you may reinstall and want the same accounts |
+| `ConfigMap` `homestead-install` | `lab` | the installer's request to Homestead |
+| `ConfigMap`s `homestead-settings`, `homestead-outage-carry`, `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt`, `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-vips`, `homestead-fleet`, `homestead-fleet-replay`, `homestead-clusters`, `homestead-iso-library` | `lab` | Homestead's records: settings, portal links, IP records, group tiers, hardware mappings, import sources, the VM store's list of kept images, address records, linked clusters, clusters known for moves, the ISO library's list. Your apps and VMs keep running without them |
+| `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | `lab` | the UniFi and MQTT passwords, and the key linked clusters know this one by |
+| `Lease` `homestead-leader` | Homestead's namespace | which copy of Homestead led; nothing else reads it |
+| Homestead's own address, `Service` `homestead-vip`, if you gave it one | Homestead's namespace | nothing once Homestead is gone, but it keeps the address taken while it is there. It goes only if it selects Homestead |
+
+By hand, without the script. Skip anything named `homestead` that is not Homestead's:
+
 ```bash
-# Homestead's own namespace: lab with the plain manifest, the release's with Helm
+# Homestead's own namespace: lab with the plain manifest, the release's with Helm.
+# Homestead itself first; with Helm, helm uninstall takes these
+kubectl -n lab delete deployment/homestead service/homestead serviceaccount/homestead
+kubectl delete clusterrolebinding/homestead clusterrole/homestead
 kubectl -n lab delete secret/homestead-setup role/homestead-setup rolebinding/homestead-setup
 kubectl -n lab delete daemonset/homestead-nodeprobe configmap/homestead-nodeprobe \
-  secret/homestead-smart-key secret/homestead-allocation-auth configmap/homestead-install \
+  secret/homestead-smart-key secret/homestead-allocation-auth configmap/homestead-shell-sessions \
   role/homestead-console rolebinding/homestead-console
 kubectl -n longhorn-system delete recurringjobs.longhorn.io/homestead-weekly-trim \
   networkpolicies.networking.k8s.io/homestead-backend-access
 kubectl taint nodes --all homestead.io/standby-
+```
+
+And only if you want the accounts, records and data gone too, for good:
+
+```bash
+kubectl -n lab delete secret/homestead-auth configmap/homestead-install \
+  configmap/homestead-settings configmap/homestead-outage-carry configmap/homestead-portal \
+  configmap/homestead-ipam configmap/homestead-group-tiers configmap/homestead-mqtt \
+  configmap/homestead-hardware configmap/homestead-sources configmap/homestead-vm-store \
+  configmap/homestead-vips configmap/homestead-fleet configmap/homestead-fleet-replay \
+  configmap/homestead-clusters configmap/homestead-iso-library \
+  secret/homestead-unifi secret/homestead-mqtt secret/homestead-fleet-key
+kubectl -n lab delete service/homestead-vip lease/homestead-leader
+kubectl -n lab delete persistentvolumeclaim/homestead-data
 ```
 
 Some of these may not exist on your cluster. kubectl then says so, and
@@ -308,7 +410,10 @@ stays too.
 | `StorageClass`es Homestead made (`homestead-single-copy`, the ISO class `homestead-isos`, restore classes) | the cluster | volumes made from them |
 | `PriorityClass`es `homestead-critical`, `homestead-normal`, `homestead-low`, or `homestead-<tier>-<value>` | the cluster | Kubernetes refuses a new pod that names a class that is gone, so an app, VM or Helm release still naming one cannot restart, update or move. Delete one only once nothing names it (below) |
 | What Homestead made for an app: its VIP `Service`, firewall `NetworkPolicy`s, `NetworkAttachmentDefinition`s, its environment `Secret`, its outage webhook `Secret` (`homestead-outage-*`) | the app's namespace | the app; without the webhook's `Secret`, its outage webhook |
-| Homestead's records: `ConfigMap`s `homestead-settings` and `homestead-outage-carry` in Homestead's namespace (`DEFAULT_NS`, `lab` in the plain manifest); `homestead-portal`, `homestead-ipam`, `homestead-group-tiers`, `homestead-mqtt` in `default`; `homestead-hardware`, `homestead-sources`, `homestead-vm-store`, `homestead-fleet` in `lab`; `Secret`s `homestead-unifi`, `homestead-mqtt`, `homestead-fleet-key` | Homestead's namespace, `default`, `lab` | nothing known, but they are harmless to keep, and a reinstall picks them up |
+| `ConfigMap` `homestead-data-handoff` | Homestead's namespace | the journal of a move of Homestead's own data: where it got to, kept off both volumes. A move part-way through has no other record of which volume holds the data |
+| `Secret` `homestead-cluster-shutdown` | Homestead's namespace | the journal of a cluster shutdown: what to bring back, and how. The helpers that recover the cluster belong to it, and go with it |
+| `Secret`s `homestead-move-credentials-<move>` | `longhorn-system` | a Longhorn backup target set up for a move between clusters may still read its keys from one. Each name is made for its move, so the script could not name it anyway |
+| `Lease`s `homestead-host-change-<host>` | `lab` | nothing: each only marks a change running on a host. Each name holds its host, so the script leaves them, and they keep `lab` from being deleted |
 | The `homestead.io/*` annotations on apps, and the other taints and labels on hosts | apps, hosts | nothing: they are harmless. The annotations are the only record of how many copies a stopped app had |
 | Settings Homestead changed: Longhorn's copies count and offline rebuilding, kube-vip's values, Longhorn disks the root-disk guard turned off, the default flag it took off extra storage classes | Longhorn, kube-vip, storage classes | they are your cluster's settings now; change them only on purpose |
 | On each host: the journal cap (`/etc/systemd/journald.conf.d/90-homestead.conf`), the inotify limits (`/etc/sysctl.d/90-homestead.conf`), the multipath setting | the host | Longhorn needs multipathd kept off its disks, or volumes fail to mount; apps may need the inotify limits |

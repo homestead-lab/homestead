@@ -30,6 +30,7 @@ import source_scan as SS
 ROOT = Path(__file__).resolve().parents[1]
 WIKI = ROOT / "docs" / "wiki"
 PAGE = WIKI / "What-Homestead-changes.md"
+INSTALL = ROOT / "scripts" / "install.sh"
 LINK = re.compile(r"\]\(What-Homestead-changes(#[^)]*)?\)")
 
 # Bodies that have the shape of an object but are only part of a request.
@@ -177,6 +178,66 @@ def deletes_by_managed_label(text):
     return found
 
 
+def uninstall_objects(script):
+    """{name: tier} from the list install.sh --uninstall removes."""
+    block = re.search(r"^UNINSTALL_OBJECTS='\n(.*?)^'", script, re.M | re.S)
+    return {line.split()[3]: line.split()[0] for line in block.group(1).splitlines() if line.strip()}
+
+
+def page_section(page, start, end):
+    return page[page.index(start):page.index(end)]
+
+
+def uninstall_list_problems(script, page):
+    """Where the script's list and the page's "Safe to delete" list part ways:
+    the script removing something that is not there, or that is under "do not
+    delete", or the page calling something safe that the script leaves."""
+    safe = page_section(page, "### Safe to delete", "### Still used")
+    keep = page[page.index("### Still used"):]
+    objects = uninstall_objects(script)
+    problems = []
+    for name in objects:
+        if f"`{name}`" not in safe:
+            problems.append(f"the script removes {name}, which is not under Safe to delete")
+        if f"`{name}`" in keep:
+            problems.append(f"the script removes {name}, which is under do not delete")
+    for name in set(re.findall(r"`(homestead(?:-[a-z0-9-]+)?)`", safe)) - set(objects):
+        if name not in UNINSTALL_NOT_OBJECTS:
+            problems.append(f"the page calls {name} safe, and the script does not remove it")
+    return problems
+
+
+# On the page's safe list, removed by the script another way than by name:
+# Longhorn attachment tickets are one key of an object that stays.
+UNINSTALL_NOT_OBJECTS = {"homestead-rebuild", "homestead-revert"}
+
+
+# The ways server code names a ConfigMap or Secret of its own: by the naming
+# helper, in an API path, or in a constant that a path uses.
+OBJECT_NAME = re.compile(r'NAMES\.object_name\(["\']([a-z0-9-]+)["\']')
+PATH_NAME = re.compile(r"/(?:configmaps|secrets)/(homestead-[a-z0-9-]+)")
+BRAND_PATH = re.compile(r"/(?:configmaps|secrets)/\{NAMES\.BRAND\}-([a-z0-9-]+)")
+CONSTANT = re.compile(r'^([A-Z_]+) = "(homestead-[a-z0-9-]+)"', re.M)
+# Not what a person finds on the cluster under that name.
+NOT_RECORDS = {"homestead-isos": "a StorageClass, on the page", "homestead-smb": "a share server, on the page",
+               "homestead-nfs": "a share server, on the page"}
+
+
+def code_object_names(root=ROOT):
+    """The ConfigMaps and Secrets server code names as its own, {name: file}."""
+    found = {}
+    for path in sorted((root / "server").rglob("*.py")):
+        text = SS.text(path)
+        names = {f"homestead-{name}" for name in OBJECT_NAME.findall(text) + BRAND_PATH.findall(text)}
+        names |= set(PATH_NAME.findall(text))
+        for constant, name in CONSTANT.findall(text):
+            if re.search(r"/(?:configmaps|secrets)/\{(?:\w+\.)?" + constant + r"\}", text):
+                names.add(name)
+        for name in names:
+            found.setdefault(name, path.name)
+    return found
+
+
 def made_kinds(root=ROOT):
     found = {}
     for source in (install_kinds(root), code_kinds(root)):
@@ -306,6 +367,65 @@ class WhatHomesteadChanges(unittest.TestCase):
         page = " ".join(SS.text(PAGE).split())
         self.assertIn("apps you deployed through Homestead carry it too", page,
                       "the page must warn that the managed label also marks the reader's apps")
+
+    def test_the_uninstall_list_matches_the_page(self):
+        script, page = SS.text(INSTALL), SS.text(PAGE)
+        self.assertGreater(len(uninstall_objects(script)), 20, "the list scan found nothing it should")
+        self.assertEqual(uninstall_list_problems(script, page), [])
+        safe = page_section(page, "### Safe to delete", "### Still used")
+        for thing in ("homestead.io/standby", "homestead-rebuild", "homestead-revert", "99-homestead-hold"):
+            self.assertIn(thing, script)
+            self.assertIn(thing, safe)
+
+    def test_the_guard_fails_when_the_script_and_the_page_part_ways(self):
+        script, page = SS.text(INSTALL), SS.text(PAGE)
+        self.assertEqual(uninstall_list_problems(script, page), [])
+        # The script starts removing something the page says never to delete.
+        for name in ("homestead-backup-target", "homestead-objectstore", "homestead-shares"):
+            worse = script.replace("self own service homestead\n", f"self own service homestead\nsafe apps secret {name}\n")
+            self.assertIn(f"the script removes {name}, which is under do not delete",
+                          uninstall_list_problems(worse, page))
+        # The page stops calling something safe.
+        worse = page.replace("`homestead-smart-key`", "`a-secret`")
+        self.assertTrue(any("homestead-smart-key" in problem for problem in uninstall_list_problems(script, worse)))
+        # The script drops something the page still calls safe.
+        worse = script.replace("safe apps secret homestead-smart-key\n", "")
+        self.assertIn("the page calls homestead-smart-key safe, and the script does not remove it",
+                      uninstall_list_problems(worse, page))
+
+    def test_every_record_only_the_code_names_is_on_the_page(self):
+        found = code_object_names()
+        for name in ("homestead-settings", "homestead-clusters", "homestead-iso-library", "homestead-shell-sessions",
+                     "homestead-cluster-shutdown"):
+            self.assertIn(name, found, "the name scan found nothing it should")
+        page = SS.text(PAGE)
+        missing = {name: where for name, where in found.items()
+                   if f"`{name}" not in page and name not in NOT_RECORDS}
+        self.assertEqual(missing, {}, "Decide these and name them on the page: stays, or on the script's list")
+
+    def test_the_by_hand_steps_name_everything_the_script_removes(self):
+        page = SS.text(PAGE)
+        safe = page_section(page, "### Safe to delete", "### Still used")
+        block = " ".join(re.findall(r"```bash\n(.*?)```", safe, re.S))
+        missing = sorted(name for name in uninstall_objects(SS.text(INSTALL))
+                         if not re.search(r"[/ ]" + re.escape(name) + r"(\s|$)", block))
+        self.assertEqual(missing, [], "Give these by-hand steps on the page")
+
+    def test_the_by_hand_steps_warn_before_their_first_delete(self):
+        safe = page_section(SS.text(PAGE), "### Safe to delete", "### Still used")
+        before = " ".join(safe[:safe.index("```bash")].split())
+        self.assertIn("Skip anything named `homestead` that is not Homestead's", before)
+
+    def test_the_page_says_what_the_script_does_and_leaves(self):
+        section = " ".join(SS.text(PAGE)[SS.text(PAGE).index("## What removing Homestead leaves behind"):].split())
+        for words in ("install.sh --uninstall", "--dry-run", "--everything", "asks first", "by exact name",
+                      "`homestead.io/*` annotations", "does not put the node probe back", "held-for-power",
+                      "`homestead-host-change-", "A later run cannot recognise", "choose `--everything` on the first run",
+                      "wait at least 5 minutes", "Flux, Argo CD or a k3s `HelmChart`",
+                      "skip anything named `homestead` that is not Homestead's"):
+            self.assertIn(words, section)
+        self.assertNotIn("nothing removes it yet", section)
+
 
 if __name__ == "__main__":
     unittest.main()
