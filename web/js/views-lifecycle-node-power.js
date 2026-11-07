@@ -8,6 +8,7 @@ window.nodeActions = async name => {
       <button class="btn" onclick="closeModal()">Close</button>`);
   }
   window.__nodeImpact = impact;
+  const declared = await api(`/api/node/maintenance?node=${encodeURIComponent(name)}`).then(r => r.declared).catch(() => undefined);
   const isEtcd = (qr.members || []).includes(name);
   const off = qr.power_enabled === false;
   const host = ((typeof STATE !== "undefined" && STATE.data.nodes) || []).find(n => n.name === name) || {};
@@ -21,7 +22,7 @@ window.nodeActions = async name => {
     `<div class="ui-insight-row">${UI.statusDot(tone)}<div><b>${esc(title)}</b><small>${esc(detail)}</small></div><div class="ui-insight-action">${buttonHtml}</div></div>`;
   const actions = `<div class="ui-insight-list">
     ${cordoned
-      ? action("Cordoned", "New pods do not land here. Allow scheduling again when the host is ready for work.", UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
+      ? action("Cordoned", `${declared ? "Uncordoning doesn't end its maintenance. " : ""}New pods do not land here. Allow scheduling again when the host is ready for work.`, UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
       : action("Cordon", "Stop new pods landing here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
     ${action("If this host goes down", "What stops, what waits, what moves and where, which volumes are at risk and which addresses move.",
       UI.button("Preview", `nodeIfDown(${jsArg(name)},() => nodeActions(${jsArg(name)}))`))}
@@ -32,6 +33,7 @@ window.nodeActions = async name => {
           + "Reviewed first: what moves, what waits for the host, and its volume copies.",
         UI.button("Reboot…", `nodePowerReview(${jsArg(name)},'reboot')`, { attrs: 'data-need="admin"' })
         + UI.button("Shut down…", `nodePowerReview(${jsArg(name)},'poweroff')`, { kind: "danger", attrs: 'data-need="admin"' }))}
+    ${window.hostMaintenanceRow?.(name, declared) || ""}
     ${promotable ? action("Make this a server", "Gives the cluster another etcd vote. Its apps move off while k3s reinstalls; its storage stays.",
       UI.button("Make server…", `nodePromoteReview(${jsArg(name)})`, { attrs: 'data-need="admin"' })) : ""}
     ${action("Remove from cluster", "Take this host out for good, after checking quorum and volume copies.",
