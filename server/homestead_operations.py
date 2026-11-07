@@ -258,8 +258,14 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes", un
     return _public(item)
 
 
+def cdi_holds(namespace, name):
+    """The jobs holding this disk now, by the rule start() refuses a new import with."""
+    return [item for item in _read() if (namespace, name) in _cdi_targets(item.get("kind"), item.get("ref") or {}) and
+            (item.get("status") not in TERMINAL or item.get("ref", {}).get("retain_resources"))]
+
+
 def _cdi_targets(kind, ref):
-    if kind == "vm-disk-import":
+    if kind in ("vm-disk-import", "vm-disk-remove"):
         names = [ref.get("name")]
     elif kind == "unraid-vm-import":
         names = [row.get("dv") for row in ref.get("disks") or []]

@@ -277,9 +277,10 @@ class CleanupTests(unittest.TestCase):
                 self.promote()
                 self.api.hold_deletes.add(NS + "/pods/upload")
                 self.assertFalse(self.clean(keep))
-                self.assertIn(DV + "/guest-disk", self.api.objects)
-                self.assertIn(NS + "/persistentvolumeclaims/guest-disk", self.api.objects)
-                self.assertIn(NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch", self.api.objects)
+                # Clearing everything, the disk and claims are asked to go at once: while its
+                # claim stands, CDI remakes a worker that has gone. Only the volume's policy waits.
+                self.assertEqual(keep, DV + "/guest-disk" in self.api.objects)
+                self.assertEqual(keep, NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch" in self.api.objects)
                 self.assertEqual("Retain", self.api.objects[PV + "/pv-scratch"]["spec"]["persistentVolumeReclaimPolicy"])
 
     def test_recreated_scratch_of_the_same_import_reclaims_both_backing_volumes(self):

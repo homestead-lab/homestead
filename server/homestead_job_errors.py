@@ -108,6 +108,7 @@ KEEPS_GUARDS = {
     "unraid-vm-import": "data is being copied into a disk",
     "vm-create": "a VM and its disks are being made",
     "vm-disk-import": "data is being copied into a disk",
+    "vm-disk-remove": "a disk is being removed",
     "vm-edit": "a VM's disks may be changing",
     "volume-copy-move": "volume data is being copied",
     "volume-delete": "a volume is being deleted",

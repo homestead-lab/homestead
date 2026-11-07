@@ -642,6 +642,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/vm-disks/import` | admin |  | homestead_route_policy |
 | POST | `/api/vm-disks/import` | admin |  | homestead_imports |
 | GET | `/api/vm-disks/import-plan` | viewer |  | homestead_imports |
+| POST | `/api/vm-disks/remove` | admin |  | homestead_vm_disk_remove |
+| POST | `/api/vm-disks/remove-plan` | admin |  | homestead_vm_disk_remove |
 | GET | `/api/vm/console` | operator |  | homestead_route_policy |
 | POST | `/api/vm/create` | operator |  | homestead_vm_review |
 | GET | `/api/vm/create-options` | viewer |  | homestead_vm_review |
