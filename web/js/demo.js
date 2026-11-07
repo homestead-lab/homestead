@@ -997,6 +997,23 @@
         pvc: body.name, size_gb: body.size_gb,
         message: `CDI import into ${body.namespace || "lab"}/${body.name} started` };
     },
+    "/api/vm-disks/remove-plan": (url, init) => {
+      const { namespace = "lab", name = "" } = JSON.parse(init?.body || "{}");
+      const disk = vmDisks.find(d => d.namespace === namespace && d.name === name) || {};
+      const finished = disk.phase === "Succeeded";
+      return { namespace, name, uid: `demo-${name}`, phase: disk.phase, finished, capacity: disk.capacity, storage_class: disk.storage_class,
+        blocking: window.__demoVmDiskBlocked ? ["An import is still working on it. Wait for it to end, then review this again: this kind of import can't be cancelled yet"] : [],
+        goes: [`DataVolume ${name} (${disk.capacity}) and the data on it`, `Its claim ${name}`, `Volume pvc-${name}`], confirm: name,
+        note: finished ? "This disk is finished: a VM can still be made from it with Create VM. Removing it deletes it for good. The source isn't touched."
+          : "This removes the disk, its claim and what CDI made for it, along with the data copied so far. The source isn't touched." };
+    },
+    "/api/vm-disks/remove": (url, init) => {
+      const { namespace = "lab", name = "" } = JSON.parse(init?.body || "{}");
+      const at = vmDisks.findIndex(d => d.namespace === namespace && d.name === name);
+      if (at >= 0) vmDisks.splice(at, 1);
+      return { ok: true, namespace, name, message: `Removing disk ${name}`,
+        operation: { id: "demo-disk-remove", kind: "vm-disk-remove", title: `Remove disk ${name}`, status: "running", progress: 3, message: "Removing the disk", href: "/vms/import" } };
+    },
     // An Unraid server's VMs, as homestead_unraid_vms.plan() maps them.
     "/api/sources/vms": (url, init) => {
       const disk = (path, gb, format, bus, usedGb) => ({ index: 0, path, target: "hdc", unraid_bus: bus, bus: bus === "ide" ? "sata" : bus,

@@ -254,8 +254,8 @@ If CDI has not finished 6 hours after the copy, the import fails and leaves the
 disks as they are, removing only its copy Job and Secret; cancelling it at that
 point keeps the disks too. If CDI then finishes, Import can make a VM from one
 disk: check it boots, as its bus, MAC and TPM aren't carried over, and Homestead
-can't attach any other disks yet. Homestead can't remove an unfinished disk yet,
-so the job gives the `kubectl` command for it.
+can't attach any other disks yet. An admin can remove what you don't want under
+**Import** > **Disk images**.
 
 A copy Job goes an hour after it ends. If one has gone before Homestead saw how it
 ended, because Homestead was down or someone deleted it, Homestead can't tell how
@@ -272,6 +272,21 @@ cleanup continues after a Homestead restart. Do not retry with the same disk
 names while cleanup is pending. Storage used by another workload, with changed
 ownership, or left by an older import without tracked ownership is preserved;
 inspect it under **Volumes** before removing anything separately.
+
+### Removing a disk
+
+An admin can **Remove** a disk no VM uses under **Import** > **Disk images**, finished or
+not, after reviewing what goes and typing its name. It refuses a disk anything still
+names: a VM, a pod, or an app or CronJob, even a stopped one. A pod that has ended counts
+too, as Kubernetes keeps the claim until it is removed, and the review says how. It also refuses a disk a
+storage move holds, or one an import is still working on. Cancel an Unraid or Proxmox
+import, or wait for it to end. An import from a web address can't be cancelled yet, and
+has no time limit, so wait for it to end. The removal is a job, which ends when the disk,
+its claim, CDI's temporary storage and the volume behind them have gone, and the name is
+free again. A use that appears before the disk has been asked to go ends the job with the
+disk kept. If something stops it after that, an admin can stop following it under the
+job: Homestead sends no more deletes, and says what Kubernetes is still deleting and what
+stays. The source isn't touched.
 
 This needs CDI, which Harvester includes.
 
