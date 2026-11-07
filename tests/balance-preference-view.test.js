@@ -8,7 +8,8 @@ function load() {
     esc: s => String(s ?? "").replaceAll("<", "&lt;"), STATE: { data: {} }, tip: t => t };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/autoupdate.js", "web/js/views-workloads.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/autoupdate.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  vm.runInContext(require("./helpers/workloads-source")(), c);
   return name => vm.runInContext(name, c);
 }
 
@@ -19,7 +20,7 @@ test("the row says which host an app prefers", () => {
 });
 
 test("it goes on the row, not the card, whose title has no room beside it", () => {
-  const tags = between(fs.readFileSync("web/js/views-workloads.js", "utf8"), "function workloadStateTags", "\n}\n");
+  const tags = between(require("./helpers/workloads-source")(), "function workloadStateTags", "\n}\n");
   assert.match(tags, /row \? preferTag\(w\) : ""/);
 });
 
@@ -32,7 +33,7 @@ test("the row's tip says who left it and what clearing it costs", () => {
 });
 
 test("both Balance reviews say a move leaves a preference that lasts", () => {
-  const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const source = require("./helpers/workloads-source")();
   const words = load()("BALANCE_LEAVES_PREFERENCE");
   assert.match(words, /stays/);
   assert.match(words, /restarts/);

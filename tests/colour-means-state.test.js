@@ -31,7 +31,7 @@ test("Schedules and Import show a running or waiting job as neutral, not amber",
 });
 
 test("App Store and Helm labels are neutral: guidance, official, verified, installed here", () => {
-  const store = read("web/js/views-workloads.js");
+  const store = require("./helpers/workloads-source")();
   assert.doesNotMatch(store, /level === "dependency" \? "warn" : "info"/);
   const helm = read("web/js/views-helm.js");
   assert.match(helm, /UI\.chip\("official", "neutral"\)/);
@@ -93,5 +93,5 @@ test("other progress states are neutral too: installing, starting, rebuilding, c
   assert.match(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding \$\{rebuild\.pct\}%`, "neutral"/);
   assert.doesNotMatch(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding[^`]*`, "(warn|med)"/);
   assert.match(read("web/js/vm-hardware.js"), /UI\.chip\("copying", "neutral"\)/);
-  assert.doesNotMatch(read("web/js/views-workloads.js"), /c\.state === "running" \? "med"/);
+  assert.doesNotMatch(require("./helpers/workloads-source")(), /c\.state === "running" \? "med"/);
 });

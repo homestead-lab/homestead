@@ -3,7 +3,7 @@
 // in place of the raw JSON manifest preview.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
-const workloads = () => fs.readFileSync("web/js/views-workloads.js", "utf8");
+const workloads = () => require("./helpers/workloads-source")();
 
 const capacity = { additional: 1, requires_confirmation: false, blocked: false, pod_request_gb: 1,
   pod_cpu_request_percent: 10, pod_memory_gb: 1, warnings: [], candidates: [] };

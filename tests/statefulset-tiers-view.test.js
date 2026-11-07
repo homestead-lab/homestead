@@ -8,7 +8,7 @@ function load() {
     STATE: { data: {} }, tip: t => t };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-workloads.js", ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", ...require("./helpers/workloads-source").paths(), ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }
 

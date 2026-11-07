@@ -38,7 +38,7 @@ function setup({ restarts = 0 } = {}) {
   vm.createContext(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/workloads-source")(), ctx);
   return { ctx, fields, sent };
 }
 

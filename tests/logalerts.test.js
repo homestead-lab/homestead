@@ -101,7 +101,7 @@ test("the demo answers like the server: its own ids, names without the query, an
 });
 
 test("Containers and the log search open log alerts, and a deep link does too", () => {
-  assert.match(fs.readFileSync("web/js/views-workloads.js", "utf8"), /run: "logAlerts\(\)"/);
+  assert.match(require("./helpers/workloads-source")(), /run: "logAlerts\(\)"/);
   const search = fs.readFileSync("web/js/logsearch.js", "utf8");
   assert.match(search, /logAlertFromSearch\(\)/);
   assert.match(fs.readFileSync("web/js/app.js", "utf8"), /params\.panel === "logalerts"/);

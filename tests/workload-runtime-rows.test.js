@@ -15,7 +15,7 @@ const context = {
 vm.createContext(context);
 context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => context.esc(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
-vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
+vm.runInContext(require("./helpers/workloads-source")(), context);
 
 const digest = "faa8e2b1c0d94f3a6b7c8d9e0f1a2b3c4d5e6f708192a3b4c5d6e7f8091a275f";
 const image = `registry.example.com/network/edge-tunnel:2026.10.1@sha256:${digest}`;
@@ -67,7 +67,7 @@ test("a container's image keeps its tag, on a line of its own, full on hover", (
 test("the wide rows layout also carries each pod's whole name, for screens with room", () => {
   const wide = context.workloadHierarchy(app, { wide: true });
   assert.match(wide, /<span class="tree-podname-short">…-hwtkq<\/span><span class="tree-podname-full">edge-tunnel-55dd45c456-hwtkq<\/span>/);
-  assert.match(fs.readFileSync("web/js/views-workloads.js", "utf8"), /workloadHierarchy\(w, \{ wide: true \}\)/, "the rows layout asks for it");
+  assert.match(require("./helpers/workloads-source")(), /workloadHierarchy\(w, \{ wide: true \}\)/, "the rows layout asks for it");
 });
 
 test("a row's Pod, Container and Init labels never break inside the word", () => {

@@ -14,7 +14,7 @@ function load(fields = {}, rows = {}) {
     monitoringFieldValue: () => "", readEditedContainer: () => ({}) };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/app-form.js", "web/js/views-workloads.js", ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/app-form.js", ...require("./helpers/workloads-source").paths(), ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }
 const NODES = [{ name: "node-1" }, { name: "node-2" }];
@@ -40,7 +40,7 @@ test("Edit draws its Placement through the shared section", () => {
 });
 
 test("Deploy's Placement is live, with pod copies and the tier in it, not in Basics", () => {
-  const workloads = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const workloads = require("./helpers/workloads-source")();
   const deploy = between(workloads, "async function viewDeploy", "\n}\n");
   assert.doesNotMatch(deploy, /later:/, "no section is greyed");
   assert.doesNotMatch(deploy, /Set after deploying/);

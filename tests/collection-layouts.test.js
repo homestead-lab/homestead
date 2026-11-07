@@ -11,7 +11,7 @@ function context() {
   c.window=c;vm.createContext(c);require("./helpers/core-text")(c);
   require("./helpers/load-time")(c);
   vm.runInContext(between(core,null,"/* Put text on the clipboard."),c);
-  for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","gitops.js","views-workloads.js","views-overview.js"])
+  for(const file of ["metrics-utils.js","ui.js","uptime.js","autoupdate.js","schedules.js","gitops.js",...require("./helpers/workloads-source").names(),"views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
   vm.runInContext("this.workloadRowKey=workloadRowKey;this.nodeComparisonKey=nodeComparisonKey",c);
   return c;

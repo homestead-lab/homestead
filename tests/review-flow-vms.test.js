@@ -29,7 +29,7 @@ function harness(answer) {
   vm.createContext(ctx);
   require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/workloads-source")(), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   return { ctx, fields, body, sent, toasts, opened, calls, html: () => body.innerHTML };
 }

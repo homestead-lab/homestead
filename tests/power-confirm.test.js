@@ -5,7 +5,7 @@ const between = require("./helpers/between");
 /* Stopping a VM, and stopping or restarting a container, asks first with the
    standard dialog; saying no sends nothing. */
 function slice(file, start, end) {
-  return between(fs.readFileSync(file, "utf8"), start, end);
+  return between(file === "web/js/views-workloads.js" ? require("./helpers/workloads-source")() : fs.readFileSync(file, "utf8"), start, end);
 }
 function run(code, answer) {
   const asked = [], sent = [];

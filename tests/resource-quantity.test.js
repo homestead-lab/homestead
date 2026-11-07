@@ -52,10 +52,10 @@ test("a saved quantity opens in friendly units, its Kubernetes value kept for th
 });
 
 test("every form that sets these uses it, and a maximum is checked against its reservation", () => {
-  for (const file of ["web/js/views-workloads.js", ...require("./helpers/lifecycle-source").files()]) {
+  for (const file of [...require("./helpers/workloads-source").paths(), ...require("./helpers/lifecycle-source").files()]) {
     const source = fs.readFileSync(file, "utf8");
     assert.doesNotMatch(source, /placeholder="128Mi"|placeholder="50m"|e\.g\. 1Gi"/, file);
   }
-  const deploy = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const deploy = require("./helpers/workloads-source")();
   assert.match(deploy, /UI\.quantity\("memory", "d_mem_limit", [^)]*reserved: "d_mem"/);
 });

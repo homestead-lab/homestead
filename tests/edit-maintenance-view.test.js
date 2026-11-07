@@ -20,7 +20,7 @@ function setup(review) {
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), c);
   vm.runInContext(fs.readFileSync("web/js/gitops.js", "utf8"), c);
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), c);
+  vm.runInContext(require("./helpers/workloads-source")(), c);
   vm.runInContext(require("./helpers/lifecycle-source")(), c);
   return { c, fields, sent, notices, html: () => html, fail: () => { fail = true; } };
 }

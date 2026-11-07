@@ -34,7 +34,7 @@ function power({ blocked = false, missing = false, fail = false, warnings = ["Hi
   vm.createContext(ctx);
   require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => ctx.esc(ctx.jsArg(s));
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/workloads-source")(), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   return { ctx, fields, sent, toasts, asked, opened, html: () => body.innerHTML };
 }

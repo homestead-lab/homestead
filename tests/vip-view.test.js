@@ -35,7 +35,7 @@ function setup() {
 
 test("node addresses are excluded from every VIP source and stale selections", async () => {
   const { ctx } = setup();
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), ctx);
+  vm.runInContext(require("./helpers/workloads-source")(), ctx);
   const ip = "192.0.2.109";
   const choices = await ctx.vipChoices({
     node_ips: [ip], registered_vips: [{ip, free:true}], available_vips:[ip],

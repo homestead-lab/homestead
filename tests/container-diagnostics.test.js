@@ -29,7 +29,7 @@ test("diagnostics show the previous exit and escape app-controlled output", () =
 
 test("Diagnostics has an icon of its own, not Search logs' magnifying glass", () => {
   // A row shows it as an icon only, beside Logs, with Search logs in the same menu.
-  const source = fs.readFileSync("web/js/views-workloads.js", "utf8");
+  const source = require("./helpers/workloads-source")();
   const iconOf = label => source.match(new RegExp(`item\\("${label}", [^\\n]*?, "([a-z-]+)"`))?.[1];
   assert.ok(iconOf("Diagnostics"), "the Diagnostics action is found");
   assert.notEqual(iconOf("Diagnostics"), iconOf("Search logs"));

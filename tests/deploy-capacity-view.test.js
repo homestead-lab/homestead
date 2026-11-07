@@ -22,7 +22,7 @@ function setup(capacity) {
   vm.createContext(context); require("./helpers/core-text")(context);
   context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
   for (const file of ["ui.js", "gitops.js"]) vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), context);
-  vm.runInContext(fs.readFileSync("web/js/views-workloads.js", "utf8"), context);
+  vm.runInContext(require("./helpers/workloads-source")(), context);
   context.collect = () => config;
   return { context, fields, sent, notices, html: () => html, setConfig: c => { config = { ...config, ...c }; } };
 }
