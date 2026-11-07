@@ -10,10 +10,11 @@ Here, at the end. Failed, because none of these depends on CI's split:
 - the list may only grow smaller (CEILING), and its fake lines' names must still be bound;
 - in a run of the whole suite in one process (how the list is measured), a listed
   fake line whose file no longer leaks the name, so the list holds real leaks.
-Reported, not failed (for now, ENFORCE_FAKES below):
+Failed too (ENFORCE_FAKES below):
 - a name left holding a fake the test made (code from tests/, a Mock, or a path
   under the temp folder; credited to the test file that left it) that bound_leaks.txt
-  does not list with that file;
+  does not list with that file.
+Reported, not failed:
 - any other change (a name put back to its default, a server value, a fake another
   test made): whether it reads as a change depends on what ran before.
 Fakes bound in setUpClass/setUpModule run before any test, so the per-test recorder
@@ -32,15 +33,20 @@ import bound_guard as GUARD
 
 GUARD.install()
 LISTED = GUARD.allowed()
+# Lines for leaks that come with an open PR of ours (note "from #NNNN"): allowed, so the
+# combined run passes, but not counted, not stale and not checked as bound (bound_guard.pending).
+SIDES = GUARD.sides(LISTED, GUARD.pending())
 GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
-CEILING = 533
-# Advisory for now: a fake a test made can still land in another name by order, through
-# a cleanup that restores by calling bind() again (bind(*saved), a module reset()), which
-# re-copies whatever another binding holds at that moment. test_smart_standby leaves its
-# fake in homestead_names.kget in one CI share and in homestead_smart.kget in a small run,
-# and in neither in the whole suite. Set True once those restores use keep_bound (wrap-up
-# gaps): then a fake not on bound_leaks.txt fails the run.
-ENFORCE_FAKES = False
+CEILING = 529
+# The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
+# PR merges and its lines go (WORKFLOW.md, after merge).
+PENDING_CEILING = 7
+# On since 3 Nov: recording every share of CI's 4-way and the gate's 8-way split found
+# no fake pair the whole-suite list lacks. (Advisory before that: test_smart_readings'
+# Base bound SMART, and through it NAMES, to its module-level probe_pods and kept it, so
+# whichever file ran a Base test first in an order was credited.) If a split shows a
+# pair this list lacks, that is an order-dependent leak to fix at its source, not to list.
+ENFORCE_FAKES = True
 # BOUND_LEAKS_RECORD=<file>: write the pairs this run found there (to measure the list).
 RECORD = os.environ.get("BOUND_LEAKS_RECORD")
 
@@ -53,7 +59,7 @@ class BoundStateClean(unittest.TestCase):
                     for (name, test_file), test in sorted(found.items()):
                         out.write(f"{name}\t{test_file}\t{kind}\t{test}\n")
             self.skipTest(f"recorded {len(GUARD.left)} fakes and {len(GUARD.others)} other changes to {RECORD}")
-        found = GUARD.new_leaks(GUARD.left, {(name, test_file) for name, test_file, kind in LISTED if kind == "fake"})
+        found = GUARD.new_leaks(GUARD.left, SIDES.fakes)
         lines = [f"{name} holds a fake from {test_file} ({GUARD.left[(name, test_file)]})" for name, test_file in found]
         if not ENFORCE_FAKES:
             for line in lines[:20]:
@@ -80,21 +86,30 @@ class BoundStateClean(unittest.TestCase):
             self.skipTest("only a run of the whole suite in one process can tell: the list was measured that way")
         # Fakes only: the other changes are reported, not enforced, and whether one reads
         # as a change depends on what ran before.
-        gone = GUARD.stale(GUARD.left, {(n, f) for n, f, k in LISTED if k == "fake"},
+        gone = GUARD.stale(GUARD.left, SIDES.stale_fakes,
                            GUARD.ran, GUARD.unchecked, GUARD.covered, GUARD.held)
         self.assertEqual([], [f"{name}\t{test_file}" for name, test_file in gone],
                          "these files no longer leak these names: take the lines off bound_leaks.txt")
 
     def test_the_allowlist_only_shrinks(self):
-        self.assertLessEqual(len(LISTED), CEILING, "bound_leaks.txt may only shrink: fix the leak, do not add it")
-        if len(LISTED) < CEILING:
-            self.fail(f"bound_leaks.txt has {len(LISTED)} lines: lower CEILING to match")
+        self.assertLessEqual(len(SIDES.on_dev), CEILING, "bound_leaks.txt may only shrink: fix the leak, do not add it")
+        if len(SIDES.on_dev) < CEILING:
+            self.fail(f"bound_leaks.txt has {len(SIDES.on_dev)} lines (not counting open PRs'): lower CEILING to match")
+
+    def test_the_open_pr_block_only_shrinks(self):
+        # Lines for leaks that come with an open PR of ours are capped too: when a PR
+        # merges, its follow-up takes its lines off and lowers this (WORKFLOW.md).
+        self.assertLessEqual(len(SIDES.pending), PENDING_CEILING,
+                             "the open-PR block of bound_leaks.txt may only shrink: fix the leak in the PR")
+        if len(SIDES.pending) < PENDING_CEILING:
+            self.fail(f"bound_leaks.txt has {len(SIDES.pending)} open-PR lines: lower PENDING_CEILING to match")
+        self.assertEqual([], GUARD.bad_notes(), "a note must read \"from #NNNN, ...\": the open PR it comes with")
 
     def test_each_listed_name_is_still_bound(self):
         # Fake lines only, as the stale check: the other lines are reported, not enforced, and
         # one can name what another PR has since removed.
         loaded = {name for name in sys.modules if name.startswith("homestead_")}
-        self.assertEqual([], GUARD.unknown({(n, f) for n, f, k in LISTED if k == "fake"}, GUARD.state(), loaded),
+        self.assertEqual([], GUARD.unknown(SIDES.stale_fakes, GUARD.state(), loaded),
                          "these are no longer bound names: take them off bound_leaks.txt")
 
 

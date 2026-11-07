@@ -62,6 +62,46 @@ class Ratchet(unittest.TestCase):
         for line in ("self.addCleanup(f)", "keep_bound(self, A)", "self.restore_it()"):
             with self.subTest(line=line):
                 self.assertFalse(self.judge(f"def setUp(self):\n    {line}\n    A.bind(1)\n"))
+class FromOpenPrs(unittest.TestCase):
+    """A line for a leak that comes with an open PR of ours (its test file is not on dev
+    yet, or not in that form): allowed, never counted against the list, never stale."""
+
+    def test_a_line_from_an_open_pr_is_allowed_and_known_as_pending(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "leaks.txt"
+            path.write_text("# note\n"
+                            "homestead_addons.kget\ttest_addons\tfake\n"
+                            "homestead_revert.lh_call\ttest_revert_stop\tfake\t"
+                            "from #1100, not on dev yet: remove once it merges with a keep_bound there\n",
+                            encoding="utf-8")
+            self.assertEqual({("homestead_addons.kget", "test_addons", "fake"),
+                              ("homestead_revert.lh_call", "test_revert_stop", "fake")}, GUARD.allowed(path))
+            self.assertEqual({("homestead_revert.lh_call", "test_revert_stop")}, GUARD.pending(path))
+            self.assertEqual([], GUARD.bad_notes(path))
+
+    def test_a_note_that_names_no_pr_number_is_refused(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "leaks.txt"
+            path.write_text("homestead_a.x\ttest_a\tfake\tfrom #, not on dev yet\n"
+                            "homestead_b.y\ttest_b\tfake\tfrom #12a, not on dev yet\n"
+                            "homestead_c.z\ttest_c\tfake\tsee later\n"
+                            "homestead_d.w\ttest_d\tfake\tfrom #1100, not on dev yet\n", encoding="utf-8")
+            self.assertEqual(["homestead_a.x\ttest_a", "homestead_b.y\ttest_b", "homestead_c.z\ttest_c"],
+                             GUARD.bad_notes(path))
+            self.assertEqual({("homestead_d.w", "test_d")}, GUARD.pending(path))
+
+    def test_each_check_reads_its_own_part_of_the_list(self):
+        listed = {("homestead_a.x", "test_a", "fake"), ("homestead_a.y", "test_a", "other"),
+                  ("homestead_b.z", "test_b", "fake")}
+        sides = GUARD.sides(listed, {("homestead_b.z", "test_b")})
+        # The fake check allows every listed fake, the open PR's too.
+        self.assertEqual({("homestead_a.x", "test_a"), ("homestead_b.z", "test_b")}, sides.fakes)
+        # CEILING, the stale check and the still-bound check see only what is on dev.
+        self.assertEqual({("homestead_a.x", "test_a", "fake"), ("homestead_a.y", "test_a", "other")}, sides.on_dev)
+        self.assertEqual({("homestead_a.x", "test_a")}, sides.stale_fakes)
+        self.assertEqual({("homestead_b.z", "test_b", "fake")}, sides.pending)
 
 
 class Kinds(unittest.TestCase):

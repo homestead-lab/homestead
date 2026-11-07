@@ -188,6 +188,50 @@ def allowed(path=LEAKS_FILE):
     return lines
 
 
+
+# The note of a line for a leak that comes with an open PR of ours: "from #1100, ...".
+FROM_PR = re.compile(r"from #\d+\b")
+
+
+def _notes(path):
+    """(name, test file, note) of each list line that carries a note (a fourth field)."""
+    for line in path.read_text(encoding="utf-8").splitlines():
+        fields = [field.strip() for field in line.split("\t")]
+        if line.strip() and not line.startswith("#") and len(fields) > 3:
+            yield fields[0], fields[1], fields[3]
+
+
+def pending(path=LEAKS_FILE):
+    """{(name, test file)} of the lines noted "from #NNNN": a leak that comes with an
+    open PR of ours, so the combined run (dev and every open PR) passes. It is allowed,
+    but not counted against CEILING, not stale and not checked as bound, since on dev
+    its file is missing or does not leak yet. They are capped on their own
+    (PENDING_CEILING); the PR's follow-up puts the name back (tests/rebind.py keep_bound)
+    and takes the line off."""
+    return {(name, test_file) for name, test_file, note in _notes(path) if FROM_PR.match(note)}
+
+
+def bad_notes(path=LEAKS_FILE):
+    """Lines whose note does not name the open PR they come with ("from #NNNN")."""
+    return sorted(f"{name}\t{test_file}" for name, test_file, note in _notes(path) if not FROM_PR.match(note))
+
+
+class Sides:
+    """What each check reads from the list. fakes: every listed fake pair, an open PR's
+    too (the fake check allows them). on_dev: the lines that are not an open PR's
+    (CEILING); stale_fakes: their fake pairs (the stale and still-bound checks).
+    pending: the open PRs' lines (PENDING_CEILING)."""
+    def __init__(self, listed, pending_pairs):
+        self.fakes = {(name, test_file) for name, test_file, kind in listed if kind == "fake"}
+        self.pending = {entry for entry in listed if entry[:2] in pending_pairs}
+        self.on_dev = set(listed) - self.pending
+        self.stale_fakes = {(name, test_file) for name, test_file, kind in self.on_dev if kind == "fake"}
+
+
+def sides(listed, pending_pairs):
+    return Sides(listed, pending_pairs)
+
+
 def new_leaks(found, listed):
     """Fakes a test left that the list does not hold: a new leak, or a listed name with another file's fake."""
     return sorted(pair for pair in found if pair not in listed)
