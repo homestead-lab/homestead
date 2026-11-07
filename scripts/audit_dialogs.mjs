@@ -369,8 +369,8 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    const errorsBefore = errors.length;
     await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; window.__demoUpgradeCheck = false; STATE.operationsStale = false; delete window.__demoOps; });
+    const errorsBefore = errors.length;
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
@@ -481,14 +481,16 @@ async function audit([label, width, height, mobile], items) {
           // function that is gone, makes a button that does nothing.
           brokenHandlers: (() => {
             const SKIP = new Set(["if", "for", "while", "switch", "return", "typeof", "await", "function", "new", "catch", "void", "delete", "in", "of"]);
-            const resolve = path => path.split(".").reduce((at, key) => (at == null ? undefined : at[key]), window);
+            // In page scope, as the handler runs: the app's own top-level
+            // const and let ($, $$, UI) are not properties of window.
+            const kind = path => { try { return Function(`try { return typeof ${path}; } catch (e) { return "missing"; }`)(); } catch (e) { return "missing"; } };
             return [...document.querySelectorAll("#modal [onclick], #modal [onchange], #modal [oninput]")].flatMap(el => {
               return ["onclick", "onchange", "oninput"].filter(a => el.hasAttribute(a)).flatMap(a => {
                 const code = el.getAttribute(a), where = `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""} ${a}="${code.slice(0, 70)}"`;
                 try { new Function("event", code); } catch (err) { return [`${where}: ${err.message}`]; }
                 const bare = code.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, '""');
                 return [...bare.matchAll(/(?:^|[^\w$.])([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*\(/g)].map(m => m[1])
-                  .filter(fn => !SKIP.has(fn) && !/^(this|event|el|e)\b/.test(fn) && typeof resolve(fn) !== "function")
+                  .filter(fn => !SKIP.has(fn) && !/^(this|event|el|e)\b/.test(fn) && kind(fn) !== "function")
                   .map(fn => `${where}: ${fn} is not a function here`);
               });
             });
