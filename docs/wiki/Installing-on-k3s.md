@@ -144,6 +144,7 @@ Options go after `server`:
 | `--longhorn-volume 200` | size in GB of the replica LVM volume at `/mnt/longhorn-os` for new clusters; `auto` takes free space less a tenth kept for the system, `none` uses a folder on the root filesystem |
 | `--longhorn-data-path /mnt/longhorn-os` | required for a fresh `agent` or `join`: match the cluster's `default-data-path` setting. Older clusters commonly use `/var/lib/longhorn`. This does not change the cluster setting |
 | `--no-node-probe` | leaves out the node probe (temperatures, drive health, each host's network interfaces); add it later under **Settings → Hardware and storage → Add-ons** |
+| `--node-probe` | installs the node probe. With neither, running the script again on a cluster keeps its earlier choice; a new cluster gets the probe |
 
 The script is safe to run again: each step finds what the last run left.
 

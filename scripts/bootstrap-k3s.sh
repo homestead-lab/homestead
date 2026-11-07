@@ -49,6 +49,9 @@
 #   --no-node-probe      leave out the node probe: no temperatures, SMART,
 #                        or per-node network facts until it is added under
 #                        Settings > Cluster > Add-ons
+#   --node-probe         install it. Saying neither keeps what this cluster
+#                        chose before (homestead-install outlives a
+#                        reinstall that keeps Homestead's data), else installs it
 # Options for every mode:
 #   --rke2                   RKE2 instead of k3s
 #   --longhorn-volume auto|none|200   where the system is on LVM, give
@@ -98,7 +101,7 @@ KUBE_VIP=1
 MULTUS=1
 KUBE_VIP_VERSION=""
 MULTUS_VERSION=""
-NODE_PROBE=1
+NODE_PROBE=""
 VIP=""
 LONGHORN_VOLUME=auto
 LONGHORN_DATA_PATH=""
@@ -516,6 +519,7 @@ while [ $# -gt 0 ]; do
     --kube-vip-version) KUBE_VIP_VERSION="$2"; shift 2; continue ;;
     --multus-version) MULTUS_VERSION="$2"; shift 2; continue ;;
     --no-node-probe) NODE_PROBE=0; shift; continue ;;
+    --node-probe) NODE_PROBE=1; shift; continue ;;
     --vip)
       printf '%s' "${2:-}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || fail "--vip needs an IPv4 address"
       VIP="$2"; shift 2; continue ;;
@@ -642,6 +646,18 @@ rm -f "$TMP"
 # pinned here. Homestead records each installation, so a component removed
 # later is not reinstalled.
 flag_word() { if [ "$1" = 1 ]; then echo yes; else echo no; fi; }
+# The node probe: what this run says, else what homestead-install says from an
+# earlier install (#1279: a reinstall that kept the data must not turn a "no"
+# back into yes), else yes. A cluster that cannot be asked is never guessed at.
+node_probe_word() {
+  case "$NODE_PROBE" in 1) echo yes; return ;; 0) echo no; return ;; esac
+  kept=$($KUBECTL -n lab get configmap homestead-install --ignore-not-found -o jsonpath='{.data.node-probe}') || return 1
+  case "$(printf '%s' "$kept" | tr '[:upper:]' '[:lower:]')" in
+    no|false|0|skip) echo no ;;
+    *) echo yes ;;
+  esac
+}
+PROBE_WORD=$(node_probe_word) || fail "Could not read homestead-install to keep this cluster's node probe choice. Run again, or say --node-probe or --no-node-probe."
 cat >> "$MANIFESTS/homestead.yaml" <<EOF
 ---
 apiVersion: v1
@@ -656,12 +672,13 @@ data:
   kube-vip-version: "$KUBE_VIP_VERSION"
   multus: "$(flag_word "$MULTUS")"
   multus-version: "$MULTUS_VERSION"
-  node-probe: "$(flag_word "$NODE_PROBE")"
+  node-probe: "$PROBE_WORD"
   vip: "$VIP"
 EOF
 [ "$KUBE_VIP" = 1 ] && echo "  kube-vip will be installed by Homestead after it starts."
 [ "$MULTUS" = 1 ] && echo "  Multus will be installed by Homestead after it starts."
-[ "$NODE_PROBE" = 1 ] && echo "  The node probe will be installed by Homestead after it starts."
+if [ "$PROBE_WORD" = yes ]; then echo "  The node probe will be installed by Homestead after it starts."
+elif [ -z "$NODE_PROBE" ]; then echo "  The node probe stays left out, as this cluster chose before (--node-probe installs it)."; fi
 apply "$MANIFESTS/homestead.yaml"
 
 say "Waiting for Homestead to start (this takes several minutes when Longhorn is being installed)"
