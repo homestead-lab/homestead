@@ -419,7 +419,7 @@ class WhatHomesteadChanges(unittest.TestCase):
     def test_the_page_says_what_the_script_does_and_leaves(self):
         section = " ".join(SS.text(PAGE)[SS.text(PAGE).index("## What removing Homestead leaves behind"):].split())
         for words in ("install.sh --uninstall", "--dry-run", "--everything", "asks first", "by exact name",
-                      "`homestead.io/*` annotations", "does not put the node probe back", "held-for-power",
+                      "`homestead.io/*` annotations", "puts the node probe back", "`HS_NODEPROBE=no`", "`HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`", "doesn't record its install", "`nodeprobe.enabled`", "held-for-power",
                       "`homestead-host-change-", "A later run cannot recognise", "choose `--everything` on the first run",
                       "wait at least 5 minutes", "Flux, Argo CD or a k3s `HelmChart`",
                       "skip anything named `homestead` that is not Homestead's"):

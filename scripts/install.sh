@@ -2014,8 +2014,10 @@ STAYS
     printf '  - Homestead'"'"'s data volume, its accounts, its settings and its own address (the\n'
     printf '    Service homestead-vip, if it has one), so a reinstall picks them up.'
     if uninstall_moved; then printf '\n'; else printf ' To remove\n    those too, run this with --everything.\n'; fi
-    printf '    A reinstall keeping this data does not put the node probe back: it is recorded\n'
-    printf '    as already installed. Install it again from Settings > Cluster > Add-ons.\n'
+    printf '    A reinstall keeping this data puts the node probe back, unless you removed\n'
+    printf '    it earlier, or Homestead here is a release without this fix. If it\n'
+    printf '    stays away, install it from Settings > Cluster > Add-ons. A Helm reinstall\n'
+    printf '    brings it back in any case, unless nodeprobe.enabled is false.\n'
   fi
   printf 'The whole list: %s\n' "$UNINSTALL_PAGE"
 }
