@@ -127,6 +127,8 @@ test("the maintenance window shows only when something uses it: an app set to up
   assert.equal(balance.length, 7);
   assert.match(balance[0].what, /Balance hosts/);
   assert.doesNotMatch(balance[0].what, /app/);
+  assert.match(W.collect({ settings: settings("notify_only", "auto"), workloads: auto }, FROM).items[0].what, /Balance hosts/,
+    "the week view counts automatic moves in the window: critical apps use it");
   const unread = W.collect({ settings: settings("approval_required", "off"), workloads: { failed: "x" } }, FROM);
   same(unread.unread, [], "the settings were read: the window, not the apps list, is what may be missing");
   assert.ok(unread.effects["the apps list"].includes("the maintenance window may be missing: whether an app updates itself in it is not known"));

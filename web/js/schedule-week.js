@@ -229,7 +229,7 @@
       // an app updates itself in it is not known. One used to balance hosts is listed anyway.
       const auto = updating.length;
       const uses = [auto && `${auto} app${auto === 1 ? "" : "s"} set to update ${auto === 1 ? "itself" : "themselves"}`,
-        settings.placement?.rebalance === "window" && "Balance hosts"].filter(Boolean);
+        ["window", "auto"].includes(settings.placement?.rebalance) && "Balance hosts"].filter(Boolean);
       const [h, mi] = String(m?.start).split(":").map(Number);
       const valid = m && Array.isArray(m.days) && m.days.length > 0 && h >= 0 && mi >= 0;
       if (valid && settings.updates.policy !== "notify_only" && sources.workloads != null && !apps() && settings.placement?.rebalance !== "window") windowUnknown = true;

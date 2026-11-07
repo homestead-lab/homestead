@@ -265,13 +265,15 @@ async function viewSettings() {
       ${UI.settingsCard(`
         ${UI.moduleHeader(`When a host comes back`, `Containers start on the other hosts while one is down or drained, and stay there when it returns`, `${can("admin") ? "" : UI.chip("admin managed", "neutral")}`)}
         <div class="srows">
-          ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
-            `<div class="dim xs" id="set_rebalance_text" aria-live="polite">${rebalanceModeText(rebalanceMode, maintenance)}</div>`,
+          ${settingRow(`Move containers back ${tip("Uses Balance hosts: only moves that bring the busiest host down enough, each restarting its container once. In the window, or Automatically, an app whose scheduled job (a backup, say) runs before the window closes is left where it is, since the job needs its volume on that host.")}`,
+            `<div class="dim xs" id="set_rebalance_text" aria-live="polite">${rebalanceModeText(rebalanceMode, maintenance, rebalancePlacement())}</div>
+             <div id="set_rebalance_status"></div>`,
             `<select id="set_rebalance" aria-label="Move containers back" aria-describedby="set_rebalance_text" ${can("admin") ? "" : "disabled"}
-              onchange="$('#set_rebalance_text').innerHTML=rebalanceModeText(this.value,(STATE.data.appSettings?.updates||{}).maintenance||{})">
+              onchange="$('#set_rebalance_text').innerHTML=rebalanceModeText(this.value,(STATE.data.appSettings?.updates||{}).maintenance||{},rebalancePlacement())">
               <option value="off" ${rebalanceMode === "off" ? "selected" : ""}>No - leave them where they are</option>
               <option value="suggest" ${rebalanceMode === "suggest" ? "selected" : ""}>Suggest - an alert to review the moves</option>
               <option value="window" ${rebalanceMode === "window" ? "selected" : ""}>In the update window</option>
+              <option value="auto" ${rebalanceMode === "auto" ? "selected" : ""}>Automatically</option>
             </select>`)}
         </div>
       `, {tab:`placement`, save:`app`})}
@@ -368,7 +370,7 @@ const SETTINGS_LOADERS = {
     () => clusterComponentsPaint(), () => window.osUpdatesCardPaint?.(),
   ],
   // Every host's preview at once is not cheap: only when it is to be seen.
-  placement: [() => capacityForecastLoad()],
+  placement: [() => capacityForecastLoad(), () => rebalanceStatusLoad()],
   hardware: [() => namespacesPaint(), () => lhSettingsPaint(), () => window.storageClassesPaint?.(), () => window.addonsPaint?.()],
   fleet: [() => window.fleetSettingsPaint?.()],
   connections: [() => mqttPaint(), () => alertHookPaint(),
@@ -953,14 +955,55 @@ window.placeModeChanged = () => {
     back.value = "suggest";
     back.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  if (back) $("#set_rebalance_text").innerHTML = rebalanceModeText(back.value, STATE.data.appSettings?.updates?.maintenance || {}, rebalancePlacement());
 };
 
 /* What the chosen mode does, in the window's own words. */
-function rebalanceModeText(mode, maintenance) {
+function rebalanceModeText(mode, maintenance, placement) {
   return mode === "suggest" ? "An alert says how many containers would move back; nothing moves until someone reviews it."
     : mode === "window" ? `The same alert, then the moves run by themselves in the update window (${esc(updateWindowText(maintenance))}), apart from apps whose scheduled job runs then.`
+    : mode === "auto" ? rebalanceAutoText(maintenance, placement)
     : "Nothing moves back on its own. Balance hosts on Hosts, or Rebalance containers in Containers' menu, moves them when you choose.";
 }
+/* The placement choice as it stands on the page, and how many apps reserve nothing. */
+function rebalancePlacement() {
+  return { mode: $("#set_place_mode")?.value ?? STATE.data.appSettings?.placement?.mode ?? "", unreserved: STATE.data.placement?.unreserved || 0 };
+}
+function rebalanceAutoText(maintenance, placement) {
+  const spread = placement?.mode === "spread", unreserved = placement?.unreserved || 0;
+  return `Once a returned host has been steady for 15 minutes with no Longhorn copy left to rebuild, the moves run by themselves, one at a time. Critical apps wait for the update window (${esc(updateWindowText(maintenance))}). `
+    + (spread ? "Apps Flux applies move by restarting; the scheduler picks the host, so a few may not land where planned. One with a host preference from an earlier move stays where it is and says why, which on a cluster that has used Move or Balance hosts for a while can be about half of them. Apps Argo CD applies stay where they are."
+      : "Apps Flux or Argo CD apply stay where they are.")
+    + (spread && unreserved >= 3 ? ` ${unreserved} apps reserve nothing, so the scheduler can't see them: ${UI.button("Set reservations from use…", "reservationsReview()", { kind: "sm" })}` : "");
+}
+/* What moving back is waiting for, or why it has stopped, from GET /api/recovery. */
+function rebalanceStatusHtml(s) {
+  if (s?.unread) return UI.callout("warn", "Could not read what moving containers back is waiting for", esc(s.unread));
+  if (!s) return "";
+  const resume = can("admin") ? UI.button("Resume", "rebalanceResume()", { kind: "sm" }) : "";
+  const stopped = [s.paused && `Stopped: ${esc(s.paused.why)}`,
+    s.undone && `${esc(s.undone.by)} removed Homestead's restart mark from ${esc(s.undone.app)}, so apps it applies are left out of moves back.`].filter(Boolean);
+  if (stopped.length) return UI.callout("warn", "Moving containers back is stopped", `${stopped.join(" ")} ${resume}`);
+  if (s.mode !== "auto" && s.mode !== "window") return "";
+  const words = [...(s.waiting || []), s.later && `${s.later} critical app${s.later === 1 ? " waits" : "s wait"} for the window`,
+    s.left_out && `${s.left_out} left out because a tool applies ${s.left_out === 1 ? "it" : "them"}`].filter(Boolean);
+  const kept = s.kept || [], total = s.kept_total ?? kept.length;
+  return (words.length ? `<div class="dim xs">Waiting: ${words.map(esc).join("; ")}</div>` : "")
+    + (kept.length ? UI.more(`${total} container${total === 1 ? " stays where it is" : "s stay where they are"}`,
+      `<ul class="ui-list">${kept.map(row => `<li><span class="mono">${esc(row.id)}</span>: ${esc(row.why)}</li>`).join("")}${total > kept.length ? `<li>and ${total - kept.length} more</li>` : ""}</ul>`) : "");
+}
+async function rebalanceStatusLoad() {
+  const status = await api("/api/recovery").catch(e => ({ unread: e.message }));
+  const host = $("#set_rebalance_status");
+  if (host) host.innerHTML = rebalanceStatusHtml(status);
+}
+window.rebalanceResume = async () => {
+  try {
+    const status = await api("/api/recovery/resume", { method: "POST" });
+    $("#set_rebalance_status").innerHTML = rebalanceStatusHtml(status);
+    toast("Moving containers back can start again", "ok");
+  } catch (e) { toast(`Could not resume: ${e.message}`, "bad"); }
+};
 
 async function settingsAppSave() {
   const saved = await settingsWrite(current => settingsChanges(current));
