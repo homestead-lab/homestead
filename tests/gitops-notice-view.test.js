@@ -22,7 +22,7 @@ function setup(review, preview = "/api/edit/preview") {
     } };
   vm.createContext(c); require("./helpers/core-text")(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const file of ["ui.js", "gitops.js", "views-workloads.js", "move.js", "views-lifecycle.js"])
+  for (const file of ["ui.js", "gitops.js", "views-workloads.js", "move.js", ...require("./helpers/lifecycle-source").names()])
     vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
   return { c, fields, sent, notices, html: () => html };
 }

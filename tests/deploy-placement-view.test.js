@@ -14,7 +14,7 @@ function load(fields = {}, rows = {}) {
     monitoringFieldValue: () => "", readEditedContainer: () => ({}) };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/app-form.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/app-form.js", "web/js/views-workloads.js", ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }
 const NODES = [{ name: "node-1" }, { name: "node-2" }];
@@ -34,7 +34,7 @@ test("the Placement section takes an id prefix: Deploy's is Edit's with d_ for e
 });
 
 test("Edit draws its Placement through the shared section", () => {
-  const lifecycle = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const lifecycle = require("./helpers/lifecycle-source")();
   assert.match(between(lifecycle, "window.wlEdit = async", "\n};\n"), /appFormPlacement\("e",/);
   assert.doesNotMatch(lifecycle, /function placementSection|function placementRow|function readPlacement/);
 });

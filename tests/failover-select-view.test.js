@@ -7,7 +7,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
-const source = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+const source = require("./helpers/lifecycle-source")();
 const form = fs.readFileSync("web/js/app-form.js", "utf8");   // Placement, shared with Deploy (#844)
 const css = fs.readFileSync("web/style.css", "utf8");
 

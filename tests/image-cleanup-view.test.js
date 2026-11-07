@@ -16,7 +16,7 @@ function load() {
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ui);
   ctx.UI = ui.window.UI;
   vm.createContext(ctx);
-  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const src = require("./helpers/lifecycle-source")();
   vm.runInContext(between(src, "const imageUnused = d =>", "window.imageCleanupRow = imageCleanupRow;"), ctx);
   return { ctx, actions };
 }

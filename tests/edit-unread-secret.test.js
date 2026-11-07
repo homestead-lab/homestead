@@ -11,7 +11,7 @@ function setup() {
     esc: s => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;") };
   vm.createContext(c); require("./helpers/core-text")(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s)); c.tip = () => ""; c.icon = () => "";
-  for (const file of ["ui.js", "gitops.js", "views-workloads.js", "views-lifecycle.js"])
+  for (const file of ["ui.js", "gitops.js", "views-workloads.js", ...require("./helpers/lifecycle-source").names()])
     vm.runInContext(fs.readFileSync(`web/js/${file}`, "utf8"), c);
   return c;
 }

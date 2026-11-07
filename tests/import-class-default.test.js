@@ -28,7 +28,7 @@ const selected = (html, id) => {
 /* ---------------- Import VM disk (Import page) ---------------- */
 function diskImport(classes) {
   const t = context({ importNamespaces: ["lab"], importStorageClasses: classes });
-  vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js", "utf8"), t.ctx);
+  vm.runInContext(require("./helpers/lifecycle-source")(), t.ctx);
   t.ctx.vmDiskImport();
   return t.shown.html;
 }

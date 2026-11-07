@@ -57,5 +57,5 @@ test("the display and virtual devices are a section of their own beside Disks", 
   const edit = require("node:fs").readFileSync("web/js/views-vms.js", "utf8");
   assert.match(edit, /\{key:"display", title:"Display and devices", html:vmDisplayFields\(v\.hardware\)\}/);
   assert.match(edit, /\{ key: "devices", title: `Passthrough · \$\{\(v\.host_devices \|\| \[\]\)\.length\}`, html: devices \}/, "the VM page shows passthrough without Edit");
-  assert.match(require("node:fs").readFileSync("web/js/views-lifecycle.js", "utf8"), /title: "Display and devices", html: vmDisplayFields\(opts\.hardware_base\)/);
+  assert.match(require("./helpers/lifecycle-source")(), /title: "Display and devices", html: vmDisplayFields\(opts\.hardware_base\)/);
 });

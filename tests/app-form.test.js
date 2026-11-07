@@ -82,7 +82,7 @@ test("a container gets one panel in each section that holds containers", () => {
 });
 
 test("Edit builds its sections from the shared list", () => {
-  const text = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const text = require("./helpers/lifecycle-source")();
   const edit = between(text, "window.wlEdit = async", "\n};\n");
   assert.match(edit, /appFormSections\("edit"/);
   assert.match(edit, /appFormContainerBlock\("e"/);
@@ -90,7 +90,7 @@ test("Edit builds its sections from the shared list", () => {
 });
 
 test("containerAdd uses the shared panels", () => {
-  const text = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const text = require("./helpers/lifecycle-source")();
   assert.match(between(text, "window.containerAdd =", "\n};"), /appFormAddPanels\(/);
 });
 
@@ -98,7 +98,7 @@ test("the page loads app-form.js after ui.js and before the views that use it", 
   const page = fs.readFileSync("web/index.html", "utf8");
   const at = name => page.indexOf(`/js/${name}?v=`);
   assert.ok(at("app-form.js") > at("ui.js"), "after ui.js");
-  assert.ok(at("app-form.js") < at("views-workloads.js") && at("app-form.js") < at("views-lifecycle.js"), "before the views");
+  assert.ok(at("app-form.js") < at("views-workloads.js") && require("./helpers/lifecycle-source").names().every(name => at("app-form.js") < at(name)), "before the views");
 });
 
 test("Deploy builds its sections from the shared list", () => {
@@ -135,6 +135,6 @@ test("both forms say which containers share the pod in the same words", () => {
   context.UI.chip = (text) => `[${text}]`;
   context.appFormPodContainers("d", ["web", ""]);
   assert.equal(host.innerHTML, "[web] [unnamed] run together in every pod, sharing its network and volumes.");
-  const lifecycle = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const lifecycle = require("./helpers/lifecycle-source")();
   assert.match(between(lifecycle, "function editContainerListChanged", "\n}\n"), /appFormPodContainers\("e",/);
 });

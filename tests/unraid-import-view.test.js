@@ -129,7 +129,7 @@ test("a Proxmox host added as Unraid says so, with Remove and Add as Proxmox", a
 });
 
 test("the Add server dialog asks the type first and starts on Proxmox from the VM import page", () => {
-  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const src = require("./helpers/lifecycle-source")();
   const dialog = between(src, "window.srcAdd = ", "window.doSrcAdd");
   assert.match(dialog, /modal\("Add a server"/);
   assert.ok(dialog.indexOf('UI.field("Type"') < dialog.indexOf('UI.field("Name"'), "the type comes first");
@@ -138,7 +138,7 @@ test("the Add server dialog asks the type first and starts on Proxmox from the V
 });
 
 test("a refused Add server can be corrected and saved again; the name is sent lower case", async () => {
-  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const src = require("./helpers/lifecycle-source")();
   const code = between(src, "window.doSrcAdd = ", "let SOURCE_KEY_REVIEW");
   const fields = { "#sc_save": { disabled: false }, "#sc_name": { value: " Proxmox " }, "#sc_host": { value: "192.0.2.10" },
     "#sc_user": { value: "root" }, "#sc_pass": { value: "pw" }, "#sc_kind": { value: "proxmox" }, "#sc_path": { value: "" }, "#sc_port": { value: "22" } };

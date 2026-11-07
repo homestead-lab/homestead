@@ -48,7 +48,12 @@ const MIGRATED = {
   "web/js/impact.js": 0,
   // The Homestead and platform chips open their explanation (onclick), and "+N" ports is the more shape.
   "web/js/views-workloads.js": 3,
-  "web/js/views-lifecycle.js": 0,
+  "web/js/views-lifecycle-edit-pod.js": 0,
+  "web/js/views-lifecycle-node-power.js": 0,
+  "web/js/views-lifecycle-vms.js": 0,
+  "web/js/views-lifecycle-images.js": 0,
+  "web/js/views-lifecycle-schedules.js": 0,
+  "web/js/views-lifecycle-import.js": 0,
   // Special shapes: a host's duties (duty), "+N" workloads (more) and a disk's role (slimtag).
   "web/js/views-overview.js": 7,
   "web/js/views-stats.js": 0,

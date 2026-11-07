@@ -14,7 +14,7 @@ function load() {
     go: (page, options) => opened.push([page, options]) };
   ctx.window = ctx;
   vm.createContext(ctx);
-  const src = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  const src = require("./helpers/lifecycle-source")();
   vm.runInContext(between(src, "const IMAGE_REASONS = {", "async function viewImages()"), ctx);
   return { ctx, opened };
 }

@@ -100,7 +100,7 @@ DYNAMIC_STARTS = {"homestead_cdi_cleanup.py": {"vm-disk-import", "unraid-vm-impo
                   "homestead_updates.py": {"image-update", "image-rollback"},            # "image-" + action
                   "homestead_vm_mutation_job.py": {"vm-create", "vm-edit"}}              # dispatch(kind)
 # A `kind` the page compares that belongs to something other than a job.
-NOT_JOBS = {("views-lifecycle.js", "chown")}  # an import's rows, from /api/imports
+NOT_JOBS = {("views-lifecycle-import.js", "chown")}  # an import's rows, from /api/imports
 JOB_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)+|[a-z0-9]+")
 JOB_VAR = r"\b(?:op|operation|job|o|j)\??\.kind"
 PAGE_BRANCH = re.compile(JOB_VAR + r"""\s*[!=]==?\s*["']([a-z0-9-]+)["']""")

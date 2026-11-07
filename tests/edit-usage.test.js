@@ -7,7 +7,7 @@ function setup() {
     document: { addEventListener() {} }, STATE: { data: {} }, $: () => null, $$: () => [], toast: () => {}, tip: t => t,
     esc: value => String(value ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])) };
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq = value => ctx.esc(JSON.stringify(value));
-  for (const file of ["web/js/metrics-utils.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
+  for (const file of ["web/js/metrics-utils.js", ...require("./helpers/lifecycle-source").files()]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
   // Top-level consts are not properties of the context; read them by name.
   ctx.editSpan = vm.runInContext("editSpan", ctx);
   return ctx;
