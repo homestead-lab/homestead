@@ -834,13 +834,14 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         except Exception:
             short = set()
     try:
-        in_maintenance, overran = HISTORY.maintenance_view()
+        in_maintenance, overran, declared = HISTORY.maintenance_view()
     except Exception:
-        in_maintenance, overran = set(), set()   # with no way to tell, every host counts, as in alerts
+        in_maintenance, overran, declared = set(), set(), {"open": {}}   # with no way to tell, every host counts, as in alerts
     # Routine things are activities, and an issue counts once it has lasted
     # the alerts' hold (#941).
     health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
-        nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short))
+        nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short,
+        declared={name: event["reason"] for name, event in declared["open"].items()}))
     health = CLUSTER.unknown_when_unread(
         health, [*(["Longhorn's volumes could not be read, so their health is not known"] if volumes_unread else []),
                  *protection_unread.values()])

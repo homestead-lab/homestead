@@ -329,6 +329,26 @@ def active(categories=None, user=None, now=None):
 
 
 # ---------------------------------------------------------------- sources
+def _held_facts(declared, down):
+    """Apps stopped to wait for a host whose maintenance is over, or an End that
+    didn't finish: stopped apps read as stopped, so nothing else would say so.
+    A host down that ran out has its own, louder alert."""
+    facts = []
+    for state, event_of in (("ran_out", declared["ran_out"]), ("ending", declared["ending"])):
+        for name, event in event_of.items():
+            held = len(event.get("held") or [])
+            if not held or (state == "ran_out" and name in down):
+                continue
+            apps = f"{held} app{'' if held == 1 else 's'}"
+            title = (f"Maintenance on {name} ran out with {apps} still stopped" if state == "ran_out" else
+                     f"Ending maintenance on {name} did not finish: {apps} may still be stopped")
+            facts.append({"key": f"maintenance-held:{name}", "category": "degraded", "severity": "degraded", "title": title,
+                          "resolved": f"Stopped-apps alert cleared on {name}: its maintenance was extended or ended, or its apps were started",
+                          "body": f"{event['reason']}. Ending the maintenance starts them.",
+                          "signals": {"held": held}, "href": f"/nodes?node={name}"})
+    return facts
+
+
 def health_facts(overview):
     # One condition per resource, with every finding retained. The old loop
     # emitted duplicate disk keys, allowing the last finding to hide severity.
@@ -343,9 +363,9 @@ def health_facts(overview):
         row["issues"].append(issue)
     facts = []
     try:
-        in_maintenance, overran = HISTORY.maintenance_view()
+        in_maintenance, overran, declared = HISTORY.maintenance_view()
     except Exception:
-        in_maintenance, overran = set(), set()   # with no way to tell, every host is reported
+        in_maintenance, overran, declared = set(), set(), {"ran_out": {}, "ending": {}}   # with no way to tell, every host is reported
     for key, row in grouped.items():
         kind, name, issues = row["kind"], row["name"], row["issues"]
         critical = any(i.get("severity") == "critical" for i in issues)
@@ -371,12 +391,23 @@ def health_facts(overview):
             # whose maintenance overran its job's limit has waited enough.
             if name in in_maintenance:
                 continue
+            ran_out = declared["ran_out"].get(name)
+            if ran_out:
+                # A person said when this host would be back, and it isn't:
+                # one loud alert, in place of the plain "not ready".
+                facts.append({"urgent": True, "key": f"maintenance-ran-out:{name}", "category": "outage",
+                              "severity": "critical", "title": f"Maintenance on {name} ran out with the host down",
+                              "resolved": f"Maintenance on {name} no longer ran out: extended, ended or the host returned",
+                              "body": f"{ran_out['reason']}. Its downtime counts as an outage from when it ran out.",
+                              "signals": signals, "href": f"/nodes?node={name}"})
+                continue
             if name in overran:
                 extra["urgent"] = True
         facts.append({**extra, "key": key, "category": "outage" if critical else "degraded",
                       "severity": "critical" if critical else "degraded", "title": title,
                       "resolved": resolved, "body": "; ".join(dict.fromkeys(i.get("reason", "") for i in issues)),
                       "signals": signals, "href": href})
+    facts.extend(_held_facts(declared, {row["name"] for row in grouped.values() if row["kind"] == "Node"}))
     # Longhorn's volumes not read cannot prove that a volume warning cleared (#1002).
     if overview.get("volumes_unread"):
         facts.append({"unknown_prefix": "health:Volume:"})

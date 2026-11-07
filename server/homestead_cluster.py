@@ -328,12 +328,13 @@ def _span(seconds):
 
 
 def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None,
-                            maintenance=(), overran=(), now=None, short_of_hosts=()):
+                            maintenance=(), overran=(), now=None, short_of_hosts=(), declared=None):
     """Separate real availability faults from normal transitions.
 
-    maintenance: hosts Homestead put in maintenance, which are an activity,
-    not a fault, as alerts leave them out (#535); overran: hosts whose
-    maintenance ended at its job's limit, which alerts raise at once (urgent).
+    maintenance: hosts in maintenance, which are an activity, not a fault, as
+    alerts leave them out (#535); declared: of those, the reason each one a
+    person declared was given; overran: hosts whose maintenance ended at its
+    limit, which alerts raise at once (urgent).
     now: the clock a volume's rebuild is timed by (#941).
     short_of_hosts: the Longhorn volumes Match copies to hosts offers to
     lower (homestead_app_copies, #841); their warning says why they are
@@ -344,8 +345,9 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         name = node.get("name", "unknown")
         if name in maintenance:
             # Ready or not: a drain says so too, not only the reboot.
+            reason = (declared or {}).get(name)
             activities.append({"state": "maintenance", "kind": "Node", "name": name,
-                               "reason": "in maintenance: Homestead is working on this host"})
+                               "reason": f"in maintenance: {reason}" if reason else "in maintenance"})
         elif node.get("status") != "Ready":
             issues.append({"severity": "critical", "kind": "Node", "name": name,
                            "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host.",

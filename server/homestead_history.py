@@ -50,7 +50,8 @@ def _valid(event):
     hand edit, a half-written file) is left out, never fatal."""
     number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
     return (isinstance(event, dict) and all(isinstance(event.get(k), str) and event.get(k) for k in ("job", "node", "reason"))
-            and number(event.get("start")) and (event.get("end") is None or number(event.get("end"))))
+            and number(event.get("start")) and (event.get("end") is None or number(event.get("end")))
+            and (not event.get("declared") or number(event.get("until"))))
 
 
 def _read(strict=False):
@@ -195,12 +196,28 @@ MAX_OPEN = 6 * 3600
 # An open event for these whose job is gone must not hide an outage for
 # ever: after MAX_OPEN it counts as closed at its limit.
 CEILING_REASONS = ("host reboot", "host shutdown", "OS update")
+# Maintenance a person declared has its own end, up to this far off (#535
+# part 2), and a typed reason, which can't be one of these: only the code that
+# writes them may. A declared event is skipped by whatever compares reasons.
+DECLARED_CEILING = 24 * 3600
+RESERVED_REASONS = CEILING_REASONS + ("cluster shutdown", "Harvester maintenance")
+
+
+def _run_out(events, now):
+    """Declared events past their end, closed there. Worked out on every read,
+    so nothing has to be running for a maintenance to run out."""
+    events = [dict(e) for e in events]
+    for event in events:
+        if event.get("declared") and event["end"] is None and now >= event["until"]:
+            event.update(end=event["until"], outcome="limit")
+    return events
 
 
 def _expire(events, now):
-    events = [dict(e) for e in events]
+    events = _run_out(events, now)
     for event in events:
-        if event["end"] is None and event["reason"] in CEILING_REASONS and now - event["start"] > MAX_OPEN:
+        if (event["end"] is None and not event.get("declared") and event["reason"] in CEILING_REASONS
+                and now - event["start"] > MAX_OPEN):
             event.update(end=event["start"] + MAX_OPEN, outcome="limit")
     return events
 
@@ -214,7 +231,7 @@ SHUTDOWN_SETTLE = 10 * 60   # the hosts power off within this of the commit
 
 def _cluster_returns(events, rebooted, now):
     for event in events:
-        if event["end"] is not None or event["reason"] != "cluster shutdown":
+        if event["end"] is not None or event["reason"] != "cluster shutdown" or event.get("declared"):
             continue
         if event["node"] in rebooted:
             event.update(end=now, outcome="returned")
@@ -235,7 +252,7 @@ def _harvester(events, nodes, now):
     that shows a host in it, closed on the first that doesn't."""
     inside = {n["name"] for n in nodes if n.get("maintenance")}
     present = {n["name"] for n in nodes}
-    open_for = {e["node"]: e for e in events if e["end"] is None and e["reason"] == "Harvester maintenance"}
+    open_for = {e["node"]: e for e in events if e["end"] is None and e["reason"] == "Harvester maintenance" and not e.get("declared")}
     for name in inside - set(open_for):
         job = f"harvester:{name}:{now}"
         events.append({"id": job, "node": name, "start": now, "end": None, "reason": "Harvester maintenance",
@@ -282,6 +299,124 @@ def maintenance_close(job, now=None, outcome="ended"):
     return None
 
 
+def maintenance_declare(node, reason, op, until, *, cordoned_before, node_uid, held=(), apps=(), started=None, now=None):
+    """Open the maintenance a person declared, or return the one this op opened
+    already. Whatever End needs is on the event, as jobs get pruned."""
+    now = int(time.time() if now is None else now)
+    with _lock:
+        data = _read()
+        for event in data["maintenance"]:
+            if event.get("op") == op:
+                return event
+        event = {"id": op, "node": node, "start": now, "end": None, "reason": reason, "job": op, "outcome": None,
+                 "declared": True, "until": until, "op": op, "cordoned_before": bool(cordoned_before),
+                 "node_uid": node_uid, "held": list(held), "apps": list(apps),
+                 "started": now if started is None else started, "released": False}
+        data["maintenance"].append(event)
+        _save(data)
+        return event
+
+
+def _own(events, op):
+    return [e for e in events if e.get("declared") and e.get("op") == op]
+
+
+def maintenance_extend(op, until, now=None):
+    """Move a declared maintenance's end later, up to DECLARED_CEILING from now.
+    After it ran out, a new event from now: the gap stays an outage. ValueError
+    says why not."""
+    now = int(time.time() if now is None else now)
+    with _lock:
+        data = _read()
+        events = _expire(data["maintenance"], now)
+        own = _own(events, op)
+        if not own:
+            raise ValueError("This maintenance is not known")
+        event = own[-1]
+        if event["released"] or event.get("end_asked"):
+            raise ValueError("This maintenance has ended")
+        if until > now + DECLARED_CEILING:
+            raise ValueError("Maintenance can reach at most 24 hours from now")
+        if until <= (event["until"] if event["end"] is None else now):
+            raise ValueError("That would not end any later than it does now")
+        if event["end"] is None:
+            event["until"] = until
+        else:
+            job = f"{op}:{len(own)}"
+            event = {**event, "id": job, "job": job, "start": now, "end": None, "outcome": None, "until": until}
+            events.append(event)
+        data["maintenance"] = events
+        _save(data)
+        return event
+
+
+def maintenance_end(op, now=None):
+    """A person ended a declared maintenance: fix its end, once. (event, whether
+    this call fixed it.) What ran out keeps its end, so ending late hides nothing.
+    It stays declared until maintenance_release: what End does next is safe to
+    repeat, and has to be able to be. KeyError when it isn't known."""
+    now = int(time.time() if now is None else now)
+    with _lock:
+        data = _read()
+        events = _expire(data["maintenance"], now)
+        own = _own(events, op)
+        if not own:
+            raise KeyError(op)
+        event = own[-1]
+        if event["released"] or event.get("end_asked"):
+            return event, False
+        event["end_asked"] = now
+        if event["end"] is None:
+            event.update(end=max(event["start"], now), outcome="ended")
+        data["maintenance"] = events
+        _save(data)
+        return event, True
+
+
+def maintenance_release(op, now=None):
+    """End's work is done: the host is let go and what waited has started. True
+    when this call did it. KeyError when it isn't known."""
+    now = int(time.time() if now is None else now)
+    with _lock:
+        data = _read()
+        events = _expire(data["maintenance"], now)
+        own = _own(events, op)
+        if not own:
+            raise KeyError(op)
+        if own[-1]["released"]:
+            return False
+        for row in own:
+            row["released"] = True
+        own[-1]["released_at"] = now
+        data["maintenance"] = events
+        _save(data)
+        return True
+
+
+def _declared_view(events):
+    """Each host's latest declared maintenance not released yet: open, ran out,
+    or ending (a person ended it and End hasn't finished)."""
+    view = {"open": {}, "ran_out": {}, "ending": {}}
+    for event in sorted((e for e in events if e.get("declared") and not e.get("released")), key=lambda e: e["start"]):
+        for rows in view.values():
+            rows.pop(event["node"], None)
+        state = "ending" if event.get("end_asked") else "open" if event["end"] is None else "ran_out"
+        view[state][event["node"]] = event
+    return view
+
+
+def declared_view(now=None, strict=False):
+    """strict raises SHARED.Unreadable on a bad file, for a reader that must not
+    take that for "not in maintenance"."""
+    now = int(time.time() if now is None else now)
+    return _declared_view(_expire(_read(strict)["maintenance"], now))
+
+
+def declared_for(node, now=None, strict=False):
+    view = declared_view(now, strict)
+    return view["open"].get(node) or view["ran_out"].get(node) or view["ending"].get(node)
+
+
 def maintenance_open_for(node, now=None):
     now = int(time.time() if now is None else now)
     for event in reversed(_expire(_read()["maintenance"], now)):
@@ -296,8 +431,8 @@ OVERRAN_RECENT = 15 * 60
 
 
 def maintenance_view(now=None):
-    """The hosts in maintenance now, and those whose maintenance just ended at
-    its job's limit, from one read of the history."""
+    """The hosts in maintenance now, those whose maintenance just ended at its
+    limit, and declared_view's answer, from one read of the history."""
     now = int(time.time() if now is None else now)
     events = _expire(_read()["maintenance"], now)
     open_nodes = {e["node"] for e in events if e["end"] is None}
@@ -306,13 +441,13 @@ def maintenance_view(now=None):
         if e["end"] is not None and e["end"] >= latest.get(e["node"], {"end": -1})["end"]:
             latest[e["node"]] = e
     overran = {n for n, e in latest.items() if e["outcome"] == "limit" and now - e["end"] <= OVERRAN_RECENT}
-    return open_nodes, overran
+    return open_nodes, overran, _declared_view(events)
 
 
-def maintenance_since(since, strict=False):
+def maintenance_since(since, strict=False, now=None):
     """Host maintenance that started or ended after since (#748's timeline)."""
-    return sorted((e for e in _read(strict)["maintenance"] if e["start"] > since or (e["end"] or 0) > since),
-                  key=lambda e: e["start"])
+    events = _run_out(_read(strict)["maintenance"], time.time() if now is None else now)
+    return sorted((e for e in events if e["start"] > since or (e["end"] or 0) > since), key=lambda e: e["start"])
 
 
 def maintenance_events(node):
@@ -538,7 +673,11 @@ def uptime(now=None):
                      "reboots": [{"t": e["t"], "planned": planned(e["t"])} for e in data.get("events") or []
                                  if e.get("node") == name and e.get("kind") == "reboot"][-50:],
                      "maintenance": [{"start": e["start"], "end": e["end"], "reason": e["reason"], "job": e["job"],
-                                      "ongoing": e["end"] is None} for e in sorted(events, key=lambda e: e["start"])][-50:],
+                                      "ongoing": e["end"] is None,
+                                      **({"declared": True, "until": e["until"], "released": bool(e.get("released")),
+                                          "ending": bool(e.get("end_asked")) and not e.get("released")}
+                                         if e.get("declared") else {})}
+                                     for e in sorted(events, key=lambda e: e["start"])][-50:],
                      "since": rows[0][0] if rows else None}
     return {"nodes": out, "step": STEP}
 

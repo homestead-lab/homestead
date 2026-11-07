@@ -261,6 +261,19 @@ class FeedTests(DataDir):
         host = [e for e in self.feed()["entries"] if e["kind"] == "host"]
         self.assertEqual([T0 - 3600], [e["at"] for e in host])
 
+    def test_declared_maintenance_says_its_reason_and_that_it_ran_out(self):
+        self.src.hosts = [{"node": "node-2", "start": T0 - 7200, "end": None, "reason": "Drive swap", "job": "j1",
+                           "outcome": None, "declared": True, "until": T0 + 60},
+                          {"node": "node-3", "start": T0 - 7200, "end": T0 - 3600, "reason": "New disk", "job": "j2",
+                           "outcome": "limit", "declared": True, "until": T0 - 3600},
+                          {"node": "node-4", "start": T0 - 7200, "end": T0 - 3600, "reason": "New disk", "job": "j3",
+                           "outcome": "ended", "declared": True, "until": T0}]
+        host = {e["host"]: e for e in self.feed()["entries"] if e["kind"] == "host"}
+        self.assertEqual("node-2 went into maintenance (Drive swap)", host["node-2"]["text"])
+        self.assertEqual(("node-3 went into maintenance (New disk), and its time ran out", "warn"),
+                         (host["node-3"]["text"], host["node-3"]["tone"]))
+        self.assertEqual("node-4 went into maintenance (New disk)", host["node-4"]["text"])
+
     # #871: the Host filter had nothing but maintenance to offer.
     def test_restarts_carry_the_host_they_happened_on(self):
         self.src.restarts[0]["node"] = "node-1"
