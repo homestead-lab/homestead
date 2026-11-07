@@ -554,7 +554,7 @@ class RestartJob(unittest.TestCase):
 class AutomaticJob(unittest.TestCase):
     """A run Homestead started by itself asks before each move whether it may go on."""
     def setUp(self):
-        keep_bound(self, C)
+        keep_bound(self, C, CAPACITY_REVIEW)
         self.c = Hosts(self)
         bind(self.c)
         folder = tempfile.TemporaryDirectory()
