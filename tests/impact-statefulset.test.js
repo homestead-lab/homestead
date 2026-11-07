@@ -27,7 +27,8 @@ test("a StatefulSet's row has its chip, its copies here and a link to Longhorn's
   assert.match(html, /<span class="ui-chip neutral">StatefulSet<\/span>/);
   assert.match(html, /data · 1 of 3 copies here · keeps answering from its other copies/);
   assert.match(html, /<button class="linkish xs" onclick="ifDownSetting\(\)">Open the setting<\/button>/);
-  assert.match(html, /ui-chip warn slim">waits</);
+  // Its section says it waits; the row does not say it again.
+  assert.doesNotMatch(html, /ui-chip warn slim">waits</);
 });
 
 test("a row Longhorn's setting can help says it in one line, with the why behind a disclosure", () => {
@@ -68,7 +69,7 @@ test("rows that couldn't be checked have their own chip and section; unread Stat
   assert.match(html, /<span class="ui-chip neutral">1 unknown<\/span>/);
   // Titles and reasons go through esc, which turns ' into &#39;.
   assert.match(html, /Couldn(?:'|&#39;)t be checked<\/h4>[^]*couldn&#39;t be checked: where its volumes are stored/);
-  assert.match(html, /ui-chip neutral slim">unknown</);
+  assert.doesNotMatch(html, /ui-chip neutral slim">unknown</, "its section says so");
   assert.match(html, /Couldn't read StatefulSets, so this may not be all of it\./);
 });
 

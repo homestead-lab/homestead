@@ -2248,6 +2248,9 @@ div.ipam-line.dim{display:block}
 .ui-notice>.ui-callout-body{margin-top:6px}
 @media (max-width:560px){.ui-notice-line{flex-wrap:wrap;gap:2px 10px}.ui-notice-first{flex-basis:100%}}
 .ui-callout-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+/* A long explanation in a dialog: its first sentence, and More for the rest (condenseDialogProse). */
+.ui-prose-more{border:0;background:none;padding:0 2px;font:inherit;font-size:.92em;font-weight:600;color:var(--mut);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.ui-prose-more:hover{color:var(--tx)}.ui-prose-more:focus-visible{outline:2px solid var(--focus);outline-offset:2px;border-radius:3px}
 /* UI.dialog: the object it acts on sits in the header, under the title,
    which becomes the line saying what happens (syncDialogHead). */
 #mbody .ui-dialog-head{display:none}
