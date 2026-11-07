@@ -21,6 +21,14 @@ test("a row says nothing while an app answers", () => {
   assert.equal(run(`answerTag(${JSON.stringify(app)})`), "", "no report yet is not a problem either");
 });
 
+test("an app moving because of host maintenance says so, and isn't marked as a problem", () => {
+  set({ state: "maintenance", since: 1000, last: { ok: false, error: "refused" }, strip: [] });
+  assert.equal(run(`answerTag(${JSON.stringify(app)})`), "");
+  const card = run(`answerCardRow(${JSON.stringify(app)})`);
+  assert.match(card, /In maintenance/);
+  assert.match(run(`answerDetail({ state: "maintenance", last: { error: "refused" } })`), /host.*maintenance/i);
+});
+
 test("down and slow are marked, with what went wrong", () => {
   set({ state: "down", since: 1000, last: { ok: false, error: "HTTP 502" }, strip: [] });
   const down = run(`answerTag(${JSON.stringify(app)})`);

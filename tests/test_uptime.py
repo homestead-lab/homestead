@@ -284,6 +284,76 @@ class StateTests(Base):
 
 
 
+class ExcusedTests(Base):
+    """An app moving because its host was put in maintenance (#535 part 2)."""
+
+    KEY = "lab/sonarr"
+
+    def round(self, at, ok, excused=()):
+        UP.observe([app()], now=at, ask=lambda t: OK if ok else MISS, excused=frozenset(excused))
+        return UP._load()[self.KEY]
+
+    def report(self, at):
+        return UP.report(at)[self.KEY]
+
+    def test_a_drained_apps_miss_is_not_an_outage(self):
+        at = 1_700_000_000
+        self.round(at, True)
+        for i in range(1, 6):
+            row = self.round(at + i * 60, False, excused=[self.KEY])
+        self.assertEqual("maintenance", row["state"])
+        self.assertEqual(0, row["misses"])
+        summary = self.report(at + 360)
+        self.assertEqual(100.0, summary["uptime_30d"], "not a miss")
+        self.assertEqual(5, summary["maintenance_checks_30d"])
+        self.assertEqual([], UP.alert_facts(UP.report(at + 360)))
+        self.assertTrue(all(len(v) == 3 for v in row["hours"].values()))
+
+    def test_an_app_broken_after_the_settle_time_is_an_outage(self):
+        at = 1_700_000_000
+        self.round(at, True)
+        self.round(at + 60, False, excused=[self.KEY])
+        for i in range(2, 2 + UP.DOWN_AFTER):
+            row = self.round(at + i * 60, False)
+        self.assertEqual("down", row["state"])
+        self.assertEqual(1, len(UP.alert_facts(UP.report(at + 600))))
+
+    def test_an_app_down_before_the_job_stays_down(self):
+        at = 1_700_000_000
+        self.round(at, True)
+        for i in range(1, 1 + UP.DOWN_AFTER):
+            self.round(at + i * 60, False)
+        before = self.report(at + 600)["uptime_30d"]
+        row = self.round(at + 700, False, excused=[self.KEY])
+        self.assertEqual("down", row["state"])
+        self.assertLess(self.report(at + 800)["uptime_30d"], before, "it still counts")
+        self.assertEqual(0, self.report(at + 800)["maintenance_checks_30d"])
+
+    def test_excused_answers_count_as_checks(self):
+        at = 1_700_000_000
+        self.round(at, False, excused=[self.KEY])
+        row = self.round(at + 60, True, excused=[self.KEY])
+        self.assertEqual("up", row["state"])
+        self.assertEqual(1, sum(v[0] for v in row["hours"].values()))
+        self.assertEqual(1, self.report(at + 60)["maintenance_checks_30d"])
+
+    def test_excused_rows_keep_the_closed_days_cache(self):
+        at = 1_700_000_000
+        self.round(at, True)
+        row = self.round(at + 60, False, excused=[self.KEY])
+        self.assertIsNotNone(UP._closed(row["hours"], int(at // 86400 * 86400)))
+        reported = UP.report(at + 60)[self.KEY]
+        self.assertEqual(1, reported["maintenance_checks_30d"])
+
+    def test_old_planned_hours_are_forgotten_with_the_others(self):
+        at = 1_700_000_000
+        self.round(at, False, excused=[self.KEY])
+        later = at + (UP.KEEP_HOURS + 2) * 3600
+        row = self.round(later, True)
+        self.assertEqual({}, row.get("planned", {}))
+        self.assertEqual(0, self.report(later)["maintenance_checks_30d"])
+
+
 def _reference_summary(app, now):
     """summary() as it was before #979: thirty passes over the hours, one a day."""
     hours = app.get("hours", {})
@@ -312,7 +382,7 @@ def _reference_summary(app, now):
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
             "port": app.get("port"),
-            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values())), "maintenance_checks_30d": 0}
 
 
 def _random_hours(rnd, now):

@@ -6,7 +6,7 @@
    it does not; a card shows the last day hour by hour and the last 30 days as
    a share; the Monitoring dialog shows what is asked and lets an operator change
    it: automatic, an HTTP path, a TCP connection, or no check. */
-const ANSWER_WORDS = { up: "Up", slow: "Slow", down: "Down", unknown: "Checking", off: "Not monitored", unread: "Not read" };
+const ANSWER_WORDS = { up: "Up", slow: "Slow", down: "Down", unknown: "Checking", off: "Not monitored", unread: "Not read", maintenance: "In maintenance" };
 
 // vm: a VM, kept as vm:<namespace>/<name> beside the apps.
 const answerOf = (w, vm = false) => (STATE.data.uptime?.apps || {})[`${vm ? "vm:" : ""}${w.ns}/${w.name}`] || null;
@@ -37,6 +37,7 @@ function answerDetail(a) {
   const last = a.last || {};
   if (a.state === "off") return a.why ? a.why[0].toUpperCase() + a.why.slice(1) : "Not checked";
   if (a.state === "down") return `Since ${answerSince(a.since)} · ${last.error || "no answer"}`;
+  if (a.state === "maintenance") return "Moving: its host was put in maintenance, so this isn't counted as an outage";
   if (a.state === "unknown") return "First checks under way";
   if (a.state === "unread") return "The checks could not be read";
   return [last.code ? `HTTP ${last.code}` : "connection accepted", last.ms !== null && last.ms !== undefined ? `${last.ms} ms` : ""].filter(Boolean).join(" · ");

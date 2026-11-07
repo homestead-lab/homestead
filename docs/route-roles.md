@@ -835,6 +835,7 @@ Needs is the role the tool's scope stands for. A destructive tool waits for a pe
 | `list_cluster_events` | viewer | read | read |  |
 | `list_containers` | viewer | read | read |  |
 | `list_events` | viewer | read | read |  |
+| `list_host_maintenance` | viewer | read | read |  |
 | `list_image_updates` | viewer | read | read |  |
 | `list_isos` | viewer | read | read |  |
 | `list_jobs` | viewer | read | read |  |

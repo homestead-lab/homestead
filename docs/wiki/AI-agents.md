@@ -179,6 +179,7 @@ Tools come in three classes:
 | `save_schedule` | Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend | `containers:manage` | change |
 | `run_schedule` | Runs a scheduled job once, now | `containers:manage` | change |
 | `delete_schedule` | Asks to delete a scheduled job | `containers:manage` | destructive |
+| `list_host_maintenance` | Each host's uptime and its maintenance: reason, start, end, and whether a person declared it | `read` | read |
 | `list_power_schedules` | When apps and VMs are stopped and started on a schedule | `read` | read |
 | `set_power_schedule` | When an app or VM stops and starts: settings as list_power_schedules shows one (kind, ns, name, stop, start, days) | `containers:manage` | change |
 

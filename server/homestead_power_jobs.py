@@ -219,13 +219,23 @@ def _opened_by(node, operation_id):
         return False
 
 
+def _moved_apps(power_plan):
+    """App uptime's keys for what a maintenance's drain moves: nothing on a
+    single host, where nothing is drained."""
+    if power_plan.get("planned_outage"):
+        return []
+    return ([f"{w.get('ns')}/{w.get('name')}" for w in power_plan.get("workloads") or []]
+            + [f"vm:{vm}" for vm in power_plan.get("vms") or []])
+
+
+
+
 def _open_maintenance(operation_id, power_plan, declared, planned_outage):
     """The event is the state here, unlike a reboot's: a history that can't be
     written stops the job, and says so. Its time counts from now, so a long
     drain doesn't eat the time asked for."""
     now = int(time.time())
-    apps = [f"{w.get('ns')}/{w.get('name')}" for w in power_plan.get("workloads") or []]
-    apps += [f"vm:{vm}" for vm in power_plan.get("vms") or []]
+    apps = _moved_apps(power_plan)
     started = next(((i.get("ref") or {}).get("started_epoch") for i in OPS.stored() if i.get("id") == operation_id), None)
     try:
         return HISTORY.maintenance_declare(

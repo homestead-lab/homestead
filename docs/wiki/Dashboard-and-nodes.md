@@ -175,6 +175,11 @@ when the drain has finished.
 - **While it's open:** the host's uptime counts it as maintenance, and its "not
   ready" alert stays quiet. An OS update of every host leaves it alone and lists
   it as skipped.
+- **Apps it moves:** from the start of the drain until ten minutes after the
+  maintenance opens, an app that doesn't answer shows **In maintenance** and
+  isn't counted against it. The apps that waited get the same ten minutes after
+  End, as that's when they start. An app that was already down stays down, and
+  one that breaks after those ten minutes is an outage.
 - **When it runs out:** the host stays cordoned, and any downtime from then on
   is an outage. If the host is down, a critical alert says the maintenance ran
   out with the host down. If it's up and apps are still stopped waiting for it,

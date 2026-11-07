@@ -422,9 +422,23 @@ def _hour(now):
     return int(now // 3600 * 3600)
 
 
-def _record(app, result, now):
-    """Count one check into the app's hour; True when its state changed."""
+def _record(app, result, now, excused=False):
+    """Count one check into the app's hour; True when its state changed.
+
+    excused: this app is moving because its host was put in maintenance (#535).
+    A miss then is neither a check nor a miss: it goes in app["planned"], so an
+    hour's row stays the three numbers _closed() keeps. An app already down
+    stays down, and one that answers is counted as usual."""
     hour = str(_hour(now))
+    if excused and not result["ok"] and app.get("state") != "down":
+        planned = app.setdefault("planned", {})
+        planned[hour] = planned.get(hour, 0) + 1
+        app["last"] = {"at": round(now), **result}
+        app["misses"] = 0
+        if app.get("state") != "maintenance":
+            app["state"], app["since"] = "maintenance", round(now)
+            return True
+        return False
     hours = app.setdefault("hours", {})
     row = hours.setdefault(hour, [0, 0, 0])          # checks, misses, slow
     row[0] += 1
@@ -446,8 +460,9 @@ def _record(app, result, now):
     return False
 
 
-def observe(workloads, now=None, ask=probe, vms=None):
-    """One round: ask every app and VM that can be asked. The leader calls it each minute."""
+def observe(workloads, now=None, ask=probe, vms=None, excused=frozenset()):
+    """One round: ask every app and VM that can be asked. The leader calls it
+    each minute. excused: the keys moving because of a host's maintenance."""
     now = now or time.time()
     rows = []
     for w in workloads or []:
@@ -519,7 +534,7 @@ def observe(workloads, now=None, ask=probe, vms=None):
                 app["target"] = f"{len(t['asks'])} ports at {t['host']}"
             result = {k: v for k, v in result.items() if k not in ("host", "port", "scheme")}
             closing = str(_hour(now)) not in app.get("hours", {})
-            changed = _record(app, result, now) or closing or changed
+            changed = _record(app, result, now, key in excused) or closing or changed
             kept = _state["closed"].get(key)
             if kept and not kept["today"] <= _hour(now) < kept["today"] + 86400:
                 _state["closed"].pop(key)       # the clock went back into a day kept as closed
@@ -533,6 +548,9 @@ def observe(workloads, now=None, ask=probe, vms=None):
                 del hours[h]
             if gone:
                 _state["closed"].pop(key, None)
+            planned = apps[key].get("planned") or {}
+            for h in [h for h in planned if int(h) < oldest]:
+                del planned[h]
             if now - apps[key].get("seen", now) > FORGET_AFTER:
                 apps.pop(key)
                 _state["closed"].pop(key, None)
@@ -592,7 +610,8 @@ def summary(app, now=None, closed=None):
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
             "port": app.get("port"),
-            "last": last, "strip": strip, "days": days, "uptime_24h": uptime_24h, "uptime_30d": uptime_30d}
+            "last": last, "strip": strip, "days": days, "uptime_24h": uptime_24h, "uptime_30d": uptime_30d,
+            "maintenance_checks_30d": sum((app.get("planned") or {}).values())}
 
 
 def _closed(hours, today):

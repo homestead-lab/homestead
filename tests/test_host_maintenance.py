@@ -721,5 +721,74 @@ class ExtendAndEndTests(Case):
         self.assertIn("homestead_host_maintenance", ROUTER.MODULES)
 
 
+class ExcusedAppsTests(Case):
+    """Which apps are moving because of a maintenance, for app uptime."""
+
+    def declare(self, op, apps, start, **extra):
+        return HISTORY.maintenance_declare("node-a", "Drive swap", op, start + 7200, cordoned_before=False, node_uid="u",
+                                           apps=apps, now=start, **extra)
+
+    def test_excused_apps_comes_from_jobs_and_events_and_is_empty_on_a_bad_read(self):
+        now = int(time.time())
+        OPS.start("node-power", "maintenance node-b", {"kind": "Node", "name": "node-b"}, "/nodes",
+                  {"node": "node-b", "action": "maintenance", "phase": "draining",
+                   "plan": {"workloads": [{"ns": "lab", "name": "web"}], "vms": ["vms/win"]}}, "reviewed")
+        self.declare("op-1", ["lab/db", "vm:vms/gpu"], now - 60)
+        self.assertEqual({"lab/web", "vm:vms/win", "lab/db", "vm:vms/gpu"}, HM.excused_apps(now))
+        with mock.patch.object(HISTORY, "maintenance_since", side_effect=OSError("disk")):
+            self.assertEqual(set(), HM.excused_apps(now), "reported rather than hidden")
+        with mock.patch.object(OPS, "stored", side_effect=OSError("disk")):
+            self.assertEqual(set(), HM.excused_apps(now))
+
+    def test_only_until_the_settle_time(self):
+        now = int(time.time())
+        self.declare("op-1", ["lab/db"], now - HM.EXCUSE_SETTLE)
+        self.assertEqual({"lab/db"}, HM.excused_apps(now))
+        self.assertEqual(set(), HM.excused_apps(now + 1))
+
+    def test_a_reboot_job_or_a_finished_job_excuses_nothing(self):
+        OPS.start("node-power", "reboot node-b", {"kind": "Node", "name": "node-b"}, "/nodes",
+                  {"node": "node-b", "action": "reboot", "plan": {"workloads": [{"ns": "lab", "name": "web"}]}}, "reviewed")
+        job = OPS.start("node-power", "maintenance node-c", {"kind": "Node", "name": "node-c"}, "/nodes",
+                        {"node": "node-c", "action": "maintenance", "phase": "draining",
+                         "plan": {"workloads": [{"ns": "lab", "name": "db"}]}}, "reviewed")
+        OPS.record_phase(job["id"], "failed", 10, "stopped")
+        self.assertEqual(set(), HM.excused_apps())
+
+    def test_what_waited_is_excused_for_the_settle_time_after_end(self):
+        now = int(time.time())
+        held = [{"kind": "Deployment", "ns": "lab", "name": "web"}, {"kind": "VirtualMachine", "ns": "vms", "name": "win"}]
+        self.declare("op-1", ["lab/other"], now - 7000, held=held)
+        self.assertEqual(set(), HM.excused_apps(now), "the move's excuse is long over, and it is still stopped")
+        HISTORY.maintenance_end("op-1", now=now)
+        both = {"lab/web", "vm:vms/win"}
+        self.assertEqual(both, HM.excused_apps(now + 1), "from End, not from when it opened")
+        self.assertEqual(both, HM.excused_apps(now + HM.EXCUSE_SETTLE))
+        self.assertEqual(set(), HM.excused_apps(now + HM.EXCUSE_SETTLE + 1))
+
+    def test_an_end_that_finished_later_counts_from_when_it_finished(self):
+        now = int(time.time())
+        self.declare("op-1", [], now - 7000, held=[{"kind": "Deployment", "ns": "lab", "name": "web"}])
+        HISTORY.maintenance_end("op-1", now=now - 3000)
+        self.assertEqual(set(), HM.excused_apps(now))
+        HISTORY.maintenance_release("op-1", now=now)
+        self.assertEqual({"lab/web"}, HM.excused_apps(now + 1))
+
+    def test_what_waited_through_a_ran_out_maintenance_is_excused_after_end(self):
+        now = int(time.time())
+        self.declare("op-1", [], now - 90000, held=[{"kind": "Deployment", "ns": "lab", "name": "web"}])
+        HISTORY.maintenance_end("op-1", now=now)
+        self.assertEqual({"lab/web"}, HM.excused_apps(now + 1), "its end is hours ago; End is now")
+
+    def test_a_late_extension_moves_nothing_so_excuses_nothing(self):
+        now = int(time.time())
+        self.declare("op-1", ["lab/db"], now - 7300)
+        HISTORY.maintenance_extend("op-1", now + 600, now=now - 10)
+        self.assertEqual(set(), HM.excused_apps(now))
+
+    def test_a_single_host_moves_nothing_so_excuses_nothing(self):
+        self.assertEqual([], JOBS._moved_apps({"planned_outage": True, "workloads": [{"ns": "lab", "name": "web"}], "vms": ["vms/win"]}))
+
+
 if __name__ == "__main__":
     unittest.main()
