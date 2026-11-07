@@ -53,6 +53,9 @@ class ImportWaitTests(unittest.TestCase):
         self.now = 1000.0
         self.dvs = DVS
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now, create=True))
+        # server.py binds this to its own cluster reader, so a run that has loaded server.py
+        # and then cleared that reader would refuse to make the VM.
+        self.enterContext(mock.patch.object(UVMS, "platform", lambda: {}))
         self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})["id"]
 
     def path(self, name):

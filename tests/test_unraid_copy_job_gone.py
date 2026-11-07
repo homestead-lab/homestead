@@ -51,6 +51,9 @@ class CopyJobGoneTests(unittest.TestCase):
         UVMS.register(JOBS)
         self.now = 1000.0
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now))
+        # server.py binds this to its own cluster reader, so a run that has loaded server.py
+        # and then cleared that reader would refuse to make the VM.
+        self.enterContext(mock.patch.object(UVMS, "platform", lambda: {}))
         self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})["id"]
 
     def token(self, method, path, body):
