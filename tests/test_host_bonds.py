@@ -227,6 +227,8 @@ class Host:
             return "CONFIRMED\n", ""
         if script == BONDS.ROLLBACK_NOW:
             return "STARTED\n", ""
+        if "systemctl restart" in script:
+            return "OK\n", ""
         return self.check, ""
 
 
