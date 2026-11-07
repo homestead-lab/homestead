@@ -424,6 +424,32 @@ def _unmark(record, job_kind, job_id):
     return Started(MANUAL)
 
 
+def release(record, job_kind, job_id):
+    """A job ending with the app not started takes its marks off, so they don't
+    refuse every later hold; the app stays as it is. A mark that isn't this
+    job's, or on another object, stays. -> "" when none of this job's is left,
+    else why one may still be there. Never raises."""
+    try:
+        for _ in range(3):
+            current = _read(record)
+            if current is None or _meta(current).get("uid") != record.uid or \
+                    not _ours(_notes(current).get(HELD_BY) or "", job_kind, job_id):
+                return ""
+            ops = (_fence(record.uid, _meta(current).get("resourceVersion")) + [{"op": "remove", "path": _pointer(HELD_BY)}] +
+                   ([{"op": "remove", "path": _pointer(HELD_AS)}] if HELD_AS in _notes(current) else []))
+            try:
+                KUBE.ksend("PATCH", _path(record.kind, record.namespace, record.name), ops, ctype=JSON_PATCH)
+                return ""
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    return ""
+                if error.code not in (409, 422):  # those: a controller wrote first; read it again
+                    return _why(error)
+        return "it kept changing"
+    except Exception as error:
+        return _why(error)
+
+
 def _drop_template(record, job_kind, job_id):
     """Remove the template Secret this job kept, once the app has started:
     "" when it is gone (or not this job's), else why it is still there."""

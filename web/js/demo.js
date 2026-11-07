@@ -1605,7 +1605,7 @@ ssh_pwauth: true
         size_mb: 48.1, ready: true, user_created: true, source: "user" }],
     "/api/lh/snapshot/revert/plan": { volume: "pvc-demo", snapshot: "homestead-1758765600-a1b2c3", namespace: "lab", claim: "paperless-data",
       created: new Date(Date.now() - 86400000).toISOString(), ready: true, blockers: [],
-      consumers: [{ kind: "Deployment", name: "paperless", replicas: 1, running: true }] },
+      consumers: [{ kind: "Deployment", name: "paperless", replicas: 1, running: true }], review_token: "demo" },
     "/api/lh/snapshot/revert": { ok: true, detail: "Rolling back: what uses it stops first, then starts again" },
     "/api/lh/backups": lhBackups, "/api/lh/backupvolumes": lhBackupVolumes,
     "/api/lh/group": (url, init) => ({ ok: true, name: JSON.parse(init?.body || "{}").name, added: [], removed: [],

@@ -953,13 +953,13 @@ window.lhRevert = async (vol, snap, label) => {
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
       ${p.blockers?.length ? UI.callout("bad", "Not possible yet", `<ul class="ui-list">${p.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
-        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
+        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)},${jsq(p.review_token)})">${icon("rollback")}Roll back</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `lhRevert(${jsArg(vol)},${jsArg(snap)},${jsArg(label || "")})`, dialog: true }); }
 };
-window.lhRevertGo = async (vol, snap) => {
+window.lhRevertGo = async (vol, snap, review) => {
   try {
     const r = await api("/api/lh/snapshot/revert", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ volume: vol, snapshot: snap }) });
+      body: JSON.stringify({ volume: vol, snapshot: snap, review_token: review }) });
     closeModal();
     toast(r.detail, "ok");
     if (window.noteOperation) noteOperation(r.operation);

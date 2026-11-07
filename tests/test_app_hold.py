@@ -511,6 +511,92 @@ class AppHoldTest(unittest.TestCase):
 
     # how_to ----------------------------------------------------------------
 
+    # release: a job ending with the app not started ----------------------------
+
+    def test_release_takes_this_jobs_marks_off_and_leaves_the_app_stopped(self):
+        kube, record = self.held(web())
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        notes = kube.object(WEB)["metadata"].get("annotations") or {}
+        self.assertNotIn(HOLD.HELD_BY, notes)
+        self.assertNotIn(HOLD.HELD_AS, notes)
+        self.assertEqual(0, kube.object(WEB)["spec"]["replicas"])
+
+    def test_release_leaves_another_jobs_mark(self):
+        kube = self.kube(web(annotations={HOLD.HELD_BY: "other:j2", HOLD.HELD_AS: "3"}))
+        record = HOLD.Record("Deployment", NS, "web", "d-web", "1", {"replicas": 3}, "")
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual("other:j2", kube.object(WEB)["metadata"]["annotations"][HOLD.HELD_BY])
+        self.assertEqual([], self.patches(kube))
+
+    def test_release_leaves_another_object_of_that_name(self):
+        kube = self.kube(web(uid="d-new", annotations={HOLD.HELD_BY: "node-power:j1", HOLD.HELD_AS: "3"}))
+        record = HOLD.Record("Deployment", NS, "web", "d-web", "1", {"replicas": 3}, "")
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual([], self.patches(kube))
+
+    def test_release_of_an_app_that_has_gone_is_done(self):
+        kube, record = self.held(web())
+        kube.discard(WEB)
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+
+    def test_release_reads_again_when_a_controller_wrote_first(self):
+        kube, record = self.held(web())
+        kube.fail(WEB, 422, method="PATCH")
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertNotIn(HOLD.HELD_BY, kube.object(WEB)["metadata"].get("annotations") or {})
+
+    def test_release_that_lands_with_its_reply_lost_says_why_and_a_second_one_is_harmless(self):
+        kube, record = self.held(web())
+        kube.fail(WEB, OSError("timed out"), method="PATCH", applied=True)
+        self.assertIn("timed out", HOLD.release(record, "node-power", "j1"))
+        sent = len(self.patches(kube))
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual(sent, len(self.patches(kube)))
+
+    def test_release_is_fenced_so_a_mark_another_job_put_in_the_instant_before_stays(self):
+        kube, record = self.held(web())
+
+        def beat_it(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            taken["metadata"]["annotations"][HOLD.HELD_BY] = "other:j2"
+            taken["metadata"]["resourceVersion"] = "9000"
+            kube.add(taken)
+        kube.react("PATCH", WEB, beat_it)
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual("other:j2", kube.object(WEB)["metadata"]["annotations"][HOLD.HELD_BY])
+
+    def test_a_mark_gone_in_the_instant_before_release_reads_again_and_is_done(self):
+        """A remove of a mark already gone answers 422 on a real cluster."""
+        kube, record = self.held(web())
+
+        def gone(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            del taken["metadata"]["annotations"][HOLD.HELD_BY]
+            kube.add(taken)
+        kube.react("PATCH", WEB, gone)
+        self.assertEqual("", HOLD.release(record, "node-power", "j1"))
+
+    def test_a_mark_gone_in_the_instant_before_a_restart_waits_then_keeps_it_stopped(self):
+        kube, record = self.held(web())
+
+        def gone(method, path, body):
+            kube._reactions.clear()
+            taken = kube.object(WEB)
+            del taken["metadata"]["annotations"][HOLD.HELD_BY]
+            kube.add(taken)
+        kube.react("PATCH", WEB, gone)
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Wait)
+        self.assertEqual(0, kube.object(WEB)["spec"]["replicas"])
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.KeptStopped)
+
+    def test_release_says_why_when_it_can_not_write(self):
+        kube, record = self.held(web())
+        kube.fail(WEB, 403, method="PATCH")
+        self.assertIn("403", HOLD.release(record, "node-power", "j1"))
+        self.assertEqual("node-power:j1", kube.object(WEB)["metadata"]["annotations"][HOLD.HELD_BY])
+
     def test_how_to_words_per_kind(self):
         def record(kind, earlier):
             return HOLD.Record(kind, NS, "x", "u", "1", earlier, "")

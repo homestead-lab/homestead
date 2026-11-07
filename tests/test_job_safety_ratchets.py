@@ -56,7 +56,6 @@ STOPS = {
     "homestead_reclass.py": 3,
     "homestead_rename.py": 1,
     "homestead_restructure.py": 1,
-    "homestead_revert.py": 4,
     "homestead_self_data_coordinator.py": 1,
     "homestead_share_servers.py": 6,
     "homestead_vms.py": 2,               # a person's VM stop and stop of boot retries, in a module that also runs jobs

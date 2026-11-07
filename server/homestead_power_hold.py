@@ -152,7 +152,7 @@ def stop(item, job):
     meta = obj.get("metadata") or {}
     mark = (meta.get("annotations") or {}).get(HELD_BY)
     if mark and mark != job:
-        raise ValueError(f"{item['ns']}/{item['name']} is already held by another host power job")
+        raise ValueError(f"{item['ns']}/{item['name']} is already held by another job")
     if item["kind"] == "VirtualMachine":
         was = (meta.get("annotations") or {}).get(HELD_AS) if mark == job else _strategy(obj)
         ksend("PATCH", _path(item["kind"], item["ns"], item["name"]),

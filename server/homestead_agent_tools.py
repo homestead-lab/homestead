@@ -411,7 +411,7 @@ def _plan_revert(args, ctx):
     if plan.get("blockers"):
         raise ToolError("it cannot be reverted: " + "; ".join(plan["blockers"]))
     return ({"action": f"Roll {volume} back to the snapshot {snapshot}; what was written since is lost",
-             "plan": plan}, {"volume": volume, "snapshot": snapshot})
+             "plan": plan}, {"volume": volume, "snapshot": snapshot, "review_token": plan.get("review_token")})
 
 
 def _plan_delete_backup(args, ctx):
