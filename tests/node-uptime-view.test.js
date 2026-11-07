@@ -77,3 +77,11 @@ test("a maintenance day with a real outage is painted by the outage, not hidden 
   assert.match(t.html(), /class="uptime-bad"/);
   assert.match(t.c.nodeUptimeStrip({ name: "node1" }), /class="uptime-bad"/);
 });
+
+test("the strip has its own row in the stylesheet, so words never come out of its width", () => {
+  const css = fs.readFileSync("web/style.css", "utf8");
+  const rule = selector => (css.match(new RegExp(`(?:^|\\n)\\s*${selector.replace(/[.]/g, "\\.")}\\{([^}]*)\\}`)) || [])[1] || "";
+  assert.match(rule(".node-upstrip"), /display:grid/);
+  assert.doesNotMatch(rule(".node-upstrip .uptime-strip.mini"), /flex:/);
+  assert.match(rule(".comparison-table .node-upstrip .mini"), /grid-column:1\/-1/);
+});
