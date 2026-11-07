@@ -8,6 +8,7 @@ created and gives the backup target back.
 
 Split out of homestead_move_engine (#623).
 """
+import re
 import calendar
 import hashlib
 import uuid
@@ -29,6 +30,30 @@ import homestead_move_target as TARGET
 import homestead_move_plan as PLAN
 import homestead_move_actions as ACT
 
+
+
+# What a failed backup's error comes down to, in words (design.md, Notices):
+# the summary first; the full error is kept after it.
+BACKUP_CAUSES = (
+    (r"request send failed|connection refused|dial tcp|i/o timeout|no such host|connection reset|EOF",
+     "it could not reach the backup storage"),
+    (r"AccessDenied|SignatureDoesNotMatch|InvalidAccessKeyId|Forbidden|403",
+     "the backup storage refused its credentials"),
+    (r"NoSuchBucket", "the backup storage has no such bucket"),
+    (r"no space|StorageFull|minimum free drive|disk quota|XMinioStorageFull", "the backup storage is full"),
+    (r"DeadlineExceed|deadline exceeded|context deadline|timed out", "it timed out"),
+)
+
+
+def backup_failure(error):
+    """A backup's error as (summary, full): its cause in a few words, and the
+    error as Longhorn wrote it."""
+    full = " ".join(str(error or "").split())
+    for pattern, summary in BACKUP_CAUSES:
+        if re.search(pattern, full, re.I):
+            return summary, full
+    first = re.split(r"(?<=[.;:])\s", full, maxsplit=1)[0].rstrip(".;:")
+    return (first[:90] or "no reason given"), full
 
 def _joining(move):
     if STATE._moving(move):
@@ -107,12 +132,15 @@ def _backing_up(move):
     for row in rows:
         state = str(row.get("state", "")).lower()
         if state in ("error", "failed") or row.get("error"):
-            raise ValueError(f"backup of {row['claim']} failed on {move['cluster']}: "
-                             f"{row.get('error') or state}. Retry the move to take a fresh snapshot; completed backups are kept")
+            summary, full = backup_failure(row.get("error") or state)
+            raise ValueError(f"Backing up {row['claim']} failed on {move['cluster']}: {summary}. "
+                             "Retry failed backups takes a fresh snapshot; completed backups are kept."
+                             + (f" Longhorn said: {full}" if full and full != summary else ""))
         image = row.get("image") or {}
         if str(image.get("state", "")).lower() in ("error", "failed") or image.get("error"):
-            raise ValueError(f"backup of the {row.get('backing_image')} image failed: "
-                             f"{image.get('error') or image.get('state')}")
+            summary, full = backup_failure(image.get("error") or image.get("state"))
+            raise ValueError(f"Backing up the {row.get('backing_image')} image failed: {summary}."
+                             + (f" Longhorn said: {full}" if full and full != summary else ""))
     if not rows:
         return STATE._note(move, 10, "Waiting for backups to start")
     done = [r for r in rows if str(r.get("state", "")).lower() == "completed"
