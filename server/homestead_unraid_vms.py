@@ -28,6 +28,7 @@ import json
 import math
 import re
 import shlex
+import time
 from datetime import datetime
 import urllib.error
 import xml.etree.ElementTree as ET
@@ -81,6 +82,12 @@ def cancel_plan(item):
         return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
     where = _where(ref)
     disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
+    if ref.get("phase") == "leaving":
+        # The copy is over and the job has told the person these disks are kept.
+        return {"mode": "stop", "action": "Finish ending the import and keep its disks", "severity": "low", "needs": "operator",
+                "undo": ["Removes its copy Job and Secret: the copy is over"],
+                "keeps": [f"The disks ({disks}) are kept, with what CDI has of them: this doesn't remove them",
+                          f"The VM on {where} is unchanged"]}
     return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
             "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
             "keeps": [f"The VM on {where} is unchanged",
@@ -89,6 +96,11 @@ def cancel_plan(item):
 
 def cancel_run(item, _options):
     ref = item["ref"]
+    if ref.get("phase") == "leaving":
+        state, _, detail = CDI_CLEANUP.leave(item, kget, ksend)
+        if state == "running":
+            raise ValueError("its copy Job can't be removed yet, and the job keeps trying. Its disks are kept")
+        return detail
     ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
     paths = []
     for disk in ref.get("disks") or []:
@@ -587,7 +599,9 @@ def start(body, actor=""):
     for dv in names:
         plan_ = IMP.vm_disk_import_plan(ns, dv)
         if not plan_["ready"]:
-            raise ValueError(plan_["message"])
+            # An import names its disks after the VM, so a new disk name means a new VM name.
+            raise ValueError(f"A disk named {dv} already exists in {ns}, perhaps from an earlier import. Import under "
+                             "another name. A finished disk no VM uses can become a VM under Import")
     cores = int(body.get("cores") or found["cores"])
     memory = str(body.get("memory") or found["memory"])
     if not 1 <= cores <= 128:
@@ -891,9 +905,9 @@ def log_sources(item):
     return out or [{"title": "Disk copy", "text": "", "note": "The import has no retained copy output yet, or its pods were cleaned up by an older release."}]
 
 
-def _fail(ref, message, item=None):
-    """Clear what this import made, so it can simply be run again."""
-    # Save before deleting Jobs and DataVolumes: their pods disappear with them.
+def _save_output(ref):
+    """Keep the copy's output with the job. Before deleting Jobs and DataVolumes:
+    their pods disappear with them."""
     remaining, saved = 60000, []
     for source in log_sources({"ref": ref}):
         if remaining <= 0:
@@ -904,6 +918,11 @@ def _fail(ref, message, item=None):
                       "note": str(source.get("note") or "")[:500],
                       **({"kind": "disk-copy", "progress": source.get("progress")} if source.get("kind") == "disk-copy" else {})})
     ref["diagnostics"] = saved
+
+
+def _fail(ref, message, item=None):
+    """Clear what this import made, so it can simply be run again."""
+    _save_output(ref)
     if ref.get("cdi_cleanup"):
         ref.update(phase="cleanup", cleanup_outcome="failed",
                    cleanup_detail=message + f"; the VM on {_where(ref)} is unchanged")
@@ -914,6 +933,67 @@ def _fail(ref, message, item=None):
                            f"The VM on {_where(ref)} is unchanged")
 
 
+# How long CDI may keep an import waiting. Ready to receive takes a claim and a
+# pod, so nothing is copied yet and the import can simply clear up. Once the copy
+# is over CDI should have little left to do, as far as can be told without a real
+# import, so 6 hours is a wide margin and not a measure. Homestead can't tell
+# stuck from slow, so at that limit it only stops following: see _stop_following.
+READY_LIMIT = 30 * 60
+FINISH_LIMIT = 6 * 60 * 60
+MESSAGE_LIMIT = 500   # what the job list keeps of a message
+_clock = time.time   # a seam for the tests
+
+
+def _waited(ref, key, limit):
+    now = _clock()
+    return now - ref.setdefault(key, now) >= limit
+
+
+def _count(disks):
+    return f"{len(disks)} disk" + ("" if len(disks) == 1 else "s")
+
+
+def _delete_command(ns, disks, before):
+    """The command that removes these disks, or None when it wouldn't fit whole after
+    before in a job's message. A cut would leave a name short, which could read as
+    another disk, even a finished one: <vm>-disk-2 becomes <vm>-disk. The caller then
+    names no disk in the command."""
+    command = f"`kubectl -n {ns} delete datavolume {' '.join(disks)}`"
+    return command if len(before) + len(command) <= MESSAGE_LIMIT else None
+
+
+def _stop_following(ref, item, phases):
+    """CDI has not finished the disks in time. End the import and let go of the
+    name, removing only the import's own copy Job and Secret: the DataVolumes, their
+    claims, CDI's pods and its work space may still be in use, and may hold the copy.
+    Only an unfinished disk is ever offered for removal, never a finished copy."""
+    unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
+    finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
+    # Import's Create VM takes one disk, and nothing attaches another to a VM yet.
+    then = ("make the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried over. If not, "
+            "import again under another name" if len(ref["disks"]) == 1 else
+            "a VM can be made from one disk under Import, and Homestead can't attach the others yet; otherwise import "
+            "again under another name")
+
+    def words(not_done, done, are):
+        kept = f"{done} {are} finished and kept. " if finished else ""
+        return (f"CDI has not finished {not_done} after {FINISH_LIMIT // 3600} hours, so this import has stopped and no "
+                f"VM was made. The VM on {_where(ref)} is unchanged. {kept}Nothing of the disks was removed. If CDI does "
+                f"finish, {then}. Homestead can't remove an unfinished disk yet: ")
+    what = words(", ".join(unfinished), ", ".join(finished), "is" if len(finished) == 1 else "are")
+    command = _delete_command(ref["namespace"], unfinished, what)
+    if command is None:
+        what = words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")
+        command = f"`kubectl -n {ref['namespace']} delete datavolume <name>` for each disk CDI has not finished"
+    detail = what + command
+    if not ref.get("cdi_cleanup"):
+        ref["phase"] = "failed"
+        return "failed", 100, detail
+    _save_output(ref)
+    ref.update(phase="leaving", cleanup_detail=detail)
+    return CDI_CLEANUP.leave(item, kget, ksend)
+
+
 def status(item):
     ref = item["ref"]
     ns = ref["namespace"]
@@ -922,6 +1002,8 @@ def status(item):
         return "succeeded", 100, ref.get("detail", "Imported")
     if ref["phase"] == "failed":
         return "failed", 100, item.get("message", "Import failed")
+    if ref["phase"] == "leaving":
+        return CDI_CLEANUP.leave(item, kget, ksend)
     if ref.get("cdi_cleanup"):
         if ref["phase"] == "creating":
             ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail="Import setup was interrupted")
@@ -941,6 +1023,8 @@ def status(item):
         return _fail(ref, "CDI could not take the disk", item)
     if ref["phase"] == "disks":
         if not all(p in ("UploadReady", "Succeeded") for p in phases):
+            if _waited(ref, "ready_since", READY_LIMIT):
+                return _fail(ref, f"CDI was not ready to receive the disks within {READY_LIMIT // 60} minutes", item)
             return "running", 2, "Waiting for CDI to be ready to receive the disks"
         _, proxy_ns = _upload_url()
         ca = _ca(proxy_ns)
@@ -981,6 +1065,8 @@ def status(item):
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":
         if not all(p == "Succeeded" for p in phases):
+            if _waited(ref, "finish_since", FINISH_LIMIT):
+                return _stop_following(ref, item, phases)
             return "running", 96, "CDI is finishing the disk"
         try:
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
