@@ -89,6 +89,17 @@ class Copies(unittest.TestCase):
         for order in (engines, engines[::-1]):
             self.assertEqual(["v1"], AUTO.copies_left("a", [volume("v1")], [replica("r1", "v1", "a")], order))
 
+    def test_any_copy_on_the_host_not_rw_counts(self):
+        for mode in ("ERR", "", "WO"):
+            self.assertEqual(["v1"], AUTO.copies_left("a", [volume("v1")], [replica("r1", "v1", "a")], [engine("v1", r1=mode)]), mode)
+
+    def test_a_copy_not_in_the_map_of_a_degraded_attached_volume_counts(self):
+        self.assertEqual(["v1"], AUTO.copies_left("a", [volume("v1", robustness="degraded")], [replica("r1", "v1", "a")], [engine("v1", r2="RW")]))
+
+    def test_a_copy_not_in_the_map_of_a_healthy_or_detached_volume_does_not(self):
+        for vol in (volume("v1"), volume("v1", state="detached", robustness="degraded")):
+            self.assertEqual([], AUTO.copies_left("a", [vol], [replica("r1", "v1", "a")], [engine("v1", r2="RW")]))
+
     def test_a_volume_counts_once(self):
         left = AUTO.copies_left("a", [volume("v1", robustness="degraded")],
                                 [replica("r1", "v1", "a", failed="x"), replica("r2", "v1", "a")], [engine("v1", r2="WO")])

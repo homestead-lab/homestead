@@ -15,6 +15,9 @@ cordoned - and then, as settings.placement.rebalance says:
   on the app's host while its volume is attached there, and a move under it
   would fail it or the move. Under Spread by capacity it also moves apps Flux
   applies, by restarting them (split_gitops); a placement would be undone.
+* auto: the same run with no window, once the hosts pass the gates in
+  homestead_recovery_auto. Critical apps wait for the window, an app moves at most
+  once a day, and a stop or a failed run stays stopped until someone resumes it.
 
 A returned host is remembered until the rebalance finds nothing worth moving,
 or for RETURN_KEEP at most - long enough for a weekly window. A host is "back"
@@ -30,13 +33,18 @@ import time
 import zoneinfo
 
 import homestead_placement_mode as PLACEMODE
+import homestead_priority as PRIORITY
+import homestead_recovery_auto as AUTO
 import homestead_recovery_marks as MARKS
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 FILE = "recovery.json"
-MODES = ("off", "suggest", "window")
+MODES = ("off", "suggest", "window", "auto")
 RETURN_KEEP = 7 * 86400
+RUN_GAP = 900           # between automatic runs
+KEPT_SHOWN = 30         # apps left out with why that Settings and the alert have room for
+APP_COOLDOWN = 86400    # an app moved automatically stays put this long, so nothing ping-pongs
 _lock = threading.Lock()
 
 
@@ -57,7 +65,8 @@ MOVES_OR_RESTARTS = ("host-os", "host-promote", "cluster-shutdown", "deployment"
                      "restructure", "reclass", "volume-restore", "snapshot-revert", "self-data-move",
                      "self-data-handoff", "self-data-prepare", "vm-migration", "vm-power", "image-update",
                      "image-rollback", "disk-retire", "disk-v2-convert", "disk-allocation", "longhorn-v2-prepare",
-                     "platform-upgrade", "harvester-upgrade", "restore-test", "set-priority")
+                     "platform-upgrade", "harvester-upgrade", "restore-test", "set-priority", "restore-swap",
+                     "host-move", "set-restart", "volume-rebalance", "volume-copy-move")
 # How long one move may take: Balance hosts waits up to ten minutes for each
 # container to start on its new host, so a run may outlast the window.
 MOVE_WAIT = 600
@@ -94,7 +103,8 @@ def _load():
     data = SHARED.read_json(_path(), {})
     return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
             "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
-            "ran": data.get("ran") or "", "marks": data.get("marks") or {}, "undone": data.get("undone") or {}}
+            "ran": data.get("ran") or "", "marks": data.get("marks") or {}, "undone": data.get("undone") or {},
+            "auto": data.get("auto") or {}}
 
 
 def _save(data):
@@ -278,14 +288,15 @@ def observe(nodes, now=None, standby=()):
         return dict(data["returned"])
 
 
-def suggest(moves, now=None):
+def suggest(moves, now=None, forget=True):
     """What the rebalance would do now for the hosts back; nothing to move
-    forgets them, since the scheduler already evened things out."""
+    forgets them, since the scheduler already evened things out - unless not
+    forget: a host just back often has no figures yet, and would be forgotten."""
     with _lock:
         data = _load()
         if not data["returned"]:
             return
-        if not moves:
+        if not moves and forget:
             data["returned"], data["suggestion"] = {}, {}
         else:
             data["suggestion"] = {"hosts": sorted(data["returned"]), "moves": len(moves), "at": int(now or time.time())}
@@ -415,6 +426,149 @@ def alert_facts(mode=None, maintenance=None):
              "resolved": "No containers need to move back now", "href": "/containers?panel=rebalance", "signals": {"moves": moves}}]
 
 
+# ------------------------------------------------------------- mode auto
+def moved_back(app, now=None):
+    """An app an automatic run moved: it stays put for APP_COOLDOWN."""
+    with _lock:
+        data = _load()
+        data["auto"].setdefault("moved", {})[app] = int(now or time.time())
+        _save(data)
+
+
+def _auto_update(change):
+    with _lock:
+        data = _load()
+        before = json.dumps(data["auto"], sort_keys=True)
+        change(data["auto"])
+        if json.dumps(data["auto"], sort_keys=True) != before:
+            _save(data)
+
+
+def _auto_job(now):
+    """How the last automatic run ended. A cancel or a failure is someone saying look
+    first (Andreas), so it pauses until Resume, or until the choice changes; a run
+    that stopped because a host left ended as succeeded, and goes on when it settles."""
+    jobs = operations.snapshot()
+
+    def change(auto):
+        if "moved" in auto:
+            auto["moved"] = {app: t for app, t in auto["moved"].items() if now - t < APP_COOLDOWN}
+        job = auto.get("job")
+        item = next((i for i in jobs if i.get("id") == job), None) if job else None
+        if job and item is None:
+            # Dismissed, say: it may have failed or been stopped. Leaves it safe.
+            auto.update(job="", paused={"why": "Homestead could not see how its last run ended", "at": int(now)})
+        elif item is not None and item.get("status") in operations.TERMINAL:
+            auto.update(job="", ended=int(now))
+            if item.get("status") in ("cancelled", "failed"):
+                auto["paused"] = {"why": item.get("message") or item["status"], "at": int(now)}
+    _auto_update(change)
+
+
+def _auto_wait(reasons=(), hosts=None, later=None, left_out=None, kept=None):
+    """What it is waiting for, for Settings and the alert. No cluster read behind it:
+    the look stored it."""
+    def change(auto):
+        waiting = auto.get("waiting") or {"hosts": [], "later": 0, "left_out": 0, "kept": []}
+        waiting["reasons"] = list(reasons)
+        for key, value in (("hosts", hosts), ("later", later), ("left_out", left_out), ("kept", kept)):
+            if value is not None:
+                waiting[key] = value
+        auto["waiting"] = waiting
+    _auto_update(change)
+
+
+def _hold_reasons(nodes, data, standby, returned, now):
+    """Each returned host's clock and copies, and any other host away. Longhorn that
+    can't be read raises: nothing moves, and Settings' health shows the tick's error."""
+    by_name = {(n.get("metadata") or {}).get("name"): n for n in nodes}
+    volumes, replicas, engines = AUTO.read_copies(read)
+    rows, reasons = [], []
+    for host, back_at in sorted(returned.items()):
+        left = AUTO.steady_left(by_name.get(host) or {}, back_at, now)
+        copies = AUTO.copies_left(host, volumes, replicas, engines)
+        rows.append({"name": host, "steady_in": left, "copies_left": len(copies)})
+        if left:
+            reasons.append(f"{host} steady in {max(1, -(-left // 60))} min")
+        if copies:
+            reasons.append(f"{len(copies)} cop{'y' if len(copies) == 1 else 'ies'} rebuilding on {host}")
+    reasons += [f"{host} is away" for host in AUTO.away(nodes, data["worked"], standby, returned)]
+    return rows, reasons
+
+
+def _auto_tick(current, placement, nodes, standby, returned, now):
+    """One look in mode auto; each hold stores why. Clocks live in the file, so a new
+    leader loses no steady time and runs nothing early."""
+    busy = sorted({i.get("title") or "Another job" for i in operations.snapshot()
+                   if i.get("kind") in WAITS_FOR and i.get("status") not in operations.TERMINAL})
+    if busy:
+        return _auto_wait([f"{title} is running" for title in busy])
+    with _lock:
+        data = _load()
+    auto = data["auto"]
+    if auto.get("paused"):
+        return _auto_wait([f"Stopped: {auto['paused'].get('why', '')}"])
+    if now - auto.get("ended", 0) < RUN_GAP:
+        return _auto_wait([f"The last run ended {max(1, int((now - auto['ended']) // 60))} min ago"])
+    rows, reasons = _hold_reasons(nodes, data, standby, returned, now)
+    if now - _planned[0] < 300:      # a plan reads every pod and volume
+        return _auto_wait(reasons, rows)
+    _planned[0] = now
+    deployments = read("/apis/apps/v1/deployments").get("items", [])
+    maintenance = current["updates"]["maintenance"]
+    key = window_key(maintenance, now)
+    opening = bool(key) and not already_ran(key)
+    ladder = PRIORITY.ladder()
+    critical = {f"{(d.get('metadata') or {}).get('namespace')}/{(d.get('metadata') or {}).get('name')}"
+                for d in deployments if AUTO.waits_for_window(d, ladder)}
+    later = set() if opening else critical
+    left_out, restart = split_gitops(deployments, placement.get("mode", ""), data["undone"])
+    cooldown = {app for app, t in (auto.get("moved") or {}).items() if now - t < APP_COOLDOWN}
+    back = sorted(returned)
+    may_restart = placement.get("mode") == "spread"
+    whole = plan(sorted(left_out), avoid=standby, restart=restart, back=back, may_restart=may_restart)
+    keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, now + MOVE_WAIT * len(whole["moves"]))
+    chosen = plan(sorted(left_out | later | cooldown | set(keep)), avoid=standby, restart=restart, back=back, may_restart=may_restart)
+    if not whole.get("metrics") or (whole.get("metrics_state") or {}).get("state") != "ok":
+        reasons.append("The CPU and memory figures aren't current")
+    kept = (whole.get("kept") or [])[:KEPT_SHOWN]
+    _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept)
+    # Forgotten only once it has passed, nothing at all is left to move, and nothing
+    # stays only because it can't: that isn't "nothing needs to move". RETURN_KEEP ends it.
+    suggest(chosen["moves"], now, forget=not reasons and not whole["moves"] and not kept)
+    if reasons or not chosen["moves"]:
+        return None
+    chosen["automatic"] = True
+    try:
+        started = start(chosen, f" after {', '.join(back)} came back", unless=WAITS_FOR)
+    except ValueError:
+        return None      # something else started meanwhile; the next minute looks again
+    _auto_update(lambda a: a.update(job=(started or {}).get("id", "")))
+    if opening:
+        ran(key)
+    return started
+
+
+def may_go_on():
+    """Asked before each move of an automatic run: "", or why it stops. It stops if it
+    can't tell, since the next look starts it again when it should."""
+    try:
+        current = settings()
+        placement = current.get("placement") or {}
+        if placement.get("rebalance", "off") not in ("window", "auto"):
+            return "the choice for moving containers back changed"
+        with _lock:
+            worked = _load()["worked"]
+        gone = AUTO.away(read("/api/v1/nodes").get("items", []), worked, sorted(PLACEMODE.standby_of(placement)), ())
+        if gone:
+            return f"{' and '.join(gone)} no longer {'takes' if len(gone) == 1 else 'take'} work"
+        other = sorted({i.get("title") or "Another job" for i in operations.snapshot() if i.get("kind") in WAITS_FOR
+                        and i.get("kind") != "container-rebalance" and i.get("status") not in operations.TERMINAL})
+    except Exception as error:
+        return f"Homestead could not read the cluster ({str(error)[:80]})"
+    return f"{other[0]} started" if other else ""
+
+
 def tick(now=None):
     """One look: hosts that take work again, and - as settings' placement.
     rebalance says - whether moving containers back would even things out,
@@ -433,8 +587,16 @@ def tick(now=None):
     standby = sorted(PLACEMODE.standby_of(placement))
     returned = observe(nodes, now, standby)
     _watch_marks(now)
+    if mode == "auto":
+        _auto_job(now)
+    else:
+        _auto_update(lambda auto: (auto.pop("paused", None), auto.pop("job", None)))
     if not returned or mode == "off":
+        if mode == "auto":
+            _auto_wait([], [], 0, 0, [])
         return None
+    if mode == "auto":
+        return _auto_tick(current, placement, nodes, standby, returned, now)
     # Not beside other work that moves or restarts apps or hosts: a host
     # uncordoned mid OS rollout is "back", and the next one is about to drain.
     if any(i.get("kind") in WAITS_FOR and i.get("status") not in operations.TERMINAL for i in operations.snapshot()):
@@ -459,6 +621,12 @@ def tick(now=None):
     # A scheduled job is guarded for as long as the run may take - a move can
     # wait MOVE_WAIT for its container - not only until the window closes.
     may_restart = placement.get("mode") == "spread"
+    if may_restart:
+        # A restart lands where the scheduler says, so not while a copy is rebuilt on the
+        # host back. The placement moves go on as they always have.
+        volumes, replicas, engines = AUTO.read_copies(read)
+        if any(AUTO.copies_left(host, volumes, replicas, engines) for host in back):
+            left_out, restart, may_restart = left_out | set(restart), {}, False
     first = plan(sorted(left_out), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     until = max(closes, now + MOVE_WAIT * len(first["moves"]))
     keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, until)

@@ -859,7 +859,8 @@ def start(plan, why="", role=None, unless=()):
     return operations.start(KIND, f"{verb} {len(moves)} container{'' if len(moves) == 1 else 's'}{why}",
                             {"kind": "Deployment", "name": "rebalance"}, "/containers",
                             {"moves": moves, "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"], "role": role,
-                             "stop_on_failure": bool(plan.get("stop_on_failure")), "results": []},
+                             "stop_on_failure": bool(plan.get("stop_on_failure")), "results": [],
+                             **({"automatic": True} if plan.get("automatic") else {})},
                             "Starting with the first container", unless=unless)
 
 
@@ -893,6 +894,16 @@ def _pull_first(dep, node):
         return [], []
 
 
+def _cooldown(ref, move, now):
+    """An automatic run's app stays put for a day from when it was sent or refused, so a
+    cancel in between counts. A failure to note it must not lose a send already made."""
+    if ref.get("automatic"):
+        try:
+            RECOVERY.moved_back(move["id"], now)
+        except Exception as error:
+            print(f"recovery: {str(error)[:160]}", flush=True)
+
+
 def _restart_mark(dep):
     return NAMES.read((((dep.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("annotations"), "restartedAt")
 
@@ -917,6 +928,7 @@ def _send_restart(ref, move, dep, role, skip, progress, i, total, now):
     except Exception as error:
         ref["send_error"] = str(error)[:160]
     ref.update(stage="starting", started=now, unwatched=True)
+    _cooldown(ref, move, now)
     if written:
         _watch(ref, move, written, now)
     return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should land on {move['to']}"
@@ -966,11 +978,17 @@ def status(item):
         rest not reached; Balance's own plan skips it and carries on."""
         if ref.get("stop_on_failure"):
             return _halt(ref, i, move, reason)
+        # A refusal each look would otherwise be a new job every 15 minutes.
+        _cooldown(ref, move, now)
         _note(ref, move, "skipped", reason)
         ref.setdefault("skipped", []).append(f"{move['id']}: {reason}")
         ref.update(index=i + 1)
         return "running", progress, f"Skipped {move['id']}: {reason}"
     if stage == "move":
+        if ref.get("automatic") or move.get("how") == "restart":
+            why = RECOVERY.may_go_on()
+            if why:
+                return "succeeded", progress, f"Stopped: {why}. Moved {done}"
         seen = {}
         settled = False
         try:
@@ -1027,6 +1045,7 @@ def status(item):
         except ValueError as error:
             return skip(str(error)[:160])
         ref.update(stage="starting", started=now)
+        _cooldown(ref, move, now)
         if ref.get("stop_on_failure"):
             moved = [r["id"] for r in ref.get("results") or [] if r["result"] == "moved"]
             return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")

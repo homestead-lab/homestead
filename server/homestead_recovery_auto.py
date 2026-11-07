@@ -41,24 +41,26 @@ def steady_left(node, returned_at, now):
 
 
 def copies_left(host, volumes, replicas, engines):
-    """The volumes with a copy on host that is being rebuilt (WO in its engine's map),
-    or failed on an attached, degraded volume. Only that host's, and attached only: a
-    volume that can never reach its count on a small cluster, or a detached one with
-    offline rebuilding off, doesn't hold by itself."""
+    """The volumes with a copy on host that isn't whole: anything but RW in an engine's
+    map, in any of its engines, or on an attached, degraded volume whose map doesn't have
+    it yet or says it failed. Only that host's, and attached only: a volume that can
+    never reach its count on a small cluster, or a detached one with offline rebuilding
+    off, doesn't hold by itself."""
     by_name = {(v.get("metadata") or {}).get("name"): v.get("status") or {} for v in volumes}
-    rebuilding = {}      # by volume; WO in any of its engines counts, whatever the others say
+    not_whole, listed = {}, {}   # by volume; one engine's RW doesn't undo another's WO
     for engine in engines:
+        vol = (engine.get("spec") or {}).get("volumeName")
         modes = (engine.get("status") or {}).get("replicaModeMap") or {}
-        rebuilding.setdefault((engine.get("spec") or {}).get("volumeName"), set()).update(n for n, mode in modes.items() if mode == "WO")
+        not_whole.setdefault(vol, set()).update(name for name, mode in modes.items() if mode != "RW")
+        listed.setdefault(vol, set()).update(modes)
     left = set()
     for replica in replicas:
         spec = replica.get("spec") or {}
         if spec.get("nodeID") != host:
             continue
-        vol, status = spec.get("volumeName"), by_name.get(spec.get("volumeName")) or {}
-        if (replica.get("metadata") or {}).get("name") in rebuilding.get(vol, ()):
-            left.add(vol)
-        elif spec.get("failedAt") and status.get("state") == "attached" and status.get("robustness") == "degraded":
+        vol, name, status = spec.get("volumeName"), (replica.get("metadata") or {}).get("name"), by_name.get(spec.get("volumeName")) or {}
+        degraded = status.get("state") == "attached" and status.get("robustness") == "degraded"
+        if name in not_whole.get(vol, ()) or (degraded and (spec.get("failedAt") or name not in listed.get(vol, ()))):
             left.add(vol)
     return sorted(left)
 
