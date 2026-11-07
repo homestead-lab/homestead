@@ -25,6 +25,31 @@ const Timeline = (() => {
     .sort((a, b) => (TONE_RANK[a.tone] ?? 2) - (TONE_RANK[b.tone] ?? 2) || b.at - a.at).slice(0, n);
   const filter = (entries, f = {}) => entries.filter(e =>
     (!f.kind || e.kind === f.kind) && (!f.app || e.app === f.app) && (!f.host || e.host === f.host));
+  const noFilter = () => ({ kind: "", app: "", host: "" });
+  /* The filter bar: kind buttons with their counts, then a menu for each of
+     `menus` ([key, label, "All …"]) that has something to choose. The same bar
+     is for any page whose rows carry a kind, an app and a host (#919): it
+     calls the global named `call` as call(key, value). It is called at run
+     time, so nothing depends on which script loaded first. */
+  function filterBar({ entries, counts = {}, filter: f, kinds = KINDS, call = "timelineFilter",
+    menus = [["app", "App", "All apps"], ["host", "Host", "All hosts"]] }) {
+    // A choice the window no longer has stays listed, so the menu says what is filtered.
+    const values = key => [...new Set([...entries.map(e => e[key]), f[key]].filter(Boolean))].sort();
+    // A menu with nothing to choose besides "All" is left out (#871).
+    const pick = (key, label, all) => !values(key).length ? "" : `<label class="tl-pick"><span class="dim xs">${esc(label)}</span><select aria-label="${esc(label)}" onchange="${call}(${jsq(key)}, this.value)">
+      <option value="">${esc(all)}</option>${values(key).map(v => `<option value="${esc(v)}"${f[key] === v ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
+    const buttons = `<div class="seg" role="group" aria-label="Kind"><button type="button" class="${f.kind ? "" : "on"}" aria-pressed="${!f.kind}" onclick="${call}('kind', '')">All</button>${Object.keys(kinds)
+      .filter(k => counts[k] || f.kind === k).map(k => `<button type="button" class="${f.kind === k ? "on" : ""}" aria-pressed="${f.kind === k}" onclick="${call}('kind', ${jsq(k)})">${esc(kinds[k][2])} ${counts[k] || 0}</button>`).join("")}</div>`;
+    return `<div class="tl-filters">${buttons}${menus.map(m => pick(...m)).join("")}</div>`;
+  }
+  /* The filter lasts while the page stays open: a refresh is the same
+     navigation (keep it); a new one starts unfiltered. True when it started over. */
+  function keepFilter(navigation) {
+    const fresh = navigation !== state.filterFor;
+    if (fresh) state.filter = noFilter();
+    state.filterFor = navigation;
+    return fresh;
+  }
   const kindWords = (kind, n) => (KINDS[kind] || [kind, kind])[n === 1 ? 0 : 1];
   const many = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 
@@ -87,13 +112,6 @@ const Timeline = (() => {
       return;
     }
     const entries = data.entries || [], shown = filter(entries, f);
-    // A choice the window no longer has stays listed, so the menu says what is filtered.
-    const values = key => [...new Set([...entries.map(e => e[key]), f[key]].filter(Boolean))].sort();
-    // A menu with nothing to choose besides "All" is left out (#871).
-    const pick = (key, label, all) => !values(key).length ? "" : `<label class="tl-pick"><span class="dim xs">${esc(label)}</span><select aria-label="${esc(label)}" onchange="timelineFilter(${jsq(key)}, this.value)">
-      <option value="">${esc(all)}</option>${values(key).map(v => `<option value="${esc(v)}"${f[key] === v ? " selected" : ""}>${esc(v)}</option>`).join("")}</select></label>`;
-    const kinds = `<div class="seg" role="group" aria-label="Kind"><button type="button" class="${f.kind ? "" : "on"}" aria-pressed="${!f.kind}" onclick="timelineFilter('kind', '')">All</button>${Object.keys(KINDS)
-      .filter(k => data.counts?.[k] || f.kind === k).map(k => `<button type="button" class="${f.kind === k ? "on" : ""}" aria-pressed="${f.kind === k}" onclick="timelineFilter('kind', ${jsq(k)})">${esc(KINDS[k][2])} ${data.counts?.[k] || 0}</button>`).join("")}</div>`;
     const row = e => `<tr class="tl-row">
       <td data-label="When" class="nowrap" data-sort="${e.at}">${fmtWhen(e.at)}</td>
       <td data-label="Kind">${UI.chip(KINDS[e.kind]?.[2] || e.kind, e.tone, { size: "slim" })}</td>
@@ -103,7 +121,7 @@ const Timeline = (() => {
       ${state.error ? UI.callout("warn", "Could not read the timeline just now", `${esc(state.error)} · this is the last read.`) : ""}
       ${(data.unread || []).filter(u => !u.admin_only).map(u => UI.callout("warn", `Could not read ${u.label}`, esc(u.reason))).join("")}
       ${(data.unread || []).filter(u => u.admin_only).map(u => `<div class="dim small">${esc(u.label)}: ${esc(u.reason)}.</div>`).join("")}
-      <div class="tl-filters">${kinds}${pick("app", "App", "All apps")}${pick("host", "Host", "All hosts")}</div>
+      ${filterBar({ entries, counts: data.counts, filter: f })}
       ${shown.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact" data-sort="timeline"><thead><tr><th>When</th><th>Kind</th><th>What</th><th data-nosort></th></tr></thead>
         <tbody>${shown.map(row).join("")}</tbody></table></div></div>` : UI.empty(entries.length ? "Nothing of this kind in the window." : `Nothing happened since ${fmtAt(data.since)}.`)}
       ${data.more ? `<div class="dim small">${many(data.more, "older event", "older events")} not shown: pick a shorter range.</div>` : ""}`);
@@ -112,14 +130,12 @@ const Timeline = (() => {
   async function view() {
     // go() counts every navigation in NAV_TOKEN; the refresh loop does not.
     const navigation = typeof window !== "undefined" ? window.NAV_TOKEN : undefined;
-    if (navigation !== state.filterFor) {
-      state.filter = { kind: "", app: "", host: "" };
+    if (keepFilter(navigation)) {
       // A summary push opens the Timeline from where its summary starts.
       const from = typeof location !== "undefined" ? new URLSearchParams(location.search).get("since") : "";
       if (/^\d{1,12}$/.test(from || "")) { state.range = "from"; state.from = +from; }
       else if (state.range === "from") state.range = "last";
     }
-    state.filterFor = navigation;
     page();
     await load(state.range, { page: true });
     page();
@@ -206,7 +222,7 @@ const Timeline = (() => {
     }
   }
 
-  return { KINDS, counts, top, filter, load, markSeen, widget, view, page, state, RANGES, start,
+  return { KINDS, counts, top, filter, filterBar, keepFilter, load, markSeen, widget, view, page, state, RANGES, start,
     summaryCard, summaryPaint, summaryEdit, summarySave };
 })();
 
