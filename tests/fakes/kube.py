@@ -144,6 +144,10 @@ class Kube:
         loses the reply: the caller gets the failure, the write stands."""
         self._failures.append([path, method, code, times, skip, applied])
 
+    def stop_failing(self):
+        """Forget every failure asked for and not yet used up."""
+        self._failures.clear()
+
     def react(self, method, path, answer):
         """answer(method, path, body) answers requests for path ("*" for any
         method) in place of the fake; returning None lets the fake answer."""

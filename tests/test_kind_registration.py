@@ -96,7 +96,7 @@ ALIASES = {"homestead_host_os": "HOST_OS", "homestead_os_rollout": "OS_ROLLOUT",
 
 
 def fake_ops():
-    return SimpleNamespace(RESOLVERS={}, CANCELLERS={}, CANCEL_BLOCKS={}, RESUMABLE={}, LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set())
+    return SimpleNamespace(RESOLVERS={}, CANCELLERS={}, CANCEL_BLOCKS={}, RESUMABLE={}, RESUMING={}, LOGGERS={}, CLEANUPS=set(), CDI_CANCELLABLE=set())
 
 
 class HostKindTests(unittest.TestCase):
@@ -164,6 +164,7 @@ class RestKindTests(unittest.TestCase):
         self.assertEqual({RENAME.KIND}, ops.CLEANUPS)
         self.assertEqual({DISK_V2.KIND: DISK_V2.logs}, ops.LOGGERS)
         self.assertEqual({"disk-retire": DISKS.retire_resumable}, ops.RESUMABLE)
+        self.assertEqual({"disk-retire": DISKS.retire_resuming}, ops.RESUMING)
         self.assertIs(DISK_V2.progress, inspect.unwrap(ops.RESOLVERS[DISK_V2.KIND]))
         self.assertIs(DISKS.retire_step, inspect.unwrap(ops.RESOLVERS["disk-retire"]))
 
