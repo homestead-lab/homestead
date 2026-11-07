@@ -15,6 +15,7 @@ import homestead_kube as K
 import homestead_operations as JOBS
 from fakes.disk_guards import disk_guards
 from fakes.kube import Kube
+from rebind import keep_bound
 
 GiB = 1024 ** 3
 EXTRA = "/var/lib/harvester/extra-disks/7f2c"
@@ -84,7 +85,7 @@ class Cluster:
             self.kube.react("DELETE", self.kube.path_of(item), self._node_controller)
         self.probe = probe if probe is not None else {}
         disk_guards(test)
-        test.addCleanup(DISKS.bind, *(getattr(DISKS, name, None) for name in ("kget", "ksend", "temps")))
+        keep_bound(test, DISKS)   # also puts back mutation_scope and v2_tasks
         DISKS.bind(K.kget, K.ksend, lambda: self.probe)
 
     def _node_controller(self, method, path, body):

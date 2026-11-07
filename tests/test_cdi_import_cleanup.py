@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_cdi_cleanup as cleanup
 import homestead_operations as operations
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NS = "/api/v1/namespaces/lab"
 DV = cleanup.API + "/namespaces/lab/datavolumes"
@@ -326,13 +328,14 @@ class JournalTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.api = Api()
-        self.previous = (operations.kget, operations.DATA_DIR, operations.cdi_send)
+        keep_bound(self, operations)   # kget, DATA_DIR and the progress readers
+        self.previous = operations.cdi_send   # set directly below, not by bind()
         self.addCleanup(self.restore)
         operations.bind(self.api.read, self.tmp.name, lambda *args: {})
         operations.cdi_send = self.api.send
 
     def restore(self):
-        operations.kget, operations.DATA_DIR, operations.cdi_send = self.previous
+        operations.cdi_send = self.previous
 
     def body(self):
         return {"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",

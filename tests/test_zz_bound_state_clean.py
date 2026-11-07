@@ -42,7 +42,9 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # there before, unseen (the commented block in bound_leaks.txt). Lower it as they are fixed.
 # 527 -> 452 on 4 Nov (sweep 1): test_mcp, test_os_rollout, test_vm_hardware, test_addons,
 # test_macvtap and test_components now keep what their bind() calls set.
-CEILING = 452
+# 452 -> 367 on 5 Nov (sweep 2): 19 test files (test_affinity through test_fleet_identities, in name order,
+# skipping the small ones) now keep what their bind() calls set.
+CEILING = 367
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7
@@ -125,10 +127,6 @@ class BoundStateClean(unittest.TestCase):
 UNRESTORED_FILES = frozenset({
     # From #1095 (fix/move-retries-end), not on dev yet: restore its source/engine binds once it merges (wrap-up gaps).
     "test_move_gives_up",
-    "test_api_keys",
-    "test_autoupdate",
-    "test_data_copies",
-    "test_firewall",
     "test_host_bridge",
     "test_hostrun_lease",
     "test_hostrun_retry",

@@ -19,6 +19,7 @@ import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 from fakes.kube import Kube
+from rebind import keep_bound
 
 LH_NODES = PARITY.LH_NODES
 GiB = 1024 ** 3
@@ -106,6 +107,7 @@ class Cluster:
 
 class FitSingleHostTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, PARITY, LHCAP)
         self.data = tempfile.mkdtemp()
 
     def bind(self, cluster, distribution="kubeadm", longhorn=True, harvester=False):
@@ -259,6 +261,7 @@ def r2_class(replicas="2", migratable="false", provisioner="driver.longhorn.io",
 
 class FactsTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, PARITY, LHCAP)
         self.data = tempfile.mkdtemp()
 
     def cluster(self, names=("node-a", "node-b"), copies=1, rooms=None, distribution="kubeadm", harvester=False,
@@ -432,6 +435,8 @@ class KeepTwoCopiesTests(unittest.TestCase):
                                             lambda cfg: (self.created.append(cfg), {"ok": True, "name": cfg["name"]})[1]))
         self.sent = []
         self.enterContext(mock.patch.object(PARITY, "ksend", lambda *a, **k: self.sent.append(a)))
+        # ensure_two_copy_class() writes the parity state: into this test's folder, not whatever an earlier test left bound
+        self.enterContext(mock.patch.object(PARITY, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
 
     def test_raises_in_place_on_a_two_copy_class(self):
         # Already on longhorn-r2, lowered to one copy: no move, no downtime.

@@ -12,6 +12,8 @@ import homestead_alerts as A
 import homestead_push as P
 import homestead_http as HTTP
 import server
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def disk(count=24, pending=0):
@@ -22,6 +24,7 @@ def disk(count=24, pending=0):
 class AcknowledgementTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        keep_bound(self, A, P)
         A.bind(self.temp.name);P.bind(self.temp.name)
         self.now=1000
         self.tick(disk());self.tick(disk(),60)
@@ -146,6 +149,7 @@ class HoldTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        keep_bound(self, A, P)
         A.bind(self.temp.name)
 
     def test_a_longer_hold_is_waited_out_and_one_that_clears_inside_it_is_never_raised(self):

@@ -14,6 +14,7 @@ from pathlib import Path
 SERVER = Path(__file__).resolve().parents[1] / "server"
 sys.path.insert(0, str(SERVER))
 from fakes.kube import Kube
+from rebind import keep_bound
 
 
 def fresh_module(name):
@@ -462,6 +463,8 @@ class RelayTests(unittest.TestCase):
 class MoveClientTests(unittest.TestCase):
     def test_linked_clusters_are_move_sources_without_a_password(self):
         import homestead_move as move
+        import homestead_names as NAMES
+        keep_bound(self, move, NAMES)   # move.bind() hands its reader to NAMES
         a = Cluster("loft", "https://10.0.0.1:8088", {})
         b = Cluster("shed", "https://10.0.0.2:8088", {})
         wire([a, b])
@@ -488,6 +491,8 @@ class LegacyClusterTests(unittest.TestCase):
 
     def setUp(self):
         import homestead_move as move
+        import homestead_names as NAMES
+        keep_bound(self, move, NAMES)   # move.bind() hands its reader to NAMES
         self.move = move
         self.a = Cluster("loft", "https://10.0.0.1:8088", {})
         self.b = Cluster("shed", "https://10.0.0.2:8088", {})

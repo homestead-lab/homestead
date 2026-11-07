@@ -22,6 +22,7 @@ import tempfile
 import homestead_auth as auth
 import homestead_diagnostics as diagnostics
 from test_fleet import Cluster, wire
+from rebind import keep_bound
 
 
 class RelayedNameTests(unittest.TestCase):
@@ -65,6 +66,7 @@ class RelayedNameTests(unittest.TestCase):
     def test_a_relayed_admin_does_not_see_a_local_accounts_diagnostics(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
+        keep_bound(self, diagnostics)
         diagnostics.bind(folder.name, mock.Mock(), mock.Mock(), "2.8.300", "lab", "homestead-abc")
         report = diagnostics.create("alice@office")["id"]
         relayed = self.relayed("alice")

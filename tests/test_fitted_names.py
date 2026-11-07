@@ -52,7 +52,7 @@ class ChownTests(unittest.TestCase):
             elif method == "DELETE":
                 self.jobs.pop(path.split("?")[0].rsplit("/", 1)[-1], None)
             return body or {}
-        keep_bound(self, imports)   # put back what imports.bind() sets
+        keep_bound(self, imports, NAMES)   # put back what imports.bind() sets (it hands its reader to NAMES)
         imports.bind(get, send, lambda *a, **k: {}, lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
 
     def run_chown(self, pvc):
@@ -84,6 +84,7 @@ class ShellTests(unittest.TestCase):
     NODE_B = "worker-pool-production-eu-central-zone-a-instance-0002"
 
     def setUp(self):
+        keep_bound(self, SHELL)
         self.pods, self.sent = {}, []
 
         def get(path):
@@ -180,6 +181,7 @@ class LanNetworkTests(unittest.TestCase):
 
     def setUp(self):
         import json
+        keep_bound(self, LAN)
         self.objects = {self.BASE: {"metadata": {"name": "vlan1"}, "spec": {"config": json.dumps(
             {"cniVersion": "0.3.1", "name": "vlan1", "type": "bridge", "bridge": "br0", "ipam": {}})}}}
         self.sent = []

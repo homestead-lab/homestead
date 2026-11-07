@@ -14,6 +14,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_files as files
 import homestead_route_policy as POLICY
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class Helper:
@@ -190,6 +192,7 @@ class Transfers(Base):
 
 class Sessions(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, files)
         self.sent, self.pods = [], {}
         files.bind(lambda path: self.pods.get(path.rsplit("/", 1)[-1]) or (_ for _ in ()).throw(ValueError("gone")),
                    lambda method, path, body=None, **kw: self.sent.append((method, path, body)) or {},
@@ -232,6 +235,9 @@ def HELPER_FOR_DATA():
 
 
 class IdleCleanup(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, files)
+
     def pod(self, seen):
         return {"metadata": {"name": "homestead-files-data", "namespace": "lab", "uid": "u", "resourceVersion": "1",
                              "creationTimestamp": "2026-10-02T00:00:00Z", "labels": {"homestead.io/task": "files"},

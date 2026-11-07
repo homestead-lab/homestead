@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
 import server
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 FEATURES = [{"id": "igpu", "label": "homestead.io/igpu", "host_path": "/dev/dri",
@@ -68,8 +70,7 @@ class WorkloadEditFixture:
             self.existing_pvcs.add(name)
             return {"metadata": {"name": name}}
 
-        # put back what server.py bound, or the next file's lifecycle reads go to this fake
-        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc")})
+        keep_bound(self, lifecycle)   # put back what bind() sets, for every test that uses this fixture
         lifecycle.bind(get, send, set(), {}, lambda: FEATURES, create_pvc)
 
     def saved_spec(self):

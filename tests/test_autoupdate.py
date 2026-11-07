@@ -8,6 +8,8 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_autoupdate as AU
 import homestead_names as NAMES
+sys.path.insert(0, str(ROOT / "tests"))
+from rebind import keep_bound
 
 
 def workload(name="sonarr", mode="auto", **extra):
@@ -25,6 +27,7 @@ def entry(name="sonarr", candidate="lscr.io/linuxserver/sonarr:latest", source="
 
 class PickTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, AU)
         AU.names = NAMES
 
     def pick(self, workloads, entries, answers=None, ops=(), window=True, policy="maintenance_window"):
@@ -108,6 +111,7 @@ class FakeUpdates:
 class JobTests(unittest.TestCase):
     def setUp(self):
         import json
+        keep_bound(self, AU)
         self.candidate = "lscr.io/linuxserver/sonarr:latest"
         self.dep = {"metadata": {"name": "sonarr", "namespace": "lab", "generation": 4,
                                  "annotations": {"homestead.io/update-sources": json.dumps({"app": "lscr.io/linuxserver/sonarr:latest"})}},
@@ -259,6 +263,9 @@ class JobTests(unittest.TestCase):
 
 
 class TidyTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, AU)
+
     def test_keeps_the_newest_two_before_update_snapshots(self):
         removed = []
         AU.bind(None, None, None, lambda: {}, None,

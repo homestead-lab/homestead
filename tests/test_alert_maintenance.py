@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_alerts as A
 import homestead_history as HISTORY
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NOT_READY = {"severity": "critical", "kind": "Node", "name": "node1", "reason": "Kubernetes reports NotReady. Review this host."}
 DISK = {"severity": "degraded", "kind": "Disk", "name": "node1/sda", "reason": "SMART warning"}
@@ -18,8 +20,7 @@ class MaintenanceAlertTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.saved = HISTORY.DATA_DIR
-        self.addCleanup(lambda: setattr(HISTORY, "DATA_DIR", self.saved))
+        keep_bound(self, HISTORY, A)
         HISTORY.bind(self.tmp.name)
         A.bind(self.tmp.name)
         self.now = time.time()
