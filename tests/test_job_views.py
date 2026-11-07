@@ -3,9 +3,9 @@ branches of homestead_operations._public moved into per-kind views (#622).
 
 _public used to hold one `if item.get("kind") == ...` branch per kind. Each
 kind's part is now a function in OPS.VIEWS, and the registry in
-homestead_job_kinds names it. reference_view below is _public exactly as it
-stood before the move; every case of the matrix must give the same answer
-from both. Once each kind's view has tests of its own, the reference and the
+homestead_job_kinds names it. reference_view below is _public as it stood
+before the move, plus helm's branch, marked where it was added: helm had no view
+then. Every case of the matrix must give the same answer from both. Once each kind's view has tests of its own, the reference and the
 matrix can go."""
 import itertools
 import sys
@@ -41,6 +41,10 @@ def reference_view(item):
         out.update(cancellable=False, cleanable=False, allocation=True)
     if item.get("kind") == "longhorn-runtime":
         out.update(cancellable=False, cleanable=False, runtime_maintenance=True)
+    if item.get("kind") == "helm" and out["cleanable"]:
+        # Added with the put-back on a failed upgrade: only that, only with its record.
+        ref = item.get("ref", {})
+        out["cleanable"] = ref.get("action") == "upgrade" and bool(ref.get("chart_uid")) and not ref.get("chart_gone")
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
     if item.get("kind") == "auto-update":
@@ -108,7 +112,7 @@ def reference_view(item):
 BRANCHED = ["disk-v2-convert", "disk-allocation", "longhorn-runtime", "k3s-cluster", "auto-update", "node-power", "set-restart", "vm-power",
             "vm-create", "vm-edit", "import-create", "self-data-prepare", "host-console",
             "cluster-shutdown", "longhorn-v2-prepare", "workload-rename", "workload-copy", "restructure",
-            "reclass"]
+            "reclass", "helm"]
 # snapshot-delete's branch only said "not cancellable"; its refusal in CANCEL_BLOCKS
 # says that now, for the tray as for cancelling.
 KIND_NAMES = BRANCHED + ["snapshot-delete", "self-data-handoff", "vm-disk-import", "workload-edit", "no-such-kind"]
@@ -129,6 +133,8 @@ REFS = [
     {"namespace": "apps", "name": "web", "snapshots": ["snap-1"], "phase": "snapshot"},
     {"node": "node-a", "name": "db", "started_by": "admin", "stage": "delete"},
     {"prepared": True, "retain_resources": False},
+    {"action": "upgrade", "chart_uid": "uid-a"}, {"action": "upgrade", "chart_uid": "uid-a", "chart_gone": True},
+    {"action": "upgrade"}, {"action": "uninstall", "chart_uid": "uid-a"},
 ]
 EXTRAS = [{}, {"cancel_started": NOW}, {"cleaned": True, "tracking_stopped": True}]
 
@@ -159,7 +165,7 @@ class SameViewTests(unittest.TestCase):
                                                           "workload-rename", "vm-create", "reclass",
                                                           "disk-v2-convert", "host-console",
                                                           # so longhorn-v2-prepare's "never cleanable" shows
-                                                          "longhorn-v2-prepare"}),
+                                                          "longhorn-v2-prepare", "helm"}),
                       mock.patch.object(OPS, "CDI_CANCELLABLE", {"vm-disk-import"})):
             patch.start()
             self.addCleanup(patch.stop)
