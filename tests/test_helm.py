@@ -296,6 +296,100 @@ class HelmJobTests(unittest.TestCase):
         self.assertEqual("Cancel and put back", plan["action"])
         self.assertNotIn("cleanup_says_action", plan)
 
+    # A running upgrade's Cancel: the earlier settings are of the chart as it wrote it.
+    def second_upgrade(self):
+        first = self.upgraded()
+        return first, self.route("upgrade", version="9.0.0")
+
+    def refused_while_running(self, ident):
+        plan = OPS.cancel_plan(ident)
+        self.assertFalse(plan["can"])
+        self.assertIn("has changed since", plan["why_not"])
+        before = self.kube.object(self.CHART)
+        self.kube.writes.clear()
+        with self.assertRaises(ValueError):
+            OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+        self.assertEqual(before, self.kube.object(self.CHART))
+        self.assertEqual("running", self.look(ident)["status"])
+
+    def test_cancelling_a_running_upgrade_leaves_a_later_upgrade(self):
+        first, _ = self.second_upgrade()
+        self.refused_while_running(first)
+        chart = self.kube.object(self.CHART)
+        self.assertEqual("9.0.0", chart["spec"]["version"])
+        self.assertEqual("8.0.0", HELM.previous_spec(chart)["version"], "its settings to go back to are kept")
+
+    def test_the_later_upgrade_can_still_be_cancelled(self):
+        first, second = self.second_upgrade()
+        self.assertEqual("rollback", OPS.cancel_plan(second)["mode"])
+        OPS.cancel(second)
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+        self.assertEqual("forget", OPS.cancel_plan(first)["mode"], "what it wrote is back, and nothing is kept")
+        self.kube.writes.clear()
+        OPS.cancel(first)
+        self.assertEqual([], self.kube.writes)
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_a_change_by_hand_leaves_a_running_upgrades_cancel_refused(self):
+        ident = self.upgraded()
+        self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        self.refused_while_running(ident)
+        self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_a_refused_cancel_still_ends_when_its_job_does(self):
+        # Cancel is refused and no other button ends it, so the Job's own end has to.
+        ident = self.upgraded()
+        self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        self.job_object({"active": 1})
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+        self.refused_while_running(ident)
+        self.job_object({"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]})
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.assertIn("changed since", OPS.cancel_plan(ident)["why_not"], "and its put-back stays refused")
+
+    def test_a_chart_made_again_is_not_put_back_by_a_running_upgrade(self):
+        ident = self.upgraded()
+        chart = self.kube.object(self.CHART)
+        self.kube.discard(self.CHART)
+        chart["metadata"]["uid"] = "another-uid"
+        self.kube.add(chart)
+        self.refused_while_running(ident)
+
+    def test_a_status_write_does_not_stop_a_running_upgrades_cancel(self):
+        # As in test_the_controllers_own_writes_do_not_take_the_offer_away: neither moves the generation.
+        ident = self.upgraded()
+        self.kube("PATCH", self.CHART, {"status": {"jobName": "helm-install-grafana"},
+                                        "metadata": {"finalizers": ["wrangler.cattle.io/on-helm-chart-remove"]}},
+                  ctype="application/merge-patch+json")
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"], "as it was before the upgrade")
+
+    def test_a_chart_changed_between_the_review_and_a_running_cancel_is_left(self):
+        ident = self.upgraded()
+        mark = OPS._mark_cancelling
+
+        def changed_now(match, *rest):
+            self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+            return mark(match, *rest)
+        with mock.patch.object(OPS, "_mark_cancelling", changed_now), self.assertRaisesRegex(ValueError, "changed since"):
+            OPS.cancel(ident)
+        self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
+        self.assertEqual("running", self.look(ident)["status"])
+
+    def test_a_running_upgrade_from_an_older_homestead_keeps_its_cancel(self):
+        # It kept no record of which chart it wrote, so there is nothing to compare.
+        self.cancelling()
+        ident = self.start("upgrade")
+        chart = self.kube.object(self.CHART)
+        chart["metadata"]["annotations"] = {HELM.PREVIOUS_SPEC: '{"version":"7.0.0"}'}
+        chart["metadata"]["generation"] = 9
+        self.kube.add(chart)
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        OPS.cancel(ident)
+        self.assertEqual("7.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
     def test_earlier_settings_that_cannot_be_read_are_not_cleaned_up(self):
         ident = self.failed_upgrade()
         chart = self.kube.object(self.CHART)

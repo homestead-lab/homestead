@@ -742,6 +742,19 @@ def _helmchart(item):
     return name, KUBE.get_optional(f"/apis/helm.cattle.io/v1/namespaces/{_helm_ns(item)}/helmcharts/{_q(name)}", read=kget)
 
 
+def _moved_since_written(item, chart):
+    """Whether the chart is not the one this job's upgrade left: made again, or its
+    settings changed since. The controller's own writes (status, finalizer) leave the
+    generation be. A job from before this has no such record."""
+    ref, meta = item["ref"], chart.get("metadata") or {}
+    return bool(ref.get("chart_uid")) and (
+        meta.get("uid") != ref["chart_uid"] or meta.get("generation") != ref.get("chart_generation"))
+
+
+def _changed_words(name):
+    return f"{name} has changed since this upgrade was written, so putting it back would undo that; nothing was changed"
+
+
 def _no_put_back(item, action, name, chart):
     """Why a failed Helm job may not put its chart back, or "". The earlier settings
     belong to the chart as this job's upgrade left it: one changed or made again
@@ -751,7 +764,6 @@ def _no_put_back(item, action, name, chart):
         return f"A failed {action} has nothing to put back"
     if not chart:
         return f"{name}'s chart is gone, so there is nothing to put back"
-    meta = chart.get("metadata") or {}
     kept = HELM.previous_spec(chart)
     if kept is None:
         return f"No earlier settings of {name} were kept to go back to"
@@ -759,8 +771,8 @@ def _no_put_back(item, action, name, chart):
         return f"This upgrade is from an older Homestead and kept no record of the chart it wrote, so {name} is not put back from here"
     if HELM.settings({"spec": kept}) == HELM.settings(chart):
         return f"{name}'s settings are already the ones that were kept, so there is nothing to put back"
-    if meta.get("uid") != ref["chart_uid"] or meta.get("generation") != ref.get("chart_generation"):
-        return f"{name} has changed since this upgrade was written, so putting it back would undo that; nothing was changed"
+    if _moved_since_written(item, chart):
+        return _changed_words(name)
     return ""
 
 
@@ -820,6 +832,12 @@ def helm_plan(item):
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"No earlier settings of {name} were kept to go back to; the upgrade carries on"]}
+        # The settings kept are from before the latest upgrade, not this one's: going back
+        # to them would undo that. A cancel of a failed job's put-back has its own path.
+        if not _was_failed(item) and _moved_since_written(item, chart):
+            # A run cut off may have landed its write, so it can't say nothing was changed.
+            why = f"{name} has changed since this upgrade was written, so it was not put back" if item.get("cancel_record") else _changed_words(name)
+            return {"can": False, "needs": "admin", "why_not": why}
         plan = {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _chart_seen(chart),
                 "undo": [f"Puts {name}'s chart version and values back as they were before the upgrade; "
                          "Helm runs again with them"],
@@ -862,6 +880,9 @@ def helm_cancel(item, _options):
     if action == "upgrade":
         if item["ref"].get("no_change"):
             return "Stopped following it; it changed nothing"
+        # The review read the chart a moment ago; this is the canceller's own read.
+        if _moved_since_written(item, chart) and HELM.previous_spec(chart) is not None:
+            raise ValueError(_changed_words(name))
         if not HELM.restore_previous(chart):
             # Restoring drops the settings kept, in the same write: a rollback was
             # reviewed, so a run cut off after it finds them gone, and it went back.

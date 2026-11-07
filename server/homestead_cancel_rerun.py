@@ -20,7 +20,7 @@ SAFE = {
     "container-rebalance": "Deletes its pulls by saved uids, ignoring errors; the rest is the job's own record.",
     "deployment": "Saves uids before deleting; a rollback marks its write, and parks if its reviewed target moved.",
     "disk-v2-convert": "Checks the host and disk identity every run, then an idempotent patch.",
-    "helm": "Deletes the Job and chart by saved uids; an upgrade's rollback parks if the chart changed since review.",
+    "helm": "Deletes the Job and chart by saved uids; an upgrade's rollback is refused once the chart it wrote has moved, and parks if its review no longer holds.",
     "host-bond": "Gives the host's lease back only if this job still holds it; no other write.",
     "host-bridge": "Gives the host's lease back only if this job still holds it; no other write.",
     "host-os": "Gives the host's lease back only if this job still holds it; no other write.",

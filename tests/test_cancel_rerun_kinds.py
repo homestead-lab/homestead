@@ -987,6 +987,16 @@ class HelmRunningUpgradeWithItsRecord(Base):
         return self.job("helm", {"action": "upgrade", "name": "helm-install-app", "namespace": "kube-system",
                                  "chart_uid": uid, "chart_generation": 5, **ref}, name="app")
 
+    def given_back(self, op):
+        """The job is what it was before the cancel, and may have been polled since, and no
+        cancel is left waiting on a person, who would be refused. Returns what it said."""
+        item = self.stored(op)
+        self.assertIn(item["status"], ("queued", "running"))
+        self.assertNotIn("cancel_record", item)
+        said = [row.get("m", "") for row in item["history"] if "has changed since" in row.get("m", "")]
+        self.assertTrue(said, item["history"])
+        return said
+
     def test_a_rollback_that_landed_says_it_went_back(self):
         op = self.chart()
         self.kube.fail(self.PATH, Died(), method="PUT", applied=True)
@@ -996,8 +1006,9 @@ class HelmRunningUpgradeWithItsRecord(Base):
         self.assertIn("went back", self.finished(op))
         self.assertEqual("1.0.0", self.kube.object(self.PATH)["spec"]["version"])
 
-    def test_a_chart_moved_on_since_the_plan_was_read_is_not_put_back(self):
-        """The plan's look passes, and the chart is a generation on by the canceller's own read."""
+    def test_a_chart_moved_on_before_the_run_again_is_given_back(self):
+        """A person's review would only be refused now, so it does not wait for one: it follows
+        its Job again and says why."""
         op = self.chart()
         self.kube.fail(self.PATH, Died(), method="PUT")
         self.cut_off(op)
@@ -1005,9 +1016,8 @@ class HelmRunningUpgradeWithItsRecord(Base):
         chart["metadata"]["generation"] = 7
         self.kube.add(chart)
         self.leader_round()
-        item = self.stored(op)
         self.assertEqual("2.0.0", self.kube.object(self.PATH)["spec"]["version"])
-        self.assertTrue(any("has changed since" in row.get("m", "") for row in item["history"]), item["history"])
+        self.given_back(op)
 
     def test_a_later_upgrade_after_the_rollback_landed_is_not_undone(self):
         op = self.chart()
@@ -1020,7 +1030,7 @@ class HelmRunningUpgradeWithItsRecord(Base):
         self.kube.add(chart)
         self.leader_round()
         self.assertEqual("3.0.0", self.kube.object(self.PATH)["spec"]["version"])
-        self.assertIn("was not run again", self.stored(op)["message"])
+        self.assertNotIn("nothing was changed", " ".join(self.given_back(op)), "its own write landed")
 
     def test_someone_else_changing_the_chart_after_it_landed_is_not_called_going_back(self):
         op = self.chart()
@@ -1057,6 +1067,29 @@ class HelmRunningUpgradeWithItsRecord(Base):
 
 class AFailedUpgradeCutOff(Base):
     PATH = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/app"
+
+    def test_a_put_back_on_a_chart_moved_on_stays_with_a_person(self):
+        """Only a running upgrade's cancel is given back: this one's job has already failed."""
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "kube-system", "name": "app", "generation": 1,
+                                    "annotations": {"homestead.io/helm-previous": '{"version": "1.0.0"}'}},
+                       "spec": {"version": "2.0.0"}})
+        chart = self.kube.object(self.PATH)
+        op = self.job("helm", {"action": "upgrade", "name": "helm-upgrade-app", "namespace": "kube-system",
+                               "chart_uid": chart["metadata"]["uid"], "chart_generation": 1}, name="app")
+        items = OPS.stored()
+        items[-1].update(status="failed", message="failed")
+        with OPS.transaction() as tx:
+            tx.save(items)
+        self.kube.fail(self.PATH, Died(), method="PUT")
+        self.cut_off(op)
+        chart = self.kube.object(self.PATH)
+        chart["spec"]["version"] = "3.0.0"
+        chart["metadata"]["generation"] = 2
+        self.kube.add(chart)
+        self.leader_round()
+        self.assertEqual("3.0.0", self.kube.object(self.PATH)["spec"]["version"])
+        self.assertIn("was not run again", self.stored(op)["message"])
 
     def test_putting_it_back_says_it_went_back(self):
         self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
