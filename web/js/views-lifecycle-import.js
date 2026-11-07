@@ -1052,7 +1052,7 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
 `,
     actions: { dismiss: { label: "Cancel", onclick: "modalBack()" },
       start: `<button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>`,
-      primary: { label: `Start ${copy ? "copy" : "move"}`, onclick: `moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})`, id: "mv_go", disabled: true, attrs: 'data-need="admin"' } } }),
+      primary: { label: `Start ${copy ? "copy" : "move"}`, onclick: `moveStart(${jsArg(cluster)},${jsArg(kind)},${jsArg(name)})`, id: "mv_go", disabled: true, attrs: 'data-need="admin"' } } }),
     false, "operation-review");
   movePlan(cluster, kind, name);
   for (const id of ["#mv_ns", "#mv_ip"]) {

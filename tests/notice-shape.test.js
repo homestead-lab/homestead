@@ -13,3 +13,13 @@ test("no warning or error is a hand-written .note box", () => {
     .map((line, n) => OLD_BOX.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
   assert.deepEqual(found, [], "use UI.callout(tone, title, body) or UI.notices(items, title)");
 });
+
+// UI.button and UI.dialog's actions escape the onclick they are given, so
+// its arguments are jsArg (JSON), never jsq (JSON already escaped for HTML):
+// escaped twice, the handler reads &amp;quot; and the button does nothing.
+test("no engine button's onclick is escaped twice", () => {
+  const twice = /onclick:\s*`[^`]*\$\{jsq\(|UI\.button\([^;\n]*,\s*`[^`]*\$\{jsq\(/;
+  const found = files.flatMap(file => fs.readFileSync(file, "utf8").split("\n")
+    .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
+  assert.deepEqual(found, [], "use jsArg(...) in an onclick UI.button or UI.dialog escapes");
+});
