@@ -577,8 +577,8 @@ def plan(exclude=(), avoid=(), role=None, restart=None, back=(), may_restart=Fal
                 if may_restart:
                     restart[app["id"]] = ""     # no tool: a restart leaves the preference alone
                 else:
-                    kept[app["id"]] = app["why"] = ("it has a host preference someone chose, which only a restart "
-                                                    "leaves alone, and restarts run under Spread by capacity")
+                    kept[app["id"]] = app["why"] = ("it has a host preference someone chose, which only a restart leaves "
+                                                    "alone, and restarts run only under Spread by capacity with every host back")
     requested = _requested(hosts) if restart else {}
     for app in apps:
         if app["id"] not in restart or app["why"] or app["id"] in exclude:
@@ -638,6 +638,12 @@ def plan(exclude=(), avoid=(), role=None, restart=None, back=(), may_restart=Fal
             continue
         _, app, target, _near = best
         _take(app, target, load, moves, moved)
+    for move in () if unattended else moves:
+        # What a person is told: Balance's own preference goes unremarked.
+        dep = next(a["dep"] for a in apps if a["id"] == move["id"])
+        wanted = PLACE.preferred_host(((dep.get("spec") or {}).get("template") or {}).get("spec") or {}, ignoring=PLACE.balance_preference(dep))
+        if wanted and wanted != move["to"]:
+            move["replaces"] = wanted
     for move in moves if unattended else ():
         # With its generation: an edit since the plan skips it, as after a review. A run
         # can last over an hour, and a placement move would write over a pin set meanwhile.
@@ -797,7 +803,9 @@ def picked(picks, role=None):
             why = f"at most {MAX_MOVES} at a time"
         if not why:
             going.setdefault(to, []).append(app["id"])
+        wanted = PLACE.preferred_host(template, ignoring=PLACE.balance_preference(app["dep"]))
         rows.append({"id": app["id"], "ns": app["ns"], "name": app["name"], "from": app["host"], "to": to, "why": why,
+                     **({"replaces": wanted} if wanted and wanted != to else {}),
                      "cpu_m": round(cpu_r), "mem_mb": round(mem_r / GI_MB), "reserves": bool(cpu_r or mem_r),
                      "near": bool(app["near"] and to in app["near"])})
     # The destinations, with every pick sent there counted together.

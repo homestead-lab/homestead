@@ -90,6 +90,7 @@ MODULES = (
     "homestead_deploy",
     "homestead_deploy_server",
     "homestead_diagnostics",
+    "homestead_recovery",
     "homestead_disk_v2",
     "homestead_host_gone",
     "homestead_disk_allocation",

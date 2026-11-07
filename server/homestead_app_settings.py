@@ -65,7 +65,8 @@ DEFAULTS = {
     # How hosts share the work (homestead_placement_mode): "" until chosen,
     # default, spread, or standby with the hosts kept in reserve - and what
     # happens when a host comes back: off, suggest (an alert to review
-    # Balance hosts), or window (that rebalance, run in the maintenance window).
+    # Balance hosts), window (that rebalance, run in the maintenance window), or
+    # auto (run by itself once the host has settled; homestead_recovery).
     "placement": {"rebalance": "off", "mode": "", "standby_nodes": []},
     # Monthly restore tests of every app with backups (homestead_restore_test).
     "restore_tests": {"enabled": False},
