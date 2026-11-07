@@ -114,7 +114,6 @@ NO_DEMO_ANSWER = {
     "POST /api/node/smart/test": CHANGE,
     "POST /api/operations/resume": CHANGE,
     "POST /api/os-updates/settings": CHANGE,
-    "POST /api/os-updates/start": CHANGE,
     "POST /api/os-updates/stop": CHANGE,
     "POST /api/passthrough/iommu": CHANGE,
     "POST /api/passthrough/pci": CHANGE,

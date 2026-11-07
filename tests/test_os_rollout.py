@@ -3,12 +3,14 @@ import functools
 import os
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_os_rollout as ROLLOUT
 from rebind import keep_bound
@@ -25,6 +27,9 @@ class Hosts:
 
     def __init__(self, facts):
         self.facts, self.began, self.holds, self.codes, self.held = facts, [], [], {}, set()
+        # What set_hold raises per host: the real one takes the host's lease
+        # through hostrun, so it can be Busy or time out.
+        self.hold_errors = {}
 
     def read(self, name, refresh=False):
         return self.facts[name]
@@ -56,6 +61,8 @@ class Hosts:
         return {"running": code is None, "code": code, "last": ""}
 
     def set_hold(self, name, hold):
+        if name in self.hold_errors:
+            raise self.hold_errors[name]
         self.holds.append((name, hold))
         self.facts[name]["auto"]["held"] = hold
 
@@ -86,7 +93,9 @@ class RolloutTests(unittest.TestCase):
     def bind(self, own="node-1"):
         def reboot(name, single_copy):
             if name in self.refuse:
-                raise ValueError(self.refuse[name])
+                # As the real one: a volume's only copy may clear, the rest won't.
+                may_clear = "only healthy copy" in self.refuse[name]
+                raise (DRAIN_BLOCKERS.MayClear if may_clear else ValueError)(self.refuse[name])
             self.restarts.append(name)
             self.ops[f"op-{name}-{len(self.restarts)}"] = {"id": f"op-{name}-{len(self.restarts)}", "status": "running"}
             return f"op-{name}-{len(self.restarts)}"
@@ -117,7 +126,7 @@ class RolloutTests(unittest.TestCase):
         with mock.patch.object(ROLLOUT, "due", return_value=True), \
                 mock.patch.object(ROLLOUT.OPS, "stored", return_value=[{"kind": "container-rebalance", "status": "succeeded"}]), \
                 mock.patch.object(ROLLOUT, "start") as start:
-            ROLLOUT.tick()
+            ROLLOUT.tick(now=time.time() + ROLLOUT.WINDOW_RETRY)   # its next look
             start.assert_called_once()
 
     @own_history

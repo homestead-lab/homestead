@@ -113,7 +113,7 @@ storage, VM and network add-ons built in, so its card shows only the node probe.
 security updates, restart needs and automatic-update status, with progress
 for a running update. **Manage host updates** opens the same controls as
 **Nodes → OS updates**: choose who installs updates, set the weekly window,
-configure restarts, or review an update of every host one at a time. Only
+configure restarts, or review an update of one host, several or every host. Only
 administrators can change these settings or start an update. Opening Settings
 or refreshing its status installs nothing.
 

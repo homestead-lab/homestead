@@ -16,6 +16,7 @@ case "${1:-}" in
     node tests/integration/audit-ready.mjs
     node tests/integration/edit-after-first-page.mjs
     node tests/integration/operator-enable.mjs
+    node tests/integration/os-updates-hosts.mjs
     node tests/integration/ha-update-reload.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
     EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs

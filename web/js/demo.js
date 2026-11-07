@@ -7,6 +7,13 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  // The hosts' waiting OS updates, for /api/os-updates and its preview.
+  const demoOsPackage = (name, security = false) => ({ name, security });
+  const DEMO_OS_WAITING = {
+    "harvester-node1": [demoOsPackage("linux-image-6.8.0-90-generic", true), demoOsPackage("openssl", true), demoOsPackage("curl")],
+    "harvester-node2": [],
+    "harvester-node3": [demoOsPackage("openssl", true), demoOsPackage("vim")],
+  };
   // What would keep a host from draining (homestead_drain_blockers' rows), one of each kind.
   const demoDrainBlockers = node => {
     const there = "harvester-node2", row = (id, kind, what, why, fix, extra = {}) =>
@@ -892,18 +899,44 @@
     "/api/passthrough/resources": { sidecar: true, resources: [
       { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "NVIDIA Corporation TU104 [GeForce RTX 2080]", selector: "10DE:1E87", devices: [{node: "harvester-node1", address: "0000:01:00.0", group: "12"}], nodes: ["harvester-node1"] },
       { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "Google Coral TPU (unflashed)", selector: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
-    // Every host's OS, one at a time (host-os.js): one host done, one restarting.
+    // Hosts' OS (host-os.js): idle, with a kernel update on one host, a restart
+    // waiting on another and a security fix on the third. window.__demoOsRun is
+    // a run under way: POST /start makes one, and it ends after 40 s; the dialog
+    // audit sets one with a time ahead, so that it stays running for its shot.
     "/api/os-updates": () => {
-      const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
-        security: name === "harvester-node3" ? 1 : 0, reboot: false,
-        auto: { tool: "unattended-upgrades", on: name !== "harvester-node1", reboots: name === "harvester-node3", held: name === "harvester-node1" } });
+      const run = window.__demoOsRun, now = Math.floor(Date.now() / 1000);
+      const ended = run && Date.now() - run.at > 40000;
+      const host = name => {
+        const updates = ended && run.nodes.includes(name) ? [] : DEMO_OS_WAITING[name];
+        return { os: "Ubuntu 24.04.3 LTS", updates, security: updates.filter(u => u.security).length,
+          reboot: name === "harvester-node2", reboot_for: name === "harvester-node2" ? "linux-image-6.8.0-90-generic" : "",
+          auto: { tool: "unattended-upgrades", on: true, reboots: name === "harvester-node3", held: !!run && !ended }, at: now - 15660 };
+      };
+      const lastRun = { id: "os-1", status: "succeeded", reason: "asked", finished: now - 396000, nodes: Object.keys(DEMO_OS_WAITING),
+        message: "3 hosts done; 0 restarted; needing a restart: harvester-node2 (harvester-node2: some workloads have no other host to run on)",
+        results: [{ node: "harvester-node2", ok: true, note: "updates installed; restart not done: some workloads have no other host to run on", restart_needed: true }] };
+      const every = run && run.nodes.length === 3;
       return { applies: true, every_s: 21600, checking: { running: false, hosts: [], done: [], failed: {} },
-        hosts: Object.fromEntries(["harvester-node1", "harvester-node2", "harvester-node3"].map(n => [n, { ...host(n), at: Math.floor(Date.now() / 1000) - 15660 }])),
+        hosts: Object.fromEntries(Object.keys(DEMO_OS_WAITING).map(name => [name, host(name)])),
         settings: { schedule: { enabled: true, days: ["sun"], hour: 3, tz: "Europe/London", offset_min: 60 }, reboot: "when-needed", single_copy: false, manage: "ubuntu" },
-        rollout: { id: "os-1", status: "running", nodes: ["harvester-node2", "harvester-node3", "harvester-node1"], index: 1,
-          message: "harvester-node3: draining and restarting",
-          results: [{ node: "harvester-node2", ok: true, note: "updates installed", updates: 4, security: 2, restarted: false }] },
+        rollout: !run ? lastRun : ended
+          ? { id: "os-2", status: "succeeded", reason: every ? "asked" : "asked-hosts", finished: now, nodes: run.nodes, results: [],
+              message: `${run.nodes.length} host${run.nodes.length === 1 ? "" : "s"} done; 0 restarted` }
+          : { id: "os-2", status: "running", reason: every ? "asked" : "asked-hosts", nodes: run.nodes, index: 0, node: { name: run.nodes[0] },
+              message: `${run.nodes[0]}: installing ${DEMO_OS_WAITING[run.nodes[0]].length} updates`, results: [] },
         last: null };
+    },
+    "/api/os-updates/preview": url => {
+      const own = "harvester-node1", names = url.searchParams.getAll("node").sort((a, b) => (a === own) - (b === own) || a.localeCompare(b));
+      return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is running already; it has to end first" : "", review_token: "demo",
+        hosts: names.map(node => { const updates = DEMO_OS_WAITING[node] || []; return { node, ready: true, updates, security: updates.filter(u => u.security).length,
+          reboot: node === "harvester-node2", reboot_for: node === "harvester-node2" ? "linux-image-6.8.0-90-generic" : "", at: Math.floor(Date.now() / 1000) - 15660,
+          homestead_here: node === own, restart_refusal: node === own ? "some workloads have no other host to run on" : "", restart_unread: "", busy: "" }; }) };
+    },
+    "/api/os-updates/start": (url, init) => {
+      const nodes = JSON.parse(init?.body || "{}").nodes || ["harvester-node2", "harvester-node3", "harvester-node1"];
+      window.__demoOsRun = { nodes, at: Date.now() };
+      return { ok: true, rollout: {}, detail: `Updating ${nodes.length === 1 ? nodes[0] : `${nodes.length} hosts`}; follow it under Jobs` };
     },
     // A logo is kept as it is in the demo; nothing is fetched (core-privileges.js logoReady).
     "/api/logo-fit/keep": (url, init) => ({ icon: JSON.parse(init?.body || "{}").url || "" }),
