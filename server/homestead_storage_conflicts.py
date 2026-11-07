@@ -5,7 +5,7 @@ from PV names: they are not interchangeable, even when provisioners make them
 look alike. The creating workflow must capture both from its reviewed binding.
 """
 
-KINDS = {"reclass", "snapshot-delete", "snapshot-revert", "volume-delete", "volume-restore", "disk-v2-convert", "disk-allocation", "longhorn-runtime", "longhorn-v2-cleanup"}
+KINDS = {"reclass", "snapshot-delete", "snapshot-revert", "volume-delete", "volume-restore", "disk-v2-convert", "disk-allocation", "longhorn-runtime", "longhorn-v2-cleanup", "vm-disk-remove"}
 TERMINAL = {"succeeded", "failed", "cancelled"}
 # A disk job whose host was removed, ended by a person after a review
 # (homestead_host_gone): settled, like a finished one. The kinds it applies to,
@@ -13,7 +13,8 @@ TERMINAL = {"succeeded", "failed", "cancelled"}
 HOST_GONE = "host-gone"
 HOST_GONE_KINDS = ("disk-v2-convert", "disk-allocation", "longhorn-runtime")
 _SETTLED = {"disk-v2-convert": ("complete", "cancelled", HOST_GONE), "disk-allocation": ("complete", "cancelled", HOST_GONE),
-            "longhorn-runtime": ("retired", HOST_GONE), "longhorn-v2-cleanup": ("complete",)}
+            "longhorn-runtime": ("retired", HOST_GONE), "longhorn-v2-cleanup": ("complete",),
+            "vm-disk-remove": ("done", "failed")}
 ENDED = "This job was ended because its host was removed; review a new one for the host that is there now."
 
 
@@ -46,6 +47,8 @@ def targets(kind, ref, resource=None):
     elif kind == "restore-swap":
         # Restore into an app (#743): both claims and the app's volume, while it runs.
         claim(ref.get("old_claim")); claim(ref.get("new_claim")); handle(ref.get("old_volume"))
+    elif kind == "vm-disk-remove":
+        claim(ref.get("name"))
     elif kind in ("volume-delete", "volume-restore"):
         if not ref.get("released"):   # a Released volume's claim name is another volume's now (#932)
             claim(ref.get("name") or resource.get("name"))

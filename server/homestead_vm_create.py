@@ -132,6 +132,13 @@ def import_vm_disk(cfg, ops=OPS):
             "message": f"CDI import into {namespace}/{name} started"}
 
 
+def _being_removed(namespace, name, disk):
+    """Asked to go, or a removal job has it. Only that kind: an import holds its own disks
+    while it makes their VM."""
+    return bool((disk.get("metadata") or {}).get("deletionTimestamp")) or any(
+        job.get("kind") == "vm-disk-remove" for job in OPS.cdi_holds(namespace, name))
+
+
 def _disk_consumers():
     """(namespace, disk) -> the VMs using it. VMs that cannot be read raise:
     unread is not "no VM uses it" (a new VM would take a disk another holds)."""
@@ -445,6 +452,8 @@ def prepare_vm(cfg, platform=None, default_class=""):
             f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{imported_dv}")
         if not disk_obj:
             raise ValueError(f"imported disk {ns}/{imported_dv} does not exist")
+        if _being_removed(ns, imported_dv, disk_obj):
+            raise ValueError(f"imported disk {ns}/{imported_dv} is being removed")
         if (disk_obj.get("status", {}) or {}).get("phase") != "Succeeded":
             raise ValueError("imported disk is not ready yet")
         users = _disk_consumers().get((ns, imported_dv), [])
@@ -563,7 +572,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
         if extra_bus not in ("virtio", "sata", "scsi") or extra_name == imported_dv:
             raise ValueError(f"imported disk {extra_name} cannot be attached as asked")
         found = _get_or_none(f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{extra_name}")
-        if not found or ((found.get("status") or {}).get("phase")) != "Succeeded":
+        if not found or ((found.get("status") or {}).get("phase")) != "Succeeded" or _being_removed(ns, extra_name, found):
             raise ValueError(f"imported disk {ns}/{extra_name} is not ready")
         if _disk_consumers().get((ns, extra_name)):
             raise ValueError(f"imported disk {extra_name} is already attached to another VM")

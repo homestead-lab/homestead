@@ -782,6 +782,8 @@ class CatalogueTests(unittest.TestCase):
             "/api/sources/vms", "/api/sources/vms/shutdown", "/api/vms/import-unraid", "/api/vms/import-unraid/room",
             "/api/vm-disks/import"),
             "importing reads another server's files with its credentials, which agents are never given"),
+        **dict.fromkeys(("/api/vm-disks/remove", "/api/vm-disks/remove-plan"),
+                        "removing an import disk is a person's, who reads what goes and types its name"),
         "/api/volumes/chown": "rewrites who owns a volume's files; agents are never given a volume's files",
         **dict.fromkeys(("/api/images/cleanup", "/api/images/forget-rollback", "/api/images/scan",
                          "/api/images/vm/delete", "/api/images/cleanup-unused", "/api/images/cleanup-unused/preview",

@@ -160,6 +160,39 @@ def observe(read, ns, work):
             disk["pvs"][meta["name"]] = entry
 
 
+def vm_users(read, ns, names):
+    """The VMs and VMIs with a volume naming any of names, by dataVolume or by claim.
+    A list that can't be read raises: unread isn't unused."""
+    users = set()
+    for resource in ("virtualmachines", "virtualmachineinstances"):
+        for vm in RESOURCES.items(read, f"/apis/kubevirt.io/v1/namespaces/{ns}/{resource}", missing=True):
+            spec = vm.get("spec") or {}
+            spec = (spec.get("template") or {}).get("spec") or spec
+            if any((v.get("dataVolume") or {}).get("name") in names or
+                   (v.get("persistentVolumeClaim") or {}).get("claimName") in names
+                   for v in spec.get("volumes") or []):
+                users.add(vm["metadata"].get("name", ""))
+    return sorted(users)
+
+
+def _mounts(pod, names):
+    return any((v.get("persistentVolumeClaim") or {}).get("claimName") in names
+               for v in (pod.get("spec") or {}).get("volumes") or [])
+
+
+def other_pods(pods, work, names):
+    """The pods mounting any of names that aren't CDI's workers for this receipt, as
+    (name, ended). One that has ended counts: Kubernetes' claim protection counts a
+    scheduled pod whatever its phase, so the claim would sit Terminating until it goes."""
+    workers = {uid for disk in work["disks"].values() for uid in disk["pods"]}
+    return sorted((pod["metadata"].get("name", ""), (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"))
+                  for pod in pods if pod["metadata"].get("uid") not in workers and _mounts(pod, names))
+
+
+def ended_pod_words(name):
+    return f"Pod {name} has ended but Kubernetes keeps the claim until it is removed"
+
+
 def cleanup(read, send, ns, work, keep_disks=True):
     """Wait for normal finalizers and CSI reclamation; never force deletion."""
     pending = False
@@ -174,19 +207,13 @@ def cleanup(read, send, ns, work, keep_disks=True):
                   if row["role"] != "target" or not keep_disks}
     if not keep_disks:
         disposable.update(name for name, disk in work["disks"].items() if disk.get("dv_uid"))
-    workers = {uid for disk in work["disks"].values() for uid in disk["pods"]}
-    if any(pod["metadata"].get("uid") not in workers and
-           any((v.get("persistentVolumeClaim") or {}).get("claimName") in disposable
-               for v in (pod.get("spec") or {}).get("volumes") or []) for pod in pods):
-        raise ValueError("Another pod uses import work space; its storage was preserved")
-    for resource in ("virtualmachines", "virtualmachineinstances"):
-        for vm in RESOURCES.items(read, f"/apis/kubevirt.io/v1/namespaces/{ns}/{resource}", missing=True):
-            spec = vm.get("spec") or {}
-            spec = (spec.get("template") or {}).get("spec") or spec
-            if any((v.get("dataVolume") or {}).get("name") in disposable or
-                   (v.get("persistentVolumeClaim") or {}).get("claimName") in disposable
-                   for v in spec.get("volumes") or []):
-                raise ValueError("A VM now uses an import disk; its storage was preserved")
+    others = other_pods(pods, work, disposable)
+    if any(ended for _, ended in others):
+        raise ValueError("; ".join(ended_pod_words(name) for name, ended in others if ended) + "; its storage was preserved")
+    if others:
+        raise ValueError(f"Another pod uses import work space ({', '.join(name for name, _ in others)}); its storage was preserved")
+    if vm_users(read, ns, disposable):
+        raise ValueError("A VM now uses an import disk; its storage was preserved")
     for row in work.get("aux", []):
         obj = RESOURCES.optional(read, row["path"])
         if obj:
@@ -195,6 +222,13 @@ def cleanup(read, send, ns, work, keep_disks=True):
                     row.get("uid") and meta["uid"] != row["uid"]):
                 raise ValueError("Import copy resource was replaced; cleanup stopped")
             pending |= not RESOURCES.delete(read, send, row["path"], obj)
+    # Before anything of a disk is asked to go: a worker with a new owner has been taken
+    # over, and may still use the disk.
+    for disk in work["disks"].values():
+        for pod in pods:
+            if pod["metadata"].get("uid") in disk["pods"] and not any(
+                    owner(pod, "PersistentVolumeClaim", claim_uid) for claim_uid in disk["claims"]):
+                raise ValueError("Import worker ownership changed; cleanup stopped")
     for name, disk in work["disks"].items():
         if disk.get("not_created") or disk.get("not_dispatched"):
             continue
@@ -202,6 +236,16 @@ def cleanup(read, send, ns, work, keep_disks=True):
         if keep_disks and (not target or (target.get("status") or {}).get("phase") != "Bound"):
             raise ValueError("Completed disk claim is not bound; its storage was preserved")
         protected_pv = (target.get("spec") or {}).get("volumeName") if target and keep_disks else None
+        if not keep_disks:
+            # First: while its claim isn't being deleted CDI remakes a worker that has gone,
+            # same name and new uid, so waiting for the workers here would never end.
+            dv_path = f"{API}/namespaces/{ns}/datavolumes/{name}"
+            dv = RESOURCES.optional(read, dv_path)
+            if dv:
+                if dv["metadata"].get("uid") != disk.get("dv_uid") or (
+                        dv["metadata"].get("annotations") or {}).get(STAMP) != work["id"]:
+                    raise ValueError("Import disk was replaced; cleanup stopped")
+                pending |= not RESOURCES.delete(read, send, dv_path, dv)
         for uid, pod_name in disk["pods"].items():
             path = f"/api/v1/namespaces/{ns}/pods/{pod_name}"
             pod = RESOURCES.optional(read, path)
@@ -212,17 +256,10 @@ def cleanup(read, send, ns, work, keep_disks=True):
         # Re-read after requesting worker deletion. Even a terminating pod can
         # hold a mount; do not change the storage policy until it has disappeared.
         pods = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/pods")
-        if any(pod["metadata"].get("uid") in disk["pods"] for pod in pods):
+        workers_left = any(pod["metadata"].get("uid") in disk["pods"] for pod in pods)
+        if workers_left and keep_disks:
             pending = True
             continue
-        if not keep_disks:
-            dv_path = f"{API}/namespaces/{ns}/datavolumes/{name}"
-            dv = RESOURCES.optional(read, dv_path)
-            if dv:
-                if dv["metadata"].get("uid") != disk.get("dv_uid") or (
-                        dv["metadata"].get("annotations") or {}).get(STAMP) != work["id"]:
-                    raise ValueError("Import disk was replaced; cleanup stopped")
-                pending |= not RESOURCES.delete(read, send, dv_path, dv)
         for uid, row in disk["claims"].items():
             if row["role"] == "target" and keep_disks:
                 continue
@@ -236,14 +273,18 @@ def cleanup(read, send, ns, work, keep_disks=True):
                     continue  # CDI recreated scratch during THIS import attempt.
                 # A retry's claim cannot be used to reclaim this attempt's PV.
                 raise ValueError("Import work claim was replaced; cleanup stopped")
-            if any((v.get("persistentVolumeClaim") or {}).get("claimName") == row["name"]
-                   for pod in pods for v in (pod.get("spec") or {}).get("volumes") or []):
+            # Clearing everything, a worker's mount doesn't stop the request: claim protection
+            # holds the claim until it has gone, and a claim being deleted stops CDI remaking it.
+            if any(_mounts(pod, {row["name"]}) for pod in pods if keep_disks or pod["metadata"].get("uid") not in disk["pods"]):
                 pending = True
                 continue
             if row["role"] == "prime" and keep_disks and (claim.get("status") or {}).get("phase") != "Lost":
                 pending = True
                 continue
             pending |= not RESOURCES.delete(read, send, path, claim)
+        if workers_left:
+            pending = True
+            continue
         claims = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
         for pv_name, row in disk["pvs"].items():
             if pv_name == protected_pv or (row["role"] == "target" and keep_disks):
@@ -269,8 +310,7 @@ def cleanup(read, send, ns, work, keep_disks=True):
                    c["metadata"].get("uid") == row["claim_uid"] for c in claims):
                 pending = True
                 continue
-            if any((v.get("persistentVolumeClaim") or {}).get("claimName") == row["claim_name"]
-                   for pod in pods for v in (pod.get("spec") or {}).get("volumes") or []):
+            if any(_mounts(pod, {row["claim_name"]}) for pod in pods):
                 pending = True
                 continue
             if (pv.get("status") or {}).get("phase") != "Released":
