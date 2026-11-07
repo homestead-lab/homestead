@@ -63,6 +63,13 @@ class HelmJobTests(unittest.TestCase):
     too, as the controller removes its Job and then the chart."""
     CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/grafana"
     LIMIT = 15 * 60
+    # What a Job that has really ended failed reads. The controller's Jobs restart a
+    # failing container in its own pod, so this is the end, and not `failed` by itself.
+    JOB_FAILED = {"failed": 1, "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}
+    # A pod lost to an eviction, a drain or a delete, before the replacement: the
+    # fields a real Job's status has, with no count of the container's restarts in it.
+    POD_LOST = {"failed": 1, "active": 0, "ready": 0, "terminating": 0, "uncountedTerminatedPods": {},
+                "conditions": [{"type": "Suspended", "status": "False", "reason": "JobResumed"}]}
 
     def setUp(self):
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
@@ -202,7 +209,7 @@ class HelmJobTests(unittest.TestCase):
 
     def test_an_upgrade_whose_helm_job_failed_offers_it_too(self):
         ident = self.upgraded()
-        self.job_object({"failed": 1})
+        self.job_object(self.JOB_FAILED)
         job = self.look(ident)
         self.assertEqual("failed", job["status"])
         self.assertTrue(job["cleanable"])
@@ -442,7 +449,7 @@ class HelmJobTests(unittest.TestCase):
         # It follows no Job, so it neither reads one first nor takes an old one for its own.
         self.cancelling()
         self.chart()
-        self.job_object({"failed": 1})
+        self.job_object(self.JOB_FAILED)
         self.kube.fail("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana", 500)
         ident = self.route("upgrade")
         self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana")
@@ -485,13 +492,76 @@ class HelmJobTests(unittest.TestCase):
         self.refused(ident, "No earlier settings")
         self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
 
+    # A lost pod is not the end of the Job: the controller goes on.
+    def test_a_lost_pod_does_not_end_the_job(self):
+        ident = self.upgraded()
+        self.job_object(self.POD_LOST)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertFalse(job["cleanable"])
+        self.assertIn("trying again", job["message"])
+
+    def test_a_retry_that_works_ends_it_green_with_nothing_to_put_back(self):
+        ident = self.upgraded()
+        self.job_object(self.POD_LOST)
+        self.assertEqual("running", self.look(ident)["status"])
+        self.job_object({"failed": 1, "active": 1})
+        job = self.look(ident)
+        self.assertEqual("running", job["status"])
+        self.assertEqual("Helm is running", job["message"])
+        self.job_object({"failed": 1, "succeeded": 1})
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertFalse(job["cleanable"])
+
+    def test_a_failed_condition_ends_it_failed_and_offers_the_put_back(self):
+        ident = self.upgraded()
+        self.job_object(self.JOB_FAILED)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertTrue(job["cleanable"])
+        self.assertEqual("Helm failed; the helm-install-grafana job's log in kube-system says why", job["message"])
+
+    def test_a_failed_condition_that_is_false_does_not_end_it(self):
+        ident = self.upgraded()
+        conditions = self.POD_LOST["conditions"] + [{"type": "Failed", "status": "False"}]
+        self.job_object({**self.POD_LOST, "conditions": conditions})
+        self.assertEqual("running", self.look(ident)["status"])
+
+    def test_a_failed_condition_ends_it_whatever_the_pod_count_says(self):
+        ident = self.upgraded()
+        self.job_object({**self.JOB_FAILED, "active": 1})
+        self.assertEqual("failed", self.look(ident)["status"])
+
+    def test_another_condition_that_is_true_does_not_end_it(self):
+        ident = self.upgraded()
+        self.job_object({**self.POD_LOST, "conditions": [{"type": "Suspended", "status": "True"}]})
+        self.assertEqual("running", self.look(ident)["status"])
+
+    def test_a_lost_pod_in_an_uninstall_still_ends_helm_removed(self):
+        ident = self.start("uninstall", job="helm-delete-grafana")
+        self.job_object(self.POD_LOST, name="helm-delete-grafana")
+        self.assertEqual("running", self.look(ident)["status"])
+        self.kube.discard("/apis/batch/v1/namespaces/kube-system/jobs/helm-delete-grafana")
+        self.kube.discard(self.CHART)
+        job = self.look(ident)
+        self.assertEqual("succeeded", job["status"])
+        self.assertIn("Helm removed grafana", job["message"])
+
+    def test_a_lost_pod_in_an_install_is_still_cancellable(self):
+        self.cancelling()
+        ident = self.start("install")
+        self.job_object(self.POD_LOST)
+        self.assertEqual("running", self.look(ident)["status"])
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+
     # A Job from before this job's write is not its Job.
     def test_an_old_complete_job_does_not_finish_an_upgrade(self):
         ident = self.upgraded()
         job = self.look(ident)
         self.assertEqual("running", job["status"])
         self.assertEqual("Waiting for the Helm controller", job["message"])
-        self.job_object({"failed": 1})
+        self.job_object(self.JOB_FAILED)
         job = self.look(ident)
         self.assertEqual("failed", job["status"], "the Job it caused decides")
         self.assertTrue(job["cleanable"])
@@ -499,7 +569,7 @@ class HelmJobTests(unittest.TestCase):
     def test_an_old_failed_job_does_not_fail_an_upgrade_or_offer_a_put_back(self):
         self.cancelling()
         self.chart()
-        self.job_object({"failed": 1})
+        self.job_object(self.JOB_FAILED)
         ident = self.route("upgrade", version="9.0.0")
         job = self.look(ident)
         self.assertEqual("running", job["status"])
