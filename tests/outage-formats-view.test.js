@@ -34,7 +34,7 @@ test("the webhook has a Format choice, generic JSON unless saved otherwise", () 
 test("Send a test and Allow a LAN address are for admins", () => {
   const html = run(`outageSectionHtml("app", ${row({ webhook: "https://h.example.com/x", lan: true })})`);
   assert.match(html, /<button[^>]*outageTest[^>]*data-need="admin"/);
-  assert.match(html, /<label class="switch" data-need="admin"><input type="checkbox" id="oa_lan" checked>/);
+  assert.match(html, /<label class="switch" data-need="admin"[^>]*><input type="checkbox" id="oa_lan" checked>/);
   assert.match(run(`outageSectionHtml("app", ${row({ webhook: "https://h.example.com/x" })})`), /id="oa_lan">/);
 });
 
