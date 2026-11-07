@@ -864,7 +864,7 @@ window.nodeBridge = async node => {
     ${f.problem ? UI.callout("warn", "Not converted", `${esc(f.problem[0].toUpperCase() + f.problem.slice(1))}.`) + UI.actions(UI.cancel("Close")) : `
       <p class="small"><span class="mono">${esc(f.interface)}</span>'s address, routes and DNS move to a new bridge, <span class="mono">${esc(f.bridge)}</span>,
         which takes ${esc(f.interface)}'s MAC address${f.dhcp ? " and asks DHCP as that MAC, so your router gives it the same address" : ""}.</p>
-      ${UI.callout("warn", `${esc(node)} drops off the network for a few seconds`,
+      ${UI.callout("warn", `${node} drops off the network for a few seconds`,
         `netplan's files are copied aside first, and a rollback is armed on the host: unless Homestead sees ${esc(f.address)} on ${esc(f.bridge)}
          with the gateway answering, the host puts its old network back by itself after ${Math.round(f.rollback_seconds / 60)} minutes.
          kube-vip then starts again on ${esc(f.bridge)}${(f.services || []).length ? `, and on a cluster of several hosts ${esc(f.services[0])} restarts so flannel follows` : ""}. Containers keep running.`)}

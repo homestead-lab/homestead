@@ -60,7 +60,7 @@ window.nfsExport = name => {
   const share = (STATE.data.shares || []).find(row => row.name === name);
   if (!share) return toast("Share details are no longer available; refresh and try again", "bad");
   const rwx = (share.access_modes || []).includes("ReadWriteMany");
-  modal(`NFS export · ${esc(name)}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
+  modal(`NFS export · ${name}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
     ${rwx ? "" : `${UI.callout("warn", "", `This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.`)}`}
     <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.0.2.42 or 192.0.2.0/24. An everyone-accessible export is not allowed.")}</label>
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
@@ -124,7 +124,7 @@ window.smbUserSave = async (action, button) => {
   } catch (error) { button.disabled = false; toast(error.message, "bad"); }
 };
 window.smbUserRemove = name => {
-  modal(`Remove SMB user · ${esc(name)}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
+  modal(`Remove SMB user · ${name}`, UI.lead("Remove this unused account and its saved password. Shares and their data are kept.")
     + UI.actions(UI.button("Back", "smbUsers()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Remove user", `smbUserDelete(${jsArg(name)},this)`, { kind: "danger" })), false, "smb-access");
 };
 window.smbUserDelete = async (user, button) => {

@@ -13,3 +13,22 @@ test("no warning or error is a hand-written .note box", () => {
     .map((line, n) => OLD_BOX.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
   assert.deepEqual(found, [], "use UI.callout(tone, title, body) or UI.notices(items, title)");
 });
+
+// UI.button and UI.dialog's actions escape the onclick they are given, so
+// its arguments are jsArg (JSON), never jsq (JSON already escaped for HTML):
+// escaped twice, the handler reads &amp;quot; and the button does nothing.
+test("no engine button's onclick is escaped twice", () => {
+  const twice = /onclick:\s*`[^`]*\$\{jsq\(|UI\.button\([^;\n]*,\s*`[^`]*\$\{jsq\(/;
+  const found = files.flatMap(file => fs.readFileSync(file, "utf8").split("\n")
+    .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
+  assert.deepEqual(found, [], "use jsArg(...) in an onclick UI.button or UI.dialog escapes");
+});
+
+// A dialog's title and a notice's plain-text title are escaped where they are
+// shown; an esc() in them is escaped twice, and a name with & reads &amp;.
+test("no dialog or notice title is escaped twice", () => {
+  const twice = /(?:childModal|modal)\(`[^`]*\$\{esc\(|UI\.callout\("[a-z]+", `[^`]*\$\{esc\(/;
+  const found = files.flatMap(file => fs.readFileSync(file, "utf8").split("\n")
+    .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
+  assert.deepEqual(found, [], "pass the plain name; use { html } for a notice title with markup");
+});

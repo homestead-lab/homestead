@@ -20,7 +20,7 @@ function world({ ask = true } = {}) {
     movesRepaint: () => log.push(["movesRepaint"]), tip: t => t, clusterStorage: () => {}, modalBack: () => log.push(["modalBack"]),
     childModal: (title, html, wide, context) => log.push(["childModal", title, html, wide, context]),
     api: (path, opts) => { log.push(["api", path, JSON.parse(opts.body)]); return new Promise((resolve, reject) => replies.push({ resolve, reject })); } };
-  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq = value => ctx.esc(JSON.stringify(value));
+  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq = value => ctx.esc(JSON.stringify(value)); ctx.jsArg = value => JSON.stringify(String(value ?? ""));
   vm.runInContext(require("./helpers/lifecycle-source")(), ctx);
   const snap = label => log.push(["state", label, fields["#mv_plan"].innerHTML, fields["#mv_go"].disabled, fields["#mv_sc"].innerHTML ?? null, fields["#mv_sc"].disabled]);
   const answer = (value, error) => { const r = replies.shift(); error ? r.reject(new Error(error)) : r.resolve(value); };
