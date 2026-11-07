@@ -195,6 +195,29 @@ class ThroughServer(unittest.TestCase):
         self.ROUTES.after(lambda request, status, ms: self.seen.append((request, status, ms)), fields=fields)
 
     def test_no_secret_reaches_a_hook_by_default(self):                 # addition 1
+        self.check_no_secret_reaches_a_hook()
+
+    def test_the_hooks_are_checked_whatever_order_they_queue_in(self):
+        """server.H queues a request's hooks after its answer is sent, on the request's
+        own thread, and each request here is a new connection: the client has the answer
+        and sends the next, whose hooks may queue first. Here the login's hooks wait until
+        the setup's are queued, so they arrive in that order every time (the plain test
+        met it now and then under load)."""
+        setup_queued, waited = threading.Event(), []
+        queue_hooks = self.server.H.after_request
+
+        def in_reverse(handler):
+            path = (handler.path or "").split("?")[0]
+            if path == "/api/auth/login":
+                waited.append(setup_queued.wait(5))
+            queue_hooks(handler)
+            if path == "/api/auth/setup":
+                setup_queued.set()
+        self.enterContext(mock.patch.object(self.server.H, "after_request", in_reverse))
+        self.check_no_secret_reaches_a_hook()
+        self.assertEqual([True], waited, "the login's hooks were queued after the setup's")
+
+    def check_no_secret_reaches_a_hook(self):
         S, AUTH = self.server, self.server.AUTH
         if hasattr(S, "SETUP_CODE"):     # with #765, setup checks its code first: the code is right here
             self.enterContext(mock.patch.object(S.SETUP_CODE, "first_admin", return_value="ada"))
@@ -227,9 +250,10 @@ class ThroughServer(unittest.TestCase):
             self.assertIsNone(request.conn.who)
             self.assertIsInstance(ms, int)
             self.assertFalse([s for s in secrets if s in repr((request, status, ms))], request.path)
-        self.assertEqual(["/api/auth/login", "/api/auth/setup", "/api/auth/password", "/api/auth/keys"],
-                         [request.path for request, _, _ in self.seen])
-        self.assertEqual([None, None, "ada", "ada"], [request.user for request, _, _ in self.seen])
+        # Who made each request, whichever order their hooks queued in.
+        self.assertCountEqual([("/api/auth/login", None), ("/api/auth/setup", None),
+                               ("/api/auth/password", "ada"), ("/api/auth/keys", "ada")],
+                              [(request.path, request.user) for request, _, _ in self.seen])
 
     def test_a_hook_asks_for_named_fields_only(self):
         self.route("POST", "/api/test/hooked", "admin", lambda request: {"ok": True})
