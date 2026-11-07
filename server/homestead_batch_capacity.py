@@ -54,7 +54,8 @@ def plan(entries, namespace, pods, nodes, claims, threshold, *, budget=256, seco
         envelopes.append({"name": node["name"], "baseline_gb": round(base, 2), "upper_gb": round(base + added, 2),
                           "upper_percent": percent if known else None, "metrics_available": known})
         if added and known and percent >= threshold:
-            warnings.add(f"{node['name']}: conservative batch RAM upper estimate {percent}% exceeds warning threshold {threshold}%")
+            warnings.add(f"{node['name']}: batch RAM could reach {percent}%, over the {threshold}% warning. "
+                         "This is a conservative upper estimate")
     total = sum(e["replicas"] for e in entries)
     remaining = tuple(e["replicas"] for e in entries)
     steps, limited = 0, False

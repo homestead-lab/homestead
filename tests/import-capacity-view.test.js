@@ -1,5 +1,6 @@
 "use strict";
 const test = require("node:test");
+const seen = require("./helpers/seen");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
@@ -78,7 +79,7 @@ test("copy review explains unknown space estimates and retained partial copies",
 
 test("shared phase warnings appear once above collapsed capacity details",async()=>{
   const t=setup(); await t.ctx.importReview({name:"app"});
-  assert.equal((t.fields.html.match(/RAM warning/g)||[]).length,1);
+  assert.equal((seen(t.fields.html).match(/RAM warning/g)||[]).length,1);
   assert.match(t.fields.html,/Copy files, Imported application/);
-  assert.ok(t.fields.html.indexOf("RAM warning")<t.fields.html.indexOf("<details "));
+  assert.ok(t.fields.html.indexOf("RAM warning")<t.fields.html.indexOf('<details class="ui-more"'));
 });

@@ -97,7 +97,7 @@ window.reclassWatch = async id => {
     $("#mbody").innerHTML = `<div class="rc-steps">${steps.map(s => `<div class="rc-step ${s.state}"><span>${s.state === "done" ? "✓" : s.state === "active" ? '<span class="spin2"></span>' : "•"}</span>${esc(s.label)}
         ${s.state === "active" && (s.id === "copy" || s.id === "verify") ? `<div class="rc-copy">${meter(s.id === "verify" ? 100 : copy.percent || 0, "", "cpu")}
           <span class="mono xs">${s.id === "verify" ? "comparing with the original" : copy.unavailable ? "waiting for reported progress" : `${copy.percent || 0}%${copy.speed ? ` · ${esc(copy.speed)}` : ""}`}</span></div>` : ""}</div>`).join("")}</div>
-      <div class="note ${op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : ""}" style="margin-top:12px">${esc(op.message || "")}</div>
+      ${UI.callout(op.status === "failed" ? "bad" : op.status === "succeeded" ? "good" : "", "", `${esc(op.message || "")}`, { attrs: 'style="margin-top:12px"' })}
       ${op.storage_recovery ? `<div class="row"><button class="btn pri" data-need="admin" onclick="storageRecoveryReview(${jsq(op.id)})">Review storage move</button></div>` : ""}
       ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation(${jsq(op.id)})">Carry on from this step</button></div>` : ""}
       ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld(${jsq(op.old_pv)})">Remove the old copy</button>

@@ -96,8 +96,8 @@ def _host_network_config(cfg, options, name):
         # (homestead_macvtap). Its device plugin offers physical links and
         # bonds, not VLAN interfaces - a VLAN for VMs wants a host bridge.
         if not options.get("macvtap"):
-            raise ValueError("VMs join a LAN on a network interface through macvtap: install it under "
-                             "Settings → Cluster → Add-ons (Required components) first, or use a host bridge")
+            raise ValueError("Install macvtap first, or use a host bridge. VMs join a LAN on a network interface through it: "
+                             "it is under Settings → Cluster → Add-ons (Required components)")
         if vlan:
             raise ValueError("a VM network on a VLAN needs a host bridge; macvtap is offered on the untagged LAN only")
         import homestead_macvtap as MACVTAP
@@ -105,7 +105,7 @@ def _host_network_config(cfg, options, name):
     master = f"{iface}.{vlan}" if vlan else iface
     if vlan and known and master not in known:
         # macvlan rides a host interface; a VLAN needs the host's own for it.
-        raise ValueError(f"the hosts have no {master} interface for VLAN {vlan} on {iface}: add it on each host "
+        raise ValueError(f"the hosts have no interface for VLAN {vlan}. Add {master} on {iface} on each host "
                          f"(ip link add link {iface} name {master} type vlan id {vlan}), or use a host bridge")
     return {"cniVersion": "0.3.1", "name": name, "type": "macvlan", "master": master, "mode": "bridge", "ipam": {}}, master, False, {}
 

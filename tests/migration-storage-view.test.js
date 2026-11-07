@@ -93,7 +93,7 @@ test("replacement vBIOS bytes are reviewed and do not enable Start until checked
 test("VM copy review and start retain copy mode and storage selection", async () => {
   const t = setup();
   t.ctx.moveReview("source", "vm", "desktop", "copy", "guests");
-  assert.match(t.ctx.modalTitle, /^Copy desktop/);
+  assert.match(t.ctx.modalTitle, /^Copy from source · desktop/);
   assert.match(t.ctx.modalHtml, /Creates a stopped copy here/);
   assert.match(t.ctx.modalHtml, /Start copy/);
   assert.equal(t.calls[0].body.transfer_mode, "copy");
@@ -116,7 +116,7 @@ test("a destination without copy support cannot enable Start copy", async () => 
   t.replies.shift()({ok:true,will_run:true,claims:[]});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(t.fields["#mv_go"].disabled,true);
-  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead on this destination/);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead here before copying/);
 });
 
 test("copy activity has cleanup actions and never offers source removal", () => {

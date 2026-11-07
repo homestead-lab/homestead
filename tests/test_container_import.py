@@ -124,7 +124,7 @@ class ContainerImportStorageTests(unittest.TestCase):
 
     def test_an_unread_class_list_is_said_and_nothing_is_made(self):
         self.reads(fail=urllib.error.URLError("connection refused"))
-        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes, so it did not "
+        with self.assertRaisesRegex(RuntimeError, "Homestead could not read the storage classes. It did not "
                                                   "choose one for the imported volumes: .*connection refused"):
             CONTAINER_IMPORT.import_container(self.config(pvc_name="example-config", size_gb=10))
         self.assertEqual([], self.created)

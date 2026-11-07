@@ -633,8 +633,8 @@ def preview(body, now=None):
         try:
             hits = matching(found, rule["query"], rule["regex"], rule["case"], PREVIEW_SECONDS)
         except TooSlow:
-            raise ValueError(f"trying it on the last hour took more than {PREVIEW_SECONDS} seconds: too many lines, "
-                             "or too slow an expression. Try plain text, or a simpler expression") from None
+            raise ValueError(f"trying it on the last hour took more than {PREVIEW_SECONDS} seconds. Too many lines, "
+                             "or too slow an expression: try plain text, or a simpler expression") from None
     per = {}
     for i in hits:
         per[_minute(stamps[i])] = per.get(_minute(stamps[i]), 0) + 1

@@ -113,7 +113,7 @@ class Snapshot:
                     if "ReadWriteMany" in modes:
                         reasons.append(f"PVC {name}'s storage class is migratable, so several hosts can't mount it; choose a class without migratable for a shared volume")
                     else:
-                        warnings.append(f"PVC {name}'s storage class is migratable: fine for one host, not for a volume several hosts mount")
+                        warnings.append(f"PVC {name}'s storage class is migratable. That suits one host, not a volume several hosts mount")
             if pv:
                 if pv.get("_missing"):
                     reasons.append(f"PVC {name}'s bound PV is missing")

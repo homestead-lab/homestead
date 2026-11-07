@@ -258,7 +258,7 @@ class UnreadInventoryTests(RemovalFixture):
                         return answer
                     return read(path)
                 with self.subTest(failed=failed, how=how), mock.patch.object(imports, "kget", get):
-                    with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                    with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                         IMAGES.cleanup_image(self.UNUSED, ["node1"])
                     self.assertEqual([], self.posted())
 
@@ -391,7 +391,7 @@ class UnreadInventoryTests(RemovalFixture):
                 raise urllib.error.HTTPError(asked, 500, "Server Error", {}, None)
             return read(asked)
         with mock.patch.object(imports, "kget", get):
-            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                 IMAGES.image_cache()
 
     def test_replicas_count_as_zero_unless_a_positive_number(self):
@@ -430,7 +430,7 @@ class UnreadInventoryTests(RemovalFixture):
                 return {"groups": [{"name": "apps"}, {"name": "kubevirt.io"}, {"name": "pool.kubevirt.io"}]}
             return read(path)
         with mock.patch.object(imports, "kget", get):
-            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                 IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
@@ -441,19 +441,19 @@ class UnreadInventoryTests(RemovalFixture):
 
     def test_a_404_for_vms_while_kubevirt_is_served_removes_nothing(self):
         with self.kubevirt_answers_404(["apps", "batch", "kubevirt.io"]):
-            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                 IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_an_empty_discovery_answer_removes_nothing(self):
         with self.kubevirt_answers_404([]):
-            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                 IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_a_discovery_that_fails_after_a_404_removes_nothing(self):
         with self.kubevirt_answers_404(OSError("timed out")):
-            with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+            with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                 IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
@@ -481,7 +481,7 @@ class WaitingWorkloadTests(RemovalFixture):
             with self.subTest(path=path, item=item):
                 self.objects[path]["items"] = [item]
                 try:
-                    with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                    with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                         IMAGES.cleanup_image(self.UNUSED, ["node1"])
                 finally:
                     self.objects[path]["items"] = []
@@ -621,7 +621,7 @@ class OtherRecordsTests(RemovalFixture):
         self.assertEqual([], self.kept())
         # A version's resource list that cannot be read keeps everything.
         self.objects["/apis/snapshot.kubevirt.io/v1"] = {"resources": "x"}
-        with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+        with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
             IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
@@ -663,7 +663,7 @@ class OtherRecordsTests(RemovalFixture):
     def test_a_404_for_a_group_discovery_still_lists_removes_nothing(self):
         for group in OPTIONAL:
             with self.subTest(group=group), self.answers(f"/apis/{group}", 404, groups=["apps", group]):
-                with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                     IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
@@ -673,7 +673,7 @@ class OtherRecordsTests(RemovalFixture):
                        {"preferredVersion": {"groupVersion": "cdi.kubevirt.io/v1/x"}}, []):
             with self.subTest(answer=answer):
                 self.objects["/apis/cdi.kubevirt.io"] = answer
-                with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
+                with self.assertRaisesRegex(ValueError, "(?i)no image is cleaned up"):
                     IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 

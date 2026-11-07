@@ -92,7 +92,8 @@ def resolve(body, ops, read, actor):
             plan, context = _snapshot(item, read, actor)
             REVIEW.enforce({"id": ident, "capacity_token": body.get("capacity_token"), "confirm_capacity": body.get("confirm_capacity")}, plan, context)
             if body.get("acknowledge_unknown") is not True or (item["kind"] != IMPORT.KIND and body.get("confirm") != plan["confirm"]):
-                raise ValueError("Type the reviewed workload or batch name and acknowledge retained resources, the unknown outcome and possible late effects")
+                raise ValueError("Type the reviewed name and tick each acknowledgement. They cover retained resources, "
+                                 "the unknown outcome and possible late effects")
             ref = item["ref"]
             ref["recovery"] = {"by": actor, "at": time.time(), "previous_phase": ref["phase"],
                                "resources": copy.deepcopy(plan["resources"]), "outcome": "unknown", "late_effect_acknowledged": True}

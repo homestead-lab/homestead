@@ -349,8 +349,8 @@ def plan(ns, claim, target, *, capture=False):
             room = (cap.get("largest") or {}).get(str(min(replicas, 3)))
             space["room_gb"] = room
             if room is not None and room < space["size_gb"]:
-                blockers.append(f"there is room for a {room} GiB volume with {replicas} cop{'y' if replicas == 1 else 'ies'} "
-                                f"on {target}, and this one is {space['size_gb']} GiB; free some space or add a disk first")
+                blockers.append(f"{target} has room for a {room} GiB volume, and this one is {space['size_gb']} GiB. "
+                                f"That is with {replicas} cop{'y' if replicas == 1 else 'ies'}; free some space or add a disk first")
         except Exception:
             warnings.append("Destination storage capacity could not be checked; free space is unknown")
         if space["room_gb"] is None and not any("free space is unknown" in w for w in warnings):

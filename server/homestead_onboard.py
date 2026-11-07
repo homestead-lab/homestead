@@ -493,16 +493,16 @@ def removal_plan(name):
         if len([n for n in control if n["metadata"]["name"] != name]) == 0:
             blockers.append(f"{name} is the only control-plane node; removing it ends the cluster.")
         elif remaining and others_ready < remaining // 2 + 1:
-            blockers.append(f"Only {others_ready} of the other {remaining} etcd members are ready, "
-                            f"so the cluster would not have quorum without {name}. Bring them back first.")
+            blockers.append(f"Only {others_ready} of the other {remaining} etcd members are ready. "
+                            f"The cluster would not have quorum without {name}: bring them back first.")
         elif remaining < 3:
             warnings.append(f"The cluster keeps {_plural(remaining, 'etcd member')}; "
                             f"one more failure would stop it. Add a node soon.")
         elif distribution == "harvester":
             warnings.append("Harvester promotes a worker to take its control-plane place, when one is available.")
         if distribution == "kubernetes" and "etcd" in roles:
-            warnings.append(f"Plain Kubernetes keeps {name}'s etcd member after the node goes, and still counts it "
-                            f"toward quorum: remove it on another control-plane host with "
+            warnings.append(f"Remove {name}'s etcd member by hand afterwards. Plain Kubernetes keeps it after the node goes, "
+                            f"and still counts it toward quorum: on another control-plane host, "
                             f"etcdctl member list, then etcdctl member remove <its id>.")
     by_volume, by_node = _replicas_by_node(strict=True)
     lost, degraded = [], []

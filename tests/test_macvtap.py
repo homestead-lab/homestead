@@ -165,7 +165,7 @@ class NetworkTests(network_fixture.HostInterfaceNetworkTests):
             self.assertEqual("bridge", self.make(interface="br0", **{"for": "vms"})["type"], "a bridge carries VMs as it is")
 
     def test_without_macvtap_it_says_how_to_get_it(self):
-        with mock.patch.object(VMNET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "install it"):
+        with mock.patch.object(VMNET, "_macvtap", lambda: False), self.assertRaisesRegex(ValueError, "Install macvtap first"):
             self.make(interface="eth0", **{"for": "vms"})
 
     test_options_list_the_hosts_interfaces_those_on_every_host_first = None

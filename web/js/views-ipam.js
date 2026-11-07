@@ -147,7 +147,7 @@ function renderIpam() {
       { title: "Last scan", value: scanning ? `${subnet.scan.progress}%` : subnet.scan.at ? fmtAgo(Date.now() / 1000 - subnet.scan.at) : "never",
         sub: u.configured && u.last_sync ? `UniFi synced ${fmtAgo(Date.now() / 1000 - u.last_sync)}` : "" },
     ])}</div>
-    ${(subnet.pool_clash || []).length ? `<div class="note bad"><b>Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.</b> A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.</div>` : ""}
+    ${(subnet.pool_clash || []).length ? `${UI.callout("bad", { html: `Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.` }, `A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.`)}` : ""}
     ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">
       <select aria-label="Show" onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
@@ -309,7 +309,7 @@ window.ipamEdit = (ip = "") => {
     <div class="f"><label>Tags</label><input id="ia_tags" value="${esc((row.tags || []).join(", "))}" placeholder="iot, office"></div>
     ${row.unifi && (row.unifi.name || row.unifi.hostname) ? `<div class="dim xs" style="margin:-4px 0 10px">UniFi calls it ${esc([row.unifi.name, row.unifi.hostname].filter(Boolean).join(" · "))}; your name here is kept apart and a sync never changes it.</div>` : ""}
     <div class="f"><label>Notes</label><textarea id="ia_note" rows="3" maxlength="300">${esc(row.note || "")}</textarea></div>
-    ${(row.flags || []).map(f => `<div class="note ${f.level === "warn" ? "bad" : ""}">${esc(f.text)}</div>`).join("")}
+    ${UI.notices((row.flags || []).map(f => [f.level === "warn" ? "bad" : "info", f.text]))}
     ${row.scan?.up ? `<div class="dim xs">Last scan: answering${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}${row.scan.rdns ? ` · ${esc(row.scan.rdns)}` : ""}</div>` : ""}
     ${UI.actions(`<button class="btn pri" onclick="ipamSave()">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}`)}`);
@@ -399,7 +399,7 @@ window.ipamUnifi = async () => {
       <div class="f"><label>Site</label><input id="uf_site" value="${esc(u.site || "default")}"></div></div>
     <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
-    ${u.last_error ? `<div class="note bad">${esc(u.last_error)}</div>` : ""}
+    ${u.last_error ? `${UI.callout("bad", "", `${esc(u.last_error)}`)}` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
       <button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>`,
@@ -504,5 +504,5 @@ window.ipamImportFile = async file => {
   try {
     const r = await ipamPost("/api/ipam/import", { csv: await file.text() });
     toast(r.detail, "ok"); closeModal(); viewIpam();
-  } catch (e) { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+  } catch (e) { host.innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; }
 };

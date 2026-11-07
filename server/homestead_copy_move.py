@@ -121,8 +121,8 @@ def plan(name, disk_tags=(), node_tags=()):
         blockers.append(f"It is {status.get('state') or 'changing'}; wait until it is attached or detached")
     elif status.get("state") == "detached" and "offlineRebuilding" not in spec \
             and REBALANCE._setting("offline-replica-rebuilding", "false") != "true":
-        blockers.append("It is detached, and this Longhorn rebuilds copies of a detached volume only with offline "
-                        "rebuilding on; start what uses it first, or turn offline rebuilding on in Longhorn")
+        blockers.append("Start what uses it first, or turn on offline rebuilding in Longhorn. It is detached, "
+                        "and this Longhorn rebuilds copies of a detached volume only with offline rebuilding on")
     if (meta.get("annotations") or {}).get(REBALANCE.MOVING):
         blockers.append("A copy of it is moving already; follow that in Jobs")
     targets = [{**d, "fits": _room(d, size, actual)[0], "room_gb": _room(d, size, actual)[1]}
@@ -139,13 +139,13 @@ def plan(name, disk_tags=(), node_tags=()):
             blockers.append("Every copy is on a disk with those tags already")
         hosts = {t["host"] for t in targets if t["fits"]}
         if wanted > 1 and len(hosts) < wanted:
-            warnings.append(f"Disks with those tags are on {len(hosts)} host{'' if len(hosts) == 1 else 's'}, "
-                            f"so {wanted} copies cannot all be on different hosts")
+            warnings.append(f"{wanted} copies cannot all be on different hosts. Disks with those tags are on "
+                            f"{len(hosts)} host{'' if len(hosts) == 1 else 's'}")
     else:
         blockers.append("Choose the disk tags (or host tags) its copies should be on")
     if status.get("state") == "detached" and moving:
-        warnings.append("It is detached: Longhorn attaches it briefly to build each copy, and an app started "
-                        "meanwhile waits for that")
+        warnings.append("Longhorn attaches it briefly to build each copy. It is detached now, and an app "
+                        "started meanwhile waits for that")
     token = review_token(name, disk_tags, node_tags, [row["replica"] for row in moving])
     return {"volume": name, "claim": "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x) or name,
             "size_gb": round(size / GIB, 1), "used_gb": round(actual / GIB, 1), "state": status.get("state", ""),

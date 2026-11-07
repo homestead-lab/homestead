@@ -5,7 +5,7 @@ async function viewShares() {
   try { sh = await api("/api/shares"); }
   catch (e) {
     paint(`${UI.pageHeader(`Network shares`, ``, ``)}
-      <div class="note bad">Could not load shares: ${esc(e.message)} <button class="btn sm" onclick="viewShares()">Retry</button></div>`);
+      ${UI.callout("bad", "", `Could not load shares: ${esc(e.message)} <button class="btn sm" onclick="viewShares()">Retry</button>`)}`);
     return;
   }
   STATE.data.shares = sh;
@@ -27,11 +27,11 @@ async function viewShares() {
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
     ${can("admin") && !smb.error ? `<div class="row">${smb.installed && (!smb.in_sync || Object.keys(smb.recovery_failures || {}).length) ? '<button class="btn sm" onclick="repairSamba(this)">Repair / retry recovery</button>' : ""}${smbUserList ? `<button class="btn sm" onclick="smbUsers()">SMB users · ${smbUserList.length}</button>` : smbUsersUnread ? '<button class="btn sm" onclick="smbUsers()">SMB users</button>' : ""}<button class="btn sm quiet" onclick="settingsTab('cluster');go('settings')">Manage add-on</button></div>` : ""}</div>
     ${smbUsersUnread && !smb.error ? `<div class="dim small" style="margin-top:8px">Could not read the SMB users: ${esc(smbUsersUnread)}</div>` : ""}
-    ${smb.partial ? `<div class="note warn"><b>Partial service · ${plural(smb.offline_shares.length, "share")} offline</b><br>Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.</div>` : ""}
+    ${smb.partial ? `${UI.callout("warn", { html: `Partial service · ${plural(smb.offline_shares.length, "share")} offline` }, `Unavailable storage is temporarily excluded so other shares can start. No volumes, credentials or share definitions were deleted.<ul>${smb.offline_shares.map(s => `<li><b>${esc(s.name)}</b> · ${esc(s.pvc)}: ${esc(s.reason)}</li>`).join("")}</ul>After storage is confirmed recoverable for two minutes, Homestead re-adds the shares. This restarts SMB and briefly interrupts connections.`)}` : ""}
     ${smbUserList && !smbUserList.length ? `<div class="dim small" style="margin-top:8px">No SMB users yet. Private shares need one; guest shares don't. <a class="linkish" onclick="smbUserEdit('')">Add a user</a></div>` : ""}
-    ${smb.recovery_warning ? `<div class="note warn">${esc(smb.recovery_warning)}</div>` : ""}
-    ${Object.keys(smb.recovery_failures || {}).length ? `<div class="note bad">Automatic restore paused: ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The working subset was restored; use Repair / retry recovery after resolving the problem.</div>` : ""}
-    ${Object.keys(smb.recovery_pending || {}).length ? `<div class="note warn">Checking storage stability: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to restore" : "waiting to exclude unavailable storage"})`).join(", ")}.</div>` : ""}
+    ${smb.recovery_warning ? `${UI.callout("warn", "", `${esc(smb.recovery_warning)}`)}` : ""}
+    ${Object.keys(smb.recovery_failures || {}).length ? `${UI.callout("bad", "", `Automatic restore paused: ${Object.entries(smb.recovery_failures).map(([pvc, reason]) => `${esc(pvc)}: ${esc(reason)}`).join(" ")} The working subset was restored; use Repair / retry recovery after resolving the problem.`)}` : ""}
+    ${Object.keys(smb.recovery_pending || {}).length ? `${UI.callout("warn", "", `Checking storage stability: ${Object.entries(smb.recovery_pending).map(([pvc, p]) => `${esc(pvc)} (${p.action === "restore" ? "waiting to restore" : "waiting to exclude unavailable storage"})`).join(", ")}.`)}` : ""}
     ${UI.more("How the SMB server is managed", `<p>Homestead manages this container, its image and its volume mounts from the share list. Enable, stop or remove the server in Settings → Hardware and storage → Add-ons; volumes are kept. Confirmed unavailable volumes are temporarily excluded after one minute; recovered volumes return after a two-minute stability check. Either change restarts SMB. Storage recovery and a working cluster control plane are still required.</p>`)}</div>
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">NFSv4 server · ${esc(nfs.name || "homestead-nfs")}</div>
     <div class="dim small">${nfs.error ? `Status unavailable: ${esc(nfs.error)}` : !nfs.installed ? "Not installed" :
@@ -61,7 +61,7 @@ window.nfsExport = name => {
   if (!share) return toast("Share details are no longer available; refresh and try again", "bad");
   const rwx = (share.access_modes || []).includes("ReadWriteMany");
   modal(`NFS export · ${esc(name)}`, `<p>Export this share from the optional NFSv4 container to a specific client address or network. Leave the field blank to remove its NFS export. SMB access is unchanged.</p>
-    ${rwx ? "" : `<div class="note warn">This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.</div>`}
+    ${rwx ? "" : `${UI.callout("warn", "", `This share may not be RWX. NFS requires a Bound ReadWriteMany volume so its separate container can mount the data; the server checks this before saving.`)}`}
     <div class="f"><label>Allowed IPv4 client or CIDR ${tip("For example, 192.0.2.42 or 192.0.2.0/24. An everyone-accessible export is not allowed.")}</label>
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
@@ -260,8 +260,8 @@ window.shareBinHint = prefix => {
   if (prefix !== "she" || !off) return;
   const held = STATE.shareBin && STATE.shareBin.files;
   off.classList.toggle("hidden", on || !held);
-  off.innerHTML = on || !held ? "" : `<div class="note warn">Turning the bin off stops new deletes going there. What it holds now stays: ${esc(shareBinHolds())}.
-    <label class="switch"><input type="checkbox" id="she_bin_empty"> Empty it when saving · deleted for good</label></div>`;
+  off.innerHTML = on || !held ? "" : `${UI.callout("warn", "", `Turning the bin off stops new deletes going there. What it holds now stays: ${esc(shareBinHolds())}.
+    <label class="switch"><input type="checkbox" id="she_bin_empty"> Empty it when saving · deleted for good</label>`)}`;
 };
 const shareBinHolds = () => {
   const bin = STATE.shareBin || {};

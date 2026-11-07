@@ -49,7 +49,7 @@ test("Start still sends after the settings review and Back", async () => {
   w.c.lhV2UpgradeSettings(true); await w.c.lhV2UpgradeSettingsReview(true);
   assert.match(w.title.textContent, /Apply V2 upgrade settings/);
   w.c.modalBack(); w.c.modalBack();                                   // back to the settings form, then to the upgrade
-  assert.match(w.title.textContent, /Upgrade Longhorn to v1\.13\.0/);
+  assert.match(w.title.textContent, /Upgrade to v1\.13\.0 · Longhorn/);
   await w.c.lhV2UpgradeStart();
   assert.equal(starts(w).length, 1);
 });

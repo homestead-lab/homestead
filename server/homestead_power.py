@@ -199,13 +199,13 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
         warnings.append("This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. "
                         "It only records the maintenance. Whatever you then do to the host takes the whole cluster with it")
     elif planned_outage:
-        warnings.append("Planned whole-cluster outage: Homestead stops the apps and VMs on this host first, so their "
+        warnings.append("Planned whole-cluster outage: its apps and VMs stop first. Homestead stops them so their "
                         "volumes detach in order, then asks the host's systemd to " + ("reboot" if action == "reboot" else "power off")
                         + "; they start again when it is back. "
                         + ("" if action == "reboot" else "Powering it on again needs console or physical access."))
     if force and soft:
-        warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
-                        "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
+        warnings.append("Forced: apps and VMs on it stop with the host. There is no cordon or drain; they come back "
+                        "when it does (or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
     warnings.append("DaemonSets and static pods remain on the host; their services stop if it goes down. Survivor capacity and external storage dependencies are not fully simulated"
                     if maintain else
                     "DaemonSets and static pods remain on the host; their services stop during the outage. Survivor capacity and external storage dependencies are not fully simulated")

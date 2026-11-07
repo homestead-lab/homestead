@@ -96,8 +96,16 @@ function imagePlacementBlocker(plan) {
   return "No host can accept this update. Review the host, storage and placement requirements in Details.";
 }
 /* The same concern for several updates is said once. A blocked review leads
-   only with blockers; warnings for otherwise eligible apps remain in Details. */
-const UNCHANGED_BY_UPDATE = /^No memory limit is set/;
+   only with blockers; warnings for otherwise eligible apps remain in Details.
+   A note about what an update does not change - a missing memory limit, a
+   host folder or a volume it already mounts, the restart every update makes
+   (the lead says it restarts) - goes in Details, not in the warning, so an
+   ordinary update asks for no tick. */
+const UNCHANGED_BY_UPDATE = new RegExp([
+  /^No memory limit is set/, /^hostPath contents are node-local/, /^Recreate stops all old pods before replacements start/,
+  /^PVC \S+ uses local storage without verified node affinity/, /^PVC \S+'s volume topology could not be verified/,
+  /^ephemeral PVC provisioning and capacity need scheduler review/,
+].map(re => re.source).join("|"));
 const updateConcerns = plan => capacityNotes(plan).concerns.filter(text => !UNCHANGED_BY_UPDATE.test(text));
 function groupedConcerns(rows) {
   const byText = new Map();
@@ -169,7 +177,6 @@ const IMAGE_REVIEW = UI.reviewFlow({
     const blocked = rows.some(row => row.preview.capacity.blocked);
     const many = rows.length > 1;
     const concerns = groupedConcerns(rows);
-    const list = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
     // One line per app: its name, and what its image moves from and to -
     // once, when every container moves between the same two images.
     const changeWords = i => imageChangeWords(i.before, i.after, i.before_tag, i.after_tag);
@@ -190,20 +197,26 @@ const IMAGE_REVIEW = UI.reviewFlow({
       UI.facts(images(preview).flatMap(i => [[`Image ${rollback ? "back to" : "now"}`, `<code title="${esc(rollback ? i.after : i.before)}">${esc(short(rollback ? i.after : i.before))}</code>`],
         [rollback ? "From" : "New", `<code title="${esc(rollback ? i.before : i.after)}">${esc(short(rollback ? i.before : i.after))}</code>`]]))
       + capacityHostTable(preview.capacity))).join("");
-    $("#mbody").innerHTML = `<div class="update-review ui-stack">
-      <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
-      ${blocked ? UI.callout("bad", "Update blocked", list)
-        : concerns.length ? UI.callout("warn", "Check first", list) : ""}
-      ${rows.filter(r => r.preview.unread).map(({config, preview}) => UI.callout("warn", "Installed by its tag",
-        `Homestead could not read the registry (${esc(preview.unread)}), so ${esc(config.version)} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`)).join("")}
-      <ul class="upd-apps">${apps}</ul>
-      ${rollback ? "" : '<div id="updNotes"></div>'}
-      ${UI.more("Details", `${details}
+    // One app names itself and its change at the top; several are listed.
+    const one = !many && rows[0], oneWords = one && one.preview.images.map(changeWords).filter(Boolean);
+    const sameChange = oneWords && oneWords.length && oneWords.every(w => w.join() === oneWords[0].join());
+    const unread = rows.filter(r => r.preview.unread).map(({config, preview}) => ["warn", {
+      short: `${config.name} is installed by its tag`,
+      more: `Homestead could not read the registry (${preview.unread}), so ${config.version} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`}]);
+    $("#mbody").innerHTML = `<div class="update-review">${UI.dialog({ shape: "review",
+      subject: one ? { kind: "App", name: one.config.name, where: `${one.config.clusterName ? `${one.config.clusterName} · ` : ""}${one.config.ns}`,
+        change: sameChange ? oneWords[0] : null }
+        : { kind: "Apps", name: rows.length > 3 ? `${rows.slice(0, 3).map(r => r.config.name).join(", ")} and ${rows.length - 3} more` : rows.map(r => r.config.name).join(", ") },
+      lead: `${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.`,
+      issues: [...concerns.map(c => [blocked ? "bad" : "warn", c]), ...unread],
+      issuesTitle: blocked ? "Update blocked" : "",
+      body: `${one && sameChange ? "" : `<ul class="upd-apps">${apps}</ul>`}${rollback ? "" : '<div id="updNotes"></div>'}`,
+      details: `${details}
         ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`)}
-      ${blocked ? "" : UI.ack("imageCapacityApprove", concerns.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", { onchange: "imageReviewReady()" })}
-      ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
-    </div>`;
+        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`,
+      ack: { id: "imageCapacityApprove", sentence: concerns.length || unread.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", onchange: "imageReviewReady()" },
+      actions: { primary: { label: rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", onclick: "imageReviewedApply()", id: "imageCapacityApply", disabled: true } },
+    })}</div>`;
     // What is in the update: read beside the review, never waited for.
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   },
@@ -389,18 +402,36 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const closing = !queueMode ? ""
     : left ? `<p class="ui-help">Closing ends the queue. ${left === 1 ? "The app not started keeps its" : `The ${left} apps not started keep their`} current image; review ${left === 1 ? "it" : "them"} again to update. Updates already started carry on in Jobs.</p>`
     : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the queue before the apps still waiting. Updates already started carry on in Jobs.</p>' : "";
-  return `<div class="batch-rollout">
-    ${reconnecting?UI.callout("warn","Some updates could not be checked","Showing last-known progress. Reconnecting automatically."):""}
-    <div class="between"><div><b>${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}</b>
-      <div class="dim xs">Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.</div></div>
-      ${failed ? UI.chip(queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention", "warn") : done === items.length ? UI.chip("finished", "ok") : reconnecting ? UI.chip("reconnecting", "warn") : UI.chip("monitoring", "ok")}</div>
-    ${UI.progress(items.length ? done/items.length*100 : 100, {label:`${done} of ${items.length} done`,kind:failed?"bad":"info"})}
-    ${running?UI.section(`Updating ${running.name}`,rolloutProgress(states[rolloutKey(running)])):""}
-    <div class="batch-rollout-list">${pending.filter(item=>item!==running).map(row).join("")}</div>
-    ${done ? UI.more(`Done · ${done}`, `<div class="batch-rollout-list">${[...ready, ...current].map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
-    ${closing}
-    ${UI.actions(UI.cancel(queueMode ? done === items.length ? "Done" : "Close queue" : "Monitor in background"))}
-  </div>`;
+  // One track across the apps: the one updating fills its segment as it goes
+  // through its stages; its stage and detail are said under the track.
+  const live = running && states[rolloutKey(running)], st = live && rolloutStages(live);
+  const at = running ? items.indexOf(running) : failed ? items.length : items.findIndex(item => pending.includes(item));
+  const list = items.map(item => {
+    const key = rolloutKey(item), phase = failureMap[key] ? "failed" : states[key]?.phase;
+    return { title: item.name, state: phase === "failed" ? "failed" : ["ready", "up to date"].includes(phase) ? "done" : item === running ? "current" : "todo",
+      detailHtml: item === running && st ? `${esc(st.list[Math.min(st.current, 2)].title)}${st.list[Math.min(st.current, 2)].detailHtml ? `: ${st.list[Math.min(st.current, 2)].detailHtml}` : ""}` : "" };
+  });
+  const status = failed ? [queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention", "warn"]
+    : done === items.length ? ["finished", "ok"] : reconnecting ? ["reconnecting", "warn"] : ["monitoring", "ok"];
+  return `<div class="batch-rollout">${UI.dialog({ shape: "watch",
+    subject: { name: items.length > 3 ? `${items.slice(0, 3).map(i => i.name).join(", ")} and ${items.length - 3} more` : items.map(i => i.name).join(", "),
+      where: `${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}`, status },
+    lead: `${done} of ${items.length} done. Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.`,
+    issues: reconnecting ? [["warn", { short: "Some updates could not be checked", more: "Showing last-known progress. Reconnecting automatically." }]] : [],
+    steps: { list, current: at < 0 ? items.length : at, unit: "App" }, progress: { value: st ? st.value : null },
+    body: `${(() => {
+      // A row for each app that needs looking at; the ones simply waiting are one line.
+      const rest = pending.filter(item => item !== running);
+      const waiting = rest.filter(item => !failureMap[rolloutKey(item)] && ["queued", "starting", undefined].includes(states[rolloutKey(item)]?.phase));
+      const shown = rest.filter(item => !waiting.includes(item));
+      return `${shown.length ? `<div class="batch-rollout-list">${shown.map(row).join("")}</div>` : ""}`
+        + `${waiting.length ? `<p class="ui-help batch-next"><b>Up next</b> ${waiting.map(item => esc(item.name)).join(", ")}</p>` : ""}`;
+    })()}
+      ${running && live?.pods?.length ? UI.more(`Pods of ${running.name}`, UI.insightList(live.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
+        label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" }))), false, "Pods") : ""}
+      ${done ? UI.more(`Done · ${done}`, `<div class="batch-rollout-list">${[...ready, ...current].map(row).join("")}</div>`, false, "Updated") : ""}
+      ${closing}`,
+    actions: { dismiss: queueMode ? done === items.length ? "Done" : "Close queue" : "Monitor in background" } })}</div>`;
 }
 
 window.imageUpdateBatchApply = () => imageReviewedApply();
@@ -457,26 +488,50 @@ function pullDetail(s) {
 
 function pullSize(b) { return bytesText(b); }
 
+/* One rollout as a track of its three stages; a download of known size fills
+   the stage it is on. One measure, never a second bar beside it. */
+function rolloutStages(s) {
+  const ready = s.phase === "ready", failed = s.phase === "failed", pull = s.pull || {};
+  const accepted = s.observed_generation >= s.generation;
+  const pulling = pull.state === "pulling";
+  const pulled = s.updated >= s.desired && !pulling && pull.state !== "failed";
+  const current = ready ? 3 : !accepted ? 0 : !pulled ? 1 : 2;
+  const desired = s.desired ?? 0;
+  const list = [
+    { title: "Change accepted" },
+    { title: pulling ? "Downloading image" : "Image and replacement pods",
+      detailHtml: esc(pull.state === "failed" ? pull.detail || "Image download failed" : pulling ? pullDetail(s) : `${s.updated || 0}/${desired || "?"} replacement pods created`),
+      state: pull.state === "failed" ? "failed" : undefined },
+    { title: "Readiness checks", detailHtml: esc(`${s.ready || 0}/${desired || "?"} pods ready; completion waits for the accepted update.`),
+      state: failed && current === 2 ? "failed" : undefined },
+  ];
+  // A failed rollout stopped at the stage it was on.
+  if (failed && current < 3) list[current].state = "failed";
+  // A percentage only for bytes known to be fetched: a pod count is not a
+  // measure, and old pods still count as ready.
+  const value = current === 1 && pulling && pull.total_bytes ? pull.percent || 0 : null;
+  return { list, current, value, ready, failed };
+}
 function rolloutProgress(s) {
-  const ready=s.phase === "ready", failed=s.phase === "failed", pull=s.pull || {};
-  const accepted=s.observed_generation >= s.generation;
-  const pulled=s.updated >= s.desired && pull.state !== "pulling" && pull.state !== "failed";
-  const pulling=pull.state === "pulling";
-  return `${failed?UI.callout("bad","Update needs attention","Review the failure details before retrying."):UI.progress(ready?100:pulling && pull.total_bytes?pull.percent:null, {
-    label:ready?"Update complete":failed?"Update needs attention":pulling?"Downloading image":"Waiting for the replacement pods",
-    detail:ready?`${s.ready}/${s.desired} pods ready`:pulling?pullDetail(s):`${s.updated || 0}/${s.desired ?? "?"} replacement pods created`,kind:failed?"bad":ready?"ok":"info"})}
-    ${UI.checklist([
-      {title:"Change accepted",state:accepted?"ok":"run"},
-      {title:pulling?"Downloading image":"Image and replacement pods",state:pull.state==="failed"?"bad":pulled?"ok":accepted?"run":"todo",detailHtml:pull.state==="failed"?esc(pull.detail || "Image download failed"):""},
-      {title:"Readiness checks",state:ready?"ok":failed?"bad":pulled?"run":"todo",detailHtml:esc(`${s.ready || 0}/${s.desired ?? "?"} pods ready; completion waits for the accepted update.`)}
-    ])}
-    ${s.problems?.length ? UI.callout("bad","Needs attention",s.problems.map(esc).join("<br>")):""}
-    ${s.pods?.length?UI.more("Pod details",UI.insightList(s.pods.map(p=>({title:p.name,detail:[p.node || "Scheduling",p.blocked,p.waiting?.[0]?.reason].filter(Boolean).join(" · "),label:p.pull?.state==="pulling"?"Pulling image":p.phase,tone:p.blocked?"warn":p.phase==="Running"?"ok":"info"})))):""}`;
+  const st = rolloutStages(s);
+  return UI.dialog({ shape: "watch",
+    steps: { list: st.list, current: st.current }, progress: { value: st.value },
+    issues: [...(st.failed ? [["bad", "Review the failure details before retrying."]] : []), ...(s.problems || []).map(p => ["bad", p])], issuesTitle: st.failed ? "Update needs attention" : "",
+    body: s.pods?.length ? UI.more("Pod details", UI.insightList(s.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
+      label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" })))) : "",
+    actions: { dismiss: false } });
 }
 function rolloutMarkup(s) {
-  return `<div class="ui-stack">${rolloutProgress(s)}${UI.actions(
-    (s.can_rollback?UI.button("Review rollback",`imageRollback(${jsArg(s.ns)},${jsArg(s.name)})`,{kind:s.phase==="failed"?"danger":"",attrs:'data-need="operator"'}):"") +
-    (s.phase==="ready"?UI.button("Done","closeModal();go('workloads')",{kind:"pri"}):""),s.phase==="ready"?"":UI.cancel("Monitor in background"))}</div>`;
+  const st = rolloutStages(s);
+  return UI.dialog({ shape: "watch",
+    subject: { kind: "App", name: s.name || "", where: s.ns || "", status: st.ready ? ["updated", "ok"] : st.failed ? ["needs attention", "bad"] : ["updating", "info"] },
+    steps: { list: st.list, current: st.current }, progress: { value: st.value },
+    issues: [...(st.failed ? [["bad", "Review the failure details before retrying."]] : []), ...(s.problems || []).map(p => ["bad", p])], issuesTitle: st.failed ? "Update needs attention" : "",
+    body: s.pods?.length ? UI.more("Pod details", UI.insightList(s.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
+      label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" })))) : "",
+    actions: { dismiss: st.ready ? false : "Monitor in background",
+      start: s.can_rollback ? UI.button("Review rollback", `imageRollback(${jsArg(s.ns)},${jsArg(s.name)})`, { kind: st.failed ? "danger" : "", attrs: 'data-need="operator"' }) : "",
+      primary: st.ready ? { label: "Done", onclick: "closeModal();go('workloads')" } : null } });
 }
 
 window.monitorImageRollout = (ns, name) => {
@@ -520,5 +575,5 @@ if (typeof module === "object" && module.exports) module.exports = {
   shortImage, imageVersion, imageChangeWords, imagePlacementBlocker, UNCHANGED_BY_UPDATE, updateConcerns,
   groupedConcerns, clusterHeaders, rolloutKey, rolloutBody, restartsHomestead, rolloutChanged,
   IMAGE_REVIEW_OPEN, IMAGE_REVIEW, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, refreshAfterRollout,
-  asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutProgress, rolloutMarkup
+  asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutStages, rolloutProgress, rolloutMarkup
 };

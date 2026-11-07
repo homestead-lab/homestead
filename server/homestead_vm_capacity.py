@@ -202,7 +202,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         if action == "restart":
             pods = dependency_pods
             warnings.append("post-stop placement assumes owned launchers fully terminate and release disks/devices; this is not guaranteed")
-            warnings.append("live RAM includes the old VM and is not subtracted from the conservative restart projection")
+            warnings.append("live RAM includes the old VM. It is not subtracted from the conservative restart projection")
         else:
             # Save is not Stop. LiveUpdate may resize or migrate; never credit
             # released launcher reservations, or accept a plan fitting only on
@@ -217,7 +217,8 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                 edit_launcher = launcher
             except ValueError as error:
                 blockers.append("Live edit requires a stable, verified resident launcher: " + str(error))
-            warnings.append("Live edit conservatively retains current launcher reservations and checks the proposed VM on its current host too. Stop the VM and review again if this overlap cannot fit; Save does not guarantee a live resize or migration.")
+            warnings.append("Save does not guarantee a live resize or migration. Live edit keeps the current launcher reservations "
+                            "and checks the proposed VM on its current host too; stop the VM and review again if this overlap cannot fit.")
     elif action == "start" and vmi and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
         blockers.append("VM already has an active instance; refresh and use its appropriate power action")
     blockers.extend(model["blockers"])

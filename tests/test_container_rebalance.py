@@ -320,7 +320,7 @@ class PlanTests(unittest.TestCase):
         c = Hosts(self); bind(c)
         plan = C.plan()
         forged = [dict(plan["moves"][0], to="k2")]
-        with self.assertRaisesRegex(ValueError, "differ from the review"):
+        with self.assertRaisesRegex(ValueError, "out of date; review again. The moves differ from it"):
             C.reviewed(forged, [], plan["review_token"])
         c.edit_pod("frigate", lambda p: p["spec"].update(nodeName="k3"))   # frigate moved meanwhile
         with self.assertRaisesRegex(ValueError, "changed since the review"):

@@ -9,7 +9,7 @@ window.snapshotFiles = async (volume, snapshot) => {
     if (sequence !== snapshotFilesSequence) return;
     snapshotFilesReview = plan;
     const linked = plan.method === 'linked-clone';
-    modal('Browse snapshot', UI.lead(`Browse and download files from <b>${esc(plan.snapshot)}</b>. The live container or SMB volume stays online.`) +
+    modal('Browse snapshot', UI.head({ kind: 'Snapshot', name: plan.snapshot, where: plan.claim }) + UI.lead(`Browse and download files from <b>${esc(plan.snapshot)}</b>. The live container or SMB volume stays online.`) +
       UI.facts([['Volume', esc(plan.claim)], ['Volume capacity', fileSize(Number(plan.size))], ['Method', linked ? 'V2 linked clone · no full data copy' : 'Full snapshot copy · one temporary replica'], ['Access', 'Read-only · expires after 30 minutes']]) +
       UI.callout(linked ? 'info' : 'warn', linked ? 'Uses the existing snapshot blocks' : 'A temporary copy is required', linked ? 'The browser depends on the original snapshot until closed. Scheduling and mounting can still take time.' : 'Preparing it can take time and use additional disk space and I/O.' + (plan.engine === 'v2' ? ' Linked-clone support could not be verified on this installation.' : '')) +
       UI.more('How this works', '<p class="ui-help">Browse a temporary filesystem restored from the snapshot. Closing removes the copy; abandoned sessions expire after 30 minutes. Cleanup waits for Homestead and the cluster API. Symbolic links and special files are excluded.</p>') +

@@ -28,7 +28,9 @@ try {
   });
   await page.locator("#imageCapacityApprove").waitFor();
   assert.equal(await page.locator("#imageCapacityApply").isDisabled(),true);
-  assert.match(await page.locator("#mbody").innerText(),/Recreate/);
+  // A Recreate restart is not a warning for an update: it is said in Details.
+  assert.doesNotMatch(await page.locator("#mbody .ui-callout").first().innerText().catch(() => ""),/Recreate/);
+  assert.match(await page.locator("#mbody details.ui-more").last().textContent(),/Recreate/);
   for(const theme of ["dark","light"]){
     await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
     for(const width of [1280,390,320]){

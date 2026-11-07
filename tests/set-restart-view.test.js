@@ -128,7 +128,7 @@ test("a 409 that names a running operation follows it instead", async () => {
   const t = setup({ post: err });
   await t.ctx.setRestartReview("data", "postgres", "node2");
   await t.ctx.setRestartRun("data", "postgres", "node2");
-  assert.equal(t.fields["#mtitle"].textContent, "Starting postgres elsewhere");
+  assert.equal(t.fields["#mtitle"].textContent, "Starting elsewhere · postgres");
   assert.ok(!t.calls.some(c => c[0] === "noteOperation"), "a bare id is not put into Recent jobs as if it were a job");
   assert.notEqual(t.fields["#sr_run"].textContent, "Review again");
 });
@@ -139,7 +139,7 @@ test("a 409 after deletes follows the other job and names the pods not deleted",
   const t = setup({ post: err });
   await t.ctx.setRestartReview("data", "postgres", "node2");
   await t.ctx.setRestartRun("data", "postgres", "node2");
-  assert.equal(t.fields["#mtitle"].textContent, "Starting postgres elsewhere");
+  assert.equal(t.fields["#mtitle"].textContent, "Starting elsewhere · postgres");
   assert.ok(t.toasts.some(([m, k]) => k === "warn" && /postgres-1 \(forbidden\)/.test(m)), "names the pod not deleted");
 });
 

@@ -216,8 +216,7 @@ function otherVolumesHtml(rows) {
   const stuck = rows.filter(r => r.phase !== "Bound");
   return `<div class="between" style="margin-top:22px"><div class="sec">Other volumes <span class="dim">${rows.length}</span>
       ${tip("Volumes on storage classes other than Longhorn, such as k3s's local-path. They have no replicas, snapshots or backups here; their data lives where that class keeps it.")}</div></div>
-    ${stuck.length ? `<div class="note warn small" style="margin-bottom:10px"><b>${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.</b>
-      Usually a shared (ReadWriteMany) volume asked of a class that serves one host - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
+    ${stuck.length ? `${UI.callout("warn", { html: `${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.` }, `Usually a shared (ReadWriteMany) volume asked of a class that serves one host - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.`, { className: "small", attrs: 'style="margin-bottom:10px"' })}` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
       <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
@@ -944,7 +943,7 @@ window.volumeChown = async (namespace, name) => {
     ${hint.unread ? UI.callout("warn", "Could not read what uses this volume", esc(hint.unread)) : hint.known
       ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
           Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`
-      : `<div class="note dependency-danger"><b>Nothing here declares a user.</b> ${esc(hint.source || "")}</div>`}
+      : `${UI.callout("bad", { html: `Nothing here declares a user.` }, `${esc(hint.source || "")}`)}`}
     <div class="f2" style="margin-top:14px">
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>

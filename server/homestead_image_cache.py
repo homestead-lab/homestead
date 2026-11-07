@@ -95,15 +95,15 @@ def _needed_list(path, optional_group=None, forbidden_none=False):
         raise ValueError(_unread_message(path, error)) from error
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or (listing.get("metadata") or {}).get("continue")):
-        raise ValueError(f"Kubernetes returned an incomplete list for {path}, so Homestead cannot tell which images "
-                         "are still needed, and no image is cleaned up until it can. Try again in a moment.")
+        raise ValueError(f"No image is cleaned up: Kubernetes returned an incomplete list for {path}. "
+                         "Homestead cannot tell which images are still needed until it can read it. Try again in a moment.")
     # A row that is not an object, or whose metadata, spec or status is not
     # one, cannot say what it needs: the list as a whole is unread.
     if not all(isinstance(row, dict) and all(isinstance(row.get(key), (dict, type(None)))
                                              for key in ("metadata", "spec", "status"))
                for row in listing["items"]):
-        raise ValueError(f"Kubernetes returned a list for {path} that Homestead cannot read, so it cannot tell which "
-                         "images are still needed, and no image is cleaned up until it can. Try again in a moment.")
+        raise ValueError(f"No image is cleaned up: Homestead cannot read the list Kubernetes returned for {path}. "
+                         "It cannot tell which images are still needed until it can. Try again in a moment.")
     return listing["items"]
 
 

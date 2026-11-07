@@ -48,7 +48,7 @@ test("several concerns make one notice, in the worst tone, with a line each", ()
   const html = c.UI.notices([["warn", "Hugepages need a reboot"], ["bad", "GPU output needs UEFI"], ["info", "Serial is on"]], "Check before saving");
   assert.equal((html.match(/class="ui-callout /g) || []).length, 1);
   assert.match(html, /ui-callout bad/);
-  assert.equal((html.match(/<li>/g) || []).length, 3);
+  assert.equal((html.match(/<li class="ui-issue">/g) || []).length, 3);
   assert.match(c.UI.notices([["warn", "Only one"]]), /ui-callout warn[\s\S]*Only one/);
 });
 
@@ -82,7 +82,7 @@ test("New VM's review reads like a container start", async () => {
   await c.vmCreateReview({ name: "win11" });
   assert.match(shown.title, /win11/);
   assert.doesNotMatch(shown.html, /reviewbox/);
-  assert.match(shown.html, /class="ui-lead"[^>]*>Creates <b>win11<\/b>/);
+  assert.match(shown.html, /ui-head-name">win11<\/span>[\s\S]*class="ui-lead"[^>]*>Creates it/);
   assert.match(shown.html, /win11-disk/);
   assert.doesNotMatch(shown.html, /vmCreateApprove/, "nothing to accept, no tickbox");
   assert.match(shown.html, />Create VM</);

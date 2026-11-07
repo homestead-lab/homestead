@@ -463,14 +463,14 @@ const POWER_RECOVERY = UI.reviewFlow({
     $("#mbody").innerHTML = `<div class="update-review">
       <div class="reviewbox"><b>${mutation ? "Resolve tracking, keep resources" : "Resolve tracking, not power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
         <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
-      ${p.blockers?.length ? `<div class="note bad">${p.blockers.map(esc).join(" · ")}</div>` : ""}
+      ${p.blockers?.length ? `${UI.callout("bad", "", `${p.blockers.map(esc).join(" · ")}`)}` : ""}
       ${mutation && p.resources ? `<div class="reviewbox"><b>Resource write receipts and current identities</b>${p.resources.map(row=>`<div class="small" style="margin-top:10px;overflow-wrap:anywhere"><b>${esc(row.resource.kind)} · ${esc(row.resource.namespace)}/${esc(row.resource.name)}</b><br>Last write: ${esc(row.last_write)} · ${esc(row.relationship)}<br>Recorded UID: ${esc(row.expected?.uid || "no verified receipt")}<br>Current UID: ${esc(row.current?.uid || "not found")}</div>`).join("")}</div>` : ""}
       ${p.observed ? `<div class="reviewbox"><b>Current observations</b>
         <p class="small">VM: ${esc(observed.vm_status)} · policy: ${esc(observed.run_strategy)}</p>
         <p class="small">Instance: ${esc(observed.instance_phase)} · Ready: ${observed.ready ? "yes" : "no"} · Paused: ${observed.paused ? "yes" : "no"}</p>
         <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
-      ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
+      ${UI.notices((p.warnings || []).map(w => ["warn", w]))}
       ${!p.blocked ? `${UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" })}
         <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record it as unknown: I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and what it kept" : ""}</label>
         <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
@@ -478,7 +478,7 @@ const POWER_RECOVERY = UI.reviewFlow({
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   },
   failed: error => {
-    $("#mbody").innerHTML=`<div class="note bad">${esc(error.message)}</div><button class="btn" onclick="closeModal()">Close</button>`;
+    $("#mbody").innerHTML=`${UI.callout("bad", "", `${esc(error.message)}`)}<button class="btn" onclick="closeModal()">Close</button>`;
   },
   blocked: review => review.plan.blocked, ack: "powerRecoveryAck", button: "powerRecoveryApply",
   check: review => !!(review.importing || typedConfirmMatches("powerRecoveryName")),
@@ -492,7 +492,7 @@ const POWER_RECOVERY = UI.reviewFlow({
       toast(result.detail,"ok");closeModal();
     } catch(error) {
       if ($("#powerRecoveryApply")===button) {
-        $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. Nothing was retried. Check the job before opening a new review.</div>`);
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. Nothing was retried. Check the job before opening a new review.`)}`);
         if ($(".modalbox")) $(".modalbox").scrollTop=0;
       }
       toast(error.message,"bad");
@@ -584,18 +584,18 @@ window.cancelOperation = async id => {
   const high = plan.severity === "high";
   const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
-    ? `<div class="note warn"><b>${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}</b><div>${esc(plan.why_not || "")}</div></div>
+    ? `${UI.callout("warn", { html: `${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}` }, `<div>${esc(plan.why_not || "")}</div>`)}
        ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`
     : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
         : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
         : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop))}</p>
       <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
-      ${plan.undo.length ? `<div class="note ${high ? "warn" : ""}" style="margin-top:12px"><b>${plan.cleanup_says_action ? "What it puts back" : cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}</b>${list(plan.undo)}</div>` : ""}
+      ${plan.undo.length ? `${UI.callout(high ? "warn" : "", { html: `${plan.cleanup_says_action ? "What it puts back" : cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}` }, `${list(plan.undo)}`, { attrs: 'style="margin-top:12px"' })}` : ""}
       ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" onchange="cancelOperationGate()" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
       ${plan.confirm ? UI.typedConfirm({ id: "oc_confirm", expect: plan.confirm, oninput: "cancelOperationGate()" }) : ""}
-      ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
+      ${plan.needs === "admin" && !can("admin") ? `${UI.callout("warn", "", `Cancelling this job needs an admin.`, { attrs: 'style="margin-top:12px"' })}` : ""}
       ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup && !plan.cleanup_says_action ? "Remove what it made" : plan.action)}</button>
         <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button>`)}`;

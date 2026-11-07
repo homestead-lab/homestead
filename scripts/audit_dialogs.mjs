@@ -19,6 +19,9 @@ const only = process.argv[2] || "";
 // design.md, Verbosity budget. Visible words count names and rows too, so the
 // budgets sit above today's longest dialogs: they stop growth, not content.
 const DIALOG_WORDS = 300, REVIEW_WORDS = 200;
+// design.md, Notices: a warning or an error is a summary bar of short
+// lines that opens to the rest. Its heading and short lines stay under this.
+const NOTICE_CHARS = 120;
 const REVIEW = /review|start|update|reboot|shutdown|power|delete|remove|confirm/;
 const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 
@@ -57,6 +60,9 @@ const DIALOGS = [
   ["jobs-empty", "workloads", "STATE.data.operations=window.__demoOps=[];jobsDialog()"],
   ["jobs-disconnected", "workloads", "STATE.data.operations=window.__demoOps=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
   ["container-update-progress", "workloads", "modal('Updating containers',batchUpdateMarkup([{ns:'lab',name:'immich'},{ns:'lab',name:'plex'}],{[rolloutKey({ns:'lab',name:'immich'})]:{phase:'updating',ready:0,desired:1},[rolloutKey({ns:'lab',name:'plex'})]:{phase:'ready',ready:1,desired:1}},[],false,true))"],
+
+  // Ten apps at once: the track drops its labels past eight, and the apps simply waiting are one line.
+  ["container-update-queue-ten", "workloads", "(()=>{const names=['immich','plex','frigate','paperless','home-assistant','grafana','loki','uptime-kuma','vaultwarden','nextcloud'],items=names.map(n=>({ns:'lab',name:n})),st={};names.slice(0,3).forEach(n=>st[rolloutKey({ns:'lab',name:n})]={phase:'ready',ready:1,desired:1});st[rolloutKey({ns:'lab',name:'paperless'})]={phase:'up to date'};st[rolloutKey({ns:'lab',name:'home-assistant'})]={phase:'updating',ready:0,desired:1,updated:1,generation:2,observed_generation:2,pull:{state:'pulling',percent:63,total_bytes:1800000000,seconds:20,image:'ghcr.io/home-assistant/home-assistant:2026.11',node:'node-1'}};names.slice(5).forEach(n=>st[rolloutKey({ns:'lab',name:n})]={phase:'queued'});modal('Updating containers',batchUpdateMarkup(items,st,[],false,true));})()"],
 
   ["longhorn-v2-upgrade-ready", "settings", "window.__demoV2UpgradeState='ready';lhV2Upgrade('v1.13.0')"],
   ["longhorn-v2-upgrade-blocked", "settings", "window.__demoV2UpgradeState='blocked';lhV2Upgrade('v1.13.0')"],
@@ -251,7 +257,7 @@ const DIALOGS = [
   ["homestead-updates", "workloads", "homesteadUpdateDialog()"],
   ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
   ["image-update-cordoned", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')"],
-  ["image-update-cordoned-details", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')", "document.querySelector('#mbody > .update-review > details').open=true"],
+  ["image-update-cordoned-details", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')", "document.querySelector('#mbody .update-review details.ui-more').open=true"],
   ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Review selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],
@@ -389,7 +395,7 @@ async function audit([label, width, height, mobile], items) {
       }
       await page.locator("#modal:not(.hidden) #mbody").waitFor({ timeout: 4000 });
       await page.waitForTimeout(600);
-      const metrics = await page.evaluate(() => {
+      const metrics = await page.evaluate((maxChars) => {
         const box = document.querySelector(".modalbox"), body = document.querySelector("#mbody");
         const boxRect = box.getBoundingClientRect();
         const wide = [...body.querySelectorAll("*")].filter((e) => {
@@ -430,6 +436,9 @@ async function audit([label, width, height, mobile], items) {
           unnamed: [...new Set(unnamed)].slice(0, 8),
           footer,
           title: document.querySelector("#mtitle").textContent,
+          // The dialog engine's view of it: its shape, and the object its header names.
+          shape: document.querySelector(".modalbox").dataset.shape || "",
+          subject: document.querySelector("#msubject")?.hidden === false ? document.querySelector("#msubject").textContent.trim() : "",
           copy: body.innerText,
           explanations: [...body.querySelectorAll("p, .ui-lead, .ui-help, .note, .ui-callout-body")].filter(e => e.offsetParent && !e.querySelector("p, .ui-lead, .ui-help, .note, .ui-callout-body")).map(e=>e.innerText.trim()).filter(Boolean),
           width: Math.round(boxRect.width), height: Math.round(box.scrollHeight),
@@ -452,11 +461,21 @@ async function audit([label, width, height, mobile], items) {
             }
             return [...seen].filter(([, n]) => n > 1).map(([text]) => text.slice(0, 80));
           })(),
+          // Warning and error lines as they show with More closed, and the
+          // older note boxes that have no short form at all.
+          // A notice's heading and every short line, open or not; a body
+          // left whole (it has controls of its own) as it shows.
+          longNotices: [...body.querySelectorAll(".ui-callout.warn, .ui-callout.bad")].filter(e => e.checkVisibility()).flatMap(callout => {
+            const shorts = [...callout.querySelectorAll(":scope > div > b, .ui-notice-head, .ui-issue-short")];
+            const whole = callout.querySelector(".ui-issue") ? [] : [...callout.querySelectorAll(".ui-callout-body")].filter(e => e.checkVisibility());
+            return [...shorts, ...whole].map(e => e.textContent.trim().replace(/\s+/g, " ")).filter(t => t.length > maxChars);
+          }).map(t => `"${t.slice(0, 70)}…" (${t.length})`).slice(0, 4),
+          oldNotes: [...body.querySelectorAll(".note.warn, .note.bad, .note.crit, .note.dependency-danger")].filter(e => e.checkVisibility()).length,
           overflow: [...new Set(wide)].slice(0, 6),
           tiny: [...new Set(tiny)].slice(0, 6),
           squeezed: [...new Set(squeezed)].slice(0, 6),
         };
-      });
+      }, NOTICE_CHARS);
       await captureDialog(page, `${output}/${name}-${label}.png`);
       report.push({ name, label, ...metrics });
       if (metrics.overflow.length) failures.push(`${name} (${label}): content wider than the dialog: ${metrics.overflow.join(", ")}`);
@@ -468,6 +487,9 @@ async function audit([label, width, height, mobile], items) {
       const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
       if (metrics.attention > 1) failures.push(`${name} (${label}): ${metrics.attention} visible notices: combine them into one UI.callout`);
+      if (metrics.longNotices.length) failures.push(`${name} (${label}): a warning heading or short line over ${NOTICE_CHARS} characters - give it a short first sentence: ${metrics.longNotices.join("; ")}`);
+      if (!metrics.shape) failures.push(`${name} (${label}): not drawn by the dialog engine (no shape)`);
+      if (metrics.oldNotes) failures.push(`${name} (${label}): ${metrics.oldNotes} old .note warning box(es): use UI.callout, which shows the short form`);
       if (metrics.repeated.length) failures.push(`${name} (${label}): says the same thing twice: "${metrics.repeated[0]}"`);
     } catch (error) {
       const toastText = await page.evaluate(() => [...document.querySelectorAll("#toast .tst")].map((t) => t.textContent.trim()).join(" | ")).catch(() => "");

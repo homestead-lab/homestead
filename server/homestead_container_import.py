@@ -449,8 +449,8 @@ def prepare_import(cfg):
             needed_gb = needed / 1024 ** 3
             if capacity_gb and needed_gb > capacity_gb:
                 raise ValueError(
-                    f"the measured source needs {needed_gb:.1f} GiB but {volume['name']} has "
-                    f"{capacity_gb:.1f} GiB total logical capacity"
+                    f"{volume['name']} is too small for the source. The source measures {needed_gb:.1f} GiB "
+                    f"and the volume has {capacity_gb:.1f} GiB total logical capacity"
                     + ". Grow the volume or choose a larger size, then import again.")
 
     for volume in volumes:

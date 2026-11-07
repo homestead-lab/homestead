@@ -133,7 +133,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         overcommit = _positive(developer.get("memoryOvercommit", 100), "memory overcommit percentage")
         requested_memory = int((Decimal(guest * 100) / overcommit).to_integral_value(rounding=ROUND_CEILING))
         if overcommit != 100:
-            warnings.append("implicit memory overcommit changes scheduler requests, not the VM's possible physical RAM use")
+            warnings.append("implicit memory overcommit changes scheduler requests only. The VM can still use its full physical RAM")
     physical = max(guest, requested_memory, RESOURCES.quantity(memory.get("maxGuest")))
     overhead = max(256 * MIB, (physical + 19) // 20, cpu_model["memory_floor"]) if physical else 0
     ratio = config.get("additionalGuestMemoryOverheadRatio")
@@ -142,8 +142,10 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         overhead = int((overhead * scale).to_integral_value(rounding=ROUND_CEILING))
         warnings.append("cluster additional guest-memory overhead ratio is included in the planning allowance")
     estimate = max(physical, RESOURCES.quantity(limits.get("memory"))) + overhead
-    warnings.append("RAM projection includes the larger of 256 MiB, 5% of guest/reserved RAM and a CPU/thread/process memory floor, not KubeVirt's exact launcher overhead or a memory limit")
-    warnings.append("unrecognised/injected helpers, admission defaults and runtime overhead may require more resources than this lower-bound request")
+    warnings.append("RAM projection includes an estimate of launcher overhead. It is the larger of 256 MiB, 5% of guest/reserved RAM "
+                    "and a CPU/thread/process memory floor, not KubeVirt's exact overhead or a memory limit")
+    warnings.append("unrecognised/injected helpers, admission defaults and runtime overhead may need more. "
+                    "This request is a lower bound")
     if not limits.get("memory"):
         warnings.append("VM launcher memory is not explicitly limited")
 

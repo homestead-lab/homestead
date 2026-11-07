@@ -4,6 +4,7 @@
    previews, shows, asks for an acknowledgement and sends once. The first
    tests pin the VM power dialogs word for word, so moving them onto the
    shared flow changes nothing a person sees; the rest test the flow. */
+const seen = require("./helpers/seen");
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 
@@ -67,11 +68,11 @@ test("pinned: the review reads the same, with its acknowledgement, buttons and r
   const t = power();
   await t.ctx.vmPower("lab", "guest", "restart");
   const html = t.html();
-  assert.match(html, /Restarts <b>guest<\/b>/);
+  assert.match(html, /<span class="ui-head-name">guest<\/span><span class="ui-head-where">VM · lab<\/span>[\s\S]*<p class="ui-lead">Restarts it/);
   assert.match(html, / The guest stops and starts again\. Its restart policy changes from Halted to <b>Always<\/b>\. <span class="ui-help">4 GiB guest memory\.<\/span>/);
   assert.match(html, /id="vmPowerApprove"[^>]*onchange="vmPowerReviewReady\(\)"/);
   assert.match(html, /Restart it anyway/);
-  assert.match(html, /<div class="ui-actions-start"><button data-dialog-dismiss="true" class="btn" onclick="modalBack\(\)">Cancel<\/button><\/div><div class="ui-actions-end"><button class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply\(\)">Restart<\/button>/);
+  assert.match(html, /<div class="ui-actions-start"><button type="button" class="btn" onclick="modalBack\(\)" data-dialog-dismiss="true">Cancel<\/button><\/div><div class="ui-actions-end"><button type="button" class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply\(\)" >Restart<\/button>/);
   assert.equal(t.fields["#vmPowerApply"].disabled, true, "nothing is sent until the warning is accepted");
   await t.ctx.vmPowerReviewedApply();
   assert.deepEqual(t.toasts, [["Tick Restart it anyway to accept the warning", "bad"]]);
@@ -88,7 +89,7 @@ test("pinned: fresh state asks for its own tick and the typed VM name", async ()
   const t = power({ stateInit: true });
   await t.ctx.vmPower("lab", "guest", "start");
   assert.match(t.html(), /<b>Initialize fresh VM state\?<\/b>/);
-  assert.match(t.html(), /No state volume exists yet\. Cancel and inspect the original state volume and backups if this VM has run before\./);
+  assert.match(seen(t.html()), /No state volume exists yet\. Cancel and inspect the original state volume and backups if this VM has run before\./);
   assert.match(t.html(), /id="vmPowerStateAck" onchange="vmPowerReviewReady\(\)"> I intend to initialize fresh state, not recover the original TPM\/EFI or backup state/);
   t.fields["#vmPowerApprove"].checked = true;
   t.fields["#vmPowerStateAck"] = { checked: true }; t.fields["#vmPowerStateName"] = { value: "gues", dataset: { typedExpect: "guest" } };
@@ -106,7 +107,8 @@ test("pinned: a blocked review has no apply button, and a missing one says nothi
   assert.match(t.html(), /No host has the GPU/);
   t = power({ missing: true });
   await t.ctx.vmPower("lab", "guest", "start");
-  assert.ok(t.html().startsWith('<div class="note bad">VM capacity review unavailable. Nothing was sent; refresh before continuing.</div><div class="ui-actions" >'), t.html());
+  assert.ok(seen(t.html()).startsWith("VM capacity review unavailable. Nothing was sent; refresh before continuing. Close"), t.html());
+  assert.match(t.html(), /^<div class="ui-callout bad"[\s\S]*<\/div><div class="ui-actions" >/);
   assert.match(t.html(), /<div class="ui-actions-start"><button data-dialog-dismiss="true" class="btn" onclick="modalBack\(\)">Close<\/button><\/div><div class="ui-actions-end"><\/div><\/div>$/);
 });
 
@@ -116,7 +118,7 @@ test("pinned: a failed send explains the uncertain outcome and is not repeated",
   t.fields["#vmPowerApprove"].checked = true;
   await t.ctx.vmPowerReviewedApply();
   assert.equal(t.fields["#vmPowerApply"].textContent, "Inspect VM before retrying");
-  assert.ok(t.html().startsWith('<div class="note bad">lost response. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available.</div>'));
+  assert.ok(seen(t.html()).startsWith("lost response. The request was not repeated. Its outcome may be uncertain: inspect the VM and its Recent jobs entry before trying again. Shut down and Force off remain available."));
   assert.equal(t.fields[".modalbox"].scrollTop, 0);
   assert.deepEqual(t.toasts, [["lost response", "bad"]]);
 });

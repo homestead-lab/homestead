@@ -377,7 +377,7 @@ def ensure_idle():
     if installed and installed[:3] >= (1, 13, 0):
         obs = observation()
         if obs["active"] or obs["pending"]:
-            raise ValueError("Wait for the V2 live upgrade to finish and its volumes to recover before expanding or live-migrating disks")
+            raise ValueError("Wait for the V2 live upgrade to finish. Disks can be expanded or live-migrated once its volumes recover")
 
 
 # Its routes and who may use them (homestead_routes.py).

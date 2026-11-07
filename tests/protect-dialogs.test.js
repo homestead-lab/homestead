@@ -1,6 +1,7 @@
 "use strict";
 // Data Protection's dialogs take the shared parts (#501): a lead, facts, at
 // most one notice, explanations in UI.more, and a title that names its object.
+const seen = require("./helpers/seen");
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
@@ -87,7 +88,7 @@ test("Restore into app on a class on neither list offers the others, as its bloc
   const blocker = "local-path is not a storage class a restore can use; choose another storage class";
   const { ctx, body } = await into(() => ({ ...INTO, storage_class: "local-path", blockers: [blocker], ready: false }));
   await ctx.lhRestoreInto("backup-7f3a91");
-  assert.ok(body.innerHTML.includes(blocker));
+  assert.ok(seen(body.innerHTML).includes(seen(blocker).replace(/; no other/, ". No other")), body.innerHTML);
   const select = between(body.innerHTML, '<select id="ri_sc"', "</select>");
   assert.match(select, /<option value="" selected disabled>Choose a class/);
   assert.match(select, /longhorn-r2/);
@@ -99,7 +100,7 @@ test("Restore into app with no class left to offer shows the review's words and 
   const { ctx, body } = await into(() => ({ ...INTO, storage_class: "longhorn-late", storage_classes: [],
     refused_classes: { "longhorn-late": LATE_WHY }, blockers: [blocker], ready: false }));
   await ctx.lhRestoreInto("backup-7f3a91");
-  assert.ok(body.innerHTML.includes(blocker));
+  assert.ok(seen(body.innerHTML).includes(seen(blocker).replace(/; no other/, ". No other")), body.innerHTML);
   assert.doesNotMatch(body.innerHTML, /id="ri_sc"/);
 });
 

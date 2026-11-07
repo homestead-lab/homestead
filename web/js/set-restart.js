@@ -50,7 +50,7 @@ window.setRestartReview = async (ns, name, node) => {
   catch (e) { return toast(`Could not check this: ${e.message}`, "bad"); }
   if (plan.ready && (!plan.review_token || !plan.set)) return toast("The review is incomplete; try again", "bad");
   if (plan.ready) SET_RESTART_PLAN = { ...plan, set: { ...plan.set, ns, name } };
-  modal(`Start ${name} on another host`, setRestartBody(plan.ready ? SET_RESTART_PLAN : plan, node), true);
+  modal(`Start on another host · ${name}`, setRestartBody(plan.ready ? SET_RESTART_PLAN : plan, node), true);
   window.applyRole?.();
 };
 
@@ -88,7 +88,7 @@ window.setRestartRun = async (ns, name, node) => {
 /* The job as it goes: its progress and message from Recent jobs, until it ends. */
 window.setRestartFollow = async (id, name) => {
   const sequence = ++SET_RESTART_FOLLOW;
-  modal(`Starting ${name} elsewhere`, '<div id="srProgress"><div class="empty"><span class="spin2"></span> Starting…</div></div>', true);
+  modal(`Starting elsewhere · ${name}`, '<div id="srProgress"><div class="empty"><span class="spin2"></span> Starting…</div></div>', true);
   let last = null;
   while (sequence === SET_RESTART_FOLLOW && $("#srProgress")) {
     let offline = false;

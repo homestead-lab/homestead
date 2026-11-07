@@ -145,7 +145,8 @@ def plan(item, proposals, read, nodes, threshold):
                 template = spec["jobTemplate"]["spec"]
                 add("CronJob/" + name, template["template"], min(_count(template.get("parallelism")), _nonnegative(template.get("completions"), 100)))
             if not spec.get("suspend", False):
-                warnings.add(f"{name}: scheduled jobs are checked for one next execution, not guaranteed future capacity; Allow/Replace can overlap old or terminating jobs")
+                warnings.add(f"{name}: only its next scheduled run is checked. Future capacity is not guaranteed; "
+                             "Allow/Replace can overlap old or terminating jobs")
         else:
             raise ValueError("Unsupported controller in storage restart admission")
     if by_path:

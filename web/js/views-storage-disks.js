@@ -203,7 +203,9 @@ window.diskSetup = async (node, device) => {
     <span><b>${label}</b><small>${detail}</small></span></label>`;
   const modes = f.choices || [];
   $("#mbody").innerHTML = `<div class="ui-stack">
-    <div class="note ${["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : ""}"><b class="mono">${esc(device)}</b> · ${f.size_gb} GiB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}<br>${what}${(f.multipath || []).length ? `<br><span class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</span>` : ""}</div>
+    ${UI.callout(["system", "mounted", "missing", "held", "longhorn-v2"].includes(f.state) ? "bad" : "info",
+      { html: `<span class="mono">${esc(device)}</span> · ${f.size_gb} GiB${f.by_id ? ` · <span class="mono dim xs">${esc(f.by_id.replace("/dev/disk/by-id/", ""))}</span>` : ""}` },
+      `${/<ul/.test(what) ? `<div>${what}</div>` : `<p>${what}</p>`}${(f.multipath || []).length ? `<p class="small">multipathd has claimed it (${esc(f.multipath.map(m => m.name).join(", "))}). Setting it up releases that and adds its WWID to the blacklist in /etc/multipath.conf, so multipathd leaves this disk alone; nothing else changes.</p>` : ""}`)}
     ${modes.length ? `
       ${v2 ? `<div class="f"><label>Engine</label><select id="ds_engine" onchange="diskSetupChanged()"><option value="v1">V1 - formatted and mounted</option><option value="v2">V2 (SPDK) - the raw device</option></select></div>` : ""}
       <div class="disk-choices" id="ds_modes">
@@ -361,7 +363,7 @@ window.diskRetire = async (node, disk) => {
   try {
     p = await api("/api/disks/retire/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, disk }) });
-  } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  } catch (e) { $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(e.message)}`)}`; return; }
   const word = { "only-copy": ["only copy", "bad"], waits: ["waits for the new disk", "warn"], elsewhere: ["rebuilds elsewhere", "ok"] };
   $("#mbody").innerHTML = `
     <p style="margin-top:0"><b class="mono">${esc(p.path)}</b> on ${esc(node)}${p.problem ? ` - <span class="badtext">${esc(p.problem)}</span>` : ""}</p>
@@ -371,12 +373,11 @@ window.diskRetire = async (node, disk) => {
     ${p.volumes.length ? `<div class="sec">${p.volumes.length} volume${p.volumes.length === 1 ? "" : "s"} had a copy on it</div>
       <div class="rc-uses">${p.volumes.map(v => `<div><b>${esc(v.claim)}</b> ${UI.chip(word[v.outcome][0], word[v.outcome][1])}
         <span class="dim xs">${esc(v.why)}</span></div>`).join("")}</div>` : '<div class="dim small">No replicas were on it.</div>'}
-    ${p.only_copies ? `<div class="note bad" style="margin-top:12px"><b>${p.only_copies} volume${p.only_copies === 1 ? "" : "s"} had the only copy on this disk.</b>
-      If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore
+    ${p.only_copies ? `${UI.callout("bad", { html: `${p.only_copies} volume${p.only_copies === 1 ? "" : "s"} had the only copy on this disk.` }, `If the drive is only unplugged, reconnect it instead: the data comes back with it. Otherwise restore
       ${p.only_copies === 1 ? "it" : "them"} from a backup (Data protection). Carrying on leaves ${p.only_copies === 1 ? "it" : "them"} alone and keeps the disk,
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
       <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked;diskRetireGate()"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
-      <div id="dr_confirm_row" hidden>${UI.typedConfirm({ id: "dr_confirm", expect: disk, oninput: "diskRetireGate()" })}</div></div>` : ""}
+      <div id="dr_confirm_row" hidden>${UI.typedConfirm({ id: "dr_confirm", expect: disk, oninput: "diskRetireGate()" })}</div>`, { attrs: 'style="margin-top:12px"' })}` : ""}
     ${UI.actions(`<button class="btn pri" id="dr_go" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();

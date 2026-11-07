@@ -287,7 +287,7 @@ window.fleetTransfersPaint = () => {
 window.fleetMigration = async id => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
   if (!m) return;
-  modal(`Migration from ${m.name}`, '<div class="empty"><span class="spin2"></span> Asking about its backup storage…</div>', true);
+  modal(`Migration · ${m.name}`, '<div class="empty"><span class="spin2"></span> Asking about its backup storage…</div>', true);
   let state, ready = null;
   try { state = await fleetTransferCall(m); FLEET.transfers[id] = state; }
   catch (e) {

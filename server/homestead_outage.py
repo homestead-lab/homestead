@@ -240,8 +240,8 @@ def clean(value, kind="app", monitored_on_port=True, before=None, role="operator
         if not 1 <= most <= MAX_RESTARTS:
             raise ValueError(f"restart at most 1 to {MAX_RESTARTS} times")
         if kind == "vm" and not monitored_on_port:
-            raise ValueError("a VM is restarted only when it is monitored on a port you chose: "
-                             "automatically, Homestead cannot tell it is down")
+            raise ValueError("choose a port to monitor before a VM can be restarted. "
+                             "Without one, Homestead cannot tell it is down")
         out["restart"] = {"after_min": after, "max": most}
     url = webhook_url(restore(webhook_url(value.get("webhook")), before.get("webhook")))
     fmt = str(value.get("format") or "generic")

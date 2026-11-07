@@ -473,8 +473,8 @@ async function replicasPaint() {
   STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count" aria-label="Copies of Homestead">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
         <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}`)}
-    ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every host can mount.</b> ${esc(r.data.reason)}.
-      ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between hosts; create one under Volumes, without live migration.</div>"}</div>` : ""}
+    ${r.data && !r.data.shareable ? `${UI.callout(r.desired > 1 ? "bad" : "", { html: `More than one copy needs a volume every host can mount.` }, `${esc(r.data.reason)}.
+      ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between hosts; create one under Volumes, without live migration.</div>"}`, { attrs: 'style="margin-top:10px"' })}` : ""}
     ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
       ${(r.data.classes || []).length && can("admin") ? `<span class="small">· move to</span>
         <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · every host" : " · one host"}</option>`).join("")}</select>
@@ -1260,7 +1260,7 @@ window.sambaInstallGo = async (selectedAddress = null) => {
 
 window.sambaRemove = () => {
   modal("Remove SMB server", `<p>The SMB address and its server will be removed. Network shares stop being served.</p>
-    <div class="note warn">Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.</div>
+    ${UI.callout("warn", "", `Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.`)}
     ${UI.typedConfirm({ id: "smb_remove_confirm", expect: "homestead-smb", button: "smb_remove_go" })}
     ${UI.actions(UI.cancel() + `<button class="btn danger" id="smb_remove_go" disabled onclick="sambaRemoveGo()">Remove SMB server</button>`)}`);
 };
@@ -1289,7 +1289,7 @@ window.nfsSet = async on => {
     const own = (choices.own || []).find(v => v.free);
     return modal("Install NFSv4 server", `<p>A separate NFS container will serve ${plural((nfs.exports || []).length, "selected RWX share")} on TCP port 2049. File access pauses if its host fails, until the replacement server and storage are available.</p>
       ${nfsRecovery(nfs, true)}
-      <div class="note warn">Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.</div>
+      ${UI.callout("warn", "", `Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.`)}
       <p class="small">SMB and NFS use different ports, but their separately placed servers need separate VIPs to keep client IP restrictions and routing correct after a host failure. Sharing one VIP would require a combined file-server pod.</p>
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
       ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -1310,7 +1310,7 @@ window.nfsInstallGo = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and its address will be removed. Clients will lose access to its exports.</p>
-  <div class="note warn">Export settings, SMB shares, all PVCs and their data remain.</div>
+  ${UI.callout("warn", "", `Export settings, SMB shares, all PVCs and their data remain.`)}
   ${UI.typedConfirm({ id: "nfs_remove_confirm", expect: "homestead-nfs", button: "nfs_remove_go" })}
   ${UI.actions(UI.cancel() + `<button class="btn danger" id="nfs_remove_go" disabled onclick="nfsRemoveGo()">Remove NFS server</button>`)}`);
 window.nfsRemoveGo = async () => {

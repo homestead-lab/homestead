@@ -58,7 +58,7 @@ test("start review distinguishes required preferred and scheduler-selected launc
   const candidates = [{ name: "host<a>", eligible: true, projected_pods: 1 }, { name: "host-b", eligible: true, projected_pods: 1 }];
   const base = { requires_confirmation: true, additional: 1, candidates, warnings: [] };
   const pinned = await review({ ...base, placement: { pinned: "host<a>" } });
-  assert.match(pinned, /Starts <b>app<\/b> on <b>host&lt;a&gt;<\/b>\./);
+  assert.match(pinned, /<p class="ui-lead">Starts it on <b>host&lt;a&gt;<\/b>\./);
   assert.match(pinned, /ui-chip info">pinned/);
   const preferred = await review({ ...base, placement: { preferred: "host<a>" } });
   assert.match(preferred, /on <b>host&lt;a&gt;<\/b> if it can, or another host/);

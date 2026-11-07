@@ -36,8 +36,8 @@ def require_rename_ack(dep, body):
     managed = notice(dep)
     if managed and body.get("confirm_managed") is not True:
         where = f" ({managed['source']})" if managed.get("source") else ""
-        raise ValueError(f"{managed['by']} applies this app{where} and will bring back the old name, so there "
-                         "would be two copies. Rename it in git instead, or confirm with confirm_managed: true")
+        raise ValueError(f"Rename it in git instead. {managed['by']} applies this app{where} and would bring back "
+                         "the old name, leaving two copies; or confirm with confirm_managed: true")
 
 
 # ------------------------------------------------- the change, as YAML (#735)

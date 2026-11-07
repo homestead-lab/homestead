@@ -701,7 +701,7 @@ class EngineTests(unittest.TestCase):
         planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
 
         self.assertTrue(any("only reachable inside" in b for b in planned["blockers"]))
-        self.assertTrue(any("changes from" in w for w in planned["warnings"]))
+        self.assertTrue(any("backup target changes for this transfer" in w for w in planned["warnings"]))
 
     def test_a_move_runs_every_phase_and_lands_running(self):
         PLAN.start("shed", "container", "frigate", "moved", "automatic")
@@ -920,7 +920,7 @@ class EngineTests(unittest.TestCase):
                      volumes={"frigate-config": {"action": "blank"}})
         move = self.run_until_settled()
         with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.249"}):
-            with self.assertRaisesRegex(ValueError, "update it to 2.8.250"):
+            with self.assertRaisesRegex(ValueError, "Homestead to 2.8.250 or later first"):
                 ACT.finish(move["id"], volumes=True)
         with mock.patch.object(client, "check_cluster", lambda name: {"version": "2.8.250"}):
             ACT.finish(move["id"], volumes=True)

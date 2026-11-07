@@ -508,14 +508,16 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
         topology_status = batch["status"]
         if batch["status"] == "blocked":
             total_bound = min(total_bound, batch["slots"])
-            warnings.append("no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules")
+            warnings.append("no scheduling order fits all requested replicas. "
+                                "The observed pod affinity and topology spread rules rule it out")
         elif batch["status"] == "unknown":
             warnings.append("multi-replica topology search reached its limit; a complete scheduling order is unknown" if batch["search_exhausted"] else
                             "pod topology placement could not be fully verified; review the unknown scheduler constraints")
     total_slots = total_bound if reservations_known else None
     insufficient = bool(additional and total_bound < additional)
     if insufficient and eligible:
-        warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots allowed by checked resources, ports, storage and topology")
+        warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots. "
+                            "Resources, ports, storage and topology were checked")
     preferred_hosts = {host for term in (pod_spec.get("affinity") or {}).get("nodeAffinity", {}).get("preferredDuringSchedulingIgnoredDuringExecution") or []
                        if term.get("weight", 0) > 0
                        for expr in term.get("preference", {}).get("matchExpressions") or []

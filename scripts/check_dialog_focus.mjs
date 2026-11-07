@@ -17,7 +17,7 @@ try {
   await opener.focus();
   const openerId = await opener.evaluate(el => { el.dataset.focusCheck = "opener"; return el.outerHTML.slice(0, 60); });
   await opener.press("Enter");
-  await page.locator('#modal:not(.hidden) [role="dialog"][aria-modal="true"][aria-labelledby="mtitle"]').waitFor();
+  await page.locator('#modal:not(.hidden) [role="dialog"][aria-modal="true"][aria-labelledby~="mtitle"]').waitFor();
   assert.equal(await inDialog(), true, `focus moves into the dialog opened by ${openerId}`);
 
   // Tab and Shift+Tab stay inside.

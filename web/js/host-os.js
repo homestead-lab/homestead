@@ -283,7 +283,7 @@ function osUpdatesStatusHtml(r) {
   if (run) return `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)),
       { label: run.nodes.length === 1 ? "Updating the host" : `Updating ${osuHosts(run.nodes.length)}, one at a time`, detail: run.message || "" })}
     ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}`;
-  return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>Last run ${esc(last.status)}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}</div>` : "";
+  return last ? `${UI.callout(last.status === "failed" ? "bad" : "", { html: `Last run ${esc(last.status)}` }, `${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}`, { className: "small" })}` : "";
 }
 const osUpdatesRunActions = run => UI.actions(run
   ? UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' })
