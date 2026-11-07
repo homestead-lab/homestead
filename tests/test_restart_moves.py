@@ -705,7 +705,7 @@ class RealTickAndPlan(unittest.TestCase):
     """The real _auto_tick on the real plan: k1 away and back, against the shared fake.
     AutoCase fakes both plan and start, which hides how they join."""
     def setUp(self):
-        keep_bound(self, C)
+        keep_bound(self, C, CAPACITY_REVIEW)
         self.c = Hosts(self)
         bind(self.c)
         C.restart = server.OVERVIEW_ROUTES.restart_workload
