@@ -30,6 +30,7 @@ import homestead_forecast as FORECAST
 import homestead_gitops as GITOPS
 import homestead_history as HISTORY
 import homestead_host_access as HOSTACCESS
+import homestead_host_maintenance as HOST_MAINT
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_kube as KUBE
@@ -152,7 +153,7 @@ def _uptime_loop():
                     # Unread VMs sit this round out; their records are left as they were, not checked as gone.
                     vms = None
                     print(f"uptime: VMs not read: {str(error)[:160]}", flush=True)
-                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=vms)
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=vms, excused=HOST_MAINT.excused_apps())
                 try:
                     outage_tick()
                 except Exception as error:

@@ -19,6 +19,41 @@ import homestead_power_jobs as POWER_JOBS
 import homestead_routes as ROUTER
 
 
+# How long after a maintenance opens the apps it moved may still be settling on
+# their new hosts, and after End the apps that waited may take to start. One that
+# breaks later than that is a real outage.
+EXCUSE_SETTLE = 600
+
+
+def excused_apps(now=None):
+    """App uptime's keys (ns/name, vm:ns/name) moving because of a maintenance:
+    from its job's start until EXCUSE_SETTLE after its event opened, and what
+    waited for EXCUSE_SETTLE after End. A read that fails gives none: an app is
+    reported rather than hidden."""
+    now = int(time.time() if now is None else now)
+    try:
+        keys = set()
+        for item in OPS.stored():
+            ref = item.get("ref") or {}
+            if item.get("kind") == "node-power" and ref.get("action") == "maintenance" and item.get("status") not in OPS.TERMINAL:
+                keys.update(POWER_JOBS._moved_apps(ref.get("plan") or {}))
+        # From the start of time: one that ran out long ago can still be ended now.
+        for event in HISTORY.maintenance_since(0, now=now):
+            if not event.get("declared"):
+                continue
+            # A late Extend's event moved nothing: same op, another job.
+            if event["job"] == event.get("op") and now <= event["start"] + EXCUSE_SETTLE:
+                keys.update(event.get("apps") or [])
+            ended = event.get("released_at") or event.get("end_asked")
+            if ended and now <= ended + EXCUSE_SETTLE:
+                keys.update(f"{'vm:' if i.get('kind') == 'VirtualMachine' else ''}{i.get('ns')}/{i.get('name')}"
+                            for i in event.get("held") or [])
+        return keys
+    except Exception as error:
+        print(f"maintenance: which apps are moving was not read: {str(error)[:160]}", flush=True)
+        return set()
+
+
 def _node(source):
     node = source.get("node")
     if not isinstance(node, str) or not node:

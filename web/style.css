@@ -3734,7 +3734,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 /* Answering: whether each app answers at its address (uptime.js). */
 .answer-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mut);flex:none}
 .answer-dot.up{background:var(--ok)}.answer-dot.slow{background:var(--med)}.answer-dot.down{background:var(--crit)}
-.answer-dot.off,.answer-dot.unknown{background:var(--surf3)}
+.answer-dot.off,.answer-dot.unknown{background:var(--surf3)}.answer-dot.maintenance{background:var(--mut)}
 .answer-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap}
 .answer-state.big{font-size:15px}.answer-state.big .answer-dot{width:10px;height:10px}
 .answer-strip{display:inline-flex;gap:2px;align-items:stretch;height:14px;min-width:0}
