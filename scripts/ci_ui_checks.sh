@@ -53,6 +53,7 @@ case "${1:-}" in
     IPAM_FIGURES_SCREENSHOTS=release-assets/pages/ipam-figures node tests/integration/ipam-figures.mjs
     node tests/integration/unread-is-not-empty.mjs
     UPTIME_STRIP_SCREENSHOTS=release-assets/pages/uptime-strip node tests/integration/host-uptime-strip.mjs
+    HOST_MAINTENANCE_SCREENSHOTS=release-assets/pages/host-maintenance node tests/integration/host-maintenance.mjs
     node tests/integration/settings-reads.mjs
     ;;
   pages-dashboard)

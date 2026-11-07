@@ -218,6 +218,14 @@
   });
   // What each host's node probe last said (#705): read in the background.
   nodes.forEach(n => { n.probe = { state: "ok", misses: 0, last_ok: Date.now() / 1000 - 8, age_s: 8 }; });
+  // What a declared maintenance adds to a host's record (host-maintenance.js).
+  const demoWithDeclared = () => {
+    const declared = window.__demoDeclared || {}, now = Math.floor(Date.now() / 1000);
+    const nodes = Object.fromEntries(Object.entries(demoUptime.nodes).map(([name, u]) => [name, !declared[name] ? u : { ...u, maintenance: [...(u.maintenance || []),
+      { start: declared[name].start, end: declared[name].until > now ? null : declared[name].until, reason: declared[name].reason, job: "demo-declared",
+        ongoing: declared[name].until > now, declared: true, until: declared[name].until, released: false }] }]));
+    return { ...demoUptime, nodes };
+  };
   const demoUptime = (() => {
     const now = Math.floor(Date.now() / 1000), today = now - now % 86400;
     const plan = {
@@ -801,7 +809,7 @@
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
-    "/api/nodes": nodes, "/api/nodes/uptime": demoUptime,
+    "/api/nodes": nodes, "/api/nodes/uptime": () => demoWithDeclared(),
     // Each host's ports (host-ports.js): one plain uplink with a spare, one
     // bond running on a slow member with CRC errors, one LACP bond the switch
     // is not answering.
@@ -1949,9 +1957,37 @@ ssh_pwauth: true
       window.__demoOrphansRemoved = true;
       return { removed: (body.records || []).map(r => r.name), refused: [] };
     },
+    // Maintenance a person declared (host-maintenance.js): the host's answer, Extend and End.
+    "/api/node/maintenance": url => {
+      const event = (window.__demoDeclared ??= {})[url.searchParams.get("node")], now = Math.floor(Date.now() / 1000);
+      return { declared: event ? { reason: event.reason, until: event.until, start: event.start, state: event.until > now ? "open" : "ran_out", left_s: Math.max(0, event.until - now) } : null };
+    },
+    "/api/node/maintenance/extend": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), event = (window.__demoDeclared ??= {})[body.node];
+      event.until = Math.max(event.until, Math.floor(Date.now() / 1000) + body.hours * 3600);
+      return { ok: true, until: event.until };
+    },
+    "/api/node/maintenance/end": (url, init) => {
+      delete (window.__demoDeclared ??= {})[JSON.parse(init?.body || "{}").node];
+      return { ok: true, detail: "Scheduling is allowed on it again", started: [], left: [] };
+    },
     // A reviewed reboot or shutdown: a job that walks through the real phases.
     "/api/node/power": (url, init) => {
       const body = JSON.parse(init?.body || "{}"), reboot = body.action === "reboot";
+      if (body.action === "maintenance") {
+        const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `maintenance ${body.node}`, status: "running",
+          progress: 10, message: "Evicting workload and system pods", started_at: new Date().toISOString(), finished_at: "",
+          href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
+          power: { phase: "draining", action: "maintenance", node: body.node, direct: false, holds: false, held: 0 } };
+        (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
+        setTimeout(() => {
+          const start = Math.floor(Date.now() / 1000);
+          (window.__demoDeclared ??= {})[body.node] = { reason: body.reason, start, until: start + body.hours * 3600 };
+          Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(), message: `In maintenance: ${body.reason}`,
+            power: { ...op.power, phase: "maintained" } });
+        }, 800);
+        return { operation: op, steps: [], background: true };
+      }
       const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
         progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
@@ -2046,6 +2082,13 @@ ssh_pwauth: true
         plan.volumes = [{name:"pvc-demo-homestead",claim:"lab/homestead-data",healthy_elsewhere:0,risk:"unavailable"}];
         plan.maintenance.budgets[0].allowed = 0;
         plan.warnings = ["All applications, storage and Homestead are unavailable while this host is down."];
+      }
+      if (plan.action === "maintenance") {
+        plan.warnings = plannedOutage
+          ? ["This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. It only records the maintenance. Whatever you then do to the host takes the whole cluster with it"]
+          : ["DaemonSets and static pods remain on the host; their services stop if it goes down.", ...plan.warnings.slice(1)];
+        if (plannedOutage) plan.hold = [];
+        if (window.__demoDeclared?.[plan.node]) Object.assign(plan, { ready: false, blockers: ["This host is already in maintenance"], hard_blockers: ["This host is already in maintenance"] });
       }
       return plan;
     },

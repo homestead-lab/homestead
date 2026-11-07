@@ -8,6 +8,7 @@ window.nodeActions = async name => {
       <button class="btn" onclick="closeModal()">Close</button>`);
   }
   window.__nodeImpact = impact;
+  const declared = await api(`/api/node/maintenance?node=${encodeURIComponent(name)}`).then(r => r.declared).catch(() => undefined);
   const isEtcd = (qr.members || []).includes(name);
   const off = qr.power_enabled === false;
   const host = ((typeof STATE !== "undefined" && STATE.data.nodes) || []).find(n => n.name === name) || {};
@@ -32,6 +33,7 @@ window.nodeActions = async name => {
           + "Reviewed first: what moves, what waits for the host, and its volume copies.",
         UI.button("Reboot…", `nodePowerReview(${jsArg(name)},'reboot')`, { attrs: 'data-need="admin"' })
         + UI.button("Shut down…", `nodePowerReview(${jsArg(name)},'poweroff')`, { kind: "danger", attrs: 'data-need="admin"' }))}
+    ${window.hostMaintenanceRow?.(name, declared) || ""}
     ${promotable ? action("Make this a server", "Gives the cluster another etcd vote. Its apps move off while k3s reinstalls; its storage stays.",
       UI.button("Make server…", `nodePromoteReview(${jsArg(name)})`, { attrs: 'data-need="admin"' })) : ""}
     ${action("Remove from cluster", "Take this host out for good, after checking quorum and volume copies.",

@@ -29,6 +29,7 @@ const MIGRATED = {
   "web/js/views-portal.js": 0,
   // The "scheduled" chip carries a clock icon and its own aria-label.
   "web/js/schedules.js": 1,
+  "web/js/host-maintenance.js": 0,
   "web/js/host-os.js": 0,
   "web/js/compose.js": 0,
   "web/js/changes.js": 0,
