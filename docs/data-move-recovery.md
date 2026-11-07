@@ -66,10 +66,13 @@ What each held phase allows:
   refuses and going back is the only way. Then start a new move. The hold offers going back first.
 - **Held after the stop, before the switch request**: `resume`, or
   `return-original` as above.
-- **Held after the switch request** (phase switch or start): `resume` only,
-  forward to the new volume. `return-original` stays refused: the new pods
-  may already have written to the new volume, so going back could lose data
-  or start two writers.
+- **Held after the switch request, before the start request** (phase switch or
+  start): `resume`, or `return-original`. Nothing has been written to the new
+  volume, as Homestead has stayed at 0 copies. Going back is one write: the
+  claim and the replica count go back together.
+- **After the start request:** `resume` only, forward to the new volume.
+  `return-original` stays refused: the new pods may have written to the new
+  volume, so going back could lose data or start two writers.
 
 Resuming forward is not a rollback, so it keeps the rule this recovery was
 built on (#165): nothing automatic may start two competing writers. Its
@@ -120,8 +123,8 @@ meanwhile, and the status page comes back with the new Pod.
   the control record, so the old Pod can write nothing more if it was only cut off.
 - It continues from the record, which holds the Job's identity, the coordinator's
   configuration and every receipt. Nothing already recorded is done again: a
-  running copy is followed, a finished one is verified, and after the switch
-  the move only goes forward. A hold stays held, and a wait keeps its deadline.
+  running copy is followed, a finished one is verified, and after the start
+  request the move only goes forward. A hold stays held, and a wait keeps its deadline.
 
 A new Pod that hasn't taken over never holds, because nothing it held could be written or
 cleared. If it is refused, the page says "This coordinator has not taken over yet and is retrying",
@@ -353,8 +356,10 @@ Before any stop request, the wait lasts only as long as the copy check, about a 
 that this move can never stop Homestead, so it holds at once and the way out is going back,
 which writes nothing and does not need the host. Homestead keeps running as it was.
 
-After the stop request and before the switch, the move waits 30 minutes for it, saying so
-on the page, then holds. The 10-minute deadlines don't run during that wait.
+After the stop request and before the start request, the move waits 30 minutes for it, saying so
+on the page, then holds. The 10-minute deadlines don't run during that wait. A hold stays until
+someone reviews it, even once the host is back: Homestead stays stopped, with its own alerts,
+until `--action resume` or `--action return-original` is confirmed with `kubectl exec`.
 
 - **The original volume is not on that host:** preview and confirm
   `--action return-original`. It does not need the host, and Homestead restarts on
@@ -364,17 +369,16 @@ on the page, then holds. The 10-minute deadlines don't run during that wait.
   help, because that disk holds the only copy Homestead has. Bring the host or its disk back, or
   restore from a backup. Do not point the Deployment at another volume by hand.
 
-After the switch, the move waits with no limit and the page says so, because a hold would
+After the start request, the move waits with no limit and the page says so, because a hold would
 only keep the new pods unready. Recovery can't go back from here. If the new volume's host
 will never return, the verified copy on it is gone too, and what that costs depends on when:
 
 - **After the switch, before the start request:** replicas are still 0, so **nothing
   has been written to the new volume, and the original volume is complete.** Nothing is
-  lost. Recovery still can't go back in this window, so it is an administrator-reviewed
-  recovery outside this tool.
+  lost. When the 30 minutes are up, preview and confirm `--action return-original`.
 - **After the start request:** the new pods may have written to the new volume. The
   original holds the data as it was when Homestead stopped, and whatever was written after that
-  is not on it. Going back to it is also an administrator-reviewed recovery outside this tool.
+  is not on it. Going back to it is an administrator-reviewed recovery outside this tool.
 
 ### Hosts removed or added
 
@@ -389,16 +393,18 @@ its next capacity check before the switch, because the cluster is no longer the 
   "A Pod on a dead host". A move held before the stop is the same: Homestead's pod on a removed
   host refuses going back until it has left. Homestead may start on a host that has joined, both when a
   return restarts it and if a pod is already there before any stop request. That is safe:
-  nothing about that host matters to its original volume.
-- **After the switch there is no going back, so resuming and the start request ignore
+  nothing about that host matters to its original volume. All of this holds from the switch until
+  the start request too; after the start request there is no going back.
+- **From the switch on, resuming and the start request ignore
   the change** and the move finishes, unless what it needs is on a missing host:
   - **Homestead's new pod listed on a deleted Node** counts as waiting, with no limit, until it
     leaves Kubernetes. Pod GC removes it, then its ReplicaSet starts another. Nothing needs doing.
     If it is still listed after a few minutes, see "A Pod on a dead host". If the Node comes
     back under the same name, it only has to be up with a fresh heartbeat: no writer from
     before the move can be on it, as all were proven gone before the start request.
-  - **The new volume's own host removed** holds, and recovery refuses and says so. The data
-    is on that host. This is an administrator-reviewed recovery outside this tool.
+  - **The new volume's own host removed** holds, and `resume` refuses and says so. The data
+    is on that host. Before the start request, `--action return-original` goes back without it.
+    After it, this is an administrator-reviewed recovery outside this tool.
 
 
 **A host just back** has no live memory figure for a minute or two. If that is the only
@@ -432,7 +438,7 @@ placement names no reviewed host, every reviewed host is checked.
 
 Recovery refuses replaced resources, structural drift, stale/rebooted hosts,
 unexpected consumers and unknown API write outcomes. This command
-deliberately cannot switch back after cutover. There is no automatic timeout
+deliberately cannot switch back after a start request. There is no automatic timeout
 rollback, since that could start two competing writers.
 
 A Kubernetes API that does not answer (a timeout, a refused connection, a
@@ -446,6 +452,16 @@ new image into a pinned move, clear its hold, delete its marker, or scale the
 application up by itself. Those edits bypass the move's evidence and startup
 fence. The incident recovery must establish the same exact volume binding,
 known write outcomes and normal mount release before restoring the source.
+
+## A claim or PersistentVolume deleted by hand
+
+Both volumes are kept by rule, so a missing one means someone removed it. The move holds, or
+recovery refuses, saying it "no longer exists", and nothing is changed. This case is outside this
+tool. Recovery can't go on without it, and a new one with the same name won't do: the move pins
+each object's identity, so it reads "identity changed". Before the start request, either volume
+missing stops both `resume` and `return-original`. Deleting the original claim after the start
+request also holds the move with both actions refused, and the fence answers 503 to the new pods
+while it is held. Restoring Homestead from there is an administrator-reviewed recovery.
 
 ## Clearing finished moves from Jobs
 
