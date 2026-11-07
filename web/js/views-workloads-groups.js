@@ -389,7 +389,7 @@ window.mvPlan = async () => {
     `<label class="rb-app"><input type="checkbox" value="${esc(r.id)}" ${r.why ? "disabled" : "checked"}
       onchange="mvUntick(${jsq(r.id)})"> <span class="mono">${esc(r.id)}</span></label>`,
     r.why ? `<span class="ui-help">${esc(r.why)}</span>`
-      : `<span class="mono">${esc(r.from)} → ${esc(r.to)}</span> <span class="sub">${r.reserves ? `${esc(r.cpu_m)}m CPU · ${esc(r.mem_mb)} MiB reserved` : "reserves nothing"}</span>`,
+      : `<span class="mono">${esc(r.from)} → ${esc(r.to)}</span> <span class="sub">${r.reserves ? `${esc(r.cpu_m)}m CPU · ${esc(r.mem_mb)} MiB reserved` : "reserves nothing"}${r.replaces ? ` · replaces its preference for ${esc(r.replaces)}` : ""}</span>`,
     hostSelect(MV.over[r.id] || MV.to, `mvOverride(${jsq(r.id)},this.value)`, `Host for ${r.id}`)]);
   const notice = !moves.length ? UI.callout("bad", "Can't move", "Choose another host for them, or untick them.")
     : stays.length || (plan.hosts || []).some(h => h.over) ? UI.callout("warn", "Check first",

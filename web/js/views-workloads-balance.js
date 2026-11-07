@@ -78,7 +78,7 @@ function balanceContainersHtml(b) {
   const rows = (plan.apps || []).map((id, i) => {
     const m = moves.find(x => x.id === id), off = b.exclude.has(id);
     return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
-      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}${m.note ? ` · ${esc(m.note)}` : ""}</span>`];
+      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}${m.replaces ? ` · replaces its preference for ${esc(m.replaces)}` : ""}${m.note ? ` · ${esc(m.note)}` : ""}</span>`];
   });
   return [
     balanceSwitch("containers", b, "Balance containers"),

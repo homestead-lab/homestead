@@ -17,12 +17,15 @@ import homestead_kube as K
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_place as PLACE
+import homestead_priority as PRIORITY
 import homestead_recovery as RECOVERY
 import server
 from rebind import keep_bound, rebind
 from test_container_rebalance import Hosts, bind, deployment, pod, replicaset
 
 FLUX = {"lab/frigate": "Flux"}
+APPS_HERE = ("frigate", "ha", "plex", "tiny")
+LADDER = PRIORITY.ladder([{"metadata": {"name": "everyday"}, "value": 0, "globalDefault": True}])
 PATH = "/apis/apps/v1/namespaces/lab/deployments/frigate"
 MARK = NAMES.key("balance-preference")
 RESTARTED = NAMES.key("restartedAt")
@@ -216,6 +219,36 @@ class Landing(unittest.TestCase):
         self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": "v1"},
                          "spec": {"dataLocality": "disabled", **({"accessMode": access} if access else {})},
                          "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": "data"}}})
+
+    def test_a_persons_term_beside_balances_own_still_counts_as_theirs(self):
+        def both(dep):
+            prefers(dep, preference("k2"), preference("k3", weight=10))
+            mark(dep, "k2")
+        self.c.edit_dep("frigate", both)
+        self.assertTrue(PLACE.person_preference(self.c.dep("frigate")))
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        self.assertFalse(PLACE.person_preference(self.c.dep("frigate")))
+
+    def test_a_refused_landing_keeps_its_reason_in_the_list(self):
+        self.c.kube.add(reserving("full", "k1"))
+        self.c.kube.add(deployment("frigate", claim="data"))
+        self.c.edit_dep("frigate", lambda d: d["spec"].update(strategy={"type": "Recreate"}))
+        self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": "v1"},
+                         "spec": {"dataLocality": "best-effort"}, "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": "data"}}})
+        self.c.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Replica", "metadata": {"namespace": "longhorn-system", "name": "r1"},
+                         "spec": {"volumeName": "v1", "nodeID": "k1"}})
+        self.assertIn("no copy of its volumes", self.stranded(self.plan()))
+
+    def test_a_manual_plan_names_a_persons_preference_it_replaces(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        self.assertEqual("k2", moves_of(C.plan())["lab/frigate"]["replaces"])
+
+    def test_a_manual_plan_names_nothing_for_balances_own(self):
+        def own(dep):
+            prefers(dep, preference("k2"))
+            mark(dep, "k2")
+        self.c.edit_dep("frigate", own)
+        self.assertNotIn("replaces", moves_of(C.plan())["lab/frigate"])
 
     def test_a_rolling_update_on_a_one_host_volume_is_not_restarted(self):
         # The new pod waits for a volume the old one holds: Multi-Attach, then ten minutes lost.
@@ -455,6 +488,29 @@ class RestartJob(unittest.TestCase):
         C.status(self.item)
         self.assertIsNone(self.watched())
 
+    def test_a_no_tool_app_lost_reply_with_no_mark_is_not_undone(self):
+        self.item["ref"]["moves"][0]["by"] = ""
+        self.tool = {}
+        self.c.kube.fail(PATH, TimeoutError("reply lost"), method="PATCH", applied=True)
+        C.status(self.item)
+        self.restarted("k1")
+        self.c.edit_dep("frigate", lambda d: d["spec"]["template"]["metadata"]["annotations"].pop(RESTARTED))
+        C.status(self.item)
+        self.assertEqual({}, RECOVERY._load()["undone"])
+
+    def test_a_no_tool_restart_is_not_blocked_by_a_tools_removed_mark(self):
+        self.item["ref"]["moves"][0]["by"] = ""
+        self.tool = {}
+        RECOVERY.undone_by("lab/other", "Flux", time.time())
+        C.status(self.item)
+        self.assertEqual(1, len(self.writes()))
+
+    def test_a_no_tool_restart_stops_if_the_placement_mode_changes_mid_run(self):
+        self.item["ref"]["moves"][0]["by"] = ""
+        self.tool = {}
+        self.settings["placement"]["mode"] = "default"
+        self.skipped_without_a_write("no longer moves by restarting")
+
     def skipped_without_a_write(self, word):
         C.status(self.item)
         self.assertEqual([], self.writes())
@@ -603,6 +659,14 @@ class AutomaticJob(unittest.TestCase):
         self.assertEqual("skipped", self.ref["results"][0]["result"])
         self.assertIn("lab/frigate", RECOVERY._load()["auto"]["moved"])
 
+    def test_a_restart_starts_its_cooldown_when_sent(self):
+        self.ref["moves"][0].update(how="restart", by="")
+        C.restart = lambda ns, name, also=None: {"restartedAt": "2026-11-07T00:00:00Z"}
+        rebind(self, RECOVERY, RECOVERY.DATA_DIR, K.kget, lambda: {"placement": {"mode": "spread", "rebalance": "auto"}}, OPS, None, None, (), _managed_by=lambda dep: {})
+        C.status({"id": "job", "ref": self.ref})
+        self.assertEqual("starting", self.ref["stage"])
+        self.assertIn("lab/frigate", RECOVERY._load()["auto"]["moved"])
+
     def test_a_cooldown_that_cannot_be_written_does_not_lose_the_send(self):
         with mock.patch.object(RECOVERY, "may_go_on", return_value=""), \
                 mock.patch.object(RECOVERY, "moved_back", side_effect=OSError("disk")):
@@ -635,6 +699,110 @@ class AutomaticJob(unittest.TestCase):
             C.start({"moves": [], "excluded": []})
         self.assertTrue(started[0][4]["automatic"])
         self.assertFalse(started[1][4].get("automatic"))
+
+
+class RealTickAndPlan(unittest.TestCase):
+    """The real _auto_tick on the real plan: k1 away and back, against the shared fake.
+    AutoCase fakes both plan and start, which hides how they join."""
+    def setUp(self):
+        keep_bound(self, C, CAPACITY_REVIEW)
+        self.c = Hosts(self)
+        bind(self.c)
+        C.restart = server.OVERVIEW_ROUTES.restart_workload
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.settings = {"placement": {"mode": "spread", "rebalance": "auto"},
+                         "updates": {"maintenance": {"days": [], "start": "02:00", "duration_minutes": 120}}}
+        self.tools = {}
+        self.chosen = []
+
+        def start(chosen, why="", unless=()):
+            self.chosen.append(chosen)
+            return {"id": "job"}
+        rebind(self, RECOVERY, folder.name, K.kget, lambda: self.settings, OPS,
+               lambda exclude=(), avoid=(), **k: C.plan(exclude, avoid=avoid, **k), start, (),
+               _managed_by=lambda dep: self.tools.get(dep["metadata"]["name"], {}))
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(PRIORITY, "ladder", lambda *a, **k: LADDER).start()
+        mock.patch.object(RECOVERY, "_planned", [0.0]).start()
+        mock.patch.object(C, "_pull_first", return_value=([], [])).start()
+        self.c.kube.add(reserving("busy", "k2", cpu="1", memory="4Gi"))
+        self.now = time.time()
+
+    def ready(self, name, ready):
+        self.c.edit(f"/api/v1/nodes/{name}", lambda n: n["status"].update(conditions=[{"type": "Ready", "status": "True" if ready else "False"}]))
+
+    def back(self):
+        RECOVERY.tick(self.now - 3600)
+        self.ready("k1", False)
+        RECOVERY.tick(self.now - 2400)
+        self.ready("k1", True)
+        RECOVERY.tick(self.now - 1200)
+        RECOVERY._planned[0] = 0.0
+        RECOVERY.tick(self.now)
+
+    def everything_flux_preferring_k2(self):
+        for name in APPS_HERE:
+            self.tools[name] = {"by": "Flux", "detected": True}
+            self.c.edit_dep(name, lambda d: prefers(d, preference("k2")))
+
+    def test_apps_left_out_are_listed_and_the_host_settles(self):
+        self.everything_flux_preferring_k2()
+        self.back()
+        self.assertEqual([], self.chosen, "no job")
+        self.assertIn("k1", RECOVERY._load()["returned"])
+        whys = {k["id"]: k["why"] for k in RECOVERY.status()["kept"]}
+        self.assertIn("preference keeps it on k2", whys["lab/frigate"])
+        self.assertEqual([], [f for f in RECOVERY.alert_facts("auto", self.settings["updates"]["maintenance"]) if f["key"] == "recovery:rebalance"],
+                         "a reboot doesn't mean a week-long alert")
+
+    def test_a_settled_host_never_starts_a_run_when_the_load_changes(self):
+        self.c.edit_dep("tiny", lambda d: prefers(d, preference("k2")))
+        self.c.edit_node_metrics("k2", lambda m: m["usage"].update(cpu="0m", memory="0Gi"))
+        self.c.edit_node_metrics("k1", lambda m: m["usage"].update(cpu="0m", memory="0Gi"))
+        self.c.edit_node_metrics("k3", lambda m: m["usage"].update(cpu="0m", memory="0Gi"))
+        for name in APPS_HERE:
+            self.c.edit_pod_metrics(name, lambda m: m["containers"][0]["usage"].update(cpu="1m", memory="1Mi"))
+        self.back()
+        self.assertEqual([], self.chosen, "even hosts: nothing worth moving")
+        for name, (cpu, memory) in {"k2": ("3200m", "11Gi")}.items():
+            self.c.edit_node_metrics(name, lambda m: m["usage"].update(cpu=cpu, memory=memory))
+        self.c.edit_pod_metrics("frigate", lambda m: m["containers"][0]["usage"].update(cpu="1500m", memory="3Gi"))
+        self.assertIn("lab/frigate", moves_of(C.plan(restart={}, back=("k1",))), "it would, if this still ran")
+        RECOVERY._planned[0] = 0.0
+        RECOVERY.tick(self.now + 5 * 86400)
+        self.assertEqual([], self.chosen)
+
+    def test_a_persons_preference_is_not_rewritten_by_an_automatic_run(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        before = self.c.dep("frigate")["spec"]["template"]["spec"]["affinity"]
+        self.back()
+        for chosen in self.chosen:
+            self.assertNotIn("lab/frigate", [m["id"] for m in chosen["moves"]])
+        self.assertEqual(before, self.c.dep("frigate")["spec"]["template"]["spec"]["affinity"])
+        self.assertIn("lab/frigate", {k["id"] for k in RECOVERY.status()["kept"]})
+
+    def test_an_automatic_run_of_a_preference_for_the_returned_host_keeps_the_preference(self):
+        self.c.kube.add(reserving("full", "k3"))
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k1")))
+        self.back()
+        move = next(m for m in self.chosen[0]["moves"] if m["id"] == "lab/frigate")
+        self.assertEqual(("restart", "k1"), (move["how"], move["to"]))
+        item = {"id": "job", "ref": {"moves": [move], "index": 0, "moved": 0, "stage": "move", "results": [], "automatic": True}}
+        C.status(item)
+        self.assertEqual("starting", item["ref"]["stage"])
+        self.assertEqual("k1", PLACE.preferred_host(self.c.dep("frigate")["spec"]["template"]["spec"]))
+        self.assertEqual([], self.c.moved)
+        self.assertEqual("", PLACE.balance_preference(self.c.dep("frigate")))
+
+    def test_every_move_chosen_carries_its_generation(self):
+        self.back()
+        self.assertTrue(self.chosen[0]["moves"])
+        self.assertTrue(all("generation" in m for m in self.chosen[0]["moves"]))
+
+    def test_a_person_can_still_move_it_from_balance_hosts(self):
+        self.c.edit_dep("frigate", lambda d: prefers(d, preference("k2")))
+        self.assertIn("lab/frigate", moves_of(C.plan()))
 
 
 if __name__ == "__main__":

@@ -739,6 +739,7 @@ class CatalogueTests(unittest.TestCase):
     # Admin routes deliberately not tools, and why (#930 follow-up). Each path
     # is named, so a new admin route still fails until someone decides.
     ADMIN_UI_ONLY = {
+        "/api/recovery/resume": "resuming after a stop means a person has looked",
         **dict.fromkeys((
             "/api/disks/add", "/api/disks/evict", "/api/disks/inspect", "/api/disks/name", "/api/disks/node-tags",
             "/api/disks/os-space", "/api/disks/os-space/use", "/api/disks/remove", "/api/disks/retire",

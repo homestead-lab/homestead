@@ -11,7 +11,7 @@ const BASE = ["/api/settings", "/api/hardware/features", "/api/overview", "/api/
 // What each section's own cards read; none of it belongs to the Homestead section.
 const OWN = {
   updates: ["/api/cluster/components", "/api/os-updates"],
-  placement: ["/api/capacity/forecast"],
+  placement: ["/api/capacity/forecast", "/api/recovery"],
   hardware: ["/api/addons", "/api/namespaces/manage", "/api/storage/classes", "/api/longhorn/offline-rebuilding"],
   fleet: ["/api/fleet", "/api/move/moves"],
   connections: ["/api/mqtt", "/api/ipam"],

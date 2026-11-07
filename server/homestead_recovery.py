@@ -392,6 +392,84 @@ def _watch_marks(now):
         _save(data)
 
 
+def _plural(count, one, many):
+    return f"{count} {one if count == 1 else many}"
+
+
+# True however it clears: the plan found nothing, a run was cancelled, a host left, the
+# choice changed. The alerts engine posts the last wording it saw, so this can't say why.
+CLEARED = "This alert has cleared; Balance hosts shows anything that could still move."
+
+
+def _auto_facts(data, maintenance):
+    """What moving back by itself is doing, waiting for, and leaving."""
+    auto, found = data["auto"], data["suggestion"]
+    waiting = auto.get("waiting") or {}
+    facts = [{"key": "recovery:stopped", "category": "joins", "severity": "degraded",
+              "title": f"Moving containers back is stopped: {auto['paused'].get('why', '')}",
+              "body": "Nothing moves back by itself until you Resume it in Settings, or change the choice.",
+              "resolved": "Moving containers back has started again", "href": "/settings?tab=placement", "signals": {"stopped": 1}}] \
+        if auto.get("paused") else []
+    settled = auto.get("settled") or {}
+    hosts = sorted(h for h, t in data["returned"].items() if settled.get(h) != t)
+    moves = int(found.get("moves") or 0)
+    later, reasons, away, flux_out, kept = (int(waiting.get("later") or 0), waiting.get("reasons") or [], waiting.get("away") or [],
+                                            int(waiting.get("flux_out") or 0), waiting.get("kept") or [])
+    total = int(waiting.get("kept_total") or len(kept))
+    if not hosts or auto.get("paused") or not (moves or later or reasons or kept):
+        return facts
+    who = " and ".join(hosts) if len(hosts) < 3 else f"{len(hosts)} hosts"
+    parts = [f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away." if moves or later else ""]
+    parts.append(f"Waiting: {'; '.join(reasons)}." if reasons else "They move by themselves, one at a time; each restarts once." if moves else "")
+    if later:
+        apps = _plural(later, "critical app", "critical apps")
+        parts.append(f"The update window has no days set, so {apps} {'stays' if later == 1 else 'stay'} until you move {'it' if later == 1 else 'them'}."
+                     if maintenance and not maintenance.get("days")
+                     else f"{apps} {'waits' if later == 1 else 'wait'} for the update window ({(maintenance or {}).get('start', '')} UTC).")
+    if flux_out:
+        parts.append(f"{_plural(flux_out, 'app', 'apps')} Flux applies {'is' if flux_out == 1 else 'are'} left out: "
+                     f"choose Spread by capacity to include {'it' if flux_out == 1 else 'them'}.")
+    if kept:
+        named = "; ".join(f"{row['id']}: {row['why']}" for row in kept[:3])
+        more = f"; and {total - 3} more in Settings" if total > 3 else ""
+        parts.append(f"{_plural(total, 'container stays where it is', 'containers stay where they are')}, and Balance hosts can still "
+                     f"move {'it' if total == 1 else 'them'} if you choose: {named}{more}.")
+    verb = "is" if len(hosts) == 1 else "are"
+    title = (f"{who} {verb} back, but moving containers back waits: {' and '.join(away)} {'is' if len(away) == 1 else 'are'} away" if away
+             else f"{who} {verb} back: {_plural(moves, 'container', 'containers')} could move to even out the hosts" if moves
+             else f"{who} {verb} back: {_plural(later, 'critical app waits', 'critical apps wait')} for the update window" if later
+             else f"{who} {verb} back: {_plural(total, 'container stays where it is', 'containers stay where they are')}" if kept
+             else f"{who} {verb} back: moving containers back waits")
+    return facts + [{"key": "recovery:rebalance", "category": "joins", "severity": "info", "title": title,
+                     "body": " ".join(part for part in parts if part),
+                     "resolved": CLEARED, "href": "/containers?panel=rebalance",
+                     "signals": {"moves": moves, "later": later, "away": len(away), "kept": total}}]
+
+
+def status():
+    """What moving back by itself is waiting for, as the last look stored it: no
+    cluster reads, so opening Settings costs nothing."""
+    mode = (settings().get("placement") or {}).get("rebalance", "off")
+    with _lock:
+        data = _load()
+    auto = data["auto"]
+    waiting = auto.get("waiting") or {}
+    return {"mode": mode, "hosts": waiting.get("hosts") or [], "waiting": waiting.get("reasons") or [],
+            "later": waiting.get("later") or 0, "left_out": waiting.get("left_out") or 0, "kept": waiting.get("kept") or [],
+            "kept_total": waiting.get("kept_total") or len(waiting.get("kept") or []),
+            "paused": auto.get("paused") or None, "undone": data["undone"] or None, "job": auto.get("job") or ""}
+
+
+def resume():
+    """Someone has looked: the next look may start a run, and restart moves again."""
+    with _lock:
+        data = _load()
+        data["auto"].pop("paused", None)
+        data["undone"] = {}
+        _save(data)
+    return status()
+
+
 def alert_facts(mode=None, maintenance=None):
     """A host back, with containers worth moving back to even things out; and a tool
     that took a restart mark off. mode and maintenance are read from the settings when
@@ -406,8 +484,10 @@ def alert_facts(mode=None, maintenance=None):
     facts = [{"key": "recovery:restart-undone", "category": "joins", "severity": "degraded",
               "title": f"{undone['by']} removed Homestead's restart mark from {undone['app']}, so it restarted a second time",
               "body": f"Apps {undone['by']} applies are left out of moves back until you Resume.",
-              "resolved": "Moves back can restart apps again", "href": "/settings?tab=general",
+              "resolved": "Moves back can restart apps again", "href": "/settings?tab=placement",
               "signals": {"undone": 1}}] if undone else []
+    if mode == "auto":
+        return facts + _auto_facts(data, maintenance)
     if mode not in ("suggest", "window") or not found.get("moves"):
         return facts
     hosts, moves = found["hosts"], found["moves"]
@@ -417,13 +497,13 @@ def alert_facts(mode=None, maintenance=None):
     elif not maintenance.get("days"):
         then = "The update window has no days set, so nothing moves by itself; review it."
     else:
-        then = (f"They move in the next update window ({maintenance['start']} UTC) unless you start it sooner - "
-                "apart from any whose scheduled job runs then.")
+        then = (f"Those it can move in the next update window ({maintenance['start']} UTC) unless you start it sooner - "
+                "not any whose scheduled job runs then; Settings lists the rest.")
     return facts + [{"key": "recovery:rebalance", "category": "joins", "severity": "info",
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
                      f"Balance hosts shows the moves; each restarts its container once. {then}",
-             "resolved": "No containers need to move back now", "href": "/containers?panel=rebalance", "signals": {"moves": moves}}]
+             "resolved": CLEARED, "href": "/containers?panel=rebalance", "signals": {"moves": moves}}]
 
 
 # ------------------------------------------------------------- mode auto
@@ -465,13 +545,13 @@ def _auto_job(now):
     _auto_update(change)
 
 
-def _auto_wait(reasons=(), hosts=None, later=None, left_out=None, kept=None):
+def _auto_wait(reasons=(), hosts=None, later=None, left_out=None, kept=None, away=None, flux_out=None, kept_total=None):
     """What it is waiting for, for Settings and the alert. No cluster read behind it:
     the look stored it."""
     def change(auto):
-        waiting = auto.get("waiting") or {"hosts": [], "later": 0, "left_out": 0, "kept": []}
+        waiting = auto.get("waiting") or {"hosts": [], "later": 0, "left_out": 0, "kept": [], "away": [], "flux_out": 0}
         waiting["reasons"] = list(reasons)
-        for key, value in (("hosts", hosts), ("later", later), ("left_out", left_out), ("kept", kept)):
+        for key, value in (("hosts", hosts), ("later", later), ("left_out", left_out), ("kept", kept), ("away", away), ("flux_out", flux_out), ("kept_total", kept_total)):
             if value is not None:
                 waiting[key] = value
         auto["waiting"] = waiting
@@ -492,13 +572,20 @@ def _hold_reasons(nodes, data, standby, returned, now):
             reasons.append(f"{host} steady in {max(1, -(-left // 60))} min")
         if copies:
             reasons.append(f"{len(copies)} cop{'y' if len(copies) == 1 else 'ies'} rebuilding on {host}")
-    reasons += [f"{host} is away" for host in AUTO.away(nodes, data["worked"], standby, returned)]
-    return rows, reasons
+    gone = AUTO.away(nodes, data["worked"], standby, returned)
+    return rows, reasons + [f"{host} is away" for host in gone], gone
 
 
 def _auto_tick(current, placement, nodes, standby, returned, now):
     """One look in mode auto; each hold stores why. Clocks live in the file, so a new
-    leader loses no steady time and runs nothing early."""
+    leader loses no steady time and runs nothing early. A host settled by an earlier
+    look gets no more plans and no more runs: being remembered is for Settings' list,
+    not leave to rebalance for a week on whatever the figures say by then."""
+    with _lock:
+        settled = _load()["auto"].get("settled") or {}
+    returned = {host: t for host, t in returned.items() if settled.get(host) != t}
+    if not returned:
+        return None
     busy = sorted({i.get("title") or "Another job" for i in operations.snapshot()
                    if i.get("kind") in WAITS_FOR and i.get("status") not in operations.TERMINAL})
     if busy:
@@ -510,9 +597,9 @@ def _auto_tick(current, placement, nodes, standby, returned, now):
         return _auto_wait([f"Stopped: {auto['paused'].get('why', '')}"])
     if now - auto.get("ended", 0) < RUN_GAP:
         return _auto_wait([f"The last run ended {max(1, int((now - auto['ended']) // 60))} min ago"])
-    rows, reasons = _hold_reasons(nodes, data, standby, returned, now)
+    rows, reasons, gone = _hold_reasons(nodes, data, standby, returned, now)
     if now - _planned[0] < 300:      # a plan reads every pod and volume
-        return _auto_wait(reasons, rows)
+        return _auto_wait(reasons, rows, away=gone)
     _planned[0] = now
     deployments = read("/apis/apps/v1/deployments").get("items", [])
     maintenance = current["updates"]["maintenance"]
@@ -531,11 +618,15 @@ def _auto_tick(current, placement, nodes, standby, returned, now):
     chosen = plan(sorted(left_out | later | cooldown | set(keep)), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     if not whole.get("metrics") or (whole.get("metrics_state") or {}).get("state") != "ok":
         reasons.append("The CPU and memory figures aren't current")
-    kept = (whole.get("kept") or [])[:KEPT_SHOWN]
-    _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept)
-    # Forgotten only once it has passed, nothing at all is left to move, and nothing
-    # stays only because it can't: that isn't "nothing needs to move". RETURN_KEEP ends it.
-    suggest(chosen["moves"], now, forget=not reasons and not whole["moves"] and not kept)
+    kept = whole.get("kept") or []
+    flux_out = 0 if placement.get("mode") == "spread" else sum((managed_by(d) or {}).get("by") == "Flux" for d in deployments)
+    _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept[:KEPT_SHOWN], gone, flux_out, len(kept))
+    # Every gate passed and nothing to move: done with this return. Apps left out keep it
+    # remembered, for Settings' list, until RETURN_KEEP; nothing else about it runs.
+    done = not reasons and not whole["moves"]
+    if done and kept:
+        _auto_update(lambda auto: auto.setdefault("settled", {}).update(returned))
+    suggest(chosen["moves"], now, forget=done and not kept)
     if reasons or not chosen["moves"]:
         return None
     chosen["automatic"] = True
@@ -592,8 +683,9 @@ def tick(now=None):
     else:
         _auto_update(lambda auto: (auto.pop("paused", None), auto.pop("job", None)))
     if not returned or mode == "off":
-        if mode == "auto":
-            _auto_wait([], [], 0, 0, [])
+        if mode in ("auto", "window"):
+            _auto_wait([], [], 0, 0, [], [], 0, 0)
+            _auto_update(lambda auto: auto.pop("settled", None))
         return None
     if mode == "auto":
         return _auto_tick(current, placement, nodes, standby, returned, now)
@@ -621,16 +713,25 @@ def tick(now=None):
     # A scheduled job is guarded for as long as the run may take - a move can
     # wait MOVE_WAIT for its container - not only until the window closes.
     may_restart = placement.get("mode") == "spread"
+    held = []
     if may_restart:
         # A restart lands where the scheduler says, so not while a copy is rebuilt on the
-        # host back. The placement moves go on as they always have.
+        # host back; and with a host away the job would stop at its first restart, so those
+        # are left out here and the placement moves go on as they always have.
         volumes, replicas, engines = AUTO.read_copies(read)
-        if any(AUTO.copies_left(host, volumes, replicas, engines) for host in back):
+        with _lock:
+            worked = _load()["worked"]
+        held = [f"A copy is rebuilding on {host}, so apps Flux applies wait for the next opening"
+                for host in back if AUTO.copies_left(host, volumes, replicas, engines)]
+        held += [f"{host} is away, so apps Flux applies wait for the next opening" for host in AUTO.away(nodes, worked, standby, returned)]
+        if held:
             left_out, restart, may_restart = left_out | set(restart), {}, False
     first = plan(sorted(left_out), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     until = max(closes, now + MOVE_WAIT * len(first["moves"]))
     keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, until)
     chosen = plan(sorted(left_out | set(keep)), avoid=standby, restart=restart, back=back, may_restart=may_restart)
+    kept = chosen.get("kept") or []
+    _auto_wait(held, later=0, left_out=len(left_out), kept=kept[:KEPT_SHOWN], kept_total=len(kept))
     if not chosen["moves"]:
         ran(key)
         return None
@@ -642,6 +743,13 @@ def tick(now=None):
         return None      # something else started meanwhile; the next minute looks again
     ran(key)
     return started
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/recovery"): ("viewer", lambda request: status()),
+    ("POST", "/api/recovery/resume"): ("admin", lambda request: resume()),
+}
 
 
 def run(sleep=time.sleep):
