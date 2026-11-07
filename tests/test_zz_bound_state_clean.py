@@ -20,6 +20,10 @@ Reported, not failed:
 Fakes bound in setUpClass/setUpModule run before any test, so the per-test recorder
 does not see them.
 
+tests/bound_restore.py, installed here too, puts back after each test file what that
+file left bound, so a leftover cannot reach the next file. A fake a test leaves still
+fails here: within a file, the next test would see it (keep_bound stays required).
+
 Fix a leak with tests/rebind.py (rebind / keep_bound) or mock.patch.object, then
 take its line off bound_leaks.txt and lower CEILING.
 """
@@ -30,8 +34,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bound_guard as GUARD
+import bound_restore as RESTORE
 
 GUARD.install()
+RESTORE.install()
 LISTED = GUARD.allowed()
 # Lines for leaks that come with an open PR of ours (note "from #NNNN"): allowed, so the
 # combined run passes, but not counted, not stale and not checked as bound (bound_guard.pending).
