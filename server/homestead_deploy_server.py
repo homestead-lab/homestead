@@ -374,13 +374,17 @@ def redact_deployment_preview(deployment, cfg=None):
     return safe
 
 
-def rebalance_move(ns, name, node):
+def rebalance_move(ns, name, node, mark=True):
     """One container of a rebalance: the manual move's capacity check and
-    placement - a preference, not a pin - or a reason to leave it."""
+    placement - a preference, not a pin - or a reason to leave it. mark: this is
+    Balance's own plan, so the preference is marked as such; picks in the Move
+    dialog are a person's choice, and carry no mark."""
     body = {"ns": ns, "name": name, "node": node, "pin": False}
     proposed, capacity, _ = WORKLOADS.move_capacity_plan(body)
     if capacity.get("blocked"):
         raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
+    if mark:
+        PLACE.mark_balance_preference(proposed, node)
     meta = proposed["metadata"]
     ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
     PLACE._bust("wl", "ov", "flow", "nodes", "impact:")

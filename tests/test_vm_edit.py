@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
 import homestead_vm_list as VM_LIST
+from rebind import bound_names, keep_bound
 
 # A VM whose DataVolume CDI refused: its URL was a file name.
 VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVersion": "10"},
@@ -43,7 +44,8 @@ class Cluster:
         # file's tests end (module cleanups run last first, so the first Cluster's
         # restore wins): a later file that reads VMs through server.py's binding,
         # once server has been imported, must not get this fake's 404s.
-        saved = {name: getattr(VMS, name) for name in ("kget", "ksend", "events_for", "platform", "images")}
+        # Everything VMS.bind() sets (bound_names), and the two it patches by hand.
+        saved = {name: getattr(VMS, name) for name in (*bound_names(VMS), "platform", "images")}
         unittest.addModuleCleanup(lambda: [setattr(VMS, name, value) for name, value in saved.items()])
         VMS.bind(self.get, self.send, lambda *a, **k: [])
         VMS.platform = lambda: platform
@@ -175,6 +177,7 @@ class VmEditTests(unittest.TestCase):
         get = c.get
         c.get = lambda path: (pods if path.endswith("/pods") else
                               {"metadata": {"uid": "u9"}} if path.endswith("/persistentvolumeclaims/web-disk") else get(path))
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(c.get, c.send, lambda ns, name, uid="": [{"type": "Warning", "message": f"{name}: waiting"}]
                  if name.startswith("prime-u9") and not name.endswith("scratch") else [])
         row = VM_LIST._filling(copy.deepcopy(VM), {("lab", "web-disk"): dv})[0]

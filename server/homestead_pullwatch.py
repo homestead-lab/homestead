@@ -38,11 +38,15 @@ UNITS = {"b": 1, "kb": 1000, "kib": 1024, "mb": 1000 ** 2, "mib": 1024 ** 2,
 ACTIVE = re.compile(r"^\S*?sha256:([0-9a-f]{64})\s+([\d.]+)\s*([kKmMgGtT]?i?B)\b")
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"DATA_DIR": DATA_DIR}
+
+
 def bind(_kget, _ksend, _raw_get, _layers_of, namespace="lab", data_dir=None):
     global kget, ksend, raw_get, layers_of, NS, DATA_DIR
     kget, ksend, raw_get, layers_of, NS = _kget, _ksend, _raw_get, _layers_of, namespace
-    if data_dir:
-        DATA_DIR = data_dir
+    DATA_DIR = data_dir if data_dir else _UNBOUND["DATA_DIR"]
 
 
 def _bytes(number, unit):

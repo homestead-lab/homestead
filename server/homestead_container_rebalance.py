@@ -58,11 +58,16 @@ kget = None
 own = ("", "")                  # Homestead's namespace and Deployment
 requirements = satisfies = None # homestead_place: what a workload needs, whether a host has it
 summaries = None                # homestead_place.get_nodes: the host summaries satisfies() reads
-apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
+apply = None                    # (ns, name, node, mark=) -> moves it, after the manual move's capacity check
 guard = None                    # (deployment, ns, role) -> raises PermissionError if that role may not change it
 operations = None               # homestead_operations: the job is one of its jobs
 standby = lambda: ()            # homestead_placement_mode.standby_hosts: never moved onto, emptied first
 is_leader = lambda: True
+
+
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"is_leader": is_leader}
 
 
 def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None,
@@ -71,8 +76,7 @@ def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=Non
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
     summaries, guard, operations = _summaries, _guard, _operations
     standby = _standby or (lambda: ())
-    if _is_leader:
-        is_leader = _is_leader
+    is_leader = _is_leader if _is_leader else _UNBOUND["is_leader"]
 
 
 def cpu(value):
@@ -826,7 +830,8 @@ def status(item):
                     kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}"), move["ns"], role):
                 raise ValueError(ADMIN_ONLY)
             with HOSTACCESS.acting_as(role):
-                apply(move["ns"], move["name"], move["to"])
+                # A pick in the Move dialog is a person's choice: no mark says it is Balance's.
+                apply(move["ns"], move["name"], move["to"], **({"mark": False} if ref.get("stop_on_failure") else {}))
         except PermissionError:
             return skip(ADMIN_ONLY)
         except ValueError as error:

@@ -60,13 +60,20 @@ storage_classes = lh_capacity = None
 default_class = lambda: ""
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"platform": platform, "storage_classes": storage_classes, "lh_capacity": lh_capacity, "default_class": default_class}
+
+
 def bind(imports, _kget, _ksend, ops, _platform=None, storage=None):
     global IMP, kget, ksend, OPS, platform, storage_classes, lh_capacity, default_class
     IMP, kget, ksend, OPS = imports, _kget, _ksend, ops
-    if _platform:
-        platform = _platform
+    platform = _platform if _platform else _UNBOUND["platform"]
     if storage:
         storage_classes, lh_capacity, default_class = storage
+    else:
+        storage_classes, lh_capacity, default_class = (
+            _UNBOUND[n] for n in ("storage_classes", "lh_capacity", "default_class"))
 
 
 # ------------------------------------------------------------ cancelling

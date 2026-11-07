@@ -17,6 +17,10 @@ function maintenanceWords(policy) {
 const autoUpdateTag = w => w.update_mode === "auto"
   ? UI.chip("Auto", "info", { tip: "Updates itself in the maintenance window: a newer build of the same tag, snapshotted first, rolled back if it stops answering" }) : "";
 
+/* A host preference lasts until someone clears it, so it is shown where people look. */
+const preferTag = w => w.prefers
+  ? UI.chip(`Prefers ${w.prefers}`, "neutral", { tip: `${w.prefers_balance ? "Balance hosts left this preference when it moved the app." : "A preference for this host."} It stays until cleared in Edit → Placement, which restarts the app. Kubernetes can still run it elsewhere.` }) : "";
+
 function lastAutoUpdate(w) {
   const ops = (STATE.data.operations || []).filter(o => o.kind === "auto-update" && o.auto_update?.namespace === w.ns && o.auto_update?.name === w.name);
   return ops.sort((a, b) => String(b.started_at).localeCompare(String(a.started_at)))[0] || null;

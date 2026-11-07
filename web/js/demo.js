@@ -383,7 +383,7 @@
   // Two cached app icons, so the paths run in the demo: one that answers, one that is gone (404).
   const DEMO_ICON_OK = "/api/icons/" + "a".repeat(64) + ".svg", DEMO_ICON_MISSING = "/api/icons/" + "b".repeat(64) + ".png";
   const workloads = [
-    { name: "frigate", ns: "lab", kind: "Deployment", icon: DEMO_ICON_OK, update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
+    { name: "frigate", ns: "lab", kind: "Deployment", icon: DEMO_ICON_OK, update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", prefers: "harvester-node2", prefers_balance: true, desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
       images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },

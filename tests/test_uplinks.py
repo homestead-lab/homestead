@@ -1,7 +1,9 @@
 import sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_uplinks as UP
+from rebind import keep_bound, rebind
 
 API = UP.API
 
@@ -62,7 +64,7 @@ PROBES = {"h1": {"interfaces": [nic("eno1", master="mgmt-bo"), nic("enp2s0"), ni
 class UplinkTests(unittest.TestCase):
     def setUp(self):
         self.fake = Fake()
-        UP.bind(self.fake.kget, self.fake.ksend)
+        rebind(self, UP, self.fake.kget, self.fake.ksend)   # put back after the test
 
     def test_inventory_lists_networks_hosts_and_who_holds_each_nic(self):
         self.fake.vcs = [vlanconfig("data-h1", "data", ["enp2s0"], {"kubernetes.io/hostname": "h1"})]
@@ -78,7 +80,8 @@ class UplinkTests(unittest.TestCase):
 
     def test_not_harvester(self):
         self.fake.kget = lambda path: (_ for _ in ()).throw(urllib.error.HTTPError(path, 404, "", {}, None))
-        UP.bind(self.fake.kget, self.fake.ksend)
+        keep_bound(self, UP)   # put back what UP.bind() sets
+        UP.bind(self.fake.kget, self.fake.ksend)   # setUp's rebind puts it back
         self.assertFalse(UP.inventory(PROBES)["applies"])
         with self.assertRaisesRegex(ValueError, "not a Harvester cluster"):
             UP.preview({"cluster_network": "data"}, PROBES)

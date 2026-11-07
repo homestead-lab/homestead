@@ -40,13 +40,17 @@ DEVICE_HINTS = {
 }
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"hardware_features": hardware_features}
+
+
 def bind(_kget, _ksend, _get_nodes, _cache_ref, _hardware_features=None):
     global kget, ksend, get_nodes, _cache, hardware_features
     # Every read of the hosts here admits or refuses a start, a scale or a
     # maintenance window: the hosts as they are, not the page's snapshot (#978).
     kget, ksend, get_nodes, _cache = _kget, _ksend, CACHE.fresh(_get_nodes), _cache_ref
-    if _hardware_features:
-        hardware_features = _hardware_features
+    hardware_features = _hardware_features if _hardware_features else _UNBOUND["hardware_features"]
 
 
 def _bust(*keys):
@@ -638,15 +642,49 @@ def _destinations(others, pods, workloads):
 
 
 # ------------------------------------------------------------------ move
+HOSTNAME = "kubernetes.io/hostname"
+# On the Deployment's own metadata, never the pod template, so it restarts
+# nothing: which host Balance hosts left a preference for. Only Balance writes it;
+# a preference without it is a person's, or a tool's, and nothing clears that.
+BALANCE_MARK = "balance-preference"
+
+
+def preferred_host(pod_spec):
+    """The one host a pod template's heaviest host preference names, or "" - a
+    term naming several hosts, or a label, says nothing about one host."""
+    terms = ((pod_spec.get("affinity") or {}).get("nodeAffinity") or {}).get("preferredDuringSchedulingIgnoredDuringExecution") or []
+    best, weight = "", 0
+    for term in terms:
+        exprs = (term.get("preference") or {}).get("matchExpressions") or []
+        if (len(exprs) == 1 and exprs[0].get("key") == HOSTNAME and exprs[0].get("operator") == "In"
+                and len(exprs[0].get("values") or []) == 1 and int(term.get("weight") or 0) > weight):
+            best, weight = exprs[0]["values"][0], int(term.get("weight") or 0)
+    return best
+
+
+def balance_preference(dep):
+    """The host Balance hosts' own preference names, or "". A mark naming any other
+    host than the preference does is stale: something else changed it since."""
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    host = preferred_host(spec)
+    return host if host and NAMES.read((dep.get("metadata") or {}).get("annotations"), BALANCE_MARK) == host else ""
+
+
+def mark_balance_preference(dep, node):
+    dep["metadata"].setdefault("annotations", {})[NAMES.key(BALANCE_MARK)] = node
+
+
 def apply_node_placement(dep, node, pin=False):
     """Apply placement to a supplied manifest without API writes.
 
     pin=False (default) uses a weighted nodeAffinity preference, so the pod
     lands where asked but can still be rescheduled if the host dies. pin=True
     uses a hard nodeSelector, which guarantees placement and disables failover.
-    node=None clears both.
+    node=None clears both. Whatever this writes is the caller's choice, so a mark
+    from Balance hosts goes; rebalance_move puts its own back.
     """
     spec = dep["spec"]["template"]["spec"]
+    ((dep.get("metadata") or {}).get("annotations") or {}).pop(NAMES.key(BALANCE_MARK), None)
 
     sel = dict(spec.get("nodeSelector") or {})
     sel.pop("kubernetes.io/hostname", None)

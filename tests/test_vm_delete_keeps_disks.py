@@ -14,6 +14,7 @@ import homestead_kube as K
 import homestead_operations as OPS
 import homestead_vms as VMS
 from fakes.kube import Kube
+from rebind import keep_bound
 
 OWNED = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "name": "web", "uid": "u1"}]
 VM = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
@@ -44,6 +45,7 @@ class KeepDisksTests(unittest.TestCase):
         # store's lock, which lives under OPS.DATA_DIR (/data, not writable as non-root).
         data = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", data))
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         VMS.bind(K.kget, K.ksend, lambda *a, **k: [])
         platform = mock.patch.object(VMS, "platform", lambda: {"harvester": False, "cdi": True})
         platform.start()

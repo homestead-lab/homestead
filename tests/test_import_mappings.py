@@ -14,6 +14,7 @@ import server
 import homestead_deploy_manifests as MANIFESTS
 from fixtures_source import source
 from fakes.storage_classes import storage_classes
+from rebind import keep_bound
 
 
 class _Module:
@@ -301,6 +302,7 @@ class ImportCapacityTests(unittest.TestCase):
                                                                    "pvcName": "ha-appdata"}}}]}
             raise AssertionError(path)
 
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(get, lambda method, path, body=None, **kw: self.sent.append((method, path)) or {},
                      lambda *a, **k: self.created.append(a) or {},
                      lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
@@ -344,6 +346,7 @@ class MountEmptyTests(unittest.TestCase):
 
     def setUp(self):
         self.bodies, self.built = [], []
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(lambda path: {"items": []},
                      lambda method, path, body=None, **kw: self.bodies.append(body) or
                      {**(body or {}), "metadata": {**(body or {}).get("metadata", {}), "uid": "created-object"}},
@@ -382,6 +385,7 @@ class OwnershipTests(unittest.TestCase):
             self.bodies.append(body)
             return body or {}
 
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(lambda path: {"items": []}, send, lambda *a, **k: {},
                      lambda cfg: ({"metadata": {"name": "x"}}, None), "lab", {})
         imports._source = lambda name: dict(SOURCE)
@@ -472,6 +476,7 @@ class OwnershipHintTests(unittest.TestCase):
 
     def _bind(self, container, **pod):
         self.pod_security = pod
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(lambda path: self._deployment(container), lambda *a, **k: {},
                      lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
@@ -684,6 +689,7 @@ class NestedFolderTests(unittest.TestCase):
 
     def test_the_copy_tells_rsync_to_leave_the_nested_folder_alone(self):
         sent = []
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(lambda path: (_ for _ in ()).throw(AssertionError(path)),
                      lambda method, path, body=None, **kw: sent.append(body) or {},
                      lambda *a, **k: {}, lambda cfg: ({"metadata": {"name": "x"}}, None),

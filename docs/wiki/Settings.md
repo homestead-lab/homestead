@@ -260,8 +260,9 @@ after it has been seen working before (a new host finishing joining is not
   both start. The window is used whatever the image update policy, notify
   only included. The run can go on after the window closes: each move waits up
   to ten minutes for its container to start. Apps Flux or Argo CD apply are
-  left out of it, since their next sync could move them back; move those by
-  hand, or in Git.
+  left out of it; move those by hand, or in Git. A move by hand leaves a host
+  preference on them that their syncs keep, until someone clears it in Edit,
+  which restarts the app.
 
 In the window, an app is left where it is when a scheduled job (a CronJob)
 mounts its volume and is running, or runs while the rebalance may still be

@@ -35,10 +35,15 @@ SERVICE_DEFS = (
 )
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"overview": overview}
+
+
 def bind(_kget, _sys_ns, _nodes_provider, _overview=None):
     global kget, SYS_NS, nodes_provider, overview
     kget, SYS_NS, nodes_provider = _kget, set(_sys_ns), _nodes_provider
-    overview = _overview or overview
+    overview = _overview or _UNBOUND["overview"]
 
 
 def _iso_age(value, now=None):

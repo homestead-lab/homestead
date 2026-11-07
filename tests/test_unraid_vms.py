@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_unraid_vms as UVMS
+from rebind import keep_bound
 
 # A Windows 11 VM as Unraid's VM manager writes it.
 WIN11 = """<domain type='kvm'>
@@ -205,6 +206,7 @@ class ImportTests(unittest.TestCase):
                 return {"items": []}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
+        keep_bound(self, UVMS)   # put back what UVMS.bind() sets
         UVMS.bind(self.imp, kget, ksend, Ops)
 
     def test_a_running_vm_is_refused_until_it_is_shut_down(self):

@@ -42,10 +42,15 @@ KIND = "harvester-uplink"
 node_probes = lambda: {}
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"node_probes": node_probes}
+
+
 def bind(_kget, _ksend, _node_probes=None):
     global kget, ksend, node_probes
     kget, ksend = _kget, _ksend
-    node_probes = _node_probes or node_probes
+    node_probes = _node_probes or _UNBOUND["node_probes"]
 
 
 def _items(path):

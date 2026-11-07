@@ -3,6 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_bonds as BONDS
 import homestead_hostrun as HOSTRUN
+from rebind import keep_bound
 
 try:
     import yaml
@@ -239,6 +240,7 @@ class HostLeaseTests(unittest.TestCase):
 
     def setUp(self):
         self.kubelet = Kubelet()
+        keep_bound(self, BONDS)   # put back what BONDS.bind() sets
         BONDS.bind(None, lambda path: {"items": [{"metadata": {"name": "kube-vip-x"}}]} if "pods" in path else
                    {"items": [{}, {}]} if path == "/api/v1/nodes" else self.kubelet.node(),
                    lambda verb, path, *a, **k: None)
@@ -427,6 +429,7 @@ class JobTests(unittest.TestCase):
     def setUp(self):
         self.deleted = []
         self.kubelet = Kubelet()
+        keep_bound(self, BONDS)   # put back what BONDS.bind() sets
         BONDS.bind(None, lambda path: {"items": [{"metadata": {"name": "kube-vip-x"}}]} if "pods" in path else
                    {"items": [{}, {}]} if path == "/api/v1/nodes" else self.kubelet.node(),
                    lambda verb, path, *a, **k: self.deleted.append(path))

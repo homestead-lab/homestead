@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_scheduled_jobs as SCHEDULED_JOBS
 import homestead_routes
+from rebind import keep_bound
 
 
 JOB = {"name": "nightly", "schedule": "0 3 * * *", "image": "alpine:3.24", "command": "echo hi"}
@@ -47,6 +48,7 @@ class ScheduleJobTests(unittest.TestCase):
         # The alerts source reads through the routes' cache; here, fresh each time.
         self.enterContext(mock.patch.object(homestead_routes, "_cached", [lambda key, seconds, fn: fn()]))
         self.cache = {"cron": (0, [])}
+        keep_bound(self, imports)   # put back what imports.bind() sets
         imports.bind(get, send, None, None, "lab", self.cache)
 
     def cronjob(self, name, time_zone=None, labels=None):

@@ -709,7 +709,7 @@ window.mvPlan = async () => {
       `${stays.length ? `${stays.length} stay where they are. ` : ""}Each one moved restarts on its new host.`) : "";
   $("#mbody").innerHTML = [
     UI.lead(!moves.length ? "None of these can move to the hosts chosen; each one says why."
-      : `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} to ${esc([...new Set(moves.map(m => m.to))].join(", "))}; each restarts there, one at a time.`),
+      : `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} to ${esc([...new Set(moves.map(m => m.to))].join(", "))}; each restarts there, one at a time. ${BALANCE_LEAVES_PREFERENCE}`),
     `<div class="f"><label>Move to</label>${hostSelect(MV.to, "mvTo(this.value)", "Move to")}</div>`,
     notice,
     UI.section(`Containers · ${rows.length}`, UI.table([{ label: "Container" }, { label: "Move", className: "grow" }, { label: "Host" }], rows)),
@@ -929,7 +929,7 @@ window.startWaitText = startWaitText;
 function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
-  return `${startWaitChip(w)}${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+  return `${startWaitChip(w)}${scheduleTag(w)}${autoUpdateTag(w)}${row ? preferTag(w) : ""}${owner ? updateOwnerPill(update, row)
     : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
@@ -1299,6 +1299,7 @@ function balanceMetrics(plan) {
   return "";
 }
 
+const BALANCE_LEAVES_PREFERENCE = "Each one then prefers its new host, and that stays until cleared in Edit → Placement, which restarts it.";
 function balanceContainersHtml(b) {
   const plan = b.plan, moves = plan.moves || [];
   const meter = (before, after, label) => `${UI.meter({ now: before, after: after !== before ? after : null, warnAt: 80, label })}
@@ -1314,7 +1315,7 @@ function balanceContainersHtml(b) {
   return [
     balanceSwitch("containers", b, "Balance containers"),
     UI.lead(!b.on ? "Containers are left where they are."
-      : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
+      : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host. ${BALANCE_LEAVES_PREFERENCE}`
       : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
       : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, only an admin can move it, or it has no other host it may run on. See Not moved below."
       : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),

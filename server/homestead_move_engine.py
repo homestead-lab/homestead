@@ -33,13 +33,17 @@ import homestead_move_actions as ACT
 guard_managed_smb = lambda ns, name: None
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"guard_managed_smb": guard_managed_smb}
+
+
 def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace, guard=None):
     global guard_managed_smb
     STATE.kget, STATE.ksend, STATE.LH, STATE.CLIENT, STATE.NETWORK, STATE.OPS = \
         _kget, _ksend, longhorn, client, network, operations
     STATE.DATA_DIR, STATE.NS = data_dir, namespace
-    if guard:
-        guard_managed_smb = guard
+    guard_managed_smb = guard if guard else _UNBOUND["guard_managed_smb"]
     NAMES.bind(_kget)
 
 

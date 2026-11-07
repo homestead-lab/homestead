@@ -13,6 +13,7 @@ import homestead_kube as K
 import homestead_placement_mode as mode
 import server
 from test_container_rebalance import APPS, Hosts, bind
+from rebind import keep_bound
 
 
 def node(name, ready=True, taints=None):
@@ -213,8 +214,7 @@ class TickTests(unittest.TestCase):
                     "updates": {"maintenance": {"days": [], "start": "02:00", "duration_minutes": 60}}}
         plans = []
         jobs = mock.Mock(TERMINAL={"succeeded"}, snapshot=lambda: [])
-        bound = (recovery.read, recovery.settings, recovery.operations, recovery.plan, recovery.start, recovery.WAITS_FOR)
-        self.addCleanup(lambda: recovery.bind(recovery.DATA_DIR, *bound[:5], waits_for=bound[5]))
+        keep_bound(self, recovery)   # put back what recovery.bind() sets
         recovery.bind(recovery.DATA_DIR, lambda path: {"items": [node("a"), node("pi")]}, lambda: settings, jobs,
                       lambda exclude=(), avoid=(): plans.append(avoid) or {"moves": [], "excluded": []}, mock.Mock())
         with mock.patch.object(recovery.PLACEMODE, "reconcile") as reconcile, \
@@ -228,8 +228,7 @@ class TickTests(unittest.TestCase):
     def test_a_failed_taint_change_does_not_stop_hosts_coming_back_from_being_noticed(self):
         import homestead_recovery as recovery
         settings = {"placement": {"rebalance": "off", "mode": "standby", "standby_nodes": ["pi"]}}
-        bound = (recovery.read, recovery.settings, recovery.operations, recovery.plan, recovery.start, recovery.WAITS_FOR)
-        self.addCleanup(lambda: recovery.bind(recovery.DATA_DIR, *bound[:5], waits_for=bound[5]))
+        keep_bound(self, recovery)   # put back what recovery.bind() sets
         recovery.bind(recovery.DATA_DIR, lambda path: {"items": [node("a"), node("pi")]}, lambda: settings,
                       mock.Mock(), mock.Mock(), mock.Mock())
         with mock.patch.object(recovery.PLACEMODE, "reconcile", side_effect=RuntimeError("API down")), \

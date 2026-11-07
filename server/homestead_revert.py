@@ -89,10 +89,15 @@ is_self = lambda ns, name: False
 lh_call = None          # (method, path, body) -> dict, Longhorn's own API
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"is_self": is_self}
+
+
 def bind(_kget, _ksend, _reclass, _is_self=None, _lh_call=None):
     global kget, ksend, reclass, is_self, lh_call
     kget, ksend, reclass = _kget, _ksend, _reclass
-    is_self = _is_self or is_self
+    is_self = _is_self or _UNBOUND["is_self"]
     lh_call = _lh_call or _backend
 
 

@@ -48,11 +48,18 @@ _failures = {}
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"settings": settings, "system_ns": system_ns}
+
+
 def bind(_kget, _ksend, _settings=None, _system_ns=()):
     global kget, ksend, settings, system_ns
     kget, ksend = _kget, _ksend
     if _settings:
         settings, system_ns = _settings, frozenset(_system_ns)
+    else:
+        settings, system_ns = _UNBOUND["settings"], _UNBOUND["system_ns"]
 
 
 def standby_hosts():

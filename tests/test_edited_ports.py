@@ -5,6 +5,7 @@ import homestead_networking as networking
 import homestead_network_state as STATE
 import homestead_network_services as SVC
 from fakes.platform import plain_platform
+from rebind import keep_bound
 
 
 DEPLOYMENT = {
@@ -54,6 +55,7 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
                     self.objects[listing]["items"] = [s for s in self.objects[listing]["items"] if s["metadata"]["name"] != name]
             return body
 
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(get, send, {"kube-system"}, "lab", "192.0.2.242")
 
     def test_changing_the_lan_port_moves_the_listener(self):

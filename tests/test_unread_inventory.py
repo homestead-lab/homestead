@@ -26,6 +26,7 @@ import homestead_vip_registry as REG
 import homestead_vm_create as VM_CREATE
 from fakes.kube import Kube
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
+from rebind import keep_bound
 
 RAW_VMS = "/apis/kubevirt.io/v1/virtualmachines"
 
@@ -228,6 +229,7 @@ class UptimeWithServicesUnreadTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
+        keep_bound(self, UP)   # put back what UP.bind() sets
         UP.bind(directory.name)
 
     def test_an_app_whose_listeners_are_unknown_is_not_asked_and_keeps_its_state(self):

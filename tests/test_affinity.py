@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_affinity as AFFINITY
+sys.path.insert(0, str(ROOT / "tests"))
+from rebind import rebind
 
 
 def deployment(name, ns="lab", labels=None):
@@ -29,7 +31,7 @@ class AffinityTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 404, "missing", None, None)
             return copy.deepcopy(self.others[key])
 
-        AFFINITY.bind(get)
+        rebind(self, AFFINITY, get)   # put back after the test
         self.dep = deployment("frigate")
 
     def affinity(self):

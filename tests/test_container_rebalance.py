@@ -80,7 +80,7 @@ class Hosts:
         test.addCleanup(lambda: [setattr(C, name, value) for name, value in saved.items()])
         self.moved = []
 
-    def apply(self, ns, name, to):
+    def apply(self, ns, name, to, mark=True):
         self.moved.append((name, to))
 
     # What someone else does to the cluster meanwhile.

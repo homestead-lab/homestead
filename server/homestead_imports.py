@@ -58,6 +58,11 @@ _cache = {}
 hardware_features = lambda: []
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"hardware_features": hardware_features}
+
+
 def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_features=None):
     global kget, ksend, create_pvc, build_deployment, NS, _cache, hardware_features
     kget, ksend, create_pvc, build_deployment = _kget, _ksend, _create_pvc, _build_dep
@@ -65,8 +70,7 @@ def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_feat
     # Name lookups need the same client, and binding here means a caller never
     # has to remember to do it separately.
     NAMES.bind(_kget)
-    if _hardware_features:
-        hardware_features = _hardware_features
+    hardware_features = _hardware_features if _hardware_features else _UNBOUND["hardware_features"]
 
 
 def _bust(*keys):

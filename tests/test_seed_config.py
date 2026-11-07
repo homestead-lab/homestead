@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
+from rebind import keep_bound
 
 
 DEPLOYMENT = {
@@ -51,8 +52,7 @@ class SeedConfigTests(unittest.TestCase):
             self.sent.append((method, path, copy.deepcopy(body)))
             return body
 
-        # put back what server.py bound, or the next file's lifecycle reads go to this fake
-        self.addCleanup(vars(lifecycle).update, {n: getattr(lifecycle, n) for n in ("kget", "ksend", "SYS_NS", "_cache", "hardware_features", "create_pvc")})
+        keep_bound(self, lifecycle)   # put back what lifecycle.bind() sets
         lifecycle.bind(get, send, set(), {}, lambda: [])
 
     def test_discovers_configmap_mounted_by_init_container(self):

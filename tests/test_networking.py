@@ -13,6 +13,7 @@ import homestead_network_services as SVC
 import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 from fakes.platform import plain_platform
+from rebind import keep_bound
 
 
 class NetworkingTests(unittest.TestCase):
@@ -158,6 +159,7 @@ class NetworkingTests(unittest.TestCase):
             self.sent.append((method, path, body))
             return body
 
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(get, send, {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
 
     def test_edited_lan_port_is_published_on_the_existing_service(self):
@@ -316,6 +318,7 @@ class NetworkingTests(unittest.TestCase):
             if path in paths:
                 raise TimeoutError("timed out")
             return self.answer(path)
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
                         {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
 
@@ -350,6 +353,7 @@ class NetworkingTests(unittest.TestCase):
             if path == "/apis/apps/v1/deployments" and reads.count(path) > 1:
                 raise TimeoutError("timed out")   # inventory's read worked; create_service's own did not
             return self.answer(path)
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
                         {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
         with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments"):
@@ -408,6 +412,7 @@ class NetworkingTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 429, "throttled", {"Retry-After": "0"}, None)
             return {"items": []}
 
+        keep_bound(self, networking)   # put back what networking.bind() sets
         networking.bind(throttled, lambda *args, **kwargs: None, set(), "lab", "192.0.2.242")
         self.assertEqual([], STATE._items("/api/v1/services"))
         self.assertEqual(2, len(calls))

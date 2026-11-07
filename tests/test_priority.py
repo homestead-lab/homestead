@@ -16,6 +16,7 @@ import homestead_cache as CACHE
 import homestead_priority as priority
 import homestead_usage as usage
 import server
+from rebind import keep_bound
 
 
 def deployment(name, ns="lab", image="busybox", cls="", labels=None):
@@ -67,6 +68,7 @@ class PriorityTests(unittest.TestCase):
         self.classes, self.sent, self.vms, self.pods, self.stss = {}, [], {}, [], {}
         CACHE.forget_where(lambda key: key == "pods")   # protect() shares the Cluster page's kept pod list
         self.addCleanup(lambda: CACHE.forget_where(lambda key: key == "pods"))
+        keep_bound(self, priority)   # put back what priority.bind() sets
         priority.bind(self.kget, self.ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
 
     def kget(self, path):
@@ -136,6 +138,7 @@ class PriorityTests(unittest.TestCase):
 
     def test_permissions_from_before_this_version_say_so_plainly(self):
         denied = urllib.error.HTTPError("x", 403, "forbidden", {}, io.BytesIO())
+        keep_bound(self, priority)   # put back what priority.bind() sets
         priority.bind(mock.Mock(side_effect=denied), self.ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
         with self.assertRaisesRegex(PermissionError, "permissions predate this version"):
             priority.ensure(("critical",))
@@ -143,6 +146,7 @@ class PriorityTests(unittest.TestCase):
     def test_a_class_made_meanwhile_by_another_save_is_taken_as_made(self):
         def ksend(method, path, body=None, ctype=None):
             raise urllib.error.HTTPError(path, 409, "exists", {}, io.BytesIO())
+        keep_bound(self, priority)   # put back what priority.bind() sets
         priority.bind(self.kget, ksend, managed, ("homestead", "homestead"), {"kube-system"}, lambda: True)
         self.assertEqual([], priority.ensure(("critical",)))
 
@@ -522,6 +526,7 @@ class PriorityTests(unittest.TestCase):
 
 class HeadroomTests(unittest.TestCase):
     def test_a_critical_app_reserves_more_memory_than_a_normal_one(self):
+        keep_bound(self, usage)   # put back what usage.bind() sets
         with tempfile.TemporaryDirectory() as folder:
             usage.bind(folder, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
             try:
@@ -674,6 +679,7 @@ class LadderWriteTests(unittest.TestCase):
         def ksend(method, path, body=None, ctype=None):
             (self.posted if method == "POST" else self.patched).append((path, body))
             return {}
+        keep_bound(self, P)   # put back what P.bind() sets
         P.bind(kget, ksend, lambda dep: {}, ("lab", "homestead"), set())
         P._LADDER.update(at=0, value=None)
 
@@ -750,6 +756,7 @@ class ProtectTests(unittest.TestCase):
         def ksend(method, path, body=None, ctype=None):
             (self.posted if method == "POST" else self.patched).append(body)
             return {}
+        keep_bound(self, P)   # put back what P.bind() sets
         P.bind(kget, ksend, lambda dep: {}, ("lab", "homestead"), {"kube-system"})
         P._LADDER.update(at=0, value=None)
 

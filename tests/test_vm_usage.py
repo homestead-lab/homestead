@@ -77,6 +77,7 @@ class UsageTests(unittest.TestCase):
                                        "containers": [{"usage": {"cpu": "1", "memory": "4Gi"}}]}]}
         U._readings.extend([{"at": 1000, "io": {("default", "win11"): [0, 0]}},
                             {"at": 1030, "io": {("default", "win11"): [30_000, 3_000]}}])
+        keep_bound(self, VMS)   # put back what VMS.bind() sets
         for running, expect in ((True, True), (False, False)):
             with self.subTest(running=running):
                 cluster = Cluster(self, running=running)
@@ -92,6 +93,7 @@ class UsageTests(unittest.TestCase):
 
 
 import unittest.mock  # noqa: E402
+from rebind import keep_bound
 
 
 class HandlerPoolTests(unittest.TestCase):

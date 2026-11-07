@@ -37,6 +37,8 @@ SHARED = {"server/server.py", "requirements-test.txt", "requirements-topology.tx
 # Checks that no test before it left state bound (#934): it can only see the
 # tests that ran in its own process, so every run ends with it, once.
 GUARD = TESTS / "test_zz_guard_state_clean.py"
+# And every bound name (bind()'s globals) checked the same way, just before it.
+BOUND_GUARD = TESTS / "test_zz_bound_state_clean.py"
 
 
 def test_files():
@@ -144,8 +146,8 @@ def affected(files, changed, known=None):
 
 
 def with_guard(files):
-    """The files, then the leak guard last (and only there)."""
-    return [path for path in files if path != GUARD] + [GUARD]
+    """The files, then the two leak guards last (and only there)."""
+    return [path for path in files if path not in (BOUND_GUARD, GUARD)] + [BOUND_GUARD, GUARD]
 
 
 def run(files):

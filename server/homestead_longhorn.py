@@ -63,10 +63,15 @@ GROUP_LABEL = "recurring-job-group.longhorn.io/"
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 
 
+# What bind() puts back for an argument it is not given: the module's own default,
+# not the last bind's (a test's fake must not outlive the test).
+_UNBOUND = {"DEFAULT_NS": DEFAULT_NS}
+
+
 def bind(_kget, _ksend, _cache_ref, default_namespace=None):
     global kget, ksend, _cache, DEFAULT_NS
     kget, ksend, _cache = _kget, _ksend, _cache_ref
-    DEFAULT_NS = default_namespace or DEFAULT_NS
+    DEFAULT_NS = default_namespace or _UNBOUND["DEFAULT_NS"]
     CSI_RESTORE.bind(_kget, _ksend)
 
 

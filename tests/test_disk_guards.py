@@ -20,6 +20,7 @@ import homestead_disk_v2 as V2
 import homestead_disks as DISKS
 import homestead_longhorn_runtime as RUNTIME
 from fakes.job_store import JobStore
+from rebind import keep_bound
 
 GUARDED = ("set_disk_tags", "set_scheduling", "evict", "remove", "set_node_tags",
            "add", "set_up", "use_os_space", "retire_start")
@@ -62,6 +63,7 @@ class Guarded(unittest.TestCase):
     """The disk module bound and its guards installed in server.py's order."""
 
     def setUp(self):
+        keep_bound(self, DISKS)
         # Everything installing the guards may change, put back after the test.
         # Written so it also runs against older disk modules, which kept the
         # guards in mutation_scope and wrapped the nine functions in place.

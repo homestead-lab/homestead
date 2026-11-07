@@ -3,6 +3,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_networking as NET
 import homestead_network_vms as VMNET
+from rebind import keep_bound
 
 
 class VmNetworkTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class VmNetworkTests(unittest.TestCase):
                 return {"items": [{"metadata": {"name": "multus", "generation": 1}, "status": {
                     "observedGeneration": 1, "desiredNumberScheduled": 2, "updatedNumberScheduled": 2, "numberAvailable": 2}}]}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        keep_bound(self, NET)   # put back what NET.bind() sets
         NET.bind(get, lambda m, p, b=None, **k: self.sent.append((m, p, b)), {"kube-system"}, "lab", "")
 
     def test_an_untagged_network_on_the_hosts_lan(self):

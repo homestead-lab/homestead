@@ -16,6 +16,7 @@ import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_priority as P
+from rebind import keep_bound
 import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
 import homestead_updates as UPDATES
@@ -143,6 +144,7 @@ class Cluster:
 
 
 def use(case, cluster):
+    keep_bound(case, P)   # first, so it is put back last: after restore() below
     """Binds a fake cluster into homestead_group_tiers and homestead_priority,
     and puts both modules' real bindings back after the test: other modules'
     tests read tiers through them."""
