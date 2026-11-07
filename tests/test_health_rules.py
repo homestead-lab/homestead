@@ -134,6 +134,12 @@ class MaintenanceTests(unittest.TestCase):
         result = classify([node("node-1", "NotReady")], [], [], overran={"node-1"})
         self.assertTrue(result["health_issues"][0].get("urgent"))
 
+    def test_a_declared_host_says_why_and_a_job_caused_one_says_in_maintenance(self):
+        result = classify([node("node-1"), node("node-2")], [], [], maintenance={"node-1", "node-2"},
+                          declared={"node-1": "Drive swap"})
+        reasons = {row["name"]: row["reason"] for row in result["activities"]}
+        self.assertEqual({"node-1": "in maintenance: Drive swap", "node-2": "in maintenance"}, reasons)
+
     def test_a_ready_host_in_maintenance_still_says_so(self):
         result = classify([node("node-1")], [], [], maintenance={"node-1"})
         self.assertEqual("maintenance", result["health_state"])
@@ -150,13 +156,34 @@ class MaintenanceTests(unittest.TestCase):
             def apply(self, report, now=None):
                 raise Seen(report)
 
-        with mock.patch.object(OV.HISTORY, "maintenance_view", return_value=({"node-1"}, set())), \
+        with mock.patch.object(OV.HISTORY, "maintenance_view", return_value=({"node-1"}, set(), {"open": {}, "ran_out": {}, "ending": {}})), \
                 mock.patch.object(CLUSTER, "HOLD", Hold()), \
                 self.assertRaises(Seen) as seen:
             OV.get_overview(nodes=[{**node("node-1", "NotReady"), "cpu_cap": 4, "cpu_used": 1,
                                     "mem_cap_gb": 8, "mem_used_gb": 2}],
                             wl=[], vols=[], pods={"items": []})
         self.assertEqual("maintenance", seen.exception.args[0]["health_state"])
+
+
+class DeclaredThroughTheOverviewTests(unittest.TestCase):
+    def test_the_overview_gives_a_declared_hosts_reason_to_the_verdict(self):
+        import homestead_overview_server as OV
+
+        class Seen(Exception):
+            pass
+
+        class Hold:
+            def apply(self, report, now=None):
+                raise Seen(report)
+
+        view = ({"node-1"}, set(), {"open": {"node-1": {"reason": "Drive swap"}}, "ran_out": {}, "ending": {}})
+        with mock.patch.object(OV.HISTORY, "maintenance_view", return_value=view), \
+                mock.patch.object(CLUSTER, "HOLD", Hold()), \
+                self.assertRaises(Seen) as seen:
+            OV.get_overview(nodes=[{**node("node-1", "NotReady"), "cpu_cap": 4, "cpu_used": 1,
+                                    "mem_cap_gb": 8, "mem_used_gb": 2}],
+                            wl=[], vols=[], pods={"items": []})
+        self.assertEqual(["in maintenance: Drive swap"], [a["reason"] for a in seen.exception.args[0]["activities"]])
 
 
 class HoldTests(unittest.TestCase):

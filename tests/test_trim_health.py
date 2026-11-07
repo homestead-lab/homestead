@@ -44,7 +44,7 @@ class TrimHealthTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         ALERTS.bind(temp.name)
         facts = lambda state: ALERTS.health_facts({"health_issues": OV.protection_issues([], {}, state)})
-        with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set())):
+        with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set(), {"open": {}, "ran_out": {}, "ending": {}})):
             ALERTS.observe({"health": facts(run(failed=[FAILED]))}, 1000)
             raised = ALERTS.observe({"health": facts(run(failed=[FAILED]))}, 1000 + ALERTS.HOLD)
             self.assertEqual([("raised", "Weekly trim failed: data-c")], [(e["phase"], e["title"]) for e in raised])
@@ -57,7 +57,7 @@ class TrimHealthTests(unittest.TestCase):
         self.assertEqual([], OV.protection_issues(jobs, {"configured": True, "available": True}))
 
     def test_health_facts_names_the_trim(self):
-        with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set())):
+        with mock.patch.object(ALERTS.HISTORY, "maintenance_view", return_value=(set(), set(), {"open": {}, "ran_out": {}, "ending": {}})):
             facts = ALERTS.health_facts({"health_issues": [{"kind": "Trim", "name": "data-c", "severity": "degraded",
                                                             "reason": "x"}]})
         self.assertEqual(("Weekly trim failed: data-c", "Weekly trim worked again: data-c", "/data-protection#housekeeping"),

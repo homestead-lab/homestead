@@ -208,11 +208,13 @@ def _alert_host(href):
 
 def _hosts(since, now, role, unread):
     out = []
-    for e in HISTORY.maintenance_since(since, strict=True):     # as _alerts: unreadable is said, in one read
+    for e in HISTORY.maintenance_since(since, strict=True, now=now):     # as _alerts: unreadable is said, in one read
         node, start, end = e["node"], e["start"], e.get("end")
         text, tone = f"{node} went into maintenance ({e['reason']})", "info"
         if end is not None and e.get("outcome") == "returned":
             text += f", back after {max(1, round((end - start) / 60))} min"
+        elif end is not None and e.get("outcome") == "limit" and e.get("declared"):
+            text, tone = text + ", and its time ran out", "warn"
         elif end is not None and e.get("outcome") == "limit":
             text, tone = text + ", and was not back when its job's time ran out", "warn"
         out.append(_entry(start if start > since or end is None else end, "host", tone, text, f"/nodes?node={node}",
