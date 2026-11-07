@@ -60,7 +60,7 @@ function architecture() {
   ctx.window = ctx;
   vm.createContext(ctx);
   require("./helpers/load-time")(ctx);
-  for (const file of ["web/js/fleet.js", "web/js/views-storage.js"]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
+  for (const file of ["web/js/fleet.js", ...require("./helpers/storage-source").files()]) vm.runInContext(fs.readFileSync(file, "utf8"), ctx);
   return ctx;
 }
 

@@ -90,8 +90,8 @@ test("other progress states are neutral too: installing, starting, rebuilding, c
   assert.match(platform, /UI\.chip\(`removing ·[^`]*`, "neutral"\)/);
   assert.match(platform, /UI\.chip\(`\$\{c\.current\} of[^`]*`, "neutral"\)/);
   assert.match(platform, /UI\.chip\("partial service", "warn"\)/, "a partly served share still needs a person");
-  assert.match(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding \$\{rebuild\.pct\}%`, "neutral"/);
-  assert.doesNotMatch(read("web/js/views-storage.js"), /UI\.chip\(`rebuilding[^`]*`, "(warn|med)"/);
+  assert.match(require("./helpers/storage-source")(), /UI\.chip\(`rebuilding \$\{rebuild\.pct\}%`, "neutral"/);
+  assert.doesNotMatch(require("./helpers/storage-source")(), /UI\.chip\(`rebuilding[^`]*`, "(warn|med)"/);
   assert.match(read("web/js/vm-hardware.js"), /UI\.chip\("copying", "neutral"\)/);
   assert.doesNotMatch(require("./helpers/workloads-source")(), /c\.state === "running" \? "med"/);
 });

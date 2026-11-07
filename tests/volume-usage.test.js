@@ -8,7 +8,7 @@ const context = { window: {}, console, esc: x => String(x).replaceAll("<", "&lt;
 vm.createContext(context);
 context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
 vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
-vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), context);
+vm.runInContext(require("./helpers/storage-source")(), context);
 const volume = { size_gb: 200, actual_gb: 292.06, used_pct: 146,
   filesystem: { used_gb: 180, capacity_gb: 196, used_pct: 91.8 } };
 

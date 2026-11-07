@@ -63,7 +63,7 @@ test('failed and completed tasks stop polling and escape cluster messages',async
 
 test('a direct node visit offers preparation without cached engine settings and retains the task link after removal',()=>{
   const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=()=>'';t.c.meter=()=>'';
-  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  vm.runInContext(require("./helpers/storage-source")(),t.c);
   const disk={device:'sdb',mounts:['/mnt/data'],role:'longhorn',longhorn:[{id:'data',type:'filesystem',ready:true,scheduling:true,tags:[],replicas:1}]};
   const html=t.c.diskRowsHtml('node-1',[disk],false);assert.match(html,/Prepare for V2/);
   assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],true),/Prepare for V2/);
@@ -73,14 +73,14 @@ test('a direct node visit offers preparation without cached engine settings and 
 
 test('the system drive shows one system tag',()=>{
   const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=()=>'';t.c.meter=()=>'';
-  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  vm.runInContext(require("./helpers/storage-source")(),t.c);
   const html=t.c.diskRowsHtml('node-1',[{device:'nvme0n1',mounts:['/'],system:true,role:'system',longhorn:[]}],false);
   assert.equal((html.match(/>system</g)||[]).length,1);
 });
 
 test('runtime move is offered for either spelling of its mount and capacity explains the reserve',()=>{
   const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=v=>`${v} GiB`;t.c.meter=()=>'';
-  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  vm.runInContext(require("./helpers/storage-source")(),t.c);
   const store={id:'data',type:'filesystem',ready:true,scheduling:true,tags:[],replicas:0,capacity_gb:120,reserved_gb:30,size_gb:90};
   const disk={device:'sdb',mounts:['/var/lib/longhorn'],role:'longhorn',longhorn:[store]};
   for(const path of ['/var/lib/longhorn','/var/lib/longhorn/']){

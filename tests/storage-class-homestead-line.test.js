@@ -4,7 +4,7 @@
 // default, so marking another class default does not move Homestead's.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
-const src = fs.readFileSync("web/js/views-storage.js", "utf8");
+const src = require("./helpers/storage-source")();
 
 function card(rows) {
   const ctx = { console, setTimeout, clearTimeout, Promise, JSON, CSS: { escape: String },
