@@ -250,6 +250,14 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         before_send()
         steps.append("forced: no cordon or drain")
         return _send_power(node, action, steps, rep, report)
+    rep = _prepare_host(node, action, drain_first, reviewed_pods, report, hold, resumed, steps)
+    before_send()
+    return _send_power(node, action, steps, rep, report)
+
+
+def _prepare_host(node, action, drain_first, reviewed_pods, report, hold, resumed, steps):
+    """Cordon, stop what waits for the host and drain it, then check quorum
+    again. Returns that last check's report; steps gets what was done."""
     ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError(why)
@@ -275,8 +283,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError("Host remains cordoned; power was not sent: " + why)
-    before_send()
-    return _send_power(node, action, steps, rep, report)
+    return rep
 
 
 def _send_power(node, action, steps, rep, report):
