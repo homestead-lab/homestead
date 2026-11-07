@@ -1,4 +1,6 @@
 import datetime
+import functools
+import os
 import sys
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_history as HISTORY
 import homestead_os_rollout as ROLLOUT
 
 
@@ -61,6 +64,15 @@ def facts(updates=(), reboot=False, auto=True):
             "auto": {"tool": "unattended-upgrades" if auto else "", "on": auto, "reboots": False, "held": False}}
 
 
+def own_history(test):
+    """The test's own history file, for declaring maintenance (#535)."""
+    @functools.wraps(test)
+    def run(self):
+        with mock.patch.object(HISTORY, "DATA_DIR", self.data):
+            return test(self)
+    return run
+
+
 class RolloutTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
@@ -105,6 +117,145 @@ class RolloutTests(unittest.TestCase):
                 mock.patch.object(ROLLOUT, "start") as start:
             ROLLOUT.tick()
             start.assert_called_once()
+
+    @own_history
+    def test_rollout_leaves_a_host_in_maintenance_alone(self):
+        # A person declared it: nobody wants a reboot in the middle of a drive swap (#535).
+        HISTORY.maintenance_declare("node-2", "Drive swap", "op-9", 9_999_999_999, cordoned_before=False, node_uid="u")
+        ROLLOUT.start(now=1000)
+        done = self.run_until_done(on_step=self.finish_restarts)
+        row = next(r for r in done["results"] if r["node"] == "node-2")
+        self.assertEqual((False, "in maintenance, so left alone"), (row["ok"], row["note"]))
+        self.assertNotIn("node-2", self.restarts)
+        self.assertNotIn("node-2", [name for name, _ in self.cordons])
+        self.assertTrue(any(r["node"] == "node-3" and r["ok"] for r in done["results"]), "the others carry on")
+
+    def declared_on_node_2(self):
+        self.hosts = Hosts({"node-1": facts(["curl"]), "node-2": facts(["linux-image-6.8"]), "node-3": facts()})
+        self.bind()
+
+    def declare_node_2(self):
+        if not HISTORY.declared_for("node-2"):
+            HISTORY.maintenance_declare("node-2", "Drive swap", "op-9", 9_999_999_999, cordoned_before=False, node_uid="u")
+
+    @own_history
+    def test_a_host_declared_before_its_restart_is_not_restarted_or_uncordoned(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+
+        def when_it_reached_it():
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if (rollout.get("node") or {}).get("name") == "node-2" and rollout.get("phase") == "restart":
+                self.declare_node_2()
+            self.finish_restarts()
+        done = self.run_until_done(on_step=when_it_reached_it)
+        row = next(r for r in done["results"] if r["node"] == "node-2")
+        self.assertEqual([], [n for n in self.restarts if n == "node-2"])
+        self.assertNotIn(("node-2", False), self.cordons)
+        self.assertEqual("in maintenance, so not restarted", row["note"], "it may have installed nothing")
+        self.assertTrue(row["restart_needed"])
+
+    @own_history
+    def test_a_host_declared_during_its_restart_keeps_the_cordon(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+
+        def during():
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if (rollout.get("node") or {}).get("name") == "node-2" and rollout.get("phase") == "restarting":
+                self.declare_node_2()
+                self.finish_restarts()
+        done = self.run_until_done(on_step=during)
+        self.assertIn("node-2", self.restarts)
+        self.assertNotIn(("node-2", False), self.cordons, "the maintenance's cordon stays")
+        self.assertEqual("succeeded", done["status"])
+
+    def spoil_history(self):
+        with open(HISTORY._path(), "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+
+    def tick_past_the_error_limit(self, start=1000):
+        for at in range(start, start + ROLLOUT.ERROR_LIMIT + 2 * ROLLOUT.ERROR_GAP, ROLLOUT.ERROR_GAP // 2):
+            ROLLOUT.tick(now=at)
+            if ROLLOUT._load()["rollout"].get("status") != "running":
+                break
+        return ROLLOUT._load()["rollout"]
+
+    @own_history
+    def test_history_that_cannot_be_read_waits_before_a_host_and_goes_on_once_it_can(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+        self.spoil_history()
+        for _ in range(4):
+            ROLLOUT.tick(now=1000)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual(("next", 0, []), (rollout["phase"], rollout["index"], rollout["results"]), "it doesn't assume")
+        self.assertIn("could not be read", rollout["message"])
+        os.remove(HISTORY._path())
+        ROLLOUT.tick(now=1060)
+        self.assertNotEqual("next", ROLLOUT._load()["rollout"]["phase"], "and goes on once it can")
+
+    @own_history
+    def test_history_that_stays_unreadable_ends_the_rollout_and_lets_go_of_the_holds(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+        self.spoil_history()
+        rollout = self.tick_past_the_error_limit()
+        self.assertNotEqual("running", rollout.get("status"), "not for ever")
+        self.assertTrue(rollout.get("failed"))
+        self.assertIn("could not be read", rollout["results"][0]["note"])
+        self.assertEqual([], self.restarts)
+        held = {name for name, on in self.hosts.holds if on}
+        self.assertTrue(held)
+        self.assertEqual(held, {name for name, on in self.hosts.holds if not on}, "automatic updates are let go")
+
+    def to_restart_on_node_2(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+        for _ in range(30):
+            ROLLOUT.tick(now=1000)
+            rollout = ROLLOUT._load()["rollout"]
+            if (rollout.get("node") or {}).get("name") == "node-2" and rollout.get("phase") == "restart":
+                return
+        self.fail("it never reached node-2's restart")
+
+    @own_history
+    def test_history_that_stays_unreadable_at_a_restart_ends_it_with_the_host_cordoned(self):
+        self.to_restart_on_node_2()
+        self.spoil_history()
+        ROLLOUT.tick(now=1000)
+        self.assertEqual("restart", ROLLOUT._load()["rollout"]["phase"], "a wait first")
+        rollout = self.tick_past_the_error_limit()
+        self.assertNotEqual("running", rollout.get("status"))
+        self.assertEqual([], self.restarts)
+        self.assertNotIn(("node-2", False), self.cordons)
+        self.assertIn("left cordoned", next(r for r in rollout["results"] if r["node"] == "node-2")["note"])
+
+    @own_history
+    def test_stop_does_not_wait_longer_than_the_error_limit(self):
+        self.to_restart_on_node_2()
+        self.spoil_history()
+        state = ROLLOUT._load()
+        state["rollout"]["stop"] = True
+        ROLLOUT._save(state)
+        self.assertNotEqual("running", self.tick_past_the_error_limit().get("status"))
+
+    @own_history
+    def test_a_cordon_it_cannot_tell_about_stays_after_the_restart(self):
+        self.declared_on_node_2()
+        ROLLOUT.start(now=1000)
+        for _ in range(30):
+            ROLLOUT.tick(now=1000)
+            rollout = ROLLOUT._load()["rollout"]
+            if (rollout.get("node") or {}).get("name") == "node-2" and rollout.get("phase") == "restarting":
+                break
+        self.assertEqual("restarting", rollout["phase"])
+        with open(HISTORY._path(), "w", encoding="utf-8") as handle:
+            handle.write("{not json")
+        self.finish_restarts()
+        ROLLOUT.tick(now=1000)
+        self.assertEqual("node-2", ROLLOUT._load()["rollout"]["results"][0]["node"], "the restart finished")
+        self.assertNotIn(("node-2", False), self.cordons, "and an unread history is not a no")
 
     def test_hosts_are_updated_one_at_a_time_with_its_own_host_last(self):
         rollout = ROLLOUT.start(now=1000)

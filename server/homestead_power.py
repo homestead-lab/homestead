@@ -1,4 +1,7 @@
-"""Fail-closed host power review and durable reboot/shutdown observation."""
+"""Fail-closed host power review and durable reboot/shutdown observation.
+
+The same review stands for maintenance a person declares (#535 part 2), which
+drains a host and sends no power."""
 import hashlib
 import json
 import time
@@ -7,6 +10,7 @@ import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as KUBE
 import homestead_maintenance as MAINTENANCE
+import homestead_os_rollout as ROLLOUT
 import homestead_power_hold as HOLD
 import homestead_whole_copy as WHOLE
 
@@ -42,9 +46,16 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     off, with an earlier helper still at work, or on a host that is not Ready,
     nothing can be sent safely. force turns the first kind into listed
     consequences; a forced action then skips cordon and drain and asks the
-    host's own systemd to reboot or power off, as its power button would."""
-    if action not in ("reboot", "poweroff"):
-        raise ValueError("action must be reboot or poweroff")
+    host's own systemd to reboot or power off, as its power button would.
+
+    action "maintenance" is reviewed as a reboot is, except that power control
+    isn't asked, as nothing is sent; it has no force, which would mean skipping
+    the very drain it is for; and on a single host nothing is stopped."""
+    if action not in ("reboot", "poweroff", "maintenance"):
+        raise ValueError("action must be reboot, poweroff or maintenance")
+    maintain = action == "maintenance"
+    if maintain and force:
+        raise ValueError("Maintenance has no force: resolve what stops it, or cordon the host by hand")
     node_obj = kget(f"/api/v1/nodes/{node}")
     place = impact(node)
     control = quorum()
@@ -66,6 +77,8 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                            ready_hosts, {(w.get("ns"), w.get("name")): w.get("eligible") or []
                                          for w in place.get("workloads", [])},
                            single_host=planned_outage)
+    if maintain and planned_outage:
+        hold = []
     storage_unknown = replicas is None or volumes is None
     # Each attached volume's engine says which replicas are whole (RW) and
     # which are still being rebuilt (WO): a rebuilding copy was counted as a
@@ -129,14 +142,24 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
         soft.extend(maintenance["blockers"])
     except Exception:
         soft.append("Drain/PDB or attached-storage inventory is unavailable or incomplete; review cannot be verified")
-    if not power_enabled():
+    if not power_enabled() and not maintain:
         hard.append("Host power control is disabled (ENABLE_NODE_POWER is off)")
+    if maintain and HISTORY.declared_for(node):
+        hard.append("This host is already in maintenance")
+    if maintain:
+        # A rollout already on this host would restart it and take the cordon off.
+        try:
+            if ROLLOUT.current_host() == node:
+                hard.append("An OS update of every host is working on this host; wait for it to move on, or stop it")
+        except Exception:
+            hard.append("Whether an OS update is working on this host could not be read")
     members = control.get("members", [])
     if not planned_outage and node in members and control.get("can_lose", 0) < 1:
         soft.append("This host is the cluster's only etcd member: the cluster, Homestead with it, is away until it is back"
                     if len(members) == 1 else "Shutting down this etcd member would lose quorum")
     if not _ready(node_obj) or (len(nodes) == 1 and nodes[0].get("metadata", {}).get("name") == node and not _ready(nodes[0])):
-        hard.append("The host is not Ready; investigate it before issuing a new power command")
+        hard.append("The host is not Ready; maintenance is declared before it goes down" if maintain else
+                    "The host is not Ready; investigate it before issuing a new power command")
     loose = [f"{i['ns']}/{i['name']}" for i in hold if i["kind"] == "VirtualMachine" and not i["options"]]
     if loose:
         soft.append("Running VMs are on this host that no VirtualMachine manages, so Homestead can neither move nor "
@@ -166,11 +189,16 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                 else:
                     soft.append(f"{v['claim']}: this host holds its only complete copy. Longhorn will not let the host drain "
                                 "until another copy is rebuilt; review again then")
+    if maintain:
+        soft = [why.replace(", or restart without draining (Force)", "") for why in soft]
     blockers = hard if force else hard + soft
     warnings = []
     if not force and not planned_outage:
         warnings.extend(maintenance.get("waiting", []))
-    if planned_outage:
+    if maintain and planned_outage:
+        warnings.append("This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. "
+                        "It only records the maintenance. Whatever you then do to the host takes the whole cluster with it")
+    elif planned_outage:
         warnings.append("Planned whole-cluster outage: Homestead stops the apps and VMs on this host first, so their "
                         "volumes detach in order, then asks the host's systemd to " + ("reboot" if action == "reboot" else "power off")
                         + "; they start again when it is back. "
@@ -178,7 +206,9 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     if force and soft:
         warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
                         "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
-    warnings.append("DaemonSets and static pods remain on the host; their services stop during the outage. Survivor capacity and external storage dependencies are not fully simulated")
+    warnings.append("DaemonSets and static pods remain on the host; their services stop if it goes down. Survivor capacity and external storage dependencies are not fully simulated"
+                    if maintain else
+                    "DaemonSets and static pods remain on the host; their services stop during the outage. Survivor capacity and external storage dependencies are not fully simulated")
     if storage_unknown:
         warnings.append("Longhorn replica inventory is unavailable; volume safety cannot be confirmed")
     if place.get("stranded"):
@@ -389,6 +419,8 @@ def _close_maintenance(item, ref, state):
     """Close the maintenance this job opened when it sent power (#535): when the
     host is back on a new boot, or when the job ends another way. Either
     Homestead copy may observe the job, so it closes by the job's id."""
+    if ref.get("action") == "maintenance":
+        return    # its event outlives the job; End closes it
     if ref.get("phase") in BEFORE_SEND or not item.get("id") or ref.get("maintenance_closed"):
         return
     try:
@@ -414,6 +446,8 @@ def _status(item):
                   "Scheduling was allowed again, so what waited could start there" if ref.get("uncordoned") else "It remains cordoned")
     now = time.time()
     phase = ref.get("phase")
+    if ref.get("action") == "maintenance" and phase == "maintained":
+        return "succeeded", 100, item.get("message") or "In maintenance"
     if phase in BEFORE_SEND:
         # A drain can evict the very replica running it, or its container can
         # restart in place. Its job names that replica and its restart count;
@@ -425,7 +459,18 @@ def _status(item):
         # nothing for half an hour, or an older job with no worker named, stopped.
         limit = 1800 if worker else 240
         if now - ref.get("phase_at", ref.get("started_epoch", now)) > limit:
-            return "failed", item.get("progress", 0), "Maintenance stopped before power was sent; inspect the host and its cordon state before retrying"
+            try:
+                opened = HISTORY.declared_for(ref["node"], strict=True) if ref.get("action") == "maintenance" else None
+            except Exception:
+                # A bad read proves nothing, and failing starts what waits while its event may be open.
+                return "running", item.get("progress", 0), "Whether this host's maintenance opened could not be read; checking again"
+            if opened and opened.get("op") == item.get("id"):
+                # It got there and stopped before saying so: what waits goes on waiting.
+                return "succeeded", 100, f"In maintenance: {opened['reason']}"
+            return "failed", item.get("progress", 0), (
+                "Maintenance stopped before the host was drained; inspect the host and its cordon state before retrying"
+                if ref.get("action") == "maintenance" else
+                "Maintenance stopped before power was sent; inspect the host and its cordon state before retrying")
         return "running", item.get("progress", 0), item.get("message", "Preparing host maintenance")
     node = kget(f"/api/v1/nodes/{ref['node']}")
     if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
