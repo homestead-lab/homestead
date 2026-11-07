@@ -11,6 +11,14 @@ import homestead_nfs as NFS
 import server
 import homestead_network_services as SVC
 import homestead_share_servers as SERVERS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class NfsExportTests(unittest.TestCase):

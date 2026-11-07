@@ -4,6 +4,7 @@ import sys
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
@@ -49,6 +50,8 @@ class IpamTests(unittest.TestCase):
         self.store = Store()
         IPAM.bind(self.store.get, self.store.send, "lab", lambda: FACTS)
         IPAM._scans.clear()
+        # A scan names the hosts it finds by reverse lookup: none answers in the tests.
+        self.enterContext(mock.patch.object(IPAM, "_rdns", lambda ip: ""))
         IPAM.save_subnets([{"cidr": "192.0.2.0/24", "name": "LAN", "gateway": "192.0.2.1",
                             "dhcp_start": "192.0.2.100", "dhcp_end": "192.0.2.199"}])
 

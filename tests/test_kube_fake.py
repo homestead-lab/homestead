@@ -3,7 +3,9 @@ it answers like the API server and plugs in at homestead_kube.transport, so
 reads go through kget and writes through WRITE_GUARDS like the real ones."""
 import json
 import os
+import socket
 import sys
+import threading
 import unittest
 import urllib.error
 from pathlib import Path
@@ -12,7 +14,10 @@ from unittest import mock
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
-from fakes.kube import Kube
+from fakes.kube import Kube, no_cluster, no_cluster_reads, summarise_reads
+import network_guard
+
+network_guard.install()   # names the running test, as in a run_tests.py run
 
 PODS = "/api/v1/namespaces/lab/pods"
 NODES = "/api/v1/nodes"
@@ -46,6 +51,65 @@ class Recorder:
 
 def http_error(code):
     return urllib.error.HTTPError("/x", code, "error", {}, None)
+
+
+class NoClusterTests(unittest.TestCase):
+    """no_cluster(): a test that needs no cluster says so, and every request fails at
+    once as it does on CI (no API server name to look up), without a real lookup."""
+
+    def test_every_way_to_the_api_fails_at_once_without_a_lookup(self):
+        lookups = []
+        with no_cluster(), mock.patch.object(socket, "getaddrinfo", lambda *a, **k: lookups.append(a)):
+            for call in (lambda: K.kget(PODS), lambda: K.raw_get(PODS + "/a/log"), lambda: K.ktable(NODES),
+                         lambda: K.transport("GET", PODS)):
+                with self.assertRaises(OSError) as caught:
+                    call()
+                self.assertIn("no cluster in this test", str(caught.exception))
+        self.assertEqual(lookups, [])
+
+    def test_each_read_it_turns_away_is_recorded_with_its_test(self):
+        # A file under no_cluster() is not seen by the network guard: what it turned
+        # away is kept instead, for run_tests.py's summary and a later sweep.
+        before = len(no_cluster_reads())
+        with no_cluster():
+            for call in (lambda: K.kget(PODS), lambda: K._ksend("DELETE", PODS + "/a")):
+                with self.assertRaises(OSError):
+                    call()
+        self.assertEqual([(self.id(), "GET", PODS)], no_cluster_reads()[before:before + 1])
+        self.assertEqual(self.id(), no_cluster_reads()[-1][0])
+
+    def test_a_read_from_a_thread_is_recorded_with_the_test_that_started_it(self):
+        # The same lookup as tests/network_guard.py: a loop a test leaves running is
+        # pinned on that test, not on whichever test runs when its read lands.
+        go, done, before = threading.Event(), threading.Event(), len(no_cluster_reads())
+
+        def read():
+            go.wait(5)
+            with self.assertRaises(OSError):
+                K.kget(PODS)
+            done.set()
+        with no_cluster():
+            threading.Thread(target=read, daemon=True).start()
+
+            class Other(unittest.TestCase):
+                def test_other(self):
+                    go.set()
+                    done.wait(5)
+            Other("test_other").run(unittest.TestResult())
+        self.assertTrue(done.is_set())
+        self.assertEqual([(self.id(), "GET", PODS)], no_cluster_reads()[before:])
+
+    def test_the_summary_counts_reads_and_tests_and_names_the_top_paths(self):
+        reads = [("t.A.a", "GET", "/api/v1/nodes"), ("t.A.b", "GET", "/api/v1/nodes"),
+                 ("u.B.c", "GET", "/apis/scheduling.k8s.io/v1/priorityclasses"), ("u.B.c", "GET", "/api/v1/nodes")]
+        self.assertEqual("no_cluster: 4 requests from 3 tests turned away (top: /api/v1/nodes x3, "
+                         "/apis/scheduling.k8s.io/v1/priorityclasses x1); advisory, tests/fakes/kube.py",
+                         summarise_reads(reads))
+        self.assertEqual("", summarise_reads([]))
+
+    def test_the_shared_fake_still_answers_inside_it(self):
+        with no_cluster(), Kube(pod("a")):
+            self.assertEqual(K.kget(PODS + "/a")["metadata"]["name"], "a")
 
 
 class TransportSeamTests(unittest.TestCase):

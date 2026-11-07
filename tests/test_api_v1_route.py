@@ -18,9 +18,17 @@ import homestead_fleet as FLEET
 import homestead_http as HTTP
 import homestead_mcp as MCP
 import server
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 KEY = {"id": "1", "name": "ha", "owner": "ada", "scopes": ["read", "containers:control"], "expires": 9}
 SENDER = {"id": "loft1", "name": "Loft", "handle": "loft"}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class ApiV1RouteTests(unittest.TestCase):

@@ -17,6 +17,12 @@ import homestead_power as POWER
 import homestead_lifecycle as LC
 import homestead_maintenance as MAINTENANCE
 from fakes.job_store import put
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # A read on the way to what these tests check fails at once, as on CI (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def job(phase="draining", age=60, worker="homestead-old", plan=True):

@@ -14,6 +14,14 @@ import homestead_cluster_shutdown as SHUTDOWN
 import homestead_config_backup as BACKUP
 import homestead_reclass as RECLASS
 import homestead_share_servers as SHARE_SERVERS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def http_error(code):

@@ -25,6 +25,8 @@ import homestead_move_phases as PHASE
 import homestead_move_plan as PLAN
 import homestead_move_state as STATE
 import homestead_move_target as TARGET
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 PARTS = (STATE, TARGET, PLAN, PHASE, ACT)
 NAMES = ("homestead_move_state", "homestead_move_target", "homestead_move_plan",
@@ -34,6 +36,12 @@ NAMES = ("homestead_move_state", "homestead_move_target", "homestead_move_plan",
 BOUND = ("kget", "ksend", "LH", "CLIENT", "NETWORK", "OPS", "DATA_DIR", "NS")
 # What homestead_move_engine defines itself.
 OWN = ("guard_managed_smb", "bind", "after_finish", "_plan_or_start", "ROUTES", "register")
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def engine_holders():

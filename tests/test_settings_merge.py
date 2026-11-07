@@ -12,6 +12,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_update_checks as CHECKS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 
 STORED = server.APP_SETTINGS.validate({
@@ -19,6 +21,12 @@ STORED = server.APP_SETTINGS.validate({
     "updates": {"policy": "maintenance_window", "notify_failures": False,
                 "maintenance": {"days": [5, 6], "start": "03:00", "duration_minutes": 60}},
     "placement": {"rebalance": "suggest", "mode": "spread"}})
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class SettingsMergeTests(unittest.TestCase):

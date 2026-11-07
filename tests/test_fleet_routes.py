@@ -18,6 +18,8 @@ import homestead_fleet as FLEET
 import homestead_http as HTTP
 import homestead_move as MOVE
 import server
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 LISTS = ("workloads", "vms", "nodes", "volumes", "flow")
 SENDER = {"id": "loft1", "name": "Loft", "handle": "loft"}
@@ -25,6 +27,12 @@ CLEAR = "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 # Under TLS a cleared cluster cookie is Secure, as the one it clears was (#764, PR 4).
 CLEAR_TLS = "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0"
 NO_POLICY = {"error": "this route has no declared authorization policy"}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Served(unittest.TestCase):

@@ -19,6 +19,13 @@ import homestead_passthrough as passthrough
 from fakes.storage_classes import storage_classes
 import homestead_names as NAMES
 from rebind import keep_bound
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class ClusterCopyTests(unittest.TestCase):

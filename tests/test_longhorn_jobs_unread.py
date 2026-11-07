@@ -14,6 +14,14 @@ import homestead_longhorn as LH
 import homestead_longhorn_jobs as JOBS
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_volumes as VOLUMES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def refused(path, **_):

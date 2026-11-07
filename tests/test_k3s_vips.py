@@ -8,9 +8,17 @@ import homestead_network_services as SVC
 import homestead_platform as PLATFORM
 import test_networking
 from rebind import keep_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 K3S_KUBE_VIP = {"load_balancer": "kube-vip", "servicelb": True, "vip_class": "kube-vip.io/kube-vip-class",
                 "distribution": "k3s"}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class KubeVipAddonTests(unittest.TestCase):

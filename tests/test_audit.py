@@ -11,8 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_audit as AUDIT_LOG
 import homestead_routes as ROUTES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 KEY = {"id": "k1", "name": "ha", "owner": "ada", "scopes": ["apps:control"], "expires": None, "kind": "key"}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def view(method="POST", path="/api/workload/scale", body=None, user="ada", role="operator", addr="192.0.2.10",

@@ -14,6 +14,8 @@ import homestead_http as HTTP
 import homestead_self_data_server as SELF_DATA_ROUTES
 import server
 import source_scan as SS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 CSRF = {"X-Homestead-Auth": "1", "Content-Type": "application/json"}
 OP = "0123456789abcdef01234567"
@@ -24,6 +26,12 @@ MOVE_COOKIE = f"homestead-data-move={TOKEN}; Path=/api/self/data/handoff/; HttpO
 # The same attributes as before #764's PR 7, in the order the shared cookie
 # writer (homestead_routes.cookie_header) puts them: Secure after SameSite.
 MOVE_COOKIE_TLS = f"homestead-data-move={TOKEN}; Path=/api/self/data/handoff/; HttpOnly; SameSite=Strict; Secure; Max-Age=86400"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Served(unittest.TestCase):

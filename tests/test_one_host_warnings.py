@@ -14,8 +14,16 @@ import homestead_alerts as ALERTS
 import homestead_cluster as CLUSTER
 import homestead_mqtt as MQTT
 import homestead_network_server as NET
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 UNPLACEABLE = {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure", "message": "replica scheduling failed"}
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def row(name="pvc-a", claim="photos", replicas=3, robustness="degraded", conditions=(UNPLACEABLE,), rebuild=None):

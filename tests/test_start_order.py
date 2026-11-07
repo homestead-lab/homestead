@@ -11,8 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_start_order as START
 import homestead_workloads as WORKLOADS
+from fakes.kube import no_cluster
 
 KEY = "homestead.io/starts-after"
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 def deployment(ns, name, after=None, replicas=1, ready=1, host_network=False, dns_policy=None, inits=None, **meta):

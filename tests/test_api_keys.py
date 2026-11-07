@@ -12,11 +12,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_auth as auth
 import homestead_api_keys as keys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 import homestead_names as NAMES
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rebind import keep_bound
 
 DAY = 86400
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class KeyTests(unittest.TestCase):

@@ -36,6 +36,8 @@ import homestead_root_guard as ROOT_GUARD
 import homestead_schedules as SCHEDULES
 import homestead_setup as SETUP
 import homestead_shared as SHARED
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 CORRUPT = '{"items": {"app:lab/web": {"gave_up": tr'   # cut off mid-write
 
@@ -56,6 +58,12 @@ STORES = [
     (SETUP, "load", "setup.json"),
     (HOST_CONSOLE, "_read", "host-consoles.json"),
 ]
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class Base(unittest.TestCase):

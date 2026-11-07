@@ -6,6 +6,8 @@ import homestead_network_state as STATE
 import homestead_network_services as SVC
 from fakes.platform import plain_platform
 from rebind import keep_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import no_cluster
 
 
 DEPLOYMENT = {
@@ -22,6 +24,12 @@ SERVICE = {
              "ports": [{"name": "web", "port": 32400, "targetPort": 32400, "protocol": "TCP"}]},
     "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.245"}]}},
 }
+
+
+def setUpModule():
+    # No cluster here: a read on the way to what a test checks fails at once, as on CI,
+    # instead of looking the API server's name up (tests/fakes/kube.py no_cluster).
+    unittest.enterModuleContext(no_cluster())
 
 
 class EditedPortsReachTheServiceTests(unittest.TestCase):
