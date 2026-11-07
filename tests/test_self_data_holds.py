@@ -496,23 +496,25 @@ class InvolvedHostTests(unittest.TestCase):
         c.settle_stop(); c.step(); c.step()
         self.assertIn(c.job_path, c.objects)
 
-    def test_reboot_of_a_host_the_move_uses_still_holds(self):
-        for where in ("homestead", "volume"):
-            with self.subTest(where=where):
-                c = Cluster(extra_nodes=("node-b",))
-                if where == "homestead":
-                    c.objects["/api/v1/namespaces/lab/pods/old-1"]["spec"]["nodeName"] = "node-b"
-                else:
-                    c.objects["/api/v1/persistentvolumes/old-pv"]["spec"]["nodeAffinity"] = {"required": {"nodeSelectorTerms": [
-                        {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["node-b"]}]}]}}
-                    c.anchor = c.fresh().load(**c.handle)  # shape pinned at setup; rebuild the plan's fact
-                    from test_self_data_coordinator import fact
-                    state = c.anchor.state; state["plan"]["source_pv"] = fact(c.objects["/api/v1/persistentvolumes/old-pv"])
-                    state["pointer_receipt"] = A.pointer_digest("lab", state, c.handle["uid"])
-                    c.objects[c.anchor.path]["data"]["state.json"] = A._validate(state, "lab")
-                self.reboot(c, "node-b")
-                with self.assertRaisesRegex(Held, "rebooted"): c.step()
-                self.assertEqual(2, c.objects[c.dep_path]["spec"]["replicas"])
+    def test_reboot_of_a_host_with_a_listed_pod_still_holds(self):
+        c = Cluster(extra_nodes=("node-b",))
+        c.objects["/api/v1/namespaces/lab/pods/old-1"]["spec"]["nodeName"] = "node-b"
+        self.reboot(c, "node-b")
+        with self.assertRaisesRegex(Held, "rebooted"): c.step()
+        self.assertEqual(2, c.objects[c.dep_path]["spec"]["replicas"])
+
+    def test_reboot_of_a_host_a_volume_is_pinned_to_holds_nothing(self):
+        """No pod listed on it; test_self_data_coordinator_job has each phase, and it being down."""
+        c = Cluster(extra_nodes=("node-b",))
+        c.objects["/api/v1/persistentvolumes/old-pv"]["spec"]["nodeAffinity"] = {"required": {"nodeSelectorTerms": [
+            {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["node-b"]}]}]}}
+        c.anchor = c.fresh().load(**c.handle)  # shape pinned at setup; rebuild the plan's fact
+        from test_self_data_coordinator import fact
+        state = c.anchor.state; state["plan"]["source_pv"] = fact(c.objects["/api/v1/persistentvolumes/old-pv"])
+        state["pointer_receipt"] = A.pointer_digest("lab", state, c.handle["uid"])
+        c.objects[c.anchor.path]["data"]["state.json"] = A._validate(state, "lab")
+        self.reboot(c, "node-b")
+        self.assertEqual("quiesce", c.step()["phase"])
 
     def test_a_host_the_move_uses_that_was_not_reviewed_holds(self):
         c = Cluster()

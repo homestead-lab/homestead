@@ -10,8 +10,14 @@ import json
 import os
 import time
 
+import homestead_self_data_anchor as A
 import homestead_self_data_coordinator as C
 from homestead_storage_journal import Held, digest, identity, shape
+
+
+def _still_there(engine):
+    names = ", ".join(engine.waited_for[:3])
+    return "Wait for normal Homestead pod removal before reviewing recovery" + (f" (still there: {names})" if names else "")
 
 
 def review(anchor, read, logs, action, *, clock=time.time):
@@ -56,7 +62,27 @@ def review(anchor, read, logs, action, *, clock=time.time):
     def forbidden(*_): raise Held("Recovery preview cannot write cluster resources")
     engine = C.Coordinator(candidate, current, forbidden, logs, None,
                            worker_uid=state["plan"]["worker"]["uid"], clock=clock)
-    dep = engine._environment()
+    engine.going_back = action == "return-original"
+    if action == "resume" and A.stop_check_expired(state, clock()):
+        raise Held("The copy check expired before Homestead was stopped, so resuming can't get past it: going back is the only "
+                   "way. It changes nothing, as Homestead was not stopped. Preview --action return-original, then start a new move")
+    target = A.worker_target(state)
+    # After the switch there is no going back, so resuming ignores host changes; _hosts
+    # below still measures the new volume's host and every pod in use.
+    if action == "resume" and not cutover and target and target["kind"] == "Job":
+        changes = engine.cluster_changes()
+        if changes:
+            raise Held("Resuming needs the cluster as it was reviewed, and " + ", ".join(changes) + ". "
+                       "Preview --action return-original, which does not need it unless the original volume or Homestead's pods are on a missing host")
+    try:
+        dep = engine._environment()
+    except C.HostDown as down:
+        names = ", ".join(down.hosts)
+        if action == "return-original":
+            raise Held(f"Going back needs {names}, which is down: the original volume or one of Homestead's pods is on it. "
+                       "Bring it back, then preview again. Nothing was changed") from None
+        raise Held(f"Resuming needs {names}, which is down. Bring it back, then preview again. Nothing was changed"
+                   + (". If it was removed, wait for Homestead's pod on it to leave Kubernetes" if down.removed else "." if cutover else ". Or preview --action return-original, which needs it only if the original volume is on it")) from None
     volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v["name"] == state["plan"]["data_volume"]]
     selected = state["destination"] if cutover else state["source"]["name"]
     if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:
@@ -68,7 +94,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         # The coordinator rechecks admission before its start request; once
         # that is sent, a pod outside Homestead on either volume still holds.
         if engine._entry("start"): engine._ready(dep)
-        elif not engine._quiet(dep): raise Held("Wait for normal Homestead pod removal before reviewing recovery")
+        elif not engine._quiet(dep): raise Held(_still_there(engine))
     elif untouched:
         if dep["spec"].get("replicas") != state["replicas"]:
             raise Held("Homestead's replica count changed after review; inspect it before recovery")
@@ -76,7 +102,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         if action != "return-original": raise Held("Original-volume restart is already committed")
         engine._ready(dep, original=True)  # also detects unexpected data consumers
     elif not engine._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
-        raise Held("Wait for normal Homestead pod removal before reviewing recovery")
+        raise Held(_still_there(engine))
     if cutover:
         if state.get("copy_receipt", {}).get("state") != "verified":
             raise Held("Resuming onto the new volume needs a verified copy receipt")
@@ -89,8 +115,9 @@ def review(anchor, read, logs, action, *, clock=time.time):
             if state["phase"] != "copy" and not receipt:
                 raise Held("The retained copy has no completion evidence")
     elif released:
-        if engine.writer.observe(released) is not None or not restarting and not engine._quiet(dep):
-            raise Held("Wait for the copy Job and its mounts to be removed")
+        names = [p["metadata"]["name"] for p in engine._pods() if known and C.owner(p, "Job", known["after"]["uid"])]
+        if engine.writer.observe(released) is not None or names or not restarting and not engine._quiet(dep):
+            raise Held("Wait for the copy Job and its mounts to be removed" + (f" (still there: {', '.join(names[:3])})" if names else ""))
     result = {"action": action, "operation": state["operation"], "anchor": identity(anchor.obj),
               "phase": state["phase"], "source": state["source"]["name"], "destination": state["destination"],
               "retention_policy": "keep_both_volumes"}
@@ -100,7 +127,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         from homestead_self_data_fence import pin_app_image
         pin_app_image(proposed, state["plan"]["copy_image"])
         report = capacity(current, anchor.namespace, "restart", proposed, state["plan"]["nodes"],
-                          state["plan"]["admission"]["threshold"], clock=clock)
+                          state["plan"]["admission"]["threshold"], clock=clock, boots=False, members=False)
         result["restart"], result["warnings"] = report["receipt"], report["warnings"]
     if not 0 <= clock() - started <= 30:
         raise Held("Recovery inspection took too long; obtain a fresh review")
@@ -122,7 +149,6 @@ def main(argv=None):
     parser.add_argument("--confirm", help="Fingerprint from the immediately preceding preview")
     args = parser.parse_args(argv)
     try:
-        import homestead_self_data_anchor as A
         import homestead_self_data_kube as K
         import homestead_self_data_launch as L
         config, scope = L.parse_configuration(os.environ.get(L.CONFIG_ENV))

@@ -48,7 +48,7 @@ class WorkerAdmissionTests(unittest.TestCase):
         actual = L.resources(self.scope, anchor_uid="actual-api-uid", image=IMAGE, node="node1", status_digest="b" * 64)[-2]
         self.assertTrue(admit(actual))
         # Calling preview must not alter the source runtime configuration.
-        raw = actual["spec"]["containers"][0]["env"][0]["value"]
+        raw = actual["spec"]["template"]["spec"]["containers"][0]["env"][0]["value"]
         self.assertEqual("actual-api-uid", L.parse_configuration(raw)[0]["anchor_uid"])
         changed = L.resources(self.scope, anchor_uid="actual-api-uid", image=IMAGE, node="node1", status_digest="c" * 64)[-2]
         with self.assertRaises(Held): admit(changed)
@@ -57,8 +57,8 @@ class WorkerAdmissionTests(unittest.TestCase):
         admit = self.admitter()
         other = K.Scope("lab", "homestead", OP, ["source", "target", "extra"], ["old-pv", "new-pv"], ["node1"])
         candidates = [L.resources(other, anchor_uid="pending", image=IMAGE, node="node1", status_digest="b" * 64)[-2]]
-        for transform in (lambda p: p["spec"]["containers"][0].update(image=IMAGE[:-1] + "c"),
-                          lambda p: p["spec"]["containers"][0]["resources"]["limits"].update(memory="512Mi")):
+        for transform in (lambda p: p["spec"]["template"]["spec"]["containers"][0].update(image=IMAGE[:-1] + "c"),
+                          lambda p: p["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"].update(memory="512Mi")):
             pod = copy.deepcopy(self.pod); transform(pod); candidates.append(pod)
         for pod in candidates:
             with self.assertRaises(Held): admit(pod)

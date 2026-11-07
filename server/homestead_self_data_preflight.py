@@ -33,7 +33,7 @@ def copy_pod(job):
 
 
 def validate_receipt(receipt, job, *, now=None):
-    from homestead_self_data_anchor import _keys, _hash
+    from homestead_self_data_anchor import _keys, _hash, COPY_CHECK_LIFE
     _keys(receipt, ("checked_at", "request", "pod_request", "admitted", "limitation"))
     for key in ("request", "pod_request", "admitted"):
         _hash(receipt[key])
@@ -41,8 +41,9 @@ def validate_receipt(receipt, job, *, now=None):
             or receipt["request"] != digest(job) or receipt["pod_request"] != digest(copy_pod(job))
             or receipt["limitation"] != LIMITATION):
         raise Held("The copy admission receipt does not match this data move")
-    if now is not None and not 0 <= now - receipt["checked_at"] <= 60:
-        raise Held("Copy admission preflight expired before Homestead stopped; obtain a fresh review")
+    if now is not None and not 0 <= now - receipt["checked_at"] <= COPY_CHECK_LIFE:
+        raise Held("The copy check expired before Homestead was stopped, so this move can't stop it now. "
+                   "Go back to the original volume, which changes nothing, then start a new move")
 
 
 class Preflight:
@@ -75,55 +76,32 @@ class Preflight:
         return digest({"spec": result["spec"], "labels": result["metadata"].get("labels", {}),
                        "annotations": result["metadata"].get("annotations", {})})
 
-    def worker(self, pod):
-        if pod.get("metadata", {}).get("name") != self.scope.worker_name:
+    def _job(self, job, refusal):
+        """The Job's dry run: only Kubernetes' own defaults were added."""
+        result = self._request("Job", job)
+        target = {"apiVersion": "batch/v1", "kind": "Job", "namespace": self.scope.namespace, "name": job["metadata"]["name"]}
+        try:
+            B.admitted(job, result, target, dry_run=True, default=self.default)
+        except B.PriorityUnknown:
+            raise
+        except Exception:
+            raise Held(refusal) from None
+
+    def worker(self, job):
+        if job.get("metadata", {}).get("name") != self.scope.worker_name:
             raise Held("The preflight does not describe this operation's coordinator")
         started = self.clock()
-        result = self._request("Pod", pod)
-        admitted = self._pod(pod, result)
-        return self._receipt(started, {"request": digest(pod), "admitted": admitted})
+        self._job(job, "Job admission changed the coordinator or does not support its replacement policy. Nothing was created")
+        # A Job dry-run alone never validates the Pod's admission chain.
+        pod = B.L.pod_of(job)
+        admitted = self._pod(pod, self._request("Pod", pod))
+        return self._receipt(started, {"request": digest(job), "pod_request": digest(pod), "admitted": admitted})
 
     def copy(self, job):
         started = self.clock()
-        result = self._request("Job", job)
-        try:
-            meta = result["metadata"]
-            if (result.get("kind") != "Job" or result.get("apiVersion") != "batch/v1"
-                    or meta.get("name") != self.scope.copy_name or meta.get("namespace") != self.scope.namespace
-                    or meta.get("ownerReferences") or meta.get("finalizers") or meta.get("deletionTimestamp")
-                    or meta.get("annotations", {}) != job["metadata"].get("annotations", {})
-                    or meta.get("labels", {}) != job["metadata"].get("labels", {}) or not B._subset(job, result)):
-                raise Held("changed job")
-            spec, wanted = result["spec"], job["spec"]
-            if (set(spec) - set(wanted) - {"selector", "manualSelector", "completionMode", "suspend"}
-                    or spec.get("manualSelector", False) is not False or spec.get("suspend", False) is not False
-                    or spec.get("completionMode", "NonIndexed") != "NonIndexed"):
-                raise Held("changed job policy")
-            template = copy.deepcopy(spec["template"])
-            # Only Kubernetes' own Job selector/name labels may be generated.
-            generated = {"controller-uid": meta.get("uid"), "batch.kubernetes.io/controller-uid": meta.get("uid"),
-                         "job-name": meta["name"], "batch.kubernetes.io/job-name": meta["name"]}
-            labels = template.get("metadata", {}).get("labels", {})
-            original = wanted["template"].get("metadata", {}).get("labels", {})
-            for key in set(labels) - set(original):
-                if key not in generated or not generated[key] or labels[key] != generated[key]:
-                    raise Held("unreviewed job label")
-                labels.pop(key)
-            selector = spec.get("selector", {})
-            if (set(selector) - {"matchLabels"} or any(not generated.get(key) or value != generated[key]
-                    for key, value in selector.get("matchLabels", {}).items())):
-                raise Held("unreviewed job selector")
-            if template.get("metadata", {}).get("annotations", {}) != wanted["template"].get("metadata", {}).get("annotations", {}):
-                raise Held("unreviewed job annotations")
-            expected = copy_pod(job)
-            admitted_job = copy.deepcopy(job)
-            admitted_job["spec"]["template"] = template
-            admitted = copy_pod(admitted_job)
-            # Validate Job-level template mutation before asking Pod admission.
-            self._pod(expected, admitted)
-        except Exception:
-            raise Held("Job admission changed the copy plan or does not support its required replacement policy. Nothing was created") from None
+        self._job(job, "Job admission changed the copy plan or does not support its required replacement policy. Nothing was created")
         # A Job dry-run alone never validates the Pod's admission chain.
+        expected = copy_pod(job)
         response = self._request("Pod", expected)
         pod_hash = self._pod(expected, response)
         return self._receipt(started, {"request": digest(job), "pod_request": digest(expected), "admitted": pod_hash})

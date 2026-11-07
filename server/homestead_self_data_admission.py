@@ -103,10 +103,22 @@ def _inventory(read, path, *, metric=False):
     return result["items"]
 
 
-def _nodes(read, pinned, now):
+def _nodes(read, pinned, now, *, boots=True, members=True):
+    """boots: the review before anything stops compares every reviewed host's boot id.
+    During the move only a replaced or removed host matters here: the coordinator
+    measures reboots itself, on the hosts actually in use (Coordinator._involved).
+    members: going back to the original volume, or starting on the new one after the
+    switch, ignores hosts removed, replaced or added: it needs only the volume and what
+    runs on it, which the coordinator checks, and counts capacity on the reviewed
+    hosts that are still there."""
     raw = _inventory(read, "/api/v1/nodes")
     expected = {n["name"]: n for n in pinned}
-    if len(expected) != len(pinned) or {n["metadata"]["name"] for n in raw} != set(expected):
+    if len(expected) != len(pinned):
+        raise Held("Cluster membership changed; review the data move placement again")
+    if not members:
+        raw = [n for n in raw if n["metadata"]["name"] in expected and n["metadata"]["uid"] == expected[n["metadata"]["name"]]["uid"]
+               and not n["metadata"].get("deletionTimestamp")]
+    elif {n["metadata"]["name"] for n in raw} != set(expected):
         raise Held("Cluster membership changed; review the data move placement again")
     try:
         metrics = {n["metadata"]["name"]: n for n in _inventory(read, "/apis/metrics.k8s.io/v1beta1/nodes", metric=True)}
@@ -116,7 +128,7 @@ def _nodes(read, pinned, now):
     for node in raw:
         meta, status, spec = node["metadata"], node.get("status", {}), node.get("spec", {})
         pin = expected[meta["name"]]
-        if (meta["uid"] != pin["uid"] or status.get("nodeInfo", {}).get("bootID") != pin["boot_id"]
+        if (meta["uid"] != pin["uid"] or boots and status.get("nodeInfo", {}).get("bootID") != pin["boot_id"]
                 or meta.get("deletionTimestamp")):
             raise Held("A reviewed capacity host was replaced, rebooted or removed")
         alloc = status.get("allocatable", {})
@@ -146,11 +158,10 @@ def _nodes(read, pinned, now):
 
 
 def _proposal(purpose, proposal, namespace):
-    kind = {"copy": "Job", "restart": "Deployment", "worker": "Pod"}.get(purpose)
+    kind = {"copy": "Job", "restart": "Deployment", "worker": "Job"}.get(purpose)
     if kind is None or proposal.get("kind") != kind or proposal.get("metadata", {}).get("namespace") != namespace:
         raise Held("The capacity proposal does not match this data move")
-    template = ({"metadata": copy.deepcopy(proposal["metadata"]), "spec": copy.deepcopy(proposal["spec"])}
-                if purpose == "worker" else proposal["spec"]["template"])
+    template = copy.deepcopy(proposal["spec"]["template"]) if purpose == "worker" else proposal["spec"]["template"]
     if purpose == "worker":
         # A read-only preview cannot know a future ConfigMap's Kubernetes UID.
         # Normalize ONLY that runtime identity for capacity acknowledgement.
@@ -165,11 +176,6 @@ def _proposal(purpose, proposal, namespace):
             raise Held("The coordinator capacity template belongs to a different namespace")
         config["anchor_uid"] = "pending"
         env[0]["value"] = json.dumps(config, sort_keys=True, separators=(",", ":"))
-        if "route" in config:
-            owners = template.get("metadata", {}).get("ownerReferences", [])
-            if len(owners) != 1 or owners[0].get("kind") != "ConfigMap" or owners[0].get("name") != scope.deployment + "-data-handoff":
-                raise Held("The maintenance helper needs its exact control-record owner")
-            owners[0]["uid"] = "pending"
     spec = template["spec"]
     replicas = 1 if purpose in ("copy", "worker") else proposal["spec"]["replicas"]
     if type(replicas) is not int or not 1 <= replicas <= 64:
@@ -191,7 +197,7 @@ def _review_key(fingerprint, threshold, nodes):
     return digest({"workload": fingerprint, "threshold": threshold, "nodes": sorted(nodes, key=lambda n: n["name"])})
 
 
-def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time):
+def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock=time.time, boots=True, members=True):
     """Return displayable fresh evidence plus an unsigned receipt for approval.
 
     Never filters old or terminating pods out of the inventory. The phase engine
@@ -206,7 +212,7 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
         if path not in cache:
             cache[path] = copy.deepcopy(read(path))
         return copy.deepcopy(cache[path])
-    nodes = _nodes(current, pinned_nodes, started)
+    nodes = _nodes(current, pinned_nodes, started, boots=boots, members=members)
     pods = _inventory(current, "/api/v1/pods")
     # Do not let a planner's unknown-storage caution become a RAM override.
     for volume in dep["spec"]["template"]["spec"].get("volumes", []):
@@ -289,7 +295,8 @@ class Admitter:
                     raise Held("Copy or restart approval no longer matches; Homestead has not been stopped")
             return True
         stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
-        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock)
+        report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False,
+                        members=purpose not in ("start", "recover-start"))
         approved = self.policy["reviews"][stage]
         if purpose == "recover-start":
             approved = (self.handoff or {}).get("recovery", {}).get("restart")
@@ -301,6 +308,20 @@ class Admitter:
             # said in the warning's own words, so it can be acted on.
             what = ([f"the {stage} workload changed"] if report["receipt"]["proposal"] != approved["proposal"] else []) +                    [f"new warning: {str(text)[:160]}" for text in
                     [next((w for w in report.get("warnings") or [] if warning_key(w) == key), "") for key in new[:2]] if text]
-            raise Held(f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); "
-                       "review the new warnings before continuing")
+            message = f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); review the new warnings before continuing"
+            back = self._just_back_with_no_figure(report, approved, new)
+            if back:
+                from homestead_self_data_coordinator import FigurePending
+                raise FigurePending(message, back)
+            raise Held(message)
         return True
+
+    def _just_back_with_no_figure(self, report, approved, new):
+        """The hosts, when the only thing new is a missing memory figure and every host
+        with no figure has rebooted since the review. Anything else holds at once."""
+        if report["receipt"]["proposal"] != approved["proposal"] or new != [warning_key("live memory usage is unavailable")]:
+            return []
+        pins = {n["name"]: n["boot_id"] for n in self.nodes}
+        boots = {n["metadata"]["name"]: n.get("status", {}).get("nodeInfo", {}).get("bootID") for n in _inventory(self.read, "/api/v1/nodes")}
+        missing = [n["name"] for n in _nodes(self.read, self.nodes, self.clock(), boots=False, members=False) if not n["mem_metrics_available"]]
+        return missing if missing and all(boots.get(name) != pins[name] for name in missing) else []

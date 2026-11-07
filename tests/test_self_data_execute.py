@@ -19,6 +19,7 @@ import homestead_self_data_worker as W
 import homestead_operations as OPS
 from homestead_storage_journal import Held
 import test_self_data_review as review_fixture
+from test_self_data_bootstrap import job_pod
 from test_self_data_coordinator import IMAGE, OP, obj
 
 
@@ -56,13 +57,24 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(OPS.stored(), "durable intent precedes every API write")
         if "?dryRun=" in path: return copy.deepcopy(body)
         result = self.cluster.send(method, path, body)
-        if method == "POST" and body.get("kind") == "Pod":
+        if method == "POST" and body.get("kind") == "Job" and body["metadata"]["name"].startswith("homestead-handoff-"):
+            live = job_pod(self.cluster.objects[path + "/" + body["metadata"]["name"]])
+            self.cluster.objects[f"/api/v1/namespaces/lab/pods/{live['metadata']['name']}"] = live
+            live["spec"]["nodeName"] = "node1"
+            live["status"] = self.running()
+        elif method == "POST" and body.get("kind") == "Pod":
+            # Not this release's helper; kept so the revert check's run on the old
+            # code fails on an assertion, not in setup's wait, whose test clock stands still.
             live = self.cluster.objects[path + "/" + body["metadata"]["name"]]
             live["spec"]["nodeName"] = "node1"
-            live["status"] = {"phase": "Running", "conditions": [{"type": "Ready", "status": "False"}], "containerStatuses": [
-                {"name": "coordinator", "ready": False, "restartCount": 0, "state": {"running": {"startedAt": "now"}},
-                 "containerID": "containerd://helper", "imageID": IMAGE}]}
+            live["status"] = self.running()
         return result
+
+    @staticmethod
+    def running():
+        return {"phase": "Running", "conditions": [{"type": "Ready", "status": "False"}], "containerStatuses": [
+            {"name": "coordinator", "ready": False, "restartCount": 0, "state": {"running": {"startedAt": "now"}},
+             "containerID": "containerd://helper", "imageID": IMAGE}]}
 
     def recheck(self, *_):
         self.assertTrue(self.frozen); self.rechecked = True

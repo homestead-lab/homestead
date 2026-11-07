@@ -1,9 +1,10 @@
-"""Isolated coordinator Pod/Service manifests and its executable entry point.
+"""Isolated coordinator Job/Service manifests and its executable entry point.
 
 Builders do not apply resources. Reviewed setup must journal creation receipts,
-observe the admitted Pod UID/spec, pin them in the anchor, and only then publish
-the local pointer. A bare, non-restarting Pod deliberately has no controller that
-could replace a lost coordinator. Both data claims stay unmounted here.
+observe the admitted Job UID/spec, pin them in the anchor, and only then publish
+the local pointer. The Job replaces a lost coordinator a limited number of times
+(stuck-jobs C4): each try is a new Pod that continues from the durable record, in
+which the Job, not the Pod, is the reviewed worker. Both data claims stay unmounted.
 The private progress Service verifies setup. The optional maintenance listener
 joins the existing app Service during the move; no new public address is created.
 
@@ -11,6 +12,7 @@ Identity/projection contracts:
 https://kubernetes.io/docs/concepts/workloads/pods/downward-api/
 https://kubernetes.io/docs/concepts/storage/projected-volumes/
 """
+import copy
 import json
 import os
 import re
@@ -26,8 +28,12 @@ from homestead_storage_journal import Held
 
 CONFIG_ENV = "HOMESTEAD_HANDOFF_CONFIG"
 UID_ENV = "HOMESTEAD_HANDOFF_POD_UID"
+JOB_UID_ENV = "HOMESTEAD_HANDOFF_JOB_UID"
 PORT = 8081
 MAX_CONFIG = 32768
+# Tries after the first. After them the Job has failed and nothing looks after
+# the move (docs/data-move-recovery.md says what then).
+BACKOFF_LIMIT = 3
 
 
 def configuration(scope, anchor_uid, status_digest, route=None):
@@ -73,12 +79,28 @@ def _uid(value):
         raise Held("The coordinator resource identity is invalid")
 
 
-def resources(scope, *, anchor_uid, image, node, status_digest, route=None):
-    """Return scoped access, one independent Pod, and a private progress Service.
+def pod_of(job, name=None):
+    """The Pod a Job's template describes, for checks that take a Pod."""
+    template = job["spec"]["template"]
+    return {"apiVersion": "v1", "kind": "Pod", "metadata": {**copy.deepcopy(template.get("metadata", {})),
+            "name": name or job["metadata"]["name"], "namespace": job["metadata"]["namespace"]},
+            "spec": copy.deepcopy(template["spec"])}
 
-    No Pod UID can be supplied by setup: Kubernetes supplies it through the
-    downward API. Never use this manifest's pre-admission shape as the worker
-    receipt; scheduling/defaulting/webhooks can change the stored Pod spec.
+
+def resources(scope, *, anchor_uid, image, node, status_digest, route=None):
+    """Return scoped access, one independent Job, and a private progress Service.
+
+    No UID can be supplied by setup: Kubernetes supplies the Pod's and the Job's
+    through the downward API. Never use this manifest's pre-admission shape as
+    the worker receipt; defaulting/webhooks can change the stored Job spec.
+
+    restartPolicy Never on purpose: each try is a new Pod, so it can go to another
+    reviewed host and leaves the last one's log. OnFailure would restart in the
+    same network namespace, where the status port (allow_reuse_address off, its
+    probe connections in TIME_WAIT) refuses to bind and the tries run out in a
+    minute. Replaced as soon as the old Pod is ending (TerminatingOrFailed): a dead
+    host's Pod may never end. The worker's first tick fences it. No time limit: the
+    coordinator outlives the copy, and cleanup removes it.
     """
     raw = configuration(scope, anchor_uid, status_digest, route)
     if not isinstance(image, str) or not re.fullmatch(r"[a-zA-Z0-9./:_-]+@sha256:[a-f0-9]{64}", image):
@@ -91,35 +113,45 @@ def resources(scope, *, anchor_uid, image, node, status_digest, route=None):
               "homestead.io/handoff-worker": account}
     def metadata():
         return {"name": account, "namespace": scope.namespace, "labels": dict(labels)}
-    pod = {"apiVersion": "v1", "kind": "Pod", "metadata": metadata(), "spec": {
+    template = {"metadata": {"labels": dict(labels)}, "spec": {
         "serviceAccountName": account, "automountServiceAccountToken": False,
         "restartPolicy": "Never", "terminationGracePeriodSeconds": 60,
         "enableServiceLinks": False,
-        "affinity": {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
-            "nodeSelectorTerms": [{"matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]}]}}},
+        # Any reviewed host, so a retry isn't Pending for ever on a dead one. One term
+        # per host: the API allows a field selector only one value.
+        "affinity": {"nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [{"matchFields": [{"key": "metadata.name", "operator": "In", "values": [host]}]} for host in scope.nodes]},
+            "preferredDuringSchedulingIgnoredDuringExecution": [{"weight": 100, "preference": {
+                "matchFields": [{"key": "metadata.name", "operator": "In", "values": [node]}]}}]}},
         "securityContext": {"runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001,
                             "fsGroup": 10001, "seccompProfile": {"type": "RuntimeDefault"}},
         "volumes": [K.token_volume()],
         "containers": [{"name": "coordinator", "image": image, "imagePullPolicy": "IfNotPresent",
             "command": ["python3", "/srv/homestead_self_data_launch.py"],
             "env": [{"name": CONFIG_ENV, "value": raw},
-                    {"name": UID_ENV, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": "metadata.uid"}}}],
+                    {"name": UID_ENV, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": "metadata.uid"}}},
+                    {"name": JOB_UID_ENV, "valueFrom": {"fieldRef": {"apiVersion": "v1",
+                        "fieldPath": "metadata.labels['batch.kubernetes.io/controller-uid']"}}}],
             "ports": [{"name": "progress", "containerPort": PORT, "protocol": "TCP"}],
             "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "500m", "memory": "256Mi"}},
             "securityContext": {"allowPrivilegeEscalation": False, "readOnlyRootFilesystem": True,
                                 "capabilities": {"drop": ["ALL"]}},
             "volumeMounts": [{"name": "handoff-api", "mountPath": "/var/run/homestead-handoff", "readOnly": True}],
             # Readiness means only that progress can be queried. No liveness
-            # restart: an unknown outcome must not create a replacement worker.
+            # restart: a slow tick must not use up the Job's tries.
             "readinessProbe": {"httpGet": {"path": "/healthz", "port": "progress"},
                                "periodSeconds": 5, "timeoutSeconds": 2, "failureThreshold": 3}}]}}
+    job = {"apiVersion": "batch/v1", "kind": "Job", "metadata": metadata(), "spec": {
+        "backoffLimit": BACKOFF_LIMIT, "parallelism": 1, "completions": 1,
+        "podReplacementPolicy": "TerminatingOrFailed", "template": template}}
     service = {"apiVersion": "v1", "kind": "Service", "metadata": metadata(), "spec": {
         "type": "ClusterIP", "selector": {"homestead.io/handoff-worker": account},
         "ports": [{"name": "progress", "port": PORT, "targetPort": "progress", "protocol": "TCP"}]}}
     if route is not None:
         from homestead_self_data_route import apply
-        apply(pod, service, route, scope.deployment + "-data-handoff", anchor_uid)
-    return [*access, pod, service]
+        apply(template, service, route)
+    return [*access, job, service]
 
 
 def serve(runner, token_digest, stop, *, address=("0.0.0.0", PORT), route=None):
@@ -179,19 +211,22 @@ def main():
         if len(sys.argv) != 1:
             raise Held("The coordinator does not accept command-line overrides")
         value, scope = parse_configuration(os.environ.get(CONFIG_ENV))
-        worker_uid = os.environ.get(UID_ENV)
-        _uid(worker_uid)
+        pod_uid, job_uid = os.environ.get(UID_ENV), os.environ.get(JOB_UID_ENV)
+        _uid(pod_uid); _uid(job_uid)
         client = K.Client(scope)
         runner = W.Runner(client.read, client.send, client.logs, namespace=scope.namespace,
-            deployment=scope.deployment, operation=scope.operation, anchor_uid=value["anchor_uid"], worker_uid=worker_uid,
-            require_setup_receipts=True)
+            deployment=scope.deployment, operation=scope.operation, anchor_uid=value["anchor_uid"], worker_uid=job_uid,
+            pod_uid=pod_uid, config=os.environ.get(CONFIG_ENV), require_setup_receipts=True)
         for signum in (signal.SIGTERM, signal.SIGINT):
             previous[signum] = signal.signal(signum, lambda *_: stop.set())
         serve(runner, value["status_digest"], stop, **({"route": value["route"]} if "route" in value else {}))
-        return 0
+        # Never 0: that marks the Pod Succeeded and the Job Complete, so a helper
+        # stopped by a drain would never be replaced. It only ever stops when told
+        # to, and cleanup deletes the Job once the move is done.
+        return 1
     except Exception:
         # No raw environment/config/API exception, and no automatic replay.
-        print("The data move coordinator could not start or stopped unexpectedly. Review the retained move record; no retry was requested.", file=sys.stderr)
+        print("The data move coordinator could not start or stopped unexpectedly. Its Job starts another while it has tries left; that one continues from the retained move record and repeats no request.", file=sys.stderr)
         return 1
     finally:
         stop.set()

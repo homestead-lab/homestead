@@ -8,6 +8,7 @@ import copy
 import datetime
 import json
 import time
+import urllib.error
 
 import homestead_self_data_copy as COPY
 import homestead_self_data_anchor as A
@@ -15,6 +16,26 @@ from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, Journal, identity, settled, shape
 
 READY_WAIT = "Waiting for every Homestead replica to become ready on the new volume"
+# How long pods and mounts may take to go before the move holds, naming them.
+# Nothing here force-deletes: a person decides, in recovery (stuck-jobs C5).
+RELEASE_LIMIT = 600
+
+
+class HostDown(Held):
+    """Hosts the move needs are down, and only their being up matters: no pod listed on them
+    can be writing. The move waits and sends nothing; to a recovery review it is a refusal.
+    removed: those deleted from the cluster with a new Homestead pod still listed on them."""
+    def __init__(self, hosts, removed=()):
+        super().__init__("Waiting for " + ", ".join(hosts))
+        self.hosts, self.removed = hosts, list(removed)
+
+
+class FigurePending(Held):
+    """The only new capacity warning is a missing memory figure on a host just back. Its
+    words are the hold it becomes if the figure does not come."""
+    def __init__(self, message, hosts):
+        super().__init__(message)
+        self.hosts = hosts
 
 
 def owner(obj, kind, uid):
@@ -50,6 +71,9 @@ class Coordinator:
         self.job_name = "homestead-data-copy-" + self.state["operation"]
         self.job_path = f"/apis/batch/v1/namespaces/{self.ns}/jobs/{self.job_name}"
         self.writer = Journal(anchor.item(), read, send, anchor.checkpoint)
+        self.waited_for = []  # the pods the latest wait is for
+        # Going back needs only the original volume, so a new volume's host may stay down.
+        self.going_back = self.state.get("recovery", {}).get("action") == "return-original"
 
     def _entry(self, step):
         return next((e for e in self.writer.entries if e["step"] == step), None)
@@ -93,44 +117,110 @@ class Coordinator:
         return pvc
 
     def _involved(self):
-        """The hosts that can hold a writer or a mount of either volume: the
-        copy host, the nodes of every pod in the namespace that mounts either
-        claim, is Homestead's own or is this coordinator, and the nodes either
-        PV is pinned to. A reboot elsewhere proves nothing about this move's
-        writers. A pod that left the API was removed normally (nothing here
-        force-deletes), so its writer stopped. A PV pinned by a hostname
-        that names no reviewed node checks every reviewed node, as before."""
-        names = {n["name"] for n in self.plan["nodes"]}
-        involved = {self.plan.get("copy_node")} - {None}
+        """The hosts that can hold a writer or a mount of either volume, each with
+        the boot id it must still have, or None when only being up matters: every
+        pod in the namespace that mounts either claim or is Homestead's own (or an
+        earlier release's bare coordinator), and the nodes either PV is pinned to.
+
+        A reboot elsewhere proves nothing about this move's writers. A Job's
+        coordinator mounts nothing: if its host reboots, its next try carries on.
+        The copy host counts only while a copy pod is on it, against the boot id it
+        had when the copy was requested, so a reboot before the copy holds nothing.
+        Homestead's own pods after the start request are new, so a reboot before
+        them holds nothing either. A pod that left the API was removed normally
+        (nothing here force-deletes), so its writer stopped.
+
+        A volume pinned to a host needs that host up with a fresh heartbeat; its boot
+        id alone holds nothing. Only a pod listed in the API can write to it, and those
+        are measured above, and the copy fsyncs before its receipt, so a reboot loses
+        nothing the move relies on. A PV pinned by something that names no reviewed
+        host checks every reviewed host and its boot id, as before."""
+        pins = {n["name"]: n["boot_id"] for n in self.plan["nodes"]}
+        target = A.worker_target(self.state)
+        job_worker = bool(target) and target["kind"] == "Job"
+        hosts = {}
+        if not job_worker and self.plan.get("copy_node") in pins:
+            hosts[self.plan["copy_node"]] = pins[self.plan["copy_node"]]
         claims_ = {self.state["source"]["name"], self.state["destination"]}
         sets = {identity(r)["uid"] for r in self._sets()}
+        known = self._entry("copy-job")
+        copy_uid = known.get("after", {}).get("uid") if known else None
+        # Before any stop request Homestead's pods are fenced by the marker, and deleting one
+        # could not help: its ReplicaSet starts another on the same host. After the start
+        # request they are new. Between the two they are the writers that must be gone.
+        restarted = job_worker and (not self._entry("stop") or self.anchor.state["phase"] in ("start", "done") or self._entry("recover-start"))
+        new_pods = job_worker and (self._entry("start") or self._entry("recover-start"))
+        self.new_pod_hosts = set()  # a host of Homestead's new pods and nothing pinned to it
+        pinned_hosts = set()
         for pod in self._pods():
-            if (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"]
-                    or any(owner(pod, "ReplicaSet", uid) for uid in sets)):
-                if pod.get("spec", {}).get("nodeName"):
-                    involved.add(pod["spec"]["nodeName"])
-        if involved - names:
-            raise Held("A host this data move uses was not reviewed; review the move again")
-        for fact in (self.plan["source_pv"], self.plan["destination_pv"]):
+            own = any(owner(pod, "ReplicaSet", uid) for uid in sets)
+            node = pod.get("spec", {}).get("nodeName")
+            if not node or not (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"] or own):
+                continue
+            if node not in pins:
+                # Homestead's own pods may be on a host that joined since, when it is staying or
+                # going back to its original volume, or restarted on the new one. Forward
+                # before the start request, the capacity check holds on the change anyway.
+                if own and restarted and (self.going_back or self._entry("start")):
+                    continue
+                raise Held("A host this data move uses was not reviewed; review the move again")
+            if copy_uid and owner(pod, "Job", copy_uid):
+                wanted = self.anchor.state.get("copy_host_boot", pins[node])
+            else:
+                wanted = None if own and restarted else pins[node]
+                if own and new_pods:
+                    self.new_pod_hosts.add(node)
+            if hosts.get(node) is None:
+                hosts[node] = wanted
+        for fact in (self.plan["source_pv"],) if self.going_back else (self.plan["source_pv"], self.plan["destination_pv"]):
             pv = self.read("/api/v1/persistentvolumes/" + fact["name"])
             terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
             for term in terms:
                 for rule in term.get("matchExpressions", []) + term.get("matchFields", []):
                     values = set(rule.get("values", []))
-                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - names:
-                        return names  # a topology this can't map to reviewed hosts: check them all
-                    involved |= values
-        return involved
+                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - set(pins):
+                        self.new_pod_hosts = set()
+                        return {**pins, **{k: v for k, v in hosts.items() if v}}  # a topology this can't map to reviewed hosts: check them all
+                    pinned_hosts |= values
+                    for value in values:
+                        hosts.setdefault(value, None)
+        self.new_pod_hosts -= pinned_hosts
+        return hosts
 
     def _hosts(self):
         involved = self._involved()
+        down, removed = [], []  # every host is looked at: one that is down must not hide one that holds
         for pinned in self.plan["nodes"]:
             if pinned["name"] not in involved:
                 continue
-            node = self.read("/api/v1/nodes/" + pinned["name"])
-            if (identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp")
-                    or node.get("status", {}).get("nodeInfo", {}).get("bootID") != pinned["boot_id"]
-                    or not any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))):
+            try:
+                node = self.read("/api/v1/nodes/" + pinned["name"])
+            except urllib.error.HTTPError as error:
+                if error.code == 404 and pinned["name"] in self.new_pod_hosts and involved[pinned["name"]] is None:
+                    # Homestead's new pod is listed on a deleted Node: it can't be running,
+                    # and Kubernetes removes it, then its ReplicaSet starts another. Only
+                    # the volume being there matters, and nothing pins it to this host.
+                    down.append(pinned["name"]); removed.append(pinned["name"])
+                    continue
+                if error.code == 404:
+                    raise Held(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
+                               "Nothing was forced and both volumes are retained") from None
+                raise
+            wanted = involved[pinned["name"]]
+            ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))
+            # A host of Homestead's new pods with nothing pinned to it: it holds no writer from
+            # before the move (all were proven gone before the start request), and its boot
+            # id isn't measured either, so a Node back under its name only has to be up.
+            only_new_pods = pinned["name"] in self.new_pod_hosts and wanted is None
+            if node["metadata"].get("deletionTimestamp") and only_new_pods:
+                down.append(pinned["name"]); removed.append(pinned["name"])
+                continue
+            if node["metadata"].get("deletionTimestamp") or identity(node)["uid"] != pinned["uid"] and not only_new_pods:
+                raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
+            if wanted is None and not ready:
+                down.append(pinned["name"])
+                continue
+            if wanted is not None and (not ready or node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted):
                 raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
             lease = self.read("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + pinned["name"])
             spec = lease.get("spec", {})
@@ -141,7 +231,21 @@ class Coordinator:
             except (KeyError, ValueError, TypeError):
                 fresh = False
             if spec.get("holderIdentity") != pinned["name"] or not fresh:
+                if wanted is None:
+                    down.append(pinned["name"])
+                    continue
                 raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
+        # Going back from before any request writes nothing, so a down host can't matter.
+        if down and not (self.going_back and not self.writer.entries):
+            raise HostDown(down, removed)
+
+    def cluster_changes(self):
+        """In words: how the cluster's hosts differ from the review's, for a refusal."""
+        pins = {n["name"]: n["uid"] for n in self.plan["nodes"]}
+        now = {n["metadata"]["name"]: n["metadata"]["uid"] for n in self._list("/api/v1/nodes")}
+        return ([f"{name} has been removed" for name in sorted(set(pins) - set(now))]
+                + [f"{name} has been replaced" for name in sorted(set(pins) & set(now)) if pins[name] != now[name]]
+                + [f"{name} has joined" for name in sorted(set(now) - set(pins))])
 
     def _environment(self):
         self.writer.check()
@@ -153,12 +257,7 @@ class Coordinator:
         self._hosts()
         dep = self._deployment()
         self._bound(True); self._bound(False)
-        worker = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/pods/{self.plan['worker']['name']}"),
-                            self.plan["worker"], namespace=self.ns)
-        if (worker.get("status", {}).get("phase") != "Running"
-                or claims(worker) & {self.state["source"]["name"], self.state["destination"]}
-                or worker.get("spec", {}).get("nodeName") not in {n["name"] for n in self.plan["nodes"]}):
-            raise Held("The coordinator must remain running independently of both data volumes")
+        self._worker_running()
         for hpa in self._list(f"/apis/autoscaling/v2/namespaces/{self.ns}/horizontalpodautoscalers"):
             target = hpa.get("spec", {}).get("scaleTargetRef", {})
             if target.get("kind") == "Deployment" and target.get("name") == self.state["deployment"]["name"]:
@@ -171,8 +270,32 @@ class Coordinator:
                 mounted = claims(pod)
                 if (self.state["destination"] in mounted or self.state["source"]["name"] in mounted
                         and not any(owner(pod, "ReplicaSet", uid) for uid in known_sets)):
-                    raise Held("A data volume has an unreviewed consumer; Homestead was not stopped")
+                    raise Held("A data volume has an unreviewed consumer; " + (
+                        "Homestead's stop request was already accepted" if self._entry("stop") else "Homestead was not stopped"))
         return dep
+
+    def _worker_running(self):
+        """The reviewed coordinator exists, and nothing running it mounts either
+        volume. For a Job, the process running this is the proof that a pod is alive:
+        the API may still show it Pending with no host, or the last try ending. Neither
+        is a hold, because that would stop every move at its first replacement. A
+        record with no Job (an earlier release's) has one bare Pod, which must be Running."""
+        target = A.worker_target(self.state)
+        data = {self.state["source"]["name"], self.state["destination"]}
+        hosts = {n["name"] for n in self.plan["nodes"]}
+        if target and target["kind"] == "Job":
+            self._fact(self.read(target["path"]), self.plan["worker"], namespace=self.ns)
+            pods = [p for p in self._pods() if owner(p, "Job", self.plan["worker"]["uid"])]
+            placed = [p for p in pods if p.get("spec", {}).get("nodeName") and p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
+            alive = True
+        else:
+            pod = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/pods/{self.plan['worker']['name']}"),
+                             self.plan["worker"], namespace=self.ns)
+            alive = pod.get("status", {}).get("phase") == "Running"
+            pods = placed = [pod]
+        if (not alive or any(claims(p) & data for p in pods)
+                or any(p.get("spec", {}).get("nodeName") not in hosts for p in placed)):
+            raise Held("The coordinator must remain running independently of both data volumes")
 
     def _pods(self):
         return self._list(f"/api/v1/namespaces/{self.ns}/pods")
@@ -187,6 +310,7 @@ class Coordinator:
         sets = self._sets()
         own = {identity(s)["uid"] for s in sets}
         waiting = not zero(dep) or any(not zero(s) for s in sets)
+        self.waited_for = []
         for pod in self._pods():
             own_pod = any(owner(pod, "ReplicaSet", uid) for uid in own)
             using = claims(pod) & {self.state["source"]["name"], self.state["destination"]}
@@ -198,11 +322,31 @@ class Coordinator:
             # normal removal instead of inferring release from its phase.
             if own_pod or using:
                 waiting = True
+                self.waited_for.append(pod["metadata"]["name"])
         return not waiting
+
+    def _wait(self, key, message, *, what="Homestead's pods"):
+        """Still waiting for pods or mounts to go; after RELEASE_LIMIT, hold.
+
+        The start is in the record, so a retried coordinator keeps the deadline,
+        and writing it once is all this costs. Only a reviewed recovery clears it."""
+        started = self.anchor.state.get("waits", {}).get(key)
+        now = int(self.clock())
+        if started is None:
+            self.anchor.wait_started(key, now)
+        elif now - started >= RELEASE_LIMIT:
+            names = list(self.waited_for)
+            named = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+            raise Held(f"{what} did not stop within {RELEASE_LIMIT // 60} minutes: {named or 'the Deployment still counts some'}. "
+                       "Nothing was forced. Both volumes are retained. Once they are gone, review recovery; "
+                       "a pod stuck Terminating usually means a volume that will not unmount.")
+        return self._result(message)
 
     def _admission(self, purpose, proposal):
         if self.admit(purpose, copy.deepcopy(proposal)) is not True:
             raise Held("Current placement or capacity needs review before the data handoff can continue")
+        if "figure" in self.anchor.state.get("waits", {}):
+            self.anchor.wait_over("figure")  # only now: an early return has not passed the check
         return self._environment()  # admission may take time; recheck afterwards
 
     def _update_dep(self, step, dep, proposed, built_from):
@@ -225,31 +369,9 @@ class Coordinator:
                         self.plan["copy_image"], self.state["operation"], self.plan["copy_node"])
 
     def _copy_admitted(self, job, pod):
-        """The finished pod passes the check its dry run passed (#467): admitted()
-        on the reviewed template, so its security contexts, priority, service
-        account and tolerations are what was reviewed. The Job controller's
-        additions are the only allowance: the generated name, its owner, the
-        controller-uid and job-name labels, which must be this Job's, and its
-        tracking finalizer, which stays on the pod until the controller has
-        counted it. The pod comes from a list, so it names no kind itself."""
         import homestead_self_data_bootstrap as B
         from homestead_self_data_preflight import copy_pod
-        meta, job_uid = pod.get("metadata", {}), identity(job)["uid"]
-        owners = meta.get("ownerReferences", [])
-        if len(owners) != 1 or owners[0].get("kind") != "Job" or owners[0].get("uid") != job_uid:
-            raise Held("The copy pod is not owned by this data copy Job alone")
-        added = {"controller-uid": job_uid, "job-name": job["metadata"]["name"],
-                 "batch.kubernetes.io/controller-uid": job_uid, "batch.kubernetes.io/job-name": job["metadata"]["name"]}
-        labels = dict(meta.get("labels", {}))
-        if any(labels.pop(key, value) != value for key, value in added.items()):
-            raise Held("The copy pod's Job labels are not this Job's")
-        body = copy_pod(self._copy_manifest())
-        body["metadata"].update(name=meta.get("name"), ownerReferences=copy.deepcopy(owners))
-        real = {"apiVersion": "v1", "kind": "Pod", **copy.deepcopy(pod)}
-        real["metadata"]["labels"] = labels
-        real["metadata"]["finalizers"] = [f for f in meta.get("finalizers", []) if f != "batch.kubernetes.io/job-tracking"]
-        B.admitted(body, real, {"apiVersion": "v1", "kind": "Pod", "namespace": self.ns, "name": meta.get("name")},
-                   default=B.default_priority(self.read))
+        B.job_pod_admitted(copy_pod(self._copy_manifest()), job, pod, default=B.default_priority(self.read))
 
     def _copy_receipt(self, job, pods):
         if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
@@ -295,6 +417,8 @@ class Coordinator:
     def step(self):
         """One bounded phase; create a fresh instance from the anchor next poll."""
         dep = self._environment()
+        if "host" in self.anchor.state.get("waits", {}):
+            self.anchor.host_back(self.clock())
         require_app_readiness(dep["spec"]["template"]["spec"], self.state["deployment"]["name"])
         if self.state.get("recovery", {}).get("action") == "return-original":
             return self._return_original(dep)
@@ -312,14 +436,17 @@ class Coordinator:
             self.anchor.advance("quiesce")
             return self._result("Waiting for Homestead and its volume mounts to stop")
         if phase == "quiesce":
-            if self._quiet(dep):
-                self.anchor.advance("copy")
-            return self._result("Homestead is stopped; preparing the verified data copy" if self.anchor.state["phase"] == "copy" else "Waiting for all Homestead pods to release the source")
+            if not self._quiet(dep):
+                return self._wait("quiesce", "Waiting for all Homestead pods to release the source")
+            self.anchor.advance("copy")
+            return self._result("Homestead is stopped; preparing the verified data copy")
         if phase == "copy":
             known = self._entry("copy-job")
             job_uid = known.get("after", {}).get("uid") if known else None
             if not self._quiet(dep, helper_uid=job_uid):
-                return self._result("Waiting for source writers to stop")
+                # With a copy running, a controller's status is catching up: a pod
+                # that returned to a volume holds in _quiet itself.
+                return self._result("Waiting for source writers to stop") if known else self._wait("copy", "Waiting for source writers to stop")
             receipt = self.state.get("copy_receipt")
             if receipt and receipt["state"] == "verified":
                 self.anchor.advance("verify")
@@ -332,7 +459,12 @@ class Coordinator:
                 body = self._copy_manifest()
                 dep = self._admission("copy", body)
                 if not self._quiet(dep):
-                    return self._result("Waiting for source writers to stop")
+                    return self._wait("copy", "Waiting for source writers to stop")
+                target = A.worker_target(self.state)
+                if target and target["kind"] == "Job":
+                    # What a reboot during the copy is measured against, not the
+                    # boot id from before the move: the host may have rebooted since.
+                    self.anchor.copy_host_seen(self.read("/api/v1/nodes/" + self.plan["copy_node"])["status"]["nodeInfo"]["bootID"])
                 self.writer.write("copy-job", "POST", self.job_path.rsplit("/", 1)[0], body)
                 return self._result("Copy Job started; waiting for verified data and metadata")
             job = self.writer.observe(known)
@@ -354,20 +486,23 @@ class Coordinator:
             if not known:
                 raise Held("The verified copy Job has no creation receipt")
             if not self._quiet(dep, helper_uid=known["after"]["uid"]):
-                return self._result("Waiting for Homestead to remain stopped")
+                return self._wait("verify", "Waiting for Homestead to remain stopped")
             if not deletion:
                 job = self.writer.observe(known)
                 self.writer.write("release-copy", "DELETE", self.job_path,
                                   {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
                 return self._result("Waiting for the copy pod to release both volumes")
-            if self.writer.observe(deletion) is not None or any(owner(p, "Job", known["after"]["uid"]) for p in self._pods()):
-                return self._result("Waiting for the copy pod to release both volumes")
-            if self._quiet(dep):
-                self.anchor.advance("switch")
+            copy_pods = [p for p in self._pods() if owner(p, "Job", known["after"]["uid"])]
+            if self.writer.observe(deletion) is not None or copy_pods:
+                self.waited_for = [p["metadata"]["name"] for p in copy_pods] or [known["target"]["name"]]
+                return self._wait("verify", "Waiting for the copy pod to release both volumes", what="The data copy")
+            if not self._quiet(dep):
+                return self._wait("verify", "Waiting for volume mounts to be released after the copy")
+            self.anchor.advance("switch")
             return self._result("Copy pod released; ready to select the new data volume")
         if phase == "switch":
             if not self._quiet(dep):
-                return self._result("Waiting for volume mounts to be released before switching")
+                return self._wait("switch", "Waiting for volume mounts to be released before switching")
             if not self._entry("switch"):
                 proposed = copy.deepcopy(dep)
                 pin_app_image(proposed, self.plan["copy_image"])
@@ -387,7 +522,7 @@ class Coordinator:
         if phase == "start":
             if not self._entry("start"):
                 if not self._quiet(dep):
-                    return self._result("Waiting for volume mounts to be released before starting")
+                    return self._wait("start", "Waiting for volume mounts to be released before starting")
                 proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
                 built_from, dep = dep, self._admission("start", proposed)
                 if not self._quiet(dep):
@@ -422,17 +557,19 @@ class Coordinator:
         known = self._entry("copy-job")
         release = self._entry("release-copy") or self._entry("recover-release-copy")
         if not self._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
-            return self._result("Waiting for Homestead's original writers to stop")
+            return self._wait("recover", "Waiting for Homestead's original writers to stop")
         if known and not release:
             job = self.writer.observe(known)
             self.writer.write("recover-release-copy", "DELETE", self.job_path,
                               {"propagationPolicy": "Foreground"}, expected=identity(job), own=True)
             return self._result("Releasing the copy mounts before original-volume recovery")
-        if release and (self.writer.observe(release) is not None or any(
-                owner(p, "Job", known["after"]["uid"]) for p in self._pods())):
-            return self._result("Waiting for the copy pod to release both retained volumes")
+        if release:
+            copy_pods = [p for p in self._pods() if owner(p, "Job", known["after"]["uid"])]
+            if self.writer.observe(release) is not None or copy_pods:
+                self.waited_for = [p["metadata"]["name"] for p in copy_pods] or [known["target"]["name"]]
+                return self._wait("recover", "Waiting for the copy pod to release both retained volumes", what="The data copy")
         if not self._quiet(dep):
-            return self._result("Waiting for normal removal of all data-volume mounts")
+            return self._wait("recover", "Waiting for normal removal of all data-volume mounts")
         proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
         pin_app_image(proposed, self.plan["copy_image"])
         volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]

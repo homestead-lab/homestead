@@ -131,8 +131,8 @@ class WorkerTests(unittest.TestCase):
         self.c.lost = None
         before = [(m, p) for m, p, _ in self.c.sent]
         self.fresh().tick()
-        # Only the next heartbeat: no stop, copy or switch request is sent again.
-        self.assertEqual([("PUT", self.c.anchor.path)], [(m, p) for m, p, _ in self.c.sent][len(before):])
+        # Only the record (its heartbeat, and when the wait began): no stop, copy or switch request is sent again.
+        self.assertEqual({("PUT", self.c.anchor.path)}, {(m, p) for m, p, _ in self.c.sent[len(before):]})
         self.assertNotIn(self.c.job_path, self.c.objects)
 
     def test_stale_heartbeat_is_not_reported_as_running(self):

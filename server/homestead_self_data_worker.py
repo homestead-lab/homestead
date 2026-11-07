@@ -5,6 +5,7 @@ The deployment wrapper must supply the pinned API handle, narrow Kubernetes
 client and current admission adapter. Source setup hands control over only after
 the final review, writer drain and durable local publication.
 """
+import datetime
 import hashlib
 import hmac
 import http.client
@@ -47,6 +48,27 @@ TRANSIENT_CODES = (429, 500, 502, 503, 504)
 # fence answers 503 while held), and returning to the original volume is
 # not allowed after cutover anyway.
 READY_WARN = 900
+# How long the move waits for a host that is down before it holds, while it could still
+# go back to the original volume. After the switch or a start request a hold would keep
+# the new pods unready, and nothing else can be done, so that wait has no limit.
+HOST_LIMIT = 1800
+# How long it waits for the memory figure of a host just back before it holds.
+FIGURE_LIMIT = 300
+
+
+def _names(hosts, room=120):
+    """Host names for a message that has a size limit: a hold that can't be written is
+    a hold no one can act on."""
+    shown, left = [], room
+    for host in hosts:
+        if len(host) > left:
+            break
+        shown.append(host)
+        left -= len(host) + 2
+    if not shown:
+        shown = [hosts[0][:room - 3] + "..."]
+    rest = len(hosts) - len(shown)
+    return ", ".join(shown) + (f" and {rest} more" if rest else "")
 
 
 def transient(error):
@@ -75,12 +97,39 @@ RECOVERY_MODULE = "/srv/homestead_self_data_recovery.py"
 def recovery_command(namespace, state):
     """The preview command to run for a held move while Homestead is stopped:
     the worker's status server stays read-only, so recovery is kubectl exec
-    into this move's coordinator (docs/data-move-recovery.md)."""
-    return f"kubectl -n {namespace} exec {state['plan']['worker']['name']} -- python3 {RECOVERY_MODULE} --action resume"
+    into this move's coordinator (docs/data-move-recovery.md). kubectl picks the
+    Job's running pod, whichever try that is; an earlier release's coordinator
+    is a bare pod with this name."""
+    target = A.worker_target(state)
+    name = state["plan"]["worker"]["name"]
+    action = "return-original" if _goes_back_first(state) else "resume"
+    return f"kubectl -n {namespace} exec {'job/' + name if target and target['kind'] == 'Job' else name} -- python3 {RECOVERY_MODULE} --action {action}"
+
+
+def _goes_back_first(state):
+    """Held before any request, with a copy check that only lasts a minute: by the time a
+    person reads this it has expired, and resuming could not get past it."""
+    return (state["phase"] == "prepare" and not state["journal"]["ref"]["storage_writes"]
+            and bool(state.get("plan", {}).get("copy_preflight")))
+
+
+def recovery_fields(namespace, state):
+    """The command for the status view, unless it could only refuse."""
+    return {} if _unsettled(state) else {"recovery_command": recovery_command(namespace, state)}
+
+
+def _unsettled(state):
+    return any(e["state"] != "accepted" for e in state["journal"]["ref"]["storage_writes"])
 
 
 def recovery_help(namespace, state):
+    if _unsettled(state):
+        return (" Recovery needs every request's outcome, so settle this one by hand first: "
+                "docs/data-move-recovery.md, \"A request with no recorded outcome\".")
     command = recovery_command(namespace, state)
+    if _goes_back_first(state):
+        return (f" To review going back, run: {command}, then run it again with --confirm <fingerprint>. "
+                "It writes nothing until confirmed. Then start a new move.")
     cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
     return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
             + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
@@ -137,7 +186,7 @@ def progress(anchor, now):
     help_fields = {}
     if held and not preparing and state.get("plan", {}).get("worker"):
         message += recovery_help(anchor.namespace, state)
-        help_fields["recovery_command"] = recovery_command(anchor.namespace, state)
+        help_fields.update(recovery_fields(anchor.namespace, state))
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
                "state": "complete" if i < current or status == "done" else "current" if i == current else "pending"}
@@ -150,7 +199,7 @@ def progress(anchor, now):
 
 class Runner:
     def __init__(self, read, send, logs, admit=None, *, namespace, deployment, operation, anchor_uid,
-                 worker_uid, clock=time.time, require_setup_receipts=False):
+                 worker_uid, clock=time.time, require_setup_receipts=False, pod_uid=None, config=None):
         A._name(namespace); A._name(deployment)
         if not re.fullmatch(r"[a-f0-9]{24}", operation or "") or not anchor_uid or not worker_uid:
             raise Held("The data move worker needs its exact reviewed identities")
@@ -158,6 +207,12 @@ class Runner:
         self.require_setup_receipts = require_setup_receipts
         self.namespace, self.deployment = namespace, deployment
         self.operation, self.anchor_uid, self.worker_uid = operation, anchor_uid, worker_uid
+        # worker_uid is the Job's, the same for every try; pod_uid is this try's.
+        self.pod_uid, self.config = pod_uid, config
+        self.replacing = False
+        self.acting = False  # whether the record names this pod: only then can it hold
+        self.retry_reason = None  # why a pod that hasn't taken over is still trying
+        self.host_down = None
         self.clock = clock
         self.lock = threading.Lock()
         self.hold = None
@@ -188,8 +243,15 @@ class Runner:
             if self.hold:
                 view.update(status="held", message=self.hold, requires_review=True)
                 if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
+                    view.pop("recovery_command", None)
                     view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
-                                recovery_command=recovery_command(self.namespace, anchor.state))
+                                **recovery_fields(self.namespace, anchor.state))
+            elif self.retry_reason and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message=f"This coordinator has not taken over yet and is retrying: {self.retry_reason}. " + view["message"])
+            elif self.host_down and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message=self.host_down)
+            elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
+                view.update(message="A new coordinator is waiting for the previous one to stop; it changes nothing until then. " + view["message"])
             elif self.outage_since is not None and view["status"] != "done":
                 view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
             elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"
@@ -204,13 +266,71 @@ class Runner:
         try:
             anchor = self._load()
             self.held_recovery = anchor.state.get("recovery", {}).get("review")
+            runtime = anchor.state.get("runtime", {})
             if (anchor.state.get("plan", {}).get("worker", {}).get("uid") == self.worker_uid
-                    and "pointer_receipt" in anchor.state and anchor.state.get("runtime", {}).get("state") != "held"):
-                anchor.report(self.worker_uid, int(self.clock()), "held", self.hold)
+                    and "pointer_receipt" in anchor.state and runtime.get("state") != "held"
+                    # Only the pod the record names has a say over it: not one that
+                    # was replaced, and not one that has not taken over.
+                    and (self.pod_uid is None or runtime.get("pod_uid") == self.pod_uid)):
+                anchor.report(self.worker_uid, self._checked_at(anchor), "held", self.hold, pod_uid=self.pod_uid)
         except Exception:
             # Hold is latched in this process too. A later poll may checkpoint
             # the hold, but cannot continue the move or replay a resource write.
             pass
+
+    def _checked_at(self, anchor):
+        # Tries can run on different hosts, whose clocks differ a little; the
+        # record's time only moves forward.
+        return max(int(self.clock()), anchor.state.get("runtime", {}).get("checked_at", 0))
+
+    @staticmethod
+    def _ended(pod, now):
+        """Whether a pod can no longer be acting: gone, finished, or past the end of
+        its deletion grace (a host that stays down leaves its pod Terminating for
+        ever). If it was only cut off, the takeover's write is what fences it."""
+        if pod is None or pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
+            return True
+        stamp = pod.get("metadata", {}).get("deletionTimestamp")
+        if not stamp:
+            return False
+        try:
+            return now >= datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+        except (AttributeError, ValueError):
+            return False
+
+    def _acts(self, anchor):
+        """One pod of the Job at a time. The record names the one acting, in its
+        heartbeat. A retry's new pod waits, reading only, until that one has ended,
+        then takes over; losing that write to anyone else just means trying again.
+        Everything else it does starts from the durable record, as every tick does,
+        so a new process is the same as the next tick, except for a request whose
+        outcome nobody recorded: that holds, and is never sent again."""
+        if self.pod_uid is None or anchor.state.get("plan", {}).get("worker", {}).get("uid") != self.worker_uid:
+            self.acting = True
+            return True  # a pod of another Job is refused by the coordinator's own check
+        current = anchor.state.get("runtime", {}).get("pod_uid")
+        self.acting = current == self.pod_uid
+        if self.acting:
+            self.replacing = False
+            return True
+        listed = self.read(f"/api/v1/namespaces/{self.namespace}/pods")
+        pods = {p.get("metadata", {}).get("uid"): p for p in listed.get("items", []) if C.owner(p, "Job", self.worker_uid)}
+        mine = pods.get(self.pod_uid)
+        now = self.clock()
+        if (mine is None or mine.get("metadata", {}).get("deletionTimestamp")
+                or mine.get("status", {}).get("phase") in ("Succeeded", "Failed")
+                or (current is not None and not self._ended(pods.get(current), now))):
+            self.replacing = True
+            return False
+        anchor.take_over(self.pod_uid, now)  # refused or lost: _retry_later, as this pod isn't acting yet
+        self.replacing = False
+        self.acting = True
+        unknown = [e["step"] for e in anchor.state["journal"]["ref"]["storage_writes"] if e["state"] == "intent"]
+        # An existing hold keeps its own words: recovery compares them to clear it.
+        if unknown and anchor.state.get("runtime", {}).get("state") != "held":
+            raise Held(f"The previous coordinator stopped before it recorded what happened to its last request ({unknown[-1]}). "
+                       "It will not be sent again.")
+        return True
 
     def tick(self):
         if not self.lock.acquire(blocking=False):
@@ -229,8 +349,15 @@ class Runner:
                 else:
                     self._save_hold()
                     return self.snapshot()
+            self.retry_reason = None
             try:
                 anchor = self._load()
+                # Before anything is written: the record, not this pod's environment, says what was reviewed.
+                if self.config is not None and "pointer_receipt" in anchor.state and anchor.state.get("setup", {}).get("config") != self.config:
+                    self.acting = True  # refused for good, and said on its page; it writes nothing
+                    raise Held("This coordinator's configuration differs from the move's record; it changes nothing")
+                if "pointer_receipt" in anchor.state and not self._acts(anchor):
+                    return self.snapshot()
                 if anchor.state.get("runtime", {}).get("state") == "held":
                     self.hold = anchor.state["runtime"]["message"]
                     self.held_recovery = anchor.state.get("recovery", {}).get("review")
@@ -257,9 +384,15 @@ class Runner:
                 result = engine.step()
                 waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
                 self.start_wait = (self.start_wait or self.clock()) if waiting else None
-                anchor.report(self.worker_uid, int(self.clock()),
-                              "done" if result["phase"] == "done" else "running", result["message"])
-                self.outage_since = None
+                anchor.report(self.worker_uid, self._checked_at(anchor),
+                              "done" if result["phase"] == "done" else "running", result["message"], pod_uid=self.pod_uid)
+                self.outage_since = self.host_down = None
+            except C.HostDown as error:
+                self._host_down(anchor, error.hosts, error.removed)
+            except C.FigurePending as error:
+                names = _names(error.hosts)
+                self._wait_for(anchor, "figure", FIGURE_LIMIT, str(error),
+                               f"{names} is back but has no live memory figure yet. Waiting up to {FIGURE_LIMIT // 60} minutes for it.")
             except Held as error:
                 if not self._retry_later(error):
                     self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
@@ -272,13 +405,72 @@ class Runner:
         finally:
             self.lock.release()
 
+    def _host_down(self, anchor, hosts, removed=()):
+        names = _names(hosts)
+        writes = anchor.state["journal"]["ref"]["storage_writes"]
+        if A.stop_check_expired(anchor.state, self.clock()):
+            # This move can never stop Homestead now: no wait can help it.
+            self.host_down = None
+            self.hold = (f"{names} is down, and this move's copy check has expired, so it can't stop Homestead now. Homestead was not "
+                         "stopped. Go back to the original volume, which writes nothing and does not need that host.")
+            self._save_hold()
+            return None
+        if _goes_back_first(anchor.state):
+            return self._wait_for(anchor, "host", None, None,
+                f"{names} is down. Homestead has not been stopped. The move can go on only if it is back within about a minute, "
+                "while its copy check lasts; after that it holds, and the way out is going back.")
+        if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
+            return self._wait_for(anchor, "host", None, None,
+                f"{_names(removed)} was removed. The move has passed the point where it can stop, so it waits with no limit: "
+                "Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
+                if len(removed) == len(hosts) else
+                f"{_names([h for h in hosts if h not in removed])} is down. The move has passed the point where it can stop, so it waits with no limit and "
+                "carries on when it is back. " + (
+                    f"{_names(removed)} was removed: Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
+                    if removed else "Bring it back; if it won't come back, see docs/data-move-recovery.md, "
+                    "\"A host that never comes back\"."))
+        self._wait_for(anchor, "host", HOST_LIMIT,
+            f"{names} has been down for {HOST_LIMIT // 60} minutes, so the move stopped waiting. Nothing was forced and "
+            "both volumes are retained. Bring it back, or go back to the original volume unless that is on it too.",
+            f"{names} is down. The move waits for it and carries on when it is back; after {HOST_LIMIT // 60} minutes it holds for a review.")
+
+    def _wait_for(self, anchor, key, limit, held, waiting):
+        """Sent nothing; every check runs again next tick. The start is in the record, so
+        a new coordinator keeps the clock, and the heartbeat goes on so the page is live."""
+        now = int(self.clock())
+        started = anchor.state.get("waits", {}).get(key)
+        if limit is not None and started is not None and now - started >= limit:
+            self.host_down = None
+            self.hold = held
+            self._save_hold()
+            return
+        self.host_down = waiting
+        self.outage_since = None  # the API answered: this is not an outage going on
+        try:
+            if started is None:
+                anchor.wait_started(key, now)
+            anchor.report(self.worker_uid, self._checked_at(anchor), "running", self.host_down, pod_uid=self.pod_uid)
+        except Exception:
+            pass  # the next tick writes again from a fresh read
+
     def _retry_later(self, error):
         """True when this tick failed only because the API did not answer.
 
         The next tick starts again from the durable record, as every tick
         does, so nothing is repeated: a write the API may have applied is in
         the journal as uncertain, and that holds at once. An outage longer
-        than OUTAGE_LIMIT holds too, saying so."""
+        than OUTAGE_LIMIT holds too, saying so.
+
+        A pod the record doesn't name never holds: it could not write that, recovery
+        could not see it, and nothing could clear it. It keeps trying to take over."""
+        if self.pod_uid is not None and not self.acting:
+            if transient(error) and self.outage_since is None:
+                self.outage_since = self.clock()
+            cause = error.__cause__ or error.__context__
+            code = error.code if isinstance(error, urllib.error.HTTPError) else getattr(cause, "code", None)
+            self.retry_reason = (f"the Kubernetes API answered {code}" if code else "the Kubernetes API is not answering" if transient(error)
+                                 else str(error)[:200] if isinstance(error, Held) else "its next step could not be verified")
+            return True
         if not transient(error):
             return False
         try:

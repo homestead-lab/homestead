@@ -3,7 +3,9 @@
 The independent worker must quiesce writers and prove each phase before
 advancing. This record is deliberately NOT
 on either data PVC. A stale copied journal cannot win a resourceVersion CAS.
-No request bodies, configuration, credentials or raw API errors belong here.
+No request bodies, credentials or raw API errors belong here. The coordinator's
+configuration does (setup.config): names, identities and a token's digest, so
+a retried coordinator is held to what was reviewed.
 Conditional PUT semantics: https://kubernetes.io/docs/reference/using-api/api-concepts/#resource-versions
 """
 import copy
@@ -16,7 +18,24 @@ from homestead_storage_journal import RETRIES, Held, identity, target
 
 PHASES = ("prepare", "quiesce", "copy", "verify", "switch", "start", "done")
 LABEL = "homestead.io/self-data-handoff"
+# What may wait, in the record so a new coordinator keeps the clock: pods and mounts
+# going in a phase or on a return to the original volume, a host that is down, and the
+# memory figure of a host just back.
+WAITS = frozenset(PHASES[1:-1]) | {"recover", "host", "figure"}
 MAX_BYTES = 262144
+
+
+# How long the copy admission check is good for, before Homestead is stopped. It can't
+# be done again from here: the helper may not create Jobs by dry run, only the app can.
+COPY_CHECK_LIFE = 60
+
+
+def stop_check_expired(state, now):
+    """Nothing has been requested yet and the copy check has expired, so this move can
+    never stop Homestead. Going back is the way out: it writes nothing."""
+    receipt = state.get("plan", {}).get("copy_preflight")
+    return (bool(receipt) and state["phase"] == "prepare" and not state["journal"]["ref"]["storage_writes"]
+            and not 0 <= now - receipt["checked_at"] <= COPY_CHECK_LIFE)
 
 
 def pointer(namespace, state, uid):
@@ -57,6 +76,13 @@ def _identity(value, named=False):
 def _hash(value):
     if not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value):
         raise Held("The data handoff receipt fingerprint is invalid")
+
+
+def worker_target(state):
+    """The helper setup's coordinator: the Job, or the bare Pod of a move started
+    by an earlier release. None for a record with no setup receipts."""
+    resources = state.get("setup", {}).get("resources") or []
+    return resources[-2]["target"] if len(resources) >= 2 else None
 
 
 def _status_retry(old, new):
@@ -128,7 +154,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery", "waits", "copy_host_boot"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -168,6 +194,11 @@ def _validate(state, namespace):
                                  "reviews": {"copy": recovery["restart"], "restart": recovery["restart"]}})
         elif "restart" in recovery:
             raise Held("Resume cannot replace the reviewed restart approval")
+    if "copy_host_boot" in state and (not isinstance(state["copy_host_boot"], str) or not 0 < len(state["copy_host_boot"]) <= 128):
+        raise Held("The data handoff copy host record is invalid")
+    if "waits" in state and (not isinstance(state["waits"], dict) or not state["waits"]
+                             or any(k not in WAITS or type(v) is not int or v < 0 for k, v in state["waits"].items())):
+        raise Held("The data handoff wait record is invalid")
     if "setup_aborted" in state and (state["setup_aborted"] is not True or state["phase"] != "prepare"
             or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]):
         raise Held("Only unpublished setup can be abandoned")
@@ -234,7 +265,9 @@ def _validate(state, namespace):
         _hash(state["pointer_receipt"])
     if "runtime" in state:
         runtime = state["runtime"]
-        _keys(runtime, ("worker_uid", "checked_at", "state", "message"))
+        _keys(runtime, ("worker_uid", "checked_at", "state", "message"), ("pod_uid",))
+        if "pod_uid" in runtime:
+            _identity({"uid": runtime["pod_uid"], "resourceVersion": "validated-separately"})
         if (runtime["worker_uid"] != state.get("plan", {}).get("worker", {}).get("uid")
                 or "pointer_receipt" not in state
                 or type(runtime["checked_at"]) is not int or runtime["checked_at"] < 0
@@ -398,7 +431,7 @@ class Anchor:
         state["plan"] = copy.deepcopy(plan)
         self._replace(state)
 
-    def prepare_setup(self, resources, *, admission=None):
+    def prepare_setup(self, resources, *, admission=None, config=None):
         """Pin helper creation targets/hashes once, before sending any POST."""
         self.handle()
         if (self.state["phase"] != "prepare" or any(k in self.state for k in ("setup", "plan", "pointer_receipt"))
@@ -408,6 +441,8 @@ class Anchor:
         state["setup"] = {"resources": copy.deepcopy(resources), "receipts": []}
         if admission is not None:
             state["setup"]["admission"] = copy.deepcopy(admission)
+        if config is not None:
+            state["setup"]["config"] = config
         self._replace(state)
 
     def checkpoint_setup(self, receipts):
@@ -442,7 +477,62 @@ class Anchor:
         state["pointer_receipt"] = digest
         self._replace(state)
 
-    def report(self, worker_uid, checked_at, status, message):
+    def wait_started(self, key, now):
+        """When a wait began, in the record, so a retried coordinator keeps its deadline."""
+        self.handle()
+        if key not in WAITS or key in self.state.get("waits", {}):
+            raise Held("The data handoff wait record cannot be rewritten")
+        state = copy.deepcopy(self.state)
+        state.setdefault("waits", {})[key] = int(now)
+        self._replace(state)
+
+    def wait_over(self, key):
+        self.handle()
+        state = copy.deepcopy(self.state)
+        waits = state.get("waits", {})
+        if key not in waits:
+            raise Held("The data handoff has no such wait")
+        del waits[key]
+        if not waits:
+            del state["waits"]
+        self._replace(state)
+
+    def host_back(self, now):
+        """The outage is over. The other deadlines did not run during it: no step did."""
+        self.handle()
+        state = copy.deepcopy(self.state)
+        waits = state["waits"]
+        gap = max(0, int(now) - waits.pop("host"))
+        for key in waits:
+            waits[key] += gap
+        if not waits:
+            del state["waits"]
+        self._replace(state)
+
+    def copy_host_seen(self, boot_id):
+        """The copy host's boot id as the copy is requested. Rewritten until it has been."""
+        self.handle()
+        if self.state["phase"] != "copy" or any(e["step"] == "copy-job" for e in self.state["journal"]["ref"]["storage_writes"]):
+            raise Held("The copy host's boot id can be recorded only before the copy is requested")
+        state = copy.deepcopy(self.state)
+        state["copy_host_boot"] = boot_id
+        self._replace(state)
+
+    def take_over(self, pod_uid, checked_at):
+        """A retry's Pod becomes the one that acts (stuck-jobs C4). This CAS is the
+        fence: the previous Pod's next write of this record is refused, so it can
+        send nothing more. The hold, phase and journal are left exactly as they are."""
+        self.handle()
+        if "pointer_receipt" not in self.state:
+            raise Held("Setup still owns this data move's record")
+        state = copy.deepcopy(self.state)
+        runtime = state.get("runtime") or {"worker_uid": state["plan"]["worker"]["uid"], "state": "running",
+                                           "message": "A coordinator is taking over this data move"}
+        runtime.update(pod_uid=pod_uid, checked_at=max(int(checked_at), runtime.get("checked_at", 0)))
+        state["runtime"] = runtime
+        self._replace(state)
+
+    def report(self, worker_uid, checked_at, status, message, pod_uid=None):
         """CAS-persist public worker status outside either data volume.
 
         A runtime hold cannot be cleared by a later heartbeat or process restart.
@@ -456,6 +546,9 @@ class Anchor:
             raise Held("The data handoff worker cannot overwrite its current hold or status")
         state = copy.deepcopy(self.state)
         state["runtime"] = {"worker_uid": worker_uid, "checked_at": checked_at, "state": status, "message": message}
+        pod_uid = pod_uid or previous.get("pod_uid")
+        if pod_uid:
+            state["runtime"]["pod_uid"] = pod_uid
         self._replace(state)
 
     def abort_setup(self):
@@ -476,6 +569,7 @@ class Anchor:
         state["recovery"] = {"action": review["action"], "review": review["fingerprint"],
                              "previous_hold": state["runtime"]["message"], "reviewed_at": checked_at}
         if "restart" in review: state["recovery"]["restart"] = copy.deepcopy(review["restart"])
+        state.pop("waits", None)  # a reviewed recovery starts its own deadlines
         state["runtime"].update(state="running", checked_at=checked_at, message="Reviewed recovery accepted")
         self._replace(state)
 
