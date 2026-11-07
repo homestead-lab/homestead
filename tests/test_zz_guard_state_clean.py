@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_changes as CH
 import homestead_host_access as HOSTACCESS
 import homestead_lifecycle as LIFECYCLE
+import homestead_platform as PLATFORM
 import server  # noqa: F401  (binds lifecycle, so the baseline is server's client even if no file imported it yet)
 
 UNSET = object()
@@ -36,6 +37,7 @@ LIFECYCLE_BOUND = {"lifecycle reads": "kget", "lifecycle writes": "ksend", "life
 
 def bound_now():
     return {"role": getattr(HOSTACCESS._request, "role", None), "author key": CH._author_key, "request user": getattr(CH.REQUEST, "user", UNSET),
+            "platform reads": PLATFORM.kget,
             **{label: getattr(LIFECYCLE, name) for label, name in LIFECYCLE_BOUND.items()}}
 
 
