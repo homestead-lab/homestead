@@ -141,20 +141,20 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
   const option = (value, label, help) => `<label class="answer-mode"><input type="radio" name="ans_mode" value="${value}" ${mode === value ? "checked" : ""}
     onchange="answerModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Homestead asks ${name} at its address ${(u.every || 60) === 60 ? "every minute" : `every ${Math.round(u.every / 60)} minutes`}, as a browser would. It is down after ${u.down_after || 3} misses in a row, which raises an alert, and up again at its first answer.`))}
+    ${UI.lead(esc(`Checked every ${(u.every || 60) === 60 ? "minute" : `${Math.round(u.every / 60)} minutes`}; ${u.down_after || 3} misses in a row mark it down and raise an alert.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
-    ${a.state === "off" ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>
+    ${a.state === "off" ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}</div>
     <div class="answer-figures"><div><span class="dim xs">LAST 24 HOURS</span><b class="mono">${answerShare(a.uptime_24h)}</b></div>
       <div><span class="dim xs">LAST 30 DAYS</span><b class="mono">${answerShare(a.uptime_30d)}</b></div></div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
-      ${option("auto", "Automatic", "An HTTP answer below 500, or an accepted connection if it does not speak HTTP")}
-      ${option("http", "A web page", "Only an HTTP answer below 500 at this path counts")}
+      ${option("auto", "Automatic", "Any web answer, or a connection")}
+      ${option("http", "A web page", "A web answer below 500 at a path")}
       <div class="f answer-path"${mode === "http" ? "" : " hidden"}><label for="ans_path">Path</label><input id="ans_path" value="${esc(mode === "http" ? path : "/")}" placeholder="/health"></div>
-      ${option("tcp", "A connection", "The port accepting a TCP connection is enough")}
-      ${option("off", "Not monitored", "No checks and no alerts for this app")}</div>
+      ${option("tcp", "A connection", "The port takes a connection")}
+      ${option("off", "Not monitored", "No checks, no alerts")}</div>
       ${portSelect ? `<div class="f answer-port"${mode === "off" ? " hidden" : ""}><label for="ans_port">Port to ask</label>${portSelect}</div>` : ""}`)}
     ${outageSectionHtml("app", w)}
     ${UI.actions(UI.cancel() + UI.button("Save", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
@@ -212,20 +212,20 @@ window.vmMonitoring = (ns, name, back = null) => {
   const option = (value, label, help, extra = "") => `<label class="answer-mode"><input type="radio" name="vm_mon" value="${value}" ${c.mode === value ? "checked" : ""}
     onchange="vmMonitorModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span>${extra}</span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Homestead asks ${name} at its address every minute. It is down after 3 misses in a row, which raises an alert, and up again at its first answer. Changing this never restarts the VM.`))}
+    ${UI.lead(esc("Checked every minute; 3 misses in a row mark it down and raise an alert. Saving never restarts the VM."))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
-    ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}
+    ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}</div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
-      ${option("auto", "Automatic", `The usual ports (SSH, RDP, HTTPS, HTTP, Proxmox, Home Assistant), and then the first that answers${a.port ? ` - ${a.port} now` : ""}. A VM none of them answer on is not monitored.`)}
-      ${option("tcp", "A port", "The port taking a connection is enough.")}
-      ${option("http", "A web page", "Only an HTTP answer below 500 counts.")}
+      ${option("auto", "Automatic", `The first usual port that answers${a.port ? ` (${a.port} now)` : ""}`, `<span class="dim xs">${tip("SSH, RDP, HTTPS, HTTP, Proxmox and Home Assistant, in that order. A VM none of them answer on is not monitored.")}</span>`)}
+      ${option("tcp", "A port", "The port takes a connection")}
+      ${option("http", "A web page", "A web answer below 500")}
       <div class="f2 vm-mon-where"${["tcp", "http"].includes(c.mode) ? "" : " hidden"}>
         <div class="f"><label for="vm_mon_port">Port</label><input id="vm_mon_port" inputmode="numeric" value="${esc(c.port || a.port || "")}" placeholder="22"></div>
         <div class="f vm-mon-path"${c.mode === "http" ? "" : " hidden"}><label for="vm_mon_path">Path</label><input id="vm_mon_path" value="${esc(c.path)}" placeholder="/"></div></div>
-      ${option("off", "Not monitored", "No checks and no alerts for this VM.")}</div>`)}
+      ${option("off", "Not monitored", "No checks, no alerts")}</div>`)}
     ${outageSectionHtml("vm", v)}
     ${UI.actions((back ? UI.button("Back", "vmMonitorBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel())
       + UI.button("Save", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
@@ -266,21 +266,18 @@ function outageSectionHtml(kind, row) {
   const status = [now.restarts ? `Restarted ${now.restarts} time${now.restarts === 1 ? "" : "s"} in this outage${now.gave_up ? "; out of tries" : ""}` : "",
     now.last_error ? `The last restart could not be done: ${now.last_error}` : "", lastHook].filter(Boolean);
   return UI.section("When it is down", `<div class="ui-stack outage-actions">
-    <p class="dim small">Nothing is done unless you choose it here.</p>
     <label class="switch"><input type="checkbox" id="oa_restart"${r ? " checked" : ""} onchange="outageToggle()"> Restart it</label>
     <div class="outage-restart"${r ? "" : " hidden"}>${UI.fields(
       UI.field("After it has been down for", `<div class="outage-unit"><input id="oa_after" type="number" inputmode="numeric" min="1" max="1440" value="${r?.after_min || 5}"><span class="dim small">minutes</span></div>`),
       UI.field("At most", `<div class="outage-unit"><input id="oa_max" type="number" inputmode="numeric" min="1" max="10" value="${r?.max || 3}"><span class="dim small">times</span></div>`,
-        { help: "Then it is left alone and an alert says so. The count starts again once it has answered for 30 minutes." }))}
-      <p class="dim xs">${kind === "vm" ? "A clean reboot, and only while it is monitored on a port you chose: automatically, Homestead cannot tell it is down. "
-        : ""}Never while a job is working on it: an automatic update watches it itself and rolls the image back if it stays down.</p></div>
-    <label class="switch"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
+        { help: "Then it alerts and stops trying until it has been up 30 minutes." }))}
+      <p class="dim xs">${kind === "vm" ? "A clean reboot, only with a port chosen above. " : ""}Never while a job is working on it.</p></div>
+    <label class="switch" title="Called when it goes down, comes back, is restarted or gives up, and after an automatic update"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
       ${UI.field("Format", webhookFormatSelect("oa_format", a.format))}
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
         ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
-      <label class="switch" data-need="admin"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address (a self-hosted ntfy or Gotify, say)</label>
-      <p class="dim xs">Called when it goes down, comes back, is restarted or runs out of tries, and when an automatic update of it finishes.</p>
+      <label class="switch" data-need="admin" title="For a self-hosted ntfy or Gotify"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address</label>
       ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries a sentence as text, content and message, for chat services and Home Assistant; ntfy gets it as the message, Gotify with a title and priority. Once saved, the address shows only up to its host: the rest, where tokens sit, is kept and shows as (hidden). It never reaches this host, link-local or metadata addresses, and a LAN address only when an admin allows it.</p>`, false)}</div>
     ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
 }

@@ -4,7 +4,7 @@
 const shortHost = name => String(name || "").replace(/^harvester-/, "");
 
 function impactApp(r, node = "") {
-  const tone = { stops: "bad", waits: "warn", unknown: "neutral" }[r.outcome] || "ok";
+  // Its group's heading says what becomes of it (stops, waits, moves): a chip per row would say it again.
   const avatar = r.kind === "vm" && typeof vmAvatar === "function" ? vmAvatar(r) : appAvatar(r.name, r.icon);
   const where = r.outcome === "moves" && r.to?.length ? `to ${r.to.slice(0, 3).map(shortHost).join(", ")}${r.to.length > 3 ? ` +${r.to.length - 3}` : ""} · ` : "";
   // A StatefulSet says how many of its copies are here (#440).
@@ -22,8 +22,7 @@ function impactApp(r, node = "") {
   return `<div class="impact-row">${avatar}<div class="impact-text"><b>${esc(r.name)}</b>${r.kind === "set" ? ` ${UI.chip("StatefulSet", "neutral")}` : ""}
       <span class="dim xs">${esc(r.ns + kind)}${r.keeps_answering ? " · keeps answering from its other copies" : ""}</span>
       <span class="small">${esc(where + why)}${setting}</span>${why !== r.why ? UI.more("Why it waits", `<p>${esc(r.why)}</p>`, false, `why:${r.ns}/${r.name}`) : ""}
-      ${(r.notes || []).map(n => `<span class="dim xs">${esc(n)}</span>`).join("")}${restart}</div>
-    ${UI.chip(r.outcome, tone, { size: "slim" })}</div>`;
+      ${(r.notes || []).map(n => `<span class="dim xs">${esc(n)}</span>`).join("")}${restart}</div></div>`;
 }
 
 window.nodeIfDown = async (node, back = null) => {
@@ -41,7 +40,7 @@ window.nodeIfDown = async (node, back = null) => {
     c.at_risk === null && UI.chip("volume risk unknown", "neutral"),
     c.fewer_copies && UI.chip(`${c.fewer_copies} with fewer copies`, "warn"), c.addresses && UI.chip(`${c.addresses} address${c.addresses === 1 ? "" : "es"} move`, "info")].filter(Boolean);
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.lead(esc(`What becomes of what runs on ${node} if it stops answering - a failure, or a reboot without moving things first. ${p.others_ready.length ? `${p.others_ready.length} other host${p.others_ready.length === 1 ? " is" : "s are"} ready to take work.` : "No other host is ready."}`))}
+    ${UI.lead(esc(`What happens to what runs here if it stops answering. That is a failure, or a reboot without moving things first. ${p.others_ready.length ? `${p.others_ready.length} other host${p.others_ready.length === 1 ? " is" : "s are"} ready to take work.` : "No other host is ready."}`))}
     ${chips.length ? `<div class="row impact-chips">${chips.join("")}</div>`
       // With something unread, "nothing here" would be a guess: the line below says what.
       : (p.unread || []).length ? "" : '<div class="ui-empty">Nothing of yours runs here, and no volume keeps a copy here.</div>'}
@@ -56,7 +55,7 @@ window.nodeIfDown = async (node, back = null) => {
       + p.fewer_copies.map(v => `<div class="impact-row"><div class="impact-text"><b>${esc(v.name)}</b><span class="dim xs">${esc(v.namespace)}</span>
         <span class="small">Carries on with ${v.left} of ${v.wanted} cop${v.wanted === 1 ? "y" : "ies"} until Longhorn rebuilds one.</span></div>${UI.chip("fewer copies", "warn", { size: "slim" })}</div>`).join(""))}
     ${section("Addresses", p.addresses, p.addresses.map(a => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(a.ip)}</b>
-        <span class="small">Moves to another host within seconds${a.services?.length ? `; used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div>${UI.chip("moves", "info", { size: "slim" })}</div>`).join(""))}
+        <span class="small">Moves to another host within seconds${a.services?.length ? `; used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div></div>`).join(""))}
     <div id="ifDownRoom" data-node="${esc(node)}"></div>
     ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed host setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;

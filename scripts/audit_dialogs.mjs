@@ -16,9 +16,58 @@ const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1&demo-scenario=incidents";
 const only = process.argv[2] || "";
-// design.md, Verbosity budget. Visible words count names and rows too, so the
-// budgets sit above today's longest dialogs: they stop growth, not content.
-const DIALOG_WORDS = 300, REVIEW_WORDS = 200;
+// design.md, Verbosity budget: the words a person reads before opening
+// anything - not a dropdown's options, code, a table's rows or what Details holds.
+const DIALOG_WORDS = 120, REVIEW_WORDS = 100;
+// Dialogs still over the budget, each held to the words it shows now (and
+// three for the demo's figures) so it can only get shorter: a rewrite lowers its number, and one under the budget
+// leaves this list. Every other dialog keeps to the budget.
+const WORD_CAPS = {
+  "add-harvester-host-3": 274,
+  "snapshot-restore-in-manager": 213,
+  "node-if-down": 211,
+  "disks": 192,
+  "node-reboot-before-draining": 178,
+  "host-join-storage": 173,
+  "disk-v2-region-identity": 173,
+  "snapshot-files-ready": 163,
+  "node-shutdown": 161,
+  "jobs-host-gone-end": 160,
+  "workload-edit-waits-for-managed": 159,
+  "disk-v2-region-review": 158,
+  "disk-v2-review": 158,
+  "runtime-move-review": 155,
+  "deploy-review-yaml": 155,
+  "protection-plans": 150,
+  "add-host-control-plane": 149,
+  "image-update-batch": 148,
+  "runtime-move-retirement": 143,
+  "workload-edit-placement": 142,
+  "disk-v2-region-erase": 140,
+  "disk-v2-erase": 140,
+  "add-host": 140,
+  "add-host-tiebreaker": 140,
+  "image-update-cordoned-details": 140,
+  "node-single-host-shutdown": 140,
+  "workload-edit-waits-for": 137,
+  "node-single-host-reboot": 135,
+  "component-upgrade-check-blocked": 133,
+  "disk-v2-blocked": 133,
+  "set-restart-review": 132,
+  "vm-logo": 130,
+  "workload-edit-waits-for-cycle": 129,
+  "workload-edit-hardware": 129,
+  "node-maintenance-review": 129,
+  "vm-import-unraid": 126,
+  "smart-disk": 126,
+  "workload-outage-actions": 125,
+  "log-alerts": 125,
+  "released-volume-reused-delete": 118,
+  "os-update-review-several": 118,
+  "node-reboot": 113,
+  "volume-delete": 110,
+  "image-updates": 109
+};
 // design.md, Notices: a warning or an error is a summary bar of short
 // lines that opens to the rest. Its heading and short lines stay under this.
 const NOTICE_CHARS = 120;
@@ -452,7 +501,8 @@ async function audit([label, width, height, mobile], items) {
           checkboxes: body.querySelectorAll("input[type=checkbox]").length,
           // Raw text a person opened Details to read (YAML, a log) is not the
           // dialog's own wording: it is left out of the budget, as of the width check.
-          words: body.innerText.split(/\s+/).filter(Boolean).length - [...body.querySelectorAll("details[open] pre")]
+          words: body.innerText.split(/\s+/).filter(Boolean).length - [...body.querySelectorAll("select, datalist, pre, code, table")]
+            .filter(e => e.checkVisibility() && !e.parentElement?.closest("select, datalist, pre, code, table"))
             .reduce((n, e) => n + e.innerText.split(/\s+/).filter(Boolean).length, 0),
           // Visible notices: design.md asks for one, combining related warnings.
           attention: [...body.querySelectorAll(".ui-callout, .note.bad, .note.warn")].filter(e => e.checkVisibility()).length,
@@ -508,7 +558,7 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.unnamed.length) failures.push(`${name} (${label}): fields with no name: ${metrics.unnamed.join(", ")}`);
       if (metrics.footer.length) failures.push(`${name} (${label}): footer: ${metrics.footer.join("; ")}`);
       // design.md, Verbosity budget: what a dialog shows before Details is opened.
-      const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
+      const limit = Math.max(REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS, WORD_CAPS[name] || 0);
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
       if (metrics.attention > 1) failures.push(`${name} (${label}): ${metrics.attention} visible notices: combine them into one UI.callout`);
       if (metrics.longNotices.length) failures.push(`${name} (${label}): a warning heading or short line over ${NOTICE_CHARS} characters - give it a short first sentence: ${metrics.longNotices.join("; ")}`);

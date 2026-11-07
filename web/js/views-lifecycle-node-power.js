@@ -249,7 +249,7 @@ const NODE_POWER = UI.reviewFlow({
     !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `Leave ${plan.stranded.length === 1 ? "1 app or VM" : `${plan.stranded.length} apps and VMs`} down`) : "",
     plan.requires_data_ack ? UI.ack("pw_data", "Go ahead despite the risk to volume copies") : "",
   ].join("") : "";
-  childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,
+  childModal(`${forced ? `Forced ${verb.toLowerCase()}` : verb} · ${node}`, UI.sectionForm("hostPower", sections,
     plan.ready ? UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute", disabled: true }) : "",
     { always: true, noticeHtml: confirm, cancelHtml: UI.cancel(plan.ready ? "Cancel" : "Close") }), true);
   },

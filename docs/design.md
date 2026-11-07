@@ -516,19 +516,26 @@ blocked states that cannot be forced, typed names and recovery guards.
 What a dialog shows before any Details is opened is its budget, and
 `scripts/audit_dialogs.mjs` fails CI when a dialog:
 
-- shows more than **300 visible words** - or **200** for a review or
+- shows more than **120 words a person reads** - or **100** for a review or
   confirmation (a name with review, start, update, reboot, shutdown, power,
-  delete, remove or confirm);
+  delete, remove or confirm). A dropdown's options, code, a table's rows and
+  what a closed disclosure holds do not count;
 - shows more than **one notice** (`UI.callout`, or an older `.note.warn` /
   `.note.bad`): combine them;
 - **says the same thing twice**: the same sentence of 40 characters or more in
   two places.
 
-Words count names and rows as well as prose, so the budgets sit just above
-today's longest dialogs: they stop a dialog growing, they do not make a long
-list wrong. When a dialog nears its budget, move explanations, identifiers and
-arithmetic into `UI.more`, or split it into sections - never raise the budget
-for one screen.
+Dialogs still over the budget are listed in the audit's `WORD_CAPS` at the
+words they show now: each can only get shorter, a rewrite lowers its number,
+and one that fits leaves the list. Never add a dialog to it.
+
+**Explanations read short on their own.** In any dialog, a paragraph or small
+print of more than about 100 characters - a lead, help under a field, a note -
+shows its first sentence and an inline **More** for the rest
+(`condenseDialogProse`). Write the first sentence to stand alone; put the why
+and the caveats after it. When a dialog nears its budget, cut what it says
+twice, move identifiers and arithmetic into `UI.more`, or split it into
+sections - never raise the budget for one screen.
 
 ### Progress, container updates and Jobs
 
