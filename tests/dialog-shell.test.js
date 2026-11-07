@@ -7,7 +7,7 @@ const between = require("./helpers/between");
 const html = fs.readFileSync("web/index.html", "utf8"), core = require("./helpers/core-source")();
 
 test("the dialog shell is a labelled modal dialog with a Close button", () => {
-  assert.match(html, /<div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="mtitle">/);
+  assert.match(html, /<div class="modalbox" role="dialog" aria-modal="true" aria-labelledby="mtitle msubject">/);
   assert.match(html, /<button type="button" class="iconbtn" id="mclose" aria-label="Close">/);
   assert.doesNotMatch(html, /<div class="iconbtn" id="mclose">/);
 });

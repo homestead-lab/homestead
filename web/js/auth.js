@@ -536,7 +536,7 @@ function apiKeyNetworksHelp() {
 window.apiKeyEdit = id => {
   const key = (STATE.data.apiKeys?.keys || []).find(k => k.id === id);
   if (!key) return;
-  modal(`Change ${esc(key.name)}`, UI.lead("Changes take effect within seconds. The key itself stays the same, so whatever uses it carries on.")
+  modal(`Change key · ${key.name}`, UI.lead("Changes take effect within seconds. The key itself stays the same, so whatever uses it carries on.")
     + UI.field("Name", `<input id="ak_name" maxlength="60" value="${esc(key.name)}">`)
     + `<div class="sec">What it may do</div>` + apiKeyForm(key)
     + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
@@ -579,7 +579,7 @@ window.apiKeyMake = async button => {
   } catch (e) { button.disabled = false; return toast(e.message, "bad"); }
   const example = `curl -H "Authorization: Bearer ${made.token}" ${location.origin}/api/v1/status`;
   window.__apiToken = made.token;
-  modal(`Key for ${made.key.name}`, UI.callout("warn", "Copy it now: it is not shown again.", "Homestead keeps only a hash of it. If it is lost, revoke it and make another.")
+  modal(`New key · ${made.key.name}`, UI.callout("warn", "Copy it now: it is not shown again.", "Homestead keeps only a hash of it. If it is lost, revoke it and make another.")
     + `<div class="f"><label>The key</label><div class="row" style="gap:8px;flex-wrap:nowrap"><input class="mono" readonly value="${esc(made.token)}" onclick="this.select()">
       <button class="btn" onclick="copyText(window.__apiToken).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">Copy</button></div></div>`
     + UI.field("Try it", `<pre class="mono small" style="white-space:pre-wrap;word-break:break-all;margin:0">${esc(example)}</pre>`)

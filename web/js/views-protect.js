@@ -938,7 +938,7 @@ window.lhRestoreStart = async backup => {
 /* Rolling a volume back to a snapshot: what uses it stops, the volume is
    reverted with the state before kept as a snapshot, and it all starts again. */
 window.lhRevert = async (vol, snap, label) => {
-  childModal(`Roll ${label} back`, '<div class="empty"><span class="spin2"></span>checking what uses it</div>');
+  childModal(`Roll back · ${label}`, '<div class="empty"><span class="spin2"></span>checking what uses it</div>');
   try {
     const p = await api(`/api/lh/snapshot/revert/plan?volume=${encodeURIComponent(vol)}&snapshot=${encodeURIComponent(snap)}`);
     const when = p.created ? localTime(new Date(p.created)) : "the snapshot";
@@ -1217,7 +1217,7 @@ window.lhRestoreInto = async (backup, storageClass = "") => {
   // Not on the list, so the review blocks on it and asks for another (refused, or on neither list).
   const offCatalogue = !p.storage_classes.includes(p.storage_class);
   const app = p.app.name || "the app", title = $("#mtitle");
-  if (title && p.app.name) title.textContent = `Restore into ${p.app.name}`;
+  if (title && p.app.name) { setModalTitle(`Restore into · ${p.app.name}`); syncDialogHead(); }
   const managed = p.managed && p.managed.by;
   $("#mbody").innerHTML = `${UI.lead(`The backup goes into a new volume and ${esc(app)} is moved onto it. If it does not come up, Homestead moves it back on its own.`)}
     ${UI.facts([["App", `${esc(p.app.namespace)}/${esc(app)}`], ["Volume", `<span class="mono small">${esc(p.claim)}</span>`],
@@ -1308,7 +1308,7 @@ window.previousKeep = async (namespace, name, keep) => {
 window.previousSwapBack = (namespace, name) => {
   const v = ((STATE.data.previousVolumes || {}).volumes || []).find(x => x.namespace === namespace && x.name === name);
   if (!v) return toast("That volume is no longer listed; refresh the page", "bad");
-  modal(`Swap ${v.app} back`, `${UI.lead(`${esc(v.app)} is stopped, pointed back at ${esc(v.name)} and started again. If it does not come up, it is moved back to ${esc(v.replaced_by)} on its own.`)}
+  modal(`Swap back · ${v.app}`, `${UI.lead(`${esc(v.app)} is stopped, pointed back at ${esc(v.name)} and started again. If it does not come up, it is moved back to ${esc(v.replaced_by)} on its own.`)}
     ${UI.facts([["App", `${esc(v.namespace)}/${esc(v.app)}`], ["Runs on now", `<span class="mono small">${esc(v.replaced_by)}</span>`],
       ["Moves to", `<span class="mono small">${esc(v.name)}</span>`]])}
     ${UI.notices([...(v.managed ? [["warn", `${v.app} is applied by ${v.managed}: its next sync puts ${v.replaced_by} back.`]] : []),

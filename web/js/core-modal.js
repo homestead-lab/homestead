@@ -51,7 +51,7 @@ function modal(t, h, wide, contextClass = "") {
   window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
   MODAL_EDITS = new Map();
-  $("#mtitle").textContent = t;
+  setModalTitle(t);
   $("#mbody").innerHTML = h;
   enhanceActions($("#mbody"));
   if (window.normaliseDialogActions) normaliseDialogActions($("#mbody"));
@@ -65,18 +65,47 @@ function modal(t, h, wide, contextClass = "") {
   if (opening || retitled) focusModal();
 }
 
-/* A dialog built by UI.dialog names what it acts on in its header
-   (design.md, Dialog shapes): the title becomes the line above, saying what
-   happens, and the object sits under it. The object is written in the body,
-   so it travels with the body through the dialog stack and any redraw; this
-   copies it up whenever the body changes. */
+/* Every dialog is drawn by the dialog engine (design.md, Dialog shapes).
+
+   Its header names what it acts on: the title becomes the line above, saying
+   what happens, and the object sits large under it. A UI.dialog subject
+   says so in the body - kind, where, state, change - and travels with the
+   body through the dialog stack and any redraw; a title written "Verb ·
+   object" ("Delete volume · media") says it otherwise. The title's text is
+   kept whole, so the stack and the back button read it as before.
+
+   Its shape - review, form, watch, confirm or info - is UI.dialog's, or read
+   from what the dialog holds, and is kept on the box (data-shape) whenever
+   its body changes. */
+function setModalTitle(t) {
+  const title = $("#mtitle"), cut = String(t).indexOf(" · ");
+  title.textContent = t;
+  if (cut < 0) return;
+  title.innerHTML = `<span class="mt-verb">${esc(String(t).slice(0, cut))}</span><span class="mt-object"> · ${esc(String(t).slice(cut + 3))}</span>`;
+}
+function dialogShape(body) {
+  const built = body.querySelector(".ui-dialog");
+  if (built) return (built.className.match(/ui-dialog-(review|form|watch|confirm|info)/) || [])[1] || "info";
+  if (body.querySelector(".ui-track, .ui-progress, [role=progressbar]")) return "watch";
+  if (body.querySelector(".ui-ack, .ui-typed")) return "review";
+  if (body.querySelector(".ui-actions-end .btn.danger")) return "confirm";
+  if (body.querySelector('input:not([type=hidden]):not([type=checkbox]):not([type=radio]), select, textarea')) return "form";
+  if (body.querySelector(".ui-actions-end .btn.pri")) return "review";
+  return "info";
+}
 function syncDialogHead() {
   const slot = $("#msubject"), box = $(".modalbox"), body = $("#mbody");
   if (!slot || !box || !body) return;
-  const head = body.querySelector(".ui-dialog-head"), html = head ? head.innerHTML : "";
+  const head = body.querySelector(".ui-dialog-head"), object = $("#mtitle")?.querySelector(".mt-object");
+  let html = head ? head.innerHTML : "";
+  if (!head && object) {
+    const [name, ...where] = object.textContent.replace(/^ · /, "").split(" · ");
+    html = `<span class="ui-head-name">${esc(name)}</span>${where.length ? `<span class="ui-head-where">${esc(where.join(" · "))}</span>` : ""}`;
+  }
   if (slot.innerHTML !== html) slot.innerHTML = html;
-  slot.hidden = !head;
-  box.classList.toggle("titled", !!head);
+  slot.hidden = !html;
+  box.classList.toggle("titled", !!html);
+  box.dataset.shape = dialogShape(body);
   modalHeadHeight();
 }
 if (typeof MutationObserver === "function" && $("#mbody")) new MutationObserver(() => syncDialogHead()).observe($("#mbody"), { childList: true, subtree: true });
@@ -237,11 +266,13 @@ function askDialog(message, { title = "", ok = "", cancel = "", danger = false, 
     layer.setAttribute("role", "dialog");
     layer.setAttribute("aria-modal", "true");
     const risky = !!danger;
-    layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
+    // The confirm shape: the question first, its detail under it, quieter.
+    const said = String(message), [question, detail] = window.UI?.splitIssue ? UI.splitIssue(esc(said)) : [esc(said), ""];
+    layer.innerHTML = `<div class="askbox ui-dialog ui-dialog-confirm">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg">${question}</p>
+      ${detail ? `<p class="askdetail">${detail}</p>` : ""}
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">${esc(cancel || "Cancel")}</button>
         <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
-    layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
     if (field) {
       field.value = input.value || "";
@@ -315,7 +346,7 @@ function closeModal(updateRoute = true) {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  toast, liftToasts, modal, syncDialogHead, MODAL_OPENER, MODAL_FOCUSABLE, focusModal, restoreFocus, MODAL_EDITS, MODAL_UNKNOWN,
+  toast, liftToasts, modal, setModalTitle, dialogShape, syncDialogHead, MODAL_OPENER, MODAL_FOCUSABLE, focusModal, restoreFocus, MODAL_EDITS, MODAL_UNKNOWN,
   fieldValue, noteModalField, modalChanged, modalHeadHeight, MODAL_STACK, modalIsOpen, pushModal, childModal,
   modalBack, paintModalBack, LAYOUT_DEFAULT, viewLayout, layoutSwitch, askDialog, dismissModal, closeModal
 };

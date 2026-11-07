@@ -68,7 +68,7 @@ test("the review names each thing that goes", async () => {
   const { ctx, elements, modals, requests } = load();
   await ctx.vmDiskRemove("lab", "guest-disk");
   assert.deepEqual(requests, [["/api/vm-disks/remove-plan", { namespace: "lab", name: "guest-disk" }]]);
-  assert.equal(modals[0], "Remove guest-disk");
+  assert.equal(modals[0], "Remove disk · guest-disk");
   for (const line of OPEN.goes) assert.ok(elements.mbody.innerHTML.includes(line), line);
 });
 

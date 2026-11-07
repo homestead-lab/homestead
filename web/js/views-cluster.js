@@ -208,7 +208,7 @@ window.componentUpgrade = async id => {
   const c = (STATE.data.components?.components || []).find(row => row.id === id);
   if (!c?.next) return;
   if (id === 'longhorn') return lhV2Upgrade(c.next);
-  modal(`Upgrade ${c.name} to ${c.next}`, `
+  modal(`Upgrade to ${c.next} · ${c.name}`, `
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
     ${componentCheckSection(c.check)}
@@ -235,7 +235,7 @@ window.componentManageOperator = id => {
   if (componentManagePending.has(id)) return toast('This installation is still being checked. Please wait.');
   const c = (STATE.data.components?.components || []).find(row => row.id === id);
   if (!c?.can_manage) return;
-  modal(`Manage ${c.name} upgrades`, `
+  modal(`Manage upgrades · ${c.name}`, `
     <p>Let Homestead upgrade this ${esc(c.name)} installation using its upstream release manifests.</p>
     <div id="cmp_manage_status" role="status" aria-live="polite"><div class="note">This enables future upgrades. It does not change the installed version, VM disks or existing settings.</div></div>
     ${UI.more('Before enabling', '<p>Use this for a Homestead installer or plain manifest installation. Keep using Helm, GitOps or another operator if it manages this component. Homestead checks for those owners and active installer files before enabling upgrades.</p>')}
@@ -271,7 +271,7 @@ window.componentManageOperatorGo = async id => {
 };
 
 window.harvesterUpgradeStart = version => {
-  modal(`Upgrade Harvester to ${version}`, `
+  modal(`Upgrade to ${version} · Harvester`, `
     <p>Harvester checks the cluster first, then downloads the release, prepares each host, upgrades its own services and then each host in turn -
       moving VMs off a host before it restarts. It takes an hour or more, and cannot be undone from here.</p>
     <div class="note">Before starting: every host Ready, no volume degraded, and a backup of anything precious. VMs that cannot live-migrate

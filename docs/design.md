@@ -404,6 +404,13 @@ Close on the left, the button named for its result.
   under it with its kind, where it is, its state and the change:
   `frigate  App · lab  1.0.0 → 1.1.0`. Give `subject` and the engine puts it
   there; the body does not repeat it.
+- **Every dialog is the engine's.** `modal()` keeps each dialog's shape on
+  the box (read from what it holds when it is not a `UI.dialog`), and a title
+  written `Verb · object` - `Delete volume · media`, `Restore into · frigate`
+  - puts its object in the header on its own. A body not built by
+  `UI.dialog` that knows more (its kind, where it is) starts with
+  `UI.head(subject)`. A dialog about no one thing - Jobs, Alerts, a new
+  share - keeps a plain title. The dialog audit fails a dialog with no shape.
 - **Steps are a track.** A job's progress or a stepped form shows a track
   across the top, then `Step 2 of 4`, the current step, its detail and, when
   it has a measure, the percentage filling its segment (`UI.track`, and

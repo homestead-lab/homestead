@@ -987,7 +987,7 @@ window.viewVmImport = viewVmImport;
 /* Removing an import disk: a review naming what goes, then the job that clears it. A
    review that is out of date, or a reply that is lost, is never sent again from here. */
 const VM_DISK_REMOVE = UI.reviewFlow({
-  loading: frozen => modal(`Remove ${frozen.name}`, '<div id="vmDiskRemoveLoading" class="empty"><span class="spin2"></span>Checking what uses this disk…</div>', true),
+  loading: frozen => modal(`Remove disk · ${frozen.name}`, '<div id="vmDiskRemoveLoading" class="empty"><span class="spin2"></span>Checking what uses this disk…</div>', true),
   live: () => !!$("#vmDiskRemoveLoading"),
   preview: frozen => api("/api/vm-disks/remove-plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(frozen) }),
   render: review => {
@@ -1099,8 +1099,8 @@ window.uvmImport = async (source, id) => {
   // Neither the VM's options nor a storage class are guessed (#620).
   const unread = opts.unread || (!opts.storage_classes?.length && STATE.data.importStorageClasses === null
     ? "the storage classes could not be read; refresh this page and try again" : "");
-  if (unread) return modal(`Import ${name}`, UI.callout("bad", "Could not read what this import needs", esc(unread)) + UI.actions(UI.cancel("Close")));
-  if (opts.cdi === false) return modal(`Import ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
+  if (unread) return modal(`Import VM · ${name}`, UI.callout("bad", "Could not read what this import needs", esc(unread)) + UI.actions(UI.cancel("Close")));
+  if (opts.cdi === false) return modal(`Import VM · ${name}`, UI.lead("VM disks arrive through CDI, KubeVirt's disk importer, and this cluster does not have it. Install CDI from kubevirt.io, then import again.") + UI.actions(UI.cancel("Close")));
   window.__uvm = { source, vm };
   const namespaces = STATE.data.importNamespaces || [defaultNamespace()];
   const classes = opts.storage_classes?.length ? opts.storage_classes : (STATE.data.importStorageClasses || ["longhorn-r2"]);
@@ -1128,7 +1128,7 @@ window.uvmImport = async (source, id) => {
     ${UI.field("Network card", `<select id="uvm_nic" onchange="uvmPicture()">${["virtio", "e1000e", "e1000", "rtl8139"].map(m => `<option ${m === vm.nic.nic_model ? "selected" : ""}>${m}</option>`).join("")}</select>`,
       { tipHtml: tip(`As on ${kind}. VirtIO needs its driver in the guest; Windows has it if it used VirtIO on ${kind}.`) })}`;
   const behind = [...vm.dropped.map(d => `<p><b>${esc(d.what)}</b> ${esc(d.detail)}: ${esc(d.reason)}.</p>`), ...vm.notes.map(n => `<p>${esc(n)}.</p>`)];
-  modal(`Import ${name}`, UI.lead(`From ${esc(source)}. The VM here is made stopped once its disks have arrived; ${esc(name)} on ${kind} is left as it is.`)
+  modal(`Import VM · ${name}`, UI.lead(`From ${esc(source)}. The VM here is made stopped once its disks have arrived; ${esc(name)} on ${kind} is left as it is.`)
     + '<div id="uvm_picture"></div><div id="uvm_room"></div>'
     + stepper("uvm_steps", [{ title: "Settings", html: settings }, { title: "Disks", html: disks }, { title: "Network", html: network }],
       '<button class="btn pri" data-need="admin" id="uvm_go" onclick="uvmStart()">Import</button>')

@@ -84,7 +84,7 @@ window.diagnosticReview = async button => {
     const review = await api("/api/container/command/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
     if (!$("#containerDiagnosticBody") || containerDiagnostics !== data) return;
     containerDiagnostics.review = review;
-    modal("Run container command", UI.lead("This command can change or delete data with the container’s permissions.")
+    modal("Run container command", UI.head({ kind: "Container", name: settings.container, where: `${settings.ns}/${settings.name} · ${settings.pod}` }) + UI.lead("This command can change or delete data with the container’s permissions.")
       + UI.facts([["App", esc(`${settings.ns}/${settings.name}`)], ["Pod", esc(settings.pod)], ["Container", esc(settings.container)], ["Timeout", `${settings.timeout_seconds} seconds`]])
       + `<pre class="mono small agent-raw">${esc(JSON.stringify(settings.argv, null, 2))}</pre>`
       + UI.more("Execution limits", `<p class="small">${esc(review.summary.limit)} Output may contain secrets.</p>`, false)

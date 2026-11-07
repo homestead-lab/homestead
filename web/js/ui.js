@@ -24,6 +24,7 @@
      UI.masterDetail grouped list and a selected detail, stacked on phones
      UI.reviewFlow  review, then apply: the state behind a review dialog (no HTML)
      UI.dialog      a whole dialog from one spec, in one of five shapes (below)
+     UI.head        what a dialog acts on, for its header, in a body not built by UI.dialog
 
    and for pages:
 
@@ -239,9 +240,12 @@ const UI = (() => {
     const measured = !finished && value !== null && value !== undefined;
     const stateOf = (step, i) => step.state || (i < current ? "done" : i === current ? "current" : "todo");
     const failed = list.some((step, i) => stateOf(step, i) === "failed");
-    return `<div class="ui-track"><ol class="ui-track-bar" aria-label="${text(unit)}s">${list.map((step, i) => {
+    // Past eight, the labels would not fit: each segment names itself on hover.
+    const dense = list.length > 8;
+    return `<div class="ui-track${dense ? " dense" : ""}"><ol class="ui-track-bar" aria-label="${text(unit)}s">${list.map((step, i) => {
       const state = stateOf(step, i);
-      const tip = step.detailHtml && i !== current ? ` title="${text(String(step.detailHtml).replace(/<[^>]*>/g, ""))}"` : "";
+      const said = [step.title, i !== current && step.detailHtml ? String(step.detailHtml).replace(/<[^>]*>/g, "") : ""].filter(Boolean).join(": ");
+      const tip = (dense || (step.detailHtml && i !== current)) && said ? ` title="${text(said)}"` : "";
       return `<li class="${state}"${i === current ? ' aria-current="step"' : ""}${tip}><i${state === "current" && measured ? ` style="--p:${Math.max(0, Math.min(100, value))}%"` : ""}></i>`
         + `<span>${state === "done" ? svg("check") : state === "failed" ? svg("x") : ""}${text(step.title)}</span></li>`;
     }).join("")}</ol><div class="ui-track-now"${measured || (finished && !failed)
@@ -739,7 +743,7 @@ const UI = (() => {
   const openDialog = (title, spec, { wide = false, context = "", child = false } = {}) =>
     (child && typeof childModal === "function" ? childModal : modal)(title, dialog(spec), wide, context);
 
-  return { dialog, openDialog, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
+  return { dialog, openDialog, head: subjectHtml, track, lead, callout, notices, issue: issueHtml, splitIssue, SHORT_CHARS, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, typedConfirm, chip, button, actions, cancel, error, empty, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,

@@ -687,10 +687,10 @@ const EDIT_REVIEW = UI.reviewFlow({
     const concerns = capacityNotes(review.capacity).concerns;
     const copying = !!review.capacity.copy_helper;
     if (copying) {
-      childModal("Move container data", gitopsNote(review.managed) + storageCopyReview(config,review.capacity), true, "operation-review");
+      childModal("Move container data", UI.head({ kind: "App", name: config.name, where: config.namespace || config.ns || "" }) + gitopsNote(review.managed) + storageCopyReview(config,review.capacity), true, "operation-review");
       return;
     }
-    childModal(rename ? "Rename app" : "Review app changes", `
+    childModal(rename ? "Rename app" : "Review app changes", `${UI.head({ kind: "App", name: config.name, where: config.namespace || config.ns || "" })}
       ${gitopsNote(review.managed, { rename: !!rename, yaml: review.yaml })}
       ${!rename && config.starts_after ? `<p>${esc(startsAfterReviewLine(config.name, config.starts_after))}</p>` : ""}
       ${!rename && startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty) ? `<p>${esc(startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty))}</p>` : ""}

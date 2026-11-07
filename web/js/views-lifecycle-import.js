@@ -885,7 +885,7 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
   const shared = ready.shared_vip || "";
   // Its shared address first: the store answers on its own port there, beside
   // the apps that share it, so no address of its own is needed.
-  childModal(`Backup storage on ${name}`, `<div class="ui-stack">
+  childModal(`Backup storage · ${name}`, `<div class="ui-stack">
     ${UI.lead(addressOnly
       ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN and this cluster reads the backups from there.`
       : `Puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points its Longhorn backups at it. A move backs each volume up there, then restores it here.`)}
@@ -947,7 +947,7 @@ window.clusterBrowse = async name => {
 window.clusterInventory = report => {
   const rows = [...(report.workloads || []), ...(report.vms || [])];
   const theirs = report.version || "";
-  modal(`Apps on ${report.cluster}`, `
+  modal(`Apps · ${report.cluster}`, `
   <div class="dim xs" style="margin-bottom:10px">${esc(report.cluster)} runs Homestead
     ${theirs ? `<b class="mono">v${esc(theirs)}</b>` : "an older release that does not say which"};
     this one runs <b class="mono">v${esc(HOMESTEAD_VERSION)}</b>.</div>
@@ -1021,7 +1021,7 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   MOVE_SOURCE_NAMESPACE = sourceNamespace;
   MOVE_STOP_SOURCE = false;
   const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
-  childModal(`${verb} ${name} from ${cluster}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, `
+  childModal(`${verb} from ${cluster} · ${name}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, `
   <p class="muted small">${kind === "volume"
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
       and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
@@ -1340,7 +1340,7 @@ window.moveBack = async (id, name, cluster, status, stopped = true, transferMode
   moveAct("abandon", id);
 };
 
-window.moveFinish = (id, name, cluster, kind) => modal(`Remove ${name} from ${cluster}`, kind === "volume" ? `
+window.moveFinish = (id, name, cluster, kind) => modal(`Remove from ${cluster} · ${name}`, kind === "volume" ? `
   <p>${esc(name)} is here now. Removing the original from ${esc(cluster)} deletes that copy and makes the move
     permanent: after this it cannot be put back.</p>
   <div class="note">Its backup stays in the backup storage.</div>` : `

@@ -419,7 +419,7 @@ window.selfAddressGo = async () => {
 
 /* A VIP's new address, and everything on it moved with it. */
 window.vipChange = ip => {
-  modal(`Change ${ip}`, `<div class="ui-stack">
+  modal(`Change address · ${ip}`, `<div class="ui-stack">
     ${UI.lead("A new address for this VIP. Everything on it moves with it, and open connections drop for a moment.")}
     ${window.Diagram ? Diagram.vip(ip, vipRoutes(ip), { caption: "What moves with it" }) : ""}
     <div class="f"><label for="vc_new">New address</label><input id="vc_new" class="mono" placeholder="e.g. 192.0.2.210" autocomplete="off" data-ipam oninput="vipChangeReset()"></div>

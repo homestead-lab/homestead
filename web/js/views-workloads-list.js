@@ -464,7 +464,7 @@ window.wlScale = async (ns, name, n) => {
       if (plan.requires_confirmation || plan.blocked || waits.length || plan.waits_for_error) {
         const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
         const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null, setting = row?.start_setting;
-        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
+        modal(`Start · ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
           extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)) })
           + UI.actions(plan.blocked ? UI.cancel("Close")
             : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)`, { kind: "pri" })));

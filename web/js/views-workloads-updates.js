@@ -418,8 +418,15 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       where: `${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}`, status },
     lead: `${done} of ${items.length} done. Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.`,
     issues: reconnecting ? [["warn", { short: "Some updates could not be checked", more: "Showing last-known progress. Reconnecting automatically." }]] : [],
-    steps: { list, current: at < 0 ? items.length : at, unit: "App" }, progress: { value: live ? rolloutShare(live) : null },
-    body: `${(() => { const rest = pending.filter(item => item !== running); return rest.length ? `<div class="batch-rollout-list">${rest.map(row).join("")}</div>` : ""; })()}
+    steps: { list, current: at < 0 ? items.length : at, unit: "App" }, progress: { value: st ? st.value : null },
+    body: `${(() => {
+      // A row for each app that needs looking at; the ones simply waiting are one line.
+      const rest = pending.filter(item => item !== running);
+      const waiting = rest.filter(item => !failureMap[rolloutKey(item)] && ["queued", "starting", undefined].includes(states[rolloutKey(item)]?.phase));
+      const shown = rest.filter(item => !waiting.includes(item));
+      return `${shown.length ? `<div class="batch-rollout-list">${shown.map(row).join("")}</div>` : ""}`
+        + `${waiting.length ? `<p class="ui-help batch-next"><b>Up next</b> ${waiting.map(item => esc(item.name)).join(", ")}</p>` : ""}`;
+    })()}
       ${running && live?.pods?.length ? UI.more(`Pods of ${running.name}`, UI.insightList(live.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
         label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" }))), false, "Pods") : ""}
       ${done ? UI.more(`Done · ${done}`, `<div class="batch-rollout-list">${[...ready, ...current].map(row).join("")}</div>`, false, "Updated") : ""}
@@ -503,8 +510,6 @@ function rolloutStages(s) {
   const value = current === 1 && pulling && pull.total_bytes ? pull.percent || 0 : null;
   return { list, current, value, ready, failed };
 }
-/* How far one app is through its update, 0-100, for the queue's track. */
-const rolloutShare = s => { if (!s) return 0; const st = rolloutStages(s); return st.ready ? 100 : (st.current + (st.value ?? 0) / 100) / 3 * 100; };
 function rolloutProgress(s) {
   const st = rolloutStages(s);
   return UI.dialog({ shape: "watch",
@@ -568,5 +573,5 @@ if (typeof module === "object" && module.exports) module.exports = {
   shortImage, imageVersion, imageChangeWords, imagePlacementBlocker, UNCHANGED_BY_UPDATE, updateConcerns,
   groupedConcerns, clusterHeaders, rolloutKey, rolloutBody, restartsHomestead, rolloutChanged,
   IMAGE_REVIEW_OPEN, IMAGE_REVIEW, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, refreshAfterRollout,
-  asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutStages, rolloutShare, rolloutProgress, rolloutMarkup
+  asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutStages, rolloutProgress, rolloutMarkup
 };

@@ -414,7 +414,7 @@ const DEPLOY = UI.reviewFlow({
   },
   render: (review, c) => {
     const joining = c.target_mode === "existing", plan = review.preview;
-    modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
+    modal(joining ? "Review shared-pod change" : "Review deployment", `${UI.head(joining ? { kind: "App", name: c.target_workload, where: c.namespace } : { kind: "New app", name: c.workload_name, where: c.namespace })}<div class="update-review">
       <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
         <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
         ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}

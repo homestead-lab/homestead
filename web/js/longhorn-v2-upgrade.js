@@ -19,7 +19,7 @@ const LH_V2_UPGRADE = UI.reviewFlow({
     LH_V2_OPEN = input;
     clearTimeout(LH_V2_UPGRADE_TIMER);
     LH_V2_SETTINGS.back();
-    modal(target ? `Upgrade Longhorn to ${target}` : 'Longhorn V2 live upgrade', '<div id="lhV2UpgradeBody">Checking volumes and hosts…</div>', true);
+    modal(target ? `Upgrade to ${target} · Longhorn` : 'Live upgrade · Longhorn V2', '<div id="lhV2UpgradeBody">Checking volumes and hosts…</div>', true);
   },
   live: input => LH_V2_OPEN === input && !!$('#lhV2UpgradeBody'),
   preview: async input => {

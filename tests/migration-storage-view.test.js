@@ -93,7 +93,7 @@ test("replacement vBIOS bytes are reviewed and do not enable Start until checked
 test("VM copy review and start retain copy mode and storage selection", async () => {
   const t = setup();
   t.ctx.moveReview("source", "vm", "desktop", "copy", "guests");
-  assert.match(t.ctx.modalTitle, /^Copy desktop/);
+  assert.match(t.ctx.modalTitle, /^Copy from source · desktop/);
   assert.match(t.ctx.modalHtml, /Creates a stopped copy here/);
   assert.match(t.ctx.modalHtml, /Start copy/);
   assert.equal(t.calls[0].body.transfer_mode, "copy");

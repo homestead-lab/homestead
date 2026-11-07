@@ -2,7 +2,7 @@
 /* Homestead stopping itself takes this page with it, and nothing here can
    start it again - so it is said plainly, with restart offered instead. */
 window.wlStopSelf = (ns, name) => {
-  modal("Stop Homestead?", `
+  modal("Stop · Homestead", `
     ${UI.callout("bad", "This takes Homestead down, and this page with it", `<p>Nothing here can start it again. It stays down until someone runs
       <code>kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</code> on the cluster.</p>
       <p>Your apps keep running. Jobs in the tray, alerts and moves pause until it is back.</p>`)}
