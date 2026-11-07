@@ -15,7 +15,7 @@ function setup(answer) {
     api: async (path, options) => { sent.push({path, options}); return answer(path, options); }};
   ctx.window = ctx;
   vm.createContext(ctx);
-  const core = fs.readFileSync("web/js/core.js", "utf8");
+  const core = require("./helpers/core-source")();
   vm.runInContext(between(core, "const safeHref", "/* Put text") + "\nthis.safeHref = safeHref;", ctx);
   vm.runInContext(fs.readFileSync("web/js/update-notes.js", "utf8"), ctx);
   return {ctx, sent};

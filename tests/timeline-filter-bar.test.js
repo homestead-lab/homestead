@@ -5,7 +5,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const entry = (kind, extra = {}) => ({ at: 1, kind, tone: "info", text: "t", app: "", host: "", href: "", ...extra });
 const DATA = { since: 0, now: 1, more: 0, unread: [], counts: { restart: 1, host: 1, change: 1 },
   entries: [entry("restart", { app: "apps/game" }), entry("host", { host: "node-2" }), entry("change", { app: "apps/wiki" })] };

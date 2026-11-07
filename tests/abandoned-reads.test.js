@@ -13,7 +13,7 @@ const between = require("./helpers/between");
 // The collector, by node --expose-gc or, failing that, the flag set now.
 const gc = globalThis.gc || (v8.setFlagsFromString("--expose-gc"), vm.runInNewContext("typeof gc === 'function' ? gc : null"));
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const reads = between(core, "window.NAV_TOKEN = 0;", "/* A read the caller cannot do without.");
 
 function page() {

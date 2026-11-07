@@ -6,7 +6,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const ctx = { Date, Intl, esc: x => String(x ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;") };
 vm.createContext(ctx);
 vm.runInContext(between(core, "const fmtUp", "const upChip"), ctx);
@@ -53,16 +53,16 @@ test("the zone line names the reader's own zone", () => {
 });
 
 // Log lines keep their seconds, and a forecast's day key is a calendar day,
-// not a moment; everything else formats a time through core.js.
+// not a moment; everything else formats a time through core-format.js.
 const ALLOWED = new Set(["logsearch.js", "operations.js"]);
 test("no view formats a time itself", () => {
   const left = [];
-  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js") && !["core.js", "demo.js"].includes(f) && !ALLOWED.has(f))) {
+  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js") && !["core-format.js", "demo.js"].includes(f) && !ALLOWED.has(f))) {
     fs.readFileSync(`web/js/${file}`, "utf8").split("\n").forEach((line, i) => {
       if (/\.toLocale(Date|Time)?String\(/.test(line) && !/forecastDate/.test(line)) left.push(`${file}:${i + 1}`);
     });
   }
-  assert.deepEqual(left, [], "use fmtWhen, fmtAt, fmtNext, fmtDay or fmtClock from core.js");
+  assert.deepEqual(left, [], "use fmtWhen, fmtAt, fmtNext, fmtDay or fmtClock from core-format.js");
 });
 
 test("the uptime card's durations drop a zero second part too", () => {

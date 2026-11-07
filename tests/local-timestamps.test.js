@@ -5,7 +5,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 
 test("a Helm release's history shows when each revision was deployed in local time", async () => {
   const body = { innerHTML: "" };
@@ -27,10 +27,10 @@ test("a Helm release's history shows when each revision was deployed in local ti
 
 test("no view cuts a timestamp down with replace(\"T\", \" \")", () => {
   const left = [];
-  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "core.js")) {
+  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "core-format.js")) {
     fs.readFileSync(`web/js/${file}`, "utf8").split("\n").forEach((line, i) => {
       if (/\.replace\("T", " "\)/.test(line)) left.push(`${file}:${i + 1}`);
     });
   }
-  assert.deepEqual(left, [], "use fmtWhen() from core.js");
+  assert.deepEqual(left, [], "use fmtWhen() from core-format.js");
 });

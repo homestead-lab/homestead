@@ -253,7 +253,7 @@
     return out;
   }
 
-  // Times are written by core.js (#503): fmtClock, fmtNext, fmtWeekday.
+  // Times are written by core-format.js (#503): fmtClock, fmtNext, fmtWeekday.
   function dayTitle(date, index) {
     const label = fmtWeekday(date);
     return index === 0 ? `Today, ${label}` : index === 1 ? `Tomorrow, ${label}` : label;

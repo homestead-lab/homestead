@@ -30,17 +30,21 @@ function loadCore(localStorage) {
     requestAnimationFrame: () => 0, addEventListener() {}, URL, URLSearchParams, Map, Set, Promise };
   ctx.window = ctx; ctx.self = ctx;
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync("web/js/core.js", "utf8"), ctx);
+  // Each part as its own script in one context, in index.html's order, as the
+  // browser runs them (#911): a name used before its part loads fails here.
+  const CORE = require("./helpers/core-source");
+  for (const file of CORE.files()) vm.runInContext(CORE.text(file), ctx, { filename: file });
   return ctx;
 }
 
 for (const [label, storage] of [["blocked storage", blocked], ["damaged saved settings", () => holding("{not json")]]) {
-  test(`core.js loads to the end with ${label}, using the default settings`, () => {
+  test(`core.js and its parts load to the end with ${label}, using the default settings`, () => {
     const ctx = loadCore(storage());
     assert.deepEqual({ ...vm.runInContext("SET", ctx) },
       { theme: "dark", bg: "soft", blur: 26, motion: "on", refresh: 15 });
-    // Declared near the end of core.js: the whole file ran.
+    // Declared in core-paint.js and the last part: every part ran to its end.
     assert.equal(typeof vm.runInContext("PAGE_SNAPSHOT", ctx), "object");
+    assert.equal(typeof vm.runInContext("logoReady", ctx), "function");
   });
 }
 

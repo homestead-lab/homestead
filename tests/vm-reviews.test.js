@@ -6,7 +6,7 @@
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 
 function context() {
   const c = { document: { addEventListener() {}, querySelector() { return null; }, getElementById(id) { return this.querySelector("#" + id); } }, FLEET: { view: {} }, icon: () => "",

@@ -13,7 +13,7 @@ function setup(images = [], harvester = false) {
     api: async () => ({images, harvester}), vmLanNetworks: () => [{name: "default/lan"}],
     vmAddressFields: () => "", vmReadAddress: () => ({prefix: 24})};
   ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
-  vm.runInContext(require("./helpers/between")(fs.readFileSync("web/js/core.js", "utf8"), "function mustRead(", "/* ---------------- configurable hardware"), ctx);
+  vm.runInContext(require("./helpers/between")(require("./helpers/core-source")(), "function mustRead(", "/* ---------------- configurable hardware"), ctx);
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   ctx.k3sCountChanged = () => {};
   return {ctx, fields};

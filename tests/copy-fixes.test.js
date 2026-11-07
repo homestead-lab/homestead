@@ -6,7 +6,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const ui = fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js")
   .map(f => [`web/js/${f}`, fs.readFileSync(`web/js/${f}`, "utf8")]);
 const where = (pattern, files = ui) => files.flatMap(([file, source]) => source.split("\n")

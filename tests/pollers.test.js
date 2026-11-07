@@ -203,6 +203,6 @@ test("the VM console no longer polls for its dialog closing; closing the dialog 
   assert.deepEqual(calls, ["rfb", "socket"]);
   ctx.vmConsoleDismiss();
   assert.deepEqual(calls, ["rfb", "socket"], "a second close has nothing to end");
-  const core = src("core.js");
+  const core = require("./helpers/core-source")();
   assert.match(between(core, "function closeModal(", "\n}\n"), /vmConsoleDismiss/);
 });

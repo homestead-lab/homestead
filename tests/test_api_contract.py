@@ -48,7 +48,7 @@ Wrapper = namedtuple("Wrapper", "path method template", defaults=("{}",))
 GLOBAL_WRAPPERS = {"api": Wrapper(0, 1), "mustRead": Wrapper(0, 2)}
 WRAPPERS = {
     "app.js": {"cached": Wrapper(1, "GET")},
-    "core.js": {"post": Wrapper(0, "POST")},
+    "core-privileges.js": {"post": Wrapper(0, "POST")},
     "filemanager.js": {"fmPost": Wrapper(0, "POST"), "fmGet": Wrapper(0, "GET")},
     "pwa.js": {"pwaPost": Wrapper(0, "POST")},
     "troubleshooting.js": {"post": Wrapper(0, "POST", "/api/diagnostics/{}")},

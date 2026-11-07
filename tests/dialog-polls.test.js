@@ -311,6 +311,6 @@ test("the ratchet catches each shape of a reading interval", () => {
 });
 
 test("closing a dialog stops its polls", () => {
-  const core = fs.readFileSync("web/js/core.js", "utf8");
+  const core = require("./helpers/core-source")();
   assert.match(between(core, "function closeModal(", "\n}\n"), /UI\??\.stopPolls/);
 });

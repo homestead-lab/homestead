@@ -16,7 +16,7 @@ function setup(answers = {}) {
   vm.createContext(ctx);
   require("./helpers/load-ui")(ctx);
   // core.js writes every time (#503).
-  vm.runInContext(between(fs.readFileSync("web/js/core.js", "utf8"), "const asDate", "/* Said once on a page"), ctx);
+  vm.runInContext(between(require("./helpers/core-source")(), "const asDate", "/* Said once on a page"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/schedule-week.js", "utf8"), ctx);
   return { W: ctx.ScheduleWeek, ctx, out };

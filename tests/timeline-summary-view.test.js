@@ -4,7 +4,7 @@ const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
 const between = require("./helpers/between");
 
-const core = fs.readFileSync("web/js/core.js", "utf8");
+const core = require("./helpers/core-source")();
 const NOW = 1_790_000_000;
 
 function setup(answer, { fail = "", search = "", fields = {} } = {}) {

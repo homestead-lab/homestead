@@ -602,6 +602,6 @@ window.fmClose = async () => {
   await closing;
 };
 // Every way out of the dialog - the ×, Escape, another page - closes it too
-// (core.js calls this from modal, modalBack and closeModal).
+// (core-modal.js calls this from modal, modalBack and closeModal).
 window.fileManagerDismiss = (keepalive = false) => fmRelease(keepalive);
 window.addEventListener?.("pagehide", () => { if (FM.open) fmRelease(true); });

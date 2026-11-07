@@ -19,7 +19,7 @@ function vmConsoleStop() {
   if (VMC.socket) { try { VMC.socket.close(); } catch (e) { /* already gone */ } VMC.socket = null; }
   if (window.__consoleSocket && window.__consoleSocket === VMC.serial) window.__consoleSocket = null;
 }
-// core.js closeModal() calls this when any dialog closes: the console's session ends with it.
+// core-modal.js closeModal() calls this when any dialog closes: the console's session ends with it.
 window.vmConsoleDismiss = () => { if (VMC.rfb || VMC.socket) vmConsoleStop(); };
 
 /* A VM with a GPU passed through and no virtual display adapter draws on
