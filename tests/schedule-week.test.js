@@ -10,7 +10,7 @@ function setup(answers = {}) {
   const out = {};
   const ctx = { console, Date, Intl, Map, Set, Promise, JSON, Math, Number, String, Array, Object, document: { addEventListener() {} },
     STATE: { platform: {} }, esc: x => String(x ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
-    paint: html => { out.html = html; }, go: () => {}, yourZone: () => "Europe/London", jsArg: s => JSON.stringify(String(s ?? "")),
+    paint: html => { out.html = html; }, go: () => {}, yourZone: () => "Europe/London", jsArg: s => JSON.stringify(String(s ?? "")), jsq: s => JSON.stringify(String(s ?? "")).replaceAll('"', "&quot;"),
     api: async path => { const a = answers[path]; if (a instanceof Error) throw a; return a; } };
   ctx.window = ctx;
   vm.createContext(ctx);
@@ -19,6 +19,8 @@ function setup(answers = {}) {
   vm.runInContext(between(require("./helpers/core-source")(), "const asDate", "/* Said once on a page"), ctx);
   vm.runInContext(fs.readFileSync("web/js/cron.js", "utf8"), ctx);
   vm.runInContext(fs.readFileSync("web/js/schedule-week.js", "utf8"), ctx);
+  // The shared filter bar (#919), which loads after this page's script.
+  vm.runInContext(fs.readFileSync("web/js/timeline.js", "utf8"), ctx);
   return { W: ctx.ScheduleWeek, ctx, out };
 }
 
@@ -126,7 +128,8 @@ test("the maintenance window shows only when something uses it: an app set to up
   assert.match(balance[0].what, /Balance hosts/);
   assert.doesNotMatch(balance[0].what, /app/);
   const unread = W.collect({ settings: settings("approval_required", "off"), workloads: { failed: "x" } }, FROM);
-  same(unread.unread, ["the apps list"]);
+  same(unread.unread, [], "the settings were read: the window, not the apps list, is what may be missing");
+  assert.ok(unread.effects["the apps list"].includes("the maintenance window may be missing: whether an app updates itself in it is not known"));
   assert.equal(W.collect({ settings: settings("notify_only", "off"), workloads: { failed: "x" } }, FROM).unread.length, 0,
     "under notify only no app updates itself, so the apps need not be read");
 });
@@ -171,15 +174,14 @@ test("each source that could not be read is named; one that does not apply is no
   same(W.collect({ lh: null }, FROM).unread, []);
 });
 
-test("the list is grouped by local day, from today to the day the week ends on", () => {
+test("Today is the rest of the local day; 7 days is everything (#919: the table replaced the days)", () => {
   const { W } = setup();
   const week = W.collect({ lh: LH }, FROM);
-  const days = W.group(week.items, FROM);
-  assert.equal(days.length, 8, "Friday afternoon to the next Friday morning");
-  assert.equal(days[0].date.toDateString(), new Date("2026-10-23T12:00:00Z").toDateString());
-  // 02:00 UTC on Saturday is 03:00 in London (summer time) - still Saturday.
-  same(days[1].items.map(i => i.name), ["nightly-backup", "weekly-trim"]);
-  assert.equal(days.reduce((n, d) => n + d.items.length, 0), week.items.length);
+  same(W.inRange(week.items, FROM, "today"), [], "Friday afternoon: nothing more today");
+  assert.equal(W.inRange(week.items, FROM, "week").length, week.items.length);
+  // 02:00 UTC on Saturday is 03:00 in London (summer time): Saturday's, not Friday's.
+  const saturday = new Date("2026-10-23T23:30:00Z");
+  same(W.inRange(W.collect({ lh: LH }, saturday).items, saturday, "today").map(i => i.name), ["nightly-backup", "weekly-trim"]);
 });
 
 test("the page names what it could not read, leads with the clash and collapses the hourly job", async () => {
@@ -190,7 +192,7 @@ test("the page names what it could not read, leads with the clash and collapses 
   assert.match(out.html, /1 clash this week/);
   assert.match(out.html, /<strong>nightly-backup<\/strong> \(backup\) and <strong>weekly-trim<\/strong>/, "inline: a callout shows <b> as its title block");
   assert.match(out.html, /nightly-backup/);
-  assert.match(out.html, /Runs all day/);
+  assert.match(out.html, /All day<\/span>/);
   assert.match(out.html, /hourly-snapshot/);
   assert.doesNotMatch(out.html, /class="(pill|tag)\b/, "chips come from UI.chip");
 });
@@ -232,14 +234,13 @@ test("the page is reachable: its address, its view, its script, the Schedules bu
   assert.match(fs.readFileSync("scripts/audit_pages.mjs", "utf8"), /\["schedules-week", "schedule-week"\]/);
 });
 
-test("each day is headed by its name and date, today and tomorrow said as such, times in core.js's words", async () => {
+test("each run's When is its weekday, date and time in core.js's words, with its UTC time on hover", async () => {
   const { ctx, out } = setup({ "/api/lh/overview": LH, "/api/schedules": [], "/api/power-schedules": { items: [] },
     "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /<h4>Today, [^<]*day[^<]*\d[^<]*<\/h4>/);
-  assert.match(out.html, /<h4>Tomorrow, [^<]*day[^<]*\d[^<]*<\/h4>/);
-  assert.match(out.html, /class="week-time mono">\d\d:\d\d/);
-  assert.match(vm.runInContext(`fmtWeekday(new Date("2026-10-24T12:00:00Z"))`, ctx), /Saturday/);
+  const when = out.html.match(/<td data-label="When" class="nowrap" data-sort="(\d+)">(<span data-tip="[^"]+ UTC">[^<]+<\/span>)<\/td>/);
+  assert.ok(when, "a dated run");
+  assert.equal(when[2], vm.runInContext(`fmtNext(${when[1]})`, ctx));
 });
 
 test("the demo has a deliberate clash and a maintenance window to show", () => {
@@ -281,7 +282,7 @@ test("without the volumes' copies any backup in the window counts; a window that
   const { W } = setup();
   const lh = { jobs: [backupJob("50 2 * * 0", twentyMinutes)], clashes: [] };
   same(W.collect({ lh, os: osWindow() }, FROM).overlaps.map(o => o.reason), ["a host may restart during backup weekly-backup"]);
-  same(W.collect({ lh, os: osWindow(), copies: { failed: "x" } }, FROM).unread, ["volume copies"]);
+  same(W.collect({ lh, os: osWindow(), copies: { failed: "x" } }, FROM).unnamed, ["volume copies"], "the runs are all there: only the hosts they touch are not named");
   const never = osWindow(); never.settings.reboot = "never";
   same(W.collect({ lh, os: never }, FROM).overlaps, []);
   same(W.collect({ lh: { jobs: [backupJob("0 1 * * 0", twentyMinutes)], clashes: [] }, os: osWindow() }, FROM).overlaps, [], "done by 01:20, before 03:00");
@@ -304,7 +305,7 @@ test("an app's power stop during a backup of its volume is close; a backup's run
   same(W.collect({ lh, workloads, power: power("02:40") }, FROM).overlaps, [], "the backup's half hour is over");
   const timed = { ...lh, jobs: [{ ...lh.jobs[0], last_run: "2026-10-22T02:00:00Z", last_success: "2026-10-22T02:50:00Z" }] };
   assert.equal(W.collect({ lh: timed, workloads, power: power("02:40") }, FROM).overlaps.length, 7, "its last run took 50 minutes");
-  same(W.collect({ lh, workloads: { failed: "x" }, power: power("02:10") }, FROM).unread, ["the apps list"]);
+  same(W.collect({ lh, workloads: { failed: "x" }, power: power("02:10") }, FROM).unnamed, ["the apps list"], "the runs are all there: only the apps they touch are not named");
 });
 
 test("the page lists these with the close ones, and the Dashboard still counts only clashes", async () => {

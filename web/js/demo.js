@@ -1336,6 +1336,16 @@
         managed: false, managed_by: "", owner: "", runnable: false, editable: false,
         result: "failed", result_at: "2026-09-22T01:34:51Z", result_reason: "BackoffLimitExceeded",
         last_success: "2026-09-19T01:31:07Z", missed: false, next_run: "" },
+      // Due at 04:00 and never started (#919): its State says "did not run".
+      { name: "frigate-export", ns: "lab", schedule: "0 4 * * *", time_zone: "Etc/UTC", image: "docker.io/library/alpine:3.20",
+        command: "tar czf /config/export.tgz /config/db", last: "2026-09-21T04:00:02Z", suspend: false, active: 0,
+        managed: true, managed_by: "", generation: 2, owner: "homestead", runnable: true, editable: true,
+        result: "ok", result_at: "2026-09-21T04:00:40Z", result_reason: "", last_success: "2026-09-21T04:00:40Z",
+        missed: true, next_run: "", claims: ["frigate-config"] },
+      // The CronJob Longhorn keeps for its nightly backup: System on Schedules, and This week lists it once, as the backup.
+      { name: "nightly-backup", ns: "longhorn-system", schedule: "0 2 * * *", last: "2026-09-22T02:00:00Z", created: "2026-03-01T10:00:00Z",
+        suspend: false, active: 0, managed: false, managed_by: "", owner: "longhorn", runnable: false, editable: false,
+        result: "ok", result_at: "2026-09-22T02:06:10Z", result_reason: "", last_success: "2026-09-22T02:06:10Z", missed: false, next_run: "" },
       { name: "export-config", ns: "automation", schedule: "45 3 * * *", time_zone: "Europe/London",
         last: "2026-09-22T02:45:00Z", created: "2026-04-11T09:00:00Z", suspend: false, active: 0,
         managed: false, managed_by: "", owner: "flux", runnable: false, editable: false,

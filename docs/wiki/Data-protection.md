@@ -164,8 +164,8 @@ as a job in the job tray.
   every attached volume now) and the switch that turns the weekly trim off.
 - **Change time** there moves the trim to another weekday and hour (UTC), for
   a cluster whose backups run on Saturday mornings. A time that has already
-  passed this week takes effect next week. **This week** lists the trim as
-  Homestead's, and a backup starting with it on a volume is a clash.
+  passed this week takes effect next week. **This week** lists the trim under
+  **System**, and a backup starting with it on a volume is a clash.
 - A single volume's snapshot panel has **Trim now**.
 - If you have a trim job of your own for the default group, Homestead's
   doesn't run as well. Housekeeping names it; delete it to hand the trim back
@@ -194,12 +194,30 @@ Only clashes reach the Dashboard.
 
 A clash shows on the Dashboard's health suggestions ("1 schedule clash this
 week"), and its **Review** opens **Containers › Schedules › This week**: every
-run in the next seven days, by day and in your own time - Longhorn's jobs,
-CronJobs, power schedules, the host OS update window, and the maintenance
-window when an app updates itself in it - with the clashes first. A job that
-runs more than six times a day is one "runs all day" line. Anything Homestead
-could not read, a schedule included, is named at the top, so a quiet week is
-never one it did not see. When Longhorn's recurring jobs cannot be read,
+run in the next seven days, in your own time - Longhorn's jobs, CronJobs, power
+schedules, the host OS update window, and the maintenance window when something
+uses it - in one table: **When**, **Kind**, **What**, **App or host** and
+**Open**. **Today** shows the rest of today, **7 days** the week. The kind
+buttons (Backups, Snapshots, Trims, CronJobs, Power, OS updates, App updates,
+System) count the runs of each kind; **System** is what Homestead and Longhorn
+run for themselves, such as the weekly trim, or the maintenance window when it
+only balances hosts. The **App** and **Host** menus show when a run names one:
+a run names the app it touches only when it touches one app (a backup of one
+app's volumes, a CronJob mounting one app's claim), and a host only when every
+copy of its volumes is on that host; otherwise it names none rather than guess.
+A CronJob in another namespace shows "—" with a tip that Homestead can't see
+which app it touches, and with an app chosen a line counts such runs. When the
+apps list or the volumes' copies cannot be read, every run is still listed and
+one line per source says what that costs: no run names its app, or its host;
+whether an app's power stop falls in its backup was not checked (then the page
+says "No clash found", not "No clashes this week"); or, when apps may update in
+the maintenance window, that the window may be missing.
+The kind and the range are in the page's address, so a link or a reload shows
+the same; the App and Host choices last while the browser tab stays open, here
+and on Schedules. A job that runs more than six times a day is one "All day"
+line. Above the table, one line counts the runs and the clashes, and at most
+one callout says what needs you: the clashes, and anything Homestead could not
+read, a schedule included, so a quiet week is never one it did not see. When Longhorn's recurring jobs cannot be read,
 This week says so instead of "No clashes this week", and Data protection says
 so above its coverage, which it leaves unknown. To fix a clash, move one of
 the two jobs here.
