@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
@@ -480,6 +482,24 @@ class HomesteadManifestTests(unittest.TestCase):
         self.assertIn("kind: PersistentVolumeClaim\nmetadata:\n  name: homestead-data",
                       manifest)
 
+
+
+class HomesteadProbeTests(unittest.TestCase):
+    """#791: the shipped Deployment, parsed, as the kubelet and a data move read it."""
+
+    def app_pod_spec(self):
+        docs = yaml.safe_load_all((ROOT / "deploy" / "deploy.yaml").read_text())
+        deployment = next(d for d in docs if d and d.get("kind") == "Deployment"
+                          and d["metadata"]["name"] == "homestead")
+        return deployment["spec"]["template"]["spec"]
+
+    def test_readiness_asks_the_data_check_and_liveness_stays_on_healthz(self):
+        app = next(c for c in self.app_pod_spec()["containers"] if c["name"] == "homestead")
+        self.assertEqual("/readyz?check=data", app["readinessProbe"]["httpGet"]["path"])
+        self.assertEqual("/healthz", app["livenessProbe"]["httpGet"]["path"])
+
+    def test_the_shipped_manifest_passes_the_data_move_check(self):
+        server.SELF_DATA_FENCE.require_app_readiness(self.app_pod_spec(), "homestead")
 
 
 class DeployTierTests(unittest.TestCase):

@@ -331,7 +331,7 @@ spec:
               drop: ["ALL"]
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz?check=data
               port: 8080
             initialDelaySeconds: 3
             timeoutSeconds: 3

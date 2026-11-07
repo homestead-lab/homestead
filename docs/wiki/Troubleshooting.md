@@ -102,7 +102,7 @@ Homestead answers these addresses for monitors. None of them needs the page.
 
 | Address | Who may ask | Says |
 |---|---|---|
-| `/healthz` | anyone | `{"ok": true}` while the process answers. The pod's probes use it. |
+| `/healthz` | anyone | `{"ok": true}` while the process answers. The pod's liveness probe uses it. |
 | `/readyz` | anyone | `{"ready": true}` (200) or `{"ready": false}` (503) |
 | `/metrics` | an API key, or anyone signed in; off until turned on | Homestead's own health in the Prometheus text format |
 
@@ -120,7 +120,43 @@ the volume. Point an uptime checker at it:
 https://homestead.example.com/readyz    expect: HTTP 200
 ```
 
-The pod's own probes still use `/healthz`.
+The pod's readiness probe asks `/readyz?check=data`. It answers the same way,
+but only the data volume counts:
+
+- A copy that can't write its data volume leaves the Service, 20 to 50 seconds after
+  the fault began. One failed write doesn't: it is tried again at the next probe.
+- A Kubernetes API outage doesn't count, so the page stays up and can say the API
+  is down.
+- During a move of Homestead's own data it answers as `/healthz` does.
+- A lock file Homestead can't verify counts as ready, although every change is
+  refused and a move can't start: the page is the only thing that shows why.
+
+Liveness stays on `/healthz`, and how that answers depends on the fault, because
+`/healthz` also reads a small file on the volume:
+
+| What the volume does | `/healthz` | `/readyz?check=data` | What happens |
+|---|---|---|---|
+| Refuses writes: read-only, or full | 200 | 503 | Leaves the Service. No restart |
+| Gives I/O errors on reads | 503 | 503 | Leaves the Service, and the pod restarts after about a minute |
+| Hangs on reads | times out | times out | The same |
+| Reads fine, but a write hangs | 200 | 503 after a minute | Leaves the Service after about 90 seconds. No restart |
+
+**Every copy shares one data volume.** So when that volume fails or fills up,
+every copy leaves the Service together and the whole address stops answering,
+rather than one copy dropping out or a page that can't save. Only a fault in one
+copy's own mount leaves the others serving, and there are others only if you run
+more than one copy; the shipped manifest runs one. If the address stops answering,
+look from the cluster, not the browser:
+
+```bash
+kubectl -n <namespace> get pods -l app=homestead           # READY 0/1, and RESTARTS climbing if reads fail too
+kubectl -n <namespace> get events --field-selector reason=Unhealthy --sort-by=.lastTimestamp
+kubectl -n <namespace> get pvc homestead-data              # and the volume's own state, in your storage system
+kubectl -n <namespace> port-forward deploy/homestead 8080  # then ask /healthz and /readyz?check=data, as in the table
+```
+
+This probe comes with the manifest, not the image: an install keeps asking
+`/healthz` until its manifest is applied again. A data move accepts either.
 
 **`/metrics`** is off until an admin turns it on in Settings → Homestead
 (*Metrics for Prometheus*). It always needs an
@@ -133,8 +169,9 @@ do: it needs the `read` scope, and every key includes it. It gives:
   Kubernetes API took to answer the last time it did
   (`homestead_kube_api_seconds`). `/metrics` checks the API itself but never
   writes to the data volume: the volume check is the last one `/readyz` made,
-  and until something has asked `/readyz`, `homestead_ready` and that check are
-  left out;
+  whichever way it was asked, so with a manifest whose readiness probe asks it
+  that check is there once the probe has run. Until something has asked `/readyz`,
+  `homestead_ready` and that check are left out;
 - whether this copy leads, and how many copies are wanted and ready;
 - when each background task last finished well
   (`homestead_loop_last_ok_timestamp_seconds`) and its state

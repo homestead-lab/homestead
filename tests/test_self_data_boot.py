@@ -217,6 +217,25 @@ class BootTests(unittest.TestCase):
                 candidate = copy.deepcopy(base); change(candidate)
                 with self.assertRaises(Held): F.require_app_readiness({"containers": [candidate]}, "homestead")
 
+    def test_probe_may_ask_the_data_check(self):
+        F = server.SELF_DATA_FENCE
+        by_number = {"name": "homestead", "readinessProbe": {"httpGet": {"path": "/readyz?check=data", "port": 8080}}}
+        by_name = copy.deepcopy(by_number)
+        by_name["env"] = [{"name": "PORT", "value": "8090"}]
+        by_name["ports"] = [{"name": "web", "containerPort": 8090}]
+        by_name["readinessProbe"]["httpGet"]["port"] = "web"
+        F.require_app_readiness({"containers": [by_number]}, "homestead")
+        F.require_app_readiness({"containers": [by_name]}, "homestead")
+        healthz = copy.deepcopy(by_number)
+        healthz["readinessProbe"]["httpGet"]["path"] = "/healthz"
+        F.require_app_readiness({"containers": [healthz]}, "homestead")
+        for path in ("/readyz", "/readyz?check=api", "/readyz?check=data&x=1", "/readyz?x=1&check=data"):
+            with self.subTest(path=path):
+                candidate = copy.deepcopy(by_number)
+                candidate["readinessProbe"]["httpGet"]["path"] = path
+                with self.assertRaisesRegex(Held, "at /healthz or /readyz\\?check=data"):
+                    F.require_app_readiness({"containers": [candidate]}, "homestead")
+
     def test_real_entrypoint_loads_and_serves_held_destination_without_creating_data(self):
         # Exercise the full module's actual imports/bindings and HTTP handlers.
         # Only cluster identity is mocked here; Fence's UID/mount/control proof
