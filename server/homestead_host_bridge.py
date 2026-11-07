@@ -27,9 +27,9 @@ Nothing is done to a host whose network Homestead cannot describe.
 """
 import re
 import time
-import urllib.error
 
 import homestead_host_bonds as HOST_BONDS
+import homestead_host_network_job as NETWORK_JOB
 import homestead_operations as OPS
 import homestead_pod_exec as POD_EXEC
 import homestead_routes as ROUTER
@@ -237,7 +237,7 @@ def look(node):
         except Exception as error:
             facts["problem"] = f"Homestead could not check the other hosts' network changes: {str(error)[:200]}"
         else:
-            facts["problem"] = next(iter(HOST_BONDS.guard_refusals(node, *guard)), "")
+            facts["problem"] = next(iter(NETWORK_JOB.guard_refusals(node, *guard)), "")
     return facts
 
 
@@ -249,7 +249,7 @@ def start(node, ops, busy=None, servers_ready=None):
     restarts k3s or RKE2 there, as a bond does, so it waits for the same:
     one host at a time, and the other servers Ready."""
     facts = inspect(node)
-    reason = facts["problem"] or next(iter(HOST_BONDS.guard_refusals(node, busy, servers_ready)), "")
+    reason = facts["problem"] or next(iter(NETWORK_JOB.guard_refusals(node, busy, servers_ready)), "")
     if reason:
         raise ValueError(f"{node}: {reason}")
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -261,8 +261,8 @@ def start(node, ops, busy=None, servers_ready=None):
         out, err = hostrun.run(node, convert_script({"file": facts["file"], "netplan_id": facts["netplan_id"],
                                                       "mac": facts["mac"]}, stamp), timeout=120, change=what, holder=lease)
     except POD_EXEC.ExecTimeout as error:
-        ref = _unconfirmed_ref(node, what, lease, error)
-        return {**ops.start("host-bridge", what, {"kind": "Node", "name": node}, "/nodes", ref, _unconfirmed(ref)),
+        ref = NETWORK_JOB.unconfirmed_ref(node, what, lease, error, time.time())
+        return {**ops.start("host-bridge", what, {"kind": "Node", "name": node}, "/nodes", ref, NETWORK_JOB.unconfirmed(_SPEC, ref)),
                 "unconfirmed": True}
     except Exception:
         hostrun.let_go(node, lease)
@@ -280,131 +280,52 @@ def start(node, ops, busy=None, servers_ready=None):
                      f"Applied; checking {node} on {BRIDGE} - it puts itself back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
 
 
-# A change script still running at its limit (homestead_pod_exec.ExecTimeout)
-# may have changed the network part-way: its job keeps the host held and
-# needs attention until a person cancels it, renewing the hold this often.
-RENEW_UNCONFIRMED = 60
+class _Spec(NETWORK_JOB.Spec):
+    """A move into the bridge, for homestead_host_network_job."""
+    rollback_seconds, restart_seconds, hold_seconds = ROLLBACK_SECONDS, RESTART_SECONDS, HOLD_SECONDS
+    confirm_script = CONFIRM_SCRIPT
+    confirming_at, confirmed_at, restarting_at, waiting_at = 40, 60, 80, 90
+
+    @staticmethod
+    def bound():
+        return hostrun, kget, ksend
+
+    def unnamed(self, ref):
+        return f"Move {ref['node']} into {BRIDGE}"
+
+    def check(self, ref):
+        return check_script(ref["interface"], ref["address"])
+
+    def needs(self, ref):
+        return {"ADDR": f"{ref['address']} on {BRIDGE}", "PORT": f"{ref['interface']} in {BRIDGE}",
+                "ROUTE": f"the default route by {BRIDGE}", "GATEWAY": "the gateway answering"}
+
+    def carries_on(self, ref):
+        return BRIDGE
+
+    def never_up(self, ref):
+        return (f"{ref['node']} did not come up on {BRIDGE} with {ref['address']}, so it put its old network "
+                f"back by itself. The configuration tried is kept in {ref['backup']} beside the old one")
+
+    def confirming(self, ref):
+        return f"{ref['node']} is up on {BRIDGE}; confirming"
+
+    def confirmed(self, ref, lines):
+        return f"{ref['node']} is on {BRIDGE}, with {ref['address']}; the rollback is disarmed"
+
+    def done(self, ref):
+        return f"{ref['node']} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
+
+    def finished(self, ref):
+        return f"{ref['node']} is on {BRIDGE}"
 
 
-def _unconfirmed(ref):
-    node = ref["node"]
-    held = (f"{node} stays held, so no other change starts there" if not ref.get("renew_error") else
-            f"Homestead could not renew its hold on {node} ({ref['renew_error']}), so another change may start "
-            f"there once the hold runs out")
-    return (f"{ref['change']} needs attention: the script on {node} did not finish within {ref['timeout']:g} seconds, "
-            f"so Homestead cannot tell whether it changed {node}'s network. {held}. Check its network (if the change got as far as arming its rollback, {node} puts its "
-            f"old network back by itself within {ROLLBACK_SECONDS // 60} minutes), then cancel this job to let go of {node}")
-
-
-def _unconfirmed_ref(node, what, lease, error):
-    return {"node": node, "stage": "unconfirmed", "since": time.time(), "renewed": time.time(),
-            "change": what, "lease": lease, "timeout": error.timeout or 0}
-
-
-def _still_unconfirmed(ref, now):
-    if now - ref.get("renewed", 0) >= RENEW_UNCONFIRMED:
-        try:
-            hostrun.hold(ref["node"], ref["change"], seconds=HOLD_SECONDS, holder=ref.get("lease", ""))
-            ref["renewed"] = now
-            ref.pop("renew_error", None)
-        except Exception as error:
-            ref["renew_error"] = str(error)[:160] or type(error).__name__    # asked again next round
-    return "running", 20, _unconfirmed(ref)
+_SPEC = _Spec()
 
 
 def status(item, now=None):
-    """The job's next step: (status, progress, message). The host is let go
-    of when the job ends."""
-    try:
-        result = _step(item, now)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:    # the job fails on it (homestead_operations)
-            _let_go(item["ref"])
-        raise
-    if result[0] in ("succeeded", "failed"):
-        _let_go(item["ref"])
-    return result
-
-
-def _let_go(ref):
-    if ref.get("lease"):
-        hostrun.let_go(ref["node"], ref.pop("lease"))
-
-
-def _held(ref):
-    """What a follow-up change runs with: inside the job's hold."""
-    return {"change": ref.get("change") or f"Move {ref['node']} into {BRIDGE}", "holder": ref.get("lease", "")}
-
-
-def _not_back(ref, interface):
-    """Why a change failed whose host was not Ready again in time after k3s or
-    RKE2 restarted on its new interface, and what to check on that host."""
-    node = ref["node"]
-    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
-    return (f"{node} was not Ready again {RESTART_SECONDS // 60} minutes after {service} restarted on {interface}. "
-            f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
-            "If it becomes Ready later, nothing more is needed: the new network is kept. "
-            f"The old configuration is in {ref['backup']}")
-
-
-
-def _step(item, now=None):
-    ref, now = item["ref"], time.time() if now is None else now
-    node, elapsed = ref["node"], now - ref.get("since", now)
-    if ref["stage"] == "unconfirmed":
-        return _still_unconfirmed(ref, now)
-    if ref["stage"] == "applied":
-        if elapsed < 15:
-            return "running", 20, f"Applying on {node}"
-        try:
-            out, _ = hostrun.run(node, check_script(ref["interface"], ref["address"]), timeout=45)
-        except Exception:
-            out = ""
-        seen = set(out.split())
-        if {"ADDR", "PORT", "ROUTE", "GATEWAY", "ARMED"} <= seen:
-            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45, **_held(ref))
-            if "CONFIRMED" not in out:
-                return "running", 40, f"{node} is up on {BRIDGE}; confirming"
-            ref.update(stage="confirmed", since=now)
-            return "running", 60, f"{node} is on {BRIDGE}, with {ref['address']}; the rollback is disarmed"
-        if elapsed > ROLLBACK_SECONDS + 60:
-            return ("failed", 100, f"{node} did not come up on {BRIDGE} with {ref['address']}, so it put its old network "
-                    f"back by itself. The configuration tried is kept in {ref['backup']} beside the old one")
-        missing = {"ADDR": f"{ref['address']} on {BRIDGE}", "PORT": f"{ref['interface']} in {BRIDGE}",
-                   "ROUTE": f"the default route by {BRIDGE}", "GATEWAY": "the gateway answering"}
-        waiting = [words for key, words in missing.items() if key not in seen] or ["an answer from the host"]
-        return "running", 30, f"Waiting for {', '.join(waiting)}; {node} puts itself back in {max(0, int(ROLLBACK_SECONDS - elapsed))}s"
-    if ref["stage"] == "confirmed":
-        # kube-vip finds its interface when it starts: its pod here starts again.
-        vip = HOST_BONDS.restart_kube_vip(kget, ksend, node, ref)
-        service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        hosts, unread, down = HOST_BONDS.before_restart(kget, node) if service else (1, "", [])
-        refused = ""
-        if hosts and hosts > 1 and not down:
-            try:
-                out, err = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                                       **_held(ref))
-                refused = "" if "OK" in out.split() else (err or out or "no answer")[-160:]
-            except POD_EXEC.ExecTimeout:
-                pass    # it may have been scheduled: never twice; the Ready check below follows
-            if not refused:
-                ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
-                return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
-        if not vip or unread or down or refused:
-            return HOST_BONDS.not_finished(ref, 60, elapsed, BRIDGE, RESTART_SECONDS, service, unread, down, refused)
-        ref.update(stage="done")
-        return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
-    if ref["stage"] == "restarting":
-        vip = HOST_BONDS.kube_vip_settled(kget, ksend, node, ref)
-        if elapsed > 30 and HOST_BONDS.kubelet_back(kget, node, ref):
-            if not vip:
-                return HOST_BONDS.not_finished(ref, 90, elapsed, BRIDGE, RESTART_SECONDS)
-            ref.update(stage="done")
-            return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
-        if elapsed > RESTART_SECONDS:
-            return "failed", 100, HOST_BONDS.not_back_with_kube_vip(_not_back(ref, BRIDGE), ref, BRIDGE)
-        return "running", 90, f"Waiting for {node} to be Ready again"
-    return "succeeded", 100, f"{node} is on {BRIDGE}"
+    """The job's next step: (status, progress, message)."""
+    return NETWORK_JOB.status(_SPEC, item, time.time() if now is None else now)
 
 
 def convert(body):
@@ -439,14 +360,14 @@ def cancel_plan(item):
                           f"Other changes on {node} can start again at once"]}
     if item["ref"].get("stage") == "confirmed":
         # Its rollback is disarmed; the job alone was going to do what is left.
-        return {"mode": "forget", "needs": "admin", "keeps": HOST_BONDS.confirmed_keeps(node)}
+        return {"mode": "forget", "needs": "admin", "keeps": NETWORK_JOB.confirmed_keeps(node)}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The move carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}
 
 
 def cancel_run(item, options):
-    _let_go(item["ref"])
+    NETWORK_JOB.let_go(hostrun, item["ref"])
     return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
 
 

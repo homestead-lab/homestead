@@ -31,7 +31,6 @@ kube-vip's pod there restarts, and on a cluster of several hosts k3s or RKE2
 restarts so flannel follows - as after a bridge conversion. Under a bridge,
 or changing a bond, the name does not change and nothing restarts.
 """
-import calendar
 import contextlib
 import datetime
 import hashlib
@@ -41,6 +40,7 @@ import secrets
 import time
 import urllib.error
 
+import homestead_host_network_job as NETWORK_JOB
 import homestead_hostrun as HOSTRUN
 import homestead_kube as KUBE
 import homestead_names as NAMES
@@ -272,7 +272,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
     reason = _host_problem(facts, shape)
     if reason:
         refusals.append(reason)
-    refusals += guard_refusals(node, busy, servers_ready)
+    refusals += NETWORK_JOB.guard_refusals(node, busy, servers_ready)
     nics = {n["name"]: n for n in facts.get("nics") or []}
     bond = shape["bond"] or BOND
     current = list(shape["members"])
@@ -519,9 +519,9 @@ def start(node, req, ops, busy=None, servers_ready=None):
     try:
         out, err = hostrun.run(node, change_script(p["spec"], stamp), timeout=120, change=what, holder=lease)
     except POD_EXEC.ExecTimeout as error:
-        ref = _unconfirmed_ref(node, what, lease, error)
+        ref = NETWORK_JOB.unconfirmed_ref(node, what, lease, error, time.time())
         return {**ops.start(KIND, what, {"kind": "Node", "name": node}, f"/nodes?node={node}&section=network", ref,
-                            _unconfirmed(ref)), "unconfirmed": True}
+                            NETWORK_JOB.unconfirmed(_SPEC, ref)), "unconfirmed": True}
     except Exception:
         hostrun.let_go(node, lease)
         raise
@@ -538,371 +538,86 @@ def start(node, req, ops, busy=None, servers_ready=None):
                      f"Applied; checking {node} - it puts its old network back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
 
 
-# A change script still running at its limit (homestead_pod_exec.ExecTimeout)
-# may have changed the network part-way: its job keeps the host held and
-# needs attention until a person cancels it, renewing the hold this often.
-RENEW_UNCONFIRMED = 60
+class _Spec(NETWORK_JOB.Spec):
+    """A bond change, for homestead_host_network_job: its members, and the
+    switch's answer on 802.3ad."""
+    rollback_seconds, restart_seconds, hold_seconds = ROLLBACK_SECONDS, RESTART_SECONDS, HOLD_SECONDS
+    confirm_script = CONFIRM_SCRIPT
+    confirming_at, confirmed_at, restarting_at, waiting_at = 50, 70, 85, 92
+
+    @staticmethod
+    def bound():
+        return hostrun, kget, ksend
+
+    def unnamed(self, ref):
+        return f"Network change on {ref['node']}"
+
+    def check(self, ref):
+        return check_script(ref["carries_on"], ref["address"], ref["bond"],
+                            ref["members"] if ref["action"] != "remove" else [], ref["mode"])
+
+    def needs(self, ref):
+        return {"ADDR": f"{ref['address']} on {ref['carries_on']}", "ROUTE": f"the default route by {ref['carries_on']}",
+                "GATEWAY": "the gateway answering"}
+
+    def also_waiting(self, ref, lines):
+        bonded = ref["action"] == "remove" or all(f"IN {m}" in lines for m in ref["members"])
+        return [] if bonded else ["every member in " + ref["bond"]]
+
+    def host_gave_up(self, ref, words):
+        if "LACPFAILED" not in words:
+            return None
+        ref.update(stage="done")
+        return ("failed", 100, f"The switch did not answer LACP on {ref['bond']} within {LACP_WAIT} seconds, so {ref['node']} "
+                "put its old network back by itself. Group the switch ports as one LACP (802.3ad) group, or choose active-backup")
+
+    def before_confirm(self, ref, words, elapsed, now):
+        node = ref["node"]
+        if ref["action"] == "remove" or ref["mode"] != "802.3ad" or "PARTNER" in words:
+            return None
+        if elapsed < LACP_WAIT + 15:
+            return "running", 40, f"{node} is up on {ref['bond']}; waiting for the switch to answer LACP"
+        hostrun.run(node, ROLLBACK_NOW, timeout=30, **NETWORK_JOB.held(self, ref))
+        ref.update(stage="rolled-back", since=now)
+        return ("running", 60, f"The switch did not answer LACP on {ref['bond']} in {LACP_WAIT} seconds, so {node} "
+                "is putting its old network back now")
+
+    def carries_on(self, ref):
+        return ref["carries_on"]
+
+    def never_up(self, ref):
+        return (f"{ref['node']} did not come up with {ref['address']} on {ref['carries_on']}, so it put its old "
+                f"network back by itself. The configuration tried is kept in {ref['backup']} beside the old one")
+
+    def confirming(self, ref):
+        return f"{ref['node']} is up; confirming"
+
+    def confirmed(self, ref, lines):
+        down = [m for m in ref["members"] if f"UP {m}" not in lines] if ref["action"] != "remove" else []
+        note = f"; {', '.join(down)} has no link yet" if down else ""
+        return f"{ref['node']} carries {ref['address']} on {ref['carries_on']}; the rollback is disarmed{note}"
+
+    def restarts(self, ref):
+        return bool(ref.get("renamed"))
+
+    def done(self, ref):
+        return f"{ref['node']} carries its network on {ref['carries_on']}"
+
+    def other_stage(self, ref, elapsed):
+        if ref["stage"] != "rolled-back":
+            return super().other_stage(ref, elapsed)
+        if elapsed < 30:
+            return "running", 80, f"{ref['node']} is putting its old network back"
+        return ("failed", 100, f"The switch did not answer LACP, so {ref['node']} put its old network back. Group the switch ports "
+                "as one LACP (802.3ad) group, or choose active-backup")
 
 
-def _unconfirmed(ref):
-    node = ref["node"]
-    held = (f"{node} stays held, so no other change starts there" if not ref.get("renew_error") else
-            f"Homestead could not renew its hold on {node} ({ref['renew_error']}), so another change may start "
-            f"there once the hold runs out")
-    return (f"{ref['change']} needs attention: the script on {node} did not finish within {ref['timeout']:g} seconds, "
-            f"so Homestead cannot tell whether it changed {node}'s network. {held}. Check its network (if the change got as far as arming its rollback, {node} puts its "
-            f"old network back by itself within {ROLLBACK_SECONDS // 60} minutes), then cancel this job to let go of {node}")
-
-
-def _unconfirmed_ref(node, what, lease, error):
-    return {"node": node, "stage": "unconfirmed", "since": time.time(), "renewed": time.time(),
-            "change": what, "lease": lease, "timeout": error.timeout or 0}
-
-
-def _still_unconfirmed(ref, now):
-    if now - ref.get("renewed", 0) >= RENEW_UNCONFIRMED:
-        try:
-            hostrun.hold(ref["node"], ref["change"], seconds=HOLD_SECONDS, holder=ref.get("lease", ""))
-            ref["renewed"] = now
-            ref.pop("renew_error", None)
-        except Exception as error:
-            ref["renew_error"] = str(error)[:160] or type(error).__name__    # asked again next round
-    return "running", 20, _unconfirmed(ref)
+_SPEC = _Spec()
 
 
 def status(item, now=None):
-    """The job's next step: (status, progress, message). The host is let go
-    of when the job ends."""
-    try:
-        result = _step(item, now)
-    except urllib.error.HTTPError as error:
-        if error.code == 404:    # the job fails on it (homestead_operations)
-            _let_go(item["ref"])
-        raise
-    if result[0] in ("succeeded", "failed"):
-        _let_go(item["ref"])
-    return result
-
-
-def _let_go(ref):
-    if ref.get("lease"):
-        hostrun.let_go(ref["node"], ref.pop("lease"))
-
-
-def _held(ref):
-    """What a follow-up change runs with: inside the job's hold."""
-    return {"change": ref.get("change") or f"Network change on {ref['node']}", "holder": ref.get("lease", "")}
-
-
-def _not_back(ref, interface):
-    """Why a change failed whose host was not Ready again in time after k3s or
-    RKE2 restarted on its new interface, and what to check on that host."""
-    node = ref["node"]
-    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
-    return (f"{node} was not Ready again {RESTART_SECONDS // 60} minutes after {service} restarted on {interface}. "
-            f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
-            "If it becomes Ready later, nothing more is needed: the new network is kept. "
-            f"The old configuration is in {ref['backup']}")
-
-
-# Proof the kubelet came back after k3s or RKE2 restarted. Ready alone stays
-# True about 40 s after the kubelet's last heartbeat, so a host the new network
-# cut off still reads Ready at first. When the restart is asked for, the step
-# keeps what the kubelet last reported (restart_baseline); it then needs a
-# Lease renewal more than BACK_AFTER seconds after that renewal, or a Ready
-# heartbeat or transition after that heartbeat. Both sides come from the host's
-# own clock, so a host clock ahead of or behind Homestead's changes nothing.
-# systemd-run restarts the service 2 s on, and the old kubelet may renew once
-# more (every 10 s) while it stops: that renewal is inside BACK_AFTER.
-BACK_AFTER = 15
-NODE_LEASE = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/{}"
-
-
-def kube_time(text):
-    """Seconds since the epoch of a Kubernetes Time or MicroTime
-    (2026-01-01T12:00:00Z, 2026-01-01T12:00:00.123456Z); None if none."""
-    text = str(text or "")
-    try:
-        whole = calendar.timegm(time.strptime(text[:19], "%Y-%m-%dT%H:%M:%S"))
-    except ValueError:
-        return None
-    fraction = re.match(r"\.(\d+)", text[19:])
-    return whole + (float("0." + fraction[1]) if fraction else 0)
-
-
-def _ready(read, node):
-    conditions = (read(f"/api/v1/nodes/{node}").get("status") or {}).get("conditions") or []
-    return next((c for c in conditions if c.get("type") == "Ready"), {})
-
-
-def _heard(ready):
-    """Ready's heartbeat and transition times that are there."""
-    return [t for t in (kube_time(ready.get("lastHeartbeatTime")), kube_time(ready.get("lastTransitionTime")))
-            if t is not None]
-
-
-def _renewed(read, node):
-    """When the host's kubelet last renewed its Lease, or None. Any failure
-    to read it (not found, forbidden, unreachable) gives None: the step then
-    goes by Ready's times, never by less."""
-    try:
-        return kube_time((read(NODE_LEASE.format(node)).get("spec") or {}).get("renewTime"))
-    except Exception:
-        return None
-
-
-def restart_baseline(read, node):
-    """What the host's kubelet last reported, read right after the restart
-    was asked for: renew0, its Lease's renewTime, and hb0, the later of
-    Ready's heartbeat and transition. None for what could not be read."""
-    try:
-        heard = _heard(_ready(read, node))
-    except Exception:
-        heard = []
-    return {"renew0": _renewed(read, node), "hb0": max(heard) if heard else None}
-
-
-def kubelet_back(read, node, ref):
-    """Whether node is Ready and its kubelet was heard from after the restart
-    the step asked for (ref: its renew0, hb0 and since). read is the caller's
-    bound kget; homestead_host_bridge uses this too."""
-    ready = _ready(read, node)
-    if ready.get("status") != "True":
-        return False
-    heard, renewed = _heard(ready), _renewed(read, node)
-    renew0, hb0 = ref.get("renew0"), ref.get("hb0")
-    if renew0 is not None and renewed is not None:
-        return renewed > renew0 + BACK_AFTER
-    if hb0 is not None:
-        return any(t > hb0 for t in heard)
-    # No baseline: nothing was readable when the restart was asked for, or the
-    # job began before Homestead kept one. Only then compare with when the step
-    # started, on Homestead's clock - a host clock far ahead can mislead this.
-    after = ref["since"] + BACK_AFTER
-    return any(t > after for t in heard) or (renewed is not None and renewed > after)
-
-
-# kube-vip's pod and the host count, after the rollback is disarmed. Neither is
-# taken on trust: until each is proved the job keeps trying, for as long as it
-# waits for a restart, and then fails saying what was not done. ref["kube_vip"]
-# remembers it: {"pods": [the pods found first], "error": ...} until done, and
-# {"done": True} once it is. A job saved restarting by a version without it
-# has none, and is not sent back to kube-vip.
-KUBE_VIP_PODS = "/api/v1/namespaces/kube-system/pods"
-SERVER_LABELS = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
-
-
-def _said(error):
-    return str(error)[:160] or type(error).__name__
-
-
-def _pod_key(pod):
-    return pod["metadata"].get("uid") or pod["metadata"]["name"]
-
-
-def restart_kube_vip(read, send, node, ref):
-    """Delete the kube-vip pods the job first found on node; True once none is
-    left to delete. A reply can be lost after the delete landed, so a retry goes
-    by what the cluster shows: a pod gone or going counts, and a replacement,
-    even under the same name, is left alone."""
-    state = ref.get("kube_vip") or {}
-    if state.get("done"):
-        return True
-    try:
-        found = read(f"{KUBE_VIP_PODS}?fieldSelector=spec.nodeName%3D{node}").get("items", [])
-        pods = [pod for pod in found if pod["metadata"]["name"].startswith("kube-vip")]
-        if "pods" not in state:
-            state = {"pods": [_pod_key(pod) for pod in pods]}
-            ref["kube_vip"] = state
-        for pod in pods:
-            if _pod_key(pod) in state["pods"] and not pod["metadata"].get("deletionTimestamp"):
-                try:
-                    send("DELETE", f"{KUBE_VIP_PODS}/{pod['metadata']['name']}")
-                except urllib.error.HTTPError as error:
-                    if error.code != 404:
-                        raise
-    except Exception as error:
-        ref["kube_vip"] = {**state, "error": _said(error)}
-        return False
-    ref["kube_vip"] = {"done": True}
-    return True
-
-
-def kube_vip_settled(read, send, node, ref):
-    """For the wait after the restart: try again if kube-vip is still unproved."""
-    return "kube_vip" not in ref or restart_kube_vip(read, send, node, ref)
-
-
-def _servers(nodes, node):
-    """The cluster's other control-plane servers: (their names, those not Ready)."""
-    names, down = [], []
-    for found in nodes:
-        meta = found.get("metadata") or {}
-        if meta.get("name") == node or not any(k in (meta.get("labels") or {}) for k in SERVER_LABELS):
-            continue
-        names.append(meta["name"])
-        if not any(c.get("type") == "Ready" and c.get("status") == "True"
-                   for c in (found.get("status") or {}).get("conditions") or []):
-            down.append(meta["name"])
-    return names, down
-
-
-def before_restart(read, node):
-    """What the restart of k3s or RKE2 on node goes by, read fresh each round:
-    (hosts, why the list has no answer, the other servers not Ready). Restarting
-    takes node quiet as the change did, so it waits for what network_guard does. The
-    host itself is in the list, so an empty one is no answer."""
-    try:
-        nodes = read("/api/v1/nodes").get("items", [])
-    except Exception as error:
-        return None, _said(error), []
-    return (len(nodes), "", _servers(nodes, node)[1]) if nodes else (None, "the list came back empty", [])
-
-
-def _restart_undone(node, service, unread, down, refused):
-    """Why the restart was not sent, and what a person does about it."""
-    undone = []
-    if unread:
-        undone.append(f"Homestead could not read the cluster's hosts ({unread}), so it did not restart {service} on {node}, "
-                      "and flannel may still carry pod traffic by the old interface. If the cluster has other hosts, run "
-                      f"`systemctl restart {service}` on {node}.")
-    if down:
-        words = guard_refusals(node, "", (0, len(down)))[0]
-        undone.append(f"Homestead did not restart {service} on {node}, and flannel may still carry pod traffic by the old interface. "
-                      f"{words} ({', '.join(down)}), then run `systemctl restart {service}` on {node}.")
-    if refused:
-        undone.append(f"{node} did not schedule the restart of {service} ({refused}), so it did not restart, and flannel may still "
-                      f"carry pod traffic by the old interface. Run `systemctl restart {service}` on {node}.")
-    return undone
-
-
-def _kube_vip_undone(ref, interface):
-    state = ref.get("kube_vip") or {}
-    if "kube_vip" not in ref or state.get("done"):
-        return []
-    return [f"Homestead could not restart kube-vip on {ref['node']} ({state.get('error', 'no answer')}), so it may still announce "
-            f"its addresses on the old interface. Delete the kube-vip pod on {ref['node']}, and it starts again on {interface}."]
-
-
-def not_finished(ref, progress, elapsed, interface, seconds, service="", unread="", down=(), refused=""):
-    """The next step of a job with kube-vip or the restart still not done:
-    (status, progress, message). It fails past seconds, saying what is undone."""
-    node, vip_undone = ref["node"], _kube_vip_undone(ref, interface)
-    if elapsed > seconds:
-        return ("failed", 100, f"{node} carries {ref['address']} on {interface} and keeps it, but the change is not finished. "
-                + " ".join(vip_undone + _restart_undone(node, service, unread, down, refused)))
-    reach = (["the cluster's hosts"] if unread else []) + ([f"kube-vip on {node}"] if vip_undone else [])
-    doing = []
-    if reach:
-        doing.append(f"still trying to reach {' and '.join(reach)} ({unread or ref['kube_vip'].get('error', 'no answer')})")
-    if down:
-        doing.append(f"waiting for {', '.join(down)} to be Ready before it restarts {service}")
-    if refused:
-        doing.append(f"still trying to schedule the restart of {service} ({refused})")
-    return "running", progress, f"{node} is on its new network; {' and '.join(doing)}, for up to {max(0, int(seconds - elapsed))}s more"
-
-
-def not_back_with_kube_vip(reason, ref, interface):
-    """A host not back by the deadline, with kube-vip still undone if it is."""
-    return " ".join([reason, *_kube_vip_undone(ref, interface)])
-
-
-def _step(item, now=None):
-    ref, now = item["ref"], time.time() if now is None else now
-    node, elapsed = ref["node"], now - ref.get("since", now)
-    if ref["stage"] == "unconfirmed":
-        return _still_unconfirmed(ref, now)
-    if ref["stage"] == "applied":
-        if elapsed < 15:
-            return "running", 20, f"Applying on {node}"
-        try:
-            out, _ = hostrun.run(node, check_script(ref["carries_on"], ref["address"], ref["bond"],
-                                                    ref["members"] if ref["action"] != "remove" else [], ref["mode"]), timeout=45)
-        except Exception:
-            out = ""
-        seen = set(out.split("\n"))
-        words = set(out.split())
-        bonded = ref["action"] == "remove" or all(f"IN {m}" in seen for m in ref["members"])
-        if "LACPFAILED" in words:
-            ref.update(stage="done")
-            return ("failed", 100, f"The switch did not answer LACP on {ref['bond']} within {LACP_WAIT} seconds, so {node} "
-                    "put its old network back by itself. Group the switch ports as one LACP (802.3ad) group, or choose active-backup")
-        if {"ADDR", "ROUTE", "GATEWAY", "ARMED"} <= words and bonded:
-            needs_partner = ref["action"] != "remove" and ref["mode"] == "802.3ad"
-            if needs_partner and "PARTNER" not in words:
-                if elapsed < LACP_WAIT + 15:
-                    return "running", 40, f"{node} is up on {ref['bond']}; waiting for the switch to answer LACP"
-                hostrun.run(node, ROLLBACK_NOW, timeout=30, **_held(ref))
-                ref.update(stage="rolled-back", since=now)
-                return ("running", 60, f"The switch did not answer LACP on {ref['bond']} in {LACP_WAIT} seconds, so {node} "
-                        "is putting its old network back now")
-            out, _ = hostrun.run(node, CONFIRM_SCRIPT, timeout=45, **_held(ref))
-            if "CONFIRMED" not in out:
-                return "running", 50, f"{node} is up; confirming"
-            ref.update(stage="confirmed", since=now)
-            down = [m for m in ref["members"] if f"UP {m}" not in seen] if ref["action"] != "remove" else []
-            note = f"; {', '.join(down)} has no link yet" if down else ""
-            return "running", 70, f"{node} carries {ref['address']} on {ref['carries_on']}; the rollback is disarmed{note}"
-        if elapsed > ROLLBACK_SECONDS + 60:
-            return ("failed", 100, f"{node} did not come up with {ref['address']} on {ref['carries_on']}, so it put its old "
-                    f"network back by itself. The configuration tried is kept in {ref['backup']} beside the old one")
-        missing = {"ADDR": f"{ref['address']} on {ref['carries_on']}", "ROUTE": f"the default route by {ref['carries_on']}",
-                   "GATEWAY": "the gateway answering"}
-        waiting = [w for k, w in missing.items() if k not in words]
-        if not bonded:
-            waiting.append("every member in " + ref["bond"])
-        return "running", 30, f"Waiting for {', '.join(waiting or ['an answer from the host'])}; {node} puts itself back in {max(0, int(ROLLBACK_SECONDS - elapsed))}s"
-    if ref["stage"] == "rolled-back":
-        if elapsed < 30:
-            return "running", 80, f"{node} is putting its old network back"
-        return ("failed", 100, f"The switch did not answer LACP, so {node} put its old network back. Group the switch ports "
-                "as one LACP (802.3ad) group, or choose active-backup")
-    if ref["stage"] == "confirmed":
-        if not ref.get("renamed"):
-            ref.update(stage="done")
-            return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
-        vip = restart_kube_vip(kget, ksend, node, ref)
-        service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-        hosts, unread, down = before_restart(kget, node) if service else (1, "", [])
-        refused = ""
-        if hosts and hosts > 1 and not down:
-            try:
-                out, err = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                                       **_held(ref))
-                refused = "" if "OK" in out.split() else (err or out or "no answer")[-160:]
-            except POD_EXEC.ExecTimeout:
-                pass    # it may have been scheduled: never twice; the Ready check below follows
-            if not refused:
-                ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
-                return "running", 85, f"Restarting {service} on {node}, so flannel carries pod traffic by {ref['carries_on']}"
-        if not vip or unread or down or refused:
-            return not_finished(ref, 70, elapsed, ref["carries_on"], RESTART_SECONDS, service, unread, down, refused)
-        ref.update(stage="done")
-        return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
-    if ref["stage"] == "restarting":
-        vip = kube_vip_settled(kget, ksend, node, ref)
-        if elapsed > 30 and kubelet_back(kget, node, ref):
-            if not vip:
-                return not_finished(ref, 92, elapsed, ref["carries_on"], RESTART_SECONDS)
-            ref.update(stage="done")
-            return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
-        if elapsed > RESTART_SECONDS:
-            return "failed", 100, not_back_with_kube_vip(_not_back(ref, ref["carries_on"]), ref, ref["carries_on"])
-        return "running", 92, f"Waiting for {node} to be Ready again"
-    return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
-
-
-def guard_refusals(node, busy, servers_ready):
-    """Why network_guard holds a change on node back: the same words for a
-    bond and a bridge (homestead_host_bridge), since both go quiet for a
-    moment and restart k3s or RKE2 there."""
-    refusals = []
-    if busy:
-        refusals.append(f"another host's network is changing ({busy}): one host at a time")
-    if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
-        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
-                        "the cluster could lose its quorum. Wait until they are Ready")
-    return refusals
+    """The job's next step: (status, progress, message)."""
+    return NETWORK_JOB.status(_SPEC, item, time.time() if now is None else now)
 
 
 # The one Lease a host network change (bond or bridge) holds while it starts:
@@ -991,7 +706,7 @@ def network_guard(node):
     being checked, and the other servers' readiness (ready, total)."""
     busy = next((op.get("title", "") for op in OPS.snapshot()
                  if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
-    servers, down = _servers(kget("/api/v1/nodes").get("items", []), node)
+    servers, down = NETWORK_JOB.other_servers(kget("/api/v1/nodes").get("items", []), node)
     return busy, (len(servers) - len(down), len(servers))
 
 
@@ -1034,15 +749,6 @@ ROUTES = {
 }
 
 
-def confirmed_keeps(node):
-    """What stopping a job says once the host's rollback is disarmed, for a
-    bond and a bridge: nothing else would restart kube-vip, k3s or RKE2."""
-    return [f"{node} keeps its new network: its rollback is already disarmed",
-            f"Homestead stops restarting kube-vip and k3s or RKE2 on {node}: restart any it had not restarted by hand, "
-            "or VIPs and flannel may stay on the old interface",
-            f"Other changes on {node} can start again at once"]
-
-
 def cancel_plan(item):
     """Stopping tracking it also lets go of the host, so other changes there
     need not wait for the hold to run out (#597)."""
@@ -1055,14 +761,14 @@ def cancel_plan(item):
                           f"Other changes on {node} can start again at once"]}
     if item["ref"].get("stage") == "confirmed":
         # Its rollback is disarmed; the job alone was going to do what is left.
-        return {"mode": "forget", "needs": "admin", "keeps": confirmed_keeps(node)}
+        return {"mode": "forget", "needs": "admin", "keeps": NETWORK_JOB.confirmed_keeps(node)}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The change carries on on {node}: unless it was confirmed, {node} puts its old network back by itself",
                       f"Other changes on {node} can start again at once"]}
 
 
 def cancel_run(item, options):
-    _let_go(item["ref"])
+    NETWORK_JOB.let_go(hostrun, item["ref"])
     return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
 
 
