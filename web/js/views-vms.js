@@ -359,10 +359,10 @@ const VM_POWER = UI.reviewFlow({
         ackId: "vmPowerApprove", onAck: "vmPowerReviewReady()",
         details: facts.request_is_lower_bound ? `<p class="ui-help">${facts.cpu_request_is_estimate
           ? "CPU uses a conservative IO-thread allowance because this renderer version is unverified. RAM requests are lower bounds; the RAM estimate is not a configured memory limit."
-          : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit."}</p>` : "" })
-      + vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")
-      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>${plan.blocked ? ""
-        : `<button class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")}</button>`}`);
+          : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit."}</p>` : "",
+        more: vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady"), kind: "VM", where: frozen.namespace || frozen.ns || "",
+        actions: { dismiss: { label: "Cancel", onclick: "modalBack()" },
+          primary: { label: VM_ACTIONS[frozen.action]?.[0] || "Apply", onclick: "vmPowerReviewedApply()", id: "vmPowerApply" } } });
     vmPowerReviewReady();
   },
   failed: error => {
@@ -701,15 +701,19 @@ const VM_EDIT = UI.reviewFlow({
       review.volumes?.length ? ["New disks", review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>")] : null]);
     const after = `<p class="ui-help">${restartAfter ? "After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart." : "Saving sends no restart. Restart the VM from its power controls if a change needs it."}</p>`;
     const warnings = plan.warnings || [];
+    const editActions = { dismiss: { label: "Back to edit", onclick: "vmEditReviewBack()" },
+      primary: { label: "Save changes", onclick: "vmEditReviewedApply()", id: "vmEditApply", disabled: true } };
     $("#mbody").innerHTML = (facts.admission_needed
-      ? startReview(plan, { what: "Saves", name: frozen.name, objects: changes + vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), warnings,
+      ? startReview(plan, { what: "Saves", kind: "VM", name: frozen.name, where: frozen.namespace || frozen.ns || "", objects: changes, more: vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), warnings,
           ackId: "vmEditApprove", onAck: "vmEditReviewReady()",
-          details: `${after}<p class="ui-help">Resource and policy changes can take effect at once through KubeVirt. Host RAM estimates include launcher overhead; they are not a memory limit.</p>` })
-      : [UI.lead(`Saves <b>${esc(frozen.name)}</b>. It needs no new room on a host.`),
-        UI.notices([...(plan.blockers || []).map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], plan.blockers?.length ? "Can't save" : "Check first"),
-        changes, vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), UI.more("Details", after),
-        !plan.blocked && warnings.length ? UI.ack("vmEditApprove", reviewAck("Saves"), { onchange: "vmEditReviewReady()" }) : ""].join(""))
-      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save changes</button>`);
+          details: `${after}<p class="ui-help">Resource and policy changes can take effect at once through KubeVirt. Host RAM estimates include launcher overhead; they are not a memory limit.</p>`,
+          actions: editActions })
+      : UI.dialog({ shape: "review", subject: { kind: "VM", name: frozen.name, where: frozen.namespace || frozen.ns || "" },
+          lead: "Saves it. It needs no new room on a host.",
+          issues: [...(plan.blockers || []).map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], issuesTitle: plan.blockers?.length ? "Can't save" : "",
+          body: changes + vmStateInitHtml(plan, "vmEdit", "vmEditReviewReady"), details: after,
+          ack: warnings.length ? { id: "vmEditApprove", sentence: reviewAck("Saves"), onchange: "vmEditReviewReady()" } : null,
+          actions: editActions }));
     vmEditReviewReady();
   },
   failed: error => {

@@ -72,17 +72,18 @@ test("pinned: VM Edit's review opens over the form with the same title and loadi
 test("pinned: VM Edit's review reads the same, with and without new room on a host", async () => {
   let t = edit();
   await t.ctx.vmEditReview(change, true);
-  assert.match(t.html(), /Saves <b>guest<\/b>/);
+  // The header names the VM; the sentence says what happens to it.
+  assert.match(t.html(), /<span class="ui-head-name">guest<\/span><span class="ui-head-where">VM · lab<\/span>[\s\S]*<p class="ui-lead">Saves it/);
   assert.match(t.html(), /4 vCPUs · 6Gi/);
   assert.match(t.html(), /Halted → Always/);
   assert.match(t.html(), /<span class="mono">guest-disk-2<\/span> · 20Gi · fast/);
   assert.match(t.html(), /After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart\./);
   assert.match(t.html(), /id="vmEditApprove"[^>]*onchange="vmEditReviewReady\(\)"/);
-  assert.match(t.html(), /<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack\(\)">Back to edit<\/button><\/div><div class="ui-actions-end"><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply\(\)">Save changes<\/button>/);
+  assert.match(t.html(), /<button type="button" class="btn" onclick="vmEditReviewBack\(\)" data-dialog-dismiss="true">Back to edit<\/button><\/div><div class="ui-actions-end"><button type="button" class="btn pri" id="vmEditApply" onclick="vmEditReviewedApply\(\)" disabled >Save changes<\/button>/);
   assert.equal(t.fields["#vmEditApply"].disabled, true);
   t = edit({ admission: false });
   await t.ctx.vmEditReview(change);
-  assert.match(t.html(), /Saves <b>guest<\/b>\. It needs no new room on a host\./);
+  assert.match(t.html(), /<p class="ui-lead">Saves it\. It needs no new room on a host\./);
   assert.match(t.html(), /Saving sends no restart\. Restart the VM from its power controls if a change needs it\./);
   assert.match(t.html(), /High RAM/);
   assert.match(t.html(), /id="vmEditApprove"/);
@@ -184,7 +185,7 @@ test("a 409 from VM Edit's save offers a fresh review of the same change", async
   assert.deepEqual(t.restarts, []);
   await t.ctx.vmEditReviewAgain();
   assert.deepEqual(t.sent.at(-1), { path: "/api/vm/edit/preview", body: change }, "the same change, previewed again");
-  assert.match(t.html(), /id="vmEditApply" disabled/);
+  assert.match(t.html(), /id="vmEditApply"[^>]*disabled/);
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.sent.filter(s => s.path === "/api/vm/edit").length, 2, "only after a fresh review and tick");

@@ -415,10 +415,16 @@ window.capacityHostTable = capacityHostTable;
    "Restart it anyway", never "Start it anyway". */
 const reviewAck = what => `${String(what || "Starts").split(" ")[0].replace(/s$/, "")} it anyway`;
 window.reviewAck = reviewAck;
-function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "", objects = "", warnings = [] }) {
+/* The review before a container or VM starts, is created or saved
+   (design.md, Reviews): a whole UI.dialog review. The header names it; the
+   lead says what happens and where; one notice; the objects; the hosts with
+   room; Details; a tick only when there is something to accept; the
+   caller's buttons. actions is UI.dialog's (a blocked review offers only
+   the way out); more is HTML shown after the objects (a fresh-state check). */
+function startReview(plan, { what = "Starts", name, kind = "", where: place = "", extra = "", ackId, onAck = "", details = "", objects = "", more = "", warnings = [], actions = { dismiss: false } }) {
   const { concerns, caveats } = capacityNotes(plan);
   const placement = plan.placement || {}, hosts = plan.candidates || [];
-  const ok = hosts.filter(host => host.eligible), out = hosts.filter(host => !host.eligible);
+  const ok = hosts.filter(host => host.eligible);
   const fixed = placement.resident || placement.pinned || plan.vm?.resident_node;
   const where = fixed ? ` on <b>${esc(fixed)}</b>`
     : ok.length === 1 ? ` on <b>${esc(ok[0].name)}</b>, the only host that can run it`
@@ -430,28 +436,25 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
     ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
     ...(topology ? [topology] : []), ...warnings])];
   const verb = reviewAck(what).split(" ")[0].toLowerCase();
-  const list = problems.length ? `<ul class="ui-list">${problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
-  const rows = hosts.length;
   const reservations = ok.filter(host => host.reservations_known).map(host =>
     `<li>${esc(host.name)}: Already reserved: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb ?? "?")} GiB RAM · ${esc(host.reserved_cpu_percent ?? "?")}% CPU${host.request_slots != null ? ` · room for ${esc(host.request_slots)} more` : ""}</li>`)
     .concat(ok.filter(host => !host.reservations_known).map(host => `<li>${esc(host.name)}: Scheduler reservations unavailable</li>`));
-  return [
-    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't ${verb} until what is below is resolved.`
-      : `${what} <b>${esc(name)}</b>${where}.${extra}`),
-    plan.blocked ? UI.callout("bad", `Can't ${verb}`, list || "No host that may run it has room for it.")
-      : problems.length ? UI.callout("warn", "Check first", list) : "",
-    objects,
-    rows ? UI.section("Hosts with room", capacityHostTable(plan)) : "",
-    UI.more("Details", `${UI.facts([
+  return UI.dialog({ shape: "review",
+    subject: { kind: kind || (plan.vm ? "VM" : "App"), name, where: place },
+    lead: plan.blocked ? `It can't ${verb} until what is below is resolved.` : `${what} it${where}.${extra}`,
+    issues: plan.blocked ? (problems.length ? problems : ["No host that may run it has room for it."]).map(p => ["bad", p]) : problems.map(p => ["warn", p]),
+    issuesTitle: plan.blocked ? `Can't ${verb}` : "",
+    body: `${objects}${more}${hosts.length ? UI.section("Hosts with room", capacityHostTable(plan)) : ""}`,
+    details: `${UI.facts([
         [plan.vm ? "VM reserves" : `Each pod reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB RAM${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
         ["Memory estimate", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB${plan.vm ? " with its launcher" : " per pod"}` : "unknown"],
         plan.additional > 1 ? ["Pods starting", esc(plan.additional)] : null])}
       ${reservations.length ? `<ul class="ui-list">${reservations.join("")}</ul>` : ""}
       ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
       ${details}
-      <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`),
-    !plan.blocked && problems.length ? UI.ack(ackId, reviewAck(what), { onchange: onAck }) : "",
-  ].join("");
+      <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`,
+    ack: problems.length ? { id: ackId, sentence: reviewAck(what), onchange: onAck } : null,
+    actions });
 }
 window.startReview = startReview;
 
@@ -464,10 +467,10 @@ window.wlScale = async (ns, name, n) => {
       if (plan.requires_confirmation || plan.blocked || waits.length || plan.waits_for_error) {
         const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
         const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null, setting = row?.start_setting;
-        modal(`Start · ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
-          extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)) })
-          + UI.actions(plan.blocked ? UI.cancel("Close")
-            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)`, { kind: "pri" })));
+        modal(`Start · ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, where: ns, ackId: "wl_capacity_ok",
+          extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)),
+          actions: { dismiss: plan.blocked ? "Close" : "Cancel",
+            primary: { label: "Start", onclick: `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)` } } }));
         return;
       }
     } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }

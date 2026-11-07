@@ -1021,8 +1021,10 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   MOVE_SOURCE_NAMESPACE = sourceNamespace;
   MOVE_STOP_SOURCE = false;
   const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
-  childModal(`${verb} from ${cluster} · ${name}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, `
-  <p class="muted small">${kind === "volume"
+  // A review of what moves and where, with the choices that shape it above the plan.
+  childModal(`${verb} from ${cluster} · ${name}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, UI.dialog({ shape: "review",
+    subject: { kind: kind === "vm" ? "VM" : kind === "volume" ? "Volume" : "App", name, where: `${cluster}${sourceNamespace ? ` · ${sourceNamespace}` : ""}` },
+    lead: `${kind === "volume"
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
       and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
       you change your mind.`
@@ -1032,7 +1034,8 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
       Review the copy's network settings before starting it.`
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
       storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
-      until you remove it, so it can be put back at any point before then.`}</p>
+      until you remove it, so it can be put back at any point before then.`}`,
+    body: `
   <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="${esc(defaultNamespace())}"></div>
     ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
       <select id="mv_mode" onchange="moveAddressMode(this.value)">
@@ -1046,10 +1049,11 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
       onchange="moveStopSource(${jsq(cluster)},${jsq(kind)},${jsq(name)},this.checked)"> Stop the VM while its disks are backed up</label>
     <div class="dim xs">It starts again on ${esc(cluster)} once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>` : ""}
   <div id="mv_plan"></div>
-  ${UI.actions(`<button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
-    <button class="btn pri" id="mv_go" data-need="admin" disabled
-      onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start ${copy ? "copy" : "move"}</button>
-    <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, false, "operation-review");
+`,
+    actions: { dismiss: { label: "Cancel", onclick: "modalBack()" },
+      start: `<button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>`,
+      primary: { label: `Start ${copy ? "copy" : "move"}`, onclick: `moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})`, id: "mv_go", disabled: true, attrs: 'data-need="admin"' } } }),
+    false, "operation-review");
   movePlan(cluster, kind, name);
   for (const id of ["#mv_ns", "#mv_ip"]) {
     const field = $(id);

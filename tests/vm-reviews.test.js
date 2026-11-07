@@ -82,7 +82,7 @@ test("New VM's review reads like a container start", async () => {
   await c.vmCreateReview({ name: "win11" });
   assert.match(shown.title, /win11/);
   assert.doesNotMatch(shown.html, /reviewbox/);
-  assert.match(shown.html, /class="ui-lead"[^>]*>Creates <b>win11<\/b>/);
+  assert.match(shown.html, /ui-head-name">win11<\/span>[\s\S]*class="ui-lead"[^>]*>Creates it/);
   assert.match(shown.html, /win11-disk/);
   assert.doesNotMatch(shown.html, /vmCreateApprove/, "nothing to accept, no tickbox");
   assert.match(shown.html, />Create VM</);

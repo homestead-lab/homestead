@@ -366,7 +366,9 @@ function capacityNotes(plan) {
 }
 window.capacityNotes = capacityNotes;
 
-function deployCapacityHtml(plan, overlap = false, imageChange = false) {
+/* Where it can run and what it needs. notice: false leaves its warnings to
+   the dialog's one notice (deployCapacityIssues) instead of a box here. */
+function deployCapacityHtml(plan, overlap = false, imageChange = false, { notice = true } = {}) {
   if (!plan) return "";
   const { concerns: needs, caveats } = capacityNotes(plan);
   const title = overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory";
@@ -383,7 +385,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
   return `<div class="deploy-capacity ui-stack">
     ${overlap ? "" : capacityPlacementHtml(plan)}
     ${UI.section(title, [
-      plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p>"}`)
+      !notice ? "" : plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p>"}`)
         : concerns ? UI.callout("warn", "Placement and memory need review.", concerns) : "",
       plan.pod_request_gb !== undefined && plan.pod_request_gb !== null ? `<p class="ui-help">${requests}</p>` : "",
       capacityHosts(plan.candidates || [], { unavailable: "Live RAM unavailable",
@@ -395,6 +397,15 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
       <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the app or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
   </div>`;
+}
+/* The capacity warnings, or the blocker and what blocks, as the dialog's notice. */
+function deployCapacityIssues(plan) {
+  if (!plan) return { issues: [], title: "" };
+  const needs = capacityNotes(plan).concerns;
+  if (plan.blocked) return { title: plan.rollout?.start_blocked ? "The rollout cannot start" : "It cannot fit",
+    issues: [["bad", { short: plan.rollout?.start_blocked ? "No replacement pod fits within the current availability policy." : "It cannot fit the checked placement constraints.",
+      more: "This is a placement blocker, not just a capacity warning: change its resources, volumes or host selection." }], ...needs.map(w => ["bad", w])] };
+  return { title: "", issues: needs.map(w => ["warn", w]) };
 }
 window.deployReviewReady = () => DEPLOY.ready();
 function deployInvalid(message, selector) {
@@ -414,18 +425,22 @@ const DEPLOY = UI.reviewFlow({
   },
   render: (review, c) => {
     const joining = c.target_mode === "existing", plan = review.preview;
-    modal(joining ? "Review shared-pod change" : "Review deployment", `${UI.head(joining ? { kind: "App", name: c.target_workload, where: c.namespace } : { kind: "New app", name: c.workload_name, where: c.namespace })}<div class="update-review">
-      <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
-        <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
-        ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
-        <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
-          <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
-      </div>
-      ${deployCapacityHtml(plan.capacity)}
-      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
-      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
-      ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}</div>
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}`, true);
+    const notice = deployCapacityIssues(plan.capacity);
+    const restart = plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again"
+      : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${c.target_workload} as its pods roll out`;
+    modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">${UI.dialog({ shape: "review",
+      subject: joining ? { kind: "App", name: c.target_workload, where: c.namespace } : { kind: "New app", name: c.workload_name, where: c.namespace },
+      lead: `${joining ? `Adds ${esc(c.container_name)} to it.` : `Creates it with container ${esc(c.container_name)}.`} ${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}`,
+      issues: notice.issues, issuesTitle: notice.title,
+      body: `${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
+        ${UI.facts([["Image", `<span class="mono">${esc(c.image)}</span>`], ["Ports", esc(c.ports.length)], ["Storage mappings", esc(c.volumes.length)]])}
+        ${deployCapacityHtml(plan.capacity, false, false, { notice: false })}
+        ${joining ? UI.ack("deployConfirm", restart, { onchange: "deployReviewReady()" }) : ""}
+        ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}`,
+      ack: plan.capacity?.requires_confirmation ? { id: "deployCapacityConfirm", sentence: "Deploy it despite the warnings", onchange: "deployReviewReady()" } : null,
+      actions: { dismiss: { label: "Cancel", onclick: "closeModal()" },
+        primary: { label: joining ? "Add container & restart pod" : "Deploy app", onclick: "confirmDeploy()", id: "deployGo",
+          disabled: !!(joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked) } } })}</div>`, true);
   },
   failed: e => toast(e.message, "bad"),
   blocked: review => !!review.plan?.blocked, button: "deployGo",
@@ -484,5 +499,5 @@ if (typeof module === "object" && module.exports) module.exports = {
   deployPlacementApp, viewDeploy, selectedTarget, renderDeployTargets, updateJoinNote, refreshDeployOptions,
   applyDeployMode, collect, deployPlacementWords, syncSummary, addPort, deployVolumePicker, addVol, addEnv,
   renderPorts, renderVols, renderEnv, CAPACITY_ROUTINE, CAPACITY_ROLLOUT_ROUTINE, capacityNoteWords,
-  capacityNotes, deployCapacityHtml, deployInvalid, DEPLOY, DEPLOY_CLICKS
+  capacityNotes, deployCapacityHtml, deployCapacityIssues, deployInvalid, DEPLOY, DEPLOY_CLICKS
 };

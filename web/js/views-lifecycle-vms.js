@@ -371,9 +371,10 @@ const VM_CREATE = UI.reviewFlow({
       cfg.host_devices?.add?.length ? ["Passthrough", cfg.host_devices.add.map(d => `${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}`).join("<br>")] : null]);
     const details = `${review.volumes?.length ? `<ul class="ui-list">${review.volumes.map(v => `<li><span class="mono">${esc(v.name)}</span>: ${esc(v.access_mode)} · ${esc(v.volume_mode)}</li>`).join("")}</ul>` : ""}
       <p class="ui-help">Guest login settings are part of this review but are not shown.</p>`;
-    childModal(`Create VM · ${cfg.name}`, startReview(review.capacity, { what: "Creates", name: cfg.name, objects, details,
-        ackId: "vmCreateApprove", onAck: "vmCreateReviewReady()" })
-      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button>`), true);
+    childModal(`Create VM · ${cfg.name}`, startReview(review.capacity, { what: "Creates", kind: "VM", name: cfg.name, where: cfg.namespace || "", objects, details,
+        ackId: "vmCreateApprove", onAck: "vmCreateReviewReady()",
+        actions: { dismiss: { label: "Back to configuration", onclick: "vmCreateReviewBack()" },
+          primary: { label: "Create VM", onclick: "vmCreateReviewedApply()", id: "vmCreateApply", disabled: true } } }), true);
     vmCreateReviewReady();
   },
   failed: error => toast(error.message,"bad"),

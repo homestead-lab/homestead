@@ -68,11 +68,11 @@ test("pinned: the review reads the same, with its acknowledgement, buttons and r
   const t = power();
   await t.ctx.vmPower("lab", "guest", "restart");
   const html = t.html();
-  assert.match(html, /Restarts <b>guest<\/b>/);
+  assert.match(html, /<span class="ui-head-name">guest<\/span><span class="ui-head-where">VM · lab<\/span>[\s\S]*<p class="ui-lead">Restarts it/);
   assert.match(html, / The guest stops and starts again\. Its restart policy changes from Halted to <b>Always<\/b>\. <span class="ui-help">4 GiB guest memory\.<\/span>/);
   assert.match(html, /id="vmPowerApprove"[^>]*onchange="vmPowerReviewReady\(\)"/);
   assert.match(html, /Restart it anyway/);
-  assert.match(html, /<div class="ui-actions-start"><button data-dialog-dismiss="true" class="btn" onclick="modalBack\(\)">Cancel<\/button><\/div><div class="ui-actions-end"><button class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply\(\)">Restart<\/button>/);
+  assert.match(html, /<div class="ui-actions-start"><button type="button" class="btn" onclick="modalBack\(\)" data-dialog-dismiss="true">Cancel<\/button><\/div><div class="ui-actions-end"><button type="button" class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply\(\)" >Restart<\/button>/);
   assert.equal(t.fields["#vmPowerApply"].disabled, true, "nothing is sent until the warning is accepted");
   await t.ctx.vmPowerReviewedApply();
   assert.deepEqual(t.toasts, [["Tick Restart it anyway to accept the warning", "bad"]]);
