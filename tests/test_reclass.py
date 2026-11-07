@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_reclass as RC
+from rebind import keep_bound
 from fakes.job_store import JobStore, Store
 
 CLASSES = [{"name": "longhorn-r2", "provisioner": "driver.longhorn.io", "replicas": "2", "migratable": True,
@@ -145,6 +146,7 @@ class ReclassTests(unittest.TestCase):
         # Saves between steps need a job store, which these resolver-only tests don't
         # have; test_reclass_legacy_waits runs the same steps through the real one.
         self.enterContext(mock.patch.object(RC.OPS, "checkpoint", lambda item: None))
+        keep_bound(self, RC)   # each Cluster() binds the module
 
     def test_the_review_names_what_uses_it_and_the_room_it_takes(self):
         Cluster()
@@ -288,6 +290,7 @@ class NotFoundPartWayTests(unittest.TestCase):
         # Saves between steps need a job store, which these resolver-only tests don't
         # have; test_reclass_legacy_waits runs the same steps through the real one.
         self.enterContext(mock.patch.object(RC.OPS, "checkpoint", lambda item: None))
+        keep_bound(self, RC)   # each Cluster() binds the module
 
     def flaky(self, cluster, where, times):
         """Answer 404 to writes on a path containing `where`, `times` times."""

@@ -12,12 +12,15 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_operations as operations
 import homestead_shared as SHARED
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class StoreMemoTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        keep_bound(self, operations)
         operations.bind(lambda path: {}, self.tmp.name, lambda namespace, name: {})
         operations.start("auto-update", "Update web automatically", {"kind": "Deployment", "name": "web"},
                          "/containers", {})

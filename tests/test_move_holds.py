@@ -6,6 +6,7 @@ annotations and the transfer's Longhorn backups by hand with kubectl.
 """
 import json
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -16,6 +17,7 @@ import homestead_move as MOVE
 import homestead_move_holds as HOLDS
 import homestead_move_source as SOURCE
 import homestead_names as NAMES
+import homestead_operations as OPS
 import homestead_kube as K
 from fakes.kube import Kube
 from test_transfer_cleanup import ID, OTHER, artifact
@@ -47,6 +49,7 @@ def longhorn(kind, name, transfer=ID, source_uid=UID, **fields):
 class HoldTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube(groups=GROUPS))
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
         for name, value in (("kget", K.kget), ("ksend", K.ksend)):
             self.enterContext(mock.patch.object(SOURCE, name, value))
 

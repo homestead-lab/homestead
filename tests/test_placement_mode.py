@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_container_rebalance as C
 import homestead_kube as K
 import homestead_placement_mode as mode
@@ -45,6 +46,7 @@ class SettingTests(unittest.TestCase):
 class TaintTests(unittest.TestCase):
     def setUp(self):
         self.sent = []
+        keep_bound(self, mode)
         mode.bind(None, lambda method, path, body, ctype: self.sent.append((method, path, body, ctype)))
 
     def test_a_standby_host_gets_the_soft_taint_and_keeps_its_own(self):
@@ -125,7 +127,7 @@ class TaintTests(unittest.TestCase):
 
 class SummaryTests(unittest.TestCase):
     def setUp(self):
-        self.addCleanup(mode.bind, None, None, lambda: {}, ())
+        keep_bound(self, mode)
 
     def test_the_route_counts_apps_reserving_nothing_outside_the_system_namespaces(self):
         def dep(ns, requests):
@@ -142,6 +144,12 @@ class SummaryTests(unittest.TestCase):
 
 
 class StandbyRebalanceTests(unittest.TestCase):
+    def setUp(self):
+        # The plan's review token is signed with this key. Two tests here only passed when an
+        # earlier one had left it bound: each test binds its own, and it is put back after.
+        keep_bound(self, CAPACITY_REVIEW)
+        CAPACITY_REVIEW.bind(lambda: b"test-key")
+
     def test_the_review_route_plans_around_the_standby_hosts(self):
         import homestead_routes as ROUTES
         c = Hosts(self)

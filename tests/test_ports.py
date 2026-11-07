@@ -4,6 +4,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server" / "probe"))
 import probe
 import homestead_ports as PORTS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def nic(name, carrier=True, speed=1000, master="", counters=None, member=None, mtu=1500):
@@ -74,6 +76,7 @@ class ProbePortFactsTests(unittest.TestCase):
 class PortsTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, PORTS)
         PORTS.bind(self.dir.name)
 
     def tearDown(self):

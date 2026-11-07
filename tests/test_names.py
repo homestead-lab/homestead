@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_names as names
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,6 +36,9 @@ class NameTests(unittest.TestCase):
 
 
 class LabelSearchTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, names)
+
     def test_objects_are_found_by_their_label(self):
         asked = []
 

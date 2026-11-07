@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 sys.path.insert(0, os.path.dirname(__file__))
+import homestead_alerts as ALERTS_MODULE
 import homestead_logalerts as LA
 import homestead_logsearch as LOGSEARCH
 from rebind import keep_bound
@@ -40,7 +41,7 @@ class Base(unittest.TestCase):
         self.logs, self.calls, self.leader = {}, [], [True]
         self.workloads = list(WL)
         self.withdrawn, self.noted = [], []
-        keep_bound(self, LA)   # bind() keeps its readers in LA._bound: put server's back after
+        keep_bound(self, LA, ALERTS_MODULE)   # bind() keeps its readers in LA._bound: put server's back after; the alerts folder too
         LA.bind(self.dir, workloads=lambda: self.workloads, read=self.read, is_leader=lambda: self.leader[0],
                 withdraw=lambda key, title, body: self.withdrawn.append((key, title, body)) or self.raised,
                 note=self.noted.append)
@@ -219,6 +220,7 @@ class Rounds(Base):
         self.assertEqual(300, self.calls[-1][1], "at most five minutes back")
 
     def test_round_keeps_edits_made_meanwhile(self):
+        ALERTS_MODULE.bind(self.dir)   # LA.delete withdraws through the alerts module: its own folder, put back by setUp
         rule = self.rule()
         self.logs["app-x-1"] = lines(3)
 
@@ -702,6 +704,7 @@ class Withdraw(unittest.TestCase):
     def setUp(self):
         import homestead_alerts as ALERTS
         self.A, self.dir = ALERTS, tempfile.mkdtemp()
+        keep_bound(self, ALERTS)
         ALERTS.bind(self.dir)
         self.fact = {"key": "logs:la-0123456789ab", "category": "logs", "severity": "degraded", "urgent": True,
                      "title": "Door: 12 matching lines in a minute", "resolved": "Door: back under 10 in a minute",

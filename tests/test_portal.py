@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_portal as PORTAL
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 WORKLOADS = [
     {"ns": "lab", "name": "frigate", "icon": "data:image/png;base64,AAA", "group": "Home",
@@ -40,6 +42,7 @@ class PortalTests(unittest.TestCase):
             self.persisted.append(source)
             return "/api/icons/" + "a" * 64 + ".png"
 
+        keep_bound(self, PORTAL)
         PORTAL.bind(get, send, "lab", lambda: WORKLOADS, persist, lambda ref: "data:image/png;base64,CACHED")
 
     def test_links_are_checked_and_stored(self):

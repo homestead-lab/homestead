@@ -16,6 +16,8 @@ import homestead_power_hold as HOLD
 import homestead_power as POWER
 import homestead_lifecycle as LC
 import homestead_node_actions as NODE_ACTIONS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def pod(ns, name, node, owner_kind="ReplicaSet", owner="app-7d9f", phase="Running", labels=None):
@@ -39,6 +41,7 @@ def vmi(ns, name, node, migratable=True, owned=True):
 
 class CandidateTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, HOLD)
         HOLD.OWN = ("lab", "homestead")
         self.sets = {("lab", "app-7d9f"): rs("lab", "app-7d9f", "app"),
                      ("lab", "plex-55cf"): rs("lab", "plex-55cf", "plex"),
@@ -115,6 +118,7 @@ class StopRestoreTests(unittest.TestCase):
     def setUp(self):
         self.k = Objects({DEP: {"metadata": {"name": "plex"}, "spec": {"replicas": 2}},
                           VM: {"metadata": {"name": "gpu"}, "spec": {"runStrategy": "RerunOnFailure"}}})
+        keep_bound(self, HOLD)
         HOLD.bind(self.k.get, self.k.send)
         self.items = [{"kind": "Deployment", "ns": "lab", "name": "plex"}, {"kind": "VirtualMachine", "ns": "vms", "name": "gpu"}]
 
@@ -155,6 +159,7 @@ class StopRestoreTests(unittest.TestCase):
 
 class OwnPodTests(unittest.TestCase):
     def test_homestead_is_never_stopped_whatever_its_deployment_is_called(self):
+        keep_bound(self, HOLD)
         HOLD.OWN, HOLD.OWN_POD = ("lab", "homestead"), "harvui-5c-x"
         try:
             items = HOLD.candidates("k1", [pod("lab", "harvui-5c-x", "k1", owner="harvui-5c")],

@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_root_guard as GUARD
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 GB = 1024 ** 3
 ROOT_ONLY = [{"mountpoint": "/", "disk": "sda"}, {"mountpoint": "/boot", "disk": "sda"}]
@@ -22,6 +24,7 @@ class RootGuardTests(unittest.TestCase):
         self.data = tempfile.mkdtemp()
         self.sent = []
         self.node, self.mounts = lh_node(50), ROOT_ONLY
+        keep_bound(self, GUARD)
         GUARD.bind(lambda path: {"items": [self.node]}, lambda *a, **k: self.sent.append(a[2]["spec"]["disks"]),
                    lambda force=False: {"distribution": "k3s", "longhorn": True},
                    lambda: {"node-1": {"mounts": self.mounts}}, self.data)

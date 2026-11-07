@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_ipam as IPAM
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 FACTS = {"node_ips": ["192.0.2.21", "192.0.2.22", "10.52.0.1"],
          "vips": [{"ip": "192.0.2.242", "listeners": [{"namespace": "lab", "service": "homestead"}]},
@@ -43,6 +45,7 @@ class Store:
 
 class IpamTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, IPAM)
         self.store = Store()
         IPAM.bind(self.store.get, self.store.send, "lab", lambda: FACTS)
         IPAM._scans.clear()

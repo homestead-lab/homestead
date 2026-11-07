@@ -13,6 +13,8 @@ import homestead_alerts as alerts
 import homestead_ecdsa as ec
 import homestead_push as push
 import server
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def unb64(text):
@@ -48,6 +50,7 @@ class PushTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, push)
         push.bind(self.dir.name)
         push._key_cache.clear()
         self.addCleanup(push._key_cache.clear)
@@ -131,6 +134,7 @@ class AlertTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, alerts)
         alerts.bind(self.dir.name)
         self.now = 1_000_000.0
 
@@ -231,6 +235,7 @@ class DeliveryTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, push, alerts)
         push.bind(self.dir.name)
         alerts.bind(self.dir.name)
 

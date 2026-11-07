@@ -14,6 +14,8 @@ import homestead_agent_audit as AUDIT
 import homestead_kube as K
 import homestead_mqtt as MQTT
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 from fakes.kube import Kube
 
 DEFAULT_ITEMS, DEFAULT_ACT = MQTT.control_items, MQTT.control_act
@@ -65,6 +67,7 @@ class ControlTests(unittest.TestCase):
         MQTT._recent.clear()
         MQTT._minute.clear()
         self.audit_dir = tempfile.TemporaryDirectory()
+        keep_bound(self, AUDIT)
         AUDIT.bind(self.audit_dir.name)
 
     def tearDown(self):
@@ -248,6 +251,7 @@ class VmReadFailsTests(unittest.TestCase):
         MQTT._recent.clear()
         MQTT._minute.clear()
         audit_dir = self.enterContext(tempfile.TemporaryDirectory())
+        keep_bound(self, AUDIT)
         AUDIT.bind(audit_dir)
 
     def test_sensors_and_containers_publish_while_the_vms_cannot_be_read(self):

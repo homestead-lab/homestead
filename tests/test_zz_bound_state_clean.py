@@ -44,7 +44,14 @@ GUARD.watch.update(name for name, _, kind in LISTED if kind == "fake")
 # test_macvtap and test_components now keep what their bind() calls set.
 # 452 -> 367 on 5 Nov (sweep 2): 19 test files (test_affinity through test_fleet_identities, in name order,
 # skipping the small ones) now keep what their bind() calls set.
-CEILING = 367
+# 367 -> 239 on 5 Nov (sweep 3, up to test_names): test files from test_forecast on, in name order, skipping
+# the open-PR ones, plus six files cleared through shared fixtures (test_shares, test_node_power_plan,
+# test_power_force, test_single_node_power, test_pullwatch_maintenance, test_transfer_cleanup), now keep what
+# their bind() calls set.
+# 239 -> 120 on 5 Nov (sweep 4, up to test_setup): test files from test_node_probe_upgrade on, in name order,
+# skipping test_revert_stop (its lines are all in the open-PR block), plus two files cleared through shared
+# fixtures (test_outage_sweep, test_storage_initial), now keep what their bind() calls set.
+CEILING = 120
 # The open-PR block at the end of bound_leaks.txt, capped on its own: lower it as each
 # PR merges and its lines go (WORKFLOW.md, after merge).
 PENDING_CEILING = 7
@@ -127,23 +134,10 @@ class BoundStateClean(unittest.TestCase):
 UNRESTORED_FILES = frozenset({
     # From #1095 (fix/move-retries-end), not on dev yet: restore its source/engine binds once it merges (wrap-up gaps).
     "test_move_gives_up",
-    "test_host_bridge",
     "test_hostrun_lease",
     "test_hostrun_retry",
-    "test_image_pull_progress",
-    "test_ipam",
     "test_iso_storage",
-    "test_job_errors",
     "test_longhorn_tags",
-    "test_names",
-    "test_node_power_plan",
-    "test_node_removal_k3s",
-    "test_orphan_volume",
-    "test_portal",
-    "test_reclass",
-    "test_released_volume_delete",
-    "test_root_guard",
-    "test_sessions",
     "test_smart",
     "test_snapshot_delete",
     "test_vip_places",

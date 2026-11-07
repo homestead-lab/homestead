@@ -8,11 +8,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
 import homestead_image_cache as IMAGES
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 from fakes.platform import plain_platform
 
 
 class ImageCacheTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, imports, imports.NAMES)
         plain_platform(self)
         self.active = "sha256:" + "a" * 64
         self.rollback = "sha256:" + "b" * 64
@@ -138,6 +141,7 @@ class PrepullTests(unittest.TestCase):
     """A pre-pull is a DaemonSet, which means it needs stopping, not deleting."""
 
     def setUp(self):
+        keep_bound(self, imports, imports.NAMES)
         self.sent = []
         self.daemonsets = []
         self.nodes = [

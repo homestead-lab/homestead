@@ -10,6 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_operations as operations
 import homestead_updates as updates
 import homestead_update_rollouts as ROLLOUTS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def _stamp(seconds_ago):
@@ -36,6 +38,7 @@ class ImagePullProgressTests(unittest.TestCase):
     """A rollout stuck at 0/1 should say it is fetching an image, not just wait."""
 
     def setUp(self):
+        keep_bound(self, updates)
         self.events = []
         self.dep = copy.deepcopy(DEPLOYMENT)
 
@@ -100,6 +103,7 @@ class ImagePullProgressTests(unittest.TestCase):
 
 class ActivityTrayMessageTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, operations)
         self.state = {"desired": 1, "ready": 0, "phase": "progressing", "pull": {}}
         operations.bind(lambda path: {}, str(Path(__file__).parent),
                         lambda ns, name: self.state)

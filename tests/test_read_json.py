@@ -14,6 +14,8 @@ import homestead_api_keys as KEYS
 import homestead_changes as CHANGES
 import homestead_push as PUSH
 import homestead_shared as SHARED
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 BROKEN = '{"half a file'
 ENDPOINT = "https://fcm.googleapis.com/fcm/send/abc123"
@@ -70,6 +72,7 @@ class ReadJsonTests(Folder):
 class ChangeHistoryTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, CHANGES)
         CHANGES.bind(self.dir.name)
         self.put("change-history.json", BROKEN)
 
@@ -89,6 +92,7 @@ class ChangeHistoryTests(Folder):
 class AgentRequestTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, REQUESTS)
         REQUESTS.bind(self.dir.name)
         self.put(REQUESTS.FILE, BROKEN)
 
@@ -102,6 +106,7 @@ class AgentRequestTests(Folder):
 class PushTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, PUSH)
         PUSH.bind(self.dir.name)
         PUSH._key_cache.clear()
         self.addCleanup(PUSH._key_cache.clear)
@@ -156,6 +161,7 @@ class BellTests(unittest.TestCase):
 class KeyUsageTests(Folder):
     def setUp(self):
         super().setUp()
+        keep_bound(self, KEYS)
         KEYS.bind(self.dir.name)
         KEYS._usage_written.clear()
         self.put("api-key-usage.json", BROKEN)

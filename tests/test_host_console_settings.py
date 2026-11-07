@@ -12,6 +12,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_console as CONSOLE
 import homestead_operations as OPS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 from fakes.platform import plain_platform
 
 
@@ -26,6 +28,7 @@ class ConsoleSettingsTests(unittest.TestCase):
         self.runner = mock.Mock()
         def get(path):
             return {"items": [copy.deepcopy(self.node)]} if path == "/api/v1/nodes" else copy.deepcopy(self.node)
+        keep_bound(self, OPS, CONSOLE)
         OPS.bind(get, self.tmp.name, lambda *a: {})
         CONSOLE.bind(get, self.runner, OPS, "2.8.244", self.tmp.name)
         self.payload = self.root / "payload"

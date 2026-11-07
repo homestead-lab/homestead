@@ -11,6 +11,8 @@ import homestead_operations as OPS
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTER
 import homestead_set_restart as sr
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 LH = sr.LH
 PODS = "/api/v1/namespaces/lab/pods?labelSelector=app%3Dweb"
@@ -53,6 +55,7 @@ class SetRestartReadTests(unittest.TestCase):
                 {"spec": {"nodeID": "host-1", "volumeName": "pv-a"}, "status": {"currentState": "running"}}]},
             "/apis/longhorn.io/v1beta2/volumes": {"items": [
                 {"metadata": {"name": "pv-a"}, "status": {"robustness": "degraded"}}]}}
+        keep_bound(self, sr)
         sr.bind(self.get, None)
 
     def get(self, path, *a, **k):
@@ -640,6 +643,7 @@ class SetRestartRouteTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.objects, self.sent, self.err, self.errs, self.get_err = {}, [], None, {}, None
+        keep_bound(self, OPS, sr)
         OPS.bind(lambda path: self.objects[path], self.tmp.name, lambda ns, name: None)
         self.state = good_state()
         self.now = NOW

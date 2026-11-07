@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 import homestead_job_errors as ERRORS
 import homestead_kube as K
 import homestead_operations as OPS
+from rebind import keep_bound
 from fakes.kube import Kube
 
 SERVICE = {"apiVersion": "v1", "kind": "Service", "metadata": {"name": "web", "namespace": "apps"},
@@ -47,6 +48,7 @@ class StoreTest(unittest.TestCase):
     def setUp(self):
         self.tmp = self.enterContext(tempfile.TemporaryDirectory())
         self.kube = self.enterContext(Kube(SERVICE, CLAIM))
+        keep_bound(self, OPS)
         OPS.bind(K.kget, self.tmp, lambda namespace, name: {})
         self.clock = Clock()
         self.enterContext(mock.patch.object(ERRORS, "clock", self.clock))

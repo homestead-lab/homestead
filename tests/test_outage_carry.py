@@ -26,6 +26,7 @@ import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_outage as O
 import homestead_outage_carry as C
+from rebind import keep_bound
 from fakes.kube import Kube
 
 ADDRESSES = {"ntfy.example.com": ["10.0.0.5"], "public.example.com": ["93.184.216.34"],
@@ -136,6 +137,7 @@ class CarryBase(unittest.TestCase):
         self.cluster = Cluster(self)
         saved = dict(O._bound)
         self.addCleanup(lambda: (O._bound.clear(), O._bound.update(saved)))
+        keep_bound(self, O)
         O.bind("/nonexistent", kget=K.kget, ksend=K.ksend,
                dns_name=lambda value, what: value, guard=lambda ns, name: None, ns="lab")
         self.looked = []

@@ -136,6 +136,7 @@ import homestead_maintenance as MAINTENANCE
 import homestead_hostrun as HOSTRUN
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
+from rebind import keep_bound
 from fakes.kube import Kube
 
 
@@ -669,6 +670,7 @@ class HostrunStdinTests(unittest.TestCase):
             if method == "POST":
                 pods["p"] = {"status": {"phase": "Running"}}
             return {}
+        keep_bound(self, HOSTRUN)
         HOSTRUN.bind(lambda path: pods.get("p") or {}, ksend,
                      lambda ns, pod, argv, **k: seen.update(k) or (b"OK", ""), "lab")
         with mock.patch.object(HOSTRUN.KUBE, "get_optional", lambda path, read=None: pods.get("p")), \
@@ -700,6 +702,7 @@ class WiringTests(unittest.TestCase):
         import homestead_hostrun as HOSTRUN
         import homestead_self as SELF
         seen = []
+        keep_bound(self, PROMOTE, HOSTRUN)   # the reload below sets the module's names afresh
         saved = (HOSTRUN.kget, HOSTRUN.ksend)
         self.addCleanup(lambda: setattr(HOSTRUN, "kget", saved[0]) or setattr(HOSTRUN, "ksend", saved[1]))
         fresh = importlib.reload(PROMOTE)

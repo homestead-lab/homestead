@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_volumes as volumes
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 API = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
@@ -21,6 +23,7 @@ class OrphanVolumeTests(unittest.TestCase):
                    "status": {"state": "detached", "kubernetesStatus": {"namespace": "lab", "pvcName": "ubuntu-cloud-disk"}}}
         self.objects = {f"{API}/volumes/vol": self.lh, "/api/v1/persistentvolumes": {"items": [self.pv]}}
         self.sent = []
+        keep_bound(self, volumes)
         volumes.bind(self.get, lambda *a, **kw: self.sent.append((a, kw)), lambda _: [], lambda _: [], {}, {"kube-system"}, "lab")
         self.cfg = dict(namespace="lab", name="ubuntu-cloud-disk", volume="vol", uid="lh-uid", pv_uid="pv-uid",
                         confirmation="ubuntu-cloud-disk", action="delete_data")

@@ -14,6 +14,8 @@ import homestead_network_inventory as INV
 import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def service(name, workload, ports, ips, requested=()):
@@ -63,6 +65,9 @@ class Objects:
 
 
 class SelfAddressTests(unittest.TestCase):
+    def setUp(self):
+        keep_bound(self, SELF_ADDRESS)
+
     def bind(self, network, objects=None):
         self.objects = objects or Objects()
         SELF_ADDRESS.bind(None, network, self.objects, "lab", "8080", "lab", "homestead-smb")
@@ -174,6 +179,7 @@ class InstallerVipTests(unittest.TestCase):
         self.platform = {"distribution": "k3s", "helm_controller": True, "load_balancer": "servicelb"}
         self.request = {"data": {"vip": "192.0.2.200"}}
         self.calls = []
+        keep_bound(self, BASELINE)
         BASELINE.bind(self.get, type("A", (), {"status": staticmethod(lambda: {})}), lambda force=False: self.platform,
                       "lab", self.tmp.name)
         BASELINE.vip_setup = lambda vip: self.calls.append(vip) or "moved"

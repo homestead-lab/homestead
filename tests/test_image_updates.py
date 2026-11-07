@@ -14,6 +14,8 @@ import homestead_updates as updates
 import homestead_update_registry as REGISTRY
 import homestead_update_rollouts as ROLLOUTS
 import homestead_update_checks as checks
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 DEPLOYMENT = {
@@ -33,6 +35,7 @@ DEPLOYMENT = {
 
 class ImageUpdateTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, updates)
         self.dep = copy.deepcopy(DEPLOYMENT)
         self.sent = []
         self.pods = []
@@ -796,6 +799,10 @@ if __name__ == "__main__":
 class RateLimitTests(unittest.TestCase):
     """A registry answering 429 - Docker Hub does, often - is a check put off,
     not a failed one: faster-whisper, piper and rustdesk showed "check failed"."""
+    def setUp(self):
+        # The channel was whatever the tests before left bound; these tests read it, so they set their own.
+        self.enterContext(mock.patch.object(updates, "CHANNEL", lambda: "prod"))
+
     def limited(self):
         import urllib.error
         return urllib.error.HTTPError("https://registry/v2/x", 429, "Too Many Requests", {"Retry-After": "0"}, None)

@@ -230,6 +230,7 @@ class SourceTests(unittest.TestCase):
         self.cluster = FakeCluster()
         self.lh = FakeLonghorn(self.cluster)
         seed_frigate(self.cluster)
+        keep_bound(self, source, source.NAMES)
         source.bind(self.cluster.get, self.cluster.send, self.lh, "lab")
 
     def stop_pods(self):
@@ -341,6 +342,7 @@ class VolumeSourceTests(unittest.TestCase):
             "metadata": {"name": "frigate-1", "labels": {"app": "frigate"}},
             "spec": {"volumes": [{"name": "c", "persistentVolumeClaim": {"claimName": "frigate-config"}}]},
             "status": {"phase": "Running"}})
+        keep_bound(self, source, source.NAMES)
         source.bind(self.cluster.get, self.cluster.send, self.lh, "lab")
 
     def claim(self):
@@ -398,6 +400,7 @@ class VmSourceTests(unittest.TestCase):
     def setUp(self):
         self.cluster = FakeCluster()
         self.lh = FakeLonghorn(self.cluster)
+        keep_bound(self, source, source.NAMES)
         source.bind(self.cluster.get, self.cluster.send, self.lh, "lab")
         self.cluster.put("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/ha", {
             "metadata": {"name": "ha", "annotations": {
@@ -472,6 +475,7 @@ class EngineTests(unittest.TestCase):
         self.lh = FakeLonghorn(self.cluster)
         self.ops = FakeOps()
         seed_frigate(self.cluster)
+        keep_bound(self, source, source.NAMES)
         source.bind(self.cluster.get, self.cluster.send, self.lh, "lab")
         self.unreachable = False
         self.remote_calls = []
@@ -517,7 +521,7 @@ class EngineTests(unittest.TestCase):
 
         client.remote = remote
         self.addCleanup(setattr, client, "remote", real_remote)
-        keep_bound(self, engine)   # put back what engine.bind() sets
+        keep_bound(self, engine, engine.NAMES)   # put back what engine.bind() sets, and the names client
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     self.ops, self.tmp.name, "lab")
         # The destination's own endpoint for the bucket matches the source's, so
@@ -545,7 +549,7 @@ class EngineTests(unittest.TestCase):
             self.assertEqual("joining", STATE._find(move["id"])["phase"])
             self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"])
             self.assertNotIn("/api/move/source", self.remote_calls)
-        keep_bound(self, engine)   # put back what engine.bind() sets
+        keep_bound(self, engine, engine.NAMES)   # put back what engine.bind() sets, and the names client
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(), self.ops, self.tmp.name, "lab")
         finished = self.run_until_settled(move_id=move["id"])
         self.assertEqual("succeeded", finished["status"], finished["message"])
@@ -595,7 +599,7 @@ class EngineTests(unittest.TestCase):
     def test_retry_after_restart_replaces_failed_backup_and_restores_new_one(self):
         failed = self.fail_backup()
         old = self.lh.made[0]["name"]
-        keep_bound(self, engine)   # put back what engine.bind() sets
+        keep_bound(self, engine, engine.NAMES)   # put back what engine.bind() sets, and the names client
         engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(),
                     self.ops, self.tmp.name, "lab")
         ACT.retry(failed["id"])
@@ -607,8 +611,9 @@ class EngineTests(unittest.TestCase):
 
     def test_dismissed_activity_then_new_attempt_recovers_source_backup_references(self):
         import homestead_operations as operations
+        keep_bound(self, operations)
         operations.bind(self.cluster.get, self.tmp.name, lambda *args: {})
-        keep_bound(self, engine)   # put back what engine.bind() sets
+        keep_bound(self, engine, engine.NAMES)   # put back what engine.bind() sets, and the names client
         with mock.patch.object(STATE, "OPS", operations), \
              mock.patch.dict(operations.RESOLVERS, {"move": PLAN.op_state}):
             failed = self.fail_backup()

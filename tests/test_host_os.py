@@ -9,6 +9,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_os as HOST_OS
 import homestead_hostrun as HOSTRUN
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 UBUNTU = """OS Ubuntu 24.04.3 LTS
 OSID ubuntu 24.04
@@ -112,6 +114,7 @@ class Ops:
 
 class StateTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, HOST_OS)
         self.data = tempfile.mkdtemp()
         self.nodes = {"items": [{"metadata": {"name": "node-1"}, "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]}
 
@@ -371,6 +374,7 @@ class PoolTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
         HOST_OS._FAILED.clear()
+        keep_bound(self, HOST_OS)
         self.addCleanup(HOST_OS._FAILED.clear)
         self.nodes = {"items": [{"metadata": {"name": f"node-{i}"},
                                  "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for i in range(6)]}

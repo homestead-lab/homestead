@@ -10,11 +10,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_auth as auth
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class SessionTests(unittest.TestCase):
     def setUp(self):
         self.store = {"users": {}, "signing_key": "k" * 48}
+        keep_bound(self, auth, auth.NAMES)
         auth.bind(self._get, self._send, "lab")
         auth._store_cache.update(at=0, data=None)
         auth.create_user("ada", "correct-horse-battery", first_only=True)

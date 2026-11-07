@@ -189,6 +189,7 @@ class HistoryTests(unittest.TestCase):
     def setUp(self):
         import homestead_changes as CHANGES
         self.C, self.dir = CHANGES, tempfile.TemporaryDirectory()
+        keep_bound(self, CHANGES)
         CHANGES.bind(self.dir.name)
         for name, value in (("_author_key", lambda: b"test-key"),
                             ("_authors", lambda: {"users": ["admin"], "api_keys": []})):

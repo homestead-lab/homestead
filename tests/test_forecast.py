@@ -9,6 +9,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_forecast as F
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 GB = 1024**3
 NOW = 1_800_000_000          # a fixed "now", in October 2027
@@ -53,6 +55,7 @@ class FitTests(unittest.TestCase):
 class ObserveTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
+        keep_bound(self, F)
         F.bind(self.dir.name)
 
     def tearDown(self):
@@ -111,6 +114,7 @@ class ReportOnceTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
+        keep_bound(self, F)
         F.bind(self.dir.name)
         for i in range(10):
             F.observe([{"name": "pvc-1", "pvc_name": "media", "filesystem": {"used_bytes": (50 + 2 * i) * GB, "capacity_bytes": 100 * GB}}],

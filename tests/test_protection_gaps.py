@@ -5,6 +5,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_longhorn as LH
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_revert as REVERT
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 API = REVERT.API
 
@@ -51,6 +53,7 @@ class RevertTests(unittest.TestCase):
         }
         self.reclass = FakeReclass(self)
         self.failing = {}       # Longhorn API action -> the error it raises
+        keep_bound(self, REVERT)
         REVERT.bind(self.get, self.send, self.reclass, lambda ns, name: name == "homestead", self.lh_call)
         reach = mock.patch.object(REVERT.ACCESS, "reachable", return_value="")
         self.reachable = reach.start()

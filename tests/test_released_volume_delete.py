@@ -20,6 +20,7 @@ import homestead_kube as K
 import homestead_operations as OPS
 import homestead_route_policy as ROUTE_POLICY
 import homestead_volumes as VOLUMES
+from rebind import keep_bound
 from fakes.kube import Kube
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -84,6 +85,7 @@ CFG = dict(namespace="lab", name="notes-data", volume="pvc-old", pv="pvc-old", u
 
 class Case(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, VOLUMES)
         # Writes take the jobs' lock (the storage guard), kept in a folder of its own.
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
 

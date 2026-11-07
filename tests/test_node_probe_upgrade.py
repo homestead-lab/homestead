@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_probe as probe
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 class ShippedScriptTests(unittest.TestCase):
@@ -64,6 +66,7 @@ class InstallTests(unittest.TestCase):
     def setUp(self):
         self.objects = {}
         self.sent = []
+        keep_bound(self, probe, probe.NAMES)
         probe.bind(self._get, self._send, "lab")
         real = probe.shipped_scripts
         self.addCleanup(setattr, probe, "shipped_scripts", real)
@@ -109,6 +112,7 @@ class ReconcileTests(unittest.TestCase):
     def setUp(self):
         self.objects = {}
         self.sent = []
+        keep_bound(self, probe, probe.NAMES)
         probe.bind(self._get, self._send, "lab")
         real = probe.shipped_scripts
         self.addCleanup(setattr, probe, "shipped_scripts", real)

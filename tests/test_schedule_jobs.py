@@ -48,7 +48,7 @@ class ScheduleJobTests(unittest.TestCase):
         # The alerts source reads through the routes' cache; here, fresh each time.
         self.enterContext(mock.patch.object(homestead_routes, "_cached", [lambda key, seconds, fn: fn()]))
         self.cache = {"cron": (0, [])}
-        keep_bound(self, imports)   # put back what imports.bind() sets
+        keep_bound(self, imports, imports.NAMES)   # put back what imports.bind() sets, and the names client it hands on
         imports.bind(get, send, None, None, "lab", self.cache)
 
     def cronjob(self, name, time_zone=None, labels=None):

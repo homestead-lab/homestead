@@ -8,6 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_move as move
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def deployment(name, volumes=(), mounts=(), replicas=1, ready=1, image="app:1"):
@@ -25,6 +27,7 @@ def deployment(name, volumes=(), mounts=(), replicas=1, ready=1, image="app:1"):
 class InventoryTests(unittest.TestCase):
     def setUp(self):
         self.deployments = []
+        keep_bound(self, move, move.NAMES)
         self.claims = {}
         move.bind(self._get, lambda *a, **k: {}, "lab")
 
@@ -132,6 +135,7 @@ class ClusterTests(unittest.TestCase):
     def setUp(self):
         self.objects = {}
         self.sent = []
+        keep_bound(self, move, move.NAMES)
         move.bind(self._get, self._send, "lab")
         move._tokens.clear()
 
@@ -191,6 +195,7 @@ class VersionTests(unittest.TestCase):
     """Two Homesteads say which release they run before anything moves."""
 
     def setUp(self):
+        keep_bound(self, move, move.NAMES)
         move.bind(lambda path: {}, lambda *a, **k: {}, "lab", "2.8.59")
         self.answers = {}
         real = move.remote

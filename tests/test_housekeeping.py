@@ -9,6 +9,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_housekeeping as HK
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 NOW = 1_800_000_000
 
@@ -21,6 +23,7 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.TemporaryDirectory()
         self.d = Path(self.dir.name)
+        keep_bound(self, HK)
         HK.bind(self.dir.name)
         HK._last.update(at=0, result=None)
         self.addCleanup(HK._last.update, at=0, result=None)

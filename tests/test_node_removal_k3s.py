@@ -7,6 +7,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_onboard as onboard
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from rebind import keep_bound
 
 
 def node(name, ready, roles=()):
@@ -95,6 +97,7 @@ class K3sCluster:
 
 class K3sRemovalTests(unittest.TestCase):
     def setUp(self):
+        keep_bound(self, onboard)
         self.c = K3sCluster()
 
     def test_the_plan_names_what_is_lost_and_what_is_tied_to_the_host(self):

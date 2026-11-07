@@ -16,6 +16,7 @@ import homestead_hostrun as HOSTRUN
 import server
 import homestead_storage_classes as STORAGE_CLASSES
 import test_shares
+from rebind import keep_bound
 
 
 class SpecTests(unittest.TestCase):
@@ -67,6 +68,7 @@ class ManifestTests(unittest.TestCase):
                 return "/var/lib/rancher/k3s/server/manifests/homestead.yaml\ndone\n", ""
 
         self.platform = {"distribution": "k3s"}
+        keep_bound(self, MANIFESTS)
         MANIFESTS.bind(lambda path: {"items": self.nodes}, Host, lambda force=False: self.platform, self.tmp.name)
 
     def tearDown(self):
