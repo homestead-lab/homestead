@@ -113,14 +113,19 @@ function syncDialogHead() {
 /* Explanations read short (design.md, Verbosity budget): a lead or help
    paragraph of more than PROSE_CHARS shows its first sentence, and an
    inline More shows the rest in place. Nothing is removed. A paragraph with
-   controls of its own, or inside a notice (which is a summary bar already)
-   or Details, is left as it is. */
+   controls of its own, inside a notice (a summary bar already) or Details,
+   or marked data-whole, is left as it is; so are a review's lead and plain
+   sentences, which state what will happen. */
 const PROSE_CHARS = 100;
 const PROSE = "p, .ui-help, small, span.small, div.dim, div.dim.xs, div.dim.small, .ui-step-detail, .ui-track-detail";
 function condenseDialogProse(body) {
   if (!body || !window.UI?.splitIssue) return;
+  // A review or a confirmation states what will happen in its lead and its
+  // plain sentences, so only its secondary text (help, small print) is cut.
+  const stating = ["review", "confirm"].includes($(".modalbox")?.dataset.shape);
   for (const p of body.querySelectorAll(PROSE)) {
-    if (p.dataset.prose || p.closest(".ui-callout, details, .ui-dialog-head, pre, table, .askdlg")) continue;
+    if (p.dataset.prose || p.dataset.whole !== undefined || p.closest(".ui-callout, details, .ui-dialog-head, pre, table, .askdlg")) continue;
+    if (stating && (p.matches(".ui-lead") || (p.matches("p") && !p.matches(".dim, .muted, .small, .ui-help")))) continue;
     p.dataset.prose = "1";
     if (p.querySelector("input, select, textarea, button, a.btn, details, ul, ol, table, pre, p, div")) continue;
     if (p.textContent.replace(/\s+/g, " ").trim().length <= PROSE_CHARS) continue;
