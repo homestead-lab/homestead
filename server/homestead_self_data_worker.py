@@ -49,8 +49,8 @@ TRANSIENT_CODES = (429, 500, 502, 503, 504)
 # not allowed after cutover anyway.
 READY_WARN = 900
 # How long the move waits for a host that is down before it holds, while it could still
-# go back to the original volume. After the switch or a start request a hold would keep
-# the new pods unready, and nothing else can be done, so that wait has no limit.
+# go back to the original volume: recovery works only on a held move. After a start request
+# a hold would keep the new pods unready, and nothing else can be done, so that wait has no limit.
 HOST_LIMIT = 1800
 # How long it waits for the memory figure of a host just back before it holds.
 FIGURE_LIMIT = 300
@@ -130,8 +130,8 @@ def recovery_help(namespace, state):
     if _goes_back_first(state):
         return (f" To review going back, run: {command}, then run it again with --confirm <fingerprint>. "
                 "It writes nothing until confirmed. Then start a new move.")
-    cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
-    return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
+    started = any(e["step"] == "start" for e in state["journal"]["ref"]["storage_writes"])
+    return (f" To review recovery, run: {command}" + ("" if started else " (or --action return-original)")
             + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
 
 
@@ -154,7 +154,7 @@ def progress(anchor, now):
         writes = state["journal"]["ref"]["storage_writes"]
         # No write at all: held before the stop, so Homestead never stopped.
         if (all(e["state"] == "accepted" for e in writes) and (not writes or any(e["step"] == "recover-start" for e in writes))
-                and not any(e["step"] in ("switch", "start") for e in writes)):
+                and not any(e["step"] == "start" for e in writes)):
             return {"operation": state["operation"], "phase": "done", "status": "cancelled", "stale": False,
                     "message": "Homestead is ready on its original volume. Both data volumes are retained.",
                     "stages": [], "copy_percent": None, "retention_policy": "keep_both_volumes", "requires_review": False, "can_cancel": False}
@@ -419,7 +419,7 @@ class Runner:
             return self._wait_for(anchor, "host", None, None,
                 f"{names} is down. Homestead has not been stopped. The move can go on only if it is back within about a minute, "
                 "while its copy check lasts; after that it holds, and the way out is going back.")
-        if any(e["step"] in ("switch", "start", "recover-start") for e in writes):
+        if any(e["step"] in ("start", "recover-start") for e in writes):
             return self._wait_for(anchor, "host", None, None,
                 f"{_names(removed)} was removed. The move has passed the point where it can stop, so it waits with no limit: "
                 "Homestead's pod on it leaves Kubernetes by itself and a new one carries on."

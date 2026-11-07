@@ -362,7 +362,7 @@ class Fence:
                       and e["target"]["path"] == f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}"]
             # No entry at all: held before the stop, so Homestead never stopped.
             if (len(starts) != 1 if entries else state["phase"] not in ("prepare", "done")) or any(
-                    e["step"] in ("switch", "start") for e in entries):
+                    e["step"] == "start" for e in entries):
                 raise Held("Original-volume recovery has no verified restart or has crossed cutover")
             if any(e["step"] == "copy-job" for e in entries) and not any(
                     e["step"] in ("release-copy", "recover-release-copy") and e["method"] == "DELETE" for e in entries):

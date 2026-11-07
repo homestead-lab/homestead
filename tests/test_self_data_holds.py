@@ -268,18 +268,23 @@ class HeldMoveRecoveryTests(unittest.TestCase):
             self.assertIn("start", self.writes())
         self.hold("Current placement or capacity needs review before the data handoff can continue")
 
-    def test_hold_at_start_resumes_forward_and_never_back(self):
-        for accepted_start in (False, True):
-            with self.subTest(accepted_start=accepted_start):
-                self.c = Cluster(); self.started_then_held(accepted_start)
-                with self.assertRaisesRegex(Held, "Cutover"): self.confirm("return-original")
-                self.confirm("resume")
-                runner = self.runner()
-                runner.tick()
-                self.assertEqual(1, self.writes().count("start"))
-                self.c.settle_start()
-                self.assertEqual("done", runner.tick()["status"])
-                self.assertEqual("target", self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+    def resumes_forward(self):
+        self.confirm("resume")
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual(1, self.writes().count("start"))
+        self.c.settle_start()
+        self.assertEqual("done", runner.tick()["status"])
+        self.assertEqual("target", self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_hold_after_the_start_request_resumes_forward_and_never_back(self):
+        self.started_then_held(True)
+        with self.assertRaisesRegex(Held, "Cutover"): self.confirm("return-original")
+        self.resumes_forward()
+
+    def test_hold_before_the_start_request_can_still_resume_forward(self):
+        self.started_then_held(False)
+        self.resumes_forward()
 
     def test_resume_at_start_needs_a_verified_copy_receipt(self):
         self.started_then_held(False)
@@ -534,8 +539,16 @@ class RecoveryCommandTests(unittest.TestCase):
         self.assertEqual(command, view["recovery_command"])
         self.assertIn("return-original", view["message"])
 
-    def test_after_cutover_it_offers_resume_only(self):
+    def test_after_the_switch_it_offers_both(self):
         c = Cluster(); c.switching(); c.step()
+        c.fresh().load(**c.handle).report("coordinator-uid", 1000, "held", "Startup needs review")
+        view = W.progress(c.fresh().load(**c.handle), 1000)
+        self.assertIn("--action resume", view["message"])
+        self.assertIn("return-original", view["message"])
+
+    def test_after_cutover_it_offers_resume_only(self):
+        c = Cluster(); c.switching(); c.step(); c.settle_stop(); c.step()
+        self.assertIn("start", [e["step"] for e in c.fresh().load(**c.handle).state["journal"]["ref"]["storage_writes"]])
         c.fresh().load(**c.handle).report("coordinator-uid", 1000, "held", "Startup needs review")
         view = W.progress(c.fresh().load(**c.handle), 1000)
         self.assertIn("--action resume", view["message"])

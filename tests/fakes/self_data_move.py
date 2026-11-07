@@ -310,13 +310,13 @@ class Move:
         self.kube.discard(self.copy_pod)
         self.kube.discard(self.copy_path)
 
-    def started(self):
+    def started(self, claim="target", host=None):
         dep = self.kube.object(self.dep_path)
         dep["status"] = {"observedGeneration": dep["metadata"]["generation"], "replicas": 1, "updatedReplicas": 1,
                          "readyReplicas": 1, "availableReplicas": 1}
         self.kube.add(dep)
-        self.kube.add(_obj("Pod", "homestead-new", {"nodeName": self.hosts[0], "volumes": [
-            {"name": "data", "persistentVolumeClaim": {"claimName": "target"}}],
+        self.kube.add(_obj("Pod", "homestead-new", {"nodeName": host or self.hosts[0], "volumes": [
+            {"name": "data", "persistentVolumeClaim": {"claimName": claim}}],
             "containers": copy.deepcopy(dep["spec"]["template"]["spec"]["containers"])},
             owner=("ReplicaSet", self.rs_uid, "hs-rs"),
             status={"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]}))

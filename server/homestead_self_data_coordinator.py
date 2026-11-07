@@ -30,6 +30,11 @@ class HostDown(Held):
         self.hosts, self.removed = hosts, list(removed)
 
 
+class HostRemoved(Held):
+    """A host the move uses is gone from the cluster, so resuming can't. Its own class so
+    recovery can say what else there is."""
+
+
 class FigurePending(Held):
     """The only new capacity warning is a missing memory figure on a host just back. Its
     words are the hold it becomes if the figure does not come."""
@@ -54,6 +59,24 @@ def zero(obj):
     return (type(generation) is int and type(observed) is int and observed >= generation > 0
             and obj.get("spec", {}).get("replicas") == 0
             and all(status.get(k, 0) == 0 for k in ("replicas", "readyReplicas", "availableReplicas", "terminatingReplicas")))
+
+
+def return_proposal(dep, state, plan):
+    """The Deployment going back to the original volume, in one write: the claim back and
+    the replica count together, so the cluster is only ever at new volume/0 or original/N.
+    The capacity review and the write both build it here, as admission compares the two.
+    The strategy stays as the switch set it: Homestead puts its own back at startup."""
+    proposed = copy.deepcopy(dep)
+    proposed["spec"]["replicas"] = state["replicas"]
+    pin_app_image(proposed, plan["copy_image"])
+    allowed = {state["source"]["name"]}
+    if any(e["step"] == "switch" for e in state["journal"]["ref"]["storage_writes"]):
+        allowed.add(state["destination"])
+    volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == plan["data_volume"]]
+    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") not in allowed:
+        raise Held("Recovery can start only the reviewed data mount")
+    volumes[0]["persistentVolumeClaim"]["claimName"] = state["source"]["name"]
+    return proposed
 
 
 class Coordinator:
@@ -106,9 +129,16 @@ class Coordinator:
     def _bound(self, source):
         name = self.state["source"]["name"] if source else self.state["destination"]
         fact = ({**self.state["source"], "shape": self.plan["source_pvc_shape"]} if source else self.plan["destination_pvc"])
-        pvc = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/persistentvolumeclaims/{name}"), fact, namespace=self.ns)
         pv_fact = self.plan["source_pv" if source else "destination_pv"]
-        pv = self._fact(self.read("/api/v1/persistentvolumes/" + pv_fact["name"]), pv_fact)
+        try:
+            pvc = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/persistentvolumeclaims/{name}"), fact, namespace=self.ns)
+            pv = self._fact(self.read("/api/v1/persistentvolumes/" + pv_fact["name"]), pv_fact)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            raise Held(f"The {'original' if source else 'new'} volume's claim or PersistentVolume no longer exists. Both are "
+                       "kept by rule, so someone removed it. Nothing was changed. Recovery can't go on without it, and a new one "
+                       "with the same name won't do: see docs/data-move-recovery.md.") from None
         ref = pv.get("spec", {}).get("claimRef", {})
         if (pvc.get("status", {}).get("phase") != "Bound" or pvc.get("spec", {}).get("volumeName") != pv_fact["name"]
                 or pvc["spec"].get("volumeMode", "Filesystem") != "Filesystem"
@@ -203,8 +233,8 @@ class Coordinator:
                     down.append(pinned["name"]); removed.append(pinned["name"])
                     continue
                 if error.code == 404:
-                    raise Held(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
-                               "Nothing was forced and both volumes are retained") from None
+                    raise HostRemoved(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
+                                      "Nothing was forced and both volumes are retained") from None
                 raise
             wanted = involved[pinned["name"]]
             ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))
@@ -539,7 +569,7 @@ class Coordinator:
         """Release mounts normally, then start only the unchanged source."""
         if self.state["phase"] == "done":
             return self._result("Homestead is ready on its original volume; both volumes are retained")
-        if any(e["step"] in ("switch", "start") for e in self.writer.entries):
+        if self._entry("start"):
             raise Held("Original-volume recovery is prohibited after cutover")
         if not self.writer.entries:
             # Held before the stop request: Homestead still runs its reviewed
@@ -570,11 +600,7 @@ class Coordinator:
                 return self._wait("recover", "Waiting for the copy pod to release both retained volumes", what="The data copy")
         if not self._quiet(dep):
             return self._wait("recover", "Waiting for normal removal of all data-volume mounts")
-        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
-        pin_app_image(proposed, self.plan["copy_image"])
-        volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]
-        if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]:
-            raise Held("Recovery can start only the unchanged original data mount")
+        proposed = return_proposal(dep, self.anchor.state, self.plan)
         built_from, dep = dep, self._admission("recover-start", proposed)
         if not self._quiet(dep): raise Held("A writer returned during recovery admission")
         self._update_dep("recover-start", dep, proposed, built_from)
