@@ -406,17 +406,19 @@ class JobTests(unittest.TestCase):
         """The pulls are cleared when their stage ends; a cancel ends it too,
         or the pre-pull DaemonSets would pull on for ever."""
         import homestead_host_move as HOST_MOVE
+        import homestead_image_cache as IMAGES
         for stop_on_failure in (False, True):
             with self.subTest(stop_on_failure=stop_on_failure):
                 item = copy.deepcopy(self.item)
                 item["ref"]["stop_on_failure"] = stop_on_failure
+                path = self.c.kube.add({"apiVersion": "apps/v1", "kind": "DaemonSet",
+                                        "metadata": {"namespace": IMAGES.I.NS, "name": "pull-1"}, "spec": {}})
                 with mock.patch.object(C, "_pull_first", return_value=(["pull-1"], ["example/frigate:stable"])), \
-                        mock.patch.object(HOST_MOVE, "_pulled", return_value=False), \
-                        mock.patch.object(HOST_MOVE, "_clear") as clear:
+                        mock.patch.object(HOST_MOVE, "_pulled", return_value=False):
                     C.status(item)
                     self.assertEqual("pulling", item["ref"]["stage"])
                     C.cancel_run(item, {})
-                    clear.assert_called_once_with(["pull-1"])
+                    self.assertIsNone(self.c.kube.object(path))
                 self.assertNotIn("pulls", item["ref"])
                 self.assertEqual([], self.c.moved)
 

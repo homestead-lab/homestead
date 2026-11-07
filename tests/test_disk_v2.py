@@ -55,6 +55,9 @@ class Operations(JobStore):
     def checkpoint(self, item):
         index = next(n for n, i in enumerate(self.items) if i['id'] == item['id'])
         self.items[index] = copy.deepcopy(item)
+    def keep_cancel_ref(self, item):
+        index = next(n for n, i in enumerate(self.items) if i['id'] == item['id'])
+        self.items[index]['ref'] = copy.deepcopy(item['ref'])
     def list_operations(self):
         for item in self._read():
             if item['status'] not in self.TERMINAL:
@@ -354,6 +357,47 @@ class DiskV2Tests(unittest.TestCase):
         disk = self.c.lh_node('node-1')['spec']['disks']['data']
         self.assertFalse(disk['allowScheduling']); self.assertFalse(disk['evictionRequested'])
         self.assertEqual(self.c.ops.items[0]['ref']['phase'], 'cancelled'); self.assertFalse(self.c.jobs)
+    def _on_the_real_store(self):
+        """The job store itself, not the stand-in: it refuses a checkpoint from a
+        job marked cancelling."""
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        for patcher in (patch.object(OPS, 'DATA_DIR', directory.name), patch.object(OPS, 'WRITE_GUARD', None),
+                        patch.dict(OPS.RESOLVERS, {V.KIND: V.progress}),
+                        patch.dict(OPS.CANCELLERS, {V.KIND: (V.cancel_plan, V.cancel_run)})):
+            patcher.start(); self.addCleanup(patcher.stop)
+        V.bind(K.kget, self.c.send, lambda force=False: {}, OPS, 'lab', lambda path: 'helper log')
+        self.c.ops = OPS
+        operation_id = self.c.start()['id']
+        OPS.list_operations()
+        return operation_id
+    def test_cancel_on_the_real_store_ends_cancelled_first_time(self):
+        operation_id = self._on_the_real_store()
+        OPS.cancel(operation_id)
+        item = OPS.stored()[0]
+        self.assertEqual(('cancelled', 'cancelled'), (item['status'], item['ref']['phase']), item['message'])
+    def test_a_cancel_cut_off_after_its_patch_finishes_when_it_runs_again(self):
+        operation_id = self._on_the_real_store()
+        died = type('Died', (BaseException,), {})
+        self.c.kube.fail(LHN('node-1'), died(), method='PATCH', applied=True)
+        with self.assertRaises(died):
+            OPS.cancel(operation_id)
+        self.assertEqual(OPS.CANCELLING, OPS.stored()[0]['status'])
+        OPS.list_operations()
+        item = OPS.stored()[0]
+        self.assertEqual(('cancelled', 'cancelled'), (item['status'], item['ref']['phase']), item['message'])
+        disk = self.c.lh_node('node-1')['spec']['disks']['data']
+        self.assertFalse(disk['allowScheduling']); self.assertFalse(disk['evictionRequested'])
+    def test_a_replaced_host_is_not_touched_when_the_cancel_runs_again(self):
+        operation_id = self._on_the_real_store()
+        died = type('Died', (BaseException,), {})
+        self.c.kube.fail(LHN('node-1'), died(), method='PATCH', applied=True)
+        with self.assertRaises(died):
+            OPS.cancel(operation_id)
+        self.c.put(NODE('node-1'), ('metadata', 'uid'), 'replacement-host')
+        patches = sum(method == 'PATCH' for method, _, _ in self.c.writes)
+        OPS.list_operations()
+        self.assertEqual(patches, sum(method == 'PATCH' for method, _, _ in self.c.writes))
+        self.assertIn('Host identity changed', OPS.stored()[0]['message'])
     def test_cancellation_after_erase_approval_is_refused(self):
         self.c.awaiting(); self.c.prepare()
         with self.assertRaisesRegex(ValueError, 'approved'): V.cancel_run(self.c.ops.items[0], {})

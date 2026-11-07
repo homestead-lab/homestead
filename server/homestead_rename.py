@@ -4,6 +4,7 @@ import hashlib
 import time
 import urllib.error
 
+import homestead_cancel_rerun as CANCEL_RERUN
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as IMPORT
 import homestead_kube as KUBE
@@ -453,17 +454,30 @@ def recovery_plan(item, read, ops):
     if _before(item):
         plan["keeps"].append(_before(item))
     try:
-        with LOCKS.worker_lock(item["id"], ops, timeout=.01):
-            for name in (item["ref"]["name"], item["ref"]["new_name"]):
-                obj = KUBE.get_optional(base(item["ref"]["namespace"]) + "/" + name, read=read)
-                if obj is None:
-                    plan["keeps"].append(f"{name}: not present")
-                else:
-                    meta = identity(obj)
-                    plan["keeps"].append(f"{name}: UID {meta['uid']}, desired replicas {obj['spec'].get('replicas', 1)}")
-            plan.update(can=True, why_not="")
+        lock = LOCKS.worker_lock(item["id"], ops, timeout=.01)
+        lock.__enter__()
+    except TimeoutError:    # its dispatcher holds it: a cancel run again waits for as long as that takes
+        return {**plan, "try_again": "busy"}
+    except OSError as error:    # perhaps passing: a cancel run again waits, for a while
+        return {**plan, "try_again": "error",
+                "why_not": f"{plan['why_not']}: its lock could not be opened ({error.strerror or error})"}
     except Exception:
-        pass
+        return plan
+    try:
+        for name in (item["ref"]["name"], item["ref"]["new_name"]):
+            obj = KUBE.get_optional(base(item["ref"]["namespace"]) + "/" + name, read=read)
+            if obj is None:
+                plan["keeps"].append(f"{name}: not present")
+            else:
+                meta = identity(obj)
+                plan["keeps"].append(f"{name}: UID {meta['uid']}, desired replicas {obj['spec'].get('replicas', 1)}")
+        plan.update(can=True, why_not="")
+    except Exception as error:
+        # A failed read says nothing about the rename: the caller waits, or shows the error.
+        if CANCEL_RERUN.is_blip(error):
+            raise
+    finally:
+        lock.__exit__(None, None, None)
     return plan
 
 

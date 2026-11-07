@@ -919,16 +919,17 @@ def cancel_run(item, options):
     inv = {'host': host, 'lh': lh, 'node': ref['node'], 'disk': ref['disk'],
            'spec': lh.get('spec', {}).get('disks', {}).get(ref['disk']),
            'status': lh.get('status', {}).get('diskStatus', {}).get(ref['disk'], {})}
-    _verify_original(inv, ref)
-    desired = copy.deepcopy(inv['spec'])
-    desired.update(allowScheduling=False, evictionRequested=False)
-    _patch_disk(inv, desired)
+    # A run cut off after its patch finds the disk as this would leave it.
+    stopped = dict(ref['original_disk'], allowScheduling=False, evictionRequested=False)
+    # Its identity is checked either way: a replaced host is not this job's.
+    expected = dict(ref['original_disk'], allowScheduling=False, evictionRequested=True)
+    _verify_original(inv if inv['spec'] != stopped else {**inv, 'spec': expected}, ref)
+    if inv['spec'] != stopped:
+        desired = copy.deepcopy(inv['spec'])
+        desired.update(allowScheduling=False, evictionRequested=False)
+        _patch_disk(inv, desired)
     ref['phase'] = 'cancelled'
-    # The generic canceller persists its original record separately.
-    with ops.transaction():
-        saved = _saved(item['id'])
-        saved['ref']['phase'] = 'cancelled'
-        ops.checkpoint(saved)
+    ops.keep_cancel_ref(item)
     return 'Evacuation stopped; disk remains mounted and disabled for new replicas'
 
 

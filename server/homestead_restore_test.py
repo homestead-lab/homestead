@@ -30,6 +30,7 @@ import json
 import time
 import urllib.error
 
+import homestead_cancel_rerun as RERUN
 import homestead_cache as CACHE
 import homestead_kube as KUBE
 import homestead_operations as OPS
@@ -400,15 +401,21 @@ def _not_made(item, to, why, final, now):
     return "running", 70, f"{why[:1].upper()}{why[1:]}; trying again"
 
 
-def _remove_made(item):
-    """Delete the copy, its fence and the restored claims; what could not be removed."""
+def _remove_made(item, saved=False):
+    """Delete the copy, its fence and the restored claims; what could not be removed.
+    saved: for a cancel, which may be run again: only the objects its first run saw."""
     ref = item["ref"]
     ns, left = ref["namespace"], []
-    for path in (f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}",
-                 f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies/{_copy_name(item)}",
-                 *[f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{r['restored']}" for r in ref.get("rows") or []]):
+    paths = (f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}",
+             f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies/{_copy_name(item)}",
+             *[f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{r['restored']}" for r in ref.get("rows") or []])
+    for path in paths:
         try:
-            _send("DELETE", path)
+            if saved:   # all saved before any goes
+                RERUN.remember(item, kget, *paths)
+                RERUN.delete_saved(item, kget, ksend, path)
+            else:
+                _send("DELETE", path)
         except Exception as error:
             left.append(f"{path.rsplit('/', 1)[-1]} ({str(error)[:60]})")
     return left
@@ -425,7 +432,7 @@ def cancel_run(item, chosen):
     # back to running, and the next round only finishes removing - the test
     # is not carried on and records nothing on the app.
     item["ref"]["cancelled"] = True
-    left = _remove_made(item)
+    left = _remove_made(item, saved=True)
     forget_plans()
     if left:
         raise ValueError("could not remove " + ", ".join(left) + "; try again or remove them by hand")

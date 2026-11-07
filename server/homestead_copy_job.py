@@ -9,6 +9,7 @@ import hashlib
 import json
 import urllib.error
 
+import homestead_cancel_rerun as CANCEL_RERUN
 import homestead_capacity_review as REVIEW
 import homestead_names as NAMES
 import homestead_pod_resources as SIZE
@@ -564,21 +565,34 @@ def recovery_plan(item, read, ops):
             "options": [{"id": "ack", "label": "I checked the storage and accept any partial or late effects",
                          "detail": "This does not restore old mappings or prove the data is complete.", "default": False}]}
     try:
-        with LOCKS.worker_lock(item["id"], ops, timeout=.01):
-            dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
-            if IDENT.identity(dep)["uid"] != ref["deployment"]["uid"]:
-                return {**plan, "why_not": "Workload was replaced; its hold will not be changed"}
-            if ref.get("job"):
-                if not ref.get("job_uid"):
-                    return {**plan, "why_not": "Copy creation outcome is unknown. Inspect the recorded Job in Kubernetes; this UI will not adopt or delete it by name."}
-                complete, failed = copy_finished(ref, read)
-                if not (complete or failed):
-                    return {**plan, "why_not": "Copy is still active. Wait for its pods to finish before releasing the hold."}
-            if dep["metadata"].get("annotations", {}).get(MARKER) not in (None, item["id"]):
-                return {**plan, "why_not": "Another operation owns this workload's hold"}
-            plan.update(can=True, why_not="")
+        lock = LOCKS.worker_lock(item["id"], ops, timeout=.01)
+        lock.__enter__()
+    except TimeoutError:    # its step holds it: a cancel run again waits for as long as that takes
+        return {**plan, "try_again": "busy"}
+    except OSError as error:    # perhaps passing: a cancel run again waits, for a while
+        return {**plan, "try_again": "error",
+                "why_not": f"{plan['why_not']}: its lock could not be opened ({error.strerror or error})"}
     except Exception:
-        pass
+        return plan
+    try:
+        dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
+        if IDENT.identity(dep)["uid"] != ref["deployment"]["uid"]:
+            return {**plan, "why_not": "Workload was replaced; its hold will not be changed"}
+        if ref.get("job"):
+            if not ref.get("job_uid"):
+                return {**plan, "why_not": "Copy creation outcome is unknown. Inspect the recorded Job in Kubernetes; this UI will not adopt or delete it by name."}
+            complete, failed = copy_finished(ref, read)
+            if not (complete or failed):
+                return {**plan, "why_not": "Copy is still active. Wait for its pods to finish before releasing the hold."}
+        if dep["metadata"].get("annotations", {}).get(MARKER) not in (None, item["id"]):
+            return {**plan, "why_not": "Another operation owns this workload's hold"}
+        plan.update(can=True, why_not="")
+    except Exception as error:
+        # A failed read says nothing about the hold: the caller waits, or shows the error.
+        if CANCEL_RERUN.is_blip(error):
+            raise
+    finally:
+        lock.__exit__(None, None, None)
     return plan
 
 

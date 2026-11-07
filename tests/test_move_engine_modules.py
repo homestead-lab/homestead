@@ -330,7 +330,8 @@ class ReadWhereDefinedTests(unittest.TestCase):
         item = {"ref": {"move": "0123456789ab"}}
         with mock.patch.object(STATE, "_find", return_value={"name": "web", "cluster": "other"}):
             self.assertEqual("rollback", CANCEL.move_plan(item)["mode"])
-        with mock.patch.object(ACT, "abandon", return_value={"message": "Put back web"}) as abandon:
+        with mock.patch.object(STATE, "_find", return_value={"name": "web", "cluster": "other"}), \
+                mock.patch.object(ACT, "abandon", return_value={"message": "Put back web"}) as abandon:
             self.assertEqual("Put back web", CANCEL.move_cancel(item, {}))
         abandon.assert_called_once_with("0123456789ab")
 

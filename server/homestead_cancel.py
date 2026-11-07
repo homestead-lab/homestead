@@ -18,15 +18,21 @@ Homestead switching onto its moved data - is refused until the step is done.
 
 Only what the job made is removed: objects are checked for the job's label or
 name before they are deleted, and volumes a job borrowed are never touched.
-Each step is safe to repeat, as a cancel stopped part-way is asked again.
+Each step is safe to repeat, as a cancel stopped part-way is run again by the
+leader (homestead_cancel_rerun). A step that destroys what a later step reads, or
+that a repeat would aim at something new of the same name, saves what it needs first.
 """
 import calendar
 import copy
+import hashlib
+import json
 import time
 import urllib.error
 import urllib.parse
 
+import homestead_cancel_rerun as RERUN
 import homestead_disks as DISKS
+import homestead_env_secrets as ENV_SECRETS
 import homestead_helm as HELM
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_image_cache as IMAGES
@@ -35,6 +41,8 @@ import homestead_longhorn as LH
 import homestead_move_actions as MOVE_ACTIONS
 import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
+import homestead_network_services as SERVICES
+import homestead_operations as OPS
 import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
@@ -51,6 +59,9 @@ LHNS = "longhorn-system"
 LHAPI = "/apis/longhorn.io/v1beta2"
 # A rollout this long before the job started is not the job's own.
 CLOCK_SLACK = 120
+# On a Deployment a cancel rolled back, with the job's id, in the write itself: once
+# it lands the old ReplicaSet has the top revision and the job's is "one back".
+CANCEL_ROLLBACK = NAMES.key("cancel-rollback")
 
 
 def bind(_kget, _ksend, _remove_workload=None, _tidy_restore=None):
@@ -72,6 +83,76 @@ def _delete(path):
         if error.code == 404:
             return False
         raise
+
+
+def _delete_saved(item, *paths):
+    """Delete these, each only if it is what this cancel's first run saw: run again,
+    it must not take a new object made since by the same name."""
+    return RERUN.delete_saved(item, kget, ksend, *paths)
+
+
+def _kept_note(item, *paths):
+    """Words for what is left because it is new since this cancel began, or ""."""
+    try:
+        kept = RERUN.kept_since(item, kget, *paths)
+    except Exception:   # the deletes are done: not a reason to call the cancel failed
+        return "; whether anything of that name was made since could not be read"
+    if not kept:
+        return ""
+    return (f"; {_names(kept)} {'was' if len(kept) == 1 else 'were'} made again since this cancel "
+            f"began, so the new {'one is' if len(kept) == 1 else 'ones are'} kept")
+
+
+def _running_again(item):
+    """Whether this is the leader running a cancel again, not a person's review. Only then
+    does what an earlier run saved fence what is there: a person has just looked at it."""
+    record = item.get("cancel_record") or {}
+    return bool(record.get("reruns")) and not record.get("parked")
+
+
+def _reviewed(item):
+    """What the person reviewed, when this cancel is running again: a half-done cancel
+    must not read as if it would now do something else."""
+    return (item.get("cancel_record") or {}).get("mode")
+
+
+def _note_workload(item, ns, name, dep):
+    """Save a workload's uid, and the Services and Secret only it can lead to."""
+    names = set(SERVICES.workload_service_names(ns, name)) | {name}
+    found = {service: KUBE.get_optional(f"/api/v1/namespaces/{_q(ns)}/services/{_q(service)}", read=kget)
+             for service in sorted(names)}
+    item["ref"]["cancel_removing"] = {"uid": dep["metadata"].get("uid"), "secret": ENV_SECRETS.own(dep),
+                                      "services": {service: row["metadata"].get("uid")
+                                                   for service, row in found.items() if row}}
+    OPS.keep_cancel_ref(item)
+
+
+def _remove_workload_once(item, ns, name):
+    """Remove a workload as remove_workload does, so that a run cut off after the
+    Deployment went still removes its Services and Secret, which can only be
+    found from the Deployment. -> "removed", "gone" or "kept" (another of that name)."""
+    ref, path = item["ref"], _deployment_path(ns, name)
+    dep = KUBE.get_optional(path, read=kget)
+    saved = ref.get("cancel_removing")
+    if not dep:
+        if not saved:
+            return "gone"
+        for service, uid in (saved.get("services") or {}).items():
+            RERUN._delete_same(f"/api/v1/namespaces/{_q(ns)}/services/{_q(service)}", uid, ksend)
+        if saved.get("secret"):
+            ENV_SECRETS.remove(ns, {"metadata": {"annotations": {ENV_SECRETS.ANNOTATION: saved["secret"]}}}, kget, ksend)
+        return "removed"
+    if saved and dep["metadata"].get("uid") != saved.get("uid"):
+        if _running_again(item):
+            return "kept"
+        saved = None
+    if not saved:
+        _note_workload(item, ns, name, dep)
+    if remove_workload:
+        remove_workload(ns, name)
+    else:
+        _delete(path)
+    return "removed"
 
 
 def _stamp(value):
@@ -132,10 +213,13 @@ def rollout_target(ns, name, since):
     return dep, older[-1], ""
 
 
-def roll_back(ns, name, replicaset, replicas=None):
+def roll_back(ns, name, replicaset, replicas=None, job=""):
     """Put a Deployment's pod template back to a ReplicaSet's, as kubectl
-    rollout undo does; with a replica count, it is started at that too."""
+    rollout undo does; with a replica count, it is started at that too. job marks
+    the Deployment as rolled back by it, in the same write."""
     dep = kget(_deployment_path(ns, name))
+    if job:
+        dep["metadata"]["annotations"] = {**(dep["metadata"].get("annotations") or {}), CANCEL_ROLLBACK: job}
     template = copy.deepcopy((replicaset.get("spec") or {}).get("template") or {})
     (template.setdefault("metadata", {}).get("labels") or {}).pop("pod-template-hash", None)
     dep["spec"]["template"] = template
@@ -166,6 +250,15 @@ def _claims_of(dep):
                    for v in spec.get("volumes") or [] if v.get("persistentVolumeClaim")} - {None})
 
 
+def _reviewed_target(item):
+    return (item.get("cancel_record") or {}).get("target")
+
+
+def _rolled_back_by(item, dep):
+    """Whether this job's cancel has rolled this Deployment back already."""
+    return bool(item.get("id")) and ((dep or {}).get("metadata", {}).get("annotations") or {}).get(CANCEL_ROLLBACK) == item["id"]
+
+
 def deployment_plan(item):
     ref = item["ref"]
     ns, name = ref["namespace"], ref["name"]
@@ -176,6 +269,9 @@ def deployment_plan(item):
             "Edit or remove the share to change it back."]}
     if undo == "delete":
         dep = KUBE.get_optional(_deployment_path(ns, name), read=kget)
+        if not dep and ref.get("cancel_removing"):
+            return {"mode": "rollback", "severity": "high",
+                    "undo": [f"Finishes removing {name}: the Services that pointed at it"]}
         if not dep:
             return {"mode": "stop", "keeps": [f"{name} no longer exists; there is nothing to remove"]}
         claims = _claims_of(dep)
@@ -185,11 +281,17 @@ def deployment_plan(item):
                 "keeps": ([f"Its {'volume' if len(claims) == 1 else 'volumes'} {_names(claims)} "
                            f"{'is' if len(claims) == 1 else 'are'} kept, with anything written so far; "
                            "delete them from Volumes if they are not wanted"] if claims else [])}
+    if _rolled_back_by(item, KUBE.get_optional(_deployment_path(ns, name), read=kget)):
+        return {"mode": "rollback", "severity": "high",
+                "undo": [f"{name} is going back to the version it ran before this job already"],
+                "reviewed_target": _reviewed_target(item)}
     dep, target, why = rollout_target(ns, name, item.get("started_at"))
     if not target:
         return {"mode": "forget", "keeps": [f"The change is saved in Kubernetes already ({why}); "
                                             f"edit {name} to change it back"]}
     return {"mode": "rollback", "severity": "high",
+            # A later rollout moves "one back": run again, this must still be what was reviewed.
+            "reviewed_target": {"replicaset": target["metadata"].get("uid")},
             "undo": [f"{name} goes back to the version it ran before this job "
                      f"(revision {_revision(target)}: {_names(_images(target['spec']['template']))})"],
             "keeps": [f"{name}'s pods restart once more, onto that version"]}
@@ -202,18 +304,19 @@ def deployment_cancel(item, _options):
     if undo == "keep":
         return "Stopped following it; the share change stays"
     if undo == "delete":
-        if not KUBE.get_optional(_deployment_path(ns, name), read=kget):
+        done = _remove_workload_once(item, ns, name)
+        if done == "gone":
             return f"{name} was already gone"
-        if remove_workload:
-            remove_workload(ns, name)
-        else:
-            _delete(_deployment_path(ns, name))
+        if done == "kept":
+            return f"{name} was made again since this cancel began, so the new one is kept"
         return f"{name} was removed; its volumes are kept"
+    if _rolled_back_by(item, KUBE.get_optional(_deployment_path(ns, name), read=kget)):
+        return f"{name} is going back to the version it ran before this job"
     _, target, why = rollout_target(ns, name, item.get("started_at"))
     if not target:
         # What the plan said: the change stays, only the tracking stops.
         return f"Stopped following it; the change stays ({why})"
-    roll_back(ns, name, target)
+    roll_back(ns, name, target, job=item.get("id", ""))
     return f"{name} is going back to revision {_revision(target)}"
 
 
@@ -246,8 +349,12 @@ def pull_plan(item):
 
 
 def pull_cancel(item, _options):
-    IMAGES.stop_prepull(item["ref"]["name"])
-    return "Pull stopped; nodes that had finished keep the image"
+    name = str(item["ref"]["name"])
+    if not any(name.startswith(prefix) for prefix in IMAGES.PREPULL_NAMES) or "/" in name:
+        raise ValueError("that is not an image pre-pull")
+    path = f"/apis/apps/v1/namespaces/{IMAGES.I.NS}/daemonsets/{name}?propagationPolicy=Background"
+    _delete_saved(item, path)
+    return "Pull stopped; nodes that had finished keep the image" + _kept_note(item, path)
 
 
 def _cleanup_pods(item):
@@ -269,11 +376,11 @@ def cleanup_plan(item):
 
 
 def cleanup_cancel(item, _options):
-    ns, stopped = item["ref"]["namespace"], 0
-    for name, phase in _cleanup_pods(item):
-        if phase not in ("Succeeded", "Failed", "gone"):
-            stopped += _delete(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
-    return f"Stopped on {_s(stopped, 'node')}; nodes already cleaned stay so"
+    ns = item["ref"]["namespace"]
+    paths = [f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}" for name, phase in _cleanup_pods(item)
+             if phase not in ("Succeeded", "Failed", "gone")]
+    stopped = _delete_saved(item, *paths)
+    return f"Stopped on {_s(stopped, 'node')}; nodes already cleaned stay so" + _kept_note(item, *paths)
 
 
 # ----------------------------------------------------------------- volumes
@@ -305,7 +412,7 @@ def restore_cancel(item, _options):
     # name may have made its pair and not yet its claim. A job from before
     # the job kept it names it in the claim it made.
     snapshot = ref.get("snapshot") or (((claim or {}).get("spec") or {}).get("dataSource") or {}).get("name")
-    gone = _delete(path)
+    gone = _delete_saved(item, path)
     # Its snapshot is removed only once a claim binds: with the claim gone,
     # it is removed here (a backup is never touched).
     if snapshot:
@@ -319,6 +426,9 @@ def restore_cancel(item, _options):
             tidy_restore()
         except Exception:
             pass
+    kept = _kept_note(item, path)
+    if kept:
+        return f"Restore stopped{kept}"
     return (f"Restore stopped; {ref['name']} is being deleted" if gone
             else f"Restore stopped; {ref['name']} was already gone")
 
@@ -336,10 +446,17 @@ def backup_plan(item):
 def backup_cancel(item, _options):
     ref = item["ref"]
     backup = KUBE.get_optional(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}", read=kget) or {}
-    snapshot = (backup.get("spec") or {}).get("snapshotName", "")
-    _delete(f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}")
-    if snapshot:
-        _delete(f"{LHAPI}/namespaces/{LHNS}/snapshots/{_q(snapshot)}")
+    snapshot = (backup.get("spec") or {}).get("snapshotName", "") or ref.get("cancel_snapshot", "")
+    if snapshot and ref.get("cancel_snapshot") != snapshot:
+        # Only the Backup names it: once that goes, a run cut off here could not find it.
+        ref["cancel_snapshot"] = snapshot
+        OPS.keep_cancel_ref(item)
+    paths = [f"{LHAPI}/namespaces/{LHNS}/backups/{_q(ref['name'])}",
+             *([f"{LHAPI}/namespaces/{LHNS}/snapshots/{_q(snapshot)}"] if snapshot else [])]
+    _delete_saved(item, *paths)
+    kept = _kept_note(item, *paths)
+    if kept:
+        return f"Backup stopped{kept}"
     return "Backup stopped and removed" + (f", with its snapshot {snapshot}" if snapshot else "")
 
 
@@ -350,13 +467,24 @@ def run_plan(_item):
 
 def job_cancel(item, _options):
     ref = item["ref"]
-    _delete(f"/apis/batch/v1/namespaces/{_q(ref['namespace'])}/jobs/{_q(ref['name'])}?propagationPolicy=Background")
-    return "Stopped"
+    path = f"/apis/batch/v1/namespaces/{_q(ref['namespace'])}/jobs/{_q(ref['name'])}?propagationPolicy=Background"
+    _delete_saved(item, path)
+    return "Stopped" + _kept_note(item, path)
 
 
 # ----------------------------------------------------------------- imports
+def _import_found(item):
+    """What an earlier run of this cancel saved of its import Job, unless that Job has
+    been replaced and a person is looking at the new one."""
+    found = item["ref"].get("cancel_found")
+    if not found or _running_again(item):
+        return found
+    job = KUBE.get_optional(_import_job_path(item, found), read=kget)
+    return None if job and job["metadata"].get("uid") != found.get("job_uid") else found
+
+
 def import_plan(item):
-    plan = CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
+    plan = _import_found(item) or CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
     made = [row["name"] for row in plan["volumes"] if row["created"]]
     borrowed = [row["name"] for row in plan["volumes"] if not row["created"]]
     keeps = ["The source is not touched"]
@@ -374,23 +502,57 @@ def import_plan(item):
                         if made else [])}
 
 
+def _import_job_path(item, plan):
+    return f"/apis/batch/v1/namespaces/{_q(plan['namespace'])}/jobs/{_q(item['ref']['name'])}"
+
+
+def _import_claims(plan):
+    return [f"/api/v1/namespaces/{_q(plan['namespace'])}/persistentvolumeclaims/{_q(row['name'])}"
+            for row in plan["volumes"] if row["created"]]
+
+
 def import_cancel(item, options):
-    plan = CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
-    CONTAINER_IMPORT.delete_import(item["ref"]["name"], item["ref"].get("namespace"))
-    done = ["copy stopped"]
+    # Read from the import Job, which goes first: saved, or a run cut off after that
+    # would find nothing to remove and say it had finished.
+    plan = _import_found(item)
+    if not plan:
+        plan = CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
+        job = KUBE.get_optional(_import_job_path(item, plan), read=kget)
+        plan["job_uid"] = ((job or {}).get("metadata") or {}).get("uid")
+        item["ref"]["cancel_found"] = plan
+        dep = KUBE.get_optional(_deployment_path(plan["namespace"], plan["workload"]), read=kget) if plan["workload"] else None
+        if dep:
+            _note_workload(item, plan["namespace"], plan["workload"], dep)
+        RERUN.remember(item, kget, *_import_claims(plan))
+        OPS.keep_cancel_ref(item)
+    job = KUBE.get_optional(_import_job_path(item, plan), read=kget)
+    if job and job["metadata"].get("uid") != plan.get("job_uid"):
+        # Its name used again since this cancel began: another import's copy.
+        done = [f"{item['ref']['name']} was made again since, so the new one is kept"]
+    else:
+        CONTAINER_IMPORT.delete_import(item["ref"]["name"], item["ref"].get("namespace"),
+                                       **({"uid": plan["job_uid"]} if plan.get("job_uid") else {}))
+        done = ["copy stopped"]
     if plan["workload"]:
-        if remove_workload:
-            remove_workload(plan["namespace"], plan["workload"])
+        if _remove_workload_once(item, plan["namespace"], plan["workload"]) == "kept":
+            done.append(f"{plan['workload']} was made again since, so the new one is kept")
         else:
-            _delete(_deployment_path(plan["namespace"], plan["workload"]))
-        CONTAINER_IMPORT.wait_for_pods_gone(plan["namespace"], f"app={plan['workload']}")
-        done.append(f"{plan['workload']} removed")
+            CONTAINER_IMPORT.wait_for_pods_gone(plan["namespace"], f"app={plan['workload']}")
+            done.append(f"{plan['workload']} removed")
     if options.get("volumes"):
-        made = [row["name"] for row in plan["volumes"] if row["created"]]
-        for claim in made:
-            _delete(f"/api/v1/namespaces/{_q(plan['namespace'])}/persistentvolumeclaims/{_q(claim)}")
+        claims = _import_claims(plan)
+        _delete_saved(item, *claims)
+        try:
+            kept = RERUN.kept_since(item, kget, *claims)
+        except Exception:   # the deletes are done: not a reason to call the cancel failed
+            kept = []
+            done.append("whether anything of those names was made since could not be read")
+        made = [row["name"] for row in plan["volumes"] if row["created"] and row["name"] not in kept]
         if made:
             done.append(f"{_names(made)} deleted")
+        if kept:
+            done.append(f"{_names(kept)} {'was' if len(kept) == 1 else 'were'} made again since, "
+                        f"so the new {'one is' if len(kept) == 1 else 'ones are'} kept")
     return "Import cancelled: " + ", ".join(done)
 
 
@@ -405,9 +567,11 @@ def disk_import_cancel(item, _options):
     ref = item["ref"]
     ns, name = _q(ref["namespace"]), _q(ref["name"])
     # The DataVolume first: while it exists it would make the claim again.
-    _delete(f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{name}")
-    _delete(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    return f"Download stopped; {ref['name']} is being deleted"
+    paths = (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{name}",
+             f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    _delete_saved(item, *paths)
+    kept = _kept_note(item, *paths)
+    return f"Download stopped{kept}" if kept else f"Download stopped; {ref['name']} is being deleted"
 
 
 # --------------------------------------------------------------------- VMs
@@ -423,9 +587,11 @@ def migration_plan(item):
 
 def migration_cancel(item, _options):
     ref = item["ref"]
-    _delete(f"/apis/kubevirt.io/v1/namespaces/{_q(ref['namespace'])}"
+    path = (f"/apis/kubevirt.io/v1/namespaces/{_q(ref['namespace'])}"
             f"/virtualmachineinstancemigrations/{_q(ref['name'])}")
-    return "Migration aborted; the VM stays where it was"
+    _delete_saved(item, path)
+    kept = _kept_note(item, path)
+    return f"Migration stopped{kept}" if kept else "Migration aborted; the VM stays where it was"
 
 
 def k3s_plan(item):
@@ -615,11 +781,20 @@ def _was_failed(item):
     return "failed" in (item.get("status"), item.get("previous_status"))
 
 
+def _chart_seen(chart):
+    """The chart a rollback was reviewed on, without keeping its values on the job: a
+    later upgrade changes this, and putting the earlier settings back would undo it."""
+    meta = chart.get("metadata") or {}
+    seen = [meta.get("uid"), chart.get("spec"), (meta.get("annotations") or {}).get(HELM.PREVIOUS_SPEC)]
+    return {"chart": hashlib.sha256(json.dumps(seen, sort_keys=True).encode()).hexdigest()}
+
+
 def helm_plan(item):
     action = _helm_action(item)
     name, chart = _helmchart(item)
     if _was_failed(item) and _went_back(item, chart):
         return {"mode": "rollback", "needs": "admin", "review_title": "Close it", "action": "Close it", "cleanup_says_action": True, "keeps": [],
+                "reviewed_target": _reviewed_target(item),
                 "lead": f"{name}'s earlier settings are back already: a put-back went through before it could say so. "
                         "Closing this changes nothing on the chart; the job stays in the list as failed"}
     # A failed job offers one thing: an upgrade's earlier settings, on the chart it wrote.
@@ -627,6 +802,14 @@ def helm_plan(item):
         why = _no_put_back(item, action, name, chart)
         if why:
             return {"can": False, "needs": "admin", "review_title": "Put back earlier settings", "why_not": why}
+    # This cancel's own first run got that far: what it found changed, not what it does. An
+    # upgrade that recorded its chart proves that (_went_back); anything else on that
+    # chart, or an older job's with no record, falls through or goes by what is there.
+    if _reviewed(item) == "rollback" and action != "uninstall" and (
+            _went_back(item, chart) if item["ref"].get("chart_uid") else
+            not chart or not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC)):
+        return {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _reviewed_target(item),
+                "undo": [f"Finishes what cancelling {name} began"]}
     if action == "uninstall" or not chart:
         return {"mode": "forget", "needs": "admin", "keeps": [
             f"{name} is being removed already, and Kubernetes cannot take that back; install it again once it is gone"]}
@@ -637,7 +820,7 @@ def helm_plan(item):
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"No earlier settings of {name} were kept to go back to; the upgrade carries on"]}
-        plan = {"mode": "rollback", "needs": "admin", "severity": "high",
+        plan = {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _chart_seen(chart),
                 "undo": [f"Puts {name}'s chart version and values back as they were before the upgrade; "
                          "Helm runs again with them"],
                 "keeps": ["Anything the upgrade changed in the chart's own data - a database migration - "
@@ -664,8 +847,10 @@ def _helm_view(item, out):
 def helm_cancel(item, _options):
     action = _helm_action(item)
     name, chart = _helmchart(item)
-    # Read again here: the review read the chart a moment ago, and this is its own read.
-    if item.get("previous_status") == "failed":
+    # Read again here: the review read the chart a moment ago, and this is its own read. So
+    # too for the leader running a running upgrade's cancel again: a later upgrade is not undone.
+    if item.get("previous_status") == "failed" or (
+            _running_again(item) and action == "upgrade" and item["ref"].get("chart_uid") and not item["ref"].get("no_change")):
         if _went_back(item, chart):
             return f"{name} went back to its settings from before the upgrade"
         why = _no_put_back(item, action, name, chart)
@@ -678,10 +863,16 @@ def helm_cancel(item, _options):
         if item["ref"].get("no_change"):
             return "Stopped following it; it changed nothing"
         if not HELM.restore_previous(chart):
+            # Restoring drops the settings kept, in the same write: a rollback was
+            # reviewed, so a run cut off after it finds them gone, and it went back.
+            if (item.get("cancel_record") or {}).get("mode") == "rollback":
+                return f"{name} is going back to its settings from before the upgrade"
             return "Stopped following it; the upgrade carries on"
         return f"{name} is going back to its settings from before the upgrade"
-    _delete(f"/apis/batch/v1/namespaces/{ns}/jobs/{_q(item['ref']['name'])}?propagationPolicy=Background")
-    _delete(f"/apis/helm.cattle.io/v1/namespaces/{ns}/helmcharts/{_q(name)}")
+    charts = f"/apis/helm.cattle.io/v1/namespaces/{ns}/helmcharts/{_q(name)}"
+    _delete_saved(item, f"/apis/batch/v1/namespaces/{ns}/jobs/{_q(item['ref']['name'])}?propagationPolicy=Background", charts)
+    if item["ref"]["cancel_uids"][charts] != chart["metadata"].get("uid"):
+        return f"{name} was made again since this cancel began, so the new one is kept"
     return f"Install stopped; the Helm controller is removing what {name} made"
 
 
@@ -711,8 +902,10 @@ def service_plan(item):
 
 def service_cancel(item, _options):
     ref = item["ref"]
-    _delete(f"/api/v1/namespaces/{_q(ref['namespace'])}/services/{_q(ref['name'])}")
-    return f"Service {ref['name']} removed"
+    path = f"/api/v1/namespaces/{_q(ref['namespace'])}/services/{_q(ref['name'])}"
+    _delete_saved(item, path)
+    kept = _kept_note(item, path)
+    return f"Service stopped{kept}" if kept else f"Service {ref['name']} removed"
 
 
 def move_plan(item):
@@ -728,7 +921,10 @@ def move_plan(item):
 
 
 def move_cancel(item, _options):
-    moved = MOVE_ACTIONS.abandon((item.get("ref") or {}).get("move", ""))
+    move_id = (item.get("ref") or {}).get("move", "")
+    if not MOVE_STATE._find(move_id):
+        return "Stopped tracking it; this move's record is gone"
+    moved = MOVE_ACTIONS.abandon(move_id)
     return moved.get("message") or "Put back"
 
 

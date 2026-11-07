@@ -84,6 +84,7 @@ class Cluster:
         # The job store: no other job, and saving the job before a write is recorded.
         self.jobs, self.saved = [], []
         test.enterContext(mock.patch.object(C.OPS, "stored", lambda: list(self.jobs)))
+        test.enterContext(mock.patch.object(C.OPS, "keep_cancel_ref", lambda item: None))
         test.enterContext(mock.patch.object(C, "_save", lambda item: self.saved.append(
             (json_copy(item["ref"]), len(self.kube.writes)))))
         C._releases.clear()
@@ -444,6 +445,80 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         self.assertTrue(self.cordoned("node-1"))
         self.assertIn("node-1 stays cordoned", message)
         self.assertIn("Update node-1", message)
+
+    def test_a_host_it_would_not_take_is_still_named_after_a_restart_during_the_cancel(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     jobs=[{"id": "op-9", "kind": "host-os", "status": "running", "title": "Update node-1",
+                            "ref": {"node": "node-1"}}])
+        died = type("Died", (BaseException,), {})
+        self.c.kube.fail(f"{C.PLANS}/{C.PLAN_NAMES[-1]}", died(), method="DELETE", applied=True)
+        kept = []
+        with mock.patch.object(C.OPS, "keep_cancel_ref",
+                               side_effect=lambda item: kept.append(json.loads(json.dumps(item["ref"])))):
+            with self.assertRaises(died):
+                C.cancel_run(self.item(), {})
+        # A new run, from what was saved: the Plans have gone, and their jobs with them.
+        self.assertEqual([], self.plans_left())
+        for name in ("apply-homestead-server-on-node-1",):
+            self.c.kube.discard(f"/apis/batch/v1/namespaces/{C.SUC_NS}/jobs/{name}")
+        message = C.cancel_run(self.item(**kept[-1]), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertIn("node-1 stays cordoned", message)
+        self.assertIn("Update node-1", message)
+
+    def test_a_replaced_node_keeps_its_cordon_when_the_cancel_runs_again(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        item = self.item()
+        C.cancel_run(item, {})
+        # The host was rebuilt under the same name, and someone cordoned the new one.
+        self.c.kube.add({**self.node("node-1"), "metadata": {"name": "node-1", "uid": "a-new-node"}, "spec": cordon(5)})
+        C.cancel_run(self.item(**item["ref"]), {})
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_a_plan_made_again_since_is_not_removed_when_the_cancel_runs_again(self):
+        self.cluster([node("node-1")])
+        died = type("Died", (BaseException,), {})
+        last = f"{C.PLANS}/{C.PLAN_NAMES[-1]}"
+        self.c.kube.fail(last, died(), method="DELETE", applied=True)
+        kept = []
+        with mock.patch.object(C.OPS, "keep_cancel_ref", side_effect=lambda item: kept.append(json.loads(json.dumps(item["ref"])))):
+            with self.assertRaises(died):
+                C.cancel_run(self.item(), {})
+        self.c.kube.add({**plan(C.PLAN_NAMES[-1]), "metadata": {**plan(C.PLAN_NAMES[-1])["metadata"], "uid": "a-later-upgrade"}})
+        C.cancel_run(self.item(**kept[-1]), {})
+        self.assertEqual("a-later-upgrade", self.c.kube.object(last)["metadata"]["uid"])
+
+    def test_a_plan_not_ours_is_left(self):
+        self.cluster([node("node-1")])
+        first = f"{C.PLANS}/{C.PLAN_NAMES[0]}"
+        found = self.c.kube.object(first)
+        found["metadata"]["labels"] = {}
+        self.c.kube.add(found)
+        C.cancel_run(self.item(), {})
+        self.assertIsNotNone(self.c.kube.object(first))
+
+    def test_pausing_v2_again_does_not_undo_someone_turning_it_back_on(self):
+        import homestead_lhv2_upgrade as V2
+        self.cluster([node("node-1")])
+        died = type("Died", (BaseException,), {})
+        kept = []
+        ref = {"component": "longhorn", "v2_mode": "live"}
+        with mock.patch.object(C, "longhorn_version", return_value="1.13.0"), \
+                mock.patch.object(V2, "_setting", return_value=({}, {"v2": "true"})), \
+                mock.patch.object(V2, "_set", side_effect=died()) as first, \
+                mock.patch.object(C.OPS, "keep_cancel_ref", side_effect=lambda item: kept.append(json.loads(json.dumps(item["ref"])))):
+            with self.assertRaises(died):
+                C.cancel_run({"id": "op-7", "ref": dict(ref)}, {})
+        self.assertEqual(1, first.call_count)
+        with mock.patch.object(C, "longhorn_version", return_value="1.13.0"), \
+                mock.patch.object(V2, "_setting", return_value=({}, {"v2": "true"})), \
+                mock.patch.object(V2, "_set") as second:
+            message = C.cancel_run({"id": "op-7", "ref": kept[-1]}, {})
+        second.assert_not_called()
+        self.assertIn("on", message)
+        self.assertIn("check", message.lower())
 
     def test_a_conflict_is_retried_from_a_fresh_read(self):
         self.cluster([node("node-1", unschedulable=True)],
