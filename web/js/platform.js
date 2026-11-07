@@ -326,9 +326,9 @@ window.addonInstall = async key => {
    cannot read, since it is a file on the server, not in the API. */
 /* What each role does, and its command (homestead_platform.join_guide). */
 const JOIN_ROLES = [
-  ["app", "App host", "Runs apps and can hold storage."],
-  ["control-plane", "App host + control plane", "Also holds an etcd vote: three servers keep the cluster up through the loss of one."],
-  ["tiebreaker", "Tiebreaker (votes only)", "Holds an etcd vote and nothing else: no apps, no storage. A small, reliable machine on its own power - a Raspberry Pi beside two main hosts."],
+  ["app", "App host", "Runs apps and holds storage."],
+  ["control-plane", "App host + control plane", "Also an etcd vote: three keep the cluster up if one is lost."],
+  ["tiebreaker", "Tiebreaker (votes only)", "Only an etcd vote: no apps, no storage. A Raspberry Pi will do."],
 ];
 const INSTALLER = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh";
 function joinCommandHtml(g, role) {
@@ -346,7 +346,7 @@ function joinCommandHtml(g, role) {
   const shared = role !== "app" && k3s && !g.settings_known
     ? `<p class="dim xs">Homestead could not read the other servers' settings. Copy these from the first server's <span class="mono">/etc/rancher/k3s/config.yaml</span> or its service file, if it sets them: <span class="mono">${esc((g.shared_flags || []).join(" "))}</span>.</p>` : "";
   const check = role !== "app" && g.check
-    ? `<p class="dim xs">First check the machine can hold a vote - its disk, cgroups, network module, swap and power:</p>${guideCopy(role === "tiebreaker" ? g.check : g.check.replace("HS_ROLE=tiebreaker", "HS_ROLE=server"))}` : "";
+    ? `<p class="dim xs">First check the machine can hold a vote:</p>${guideCopy(role === "tiebreaker" ? g.check : g.check.replace("HS_ROLE=tiebreaker", "HS_ROLE=server"))}` : "";
   return check + guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
 }
 window.joinCommandHtml = joinCommandHtml;
@@ -361,7 +361,7 @@ function joinLonghornHtml(g, role) {
       : `<p class="dim small">The cluster's storage setting could not be read. If the Homestead installer asks for it, follow its instructions to read the value on an existing server. Do not guess a folder.</p>`)
     + `</details>`;
   return guideCopy(g.longhorn)
-    + `<p class="dim xs">Longhorn attaches volumes over iSCSI on the host where an app runs, so every host that runs apps needs these, even one that holds no copies. If Longhorn's pods keep restarting on it, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;
+    + `<p class="dim xs">Every host that runs apps needs these, even one that holds no copies. Longhorn's pods keep restarting? See the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;
 }
 window.joinLonghornHtml = joinLonghornHtml;
 window.platformJoinRole = role => {
@@ -382,16 +382,16 @@ window.platformJoinGuide = async (role = "app") => {
     $("#mbody").innerHTML = `<p class="muted small">This cluster's distribution could not be told from its hosts, so Homestead cannot give its join steps. Use the installer that set the cluster up.</p>`;
     return;
   }
-  $("#mbody").innerHTML = `<p class="muted small">This cluster runs <b>${k3s ? "k3s" : "RKE2"} v${esc(g.version)}</b>; the new host joins with the same release. Run these on the new machine, as root or with sudo.</p>
+  $("#mbody").innerHTML = `<p class="muted small">Run these as root on the new machine. It joins with this cluster's release, <b>${k3s ? "k3s" : "RKE2"} v${esc(g.version)}</b>.</p>
     <section class="guide-step"><h4><span>1</span>Read the join token</h4>
-      <p>It is on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}; Homestead cannot read it for you.</p>
+      <p>It is on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}.</p>
       ${guideCopy(`sudo cat ${g.token_file}`)}
-      <p class="dim xs">Anyone holding it can join a machine to this cluster, so keep it out of chats and notes.</p></section>
+      <p class="dim xs">Keep it private: anyone with it can join a machine.</p></section>
     <section class="guide-step"><h4><span>2</span>Choose what it does</h4>
       <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
         onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div></section>
     <section class="guide-step"><h4><span>3</span>Install Longhorn's host packages</h4><div id="joinLonghorn">${joinLonghornHtml(g, role)}</div></section>
     <section class="guide-step"><h4><span>4</span>Join it</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It appears on the Hosts page within a minute or two, and turns Ready once its networking is up.</p>
+    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It shows on Hosts within a minute or two, and turns Ready once its network is up.</p>
       <div>${UI.button("View hosts", "closeModal();go('nodes')", { kind: "pri" })}</div></section>`;
 };

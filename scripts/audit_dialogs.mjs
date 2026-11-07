@@ -17,7 +17,7 @@ await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1&demo-scenario=incidents";
 const only = process.argv[2] || "";
 // design.md, Verbosity budget: the words a person reads before opening
-// anything - not a dropdown's options, code or what Details holds.
+// anything - not a dropdown's options, code, a table's rows or what Details holds.
 const DIALOG_WORDS = 120, REVIEW_WORDS = 100;
 // design.md, Notices: a warning or an error is a summary bar of short
 // lines that opens to the rest. Its heading and short lines stay under this.
@@ -452,8 +452,8 @@ async function audit([label, width, height, mobile], items) {
           checkboxes: body.querySelectorAll("input[type=checkbox]").length,
           // Raw text a person opened Details to read (YAML, a log) is not the
           // dialog's own wording: it is left out of the budget, as of the width check.
-          words: body.innerText.split(/\s+/).filter(Boolean).length - [...body.querySelectorAll("select, datalist, pre, code")]
-            .filter(e => e.checkVisibility() && !e.parentElement?.closest("select, datalist, pre, code"))
+          words: body.innerText.split(/\s+/).filter(Boolean).length - [...body.querySelectorAll("select, datalist, pre, code, table")]
+            .filter(e => e.checkVisibility() && !e.parentElement?.closest("select, datalist, pre, code, table"))
             .reduce((n, e) => n + e.innerText.split(/\s+/).filter(Boolean).length, 0),
           // Visible notices: design.md asks for one, combining related warnings.
           attention: [...body.querySelectorAll(".ui-callout, .note.bad, .note.warn")].filter(e => e.checkVisibility()).length,

@@ -94,8 +94,8 @@ test("an app host is told to install Longhorn's packages, why, and where to look
     await t.ctx.platformJoinGuide(role);
     const step = t.fields["#mbody"].innerHTML.split("<h4><span>3</span>")[1].split("<h4><span>4</span>")[0];
     assert.match(step, /LONGHORN-CMD/);
-    assert.match(step, /iSCSI on the host where an app runs/);
-    assert.match(step, /If Longhorn.s pods keep restarting on it, see the wiki/);
+    assert.match(step, /Every host that runs apps needs these/);
+    assert.match(step, /Longhorn.s pods keep restarting\? See the wiki/);
     assert.match(step, /<a class="linkish" href="https:\/\/github\.com\/homestead-lab\/homestead\/wiki\/Installing-on-k3s#if-something-is-stuck"/);
   }
 });
