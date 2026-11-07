@@ -194,6 +194,9 @@ def pin_app_image(deployment, image):
             init["image"] = image
 
 
+READINESS_PATHS = ("/healthz", "/readyz?check=data")
+
+
 def require_app_readiness(pod_spec, container_name):
     """A Ready condition without the app's HTTP probe cannot prove app startup.
 
@@ -222,9 +225,9 @@ def require_app_readiness(pod_spec, container_name):
         selected = matches[0].get("containerPort") if len(matches) == 1 else None
     if (any(k in probe for k in ("exec", "tcpSocket", "grpc")) or not http
             or set(http) - {"path", "port", "scheme", "host"} or http.get("host")
-            or http.get("scheme", "HTTP") != "HTTP" or http.get("path") != "/healthz"
+            or http.get("scheme", "HTTP") != "HTTP" or http.get("path") not in READINESS_PATHS
             or type(selected) is not int or selected != int(port)):
-        raise Held("Moving data requires Homestead's HTTP readiness probe at /healthz on its application port")
+        raise Held("Moving data requires Homestead's HTTP readiness probe at /healthz or /readyz?check=data on its application port")
 
 
 def read_marker(directory):
