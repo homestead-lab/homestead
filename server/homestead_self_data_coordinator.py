@@ -30,6 +30,11 @@ class HostDown(Held):
         self.hosts, self.removed = hosts, list(removed)
 
 
+class HostRemoved(Held):
+    """A host the move uses is gone from the cluster, so resuming can't. Its own class so
+    recovery can say what else there is."""
+
+
 class FigurePending(Held):
     """The only new capacity warning is a missing memory figure on a host just back. Its
     words are the hold it becomes if the figure does not come."""
@@ -124,9 +129,16 @@ class Coordinator:
     def _bound(self, source):
         name = self.state["source"]["name"] if source else self.state["destination"]
         fact = ({**self.state["source"], "shape": self.plan["source_pvc_shape"]} if source else self.plan["destination_pvc"])
-        pvc = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/persistentvolumeclaims/{name}"), fact, namespace=self.ns)
         pv_fact = self.plan["source_pv" if source else "destination_pv"]
-        pv = self._fact(self.read("/api/v1/persistentvolumes/" + pv_fact["name"]), pv_fact)
+        try:
+            pvc = self._fact(self.read(f"/api/v1/namespaces/{self.ns}/persistentvolumeclaims/{name}"), fact, namespace=self.ns)
+            pv = self._fact(self.read("/api/v1/persistentvolumes/" + pv_fact["name"]), pv_fact)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            raise Held(f"The {'original' if source else 'new'} volume's claim or PersistentVolume no longer exists. Both are "
+                       "kept by rule, so someone removed it. Nothing was changed. Recovery can't go on without it, and a new one "
+                       "with the same name won't do: see docs/data-move-recovery.md.") from None
         ref = pv.get("spec", {}).get("claimRef", {})
         if (pvc.get("status", {}).get("phase") != "Bound" or pvc.get("spec", {}).get("volumeName") != pv_fact["name"]
                 or pvc["spec"].get("volumeMode", "Filesystem") != "Filesystem"
@@ -221,8 +233,8 @@ class Coordinator:
                     down.append(pinned["name"]); removed.append(pinned["name"])
                     continue
                 if error.code == 404:
-                    raise Held(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
-                               "Nothing was forced and both volumes are retained") from None
+                    raise HostRemoved(f"Host {pinned['name']}, which this move uses, has been removed from the cluster. "
+                                      "Nothing was forced and both volumes are retained") from None
                 raise
             wanted = involved[pinned["name"]]
             ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in node.get("status", {}).get("conditions", []))

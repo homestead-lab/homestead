@@ -48,6 +48,71 @@ def _overdue(signum, frame):
     raise TimeoutError(f"the fixture ran past {WATCHDOG}s")
 
 
+def revert_while_stopped(kube, image):
+    """What going back after the switch (#1214) asks of the real Deployment controller,
+    which tests/fakes/self_data_move.py can't show: at 0 replicas, the template moves to
+    claim B and then, in one write with the replica count, back to claim A. That hash
+    has an earlier ReplicaSet. The pod must mount A and never B, and status must reach
+    what Coordinator._ready asks. On a throwaway Deployment: the moves come after this."""
+    ns, name = "revert-test", "revert"
+    def claim(which):
+        return {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": which, "namespace": ns},
+                "spec": {"storageClassName": "local-path", "accessModes": ["ReadWriteOnce"], "resources": {"requests": {"storage": "16Mi"}}}}
+    workload = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name, "namespace": ns}, "spec": {
+        "replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app": name}},
+        "template": {"metadata": {"labels": {"app": name}}, "spec": {
+            "terminationGracePeriodSeconds": 1,
+            "containers": [{"name": "app", "image": image, "imagePullPolicy": "IfNotPresent", "command": ["python3", "-c", "import time; time.sleep(86400)"],
+                            "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+            "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "claim-a"}}]}}}}
+    def read(*what): return json.loads(kube("-n", ns, "get", *what, "-o", "json"))
+    def pods(): return read("pods", "-l", "app=" + name)["items"]
+    def mounts(pod): return {v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"] if "persistentVolumeClaim" in v}
+    def write(**change):
+        dep = read("deployment", name)
+        # Unconditional: a controller's status write after the read above would fail a replace that kept it.
+        dep.pop("status", None); dep["metadata"].pop("resourceVersion", None)
+        if "replicas" in change: dep["spec"]["replicas"] = change["replicas"]
+        if "claim" in change: dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = change["claim"]
+        kube("replace", "-f", "-", data=json.dumps(dep))
+    def wait_for(what, done, limit=120):
+        deadline = time.monotonic() + limit
+        while True:
+            found = done()
+            if found: return found
+            if time.monotonic() >= deadline: raise AssertionError(f"revert_while_stopped: {what} within {limit}s: {read('deployment', name).get('status')}")
+            time.sleep(1)
+    def stopped():
+        dep = read("deployment", name)
+        return dep["status"].get("observedGeneration", 0) >= dep["metadata"]["generation"] and not dep["status"].get("replicas") and not pods()
+    def back():
+        rows = pods()
+        if any("claim-b" in mounts(pod) for pod in rows): raise AssertionError("revert_while_stopped: a pod mounted the claim the Deployment went back from")
+        dep = read("deployment", name)
+        status = dep["status"]
+        return (status.get("observedGeneration", 0) >= dep["metadata"]["generation"]
+                and all(status.get(key) == 1 for key in ("replicas", "updatedReplicas", "readyReplicas", "availableReplicas"))
+                and len(rows) == 1 and mounts(rows[0]) == {"claim-a"} and rows[0]["status"].get("phase") == "Running")
+    kube("create", "namespace", ns)
+    kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": [claim("claim-a"), claim("claim-b"), workload]}))
+    kube("-n", ns, "wait", "--for=condition=available", "deployment/" + name, "--timeout=120s")
+    write(replicas=0)
+    wait_for("the stop", stopped)
+    write(claim="claim-b")
+    wait_for("the switch at 0 replicas", stopped)
+    write(claim="claim-a", replicas=1)
+    wait_for("back on the first claim", back)
+    for rs in read("replicasets", "-l", "app=" + name)["items"]:
+        claims = {v["persistentVolumeClaim"]["claimName"] for v in rs["spec"]["template"]["spec"]["volumes"]}
+        assert rs["spec"]["replicas"] == (1 if claims == {"claim-a"} else 0), rs["metadata"]["name"]
+    # Waits for its first consumer: Pending proves no pod ever tried it, which a 1 s poll can't.
+    pending = read("pvc", "claim-b")
+    assert pending["status"].get("phase") == "Pending" and not pending["spec"].get("volumeName"), pending["status"]
+    log("Going back at 0 replicas: the controller started the first claim's template")
+    # Only now: on a failure the caller prints pods and events, which need it still there.
+    kube("delete", "namespace", ns, "--timeout=90s")
+
+
 def main():
     if hasattr(signal, "SIGALRM"):
         signal.signal(signal.SIGALRM, _overdue)
@@ -115,6 +180,7 @@ def main():
             kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
             kube("-n", "lab", "wait", "--for=condition=available", "deployment/homestead", "--timeout=180s")
             log("Homestead available")
+            revert_while_stopped(kube, pinned)
             def watch_controllers():
                 previous = {}
                 def differences(a, b, path=""):

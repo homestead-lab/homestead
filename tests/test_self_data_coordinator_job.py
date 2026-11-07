@@ -661,7 +661,7 @@ class ApiOutageTests(unittest.TestCase):
         run.tick()
         self.blip(run)
         run.tick()
-        m.pass_time(86400)
+        m.pass_time(1000)
         run.tick()
         self.blip(run)
         self.assertIsNone(run.hold)
@@ -1178,18 +1178,23 @@ class HostNeverBackTests(unittest.TestCase):
         self.assertEqual("start", m.state()["phase"])
         m.stopped()
 
-    def test_after_the_switch_the_wait_has_no_limit_and_the_page_says_so(self):
+    def test_after_the_switch_it_waits_thirty_minutes_then_holds(self):
+        """Going back still works here, and it works only on a held move."""
         m = self.m
         self.after_the_switch()
         self.down()
-        for _ in range(3):
-            m.pass_time(86400)
-            view = self.run_.tick()
+        view = self.run_.tick()
         self.assertNotEqual("held", view["status"])
-        self.assertEqual("running", m.state()["runtime"]["state"])
         self.assertIn("node-a", view["message"])
-        self.assertIn("no limit", view["message"])
-        self.assertIn("docs/data-move-recovery.md", view["message"])
+        self.assertIn("30 minutes", view["message"])
+        m.pass_time(1799)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.assertEqual("running", m.state()["runtime"]["state"])
+        m.pass_time(1)
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        self.assertIn("return-original", view["message"])
         self.assertNotIn("start", m.steps())
 
     def test_after_the_start_request_likewise(self):

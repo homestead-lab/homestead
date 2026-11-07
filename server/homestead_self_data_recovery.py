@@ -80,6 +80,10 @@ def review(anchor, read, logs, action, *, clock=time.time):
                        "Preview --action return-original, which does not need it unless the original volume or Homestead's pods are on a missing host")
     try:
         dep = engine._environment()
+    except C.HostRemoved as gone:
+        if action == "resume" and not start_requested:
+            raise Held(f"{gone}. Or preview --action return-original, which needs it only if the original volume is on it") from None
+        raise
     except C.HostDown as down:
         names = ", ".join(down.hosts)
         if action == "return-original":

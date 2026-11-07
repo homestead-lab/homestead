@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -192,6 +193,44 @@ class GoingBackTests(Base):
                 self.assertEqual(puts, self.puts())
                 self.assertNotIn("recover-start", self.m.steps())
                 self.assertEqual("target", self.claim())
+
+    def test_a_new_volume_deleted_by_hand_refuses_in_words(self):
+        for path in (f"/api/v1/namespaces/{NS}/persistentvolumeclaims/target", "/api/v1/persistentvolumes/new-pv"):
+            with self.subTest(path=path), Kube() as kube:
+                self.kube = kube
+                self.m = Move(kube)
+                self.run_ = self.m.runner(real_admission=True)
+                self.after_the_switch()
+                self.hold()
+                kube.discard(path)
+                with self.assertRaisesRegex(Held, "new volume.*no longer exists"):
+                    self.preview("return-original")
+
+    def test_a_volume_deleted_by_hand_says_which_and_that_a_new_one_wont_do(self):
+        self.after_the_switch()
+        self.hold()
+        self.kube.discard(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/source")
+        for action in ("resume", "return-original"):
+            with self.assertRaisesRegex(Held, "(?s)The original volume.*no longer exists.*won't do"):
+                self.preview(action)
+
+    def test_a_failed_read_of_a_volume_is_not_called_gone(self):
+        self.after_the_switch()
+        self.hold()
+        self.kube.fail(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/target", 500, times=1, method="GET")
+        with self.assertRaises(urllib.error.HTTPError):
+            self.preview("return-original")
+
+    def test_the_original_claim_deleted_after_the_start_request_refuses_both(self):
+        self.after_the_switch()
+        self.run_.tick()
+        self.m.started()
+        self.hold()
+        self.kube.discard(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/source")
+        with self.assertRaisesRegex(Held, "no longer exists"):
+            self.preview("resume")
+        with self.assertRaisesRegex(Held, CUTOVER_WORDS):
+            self.preview("return-original")
 
     def test_a_changed_mount_refuses(self):
         self.after_the_switch()
@@ -391,6 +430,10 @@ class TheFenceTests(Base):
         self.edit_entries(lambda writes: writes.append(copy.deepcopy(next(e for e in writes if e["step"] == "recover-start"))))
         with self.assertRaises(Held):
             self.fence.inspect()
+        # The record's own check refuses this first; the fence's line stands by itself too.
+        with mock.patch.object(A, "_validate", lambda state, namespace: None):
+            with self.assertRaisesRegex(Held, "no verified restart"):
+                F.Fence(self.m.read, NS, "homestead", "homestead-new", "homestead", self.directory).inspect()
 
     def test_a_start_too_never_opens_the_original_volume(self):
         def started(writes):
@@ -516,6 +559,131 @@ class WhatAPersonSeesTests(Base):
         self.assertEqual("held", view["status"])
         self.assertIn("--action resume", view["message"])
         self.assertNotIn("return-original", view["message"])
+
+
+class TheHostNeverComesBackTests(Base):
+    """The issue's own case: the new volume's host is lost between the switch and the start."""
+
+    pins = {"new-pv": "node-a"}
+
+    def setUp(self):
+        super().setUp()
+        self.after_the_switch()
+
+    def down(self):
+        """The host dies, taking the helper with it: the next one runs on node-b."""
+        m = self.m
+        m.host_down("node-a")
+        m.pod_lost(m.first_pod)
+        self.run_ = m.runner(m.start_pod("node-b"), real_admission=True)
+
+    def down_past_the_limit(self):
+        self.down()
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.m.pass_time(1800)
+        return self.run_.tick()
+
+    def test_the_new_volumes_host_never_returns_after_the_switch_and_it_goes_back(self):
+        m = self.m
+        view = self.down_past_the_limit()
+        self.assertEqual("held", view["status"])
+        self.assertNotIn("start", m.steps())
+        with self.assertRaisesRegex(Held, "(?s)node-a.*return-original"):
+            self.preview("resume")
+        self.confirm("return-original")
+        self.run_.tick()
+        self.assertEqual(("source", 1), (self.claim(), self.replicas()))
+        m.started("source", "node-b")
+        self.assertEqual("cancelled", self.run_.tick()["status"])
+        self.both_claims_kept()
+
+    def test_the_new_volumes_host_removed_after_the_switch_goes_back(self):
+        m = self.m
+        m.removed("node-a")
+        m.pod_lost(m.first_pod)
+        self.run_ = m.runner(m.start_pod("node-b"), real_admission=True)
+        view = self.run_.tick()
+        self.assertEqual("held", view["status"])
+        self.assertIn("node-a", view["message"])
+        with self.assertRaisesRegex(Held, "(?s)node-a.*return-original"):
+            self.preview("resume")
+        self.confirm("return-original")
+        self.run_.tick()
+        self.assertEqual(("source", 1), (self.claim(), self.replicas()))
+        self.assertNotIn("start", m.steps())
+
+    def after_a_start_request(self):
+        m = self.m
+        self.run_.tick()
+        self.assertIn("start", m.steps())
+        m.started("target", "node-b")
+        self.hold()
+
+    def test_after_a_start_request_a_host_down_refusal_offers_no_way_back(self):
+        m = self.m
+        self.after_a_start_request()
+        m.host_down("node-a")
+        with self.assertRaisesRegex(Held, "node-a") as refused:
+            self.preview("resume")
+        self.assertNotIn("return-original", str(refused.exception))
+
+    def test_after_a_start_request_a_host_removed_refusal_offers_no_way_back(self):
+        m = self.m
+        self.after_a_start_request()
+        m.removed("node-a")
+        with self.assertRaisesRegex(Held, "node-a") as refused:
+            self.preview("resume")
+        self.assertNotIn("return-original", str(refused.exception))
+
+    def test_the_host_back_within_the_limit_carries_on(self):
+        m = self.m
+        self.down()
+        self.run_.tick()
+        m.pass_time(1000)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        m.down.discard("node-a")
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
+        self.kube.add(node)
+        m.pass_time(0)
+        self.assertNotEqual("held", self.run_.tick()["status"])
+        self.assertIn("start", m.steps())
+        self.assertEqual(("target", 1), (self.claim(), self.replicas()))
+
+    def test_the_host_back_after_the_hold_resumes(self):
+        m = self.m
+        self.assertEqual("held", self.down_past_the_limit()["status"])
+        m.down.discard("node-a")
+        node = self.kube.object("/api/v1/nodes/node-a")
+        node["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
+        self.kube.add(node)
+        m.pass_time(0)
+        self.confirm("resume")
+        self.run_.tick()
+        self.assertIn("start", m.steps())
+        m.started()
+        self.assertEqual("done", self.run_.tick()["status"])
+        self.assertEqual("target", self.claim())
+
+
+class TheOriginalVolumesHostTests(Base):
+    pins = {"old-pv": "node-a"}
+
+    def test_a_return_under_way_holds_after_thirty_minutes_before_its_write(self):
+        m = self.m
+        self.after_the_switch()
+        self.hold()
+        self.confirm("return-original")
+        m.host_down("node-a")
+        m.pod_lost(m.first_pod)
+        self.run_ = m.runner(m.start_pod("node-b"), real_admission=True)
+        view = self.run_.tick()
+        self.assertNotEqual("held", view["status"])
+        self.assertIn("30 minutes", view["message"])
+        m.pass_time(1800)
+        self.assertEqual("held", self.run_.tick()["status"])
+        self.assertNotIn("recover-start", m.steps())
+        self.assertEqual(("target", 0), (self.claim(), self.replicas()))
 
 
 if __name__ == "__main__":
