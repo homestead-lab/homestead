@@ -112,6 +112,7 @@ MODULES = (
     "homestead_host_bonds",
     "homestead_host_bridge",
     "homestead_host_console",
+    "homestead_host_maintenance",
     "homestead_host_os",
     "homestead_housekeeping",
     "homestead_icons",

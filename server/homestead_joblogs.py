@@ -221,6 +221,8 @@ def unraid_vm_import(item):
 def node_power(item):
     ref = item.get("ref") or {}
     name, uid, ns = ref.get("helper_pod"), ref.get("helper_uid"), ref.get("helper_namespace", "lab")
+    if ref.get("action") == "maintenance":
+        return [{"title": "Maintenance", "text": "", "note": "Maintenance only cordons and drains a host; it starts no helper. The steps above show how far it got."}]
     if not name:
         return [{"title": "Power helper", "text": "", "note": "No power helper was submitted. The steps above show where maintenance stopped; inspect the host's cordon state."}]
     if not uid:

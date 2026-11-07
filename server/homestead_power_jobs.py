@@ -90,6 +90,8 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
 
 def _run_power_job(operation_id, power_plan, force=False, resumed=False):
     node, action = power_plan["node"], power_plan["action"]
+    if action == "maintenance":
+        return _run_maintenance(operation_id, power_plan, resumed)
     planned_outage = bool(power_plan.get("planned_outage")) and not force
     phase_state = {"phase": "reviewed"}
 
@@ -133,18 +135,109 @@ def _run_power_job(operation_id, power_plan, force=False, resumed=False):
             # Power was not sent: what was stopped to wait for the host starts
             # again now. The host stays cordoned, so an app tied to it waits
             # for scheduling to be allowed.
-            restored = {}
-            held = next((((i.get("ref") or {}).get("held") or []) for i in OPS.stored() if i.get("id") == operation_id), [])
-            if held:
-                try:
-                    started, left = HOLD.restore(held, operation_id)
-                    restored = {"restored": {"started": started, "left": left, "at": time.time()}}
-                    message += (". Started again: " + ", ".join(started)) if started else ""
-                    message += (". Left as they are: " + ", ".join(left)) if left else ""
-                except Exception as error:
-                    message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
+            message, restored = _start_what_was_held(operation_id, message)
             power_progress("failed", 10, message, failed_phase=phase_state["phase"], **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def _held_by(operation_id):
+    return next((((i.get("ref") or {}).get("held") or []) for i in OPS.stored() if i.get("id") == operation_id), [])
+
+
+def _start_what_was_held(operation_id, message):
+    """What this job stopped starts again. The message says so, and the second
+    answer is what the job's record gets."""
+    restored = {}
+    held = _held_by(operation_id)
+    if held:
+        try:
+            started, left = HOLD.restore(held, operation_id)
+            restored = {"restored": {"started": started, "left": left, "at": time.time()}}
+            message += (". Started again: " + ", ".join(started)) if started else ""
+            message += (". Left as they are: " + ", ".join(left)) if left else ""
+        except Exception as error:
+            message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
+    return message, restored
+
+
+# The words of the steps it shares with a reboot, for a job that sends no power.
+_POWER_WORDS = (("; power has not been sent", ""), (" before power", ""), ("Power was not sent", "Maintenance was not opened"),
+                ("power was not sent", "maintenance was not opened"), ("before retrying power control", "before retrying"))
+
+
+def _maintenance_words(text):
+    for old, new in _POWER_WORDS:
+        text = text.replace(old, new)
+    return text
+
+
+def _run_maintenance(operation_id, power_plan, resumed=False):
+    """Cordon, drain and recheck as for a reboot, then open the event instead
+    of sending power. The job ends there: a running one would count as an
+    active power job for the whole maintenance, and End isn't one of its steps.
+    A copy evicted by the drain is carried on as any power job is, and a declared
+    event is one per job, so opening it twice opens it once."""
+    node, declared = power_plan["node"], power_plan["declared"]
+    planned_outage = bool(power_plan.get("planned_outage"))
+
+    def progress(phase, percent, message, **details):
+        return OPS.record_phase(operation_id, phase, percent, _maintenance_words(message), owner=POD_NAME or None, **details)
+
+    def before_open():
+        (POWER.recheck_planned_outage if planned_outage else POWER.recheck_after_drain)(power_plan)
+
+    try:
+        steps = []
+        if not _opened_by(node, operation_id):
+            # The review finds an event already open, so a copy carrying on after one was opened must not repeat it.
+            steps = NODE_ACTIONS.node_maintain(
+                node, before_open, power_plan["drain_pods"], progress, planned_outage=planned_outage, resumed=resumed,
+                hold=None if planned_outage else (lambda: hold_for_power(operation_id, power_plan, progress)))["steps"]
+            _open_maintenance(operation_id, power_plan, declared, planned_outage)
+        progress("maintained", 100, f"In maintenance: {declared['reason']}")
+        OPS.advance_soon()     # the job is done: until the loop sees that, it blocks a Reboot
+        return {"ok": True, "node": node, "action": "maintenance", "steps": steps, "operation": {"id": operation_id}}
+    except OPS.Superseded:
+        raise  # another replica owns the job
+    except Exception as e:
+        if _opened_by(node, operation_id):
+            # Only saying so failed. The event is open and End is what lets it go,
+            # so what waits goes on waiting.
+            message = f"In maintenance: {declared['reason']}. Its job could not record that ({str(e)[:120]})"
+            progress("failed", 100, message)
+            raise PowerNotSent(message, {"id": operation_id}) from e
+        message, restored = _start_what_was_held(
+            operation_id, "Maintenance was not opened. Inspect the host's cordon state: " + _maintenance_words(str(e)))
+        progress("failed", 10, message, **restored)
+        raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def _opened_by(node, operation_id):
+    try:
+        return (HISTORY.declared_for(node, strict=True) or {}).get("op") == operation_id
+    except Exception:
+        return False
+
+
+def _open_maintenance(operation_id, power_plan, declared, planned_outage):
+    """The event is the state here, unlike a reboot's: a history that can't be
+    written stops the job, and says so. Its time counts from now, so a long
+    drain doesn't eat the time asked for."""
+    now = int(time.time())
+    apps = [f"{w.get('ns')}/{w.get('name')}" for w in power_plan.get("workloads") or []]
+    apps += [f"vm:{vm}" for vm in power_plan.get("vms") or []]
+    started = next(((i.get("ref") or {}).get("started_epoch") for i in OPS.stored() if i.get("id") == operation_id), None)
+    try:
+        return HISTORY.maintenance_declare(
+            power_plan["node"], declared["reason"], operation_id, now + declared["hours"] * 3600,
+            # Nothing was cordoned on a single host, so End has nothing to take off.
+            cordoned_before=bool(power_plan.get("cordoned")) or planned_outage, node_uid=power_plan["node_uid"],
+            held=_held_by(operation_id), apps=apps, started=started, now=now)
+    except OPS.Superseded:
+        raise
+    except Exception as error:
+        raise ValueError(f"The host is cordoned, but its maintenance could not be recorded ({str(error)[:120]}). "
+                         "Uncordon it by hand when you are done") from error
 
 
 def send_handoff(operation_id, power_plan, steps, rep, report):
@@ -319,6 +412,7 @@ def send_reviewed_power(power_plan, force=False, background=False):
          # What a resumed job needs: the reviewed plan, and which replica runs it.
          "plan": power_plan, "worker": POD_NAME, "worker_restarts": own_restarts(),
          "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+        "Planned whole-cluster outage; recording it without cordon or drain" if planned_outage and action == "maintenance" else
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
     if not background:
@@ -492,6 +586,29 @@ def _plan(request):
                                           force=(q.get("force") or [""])[0] == "1"))
 
 
+DECLARED_HOURS = (1, 2, 4, 8, 24)
+
+
+def declared_hours(value):
+    """Hours a person may ask for: DECLARED_HOURS, the last being "until I end it"
+    under the agreed ceiling. ValueError for anything else."""
+    if isinstance(value, bool) or value not in DECLARED_HOURS or not isinstance(value, int):
+        raise ValueError("hours must be one of " + ", ".join(map(str, DECLARED_HOURS)))
+    return value
+
+
+def _declared_request(body):
+    """The typed reason and the hours, or ValueError. A reserved reason is the
+    words Homestead itself writes for its own maintenance."""
+    reason = body.get("reason")
+    reason = reason.strip() if isinstance(reason, str) else ""
+    if not 1 <= len(reason) <= 120 or not reason.isprintable():
+        raise ValueError("Give a reason of 1 to 120 printable characters")
+    if reason.casefold() in {word.casefold() for word in HISTORY.RESERVED_REASONS}:
+        raise ValueError(f"\"{reason}\" is what Homestead calls its own maintenance; give another reason")
+    return {"reason": reason, "hours": declared_hours(body.get("hours"))}
+
+
 def _send_power(request):
     """Host actions' send: refused (409) whenever the review it carries no
     longer holds, so the browser shows the plan again."""
@@ -499,6 +616,11 @@ def _send_power(request):
     if b.get("confirm") != b.get("node"):
         raise ValueError("confirmation must repeat the node name")
     force = b.get("force") is True
+    declared = None
+    if b.get("action") == "maintenance":
+        if b.get("force"):
+            raise ValueError("Maintenance has no force: resolve what stops it, or cordon the host by hand")
+        declared = _declared_request(b)
     running = active_power_job(b.get("node"))
     if running:
         return ROUTER.Reply(409, {"error": "A power job for this host is still running; follow it instead of sending another",
@@ -524,6 +646,8 @@ def _send_power(request):
             set(map(str, given)) != {row["id"] for row in power_plan.get("drain_blockers") or []}):
         return ROUTER.Reply(409, {"error": "acknowledge each drain blocker (or remove the orphan records) before host power control",
                                   "plan": power_plan})
+    if declared:
+        power_plan["declared"] = declared
     # Cordon and drain can take many minutes: the request returns the job at
     # once and the browser follows its phases.
     return ROUTER.Reply(202, send_reviewed_power(power_plan, force, background=True))

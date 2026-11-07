@@ -32,6 +32,7 @@ import os
 import time
 import urllib.error
 
+import homestead_history as HISTORY
 import homestead_operations as OPS
 import homestead_shared as SHARED
 
@@ -239,8 +240,35 @@ def _result(rollout, ok, note, **extra):
 
 def _uncordon(rollout):
     node = rollout.get("node") or {}
-    if node.get("cordoned_before") is False and node.get("name"):
+    # A cordon a person's maintenance put on since isn't the rollout's to take
+    # off, and one it can't tell about stays.
+    if node.get("cordoned_before") is False and node.get("name") and _in_maintenance(node["name"]) is False:
         set_cordon(node["name"], False)
+
+
+def _in_maintenance(name):
+    """Whether a person has this host in maintenance; None when that can't be
+    read, which is not the same as no."""
+    try:
+        return bool(HISTORY.declared_for(name, strict=True))
+    except Exception as error:
+        print(f"OS updates: {name}: its maintenance could not be read: {str(error)[:120]}", flush=True)
+        return None
+
+
+def current_host():
+    """The host a running rollout is working on now, or "". """
+    rollout = _load().get("rollout") or {}
+    return (rollout.get("node") or {}).get("name") or "" if rollout.get("status") == "running" else ""
+
+
+def _not_in_maintenance(name):
+    """Whether this host's turn may go on. An unread history raises: _failing
+    waits it out for ERROR_LIMIT, then ends the rollout and lets go of the holds."""
+    declared = _in_maintenance(name)
+    if declared is None:
+        raise ValueError(f"{name}: whether it is in maintenance could not be read")
+    return not declared
 
 
 def step(state, now=None):
@@ -263,6 +291,9 @@ def step(state, now=None):
         rollout["node"] = {"name": name, "attempts": 0}
         if not item or not _ready(item):
             _result(rollout, False, "not Ready, so left alone")
+            return True
+        if not _not_in_maintenance(name):
+            _result(rollout, False, "in maintenance, so left alone")
             return True
         rollout["node"]["cordoned_before"] = bool((item.get("spec") or {}).get("unschedulable"))
         rollout["phase"], rollout["message"] = "check", f"{name}: refreshing its package lists"
@@ -320,6 +351,10 @@ def step(state, now=None):
             node["op"] = existing
             rollout["phase"], node["since"] = "restarting", now
             rollout["message"] = f"{name}: draining and restarting"
+            return True
+        # A person may have declared maintenance since this host's turn began.
+        if not _not_in_maintenance(name):
+            _result(rollout, True, "in maintenance, so not restarted", restart_needed=True)
             return True
         node["attempts"] = node.get("attempts", 0) + 1
         try:
@@ -416,7 +451,7 @@ def _failing(state, error, now=None):
         rollout["message"] = f"waiting: {text}"
         return False
     left = ("; its updates may still be installing" if phase == "installing" else
-            "; it is left cordoned" if phase == "restarting" else "")
+            "; it is left cordoned" if phase in ("restart", "restarting") else "")
     _result(rollout, False, f"no answer for {limit // 60} min: {text}{left}")
     rollout["stop"], rollout["failed"] = True, True
     rollout.pop("error_since", None)
