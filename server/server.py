@@ -496,7 +496,7 @@ REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
-                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS, lambda: PLACEMODE.standby_hosts())
+                PLACE.get_nodes, HOSTACCESS.require_target_as, OPS, lambda: PLACEMODE.standby_hosts(), restart_workload)
 POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
 POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,

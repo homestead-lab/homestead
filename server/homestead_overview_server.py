@@ -719,14 +719,16 @@ def _path_names(ns, name):
     KUBE.request_name(name, "workload name")
 
 
-def restart_workload(ns, name):
+def restart_workload(ns, name, also=None):
+    """also: a merge patch to go in the same write, so one rollout does both."""
     _path_names(ns, name)
     guard_managed_smb(ns, name)
     require_workload_target(ns, name)
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-          {"spec": {"template": {"metadata": {"annotations":
-           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}}}},
-          ctype="application/merge-patch+json")
+    body = copy.deepcopy(also or {})
+    template = body.setdefault("spec", {}).setdefault("template", {})
+    template.setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("restartedAt")] = \
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", body, ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True}
 
