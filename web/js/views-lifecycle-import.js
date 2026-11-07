@@ -259,17 +259,17 @@ window.doSrcAdd = async () => {
     else toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad");
   }
 };
-let SOURCE_KEY_REVIEW = null, SOURCE_KEY_SEQUENCE = 0, SOURCE_KEY_BUSY = false;
-window.srcVerify = async name => {
-  if (SOURCE_KEY_BUSY) return;
-  SOURCE_KEY_REVIEW = null;
-  const sequence = ++SOURCE_KEY_SEQUENCE;
-  modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review");
-  try {
+/* Review, then trust a source's SSH host key (#909), on the shared review flow: it keeps the sequence, the
+   busy flag and the one-shot send. This view keeps its words. */
+const SOURCE_KEY = UI.reviewFlow({
+  loading: name => modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review"),
+  live: () => !!$("#sourceKeyLoading"),
+  preview: async name => {
     const review = await api("/api/sources/scan", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
-    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
     if (!review.capacity_token || !review.key || !review.fingerprint || review.name !== name) throw new Error("Fingerprint review is incomplete. Nothing was trusted.");
-    SOURCE_KEY_REVIEW = review;
+    return review;
+  },
+  render: review => {
     const file = {"ssh-ed25519":"ed25519","ecdsa-sha2-nistp256":"ecdsa","ssh-rsa":"rsa"}[review.algorithm];
     $("#mbody").innerHTML = UI.lead("Compare this fingerprint with the source host's own console before allowing Homestead to log in.") +
       UI.callout(review.changed ? "bad" : "warn", review.changed ? "The source key changed" : "A scan is not proof of identity",
@@ -280,30 +280,28 @@ window.srcVerify = async name => {
       UI.more("What trusting changes", `<p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p>${review.previous ? `<p>Previously pinned: <span class="mono" style="overflow-wrap:anywhere">${esc(review.previous)}</span></p>` : ""}`) +
       UI.ack("sourceKeyAck", "I compared this fingerprint with the source host's console.", {onchange:"sourceKeyReady()"}) +
       UI.actions(UI.cancel("Not now") + UI.button("Trust this source", "sourceKeyTrust()", {kind:"pri",id:"sourceKeyApply",disabled:true}));
-  } catch(e) {
-    if (sequence !== SOURCE_KEY_SEQUENCE || !$("#sourceKeyLoading")) return;
-    SOURCE_KEY_REVIEW = null;
-    $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close"));
-  }
-};
-window.sourceKeyReady = () => {
-  const ready = !!(SOURCE_KEY_REVIEW && !SOURCE_KEY_BUSY && $("#sourceKeyAck")?.checked);
-  if ($("#sourceKeyApply")) $("#sourceKeyApply").disabled = !ready;
-  return ready;
-};
+  },
+  failed: e => { $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close")); },
+  ack: "sourceKeyAck", button: "sourceKeyApply",
+  apply: async review => {
+    const button = $("#sourceKeyApply");
+    button.disabled = true;
+    try {
+      await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
+      toast("Source key pinned", "ok");
+      if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
+    } catch(e) {
+      if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
+      else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
+    }
+  },
+});
+window.srcVerify = name => SOURCE_KEY.open(name);
+window.sourceKeyReady = () => SOURCE_KEY.ready();
 window.sourceKeyTrust = async () => {
   if (!sourceKeyReady()) return;
-  const review = SOURCE_KEY_REVIEW, button = $("#sourceKeyApply");
-  SOURCE_KEY_REVIEW = null; SOURCE_KEY_BUSY = true; $("#sourceKeyApply").disabled = true;
-  try {
-    await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
-    toast("Source key pinned", "ok");
-    if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
-  } catch(e) {
-    if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
-    else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
-  } finally { SOURCE_KEY_BUSY = false; }
+  await SOURCE_KEY.apply();
 };
 window.srcDel = async name => {
   if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
@@ -999,7 +997,10 @@ function clusterVolumesHtml(report) {
 
 /* Before anything stops: where it lands, what address it gets, and every
    reason it would fail or surprise someone - asked of both clusters. */
-let MOVE_PLAN_SEQUENCE = 0;
+/* The linked-cluster move or copy review (#909), on the shared review flow: it keeps the sequence and the
+   one-shot send. A plan is read again whenever a field changes, so most of the page invalidates it. */
+let MOVE_PLAN_EDITS = 0;
+const invalidateMovePlan = () => { ++MOVE_PLAN_EDITS; MOVE_PLAN.back(); };
 /* Each volume's choice in the move being reviewed: move (the default),
    blank or skip, and its storage class here. Kept across re-checks. */
 let MOVE_VOLUMES = {};
@@ -1009,8 +1010,12 @@ let MOVE_DEVICES = {}, MOVE_ROM_NAMES = {};
 // Whether the last review copies a VM while it keeps running (plan.live),
 // and whether the person chose to stop it for the copy instead.
 let MOVE_LIVE = false, MOVE_STOP_SOURCE = false;
+// The transfer whose dialog is open now. A send that settles re-plans this, not what it sent: a person can go
+// Back during a send and open another, and the flow reads no plan until that send has settled.
+let MOVE_TARGET = null;
 window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace = "") => {
-  ++MOVE_PLAN_SEQUENCE;
+  invalidateMovePlan();
+  MOVE_TARGET = { cluster, kind, name };
   MOVE_VOLUMES = {};
   MOVE_DEVICES = {}; MOVE_ROM_NAMES = {};
   MOVE_TRANSFER_MODE = transferMode === "copy" && kind !== "volume" ? "copy" : "move";
@@ -1049,12 +1054,12 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   movePlan(cluster, kind, name);
   for (const id of ["#mv_ns", "#mv_ip"]) {
     const field = $(id);
-    if (field) field.oninput = () => { ++MOVE_PLAN_SEQUENCE; $("#mv_go").disabled = true; };
+    if (field) field.oninput = () => { invalidateMovePlan(); $("#mv_go").disabled = true; };
   }
 };
 
 window.moveAddressMode = value => {
-  ++MOVE_PLAN_SEQUENCE;
+  invalidateMovePlan();
   if ($("#mv_go")) $("#mv_go").disabled = true;
   const wrap = $("#mv_ip_wrap");
   if (wrap) wrap.hidden = value !== "manual";
@@ -1080,11 +1085,12 @@ window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
 window.moveDeviceRom = async (cluster, kind, name, device, input) => {
   const file = input.files?.[0];
   if (!file) return;
-  const sequence = ++MOVE_PLAN_SEQUENCE;
+  invalidateMovePlan();
+  const edit = MOVE_PLAN_EDITS;
   if ($("#mv_go")) $("#mv_go").disabled = true;
   try {
     const data = await vmReadRom(file);
-    if (sequence !== MOVE_PLAN_SEQUENCE) return;
+    if (edit !== MOVE_PLAN_EDITS) return;
     MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), rom: data };
     MOVE_ROM_NAMES[device] = file.name;
     movePlan(cluster, kind, name);
@@ -1148,20 +1154,21 @@ function moveVolumesTable(plan, cluster, kind, name) {
     <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
-window.movePlan = async (cluster, kind, name) => {
-  const host = $("#mv_plan"), go = $("#mv_go");
-  if (!host) return;
-  const sequence = ++MOVE_PLAN_SEQUENCE;
+const moveLoading = ({ host, go }) => {
   host.innerHTML = '<div class="empty"><span class="spin2"></span> asking both clusters…</div>';
   if (go) go.disabled = true;
-  try {
-    const plan = await api("/api/move/plan", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
-    if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
+};
+const MOVE_PLAN = UI.reviewFlow({
+  loading: moveLoading,
+  live: ({ host }) => $("#mv_plan") === host,
+  preview: ({ cluster, kind, name }) => api("/api/move/plan", { method: "POST",
+    headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) }),
+  render: (plan, { cluster, kind, name, host, go }) => {
     MOVE_LIVE = plan.live === true;
     const stopChoice = $("#mv_stop_row");
     if (stopChoice) stopChoice.hidden = plan.can_live !== true;
     if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
+      plan.unusable = true;
       host.innerHTML = '<div class="note bad">Update Homestead on this destination before copying. It only supports moves.</div>';
       return;
     }
@@ -1173,10 +1180,10 @@ window.movePlan = async (cluster, kind, name) => {
       const selected = classes.value || plan.storage_class;
       classes.innerHTML = plan.storage_classes.map(c => `<option value="${esc(c)}" ${c === selected ? "selected" : ""}>${esc(c)}</option>`).join("");
       classes.disabled = !plan.storage_classes.length;
-      classes.onchange = () => { if (go) go.disabled = true; movePlan(cluster, kind, name); };
+      classes.onchange = () => { if (go) go.disabled = true; window.movePlan(cluster, kind, name); };
       // A cluster without Homestead's old default can still choose another
       // valid class. Review the actual selection before enabling Start.
-      if (classes.value && classes.value !== plan.storage_class) return movePlan(cluster, kind, name);
+      if (classes.value && classes.value !== plan.storage_class) return window.movePlan(cluster, kind, name);
     }
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
@@ -1194,16 +1201,43 @@ window.movePlan = async (cluster, kind, name) => {
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
         ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
       ${moveVolumesTable(plan, cluster, kind, name)}${moveDevicesTable(plan, cluster, kind, name)}`;
-    if (go) go.disabled = !plan.ok;
-  } catch (e) {
-    if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
-    host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`;
-  }
+    MOVE_PLAN.ready();
+  },
+  failed: (e, { host }) => { host.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; },
+  // Start follows the plan: enabled only when it says the move can go ahead.
+  blocked: plan => !plan.ok || !!plan.unusable, button: "mv_go",
+  apply: async () => {
+    const { body, copy, cluster, name } = MOVE_STARTING;
+    try {
+      await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body) });
+      toast(`${copy ? "Copying" : "Moving"} ${name} from ${cluster}; follow progress under Linked clusters or in Activity`, "ok");
+      closeModal(); movesRepaint();
+    } catch (e) {
+      toast(e.message, "bad");
+      MOVE_REPLAN = true;   // read the plan again once this send has settled, so Start can be tried again
+    }
+  },
+  after: () => {
+    const again = MOVE_REPLAN && MOVE_TARGET; MOVE_REPLAN = false;
+    if (again) window.movePlan(again.cluster, again.kind, again.name);   // nothing happens if no such dialog is open
+  },
+});
+let MOVE_STARTING = null, MOVE_REPLAN = false;
+window.movePlan = (cluster, kind, name) => {
+  const host = $("#mv_plan"), go = $("#mv_go");
+  if (!host) return;
+  ++MOVE_PLAN_EDITS;
+  // Nothing is read while a start is being sent. The dialog waits on the spinner: a refused start's after() reads
+  // its plan, and an accepted one closes it.
+  if (MOVE_PLAN.busy) return moveLoading({ host, go });
+  return MOVE_PLAN.open({ cluster, kind, name, host, go });
 };
 
 window.moveStart = async (cluster, kind, name) => {
+  const review = MOVE_PLAN.review;
   const body = JSON.parse(JSON.stringify(moveBody(cluster, kind, name)));
-  const copy = body.transfer_mode === "copy", sequence = MOVE_PLAN_SEQUENCE;
+  const copy = body.transfer_mode === "copy";
   const question = copy ? `Copy ${name} from ${cluster}?` + String.fromCharCode(10, 10)
       + (MOVE_LIVE ? "It keeps running while its disks are snapshotted and backed up. The destination copy stays stopped."
         : MOVE_STOP_SOURCE ? "It stops while its disks are backed up, then starts again as it was. The destination copy stays stopped."
@@ -1214,13 +1248,9 @@ window.moveStart = async (cluster, kind, name) => {
     : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
       + "It is unavailable from the moment it stops there until it starts here.";
   if (!(await ask(question, { title: copy ? "Copy here" : "Move here", ok: copy ? "Copy" : kind === "volume" ? "Move" : "Stop and move", danger: !copy && kind !== "volume" }))) return;
-  if (sequence !== MOVE_PLAN_SEQUENCE) return toast("The transfer settings changed; review them again", "bad");
-  try {
-    await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body) });
-    toast(`${copy ? "Copying" : "Moving"} ${name} from ${cluster}; follow progress under Linked clusters or in Activity`, "ok");
-    closeModal(); movesRepaint();
-  } catch (e) { toast(e.message, "bad"); }
+  if (!review || MOVE_PLAN.review !== review) return toast("The transfer settings changed; review them again", "bad");
+  MOVE_STARTING = { body, copy, cluster, name };
+  await MOVE_PLAN.apply();
 };
 
 const MOVE_PHASE_WORDS = { joining: "Share storage", quiescing: "Stop there", "backing-up": "Back up",
@@ -1396,16 +1426,15 @@ window.doImport = async source => {
   await importReview(body);
 };
 
-let IMPORT_REVIEW = null, IMPORT_REVIEW_SEQUENCE = 0;
-window.importReview = async body => {
-  IMPORT_REVIEW = null;
-  const sequence = ++IMPORT_REVIEW_SEQUENCE;
-  const config = JSON.parse(JSON.stringify(body));
-  try {
+/* Review, then import (#909), on the shared review flow: it keeps the sequence, the busy flag and the
+   one-shot send. This view keeps its words. */
+const IMPORT_REVIEW = UI.reviewFlow({
+  preview: async config => {
     const result = await api("/api/import/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(config)});
-    if (sequence !== IMPORT_REVIEW_SEQUENCE) return;
     if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("Import review unavailable; refresh before continuing.");
-    IMPORT_REVIEW = {config, ...result, submitting:false};
+    return {config, ...result};
+  },
+  render: (result, config) => {
     const phaseWarnings = new Map();
     for (const phase of result.phases) {
       const warnings = capacityNotes(phase.capacity).concerns;
@@ -1426,30 +1455,31 @@ window.importReview = async body => {
       ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> Import it anyway, replacing files</label>' : ''}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Import</button>`)}</div>`, true);
-  } catch (e) { toast(e.message, "bad"); }
-};
+  },
+  failed: e => toast(e.message, "bad"),
+  blocked: review => review.capacity.blocked, ack: "importConfirm",
+  apply: async review => {
+    $("#importGo").disabled = true;
+    try {
+      const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
+      if (result.operation) window.noteOperation?.(result.operation);
+      toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
+      closeModal(); resetPaint(); viewImport();
+    } catch (e) {
+      // An unknown outcome is never an automatic retry: the flow consumed the review.
+      toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
+      $("#importGo").textContent = "Review again";
+      $("#importGo").disabled = false;
+      $("#importGo").onclick = () => importReview(review.config);
+    }
+  },
+  after: () => window.refreshOperations?.(true),
+});
+window.importReview = body => IMPORT_REVIEW.open(JSON.parse(JSON.stringify(body)));
 window.confirmImport = async () => {
-  const review = IMPORT_REVIEW;
-  if (!review || review.submitting || review.capacity.blocked || !$("#importConfirm")?.checked)
-    return toast("Review and approve the import first", "bad");
-  review.submitting = true;
-  $("#importGo").disabled = true;
-  try {
-    const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
-    if (result.operation) window.noteOperation?.(result.operation);
-    IMPORT_REVIEW = null;
-    toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
-    closeModal(); resetPaint(); viewImport();
-  } catch (e) {
-    IMPORT_REVIEW = null; // An unknown outcome is never an automatic retry.
-    toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
-    $("#importGo").textContent = "Review again";
-    $("#importGo").disabled = false;
-    $("#importGo").onclick = () => importReview(review.config);
-  } finally {
-    window.refreshOperations?.(true);
-  }
+  if (!IMPORT_REVIEW.ready()) return toast("Review and approve the import first", "bad");
+  await IMPORT_REVIEW.apply();
 };
 
 /* Finished moves off the list, leaving the source's stopped copy where it is. */
@@ -1552,10 +1582,10 @@ window.imStorageAnyway = () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  importProgressCell, viewImport, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps, SOURCE_LEADS,
-  SOURCE_KEY_REVIEW, importMappingRows, importFolderName, importMappingRow, importVolumeRow, importMapPicture,
-  importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS, clusterVolumesHtml,
-  MOVE_PLAN_SEQUENCE, MOVE_VOLUMES, MOVE_TRANSFER_MODE, MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, moveBody,
-  moveDevicesTable, MOVE_VOLUME_ACTIONS, moveVolumesTable, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves,
-  IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
+  importProgressCell, viewImport, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps,
+  SOURCE_LEADS, SOURCE_KEY, importMappingRows, importFolderName, importMappingRow, importVolumeRow,
+  importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS,
+  clusterVolumesHtml, MOVE_PLAN_EDITS, invalidateMovePlan, MOVE_VOLUMES, MOVE_TRANSFER_MODE,
+  MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, moveDevicesTable, MOVE_VOLUME_ACTIONS,
+  moveVolumesTable, moveLoading, MOVE_PLAN, MOVE_STARTING, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };

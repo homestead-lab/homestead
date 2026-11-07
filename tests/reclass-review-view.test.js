@@ -2,15 +2,14 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 function setup({blocked=false,missing=false,fail=false}={}) {
   const fields={'#rc_plan':{},'#rc_to':{value:'new-class'},'#rc_go':{},'#rc_ack':{checked:false}},calls=[];
   const ctx={console,Date,Map,Set,Promise,URLSearchParams,encodeURIComponent,
-    document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],
+    document:{addEventListener(){},getElementById:id=>fields['#'+id]||null},STATE:{data:{}},$:key=>fields[key],$$:()=>[],
     esc:x=>String(x).replaceAll('<','&lt;'),sizeText:x=>x+' GiB',toast:()=>{},
-    UI:new Proxy({}, {get:(_,key)=>(...args)=>JSON.stringify({[key]:args})}),
     api:async(path,opts)=>{
       calls.push({path,body:JSON.parse(opts.body)});
       if(path.endsWith('/plan'))return {ok:!blocked,blockers:blocked?['Unsafe']:[],warnings:['Capacity unknown'],consumers:[{name:'<app>',kind:'Deployment',running:true}],space:{size_gb:20,replicas:2,allocated_gb:40},capacity_token:missing?'':'signed'};
       if(fail)throw Error('connection lost');return {operation:{id:'move-id'}};
     }};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(require("./helpers/storage-source")(),ctx);
+  ctx.window=ctx;vm.createContext(ctx);require('./helpers/load-ui')(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(require("./helpers/storage-source")(),ctx);
   ctx.reclassWatch=id=>{fields.watched=id;};return{ctx,fields,calls};
 }
 test('class move has one acknowledgement and submits only the reviewed target once',async()=>{

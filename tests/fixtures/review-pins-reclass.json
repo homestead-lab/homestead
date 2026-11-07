@@ -1,0 +1,393 @@
+{
+ "openingTheDialogAndPlanning": [
+  [
+   "modal",
+   "Change storage class · data",
+   "<p class=\"ui-lead\">Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move; the original data is kept afterward.</p><div class=\"ui-fields\"><div class=\"ui-field\">\n    <label for=\"field-c1\">From</label><input id=\"field-c1\" value=\"old\" disabled></div><div class=\"ui-field\">\n    <label for=\"rc_to\">To</label><select id=\"rc_to\" onchange=\"volumeReclassPlan(\"lab\",\"data\")\"><option value=\"new-class\" selected>new-class</option><option value=\"other\" >other</option></select></div></div><div id=\"rc_plan\"></div><label class=\"ui-ack\">\n    <input type=\"checkbox\" id=\"rc_ack\" onchange=\"volumeReclassReady()\"><span>Copy it despite the downtime and warnings</span></label><div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button type=\"button\" class=\"btn\" onclick=\"closeModal()\" data-dialog-dismiss=\"true\">Cancel</button></div><div class=\"ui-actions-end\"><button type=\"button\" class=\"btn pri\" id=\"rc_go\" onclick=\"volumeReclassStart(\"lab\",\"data\")\" disabled >Move volume</button></div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "planned",
+   "<div class=\"ui-callout info\" role=\"note\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-info\"/></svg></span>\n      <div><b>This can move with nothing stopped</b><div class=\"ui-callout-body\"><p>new-class differs from old only in which disks hold the copies (nvme). Its copies can move there while it stays in use; the volume keeps the class name old.</p>\n     <div class=\"row\"><button type=\"button\" class=\"btn pri\" onclick=\"volumeCopyMove(window.__reclassVolume,{\"disk_tags\":[\"nvme\"],\"node_tags\":[]})\" data-need=\"operator\">Move copies instead</button></div></div></div>\n    </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   false,
+   false
+  ]
+ ],
+ "gateAndStartOnce": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "planned",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   false,
+   false
+  ],
+  [
+   "state",
+   "without the tick",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   false,
+   false
+  ],
+  [
+   "state",
+   "ticked",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   false,
+   true,
+   false
+  ],
+  [
+   "state",
+   "another volume",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   false,
+   true,
+   false
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/start",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "state",
+   "sending",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   true
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "move-id"
+   }
+  ],
+  [
+   "reclassWatch",
+   "move-id"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "started",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   false
+  ]
+ ],
+ "blockedMissingAndEditedReviews": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "checked",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>This move cannot start</b><div class=\"ui-callout-body\"><ul><li>Unsafe</li><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   false
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "state",
+   "checked",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review unavailable</b><div class=\"ui-callout-body\">Review is incomplete; nothing can start.</div></div>\n    </div>",
+   true,
+   true,
+   false
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "checked",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   false
+  ]
+ ],
+ "anUncertainStartIsNeverReplayed": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/start",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Start not confirmed</b><div class=\"ui-callout-body\">connection lost Check Recent jobs before reviewing again. Nothing was retried.</div></div>\n    </div>",
+   true,
+   true,
+   false
+  ],
+  [
+   "state",
+   "tried again",
+   "<div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Start not confirmed</b><div class=\"ui-callout-body\">connection lost Check Recent jobs before reviewing again. Nothing was retried.</div></div>\n    </div>",
+   true,
+   true,
+   false
+  ]
+ ],
+ "planningAgainClearsTheTick": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "ticked",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   false,
+   true,
+   false
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "state",
+   "planning",
+   "<div class=\"empty\"><span class=\"spin2\"></span> checking what uses it and where it fits</div>",
+   true,
+   false,
+   false
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "state",
+   "planned again",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   false,
+   false
+  ]
+ ],
+ "olderPlanCannotReplaceANewerOne": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "latest"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/start",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "latest",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "move-id"
+   }
+  ],
+  [
+   "reclassWatch",
+   "move-id"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "after",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   false
+  ]
+ ],
+ "aDialogClosedDuringTheStart": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "move"
+   }
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "after",
+   null,
+   true,
+   true,
+   true
+  ]
+ ],
+ "aPlanWhileTheStartIsSentIsIgnored": [
+  [
+   "api",
+   "/api/volumes/reclass/plan",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class"
+   }
+  ],
+  [
+   "applyRole"
+  ],
+  [
+   "api",
+   "/api/volumes/reclass/start",
+   {
+    "namespace": "lab",
+    "claim": "data",
+    "target": "new-class",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "move-id"
+   }
+  ],
+  [
+   "reclassWatch",
+   "move-id"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "after",
+   "<div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Before moving</b><div class=\"ui-callout-body\"><ul><li>Capacity unknown</li></ul></div></div>\n    </div><section class=\"ui-section\">\n    <header><h4>Affected apps and VMs</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">App or VM</th><th class=\"\">Effect</th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"App or VM\">&lt;app> · Deployment</td><td class=\"\" data-label=\"Effect\">stopped, then started again</td></tr></tbody></table></div></section><section class=\"ui-section\">\n    <header><h4>Storage needed</h4></header>\n    <dl class=\"ui-facts\"><div><dt>New volume</dt><dd>20 GiB</dd></div><div><dt>Replica allocation</dt><dd>40 GiB · 2 copies</dd></div><div><dt>Estimated destination room</dt><dd>Unknown</dd></div></dl></section><details class=\"ui-more\" data-disclosure=\"What is checked\">\n    <summary>What is checked</summary><div class=\"ui-more-body\">The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.</div></details>",
+   true,
+   true,
+   false
+  ]
+ ]
+}

@@ -5,17 +5,16 @@ function setup({fail=false}={}) {
   const calls=[], fields={"#sourceKeyLoading":{},"#mbody":{},"#sourceKeyAck":{checked:false},"#sourceKeyApply":{}};
   let closed=0;
   const ctx={console,Map,Set,Date,Promise,URLSearchParams,encodeURIComponent,
-    document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},STATE:{data:{}},$:key=>fields[key],$$:()=>[],
     esc:x=>String(x).replaceAll('<','&lt;'),toast:()=>{},modal:(_title,_html,_wide,context)=>{fields.context=context;},
     closeModal:()=>closed++,resetPaint:()=>{},
-    UI:new Proxy({}, {get:(_,key)=>(...args)=>JSON.stringify({[key]:args})}),
     api:async(path,opts)=>{
       calls.push({path,body:JSON.parse(opts.body)});
       if(path.endsWith('/scan'))return {name:'tower',key:'public-key',fingerprint:'SHA256:fixture',algorithm:'ssh-ed25519',capacity_token:'signed',connection:{host:'192.0.2.10',port:22}};
       if(fail)throw Error('lost response');
       return {ok:true};
     }};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(require("./helpers/lifecycle-source")(),ctx);
+  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));require("./helpers/load-ui")(ctx);vm.runInContext(require("./helpers/lifecycle-source")(),ctx);
   ctx.viewImport=()=>{};
   return {ctx,calls,fields,closed:()=>closed};
 }

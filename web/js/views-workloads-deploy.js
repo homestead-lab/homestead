@@ -323,9 +323,6 @@ function renderPorts() { const before = DRENDERING; DRENDERING = true; const row
 function renderVols() { const before = DRENDERING; DRENDERING = true; renderVolumeRows(deployVolumePicker(), DCFG.volumes || []); DRENDERING = before; }
 function renderEnv() { const before = DRENDERING; DRENDERING = true; const rows = Object.entries(DCFG.env || {}); $("#d_env").innerHTML = ""; rows.forEach(([k, v]) => addEnv(k, v, (DCFG.env_meta || []).find(m => m.key === k) || {})); DRENDERING = before; }
 window.addPort = addPort; window.addVol = addVol; window.addEnv = addEnv;
-let DEPLOY_REVIEW = null;
-let DEPLOY_REVIEW_SEQUENCE = 0;
-let DEPLOY_SUBMITTING = false;
 /* The capacity review's notes, split: what needs someone, and the caveats
    every new VM or pod has - its disks not made yet, its launcher's memory
    not limited, the estimate a lower bound. Those are true of every review, so
@@ -399,26 +396,62 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
   </div>`;
 }
-window.deployReviewReady = () => {
-  const review = DEPLOY_REVIEW;
-  const ready = !DEPLOY_SUBMITTING && review && !review.plan?.blocked &&
-    (review.config.target_mode !== "existing" || $("#deployConfirm")?.checked) &&
-    (!review.plan?.requires_confirmation || $("#deployCapacityConfirm")?.checked);
-  if ($("#deployGo")) $("#deployGo").disabled = !ready;
-  return !!ready;
-};
+window.deployReviewReady = () => DEPLOY.ready();
 function deployInvalid(message, selector) {
   const field=selector?document.querySelector(selector):null, pane=field?.closest('.stepper-pane');
   if(pane)UI.selectSection("containerDeploy",pane.dataset.key);
   for(let parent=field?.parentElement;parent && parent!==pane;parent=parent.parentElement)if(parent.tagName==="DETAILS")parent.open=true;
   field?.focus();toast(message,"bad");
 }
+/* Review, then deploy (#909), on the shared review flow: it keeps the sequence, the busy flag and the
+   one-shot send. This view keeps its words, and the two ticks (joining a pod; deploying despite warnings). */
+const DEPLOY = UI.reviewFlow({
+  preview: async c => {
+    const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+    if (plan.app_profile?.blocked) throw new Error(plan.app_profile.label || "this app needs a Kubernetes-specific design");
+    if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
+    return { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token, preview: plan };
+  },
+  render: (review, c) => {
+    const joining = c.target_mode === "existing", plan = review.preview;
+    modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
+      <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
+        <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
+        ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
+        <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
+          <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
+      </div>
+      ${deployCapacityHtml(plan.capacity)}
+      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
+      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
+      ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}</div>
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}`, true);
+  },
+  failed: e => toast(e.message, "bad"),
+  blocked: review => !!review.plan?.blocked, button: "deployGo",
+  check: review => (review.config.target_mode !== "existing" || !!$("#deployConfirm")?.checked) &&
+    (!review.plan?.requires_confirmation || !!$("#deployCapacityConfirm")?.checked),
+  apply: async review => {
+    const c = { ...review.config, capacity_token: review.token,
+      confirm_capacity: !!$("#deployCapacityConfirm")?.checked };
+    try { $("#deployGo").disabled = true; const r = await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
+      const kept = (r.reused_volumes || []).length ? ` - kept the existing ${r.reused_volumes.join(", ")}, which nothing was using` : "";
+      closeModal(); toast((c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`) + kept, "ok"); go("workloads");
+    } catch (e) {
+      const button = $("#deployGo");
+      if (button) { button.disabled = false; button.textContent = "Review again"; button.onclick = () => window.doDeploy(); }
+      toast(e.message, "bad");
+    }
+  },
+});
+// A second click while the logo is still being checked replaces the first.
+let DEPLOY_CLICKS = 0;
 window.doDeploy = async () => {
-  if (DEPLOY_SUBMITTING) return;
-  const sequence = ++DEPLOY_REVIEW_SEQUENCE;
-  DEPLOY_REVIEW = null;
+  if (DEPLOY.busy) return;
+  const click = ++DEPLOY_CLICKS;
+  DEPLOY.back();
   try { await logoReady("#d_icon"); } catch (e) { return deployInvalid(e.message, "#d_icon"); }
-  if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
+  if (click !== DEPLOY_CLICKS) return;
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
@@ -438,46 +471,18 @@ window.doDeploy = async () => {
     const vols = volumeListIssue(c.volumes) ? "#d_vols" : extraField(extra.findIndex(container => volumeListIssue(container.volumes)), "vols");
     return deployInvalid(storageIssue, vols && `${vols} input`);
   }
-  try {
-    const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-    if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
-    if (plan.app_profile?.blocked) return toast(plan.app_profile.label || "this app needs a Kubernetes-specific design", "bad");
-    const joining = c.target_mode === "existing";
-    if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
-    DEPLOY_REVIEW = { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token };
-    modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">
-      <div class="reviewbox"><b>${joining ? `Add ${esc(c.container_name)} to ${esc(c.target_workload)}` : `Create ${esc(c.workload_name)} with container ${esc(c.container_name)}`}</b>
-        <p class="dim">${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}</p>
-        ${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
-        <div class="dependency-list"><div class="dependency-row"><span>Image</span><b class="mono">${esc(c.image)}</b></div>
-          <div class="dependency-row"><span>Ports</span><b>${c.ports.length}</b></div><div class="dependency-row"><span>Storage mappings</span><b>${c.volumes.length}</b></div></div>
-      </div>
-      ${deployCapacityHtml(plan.capacity)}
-      ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again" : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${esc(c.target_workload)} as its pods roll out`}</label>` : ""}
-      ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Deploy it despite the warnings</label>` : ""}
-      ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}</div>
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy app"}</button>`)}`, true);
-  } catch (e) { toast(e.message, "bad"); }
+  await DEPLOY.open(c);
 };
 window.confirmDeploy = async () => {
   if (!window.deployReviewReady()) return toast("Review the deployment and acknowledge its warnings first", "bad");
-  const c = { ...DEPLOY_REVIEW.config, capacity_token: DEPLOY_REVIEW.token,
-    confirm_capacity: !!$("#deployCapacityConfirm")?.checked };
-  DEPLOY_SUBMITTING = true;
-  try { $("#deployGo").disabled = true; const r = await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-    const kept = (r.reused_volumes || []).length ? ` - kept the existing ${r.reused_volumes.join(", ")}, which nothing was using` : "";
-    DEPLOY_REVIEW = null;
-    closeModal(); toast((c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`) + kept, "ok"); go("workloads");
-  } catch (e) {
-    DEPLOY_REVIEW = null;
-    const button = $("#deployGo");
-    if (button) { button.disabled = false; button.textContent = "Review again"; button.onclick = () => window.doDeploy(); }
-    toast(e.message, "bad");
-  } finally { DEPLOY_SUBMITTING = false; }
+  await DEPLOY.apply();
 };
-
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  DEPLOY_CONTAINER_NEXT, deployContainerStorage, renderDeployContainers, deployDefaults, DCFG, generatedSecret, deployPlacementApp, viewDeploy, selectedTarget, renderDeployTargets, updateJoinNote, refreshDeployOptions, applyDeployMode, collect, deployPlacementWords, syncSummary, addPort, deployVolumePicker, addVol, addEnv, renderPorts, renderVols, renderEnv, DEPLOY_REVIEW, DEPLOY_REVIEW_SEQUENCE, DEPLOY_SUBMITTING, CAPACITY_ROUTINE, CAPACITY_ROLLOUT_ROUTINE, capacityNoteWords, capacityNotes, deployCapacityHtml, deployInvalid
+  DEPLOY_CONTAINER_NEXT, deployContainerStorage, renderDeployContainers, deployDefaults, DCFG, generatedSecret,
+  deployPlacementApp, viewDeploy, selectedTarget, renderDeployTargets, updateJoinNote, refreshDeployOptions,
+  applyDeployMode, collect, deployPlacementWords, syncSummary, addPort, deployVolumePicker, addVol, addEnv,
+  renderPorts, renderVols, renderEnv, CAPACITY_ROUTINE, CAPACITY_ROLLOUT_ROUTINE, capacityNoteWords,
+  capacityNotes, deployCapacityHtml, deployInvalid, DEPLOY, DEPLOY_CLICKS
 };

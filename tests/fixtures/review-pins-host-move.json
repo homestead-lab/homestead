@@ -1,0 +1,426 @@
+{
+ "consentGateAndSendOnce": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Move",
+   "object"
+  ],
+  [
+   "toast",
+   "Review the move and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "without the tick",
+   false,
+   "Move",
+   "object"
+  ],
+  [
+   "api",
+   "/api/move",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false,
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Review the move and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "sending",
+   true,
+   "Applying placement…",
+   "object"
+  ],
+  [
+   "toast",
+   "app: placement saved; watch rollout progress in Recent jobs",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "setTimeout",
+   1500
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Applying placement…",
+   "object"
+  ]
+ ],
+ "reviewedInputNotChangedSelection": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/move",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false,
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "app: placement saved; watch rollout progress in Recent jobs",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "setTimeout",
+   1500
+  ]
+ ],
+ "blockedReview": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      \n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\" disabled onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Move",
+   "object"
+  ],
+  [
+   "toast",
+   "Review the move and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "tried",
+   false,
+   "Move",
+   "object"
+  ]
+ ],
+ "rejectedSendOffersAnotherReview": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/move",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false,
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "review expired",
+   "bad"
+  ],
+  [
+   "state",
+   "failed",
+   false,
+   "Review again",
+   "function"
+  ],
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "state",
+   "review again",
+   false,
+   "Review again",
+   "function"
+  ]
+ ],
+ "incompleteAndFailedPreviews": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "toast",
+   "Move review unavailable; refresh before moving.",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "toast",
+   "Not found",
+   "bad"
+  ]
+ ],
+ "pickingAHostMakesAnOpenPreviewStale": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "state",
+   "after the late reply",
+   false,
+   "Move",
+   "object"
+  ]
+ ],
+ "anOlderPreviewCannotReplaceANewerOne": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "new",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/move",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "new",
+    "pin": false,
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "app: placement saved; watch rollout progress in Recent jobs",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "setTimeout",
+   1500
+  ]
+ ],
+ "noReviewWhileOneIsBeingSent": [
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/move",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false,
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "app: placement saved; watch rollout progress in Recent jobs",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "setTimeout",
+   1500
+  ],
+  [
+   "state",
+   "after",
+   true,
+   "Applying placement…",
+   "object"
+  ]
+ ],
+ "doMoveNowNeedsAHost": [
+  [
+   "toast",
+   "Pick a host first",
+   "bad"
+  ],
+  [
+   "state",
+   "nothing picked",
+   false,
+   "Move",
+   "object"
+  ],
+  [
+   "api",
+   "/api/move/preview",
+   {
+    "ns": "lab",
+    "name": "app",
+    "node": "b",
+    "pin": false
+   }
+  ],
+  [
+   "childModal",
+   "Review move · app",
+   "<p>Destination: <b>&lt;host&gt;</b> · preferred.</p>\n      <div class=\"note warn\">This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.</div>\n      capacity report\n      <details><summary>Selected host: full desired replica count</summary><p class=\"small muted\">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>capacity report</details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"hostMoveConfirm\"> Move it despite the warnings</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"invalidateHostMove();modalBack()\">Back</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"hostMoveGo\"  onclick=\"confirmHostMove()\">Move</button></div></div>"
+  ],
+  [
+   "state",
+   "picked",
+   false,
+   "Move",
+   "object"
+  ]
+ ],
+ "pickerPlanAndALatePlan": [
+  [
+   "childModal",
+   "Move · app",
+   "<div class=\"empty\"><span class=\"spin2\"></span>checking capacity and hardware constraints…</div>"
+  ],
+  [
+   "childModal",
+   "Move · app",
+   "<div class=\"empty\"><span class=\"spin2\"></span>checking capacity and hardware constraints…</div>"
+  ],
+  [
+   "picker",
+   "\n    <div class=\"between\"><p class=\"muted small\">Currently on <b>a</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>\n      <button class=\"btn pri sm\" onclick=\"pickMove(\"&lt;new&gt;\")\">Best fit · &lt;new&gt;</button></div>\n    <div class=\"constraintbar\"><span class=\"dim small\">No host-specific hardware requirements.</span></div>\n    \n\n    <div class=\"movegrid\" style=\"margin-top:16px\">\n      <div class=\"movecard cur \"\n              data-node=\"a\">\n          <div class=\"between\">\n            <div class=\"row\" style=\"gap:9px\">\n              <div class=\"av n2\">A</div>\n              <div><div style=\"font-weight:670\">a</div>\n                <div class=\"dim xs\">1 of your pods · score 1</div></div>\n            </div>\n            <span class=\"ui-chip neutral\">current</span>\n          </div>\n          <div style=\"margin-top:12px\">\n            <div class=\"between\"><span class=\"dim xs\">Preliminary CPU estimate</span>\n              <span class=\"mono small\">1%</span></div>\n            \n            <div class=\"between\"><span class=\"dim xs\">Preliminary RAM estimate</span>\n              <span class=\"mono small\">1%</span></div>\n            \n          </div>\n          <div style=\"margin-top:11px\">\n             \n             \n             \n          </div>\n        </div><div class=\"movecard  \"\n             onclick=\"pickMove(\"&lt;new&gt;\")\" data-node=\"&lt;new&gt;\">\n          <div class=\"between\">\n            <div class=\"row\" style=\"gap:9px\">\n              <div class=\"av n2\">EW</div>\n              <div><div style=\"font-weight:670\">&lt;new&gt;</div>\n                <div class=\"dim xs\">0 of your pods · score 2</div></div>\n            </div>\n            <span class=\"ui-chip neutral\">review needed</span>\n          </div>\n          <div style=\"margin-top:12px\">\n            <div class=\"between\"><span class=\"dim xs\">Preliminary CPU estimate</span>\n              <span class=\"mono small\">2%</span></div>\n            \n            <div class=\"between\"><span class=\"dim xs\">Preliminary RAM estimate</span>\n              <span class=\"mono small\">2%</span></div>\n            \n          </div>\n          <div style=\"margin-top:11px\">\n             \n             \n             \n          </div>\n        </div>\n    </div>\n\n    <div class=\"row\" style=\"margin-top:16px\"><label class=\"switch\"><input type=\"checkbox\" id=\"mv_unpin\">\n      Clear preference — let the scheduler choose</label>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"mv_pin\"> Hard pin </label></div>\n\n    <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"mv_go\" onclick=\"doMoveNow(\"lab\",\"app\")\" disabled>Review move</button>\n      </div></div>\n    <div class=\"note\" style=\"margin-top:14px\">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. </div>"
+  ],
+  [
+   "picker after the late plan",
+   "\n    <div class=\"between\"><p class=\"muted small\">Currently on <b>a</b>. Pick a host for a full capacity review. These initial estimates are not an admission check.</p>\n      <button class=\"btn pri sm\" onclick=\"pickMove(\"&lt;new&gt;\")\">Best fit · &lt;new&gt;</button></div>\n    <div class=\"constraintbar\"><span class=\"dim small\">No host-specific hardware requirements.</span></div>\n    \n\n    <div class=\"movegrid\" style=\"margin-top:16px\">\n      <div class=\"movecard cur \"\n              data-node=\"a\">\n          <div class=\"between\">\n            <div class=\"row\" style=\"gap:9px\">\n              <div class=\"av n2\">A</div>\n              <div><div style=\"font-weight:670\">a</div>\n                <div class=\"dim xs\">1 of your pods · score 1</div></div>\n            </div>\n            <span class=\"ui-chip neutral\">current</span>\n          </div>\n          <div style=\"margin-top:12px\">\n            <div class=\"between\"><span class=\"dim xs\">Preliminary CPU estimate</span>\n              <span class=\"mono small\">1%</span></div>\n            \n            <div class=\"between\"><span class=\"dim xs\">Preliminary RAM estimate</span>\n              <span class=\"mono small\">1%</span></div>\n            \n          </div>\n          <div style=\"margin-top:11px\">\n             \n             \n             \n          </div>\n        </div><div class=\"movecard  \"\n             onclick=\"pickMove(\"&lt;new&gt;\")\" data-node=\"&lt;new&gt;\">\n          <div class=\"between\">\n            <div class=\"row\" style=\"gap:9px\">\n              <div class=\"av n2\">EW</div>\n              <div><div style=\"font-weight:670\">&lt;new&gt;</div>\n                <div class=\"dim xs\">0 of your pods · score 2</div></div>\n            </div>\n            <span class=\"ui-chip neutral\">review needed</span>\n          </div>\n          <div style=\"margin-top:12px\">\n            <div class=\"between\"><span class=\"dim xs\">Preliminary CPU estimate</span>\n              <span class=\"mono small\">2%</span></div>\n            \n            <div class=\"between\"><span class=\"dim xs\">Preliminary RAM estimate</span>\n              <span class=\"mono small\">2%</span></div>\n            \n          </div>\n          <div style=\"margin-top:11px\">\n             \n             \n             \n          </div>\n        </div>\n    </div>\n\n    <div class=\"row\" style=\"margin-top:16px\"><label class=\"switch\"><input type=\"checkbox\" id=\"mv_unpin\">\n      Clear preference — let the scheduler choose</label>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"mv_pin\"> Hard pin </label></div>\n\n    <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"mv_go\" onclick=\"doMoveNow(\"lab\",\"app\")\" disabled>Review move</button>\n      </div></div>\n    <div class=\"note\" style=\"margin-top:14px\">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. </div>"
+  ],
+  [
+   "childModal",
+   "Move · app",
+   "<div class=\"empty\"><span class=\"spin2\"></span>checking capacity and hardware constraints…</div>"
+  ],
+  [
+   "picker failed",
+   "<div class=\"empty\"><b>Could not build a placement plan</b><br><span class=\"dim small\">no plan</span></div>"
+  ]
+ ]
+}

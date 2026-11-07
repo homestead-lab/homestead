@@ -4,7 +4,7 @@ function setup() {
   let html='', resolvePost, timer, closed=false;
   const sent=[], fields={'#lhV2UpgradeBody':{innerHTML:''},'#lhV2UpgradeBackup':{checked:false},'#lhV2UpgradeTimeout':{value:'60'},'#lhV2SettingsAck':{checked:false}};
   const report={installed:'v1.12.2',target:'v1.13.0',v2_volumes:3,live_ready:true,offline_ready:false,live_blockers:[],offline_blockers:['Stop and detach disks'],upgrade:{enabled:false,timeout:60,nodes:[]}};
-  const c={window:null,console,$:s=>closed?null:fields[s],esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
+  const c={window:null,console,document:{addEventListener(){},getElementById:id=>closed?null:fields['#'+id]||null},$:s=>closed?null:fields[s],esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
     can:()=>true,icon:()=>'',modal:(_,h)=>{html=h;closed=false;},childModal:(_,h)=>{html=h;},closeModal:()=>{closed=true;},toast(){},clusterComponentsPaint(){},
     setTimeout:f=>{timer=f;return 1;},clearTimeout(){},api:async(path,opts)=>{
       if(!opts)return report;

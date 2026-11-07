@@ -308,9 +308,8 @@ window.vmNamespaceChanged = () => {
   $$("#v_boot option[value^='iso:']").forEach(option => { option.disabled = outside; });
   if (outside && ($("#v_boot")?.value || "").startsWith("iso:")) { $("#v_boot").value = ""; vmBootChanged(); }
 };
-let VM_CREATE_REVIEW = null, VM_CREATE_BUSY = false, VM_CREATE_SEQUENCE = 0;
 window.doVmCreate = async () => {
-  if (VM_CREATE_BUSY) return;
+  if (VM_CREATE.busy) return;
   const boot = $("#v_boot").value;
   const imported = boot.startsWith("disk:") ? boot.slice(5).split("/") : [];
   const body = { name: $("#v_name").value.trim(), cores: +$("#v_cores").value,
@@ -353,17 +352,16 @@ window.doVmCreate = async () => {
   }
   return vmCreateReview(body, {serviceMode, selectedVip});
 };
-window.vmCreateReview = async (body, network = {}) => {
-  if (VM_CREATE_BUSY) return;
-  VM_CREATE_REVIEW = null;
-  const sequence = ++VM_CREATE_SEQUENCE;
-  const frozen = JSON.parse(JSON.stringify(body));
-  try {
+/* Review, then create a VM (#909), on the shared review flow: it keeps the sequence, the busy flag and the
+   one-shot send. This view keeps its words and the Service VIP set up after the create. */
+const VM_CREATE = UI.reviewFlow({
+  preview: async ({ frozen, network }) => {
     const review = await api("/api/vm/create/preview", {method:"POST", headers:{"Content-Type":"application/json"},body:JSON.stringify(frozen)});
-    if (sequence !== VM_CREATE_SEQUENCE) return;
     if (!(review.config?.isolated === true || review.config?.mac) || !review.capacity_token || typeof review.capacity?.blocked !== "boolean")
       throw new Error("VM creation review unavailable. Nothing was created; refresh before continuing.");
-    VM_CREATE_REVIEW = {...review, network:{...network}};
+    return {...review, network:{...network}};
+  },
+  render: review => {
     const cfg = review.config;
     const ip = cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : "";
     const objects = UI.facts([
@@ -377,42 +375,42 @@ window.vmCreateReview = async (body, network = {}) => {
         ackId: "vmCreateApprove", onAck: "vmCreateReviewReady()" })
       + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button>`), true);
     vmCreateReviewReady();
-  } catch (error) { if(sequence === VM_CREATE_SEQUENCE) toast(error.message,"bad"); }
-};
-window.vmCreateReviewBack = () => { if (!VM_CREATE_BUSY) { VM_CREATE_REVIEW = null; ++VM_CREATE_SEQUENCE; modalBack(); } };
-window.vmCreateReviewReady = () => {
+  },
+  failed: error => toast(error.message,"bad"),
   // Nothing needing attention: no tickbox to tick, only the button.
-  const accepted = $("#vmCreateApprove") ? $("#vmCreateApprove").checked : true;
-  const ready = !!(VM_CREATE_REVIEW && !VM_CREATE_BUSY && !VM_CREATE_REVIEW.capacity.blocked && accepted);
-  if($("#vmCreateApply")) $("#vmCreateApply").disabled = !ready;
-  return ready;
-};
+  blocked: review => review.capacity.blocked, ack: "vmCreateApprove", button: "vmCreateApply",
+  apply: async review => {
+    const cfg = review.config, button = $("#vmCreateApply");
+    button.disabled = true; button.textContent = "Preparing disk and creating VM…";
+    try {
+      const result = await api("/api/vm/create", {method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({...cfg, capacity_token:review.capacity_token,confirm_capacity:true})});
+      if (result.operation && window.noteOperation) noteOperation(result.operation);
+      toast(result.warning || `${cfg.name} created${result.address ? ` at ${result.address}` : ""}`, result.warning ? "bad" : "ok");
+      closeModal(); go("vms");
+      if (!cfg.isolated && review.network.serviceMode) {
+        try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
+        catch(error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`,"bad"); }
+      }
+    } catch(error) {
+      if($("#vmCreateApply") === button) {
+        button.textContent = "Inspect before creating again";
+        $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.</div>`);
+      }
+      toast(error.message,"bad");
+    }
+  },
+  after: () => { if (window.refreshOperations) refreshOperations(true); },
+});
+window.vmCreateReview = (body, network = {}) => VM_CREATE.open({ frozen: JSON.parse(JSON.stringify(body)), network });
+window.vmCreateReviewBack = () => { if (VM_CREATE.back()) modalBack(); };
+window.vmCreateReviewReady = () => VM_CREATE.ready();
 window.vmCreateReviewedApply = async () => {
   if (!vmCreateReviewReady()) return toast("Review the VM and acknowledge its warnings first", "bad");
-  const review = VM_CREATE_REVIEW, cfg = review.config, button = $("#vmCreateApply");
-  VM_CREATE_REVIEW = null;
-  VM_CREATE_BUSY = true;
-  button.disabled = true; button.textContent = "Preparing disk and creating VM…";
-  try {
-    const result = await api("/api/vm/create", {method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({...cfg, capacity_token:review.capacity_token,confirm_capacity:true})});
-    if (result.operation && window.noteOperation) noteOperation(result.operation);
-    toast(result.warning || `${cfg.name} created${result.address ? ` at ${result.address}` : ""}`, result.warning ? "bad" : "ok");
-    closeModal(); go("vms");
-    if (!cfg.isolated && review.network.serviceMode) {
-      try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
-      catch(error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`,"bad"); }
-    }
-  } catch(error) {
-    if($("#vmCreateApply") === button) {
-      button.textContent = "Inspect before creating again";
-      $("#mbody").insertAdjacentHTML("afterbegin",`<div class="note bad">${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.</div>`);
-    }
-    toast(error.message,"bad");
-  } finally { VM_CREATE_BUSY = false; if (window.refreshOperations) refreshOperations(true); }
+  await VM_CREATE.apply();
 };
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  vmLanNetworks, vmNetworkNote, vmSubnetFor, vmAddressFields, vmReadAddress, VM_CREATE_REVIEW
+  vmLanNetworks, vmNetworkNote, vmSubnetFor, vmAddressFields, vmReadAddress, VM_CREATE
 };

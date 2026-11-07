@@ -616,7 +616,6 @@ window.containerRemove = (mode, index) => {
   panels.forEach(card => card.remove());
   containerRemovedPaint(); containerRemoveButtons(); editContainerListChanged(); editPortsChanged(); placementChanged();
 };
-let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
   if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
   const workloadName = $("#e_workload_name").value.trim();
@@ -675,16 +674,15 @@ function storageCopyReview(config, capacity) {
     (!capacity.blocked ? UI.ack("editCapacityConfirm","Move its storage despite the outage and warnings") : "") +
     UI.actions(UI.button("Back to edit","modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
-window.editReview = async body => {
-  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
-  EDIT_REVIEW = null;
-  const sequence = ++EDIT_REVIEW_SEQUENCE;
-  const config = JSON.parse(JSON.stringify(body));
-  try {
+/* Review, then save an Edit (#909), on the shared review flow: it keeps the sequence, the busy flag and the
+   one-shot send. This view keeps its words, the managed-rename tick, and what happens when a save is refused. */
+const EDIT_REVIEW = UI.reviewFlow({
+  preview: async config => {
     const review = await api("/api/edit/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
-    if (sequence !== EDIT_REVIEW_SEQUENCE) return;
     if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
-    EDIT_REVIEW = { config, ...review, submitting: false };
+    return { config, ...review };
+  },
+  render: (review, config) => {
     const rename = review.capacity.rename;
     const concerns = capacityNotes(review.capacity).concerns;
     const copying = !!review.capacity.copy_helper;
@@ -703,51 +701,55 @@ window.editReview = async body => {
       ${gitopsYamlBlock(review.yaml, review.secret)}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename app" : "Save changes"}</button>`)}`, true, "operation-review");
-  } catch (e) {
+  },
+  failed: (e, config) => {
     // A refusal about Starts after (a loop, say) is shown beside it too.
     if (config.starts_after && e.status === 400 && startsAfterRefusal(e.message)) startsAfterShowError(e.message);
     toast(e.message, "bad");
-  }
-};
-window.confirmEdit = async () => {
-  const review = EDIT_REVIEW;
-  if (!review || review.submitting || review.capacity.blocked || !$("#editCapacityConfirm")?.checked)
-    return toast("Review the changes and acknowledge their warnings first", "bad");
-  const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
-  const { ns, name, workload_name: workloadName } = body;
-  const renaming = workloadName && workloadName !== name;
-  // Flux or Argo CD brings the old name back (#734): its own tick, sent so the server knows.
-  if (renaming && review.managed?.by) {
-    if (!$("#editManagedConfirm")?.checked) return toast(`Tick "${review.managed.by} will bring back the old name" first`, "bad");
-    body.confirm_managed = true;
-  }
-  review.submitting = true;
-  const button = $("#editGo");
-  button.disabled = true;
-  button.textContent = renaming ? "Renaming… follow Recent jobs" : "Saving changes…";
-  if (renaming) window.startOperationChecks?.();
-  try {
-    const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const activeName = result.name || workloadName || name;
-    if (result.operation) window.noteOperation?.(result.operation);
-    toast(renaming ? `${name} renamed to ${activeName}` : result.operation ? `${activeName} saved; copying its data under Jobs` :
-      result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
-    EDIT_REVIEW = null;
-    closeModal(); setTimeout(() => refresh(true), 1200);
-  } catch (e) {
-    EDIT_REVIEW = null;
-    window.startOperationChecks?.();
-    EDIT_SAVE_UNCERTAIN = true;
-    toast(e.message, "bad");
+  },
+  blocked: review => review.capacity.blocked, ack: "editCapacityConfirm",
+  apply: async review => {
+    const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
+    const { ns, name, workload_name: workloadName } = body;
+    const renaming = workloadName && workloadName !== name;
+    // Flux or Argo CD brings the old name back (#734): its own tick, checked before this, sent so the server knows.
+    if (renaming && review.managed?.by) body.confirm_managed = true;
+    const button = $("#editGo");
     button.disabled = true;
-    button.textContent = "Inspect before saving again";
-    button.onclick = null;
-    $("#mbody").insertAdjacentHTML("beforeend", `<div id="editSaveNotice" class="note warn" role="alert"><b>${esc(e.message)}</b><p>${renaming
+    button.textContent = renaming ? "Renaming… follow Recent jobs" : "Saving changes…";
+    if (renaming) window.startOperationChecks?.();
+    try {
+      const result = await api("/api/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const activeName = result.name || workloadName || name;
+      if (result.operation) window.noteOperation?.(result.operation);
+      toast(renaming ? `${name} renamed to ${activeName}` : result.operation ? `${activeName} saved; copying its data under Jobs` :
+        result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
+      closeModal(); setTimeout(() => refresh(true), 1200);
+    } catch (e) {
+      window.startOperationChecks?.();
+      EDIT_SAVE_UNCERTAIN = true;
+      toast(e.message, "bad");
+      button.disabled = true;
+      button.textContent = "Inspect before saving again";
+      button.onclick = null;
+      $("#mbody").insertAdjacentHTML("beforeend", `<div id="editSaveNotice" class="note warn" role="alert"><b>${esc(e.message)}</b><p>${renaming
       ? "The rename may have partly completed. Inspect both app names and Recent jobs before another action."
       : "Some changes may already be saved, including new containers or volumes. Reload the saved app to inspect what applied before making another change. Reload replaces this form's unsaved edits; the app does not need a new name."}</p>
       <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect apps" : "Reload saved app"}</button></div>`);
-    $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
-  }
+      $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
+    }
+  },
+});
+window.editReview = async body => {
+  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved app before reviewing another save", "bad");
+  return EDIT_REVIEW.open(JSON.parse(JSON.stringify(body)));
+};
+window.confirmEdit = async () => {
+  if (!EDIT_REVIEW.ready()) return toast("Review the changes and acknowledge their warnings first", "bad");
+  const review = EDIT_REVIEW.review, { name, workload_name: workloadName } = review.config;
+  if (workloadName && workloadName !== name && review.managed?.by && !$("#editManagedConfirm")?.checked)
+    return toast(`Tick "${review.managed.by} will bring back the old name" first`, "bad");
+  await EDIT_REVIEW.apply();
 };
 
 /* ---------------- move a container ---------------- */
@@ -771,12 +773,12 @@ window.doMove = async (ns, name) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  editEnvRow, editPortRow, EDIT_STORAGE, editVolumeRow, editVolumePicker, editContainerPanel, editCpuWords, editSpan,
-  editUsageWords, editSuggestionChange, editUsageSuggestion, EDIT_CONTAINER_NEXT, EDIT_REMOVED_PANELS,
+  editEnvRow, editPortRow, EDIT_STORAGE, editVolumeRow, editVolumePicker, editContainerPanel, editCpuWords,
+  editSpan, editUsageWords, editSuggestionChange, editUsageSuggestion, EDIT_CONTAINER_NEXT, EDIT_REMOVED_PANELS,
   EDIT_SAVE_UNCERTAIN, nodes0, editAddressNow, FAILOVER_WORDS, FAILOVER_HELP, failoverSelect, PRIORITY_HELP,
   prioritySelect, priorityGroupLabel, priorityGroupHelp, priorityFixed, STARTS_HELP, EDIT_STARTS, startsKey,
   startsAfterRow, startsAfterPorts, startsAfterBlock, startsAfterValue, startsAfterRows, readStartsAfter,
   startsAfterProblem, startsAfterManagedNote, startsAfterStopped, startsAfterReviewLine, startsAfterRefusal,
   startsAfterNote, editPortSignature, editSecretUnreadNotice, editReviewButton, readEditedContainer,
-  editContainerListChanged, containerRemovedPaint, containerRemoveButtons, EDIT_REVIEW, storageCopyReview
+  editContainerListChanged, containerRemovedPaint, containerRemoveButtons, storageCopyReview, EDIT_REVIEW
 };

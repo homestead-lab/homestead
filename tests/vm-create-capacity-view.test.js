@@ -4,7 +4,7 @@ function setup({blocked=false,missing=false,fail=false,routine=false}={}) {
   const fields={"#vmCreateApprove":{checked:false},"#vmCreateApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],exposed=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
-    document:{addEventListener(){}},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
+    document:{addEventListener(){},getElementById:id=>fields["#"+id]||null},STATE:{data:{}},$:key=>fields[key],$$:()=>[],esc:v=>String(v).replaceAll("<","&lt;"),
     toast(){},go(){},closeModal(){},modalBack(){},defaultNamespace:()=>"lab",childModal:(_title,html)=>fields["#mbody"].innerHTML=html,
     deployCapacityHtml:p=>`<div>${p.warnings.join(" ")}</div>`,capacityNotes:p=>routine ? {concerns:[],caveats:p.warnings} : {concerns:p.warnings,caveats:[]},networkExpose:async(...args)=>exposed.push(args),
     api:async(path,options)=>{

@@ -1,0 +1,494 @@
+{
+ "gateFrozenConfigAndSendOnce": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployCapacityConfirm\" onchange=\"deployReviewReady()\"> Deploy it despite the warnings</label>\n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "without the tick",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "state",
+   "ticked",
+   false,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "api",
+   "/api/deploy",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "capacity_token": "signed-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "sending",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "demo deployed - kept the existing old-claim, which nothing was using",
+   "ok"
+  ],
+  [
+   "go",
+   "workloads"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Deploy",
+   "orig"
+  ]
+ ],
+ "joiningAPodNeedsItsOwnTick": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "existing",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "target_workload": "web"
+   }
+  ],
+  [
+   "modal",
+   "Review shared-pod change",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Add demo to web</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Updated pod: capacity after old pods stop</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\"><p>Recreate · 1 desired replica · Pod ownership is unverified; released capacity is unknown.</p>\n    \n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployConfirm\" onchange=\"deployReviewReady()\"> Save the paused template; resuming is reviewed again</label>\n      \n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Add container & restart pod</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "no tick",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "state",
+   "ticked",
+   false,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "api",
+   "/api/deploy",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "existing",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "target_workload": "web",
+    "capacity_token": "signed-token",
+    "confirm_capacity": false
+   }
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "demo added to web - kept the existing old-claim, which nothing was using",
+   "ok"
+  ],
+  [
+   "go",
+   "workloads"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Deploy",
+   "orig"
+  ]
+ ],
+ "noWarningsNeedNoTick": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      \n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\"  onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "api",
+   "/api/deploy",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "capacity_token": "signed-token",
+    "confirm_capacity": false
+   }
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "demo deployed - kept the existing old-claim, which nothing was using",
+   "ok"
+  ],
+  [
+   "go",
+   "workloads"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Deploy",
+   "orig"
+  ]
+ ],
+ "blockedMissingAndUnsupportedPreviews": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch. Launch is blocked until the issues below are resolved.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul><p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\" open>\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      \n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      \n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "toast",
+   "Capacity preview unavailable; refresh Homestead before deploying.",
+   "bad"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "toast",
+   "needs a Kubernetes design",
+   "bad"
+  ],
+  [
+   "state",
+   "reviewed",
+   true,
+   "Deploy",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ]
+ ],
+ "refusedSendNeedsAFreshReview": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployCapacityConfirm\" onchange=\"deployReviewReady()\"> Deploy it despite the warnings</label>\n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/deploy",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "capacity_token": "signed-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "rejected",
+   "bad"
+  ],
+  [
+   "state",
+   "failed",
+   false,
+   "Review again",
+   "() => window.doDeploy()"
+  ],
+  [
+   "toast",
+   "Review the deployment and acknowledge its warnings first",
+   "bad"
+  ],
+  [
+   "state",
+   "tried again",
+   true,
+   "Review again",
+   "() => window.doDeploy()"
+  ],
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployCapacityConfirm\" onchange=\"deployReviewReady()\"> Deploy it despite the warnings</label>\n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "state",
+   "review again",
+   true,
+   "Review again",
+   "() => window.doDeploy()"
+  ]
+ ],
+ "olderReviewCannotReplaceANewerOne": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "newer",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create newer with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployCapacityConfirm\" onchange=\"deployReviewReady()\"> Deploy it despite the warnings</label>\n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "api",
+   "/api/deploy",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "newer",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": [],
+    "capacity_token": "signed-token",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "toast",
+   "newer deployed - kept the existing old-claim, which nothing was using",
+   "ok"
+  ],
+  [
+   "go",
+   "workloads"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Deploy",
+   "orig"
+  ]
+ ],
+ "aSecondClickWhileTheLogoIsChecked": [
+  [
+   "api",
+   "/api/preview",
+   {
+    "name": "demo",
+    "container_name": "demo",
+    "workload_name": "demo",
+    "target_mode": "new",
+    "image": "demo:1",
+    "ports": [],
+    "volumes": []
+   }
+  ],
+  [
+   "modal",
+   "Review deployment",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>Create demo with container demo</b>\n        <p class=\"dim\">Review the Kubernetes objects before continuing.</p>\n        \n        <div class=\"dependency-list\"><div class=\"dependency-row\"><span>Image</span><b class=\"mono\">demo:1</b></div>\n          <div class=\"dependency-row\"><span>Ports</span><b>0</b></div><div class=\"dependency-row\"><span>Storage mappings</span><b>0</b></div></div>\n      </div>\n      <div class=\"deploy-capacity ui-stack\">\n    <div class=\"capacity-placement\"><section class=\"ui-section\">\n    <header><h4>Launch host</h4></header>\n    <b>Only eligible host: host&lt;a&gt;</b><p class=\"ui-help\">Kubernetes can schedule it here if these constraints still hold at launch.</p></section></div>\n    <section class=\"ui-section\">\n    <header><h4>Placement and memory</h4></header>\n    <div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Placement and memory need review.</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>planned &lt;volume&gt;</li></ul></div></div>\n    </div><p class=\"ui-help\">1 pod, each requesting 1 GiB RAM; CPU request: 50% (100% = one core). Memory estimate: 2 GiB per pod, including init stages.</p><section class=\"ui-section\">\n    <header><h4>Hosts that can run it</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\">Host</th><th class=\"grow\">Memory</th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"Host\"><span class=\"mono\">host&lt;a&gt;</span><span class=\"sub\">Live RAM unavailable · Scheduler reservations unavailable.</span></td><td class=\"grow\" data-label=\"Memory\"><span class=\"ui-help\">Live RAM unavailable</span></td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Eligible</span></td></tr></tbody></table></div></section></section>\n    <details class=\"ui-more\" data-disclosure=\"How this is estimated\">\n    <summary>How this is estimated</summary><div class=\"ui-more-body\">\n      \n      <p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>\n      <p>This is a snapshot, not a reservation or an OOM guarantee. The server checks again before creating anything. Planned volumes have not been provisioned.</p></div></details>\n    \n  </div>\n      \n      <label class=\"switch dependency-confirm\"><input type=\"checkbox\" id=\"deployCapacityConfirm\" onchange=\"deployReviewReady()\"> Deploy it despite the warnings</label>\n      </div>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"closeModal()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"deployGo\" disabled onclick=\"confirmDeploy()\">Deploy app</button></div></div>"
+  ],
+  [
+   "state",
+   "after",
+   true,
+   "Deploy",
+   "orig"
+  ]
+ ]
+}

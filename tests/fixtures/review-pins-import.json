@@ -1,0 +1,430 @@
+{
+ "gateFrozenInputAndSendOnce": [
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>app</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review before importing</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"importConfirm\"> Import it anyway, replacing files</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\"  onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "state",
+   "without the tick",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "api",
+   "/api/import",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "state",
+   "sending",
+   true,
+   "Import",
+   "orig"
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "import-job"
+   }
+  ],
+  [
+   "toast",
+   "Copy started; the application stays stopped",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "resetPaint"
+  ],
+  [
+   "viewImport"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Import",
+   "orig"
+  ]
+ ],
+ "configurationOnly": [
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>app</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review before importing</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"importConfirm\"> Import it anyway, replacing files</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\"  onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "api",
+   "/api/import",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Import configuration saved",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "resetPaint"
+  ],
+  [
+   "viewImport"
+  ],
+  [
+   "refreshOperations"
+  ]
+ ],
+ "lostReplyOffersAFreshReview": [
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>app</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review before importing</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"importConfirm\"> Import it anyway, replacing files</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\"  onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "api",
+   "/api/import",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "toast",
+   "Lost connection — inspect Recent jobs before trying again; any created volumes are kept.",
+   "bad"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "failed",
+   false,
+   "Review again",
+   "() => importReview(review.config)"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>app</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review before importing</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"importConfirm\"> Import it anyway, replacing files</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\"  onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "state",
+   "review again",
+   false,
+   "Review again",
+   "() => importReview(review.config)"
+  ]
+ ],
+ "blockedIncompleteAndFailedReviews": [
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>app</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout bad\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Import blocked</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      \n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\" disabled onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "toast",
+   "Import review unavailable; refresh before continuing.",
+   "bad"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "toast",
+   "Not found",
+   "bad"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ],
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "app",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "toast",
+   "Import review unavailable; refresh before continuing.",
+   "bad"
+  ],
+  [
+   "state",
+   "reviewed",
+   false,
+   "Import",
+   "orig"
+  ],
+  [
+   "toast",
+   "Review and approve the import first",
+   "bad"
+  ]
+ ],
+ "olderReviewCannotReplaceANewerOne": [
+  [
+   "api",
+   "/api/import/preview",
+   {
+    "name": "new",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data"
+   }
+  ],
+  [
+   "childModal",
+   "Review import",
+   "<div class=\"update-review\">\n      <div class=\"reviewbox\"><b>new</b><p>example/app:1</p>\n        \n        <div class=\"dependency-row\"><span>Reuse volume</span><b>data · ReadWriteMany · storage</b></div>\n      </div><div class=\"ui-callout warn\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review before importing</b><div class=\"ui-callout-body\"><ul class=\"ui-list\"><li>File replacement</li><li><b>Copy files, Imported application:</b> RAM warning</li></ul></div></div>\n    </div>\n      <details class=\"ui-more\" data-disclosure=\"Copy safety checks\">\n    <summary>Copy safety checks</summary><div class=\"ui-more-body\">Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.</div></details>\n      <details class=\"ui-more\" data-disclosure=\"Copy files: capacity\">\n    <summary>Copy files: capacity</summary><div class=\"ui-more-body\"><div>copy</div></div></details><details class=\"ui-more\" data-disclosure=\"Imported application: capacity\">\n    <summary>Imported application: capacity</summary><div class=\"ui-more-body\"><div>app</div></div></details>\n      <label class=\"switch\"><input type=\"checkbox\" id=\"importConfirm\"> Import it anyway, replacing files</label>\n      <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Back to import</button></div><div class=\"ui-actions-end\"><button class=\"btn pri\" id=\"importGo\"  onclick=\"confirmImport()\">Import</button></div></div></div>"
+  ],
+  [
+   "api",
+   "/api/import",
+   {
+    "name": "new",
+    "image": "example/app:1",
+    "mappings": [
+     {
+      "copy": true
+     }
+    ],
+    "remote_path": "/data",
+    "capacity_token": "signed",
+    "confirm_capacity": true
+   }
+  ],
+  [
+   "noteOperation",
+   {
+    "id": "import-job"
+   }
+  ],
+  [
+   "toast",
+   "Copy started; the application stays stopped",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "resetPaint"
+  ],
+  [
+   "viewImport"
+  ],
+  [
+   "refreshOperations"
+  ],
+  [
+   "state",
+   "sent",
+   true,
+   "Import",
+   "orig"
+  ]
+ ]
+}

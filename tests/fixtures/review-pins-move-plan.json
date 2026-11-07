@@ -1,0 +1,907 @@
+{
+ "planStartQuestionAndRequest": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "opened",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "state",
+   "planned",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        One volume (10 GiB) goes\n          through the backup storage both clusters already share.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">app-data</b><div class=\"dim xs\">10 GiB</div></td>\n      <td><select id=\"mv_vol_app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Move its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_app-data\" aria-label=\"Storage class for app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'storage_class',this.value)\">\n          <option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option></select></td>\n      <td><span class=\"dim xs\">10 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   "<option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option>",
+   false
+  ],
+  [
+   "ask",
+   "Stop camera-app on source and bring it here?\n\nIt is unavailable from the moment it stops there until it starts here.",
+   {
+    "title": "Move here",
+    "ok": "Stop and move",
+    "danger": true
+   }
+  ],
+  [
+   "api",
+   "/api/move/start",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "asked",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        One volume (10 GiB) goes\n          through the backup storage both clusters already share.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">app-data</b><div class=\"dim xs\">10 GiB</div></td>\n      <td><select id=\"mv_vol_app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Move its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_app-data\" aria-label=\"Storage class for app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'storage_class',this.value)\">\n          <option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option></select></td>\n      <td><span class=\"dim xs\">10 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   "<option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option>",
+   false
+  ],
+  [
+   "toast",
+   "Moving camera-app from source; follow progress under Linked clusters or in Activity",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ],
+  [
+   "state",
+   "started",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        One volume (10 GiB) goes\n          through the backup storage both clusters already share.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">app-data</b><div class=\"dim xs\">10 GiB</div></td>\n      <td><select id=\"mv_vol_app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Move its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_app-data\" aria-label=\"Storage class for app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'storage_class',this.value)\">\n          <option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option></select></td>\n      <td><span class=\"dim xs\">10 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   "<option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option>",
+   false
+  ]
+ ],
+ "blockedWarningsAndAFix": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "blocked",
+   "\n      <div class=\"note bad\"><b>This move cannot start.</b><ul><li>No capacity</li></ul>\n        <button class=\"btn sm pri\" data-need=\"admin\" onclick=\"clusterStorage(&quot;source&quot;,true,() => movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;))\">Give source's backup storage an address</button></div>\n      <div class=\"note warn\"><b>Before you start</b><ul><li>Slow disk</li></ul></div>\n      \n      ",
+   true,
+   null,
+   true
+  ]
+ ],
+ "copyNeedsADestinationThatCanCopy": [
+  [
+   "childModal",
+   "Copy desktop from source · guests",
+   "\n  <p class=\"muted small\">Creates a stopped copy here from backups of the source's volumes. A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says.\n      Review the copy's network settings before starting it.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  <div class=\"f\" id=\"mv_stop_row\" hidden><label class=\"switch\"><input type=\"checkbox\" id=\"mv_stop\"\n      onchange=\"moveStopSource(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,this.checked)\"> Stop the VM while its disks are backed up</label>\n    <div class=\"dim xs\">It starts again on source once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>\n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Start copy</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "guests",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "old destination",
+   "<div class=\"note bad\">Update Homestead on this destination before copying. It only supports moves.</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "guests",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "copy plan",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to copy.</b>\n        One volume (40 GiB) goes\n          through the backup storage on source, which this cluster will be pointed at.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">os</b><div class=\"dim xs\">40 GiB · disk</div></td>\n      <td><select id=\"mv_vol_os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Copy its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_os\" aria-label=\"Storage class for os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'storage_class',this.value)\">\n          </select></td>\n      <td><span class=\"dim xs\">40 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   null,
+   true
+  ],
+  [
+   "ask",
+   "Copy desktop from source?\n\nThe source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped.",
+   {
+    "title": "Copy here",
+    "ok": "Copy",
+    "danger": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/start",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "guests",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "toast",
+   "Copying desktop from source; follow progress under Linked clusters or in Activity",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ]
+ ],
+ "aFailedPlan": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "failed",
+   "<div class=\"note bad\">no route to the other cluster</div>",
+   true,
+   null,
+   true
+  ]
+ ],
+ "anotherClassIsCheckedAgain": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "re-plans",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   "<option value=\"fast\" selected>fast</option><option value=\"other\" >other</option>",
+   false
+  ],
+  [
+   "state",
+   "settled",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        It has no volumes, so only its definition travels.\n        \n        <br>It is stopped on source, and will arrive stopped.</div>\n      ",
+   false,
+   "<option value=\"fast\" selected>fast</option><option value=\"other\" >other</option>",
+   false
+  ]
+ ],
+ "anEditedFieldMakesAPlanStale": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "opened",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "state",
+   "typed",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "state",
+   "after the late plan",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "state",
+   "address mode",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ]
+ ],
+ "anOlderPlanCannotReplaceANewerOne": [
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "longhorn-r2",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "after",
+   "\n      <div class=\"note bad\"><b>This move cannot start.</b><ul><li>No capacity</li></ul>\n        </div>\n      \n      \n      ",
+   true,
+   "<option value=\"fast\" >fast</option><option value=\"longhorn-r2\" selected>longhorn-r2</option>",
+   false
+  ]
+ ],
+ "settingsChangeWhileAskedAreCaught": [
+  [
+   "childModal",
+   "Move camera-app from source",
+   "\n  <p class=\"muted small\">Stops camera-app on source, backs up its volumes to the shared backup\n      storage, restores them here, and starts it here. The original stays on source, stopped,\n      until you remove it, so it can be put back at any point before then.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    <div class=\"f\"><label>Address The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.</label>\n      <select id=\"mv_mode\" onchange=\"moveAddressMode(this.value)\">\n        <option value=\"shared\">This cluster's shared address</option>\n        <option value=\"automatic\">Next free pool address</option>\n        <option value=\"manual\">A specific address</option></select></div></div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "container",
+    "name": "camera-app",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "ask",
+   "Stop camera-app on source and bring it here?\n\nIt is unavailable from the moment it stops there until it starts here.",
+   {
+    "title": "Move here",
+    "ok": "Stop and move",
+    "danger": true
+   }
+  ],
+  [
+   "toast",
+   "The transfer settings changed; review them again",
+   "bad"
+  ],
+  [
+   "state",
+   "after",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        One volume (10 GiB) goes\n          through the backup storage both clusters already share.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">app-data</b><div class=\"dim xs\">10 GiB</div></td>\n      <td><select id=\"mv_vol_app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Move its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_app-data\" aria-label=\"Storage class for app-data\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;container&quot;,&quot;camera-app&quot;,&quot;app-data&quot;,'storage_class',this.value)\">\n          <option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option></select></td>\n      <td><span class=\"dim xs\">10 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   true,
+   "<option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option>",
+   false
+  ]
+ ],
+ "declinedStart": [
+  [
+   "childModal",
+   "Move data from source",
+   "\n  <p class=\"muted small\">Holds data on source while nothing uses it, backs it up to the shared backup storage,\n      and restores it here. The original stays on source until you remove it, so nothing is lost if\n      you change your mind.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  \n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;volume&quot;,&quot;data&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;volume&quot;,&quot;data&quot;)\">Start move</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "volume",
+    "name": "data",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "ask",
+   "Bring the volume data here from source?\n\nNothing on source can use it until the move finishes or is put back.",
+   {
+    "title": "Move here",
+    "ok": "Move",
+    "danger": false
+   }
+  ],
+  [
+   "state",
+   "declined",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        data (10 GiB) goes through the backup storage both clusters already share.\n        \n        </div>\n      <div class=\"drow\"><div class=\"dl\">Volume</div><div class=\"dv mono xs\">app-data · 10 GiB<br>Storage class: fast</div></div>",
+   false,
+   "<option value=\"fast\" selected>fast</option><option value=\"longhorn-r2\" >longhorn-r2</option>",
+   false
+  ]
+ ],
+ "deviceChoicesAndAVbiosFile": [
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {
+     "gpu": {
+      "resource": "example.test/new"
+     }
+    },
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "device set",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "move",
+    "source_namespace": "",
+    "host_devices": {
+     "gpu": {
+      "resource": "example.test/new",
+      "rom": "VaoA"
+     }
+    },
+    "stop_source": false
+   }
+  ],
+  [
+   "state",
+   "rom read",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "state",
+   "planned",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to move.</b>\n        It has no volumes, so only its definition travels.\n        \n        <br>It is stopped on source, and will arrive stopped.</div>\n      <div class=\"f\"><label>Passthrough on this cluster</label><p class=\"dim small\">Map each source device to hardware here, or leave it out. Prepare IOMMU and devices under Hosts → Hardware first. A different GPU may need a different vBIOS.</p>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense vm-passthrough-table\"><colgroup><col style=\"width:25%\"><col style=\"width:40%\"><col style=\"width:35%\"></colgroup><thead><tr><th>Source device</th><th>Destination device</th><th>vBIOS</th></tr></thead><tbody><tr><td data-label=\"Source device\"><b>gpu</b><div class=\"dim xs mono\"></div></td>\n      <td data-label=\"Destination device\" data-wide><select aria-label=\"Destination device for gpu\" onchange=\"moveDeviceSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;gpu&quot;,'resource',this.value)\">\n        <option value=\"\" disabled >Choose a device</option>\n        <option value=\"\" >Leave out</option>\n        </select></td>\n      <td data-label=\"vBIOS\" data-wide><select aria-label=\"vBIOS for gpu\" onchange=\"moveDeviceSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;gpu&quot;,'rom',this.value)\" >\n        <option value=\"source\" >Keep source vBIOS</option>\n        <option value=\"\" >Use device default ROM</option>\n        <option selected disabled>gpu.rom</option></select>\n        <input type=\"file\" class=\"pd_rom\" aria-label=\"Upload destination vBIOS for gpu\" accept=\".rom,.bin,application/octet-stream\" onchange=\"moveDeviceRom(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;gpu&quot;,this)\" ></td></tr></tbody></table></div>\n    </div>",
+   false,
+   null,
+   true
+  ]
+ ],
+ "aCopyThatKeepsRunning": [
+  [
+   "childModal",
+   "Copy desktop from source",
+   "\n  <p class=\"muted small\">Creates a stopped copy here from backups of the source's volumes. A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says.\n      Review the copy's network settings before starting it.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  <div class=\"f\" id=\"mv_stop_row\" hidden><label class=\"switch\"><input type=\"checkbox\" id=\"mv_stop\"\n      onchange=\"moveStopSource(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,this.checked)\"> Stop the VM while its disks are backed up</label>\n    <div class=\"dim xs\">It starts again on source once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>\n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Start copy</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "stop row",
+   "opened",
+   true
+  ],
+  [
+   "stop row",
+   "planned",
+   false
+  ],
+  [
+   "state",
+   "planned",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to copy.</b>\n        One volume (40 GiB) goes\n          through the backup storage on source, which this cluster will be pointed at.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">os</b><div class=\"dim xs\">40 GiB · disk</div></td>\n      <td><select id=\"mv_vol_os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Copy its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_os\" aria-label=\"Storage class for os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'storage_class',this.value)\">\n          </select></td>\n      <td><span class=\"dim xs\">40 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   null,
+   true
+  ],
+  [
+   "ask",
+   "Copy desktop from source?\n\nIt keeps running while its disks are snapshotted and backed up. The destination copy stays stopped.",
+   {
+    "title": "Copy here",
+    "ok": "Copy",
+    "danger": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/start",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "toast",
+   "Copying desktop from source; follow progress under Linked clusters or in Activity",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ]
+ ],
+ "aCopyStoppedOnRequest": [
+  [
+   "childModal",
+   "Copy desktop from source",
+   "\n  <p class=\"muted small\">Creates a stopped copy here from backups of the source's volumes. A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says.\n      Review the copy's network settings before starting it.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  <div class=\"f\" id=\"mv_stop_row\" hidden><label class=\"switch\"><input type=\"checkbox\" id=\"mv_stop\"\n      onchange=\"moveStopSource(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,this.checked)\"> Stop the VM while its disks are backed up</label>\n    <div class=\"dim xs\">It starts again on source once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>\n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Start copy</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": true
+   }
+  ],
+  [
+   "state",
+   "switched",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ],
+  [
+   "stop row",
+   "planned",
+   false
+  ],
+  [
+   "state",
+   "planned",
+   "\n      \n      \n      <div class=\"note good\"><b>Ready to copy.</b>\n        One volume (40 GiB) goes\n          through the backup storage on source, which this cluster will be pointed at.\n        \n        </div>\n      <div class=\"f\"><label>Volumes Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.</label>\n    <div class=\"tblwrap\"><table class=\"tbl stack dense\"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody><tr><td><b class=\"mono\">os</b><div class=\"dim xs\">40 GiB · disk</div></td>\n      <td><select id=\"mv_vol_os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'action',this.value)\">\n        <option value=\"move\" selected>Copy its data</option><option value=\"blank\" >Create blank</option><option value=\"skip\" >Skip (use one already here)</option></select></td>\n      <td><select id=\"mv_volsc_os\" aria-label=\"Storage class for os\" onchange=\"moveVolumeSet(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,&quot;os&quot;,'storage_class',this.value)\">\n          </select></td>\n      <td><span class=\"dim xs\">40 GiB, as it is</span></td></tr></tbody></table></div></div>",
+   false,
+   null,
+   true
+  ],
+  [
+   "ask",
+   "Copy desktop from source?\n\nIt stops while its disks are backed up, then starts again as it was. The destination copy stays stopped.",
+   {
+    "title": "Copy here",
+    "ok": "Copy",
+    "danger": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/start",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": true
+   }
+  ],
+  [
+   "toast",
+   "Copying desktop from source; follow progress under Linked clusters or in Activity",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ]
+ ],
+ "aCopyThatCannotKeepRunning": [
+  [
+   "childModal",
+   "Copy desktop from source",
+   "\n  <p class=\"muted small\">Creates a stopped copy here from backups of the source's volumes. A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says.\n      Review the copy's network settings before starting it.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  <div class=\"f\" id=\"mv_stop_row\" hidden><label class=\"switch\"><input type=\"checkbox\" id=\"mv_stop\"\n      onchange=\"moveStopSource(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,this.checked)\"> Stop the VM while its disks are backed up</label>\n    <div class=\"dim xs\">It starts again on source once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>\n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Start copy</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "stop row",
+   "planned",
+   true
+  ],
+  [
+   "ask",
+   "Copy desktop from source?\n\nThe source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped.",
+   {
+    "title": "Copy here",
+    "ok": "Copy",
+    "danger": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/start",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "toast",
+   "Copying desktop from source; follow progress under Linked clusters or in Activity",
+   "ok"
+  ],
+  [
+   "closeModal"
+  ]
+ ],
+ "theStopChoiceChangedWhileAsked": [
+  [
+   "childModal",
+   "Copy desktop from source",
+   "\n  <p class=\"muted small\">Creates a stopped copy here from backups of the source's volumes. A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says.\n      Review the copy's network settings before starting it.</p>\n  <div class=\"f2\"><div class=\"f\"><label>Namespace here</label><input id=\"mv_ns\" value=\"lab\"></div>\n    </div>\n  <div class=\"f\" id=\"mv_ip_wrap\" hidden><label>Specific address</label><input id=\"mv_ip\" class=\"mono\" placeholder=\"192.0.2.245\" data-ipam></div>\n  <div class=\"f\"><label>Destination storage class</label><select id=\"mv_sc\" disabled><option value=\"\">Loading destination classes…</option></select>\n    <div class=\"dim xs\">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>\n  <div class=\"f\" id=\"mv_stop_row\" hidden><label class=\"switch\"><input type=\"checkbox\" id=\"mv_stop\"\n      onchange=\"moveStopSource(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;,this.checked)\"> Stop the VM while its disks are backed up</label>\n    <div class=\"dim xs\">It starts again on source once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>\n  <div id=\"mv_plan\"></div>\n  <div class=\"ui-actions\" >\n      <div class=\"ui-actions-start\"><button data-dialog-dismiss=\"true\" class=\"btn\" onclick=\"modalBack()\">Cancel</button></div><div class=\"ui-actions-end\"><button class=\"btn\" onclick=\"movePlan(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Check again</button>\n    <button class=\"btn pri\" id=\"mv_go\" data-need=\"admin\" disabled\n      onclick=\"moveStart(&quot;source&quot;,&quot;vm&quot;,&quot;desktop&quot;)\">Start copy</button>\n    </div></div>",
+   false,
+   "operation-review"
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": false
+   }
+  ],
+  [
+   "ask",
+   "Copy desktop from source?\n\nIt keeps running while its disks are snapshotted and backed up. The destination copy stays stopped.",
+   {
+    "title": "Copy here",
+    "ok": "Copy",
+    "danger": false
+   }
+  ],
+  [
+   "api",
+   "/api/move/plan",
+   {
+    "cluster": "source",
+    "kind": "vm",
+    "name": "desktop",
+    "namespace": "lab",
+    "address_mode": "shared",
+    "address": "",
+    "storage_class": "fast",
+    "volumes": {},
+    "transfer_mode": "copy",
+    "source_namespace": "",
+    "host_devices": {},
+    "stop_source": true
+   }
+  ],
+  [
+   "toast",
+   "The transfer settings changed; review them again",
+   "bad"
+  ],
+  [
+   "state",
+   "after",
+   "<div class=\"empty\"><span class=\"spin2\"></span> asking both clusters…</div>",
+   true,
+   null,
+   true
+  ]
+ ]
+}

@@ -7,7 +7,8 @@ const review = { capacity_token: "signed", capacity: { blocked: false, warnings:
 function setup(response = review) {
   let html = "", fail = false;
   const sent = [], fields = { "#hostMoveConfirm": { checked: false }, "#hostMoveGo": {} };
-  const c = { window: {}, console, $: s => fields[s], toast() {}, closeModal() {}, setTimeout() {},
+  // UI.reviewFlow finds the tickbox by id, as the page does.
+  const c = { window: {}, console, document: { getElementById: id => fields["#" + id] }, $: s => fields[s], toast() {}, closeModal() {}, setTimeout() {},
     esc: v => String(v).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     childModal: (_, body) => { html = body; }, deployCapacityHtml: () => "capacity report",
     api: async (url, options) => {
