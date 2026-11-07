@@ -6,9 +6,13 @@
 The names come from the AST of the module's bind() (and bind_routes()): the names
 it declares global, the attributes it sets on another object of the module
 (STATE.kget = ..., ALERTS.AGENTS = ...), and the entries it sets in a dict, also in a
-loop over a fixed tuple, with .update(), under a module constant (RESOLVERS[KIND]) or
-with globals().update({n: ... for n in NEEDS}); a dict .update() fills from an argument
-is kept whole ("X[*]"). A new one is kept without changing this file. They are put back by name with
+loop over a fixed tuple, with .update(), under a module constant (RESOLVERS[KIND]),
+with globals().update({n: ... for n in NEEDS}) or with globals().update(values) whose keys
+bind_routes() checks against VALUES; a dict .update() fills from an argument, or one set
+under a key only known when bind() runs, is kept whole ("X[*]"). An .update() that resets
+a dict to constants (a runtime cache, homestead_uptime's _state) is put back too, since it
+belongs to what bind() was given (DATA_DIR), but the bound-state guard does not report it
+(bound_targets(module, resets=False)). A new one is kept without changing this file. They are put back by name with
 addCleanup, not by calling bind() again: a bind() may skip an argument that is left
 out, and the point is to restore exactly what was there before the test.
 """
@@ -41,8 +45,12 @@ def _attributes_of(function):
     literal key, under a loop variable that runs over a literal tuple (for key, value
     in (("kget", kget), ...): X[key] = value), or by X.update(k=..., **{"k": ...});
     "X[@NAME]" for one under a module constant NAME (resolved by bound_targets);
-    "X[*]" for a dict that .update() fills with keys only known when it runs; and
-    "@globals:NAME" for globals().update({n: ... for n in NAME})."""
+    "X[*]" for a dict that .update() fills, or X[...] = sets, with keys only known when it
+    runs; and "@globals:NAME" for globals().update({n: ... for n in NAME}) and for
+    globals().update(values) where the function compares values with NAME
+    (if set(values) != set(VALUES): raise ...). An X.update() whose values are all
+    constants (a reset of a runtime cache: _state.update(loaded=False, apps={})) names
+    each entry as "%reset:X[k]"."""
     tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
     loops = {}
     for node in ast.walk(tree):
@@ -62,7 +70,23 @@ def _attributes_of(function):
                     values.append(element.value)
                 if values is not None:
                     loops.setdefault(name.id, set()).update(values)
+    # globals().update(values): the module name the function checks values' keys against,
+    # as in "if set(values) != set(VALUES)".
+    checked = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            called = {id(n.func) for n in ast.walk(node) if isinstance(n, ast.Call)}
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name) and id(n) not in called}
+            for name in names:
+                checked.setdefault(name, set()).update(names - {name})
     found = set()
+
+    def constant(value):
+        try:
+            ast.literal_eval(value)
+        except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
+            return False
+        return True
 
     def holder(base):
         if isinstance(base, ast.Name):
@@ -85,6 +109,9 @@ def _attributes_of(function):
                         found.update(f"{holder(t.value)}[{key!r}]" for key in loops[t.slice.id])
                     elif isinstance(t.slice, ast.Name):
                         found.add(f"{holder(t.value)}[@{t.slice.id}]")
+                    else:
+                        # A key only known when bind() runs (X[name.upper()] = ...): the whole dict.
+                        found.add(f"{holder(t.value)}[*]")
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "update":
             base = node.func.value
             if isinstance(base, ast.Call) and isinstance(base.func, ast.Name) and base.func.id == "globals":
@@ -92,32 +119,44 @@ def _attributes_of(function):
                     if isinstance(arg, ast.DictComp) and len(arg.generators) == 1 \
                             and isinstance(arg.generators[0].iter, ast.Name):
                         found.add(f"@globals:{arg.generators[0].iter.id}")
+                    elif isinstance(arg, ast.Name):
+                        found.update(f"@globals:{name}" for name in checked.get(arg.id, ()))
                 found.update(keyword.arg for keyword in node.keywords if keyword.arg)
                 continue
             name = holder(base)
             if name is None:
                 continue
+            # A reset to constants: runtime state that goes with what bind() is given.
+            reset = "%reset:" if all(keyword.arg and constant(keyword.value) for keyword in node.keywords) \
+                and all(isinstance(arg, ast.Dict) and None not in arg.keys and constant(arg)
+                        for arg in node.args) else ""
             for keyword in node.keywords:
                 if keyword.arg:
-                    found.add(f"{name}[{keyword.arg!r}]")
+                    found.add(f"{reset}{name}[{keyword.arg!r}]")
                 else:
                     found.add(f"{name}[*]")
             for arg in node.args:
                 if isinstance(arg, ast.Dict) and all(isinstance(k, ast.Constant) for k in arg.keys):
-                    found.update(f"{name}[{k.value!r}]" for k in arg.keys)
+                    found.update(f"{reset}{name}[{k.value!r}]" for k in arg.keys)
                 else:
                     found.add(f"{name}[*]")
     return tuple(sorted(found))
 
 
-def bound_targets(module):
+def bound_targets(module, resets=True):
     """Everything module.bind() (and bind_routes()) sets: its globals, and HOLDER.attr
-    for an object HOLDER of the module (a state module, another module's table)."""
+    for an object HOLDER of the module (a state module, another module's table). With
+    resets=False (what the bound-state guard reports), without the entries an .update()
+    only resets to constants (homestead_uptime's _state): keep_bound still puts them back."""
     names = set(bound_names(module))
     for fn in ("bind", "bind_routes"):
         function = getattr(module, fn, None)
         if inspect.isfunction(function) and function.__module__ == module.__name__:
             for name in _attributes_of(function):
+                if name.startswith("%reset:"):
+                    if not resets:
+                        continue
+                    name = name[len("%reset:"):]
                 if name.startswith("@globals:"):
                     # globals().update({n: ... for n in NEEDS}): the globals NEEDS names.
                     listed = getattr(module, name.split(":", 1)[1], None)
@@ -125,12 +164,11 @@ def bound_targets(module):
                         names.update(listed)
                     continue
                 if "[@" in name:
-                    # X[KIND] = ...: the key is the module's constant KIND.
+                    # X[KIND] = ...: the key is the module's constant KIND; X[name] = ... with
+                    # a key only known when bind() runs: the whole dict.
                     path, constant = name[:-1].split("[@", 1)
                     key = getattr(module, constant, None)
-                    if not isinstance(key, (str, int)):
-                        continue
-                    name = f"{path}[{key!r}]"
+                    name = f"{path}[{key!r}]" if isinstance(key, (str, int)) else f"{path}[*]"
                 head = name.split("[", 1)[0].split(".", 1)[0]
                 if head in vars(module) and not inspect.isfunction(getattr(module, head)):
                     names.add(name)

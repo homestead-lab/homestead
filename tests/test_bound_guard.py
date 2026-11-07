@@ -236,6 +236,40 @@ def bind(**given):
 '''
 
 
+# A module whose bind_routes() sets the names its VALUES lists with globals().update(values)
+# (homestead_kube's API, CTX and TOKEN); whose bind() sets an entry under a key it is given
+# (neither a constant nor a loop variable), and resets a runtime cache to constants
+# (homestead_uptime's _state): keep_bound puts that back, the guard does not report it.
+VALUES_MODULE = '''
+VALUES = ("API", "TOKEN")
+API = "https://example.com"
+TOKEN = "made-up"
+_table = {}
+_named = {}
+_state = {"loaded": True, "apps": {"a": 1}}
+_seen = {"at": 0.0}
+_cache = {"at": 1.0}
+
+
+def bind(name="first", handler=None, at=0.0):
+    _table[name] = handler
+    _named[name.upper()] = handler
+    _state.update(loaded=False, apps={})
+    _seen.update({"at": 0.0, "hosts": []})
+    _cache.update(at=at)
+
+
+def load():
+    _state["loaded"], _state["apps"] = True, {"b": 2}
+
+
+def bind_routes(helpers, **values):
+    if set(values) != set(VALUES):
+        raise TypeError("bound with " + ", ".join(sorted(set(values) ^ set(VALUES))))
+    globals().update(values)
+'''
+
+
 class DictEntries(unittest.TestCase):
     """What a bind() sets in a dict without naming the key on that line: in a loop over
     a fixed tuple, with .update(), under a module constant, or with globals().update()."""
@@ -244,7 +278,8 @@ class DictEntries(unittest.TestCase):
         import importlib
         import tempfile
         folder = self.enterContext(tempfile.TemporaryDirectory())
-        for name, source in (("homestead_made_up_dicts", MADE_UP_MODULE), ("homestead_made_up_only_dict", ONLY_A_DICT)):
+        for name, source in (("homestead_made_up_dicts", MADE_UP_MODULE), ("homestead_made_up_only_dict", ONLY_A_DICT),
+                             ("homestead_made_up_values", VALUES_MODULE)):
             (Path(folder) / f"{name}.py").write_text(source, encoding="utf-8")
             self.addCleanup(sys.modules.pop, name, None)
             self.addCleanup(GUARD._targets.pop, name, None)
@@ -253,7 +288,8 @@ class DictEntries(unittest.TestCase):
         importlib.invalidate_caches()
         import homestead_made_up_dicts as MADE_UP
         import homestead_made_up_only_dict as ONLY
-        self.module, self.only = MADE_UP, ONLY
+        import homestead_made_up_values as VALUES
+        self.module, self.only, self.values = MADE_UP, ONLY, VALUES
         MADE_UP.bind(kget=len, ksend=print, plan=min, helpers={"reader": max, "writer": sum})
 
     def record(self, leak):
@@ -276,7 +312,8 @@ class DictEntries(unittest.TestCase):
             for key in [key for key in record if key[1] == "test_made_up_dict_leaker"]:
                 record.pop(key)
         GUARD.ran.discard("test_made_up_dict_leaker")
-        GUARD.covered.difference_update({"homestead_made_up_dicts", "homestead_made_up_only_dict"})
+        GUARD.covered.difference_update({"homestead_made_up_dicts", "homestead_made_up_only_dict",
+                                         "homestead_made_up_values"})
         return found
 
     def test_bound_targets_name_each_entry(self):
@@ -325,6 +362,137 @@ class DictEntries(unittest.TestCase):
         found = self.record(leak)
         only._given.clear()
         self.assertEqual({("homestead_made_up_only_dict._given['kget']", "test_made_up_dict_leaker")}, found)
+
+    def test_bound_targets_name_what_globals_update_values_sets_from_VALUES(self):
+        import rebind as REBIND
+        self.assertLessEqual({"API", "TOKEN"}, set(REBIND.bound_targets(self.values)))
+
+    def test_keep_bound_puts_back_a_name_bind_routes_set_from_VALUES(self):
+        import rebind as REBIND
+        module = self.values
+
+        class Leaky(unittest.TestCase):
+            def test_leaks(self):
+                REBIND.keep_bound(self, module)
+                module.bind_routes({}, API="https://fake.example.com", TOKEN="fake")
+
+        result = unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Leaky))
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(("https://example.com", "made-up"), (module.API, module.TOKEN))
+
+    def test_the_recorder_sees_a_fake_left_in_a_name_set_from_VALUES(self):
+        module = self.values
+
+        def leak():
+            module.bind_routes({}, API=lambda: "fake", TOKEN="made-up")   # a fake, never put back
+        found = self.record(leak)
+        module.API = "https://example.com"
+        self.assertEqual({("homestead_made_up_values.API", "test_made_up_dict_leaker")}, found)
+
+    def test_an_entry_under_a_key_bind_is_given_is_kept_as_the_whole_dict(self):
+        import rebind as REBIND
+        self.assertLessEqual({"_table[*]", "_named[*]"}, set(REBIND.bound_targets(self.values)))
+        module = self.values
+
+        class Leaky(unittest.TestCase):
+            def test_leaks(self):
+                REBIND.keep_bound(self, module)
+                module.bind(name="second", handler=id)
+
+        unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Leaky))
+        self.assertEqual({}, module._table, "the entry the test added is taken out again")
+        self.assertEqual({}, module._named)
+
+    def test_an_update_that_resets_a_cache_to_constants_is_kept_but_not_reported(self):
+        import rebind as REBIND
+        kept = set(REBIND.bound_targets(self.values))
+        reported = set(REBIND.bound_targets(self.values, resets=False))
+        resets = {"_state['loaded']", "_state['apps']", "_seen['at']", "_seen['hosts']"}
+        self.assertLessEqual(resets, kept, "keep_bound puts a reset cache back: it goes with what bind() was given")
+        self.assertEqual(set(), resets & reported, "the guard does not report a reset to constants (keywords or a dict)")
+        self.assertIn("_cache['at']", reported, "an .update() with a value from bind()'s arguments is reported")
+
+    def test_keep_bound_puts_back_a_cache_that_bind_reset_and_a_load_filled(self):
+        import rebind as REBIND
+        module = self.values
+        apps = module._state["apps"]
+
+        class Leaky(unittest.TestCase):
+            def test_leaks(self):
+                REBIND.keep_bound(self, module)
+                module.bind()
+                module.load()
+
+        unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Leaky))
+        self.assertEqual({"loaded": True, "apps": {"a": 1}}, module._state)
+        self.assertIs(apps, module._state["apps"])
+
+
+class RealResets(unittest.TestCase):
+    def test_keep_bound_puts_back_uptimes_state_after_a_test_that_binds_and_loads(self):
+        """homestead_uptime.bind() resets _state; _load() fills it from DATA_DIR. A test that
+        binds a temp folder and loads must not leave that folder's apps for later tests."""
+        import json
+        import tempfile
+        import rebind as REBIND
+        import homestead_uptime as UP
+        before = dict(UP._state)
+
+        class Loads(unittest.TestCase):
+            def test_loads(self):
+                folder = self.enterContext(tempfile.TemporaryDirectory())
+                REBIND.keep_bound(self, UP)
+                UP.bind(folder)
+                Path(folder, "uptime.json").write_text(json.dumps({"format": 1, "apps": {"made-up": {}}}),
+                                                       encoding="utf-8")
+                self.assertIn("made-up", UP._load())
+
+        result = unittest.TextTestRunner(stream=open("/dev/null", "w")).run(
+            unittest.defaultTestLoader.loadTestsFromTestCase(Loads))
+        self.assertTrue(result.wasSuccessful())
+        self.assertEqual(before, UP._state)
+        self.assertIs(before["apps"], UP._state["apps"])
+
+
+class ValuesRatchet(unittest.TestCase):
+    def test_each_globals_update_of_bind_routes_values_resolves_to_values_names(self):
+        """globals().update(values) in a bind()/bind_routes() is seen only through the module
+        tuple the function compares values with (VALUES): a new way of checking the keys
+        must not make rebind drop the names silently."""
+        import ast
+        import importlib
+        import inspect
+        import textwrap
+        import rebind as REBIND
+        server = Path(__file__).resolve().parents[1] / "server"
+        seen, unresolved = [], []
+        for path in sorted(server.glob("homestead_*.py")):
+            if "globals().update(" not in path.read_text(encoding="utf-8"):
+                continue
+            module = importlib.import_module(path.stem)
+            for fn in ("bind", "bind_routes"):
+                function = getattr(module, fn, None)
+                if not (inspect.isfunction(function) and function.__module__ == module.__name__):
+                    continue
+                tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+                calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                         and isinstance(node.func, ast.Attribute) and node.func.attr == "update"
+                         and isinstance(node.func.value, ast.Call) and getattr(node.func.value.func, "id", "") == "globals"
+                         and any(isinstance(arg, ast.Name) for arg in node.args)]
+                if not calls:
+                    continue
+                seen.append(f"{path.stem}.{fn}")
+                listed = [getattr(module, name.split(":", 1)[1], None) for name in REBIND._attributes_of(function)
+                          if name.startswith("@globals:")]
+                values = {n for names in listed if isinstance(names, (tuple, list, frozenset))
+                          for n in names if isinstance(n, str)}
+                if not values or not values <= set(REBIND.bound_targets(module)):
+                    unresolved.append(f"{path.stem}.{fn}")
+        self.assertGreaterEqual(len(seen), 11, "the eleven bind_routes() with globals().update(values) are found")
+        self.assertEqual([], unresolved, "check values' keys with `if set(values) != set(VALUES)`, as the others do")
 
 
 if __name__ == "__main__":
