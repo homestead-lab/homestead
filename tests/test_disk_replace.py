@@ -721,7 +721,7 @@ class RetireWaitTests(unittest.TestCase):
     def test_the_failed_message_says_how_to_let_replicas_back_once_it_is_dismissed(self):
         ident = self.failed()
         self.assertIn("Nodes > Disks > Allow new replicas", self.look(ident)["message"])
-        page = (Path(__file__).resolve().parents[1] / "web/js/views-storage.js").read_text()
+        page = "".join(part.read_text() for part in sorted((Path(__file__).resolve().parents[1] / "web/js").glob("views-storage*.js")))
         self.assertIn("'Allow new replicas'", page, "the message names this menu entry")
         JOBS.dismiss(ident)
         DISKS.set_scheduling("node3", "bd-sdb", True)
