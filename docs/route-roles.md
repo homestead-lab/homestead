@@ -441,9 +441,9 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/node/probe/allocation/check` | admin |  | homestead_allocation_probe |
 | POST | `/api/node/probe/allocation/check` | admin |  | homestead_route_policy |
 | GET | `/api/node/probe/install` | admin |  | homestead_route_policy |
-| POST | `/api/node/probe/install` | admin |  | homestead_probe |
+| POST | `/api/node/probe/install` | admin |  | homestead_baseline |
 | GET | `/api/node/probe/remove` | admin |  | homestead_route_policy |
-| POST | `/api/node/probe/remove` | admin |  | homestead_probe |
+| POST | `/api/node/probe/remove` | admin |  | homestead_baseline |
 | POST | `/api/node/promote` | admin |  | homestead_promote |
 | GET | `/api/node/promote/plan` | admin |  | homestead_promote |
 | GET | `/api/node/shell` | admin |  | homestead_route_policy |

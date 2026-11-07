@@ -78,7 +78,8 @@ leads (it holds a `Lease`, `homestead-leader`, renewed all the time).
 - **The node probe**, on every cluster (Harvester and existing clusters too),
   unless the installer was told not to (`node-probe: no` in
   `homestead-install`) or Homestead runs with
-  `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`.
+  `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`; and again after a reinstall that
+  keeps its data.
 - **Outage webhooks saved before Allow a LAN address existed** that resolve
   to a LAN or cluster address get it ticked (`lan` in `homestead.io/outage-actions`, on the
   `Deployment` or `VirtualMachine`), so they keep working. An address a
@@ -266,9 +267,17 @@ It looks in Homestead's namespace, in your apps' namespace and in `lab`. Once th
 says so: set `HS_APPS_NAMESPACE` if yours is elsewhere.
 
 - **By default (`--keep-data`)** the data volume, the accounts and Homestead's
-  records stay, so a reinstall picks them up. **That reinstall does not put the
-  node probe back**: Homestead has it recorded as installed once, as it does any
-  add-on removed later. Install it again from **Settings › Cluster › Add-ons**.
+  records stay, so a reinstall picks them up. **That reinstall puts the node
+  probe back**, unless you removed it: that is recorded with the data and stays.
+  Removing it on the page is recorded at once; deleting it with kubectl is
+  recorded when Homestead next restarts. To keep it away for certain, reinstall
+  with `HS_NODEPROBE=no` on k3s or RKE2, which sets `node-probe: no` in
+  `homestead-install`, and say so again at each reinstall; with the plain manifest
+  or on Harvester, set `HOMESTEAD_NODEPROBE_AUTO_INSTALL=false`. Homestead on a
+  release that doesn't record its install yet leaves the probe away after a
+  reinstall: install it from **Settings › Cluster › Add-ons**. A Helm reinstall brings the probe back
+  in any case, unless `nodeprobe.enabled` is false, though Homestead's record may
+  still say removed.
 - **`--everything`** removes them too, for good, once you type `everything`.
   It deletes Homestead's own namespace only when nothing else is left in it:
   with the plain manifest that is `lab`, which holds your apps, so it stays and

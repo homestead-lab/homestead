@@ -915,11 +915,13 @@ class Uninstall(unittest.TestCase):
         flat = " ".join(out.split())
         self.assertIn("no OS update, host reboot, cluster shutdown or other Homestead job", flat)
 
-    def test_it_says_a_reinstall_will_not_bring_the_node_probe_back(self):
+    def test_it_says_a_reinstall_puts_the_node_probe_back(self):
         code, out = self.uninstall(plain_install(), "--uninstall", "--dry-run")
         flat = " ".join(out.split())
-        self.assertIn("A reinstall keeping this data does not put the node probe back", flat)
-        self.assertIn("Settings", flat)
+        self.assertIn("A reinstall keeping this data puts the node probe back", flat)
+        self.assertIn("a release without this fix", flat)
+        self.assertIn("Settings > Cluster > Add-ons", flat)
+        self.assertIn("nodeprobe.enabled", flat)
 
     def test_the_messages_say_how_to_run_it_with_sudo(self):
         (self.bin / "helm").unlink()
