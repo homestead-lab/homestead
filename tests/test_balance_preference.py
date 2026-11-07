@@ -18,6 +18,7 @@ import homestead_deploy_server as DEPLOY_SERVER
 import homestead_kube as K
 import homestead_names as NAMES
 import homestead_place as PLACE
+import homestead_priority as PRIORITY
 import homestead_workload_edit as WORKLOAD_EDIT
 import server
 from fakes.kube import Kube
@@ -138,6 +139,18 @@ class WhoseItIs(unittest.TestCase):
 
 
 class WhereItShows(unittest.TestCase):
+    def setUp(self):
+        # Edit reads the priority ladder, and keeps it five seconds: an empty fake's
+        # empty ladder would read as "no tiers" to the next module to ask.
+        self.enterContext(mock.patch.dict(PRIORITY._LADDER, at=0.0, value=None))
+
+    def test_the_ladder_edit_read_is_not_left_for_other_modules(self):
+        self.edit_node(deployment())
+        read = PRIORITY._LADDER["value"]
+        self.assertIsNotNone(read)
+        self.doCleanups()
+        self.assertIsNot(read, PRIORITY._LADDER["value"])
+
     def edit_node(self, dep):
         with Kube():
             return WORKLOADS.workload_edit_payload("lab", dep["metadata"]["name"], dep, [], services=[])["node"]
