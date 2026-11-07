@@ -1289,7 +1289,10 @@ function movesHtml(moves) {
         ${UI.chip(m.status, tone)}</div>
       <div class="rollout-meter"><span style="width:${Math.max(2, m.progress)}%"></span></div>
       <div class="rollout-steps movesteps">${steps}</div>
-      <div class="between"><span class="dim xs">${esc(m.message || "")}</span><div class="row">${actions}</div></div>
+      ${m.status === "failed" && m.message
+        // A failure is an error notice: its summary, the rest when opened (design.md, Notices).
+        ? `${UI.callout("bad", "", esc(m.message))}<div class="row" style="justify-content:flex-end">${actions}</div>`
+        : `<div class="between"><span class="dim xs">${esc(m.message || "")}</span><div class="row">${actions}</div></div>`}
       ${m.cleanup_message ? `<div class="dim xs" style="margin-top:6px">${m.resource_cleanup_pending ? '<span class="spin2"></span> ' : ""}${esc(m.cleanup_message)}</div>` : ""}
     </div>`;
   }).join("");
