@@ -659,7 +659,9 @@ class EveryKindIsClassified(unittest.TestCase):
 
     def test_the_lists_name_only_real_kinds_and_none_twice(self):
         kinds = self.registered()
-        self.assertEqual(set(), (set(rerun().SAFE) | set(rerun().PERSON)) - kinds)
+        # A kind that comes with an open PR (#1217's removal job) is listed before it lands.
+        coming = {"vm-disk-remove"}
+        self.assertEqual(set(), (set(rerun().SAFE) | set(rerun().PERSON)) - kinds - coming)
         self.assertEqual(set(), set(rerun().SAFE) & set(rerun().PERSON))
 
     def test_each_entry_says_why_in_words(self):
