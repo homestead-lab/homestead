@@ -139,7 +139,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     if source_namespace and definition.get("namespace") != source_namespace:
         blockers.append("Update Homestead on the source cluster; it did not return the selected source namespace")
     if transfer_mode == "copy" and (definition.get("held") or definition.get("transfer_owner")):
-        blockers.append("The source is held by another transfer; finish or put back that transfer first")
+        blockers.append("The source is held by another transfer; finish or put back that transfer first. "
+                        f"If no cluster lists it any more, release it on {cluster} in Settings, Linked clusters, under Held here for transfers")
     if transfer_mode == "copy" and (not definition.get("source_uid") or not definition.get("source_version")):
         blockers.append("Could not verify the source workload identity; refresh before copying")
     if kind == "vm":

@@ -275,7 +275,8 @@ def _owner(obj, transfer_id="", expected_uid=""):
         raise ValueError("The source workload was replaced; review the copy again")
     owner = NAMES.read(_annotations(obj), OWNER)
     if (owner and owner != transfer_id) or (transfer_id and _origin(obj) and owner != transfer_id):
-        raise ValueError("The source is held by another transfer; finish or put back that transfer first")
+        raise ValueError("The source is held by another transfer; finish or put back that transfer first. "
+                         "If no cluster lists it any more, release it here in Settings, Linked clusters, under Held here for transfers")
 
 
 def definition(kind, name):

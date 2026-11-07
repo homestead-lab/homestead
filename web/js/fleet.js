@@ -478,14 +478,18 @@ window.fleetMovesPaint = async () => {
   const host = $("#fleetMovesCard");
   if (!host) return;
   let unread = "", clustersUnread = "";
-  const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(e => { unread = e.message; return []; }),
-    api("/api/move/clusters").catch(e => { clustersUnread = e.message; return []; })]);
+  const [moves, clusters, holds] = await Promise.all([api("/api/move/moves").catch(e => { unread = e.message; return []; }),
+    api("/api/move/clusters").catch(e => { clustersUnread = e.message; return []; }),
+    // Admin's only; anyone else is simply not shown them.
+    window.can?.("admin") ? api("/api/move/holds").catch(e => ({ error: e.message })) : null]);
   if (!$("#fleetMovesCard")) return;
-  host.hidden = !unread && !clustersUnread && !moves.length && !clusters.length;
+  const held = holds && (holds.error || holds.holds?.length || holds.leftovers?.length);
+  host.hidden = !unread && !clustersUnread && !moves.length && !clusters.length && !held;
   host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${unread ? movesUnreadHtml(unread) : moves.length ? movesHtml(moves) : ""}</div>
     ${clustersUnread ? UI.callout("bad", "Could not read which clusters apps can move from", esc(clustersUnread)) + UI.button("Try again", "fleetMovesPaint()") : ""}
-    ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
+    ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}
+    ${held ? `<div id="moveHolds">${moveHoldsHtml(holds)}</div>` : ""}`;
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.
   clusters.forEach(moveSourceCheck);

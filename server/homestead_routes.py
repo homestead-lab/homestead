@@ -131,6 +131,7 @@ MODULES = (
     "homestead_metrics",
     "homestead_move",
     "homestead_move_engine",
+    "homestead_move_holds",
     "homestead_move_source",
     "homestead_mqtt",
     "homestead_namespaces",

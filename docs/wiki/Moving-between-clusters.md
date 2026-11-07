@@ -248,6 +248,29 @@ when cleanup finishes. Kubernetes and Longhorn may take time to detach,
 merge snapshots and reclaim disk space; Homestead keeps their safety
 finalizers intact.
 
+### Holds a transfer left behind
+
+The destination drives a transfer, so it is also the one that lets go of the
+source: it puts the workload back, or removes it, when the transfer finishes
+or is cancelled. A source cluster that restarts mid-transfer is waited out,
+including a refused sign-in just after it comes back. If the destination
+never lets go - its record of the transfer is gone, or that cluster was
+rebuilt - the workload stays held, and every new copy of it is refused with
+"The source is held by another transfer".
+
+On the source cluster, **Settings > Linked clusters** lists these under
+**Held here for transfers**, each with **Release**. Release puts the workload
+back exactly as the transfer would have. One kept running for a live copy is
+not touched; one stopped for the transfer starts again if it was running
+before. It then deletes that transfer's backups and snapshots on this
+cluster, and the transfer's folder in the backup store once nothing else is
+kept there. Release only a hold whose transfer no other cluster lists; one
+still listed is cancelled there instead.
+
+Longhorn deletes backups in the background, so some can outlive the release.
+Those, and backups or snapshots left by any transfer that no longer holds its
+workload, are listed under **Leftovers from transfers**, with **Remove**.
+
 Cleanup uses ownership recorded when each resource was created. Shared images,
 unrelated backups and artifacts from older Homestead versions without this
 ownership are preserved. Storage with a **Retain** policy keeps removed
