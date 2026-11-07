@@ -503,6 +503,34 @@ def last_state(strict=False):
         return {}
 
 
+def trim_reason(message):
+    """A recorded failure as (summary, full). Older runs kept Longhorn's whole
+    answer, JSON and all, after "Longhorn refused the trim: "; newer ones say
+    "Longhorn could not trim it: <summary>. Longhorn said: <full>"."""
+    said = str(message or "").strip()
+    if not said:
+        return "no reason given", ""
+    for prefix in ("Longhorn refused the trim: ", "Longhorn could not trim it: "):
+        if said.startswith(prefix):
+            rest = said[len(prefix):]
+            if prefix.startswith("Longhorn could") and ". Longhorn said: " in rest:
+                summary, full = rest.split(". Longhorn said: ", 1)
+                return summary.rstrip("."), full
+            if prefix.startswith("Longhorn could"):
+                return rest.rstrip("."), ""
+            return LH_JOBS.refusal(rest)
+    if len(said) <= 120:
+        return said.rstrip("."), ""
+    return LH_JOBS.refusal(said)
+
+
+def weekly_trim_reason(message, day):
+    """The summary first, the way out, then the full error (design.md, Notices)."""
+    summary, full = trim_reason(message)
+    return (f"Weekly trim failed: {summary}. It is tried again next {day}; Trim now on its snapshot panel tries it now."
+            + (f" Longhorn said: {full}" if full and full != summary else ""))
+
+
 def issues(state):
     """A health issue for each attached volume the last run failed to trim
     (#749). Skipped and unconfirmed volumes raise nothing, and nothing is
@@ -516,9 +544,7 @@ def issues(state):
             continue                    # left out since: an admin's choice, not a fault
         name = failed.get("pvc") or failed.get("volume") or "a volume"
         out.append({"severity": "degraded", "kind": "Trim", "name": name,
-                    "reason": f"The weekly trim of {name} failed: {failed.get('message') or 'no reason given'}. "
-                              f"It is tried again next {DAY_NAMES[slot_of(state)[0]]}; "
-                              "Trim now on its snapshot panel tries it now."})
+                    "reason": weekly_trim_reason(failed.get("message"), DAY_NAMES[slot_of(state)[0]])})
     return out
 
 

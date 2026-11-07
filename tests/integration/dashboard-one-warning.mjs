@@ -27,7 +27,9 @@ try{for(const width of [1440,390]){
  const callout=views.locator('.dash-alert .ui-callout');
  assert.equal(await callout.getAttribute('role'),'alert');
  assert.equal(await callout.locator('.ui-callout-icon').count(),1);
- const said=await callout.innerText();
+ // The banner is a summary bar: every concern is in it, open or closed.
+ assert.equal(await callout.locator('.ui-notice, .ui-notice-whole').count()>0,true,'a summary bar');
+ const said=await callout.textContent();
  assert.match(said,/Cluster needs attention/);assert.match(said,/history/i);assert.match(said,/layout/i);
  await page.locator('#historyCard .ui-error, #historyCard .history-error').first().waitFor();
  assert.equal(await page.locator('#historyCard .note.warn').count(),0,'the Over time card shows its own error state');
