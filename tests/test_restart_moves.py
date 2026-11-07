@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_container_rebalance as C
 import homestead_kube as K
 import homestead_names as NAMES
@@ -56,7 +57,7 @@ def why_of(plan):
 
 class Landing(unittest.TestCase):
     def setUp(self):
-        keep_bound(self, C)
+        keep_bound(self, C, CAPACITY_REVIEW)
         self.c = Hosts(self)
         bind(self.c)
         self.c.kube.add(reserving("busy", "k2", cpu="1", memory="4Gi"))
@@ -264,7 +265,7 @@ class Landing(unittest.TestCase):
 
 class RestartJob(unittest.TestCase):
     def setUp(self):
-        keep_bound(self, C)
+        keep_bound(self, C, CAPACITY_REVIEW)
         self.c = Hosts(self)
         bind(self.c)
         C.restart = server.OVERVIEW_ROUTES.restart_workload
