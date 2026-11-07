@@ -55,7 +55,7 @@ try {
   await page.goto(`${base}/?demo=1`);
   await page.waitForSelector(".dashboard-widget");
   // Only the reads this check makes: no refresh tick, jobs tray or alerts poll.
-  await page.evaluate(() => { clearInterval(window.__loopTimer); clearTimeout(window.__operationTimer); window.stopAlertChecks?.(); });
+  await page.evaluate(() => { window.__loopTimer?.stop(); clearTimeout(window.__operationTimer); window.stopAlertChecks?.(); });
   await page.evaluate(slowCluster);
 
   // Started before leaving, and not the page's: a read marked `keep` (the jobs

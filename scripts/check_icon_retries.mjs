@@ -12,7 +12,7 @@ try {
   // The demo answers in the page (no network request to watch), and notes each icon it is asked for.
   await page.goto(`${base}/containers?demo=1`, { waitUntil: "networkidle" });
   await page.locator(".wl-row, .wcard").first().waitFor();
-  await page.evaluate(() => { clearInterval(window.__loopTimer); });
+  await page.evaluate(() => { window.__loopTimer?.stop(); });
   let icons = [];
   const read = async () => { icons = await page.evaluate(() => window.__iconRequests || []); };
   const count = kind => icons.filter(path => path.includes(kind === "ok" ? "a".repeat(64) : "b".repeat(64))).length;

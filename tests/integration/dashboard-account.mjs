@@ -20,7 +20,7 @@ async function open(user,old=null){
  });
  await page.goto(`${base}/?demo=1`);await page.getByRole('button',{name:'Edit dashboard',exact:true}).waitFor();
  await page.evaluate(async({user,old,endpoint})=>{
-   clearInterval(window.__loopTimer);ME=user;Dashboard.invalidate();
+   window.__loopTimer?.stop();ME=user;Dashboard.invalidate();
    if(old)localStorage.setItem(`homestead.dashboard.v1.${encodeURIComponent(user)}`,JSON.stringify(old));
    const original=window.api;
    window.api=async(path,opts={})=>{

@@ -11,7 +11,7 @@ try{
   page.on("pageerror",e=>errors.push(e.message));
   await page.goto(`${base}/?demo=1`);
   await page.locator("#historyCard .spark").first().waitFor();
-  await page.evaluate(theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();},theme);
+  await page.evaluate(theme=>{window.__loopTimer?.stop();SET.theme=theme;applySettings();},theme);
   const order=()=>page.locator('.dashboard-widget').evaluateAll(els=>els.map(el=>el.dataset.widget));
   const initial=await order();assert.equal(initial.length,7);
   if(width<=900){

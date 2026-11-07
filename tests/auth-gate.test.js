@@ -55,8 +55,12 @@ test("unauthenticated background failures preserve the password field and focus"
 
 test("session expiry stops polls and renders sign-in only once for concurrent failures", async () => {
   const t = fixture(); t.run('ME = "admin"; ROLE = "admin";');
-  for (const name of ["__loopTimer", "__imageUpdateLoop", "__imageUpdateStart", "__operationTimer"])
-    t.ctx[name] = t.ctx.setInterval(() => {});
+  // The two loops are UI.poll handles (.stop()); the other two are plain timers.
+  for (const name of ["__loopTimer", "__imageUpdateLoop"]) {
+    const id = t.ctx.setInterval(() => {});
+    t.ctx[name] = { id, stop() { t.timers.delete(id); } };
+  }
+  for (const name of ["__imageUpdateStart", "__operationTimer"]) t.ctx[name] = t.ctx.setInterval(() => {});
   const first = t.ctx.api("/api/overview").catch(() => {}), rejectFirst = t.rejection();
   const second = t.ctx.api("/api/operations").catch(() => {}), rejectSecond = t.rejection();
   rejectFirst(new Error("not signed in")); await first;
@@ -64,8 +68,8 @@ test("session expiry stops polls and renders sign-in only once for concurrent fa
   rejectSecond(new Error("not signed in")); await second;
   assert.equal(t.fields["#lg_pass"], password);
   assert.equal(password.value, "still typing");
-  for (const name of ["__loopTimer", "__imageUpdateLoop", "__imageUpdateStart", "__operationTimer"])
-    assert.equal(t.timers.has(t.ctx[name]), false);
+  for (const name of ["__loopTimer", "__imageUpdateLoop"]) assert.equal(t.timers.has(t.ctx[name].id), false);
+  for (const name of ["__imageUpdateStart", "__operationTimer"]) assert.equal(t.timers.has(t.ctx[name]), false);
   assert.equal(t.run("ROLE"), null);
 });
 

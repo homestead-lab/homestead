@@ -12,7 +12,7 @@ try {
     await page.goto(`${base}/?demo=1`);
     await page.locator('[data-widget="nodes"]').waitFor();
     // These steps paint the pages themselves; the refresh tick would paint over them.
-    await page.evaluate(() => clearInterval(window.__loopTimer));
+    await page.evaluate(() => window.__loopTimer?.stop());
     await page.evaluate(async () => {
       const original = window.api, seed = structuredClone(STATE.data.ov.nodes[0]);
       const host = (name, probe, temps) => ({...structuredClone(seed), name, probe, temps, disk_issues: []});

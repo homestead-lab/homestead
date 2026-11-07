@@ -31,7 +31,7 @@ try {
   // Only the refreshes this check asks for. Every read takes a second, as on a
   // real cluster; the clock can be moved on, so the 30 s Health cache runs out.
   await page.evaluate(() => {
-    clearInterval(window.__loopTimer); window.stopAlertChecks?.();
+    window.__loopTimer?.stop(); window.stopAlertChecks?.();
     const answer = window.fetch, now = Date.now.bind(Date);
     window.__skew = 0; Date.now = () => now() + window.__skew;
     window.fetch = async (input, init) => {

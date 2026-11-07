@@ -7,7 +7,7 @@ export async function checkMobileRefresh(page, context, installed) {
     window.__refreshCalls = 0;
     window.__originalRefreshView = VIEWS.dash[1];
     VIEWS.dash[1] = async () => { window.__refreshCalls++; await window.__originalRefreshView(); };
-    clearInterval(window.__loopTimer);
+    window.__loopTimer?.stop();
   });
   const calls = () => page.evaluate(() => window.__refreshCalls);
   const idle = () => page.waitForFunction(() => !STATE.busy && !document.querySelector("#refresh").disabled);

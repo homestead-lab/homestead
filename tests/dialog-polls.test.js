@@ -183,6 +183,46 @@ test("a poll that starts later waits its interval before the first read", async 
   assert.equal(calls, 1, "a poll that is not a dialog's outlives closing one");
 });
 
+test("a read is told why it runs: the start, a timer tick or the tab being shown", async () => {
+  const { UI, clock, document } = loadUI();
+  const why = [];
+  UI.poll(async (signal, reason) => { why.push(reason); }, 2000);
+  await clock.advance(2000);
+  document.show(false); document.show(true); await clock.settle();
+  assert.deepEqual(why, ["start", "tick", "show"]);
+});
+
+test("readOnShow: false waits a whole interval after the tab is shown, and reads nothing before", async () => {
+  const { UI, clock, document } = loadUI();
+  let calls = 0;
+  UI.poll(async () => { calls++; }, 900000, { later: true, dialog: false, readOnShow: false });
+  await clock.advance(900000);
+  assert.equal(calls, 1);
+  document.show(false);
+  await clock.advance(3600000);
+  assert.equal(calls, 1, "nothing is read while the tab is hidden");
+  document.show(true); await clock.settle();
+  assert.equal(calls, 1, "showing the tab is not a reason to read");
+  await clock.advance(899999);
+  assert.equal(calls, 1);
+  await clock.advance(1);
+  assert.equal(calls, 2, "the next read is an interval after the tab came back");
+});
+
+test("a stopped poll that is not a dialog's reads no more, however the tab changes", async () => {
+  const { UI, clock, document } = loadUI();
+  let calls = 0;
+  const poll = UI.poll(async () => { calls++; }, 2000, { later: true, dialog: false });
+  await clock.advance(2000);
+  assert.equal(calls, 1);
+  poll.stop();
+  document.show(false); document.show(true);
+  await clock.advance(60000);
+  assert.equal(calls, 1);
+  assert.equal(document.listening("visibilitychange"), 0);
+  assert.equal(clock.pending(), 0);
+});
+
 /* The Volumes progress watch reads the whole volume list every 4 s while a
    volume rebuilds or restores, which can be hours. A hidden tab reads none. */
 test("a busy volume with a hidden tab makes no /api/volumes read in 60 s", async () => {

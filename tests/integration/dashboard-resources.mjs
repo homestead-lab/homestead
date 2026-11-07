@@ -7,7 +7,7 @@ try{for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(async theme=>{
-  clearInterval(window.__loopTimer);SET.theme=theme;applySettings();const original=window.api;
+  window.__loopTimer?.stop();SET.theme=theme;applySettings();const original=window.api;
   window.resourceFixture={containers:Array.from({length:12},(_,i)=>({name:['bazarr','homarr','nginx-proxy','overseerr','pihole','plex','prowlarr','qbittorrent','radarr','sonarr','tdarr','watchtower'][i],ns:'apps',desired:i===10?0:1,ready:i===9?0:1,cpu:i===8?null:i*.023,mem_mb:i===8?null:60+i*38})),vms:Array.from({length:8},(_,i)=>({name:`vm-${i+1}`,ns:'lab',status:i===2?'Stopped':i===3?'Starting':'Running',usage:i===4?null:{cpu_pct:i*3.4,mem:1024**3*(i+1)}}))};
   window.api=(path,opts)=>path==='/api/workloads'?Promise.resolve([...resourceFixture.containers,{name:'platform-helper',platform:true}]):path==='/api/vms'?Promise.resolve(resourceFixture.vms):original(path,opts);
  },theme);

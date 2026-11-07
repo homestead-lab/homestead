@@ -12,7 +12,7 @@ try{for(const width of [1440,1100,390]){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(links=>{
-  clearInterval(window.__loopTimer);const original=window.api;
+  window.__loopTimer?.stop();const original=window.api;
   window.api=async(path,opts)=>{
    if(path==='/api/auth/preferences/dashboard')return {layout:{version:1,items:[{id:'portal',width:12,height:0}]},revision:'one'};
    if(path==='/api/portal')return {links};

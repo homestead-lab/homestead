@@ -7,14 +7,14 @@ const browser=await chromium.launch({headless:true});
 try {for(const width of [1440,390,320])for(const theme of ['dark','light']){
  const context=await browser.newContext({viewport:{width:1440,height:1000}}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1&platform=harvester&demo-scenario=incidents`);await page.waitForSelector('.dashboard-widget');
- await page.evaluate(async theme=>{SET.theme=theme;applySettings();clearInterval(window.__loopTimer);await Dashboard.start();for(const w of Dashboard.defaults())Dashboard.remove(w.id);for(const id of ['health','workloads','backups','updates','jobs'])Dashboard.add(id);await Dashboard.save();},theme);
+ await page.evaluate(async theme=>{SET.theme=theme;applySettings();window.__loopTimer?.stop();await Dashboard.start();for(const w of Dashboard.defaults())Dashboard.remove(w.id);for(const id of ['health','workloads','backups','updates','jobs'])Dashboard.add(id);await Dashboard.save();},theme);
  await page.setViewportSize({width,height:1000});await page.waitForFunction(()=>document.querySelector('[data-insight="health"]')?.textContent.includes('scheduled'));
  const shot=async name=>{assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`${name} overflows ${width}`);await page.waitForTimeout(200);
  if(await page.locator('#modal').isVisible()){
    await captureDialog(page,`${out}/${name}-${theme}-${width}.png`);
  }else await page.screenshot({path:`${out}/${name}-${theme}-${width}.png`,fullPage:true});};
  assert.equal(await page.locator('[data-insight]').count(),5);await shot('dashboard');
- await page.reload();await page.evaluate(theme=>{SET.theme=theme;applySettings();clearInterval(window.__loopTimer);},theme);await page.waitForSelector('[data-insight="health"]');assert.equal(await page.locator('[data-insight]').count(),5,'widgets persist');
+ await page.reload();await page.evaluate(theme=>{SET.theme=theme;applySettings();window.__loopTimer?.stop();},theme);await page.waitForSelector('[data-insight="health"]');assert.equal(await page.locator('[data-insight]').count(),5,'widgets persist');
  await page.evaluate(()=>go('cluster'));await page.waitForFunction(()=>document.querySelector('[data-insight="full"]')?.textContent.includes('scheduled'));await shot('cluster-health');
  await page.evaluate(async()=>{await imageUpdateCenter();});await page.waitForSelector('#updateStage');assert.equal(await page.locator('#updateStage').locator('xpath=ancestor::*[contains(@class,"ui-actions")]').count(),2);assert.match(await page.locator('#updateStage').textContent(),/Review selected/);
  await shot('image-updates');await page.evaluate(()=>closeModal());

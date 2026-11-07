@@ -290,13 +290,12 @@ window.pwaAcknowledge=async(key,version,undo=false)=>{
   catch(error){toast(error.message,"bad");}
   await refreshPwaAlerts(true);
 };
-window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.timer=null;PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;PWA_ALERTS.unread="";PWA_ALERTS.health=null;window.healthPillChecking?.();};
+window.stopAlertChecks=()=>{PWA_ALERTS.timer?.stop();PWA_ALERTS.timer=null;PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;PWA_ALERTS.unread="";PWA_ALERTS.health=null;window.healthPillChecking?.();};
 window.startAlertChecks=()=>{
-  clearInterval(PWA_ALERTS.timer);refreshPwaAlerts(true);
-  PWA_ALERTS.timer=setInterval(()=>{if(!document.hidden)refreshPwaAlerts();},20000);
+  PWA_ALERTS.timer?.stop();refreshPwaAlerts(true);
+  // A tab coming back is not up to 20 s behind on the bell and the health pill (#940): UI.poll reads on show.
+  PWA_ALERTS.timer=UI.poll(async()=>{refreshPwaAlerts();},20000,{later:true,dialog:false});
 };
-// A tab coming back is not up to 20 s behind on the bell and the health pill (#940).
-document.addEventListener("visibilitychange",()=>{if(!document.hidden && PWA_ALERTS.timer)refreshPwaAlerts();});
 window.refreshPwaAlerts=refreshPwaAlerts;
 window.PWA_ALERTS=PWA_ALERTS;
 window.pwaCard = pwaCard;

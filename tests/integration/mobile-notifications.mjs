@@ -9,8 +9,8 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  // The check owns its job and alert for the whole run, not just until the next poll (#892): the demo answers every
  // jobs read from window.__demoOps, and every alerts read (the poll, the Alerts dialog) is answered here, as the demo has no hook for it.
  // The image update check, which first runs 3.5 s after sign-in and adds the bell's container-update rows, runs now instead.
- await page.evaluate(async theme=>{clearInterval(window.__loopTimer);SET.theme=theme;SET.motion='off';applySettings();
-  clearTimeout(window.__imageUpdateStart);clearInterval(window.__imageUpdateLoop);await loadImageUpdates(false,true);await PWA_ALERTS.request;
+ await page.evaluate(async theme=>{window.__loopTimer?.stop();SET.theme=theme;SET.motion='off';applySettings();
+  clearTimeout(window.__imageUpdateStart);window.__imageUpdateLoop?.stop?.();await loadImageUpdates(false,true);await PWA_ALERTS.request;
   const alerts={active:[{key:'disk',title:'Drive needs attention',body:'2 reallocated sectors',severity:'degraded'}]},real=window.api;
   window.api=(path,...rest)=>String(path).split('?')[0]==='/api/alerts'?Promise.resolve(structuredClone(alerts)):real(path,...rest);
   PWA_ALERTS.report=structuredClone(alerts);STATE.data.operations=window.__demoOps=[{id:'update',title:'Update media server',status:'running',message:'Downloading the replacement container image',progress:42}];paintBell()},theme);

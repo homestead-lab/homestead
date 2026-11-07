@@ -8,7 +8,7 @@ try{for(const theme of ['dark','light']){
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="nodes"]').waitFor();
  await page.evaluate(async theme=>{
-  clearInterval(window.__loopTimer);SET.theme=theme;SET.motion='off';applySettings();await fleetLoad();
+  window.__loopTimer?.stop();SET.theme=theme;SET.motion='off';applySettings();await fleetLoad();
   window.archRequests=[];const original=window.fetch;window.fetch=(input,opts)=>{archRequests.push(typeof input==='string'?input:input.url);return original(input,opts)};
   setFleetMode('all');await go('flow');
  },theme);

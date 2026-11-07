@@ -31,7 +31,7 @@ try {
       await page.goto(`${base}/?demo=1`, {waitUntil:'load'});
       await page.waitForSelector('.dashboard-widget');
       await page.evaluate(({theme,report}) => {
-        clearInterval(window.__loopTimer); document.documentElement.dataset.theme = theme;
+        window.__loopTimer?.stop(); document.documentElement.dataset.theme = theme;
         window.__operatorFixture = true; STATE.data.components = report;
         componentManageOperator('kubevirt');
       }, {theme,report:report()});

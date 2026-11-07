@@ -157,8 +157,10 @@ test("signing out puts the pill back to CHECKING and forgets the last verdict", 
   assert.match(stop, /healthPillChecking\?\.\(\)/);
 });
 
+// The alert checks are a UI.poll, which reads when the tab comes back (#940); tests/pollers.test.js runs it.
 test("a tab coming back into view reads the alerts again", () => {
-  assert.match(pwa, /addEventListener\("visibilitychange",\s*\(\)\s*=>\s*\{\s*if\s*\(!document\.hidden && PWA_ALERTS\.timer\)\s*refreshPwaAlerts\(\);?\s*\}\)/);
+  assert.match(pwa, /PWA_ALERTS\.timer=UI\.poll\([\s\S]*?\{later:true,dialog:false\}\)/);
+  assert.doesNotMatch(pwa, /readOnShow/);
 });
 
 test("the pulse stops when motion is off or reduced", () => {
