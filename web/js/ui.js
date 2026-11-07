@@ -248,8 +248,9 @@ const UI = (() => {
       const tip = (dense || (step.detailHtml && i !== current)) && said ? ` title="${text(said)}"` : "";
       return `<li class="${state}"${i === current ? ' aria-current="step"' : ""}${tip}><i${state === "current" && measured ? ` style="--p:${Math.max(0, Math.min(100, value))}%"` : ""}></i>`
         + `<span>${state === "done" ? svg("check") : state === "failed" ? svg("x") : ""}${text(step.title)}</span></li>`;
-    }).join("")}</ol><div class="ui-track-now"${measured || (finished && !failed)
-      ? ` role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${finished ? 100 : Math.round(Math.max(0, Math.min(100, value)))}" aria-label="${text(finished ? "Done" : now.title || unit)}"` : ""}><div class="ui-track-head">`
+    }).join("")}</ol><div class="ui-track-now"${failed ? ""
+      // Under way is a progressbar; its value only when it is measured, or done.
+      : ` role="progressbar" aria-valuemin="0" aria-valuemax="100"${measured || finished ? ` aria-valuenow="${finished ? 100 : Math.round(Math.max(0, Math.min(100, value)))}"` : ""} aria-label="${text(finished ? "Done" : now.title || unit)}"`}><div class="ui-track-head">`
       + (finished ? `<b>${failed ? "Stopped" : "Done"}</b>` : `<span class="ui-track-count">${text(unit)} ${current + 1} of ${list.length}</span><b>${text(now.title || "")}</b>`)
       + `${measured ? `<span class="ui-track-value">${Math.round(value)}%</span>` : ""}</div>`
       + `${!finished && (now.detailHtml || label) ? `<div class="ui-track-detail">${now.detailHtml || ""}${now.detailHtml && label ? " · " : ""}${text(label)}</div>` : ""}</div></div>`;
@@ -698,15 +699,16 @@ const UI = (() => {
   const DISMISS = { review: "Cancel", form: "Cancel", confirm: "Cancel", watch: "Close", info: "Close" };
   /* What the dialog acts on, for its header: the object, its kind and
      where it is, its state and the change. In a dialog the header shows it
-     under the title (syncDialogHead); the body keeps it hidden. */
+     under the title (syncDialogHead); the body keeps it as a template, so it
+     travels with the body and is never on the page twice. */
   const subjectHtml = subject => {
     if (!subject) return "";
     const chips = [...(subject.status ? [subject.status] : []), ...(subject.chips || [])].filter(Boolean)
       .map(([label, t]) => chip(label, t, { size: "slim" })).join("");
     const where = [subject.kind, subject.where].filter(Boolean).map(text).join(" · ");
     const change = subject.change ? `<span class="ui-head-change"><code>${text(subject.change[0])}</code><span aria-hidden="true">→</span><code>${text(subject.change[1])}</code></span>` : "";
-    return `<div class="ui-dialog-head"><span class="ui-head-name">${text(subject.name)}</span>`
-      + `${where ? `<span class="ui-head-where">${where}</span>` : ""}${chips ? `<span class="ui-head-chips">${chips}</span>` : ""}${change}</div>`;
+    return `<template class="ui-dialog-head"><span class="ui-head-name">${text(subject.name)}</span>`
+      + `${where ? `<span class="ui-head-where">${where}</span>` : ""}${chips ? `<span class="ui-head-chips">${chips}</span>` : ""}${change}</template>`;
   };
   const detailsHtml = details => {
     if (!details) return "";

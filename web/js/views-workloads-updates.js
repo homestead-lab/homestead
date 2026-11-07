@@ -505,6 +505,8 @@ function rolloutStages(s) {
     { title: "Readiness checks", detailHtml: esc(`${s.ready || 0}/${desired || "?"} pods ready; completion waits for the accepted update.`),
       state: failed && current === 2 ? "failed" : undefined },
   ];
+  // A failed rollout stopped at the stage it was on.
+  if (failed && current < 3) list[current].state = "failed";
   // A percentage only for bytes known to be fetched: a pod count is not a
   // measure, and old pods still count as ready.
   const value = current === 1 && pulling && pull.total_bytes ? pull.percent || 0 : null;
@@ -514,7 +516,7 @@ function rolloutProgress(s) {
   const st = rolloutStages(s);
   return UI.dialog({ shape: "watch",
     steps: { list: st.list, current: st.current }, progress: { value: st.value },
-    issues: [...(st.failed ? [["bad", { short: "Update needs attention", more: "Review the failure details before retrying." }]] : []), ...(s.problems || []).map(p => ["bad", p])],
+    issues: [...(st.failed ? [["bad", "Review the failure details before retrying."]] : []), ...(s.problems || []).map(p => ["bad", p])], issuesTitle: st.failed ? "Update needs attention" : "",
     body: s.pods?.length ? UI.more("Pod details", UI.insightList(s.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
       label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" })))) : "",
     actions: { dismiss: false } });
@@ -524,7 +526,7 @@ function rolloutMarkup(s) {
   return UI.dialog({ shape: "watch",
     subject: { kind: "App", name: s.name || "", where: s.ns || "", status: st.ready ? ["updated", "ok"] : st.failed ? ["needs attention", "bad"] : ["updating", "info"] },
     steps: { list: st.list, current: st.current }, progress: { value: st.value },
-    issues: [...(st.failed ? [["bad", { short: "Update needs attention", more: "Review the failure details before retrying." }]] : []), ...(s.problems || []).map(p => ["bad", p])],
+    issues: [...(st.failed ? [["bad", "Review the failure details before retrying."]] : []), ...(s.problems || []).map(p => ["bad", p])], issuesTitle: st.failed ? "Update needs attention" : "",
     body: s.pods?.length ? UI.more("Pod details", UI.insightList(s.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
       label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" })))) : "",
     actions: { dismiss: st.ready ? false : "Monitor in background",

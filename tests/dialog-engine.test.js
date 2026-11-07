@@ -24,7 +24,7 @@ const update = extra => UI.dialog({ shape: "review",
 test("a review says what it acts on first, then the sentence, then the button named for the result", () => {
   const html = update();
   // The object goes in the header, under the title (syncDialogHead copies it up).
-  assert.match(html, /^<div class="ui-dialog ui-dialog-review ui-stack"><div class="ui-dialog-head"><span class="ui-head-name">immich-stack<\/span><span class="ui-head-where">App · lab<\/span>/);
+  assert.match(html, /^<div class="ui-dialog ui-dialog-review ui-stack"><template class="ui-dialog-head"><span class="ui-head-name">immich-stack<\/span><span class="ui-head-where">App · lab<\/span>/);
   assert.match(seen(html), /^immich-stack App · lab latest · cf6f0d6 → latest · 9b74872 The app restarts/);
   assert.match(html, /<details class="ui-more" data-disclosure="Details">/);
   assert.match(html, /id="approve"[\s\S]*Restart it now/);

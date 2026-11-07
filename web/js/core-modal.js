@@ -266,13 +266,13 @@ function askDialog(message, { title = "", ok = "", cancel = "", danger = false, 
     layer.setAttribute("role", "dialog");
     layer.setAttribute("aria-modal", "true");
     const risky = !!danger;
-    // The confirm shape: the question first, its detail under it, quieter.
-    const said = String(message), [question, detail] = window.UI?.splitIssue ? UI.splitIssue(esc(said)) : [esc(said), ""];
-    layer.innerHTML = `<div class="askbox ui-dialog ui-dialog-confirm">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg">${question}</p>
-      ${detail ? `<p class="askdetail">${detail}</p>` : ""}
+    // The confirm shape. A question is short and every sentence of it counts
+    // (an unread check is said in it), so it is read whole.
+    layer.innerHTML = `<div class="askbox ui-dialog ui-dialog-confirm">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">${esc(cancel || "Cancel")}</button>
         <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
+    layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
     if (field) {
       field.value = input.value || "";

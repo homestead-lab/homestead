@@ -32,16 +32,17 @@ try {
         if(mode!=='automatic')window.__launchFixture[mode]='host-a';
         await vmPower('lab','ubuntu-2404',mode==='resident'?'unpause':'start');
       },mode);
-      // The start review says what starts where in its first sentence.
-      const expected={automatic:/Starts ubuntu-2404 on one of 2 hosts\./,pinned:/Starts ubuntu-2404 on host-a\./,
-        preferred:/Starts ubuntu-2404 on host-a if it can, or another host\./,resident:/Resumes ubuntu-2404 on host-a\./}[mode];
+      // The header names the VM; the start review says what happens where in its first sentence.
+      const expected={automatic:/Starts it on one of 2 hosts\./,pinned:/Starts it on host-a\./,
+        preferred:/Starts it on host-a if it can, or another host\./,resident:/Resumes it on host-a\./}[mode];
       await page.locator('.ui-lead').filter({hasText:expected}).waitFor();
+      assert.match(await page.locator('#msubject').innerText(),/ubuntu-2404/);
       assert.equal(await page.getByText('Chosen',{exact:true}).count(),0);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
       await page.screenshot({path:`release-assets/pages/launch-import/vm-${mode}-${width}.png`,fullPage:true});
     }
     await page.evaluate(async()=>{closeModal();window.__launchFixture={pinned:null,preferred:'host-a',resident:null};await wlScale('lab','example-app',1)});
-    await page.locator('.ui-lead').filter({hasText:/example-app on host-a if it can, or another host/}).waitFor();
+    await page.locator('.ui-lead').filter({hasText:/Starts it on host-a if it can, or another host/}).waitFor();
     await page.screenshot({path:`release-assets/pages/launch-import/container-${width}.png`,fullPage:true});
     await page.evaluate(async()=>{
       closeModal();clearInterval(window.__logTimer);

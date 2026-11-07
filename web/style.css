@@ -2254,8 +2254,6 @@ div.ipam-line.dim{display:block}
 .modalsubject{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;min-width:0}
 .modalsubject[hidden]{display:none}
 .modalbox.titled #mtitle .mt-object{display:none}
-.askmsg:has(+ .askdetail){margin-bottom:0}
-.askdetail{margin:6px 0 16px;color:var(--mut);font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
 .modalbox.titled #mtitle{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
 .ui-head-name{font-size:18px;font-weight:700;color:var(--tx);overflow-wrap:anywhere;min-width:0}
 .ui-head-where{color:var(--mut);font-size:12.5px}

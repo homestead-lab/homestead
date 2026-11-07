@@ -63,7 +63,7 @@ try {
     });
     await page.locator('#ve_section').isVisible() ? await page.locator('#ve_section').selectOption('network') : await page.locator('#ve-tab-network').click();
     assert.equal(await page.locator('#ve-tab-network').getAttribute('aria-selected'), 'true');
-    assert.match(await page.locator('#ve-pane-network').innerText(),/KubeVirt currently adds its default/);
+    assert.match(await page.locator('#ve-pane-network').innerText(),/KubeVirt adds a pod-network card at boot/);
     await page.locator('#ve_isolated').check();
     // The VM editor uses the same controller as other forms: moving between
     // sections preserves the DOM and error focus reveals the correct section.
