@@ -23,8 +23,14 @@ tests/fakes/kube.py no_cluster() names its turned-away reads the same way (origi
 
 What stays allowed: loopback (127.0.0.0/8, ::1, "localhost"), the unspecified
 addresses (0.0.0.0, ::), Unix sockets, and any test that patches socket itself.
-The shared Kubernetes fake (tests/fakes/kube.py) replaces homestead_kube.transport,
-so a test on it never gets this far.
+The shared Kubernetes fake (tests/fakes/kube.py) replaces both homestead_kube.transport
+(kget, ksend) and homestead_kube._request (raw_get, ktable: #1280), so while it is in
+use no request made through homestead_kube gets this far; under its no_cluster() none
+does either (refused there and counted in no_cluster_reads instead). Neither covers
+clients of their own, such as homestead_self_data_kube._request (urllib to the API
+server). A Kubernetes API request refused here comes from a test with neither in use,
+from one that patched only kget or ksend and left raw_get or ktable to the real
+client, or from a client outside homestead_kube.
 
 Who checks: scripts/run_tests.py installs it before the tests load and reports the
 tests that reached the network (with ENFORCE, a file not in network_offenders.txt
@@ -160,7 +166,11 @@ def _getaddrinfo(host, *args, **kwargs):
     # as a real one would fail (ENETUNREACH, not "no such name").
     if _local(host) or _literal(host) is not None:
         return _installed["getaddrinfo"](host, *args, **kwargs)
-    what = "Kubernetes API (no fake active)" if host == "kubernetes.default.svc" else f"lookup of {host}"
+    # The shared fake answers every request made through homestead_kube (transport and
+    # _request) and no_cluster() refuses them before here, so this is a test with neither,
+    # one that faked only kget/ksend and not raw_get/ktable, or a client of its own
+    # (homestead_self_data_kube).
+    what = "Kubernetes API (not answered by a fake)" if host == "kubernetes.default.svc" else f"lookup of {host}"
     raise socket.gaierror(socket.EAI_NONAME, "Name or service not known; " + _refuse(what))
 
 
