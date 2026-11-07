@@ -259,10 +259,23 @@ after it has been seen working before (a new host finishing joining is not
   and the start are one step, so two that become due the same minute do not
   both start. The window is used whatever the image update policy, notify
   only included. The run can go on after the window closes: each move waits up
-  to ten minutes for its container to start. Apps Flux or Argo CD apply are
-  left out of it; move those by hand, or in Git. A move by hand leaves a host
-  preference on them that their syncs keep, until someone clears it in Edit,
-  which restarts the app.
+  to ten minutes for its container to start.
+
+Apps a tool applies: under **Spread by capacity**, the run also moves apps Flux
+applies, by restarting them. It writes no placement, so the scheduler picks the
+host, and a Flux sync keeps Homestead's restart mark. If one lands back where it
+was, the run stops and says so. If a sync does take the mark off, the app restarts
+a second time; Homestead notices within two hours of the restart, raises an alert
+and leaves Flux's apps out of moves back. Under Kubernetes' default and Hot spare,
+Flux's apps are left out. Apps Argo CD applies, and any with an *Updated elsewhere*
+mark, are always left out: nothing has tested a restart under Argo CD yet. Move
+those by hand, or in Git. A move by hand leaves a host preference on them that their
+syncs keep, until someone clears it in Edit, which restarts the app.
+
+An app a restart can't move stays where it is, with why: it prefers its own host,
+or a host other than the one that came back (a preference a person set is never
+touched; one Balance hosts left is cleared in the restart), reservations favour its
+host, the likely host has no copy of its volumes, or it is paused or mid-rollout.
 
 In the window, an app is left where it is when a scheduled job (a CronJob)
 mounts its volume and is running, or runs while the rebalance may still be

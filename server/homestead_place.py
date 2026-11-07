@@ -649,16 +649,28 @@ HOSTNAME = "kubernetes.io/hostname"
 BALANCE_MARK = "balance-preference"
 
 
-def preferred_host(pod_spec):
-    """The one host a pod template's heaviest host preference names, or "" - a
-    term naming several hosts, or a label, says nothing about one host."""
+def host_terms(pod_spec):
+    """A pod template's preferences that name hosts."""
     terms = ((pod_spec.get("affinity") or {}).get("nodeAffinity") or {}).get("preferredDuringSchedulingIgnoredDuringExecution") or []
+    return [term for term in terms if any(m.get("key") == HOSTNAME for m in (term.get("preference") or {}).get("matchExpressions") or [])]
+
+
+def one_host(term):
+    """The one host a preference names, or "": several hosts, or a host and a label,
+    say nothing about one host."""
+    exprs = (term.get("preference") or {}).get("matchExpressions") or []
+    single = len(exprs) == 1 and exprs[0].get("operator") == "In" and len(exprs[0].get("values") or []) == 1
+    return exprs[0]["values"][0] if single and exprs[0].get("key") == HOSTNAME else ""
+
+
+def preferred_host(pod_spec, ignoring=""):
+    """The one host a pod template's heaviest host preference names, or "";
+    ignoring: a host whose preference does not count."""
     best, weight = "", 0
-    for term in terms:
-        exprs = (term.get("preference") or {}).get("matchExpressions") or []
-        if (len(exprs) == 1 and exprs[0].get("key") == HOSTNAME and exprs[0].get("operator") == "In"
-                and len(exprs[0].get("values") or []) == 1 and int(term.get("weight") or 0) > weight):
-            best, weight = exprs[0]["values"][0], int(term.get("weight") or 0)
+    for term in host_terms(pod_spec):
+        host = one_host(term)
+        if host and host != ignoring and int(term.get("weight") or 0) > weight:
+            best, weight = host, int(term.get("weight") or 0)
     return best
 
 
@@ -670,8 +682,38 @@ def balance_preference(dep):
     return host if host and NAMES.read((dep.get("metadata") or {}).get("annotations"), BALANCE_MARK) == host else ""
 
 
+def person_preference(dep):
+    """Whether it has a host preference Balance hosts didn't leave: nothing automatic
+    rewrites that, and a placement move would."""
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    own = balance_preference(dep)
+    return any(one_host(term) != own or not own for term in host_terms(spec))
+
+
 def mark_balance_preference(dep, node):
     dep["metadata"].setdefault("annotations", {})[NAMES.key(BALANCE_MARK)] = node
+
+
+def balance_clear_patch(dep):
+    """A merge patch taking Balance hosts' own preference and its mark off, or None
+    when there isn't one. Every other rule stays. resourceVersion: a person who
+    changed the app after this read gets to keep what they did."""
+    host = balance_preference(dep)
+    if not host:
+        return None
+    meta, spec = dep.get("metadata") or {}, dep["spec"]["template"]["spec"]
+    affinity, node = spec.get("affinity") or {}, (spec.get("affinity") or {}).get("nodeAffinity") or {}
+    slot = "preferredDuringSchedulingIgnoredDuringExecution"
+    kept = [term for term in node.get(slot) or [] if one_host(term) != host]
+    if kept:
+        value = {"nodeAffinity": {slot: kept}}
+    elif set(node) - {slot}:
+        value = {"nodeAffinity": {slot: None}}
+    else:
+        value = {"nodeAffinity": None} if set(affinity) - {"nodeAffinity"} else None
+    return {"metadata": {"annotations": {NAMES.key(BALANCE_MARK): None},
+                         **({"resourceVersion": meta["resourceVersion"]} if meta.get("resourceVersion") else {})},
+            "spec": {"template": {"spec": {"affinity": value}}}}
 
 
 def apply_node_placement(dep, node, pin=False):

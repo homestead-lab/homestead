@@ -262,6 +262,12 @@ usage history** with when it last read use and its last error.
 reached or needs credentials; that container shows the error, and the others
 still show their updates.
 
+### An app Flux applies restarted twice
+
+`kubectl rollout restart` on an app Flux's Kustomization applies restarts it twice:
+Flux takes `kubectl`'s mark off at its next sync, which changes the pod template.
+Use **Restart** in Homestead, whose mark Flux keeps.
+
 ## Storage
 
 **New volumes come up degraded, or growing one is refused.** Longhorn has run out

@@ -43,7 +43,10 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
 import homestead_kube as KUBE
 import homestead_kube_metrics as KUBE_METRICS
+import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_place as PLACE
+import homestead_recovery as RECOVERY
 import homestead_pod_resources as RESOURCES
 import homestead_routes as ROUTER
 
@@ -51,7 +54,7 @@ KIND = "container-rebalance"
 MAX_MOVES = 10
 GAIN = 3.0          # a move must even the hosts out by this many points (spread, below)
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
-SYSTEM_NS = {"kube-system", "longhorn-system", "kubevirt", "cdi", "system-upgrade", "local"}
+SYSTEM_NS = {"kube-system", "longhorn-system", "kubevirt", "cdi", "system-upgrade", "local", "flux-system"}
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
 kget = None
@@ -63,20 +66,22 @@ guard = None                    # (deployment, ns, role) -> raises PermissionErr
 operations = None               # homestead_operations: the job is one of its jobs
 standby = lambda: ()            # homestead_placement_mode.standby_hosts: never moved onto, emptied first
 is_leader = lambda: True
+restart = None                  # homestead_overview_server.restart_workload: a move by restarting
 
 
 # What bind() puts back for an argument it is not given: the module's own default,
 # not the last bind's (a test's fake must not outlive the test).
-_UNBOUND = {"is_leader": is_leader}
+_UNBOUND = {"is_leader": is_leader, "restart": restart}
 
 
 def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None,
-         _operations=None, _standby=None):
-    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations, standby
+         _operations=None, _standby=None, _restart=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard, operations, standby, restart
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
     summaries, guard, operations = _summaries, _guard, _operations
     standby = _standby or (lambda: ())
     is_leader = _is_leader if _is_leader else _UNBOUND["is_leader"]
+    restart = _restart if _restart else _UNBOUND["restart"]
 
 
 def cpu(value):
@@ -207,11 +212,12 @@ def inventory(role=None):
             sum(mem((c.get("usage") or {}).get("memory")) for c in m.get("containers") or []))
     sets = {((r.get("metadata") or {}).get("namespace"), (r.get("metadata") or {}).get("name")): r for r in _items("/apis/apps/v1/replicasets")}
     # Where each Longhorn volume has a copy: a host holding one keeps reads local.
-    claims, locality = {}, {}
+    claims, locality, access = {}, {}, {}
     for volume in _items(f"{LH}/volumes"):
         k8s = (volume.get("status") or {}).get("kubernetesStatus") or {}
         claims[(k8s.get("namespace"), k8s.get("pvcName"))] = (volume.get("metadata") or {}).get("name")
         locality[(volume.get("metadata") or {}).get("name")] = (volume.get("spec") or {}).get("dataLocality") or "disabled"
+        access[(volume.get("metadata") or {}).get("name")] = (volume.get("spec") or {}).get("accessMode") or ""
     copies = {}
     for replica in _items(f"{LH}/replicas"):
         spec = replica.get("spec") or {}
@@ -249,7 +255,9 @@ def inventory(role=None):
         apps.append({"ns": ns, "name": name, "id": f"{ns}/{name}", "host": where[0], "dep": dep,
                      "cpu": sum(u[0] for u in use), "mem": sum(u[1] for u in use), "why": why,
                      "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None,
-                     "follows": "best-effort" in modes})
+                     "follows": "best-effort" in modes, "volumes": [v for v in volumes if v],
+                     # A claim Longhorn doesn't say is shared counts as attaching to one host.
+                     "one_host": any(access.get(v) != "rwx" for v in volumes)})
     _placement(apps)
     return hosts, apps
 
@@ -449,9 +457,79 @@ def _not_moved(apps, load, hosts, refused, reachable, exclude, moved, now, sprea
 
 
 SPARE_ROOM = 90.0  # how full a main host may get from apps moved off a standby host
+# Kubernetes counts an app that reserves nothing as this when it places it.
+NONZERO_CPU, NONZERO_MEM = 100.0, 200.0 * 1024 ** 2
 
 
-def plan(exclude=(), avoid=(), role=None):
+def _restart_refused(dep):
+    """Why restarting this app now would not be a clean move, or ""."""
+    spec, meta, status = dep.get("spec") or {}, dep.get("metadata") or {}, dep.get("status") or {}
+    template = (spec.get("template") or {}).get("spec") or {}
+    if spec.get("paused"):
+        return "its rollouts are paused, so a restart would not take effect"
+    wanted = int(spec.get("replicas") or 0)
+    if (int(status.get("observedGeneration") or 0) < int(meta.get("generation") or 0)
+            or int(status.get("updatedReplicas") or 0) != wanted or int(status.get("readyReplicas") or 0) != wanted):
+        return "it is still rolling out, so it is not restarted on top of that"
+    if template.get("nodeName"):
+        return "it names its host directly (nodeName)"
+    if template.get("topologySpreadConstraints"):
+        return "it has spread rules, which decide where it runs"
+    return ""
+
+
+def _rolls(dep):
+    """Starts the new pod before stopping the old, the default when a Deployment names none."""
+    return ((dep.get("spec") or {}).get("strategy") or {}).get("type") != "Recreate"
+
+
+def _unsettled_volumes():
+    """Volumes with any copy that isn't RW in an engine, on whatever host: moving the
+    app now would work from a picture Longhorn is still changing."""
+    found = set()
+    for engine in _items(f"{LH}/engines"):
+        if any(mode != "RW" for mode in ((engine.get("status") or {}).get("replicaModeMap") or {}).values()):
+            found.add((engine.get("spec") or {}).get("volumeName"))
+    return found
+
+
+def _restart_landing(app, hosts, requested, usable, back):
+    """(host, "") where a restart would put the app, or (None, why). Not the
+    scheduler: its dominant signals, a host preference then the room requests leave,
+    which the job checks against where it really lands."""
+    template = ((app["dep"].get("spec") or {}).get("template") or {}).get("spec") or {}
+    own, here = PLACE.balance_preference(app["dep"]), app["host"]     # Balance's own goes in the restart's patch
+    if any(not PLACE.one_host(term) for term in PLACE.host_terms(template)):
+        return None, "its host preference isn't for one host, so a restart may not move it"
+    wanted = PLACE.preferred_host(template, ignoring=own)
+    if wanted == here:
+        return None, f"its host preference keeps it on {here}, so a restart would not move it"
+    if wanted:
+        if wanted in back and wanted in usable:
+            return wanted, ""
+        return None, f"it has a host preference for {wanted}, which only a person changes"
+    cpu_r, mem_r = _requests(template)
+
+    def room(name):
+        cpu_used, mem_used = requested.get(name, (0.0, 0.0))
+        if name == here and not _rolls(app["dep"]):   # gone before the new pod is placed
+            cpu_used, mem_used = cpu_used - cpu_r, mem_used - mem_r
+        host = hosts[name]
+        return ((1 - (cpu_used + (cpu_r or NONZERO_CPU)) / host["cpu_total"])
+                + (1 - (mem_used + (mem_r or NONZERO_MEM)) / host["mem_total"])) / 2
+    # A tie stays put: the restart would be for nothing half the time.
+    best = max({*usable, here}, key=lambda name: (room(name), name == here))
+    if best == here:
+        return None, f"the scheduler would put it back on {here}: reservations favour that host"
+    return best, ""
+
+
+def plan(exclude=(), avoid=(), role=None, restart=None, back=(), may_restart=False):
+    """restart: {app id: who applies it}, apps to move by restarting them, since a
+    new placement would be undone. Only a run nobody is watching passes it (None for a
+    person's plan), and such a run rewrites no preference a person set: those apps go by
+    restart too, when may_restart says restarts are on, or stay with why. back: the
+    hosts that have returned, the only ones a person's preference may be followed to."""
     hosts, apps = inventory(role)
     exclude, avoid = set(exclude or ()), set(avoid or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
@@ -485,6 +563,40 @@ def plan(exclude=(), avoid=(), role=None):
             if why:
                 refused[app["id"]][n] = why
         reachable[app["id"]] = {n for n in hosts if n != app["host"] and n not in refused[app["id"]]}
+    unattended = restart is not None
+    restart = dict(restart or {})
+    kept = {}
+    if unattended:
+        unsettled = _unsettled_volumes()
+        for app in apps:
+            if app["why"] or app["id"] in exclude:
+                continue
+            if unsettled & set(app["volumes"]):
+                kept[app["id"]] = app["why"] = "a copy of its volume is still being rebuilt"
+            elif app["id"] not in restart and PLACE.person_preference(app["dep"]):
+                if may_restart:
+                    restart[app["id"]] = ""     # no tool: a restart leaves the preference alone
+                else:
+                    kept[app["id"]] = app["why"] = ("it has a host preference someone chose, which only a restart "
+                                                    "leaves alone, and restarts run under Spread by capacity")
+    requested = _requested(hosts) if restart else {}
+    for app in apps:
+        if app["id"] not in restart or app["why"] or app["id"] in exclude:
+            continue
+        reqs = requirements(app["dep"])
+        usable = {n for n, h in hosts.items() if n not in avoid and h["takes"] and satisfies(summary.get(n, h["node"]), reqs)[0]}
+        app["why"] = _restart_refused(app["dep"])
+        if not app["why"] and app["one_host"] and _rolls(app["dep"]):
+            app["why"] = "it starts a new copy before stopping the old, and its volume attaches to one host at a time"
+        landing, why = (None, "") if app["why"] else _restart_landing(app, hosts, requested, usable, set(back or ()))
+        app["why"] = app["why"] or why
+        if app["why"]:
+            kept[app["id"]] = app["why"]
+        if landing:
+            refused[app["id"]] = {n: w for n, w in refused[app["id"]].items() if n == landing}
+            reachable[app["id"]] = {landing} - set(refused[app["id"]])
+            if refused[app["id"]]:
+                kept[app["id"]] = next(iter(refused[app["id"]].values()))
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
         best = None
@@ -515,7 +627,8 @@ def plan(exclude=(), avoid=(), role=None):
             if best:
                 break
         if not best:
-            chain = _chained(apps, load, hosts, avoid, exclude, moved, reachable, now, main_spread)                 if len(moves) + 2 <= MAX_MOVES else []
+            # An app moved by restarting has no exact host to be sent to: in no chain.
+            chain = _chained(apps, load, hosts, avoid, exclude | set(restart), moved, reachable, now, main_spread)                 if len(moves) + 2 <= MAX_MOVES else []
             if not chain:
                 break
             # The one in the way first, to a host it may run on; then the app
@@ -525,6 +638,13 @@ def plan(exclude=(), avoid=(), role=None):
             continue
         _, app, target, _near = best
         _take(app, target, load, moves, moved)
+    for move in moves if unattended else ():
+        # With its generation: an edit since the plan skips it, as after a review. A run
+        # can last over an hour, and a placement move would write over a pin set meanwhile.
+        dep = next(a["dep"] for a in apps if a["id"] == move["id"])
+        move["generation"] = int((dep.get("metadata") or {}).get("generation") or 0)
+        if move["id"] in restart:
+            move.update(how="restart", by=restart[move["id"]])
     shown = {m["id"] for m in moves} | (exclude & {a["id"] for a in apps})
     movable = [a for a in apps if not a["why"] and a["id"] not in exclude and reachable.get(a["id"])]
     # Why nothing moves, when nothing does (#381).
@@ -541,7 +661,8 @@ def plan(exclude=(), avoid=(), role=None):
                        + _not_moved(apps, load, hosts, refused, reachable, exclude, moved, main_spread(load) if hosts else 0,
                                     main_spread, len(moves) >= MAX_MOVES),
             "metrics": all(h["metrics"] for h in hosts.values()),
-            "metrics_state": next((h["metrics_state"] for h in hosts.values()), None), "review_token": token}
+            "metrics_state": next((h["metrics_state"] for h in hosts.values()), None), "review_token": token,
+            **({"kept": [{"id": app, "why": kept[app]} for app in sorted(kept)]} if unattended else {})}
 
 
 def _versions(moves):
@@ -618,6 +739,17 @@ def _requests(template):
     return float(RESOURCES.pod_request(template, "cpu")), float(RESOURCES.pod_request(template, "memory"))
 
 
+def _requested(hosts):
+    """{host: [CPU millicores, memory bytes]} every pod on it asks for."""
+    used = {n: [0.0, 0.0] for n in hosts}
+    for p in _items("/api/v1/pods"):
+        where = (p.get("spec") or {}).get("nodeName")
+        if where in used and (p.get("status") or {}).get("phase") in ("Running", "Pending"):
+            cpu_r, mem_r = _requests(p.get("spec") or {})
+            used[where][0] += cpu_r; used[where][1] += mem_r
+    return used
+
+
 def picked(picks, role=None):
     """Moves a person chose - [{id, to}] - each marked with why it can't go,
     and the destinations' requests counted together: what each already
@@ -628,12 +760,7 @@ def picked(picks, role=None):
     hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
-    used = {n: [0.0, 0.0] for n in hosts}
-    for p in _items("/api/v1/pods"):
-        where = (p.get("spec") or {}).get("nodeName")
-        if where in used and (p.get("status") or {}).get("phase") in ("Running", "Pending"):
-            cpu_r, mem_r = _requests(p.get("spec") or {})
-            used[where][0] += cpu_r; used[where][1] += mem_r
+    used = _requested(hosts)
     rows, seen, going = [], set(), {}
     for pick in picks:
         if pick["id"] in seen:
@@ -766,6 +893,59 @@ def _pull_first(dep, node):
         return [], []
 
 
+def _restart_mark(dep):
+    return NAMES.read((((dep.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("annotations"), "restartedAt")
+
+
+def _send_restart(ref, move, dep, role, skip, progress, i, total, now):
+    """The one write of a move by restarting, with Balance's own preference cleared
+    in it. Never sent twice: a reply lost may mean it landed, so anything but a plain
+    refusal goes on to look where the app runs. Watched from here on, however the move
+    ends; with no reply to say what was written, the next look finds out."""
+    also = PLACE.balance_clear_patch(dep)
+    ref.update(sent_generation=int((dep.get("metadata") or {}).get("generation") or 0), mark_before=_restart_mark(dep))
+    written = ""
+    try:
+        with HOSTACCESS.acting_as(role):
+            written = (restart(move["ns"], move["name"], also=also) or {}).get("restartedAt", "")
+    except PermissionError:
+        return skip(ADMIN_ONLY)
+    except urllib.error.HTTPError as error:
+        if error.code in (404, 409):
+            return skip("it changed as it was being restarted")
+        ref["send_error"] = str(error)[:160]
+    except Exception as error:
+        ref["send_error"] = str(error)[:160]
+    ref.update(stage="starting", started=now, unwatched=True)
+    if written:
+        _watch(ref, move, written, now)
+    return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should land on {move['to']}"
+
+
+def _watch(ref, move, value, now):
+    """A failure to note it must not lose the move: the send has gone, and a resend
+    would restart the app twice. The next look tries again."""
+    if not move.get("by"):      # no tool applies it, so none can take the mark off
+        ref.pop("unwatched", None)
+        return
+    try:
+        RECOVERY.marked(move["id"], value, move.get("by", ""), now)
+        ref.pop("unwatched", None)
+    except Exception as error:
+        print(f"recovery: {str(error)[:160]}", flush=True)
+
+
+def _watch_late(ref, move, dep, now):
+    """After a lost reply: the mark on the app says the restart landed. Rolled with no
+    mark at all means something took it off already."""
+    value = _restart_mark(dep)
+    if value and value != ref.get("mark_before"):
+        _watch(ref, move, value, now)
+    elif move.get("by") and not value and int((dep.get("metadata") or {}).get("generation") or 0) > ref.get("sent_generation", 0):
+        RECOVERY.undone_by(move["id"], move.get("by", ""), now)
+        ref.pop("unwatched", None)
+
+
 def status(item):
     ref = item["ref"]
     moves, i, done = ref["moves"], ref.get("index", 0), ref.get("moved", 0)
@@ -792,8 +972,9 @@ def status(item):
         return "running", progress, f"Skipped {move['id']}: {reason}"
     if stage == "move":
         seen = {}
+        settled = False
         try:
-            _, hosts = _running_on(move["ns"], move["name"], seen)
+            settled, hosts = _running_on(move["ns"], move["name"], seen)
         except urllib.error.HTTPError as error:
             if error.code != 404:
                 raise
@@ -801,6 +982,10 @@ def status(item):
         if hosts != {move["from"]}:
             return skip("it moved or changed since the review")
         dep = seen.get("dep") or {}
+        by_restart = move.get("how") == "restart"
+        if by_restart and not settled:
+            # A new image rolling out, Renovate's say: never a restart on top of it.
+            return skip("it is rolling out")
         if "generation" in move:
             now_generation = int((dep.get("metadata") or {}).get("generation") or 0) if dep else -1
             if now_generation != move["generation"]:
@@ -825,6 +1010,11 @@ def status(item):
         # the move written as them, so the fence on Kubernetes writes checks
         # the very object it changes, as it does for a manual move.
         role = ref.get("role")
+        if by_restart:
+            why = _restart_refused(dep) or RECOVERY.restart_why(dep, move.get("by", ""))
+            if why:
+                return skip(why)
+            return _send_restart(ref, move, dep, role, skip, progress, i, len(moves), now)
         try:
             if role not in (None, "admin") and not _allowed(
                     kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}"), move["ns"], role):
@@ -853,12 +1043,25 @@ def status(item):
         ref["stage"] = "move"
         return "running", progress, f"Image on {move['to']}; moving {move['id']}"
     if stage == "starting":
-        settled, hosts = _running_on(move["ns"], move["name"])
+        seen = {}
+        settled, hosts = _running_on(move["ns"], move["name"], seen)
+        if ref.get("unwatched") and move.get("how") == "restart":
+            _watch_late(ref, move, seen["dep"], now)
         if settled and hosts and move["from"] not in hosts:
             # Where it landed, when not where it was sent.
             _note(ref, move, "moved", "" if move["to"] in hosts else f"it landed on {', '.join(sorted(hosts))}, not {move['to']}")
             ref.update(index=i + 1, stage="move", moved=done + 1)
+            ref.pop("send_error", None)
             return "running", int(100 * (i + 1) / len(moves)), f"{move['id']} runs on {', '.join(sorted(hosts))}"
+        if move.get("how") == "restart" and settled and hosts == {move["from"]}:
+            # Nothing is gained by waiting: it runs, on the host it was to leave.
+            rolled = int((seen["dep"].get("metadata") or {}).get("generation") or 0) > ref.get("sent_generation", 0)
+            if rolled:
+                return "failed", progress, (f"{move['id']} restarted on {move['from']}, not {move['to']}; the rest were not moved. "
+                                            f"Moved {done} before it")
+            if ref.get("send_error"):
+                return "failed", progress, (f"{move['id']} could not be restarted, as far as Homestead can see ({ref['send_error']}); "
+                                            f"the rest were not moved. Moved {done} before it")
         if now - ref.get("started", now) > 600:
             # Stop rather than restart more: one that did not come up is looked at first.
             if ref.get("stop_on_failure"):
