@@ -355,6 +355,9 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/move/definition` | admin |  | homestead_move_source |
 | POST | `/api/move/definition` | admin |  | homestead_route_policy |
 | GET | `/api/move/hello` | viewer |  | homestead_move |
+| GET | `/api/move/holds` | admin |  | homestead_move_holds |
+| POST | `/api/move/holds/release` | admin |  | homestead_move_holds |
+| POST | `/api/move/holds/tidy` | admin |  | homestead_move_holds |
 | GET | `/api/move/inventory` | viewer |  | homestead_move |
 | GET | `/api/move/moves` | viewer |  | homestead_move_engine |
 | GET | `/api/move/moves/abandon` | admin |  | homestead_route_policy |

@@ -498,8 +498,9 @@ def _reason(error):
 def remote(name, path, body=None):
     """Call another Homestead as the stored account, signing in again if needed.
 
-    A 401 is a lapsed session and gets one fresh sign-in. A 403 is the account
-    lacking the role - a move needs admin there - and is said plainly.
+    A 401 is a lapsed session and gets one fresh sign-in; a second 401 just
+    after it is waited out. A 403 is the account lacking the role - a move
+    needs admin there - and is said plainly.
     """
     row = _cluster(name)
     for attempt in (0, 1):
@@ -511,6 +512,12 @@ def remote(name, path, body=None):
             reason = _reason(error)
             if error.code == 401 and not attempt:
                 continue
+            if error.code == 401:
+                # Refused straight after it accepted a fresh sign-in: that
+                # Homestead is restarting, or its sessions are not shared
+                # yet. Credentials it refuses fail in _token, not here.
+                raise Unreachable(f"{name}: {reason or 'not signed in'} straight after signing in; "
+                                  "it may be restarting") from error
             if error.code == 403:
                 raise ValueError(f"{name}: {reason or 'the account there lacks the access this needs'}"
                                  ) from error
@@ -523,7 +530,6 @@ def remote(name, path, body=None):
             raise
         except Exception as error:
             raise Unreachable(f"could not reach {name}: {str(error)[:120]}") from error
-    raise ValueError(f"{name} would not accept a fresh sign-in")
 
 
 def icon_bytes(name, reference, limit=256 * 1024):

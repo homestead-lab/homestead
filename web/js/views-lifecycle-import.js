@@ -1475,6 +1475,68 @@ window.moveDismiss = async (id = "") => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* What transfers from other clusters hold on this one. The other cluster
+   ends a hold when its move or copy finishes or is cancelled; one whose
+   record is gone there never will, so a person ends it here. */
+const HOLD_KINDS = { vm: "VM", container: "App", volume: "Volume" };
+
+function moveHoldsHtml(h) {
+  if (h.error) return UI.callout("bad", "Could not read what transfers hold here", esc(h.error));
+  const holds = h.holds || [], left = h.leftovers || [];
+  window.__moveHolds = { holds, left };
+  const since = row => row.since ? ` · since ${esc(fmtAgo(Math.max(0, Date.now() / 1000 - row.since)))}` : "";
+  const holdRow = (row, i) => `<li class="between">
+      <div><b>${esc(row.name)}</b> ${UI.chip(HOLD_KINDS[row.kind] || row.kind, "neutral")}${row.copy ? ` ${UI.chip("Copy", "neutral")}` : ""}
+        <div class="dim xs">${esc(row.namespace)} · ${row.kept_running ? "kept running" : "stopped for the transfer"}${row.backups ? ` · ${row.backups} backup${row.backups === 1 ? "" : "s"}` : ""}${since(row)}${row.transfer_id ? ` · transfer ${esc(row.transfer_id)}` : ""}</div></div>
+      <button class="btn sm danger" data-need="admin" onclick="moveHoldRelease(${i})">Release</button></li>`;
+  const leftRow = (row, i) => `<li class="between">
+      <div><b>${esc(row.name || "Something no longer on this cluster")}</b>${row.kind ? ` ${UI.chip(HOLD_KINDS[row.kind] || row.kind, "neutral")}` : ""}
+        <div class="dim xs">${[row.backups && `${row.backups} backup${row.backups === 1 ? "" : "s"}`, row.snapshots && `${row.snapshots} snapshot${row.snapshots === 1 ? "" : "s"}`].filter(Boolean).join(", ")}
+          ${row.deleting ? ` · ${row.deleting} deleting` : ""} · transfer ${esc(row.transfer_id)}</div></div>
+      <button class="btn sm" data-need="admin" onclick="moveLeftoverTidy(${i})">Remove</button></li>`;
+  return `${holds.length ? `<h3 style="margin:18px 0 8px">Held here for transfers</h3>
+      <p class="dim xs">Moves and copies to other clusters hold these. The other cluster lets go when its transfer finishes or is cancelled; release one only if that transfer is no longer listed there.</p>
+      <ul class="fleet-list">${holds.map(holdRow).join("")}</ul>` : ""}
+    ${left.length ? `<h3 style="margin:18px 0 8px">Leftovers from transfers</h3>
+      <p class="dim xs">Backups and snapshots made for transfers that no longer hold anything here. They use space here and in backup storage.</p>
+      <ul class="fleet-list">${left.map(leftRow).join("")}</ul>` : ""}`;
+}
+window.moveHoldsHtml = moveHoldsHtml;
+
+window.moveHoldRelease = async i => {
+  const row = window.__moveHolds?.holds?.[i];
+  if (!row) return;
+  const nl = String.fromCharCode(10, 10);
+  const effect = row.kept_running
+    ? `${row.name} keeps running as it is.`
+    : `${row.name} is put back as it was before the transfer, so it starts again if it was running then.`
+      + (row.copy ? "" : ` If that move finished, ${row.name} already runs on the other cluster, and both would run.`);
+  if (!(await ask(`Release ${row.name}?` + nl + effect + nl
+      + "The transfer's backups and snapshots here are deleted. A transfer still running on the other cluster fails at its next step; cancel it there instead if it is listed.",
+      { title: "Release hold", ok: "Release", danger: !row.kept_running }))) return;
+  try {
+    const r = await api("/api/move/holds/release", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: row.kind, namespace: row.namespace, name: row.name, transfer_id: row.transfer_id, uid: row.uid }) });
+    toast(r.detail, "ok");
+  } catch (e) { toast(e.message, "bad"); }
+  movesRepaint();
+};
+
+window.moveLeftoverTidy = async i => {
+  const row = window.__moveHolds?.left?.[i];
+  if (!row) return;
+  if (!(await ask(`Remove what transfer ${row.transfer_id} left here?` + String.fromCharCode(10, 10)
+      + `Deletes its ${[row.backups && `${row.backups} backup${row.backups === 1 ? "" : "s"}`, row.snapshots && `${row.snapshots} snapshot${row.snapshots === 1 ? "" : "s"}`].filter(Boolean).join(" and ")}`
+      + `${row.name ? ` of ${row.name}` : ""}, and its folder in backup storage once nothing else is kept there. ${row.name ? `${row.name} itself is not touched.` : ""}`,
+      { title: "Remove leftovers", ok: "Remove", danger: true }))) return;
+  try {
+    const r = await api("/api/move/holds/tidy", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ transfer_id: row.transfer_id, source_uid: row.source_uid }) });
+    toast(r.detail, r.complete ? "ok" : "warn");
+  } catch (e) { toast(e.message, "bad"); }
+  movesRepaint();
+};
+
 /* Storage for an import that has none on the source: a volume and a folder
    row to fill in, only because someone asked. */
 window.imStorageAnyway = () => {
@@ -1495,5 +1557,5 @@ if (typeof module === "object" && module.exports) module.exports = {
   importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS, clusterVolumesHtml,
   MOVE_PLAN_SEQUENCE, MOVE_VOLUMES, MOVE_TRANSFER_MODE, MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, moveBody,
   moveDevicesTable, MOVE_VOLUME_ACTIONS, moveVolumesTable, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves,
-  IMPORT_REVIEW
+  IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };

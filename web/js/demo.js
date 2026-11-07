@@ -1351,6 +1351,14 @@
       { obj: "home-assistant", ns: "lab", kind: "Deployment", type: "Normal", reason: "ScalingReplicaSet",
         msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }] }),
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
+    // A copy to another cluster whose record is gone there: win-dev stays held here.
+    "/api/move/holds": () => ({
+      holds: [{ kind: "vm", namespace: "lab", name: "win-dev", uid: "win-dev-uid", transfer_id: "8ef45685f537",
+        kept_running: true, copy: true, backups: 3, since: Date.now() / 1000 - 7 * 3600 }],
+      leftovers: [{ transfer_id: "0d91293d1979", source_uid: "gpu-ssd-w11-uid", kind: "vm", namespace: "lab",
+        name: "gpu-ssd-w11", backups: 2, snapshots: 2, deleting: 0 }] }),
+    "/api/move/holds/release": { ok: true, complete: true, pending: [], retained: [], detail: "win-dev kept running throughout the copy" },
+    "/api/move/holds/tidy": { ok: true, complete: true, pending: [], retained: [], detail: "Removed what the transfer left here" },
     "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on branch" },
     "/api/move/moves": () => [
       { id: "d2", cluster: "branch", kind: "container", name: "grafana", source_namespace: "lab",
