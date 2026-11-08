@@ -33,14 +33,14 @@ test("the lead counts restarting StatefulSets apart from apps, and held ones wit
     row("sts:lab/postgres", { tier: "critical" }),
     row("sts:lab/x-db", { tier: "critical", restarts: false }),
     row("vm:lab/win", { tier: "low" })]));
-  assert.match(html, /Changes the tier of 2 apps and 1 StatefulSet\. Each restarts once, one at a time; a StatefulSet one pod at a time\./);
-  assert.match(html, /1 VM and 1 StatefulSet take their new tier when they next start; none restarts now\./);
+  assert.match(html, /Changes the tier of 2 apps and 1 StatefulSet\. Each restarts once, one at a time, and a StatefulSet one copy at a time\./);
+  assert.match(html, /1 VM and 1 StatefulSet take their new tier when they next start\. None restarts now\./);
   assert.match(html, /Restart these 3 now/);
 });
 
 test("a StatefulSet that doesn't restart itself is counted alone with the VMs", () => {
   const html = load().priorityHtml(plan([row("sts:lab/x-db", { tier: "critical", restarts: false })]));
-  assert.match(html, /1 StatefulSet takes its new tier when it next starts; none restarts now\./);
+  assert.match(html, /1 StatefulSet takes its new tier when it next starts\. None restarts now\./);
   assert.doesNotMatch(html, /Changes the tier of/);
   assert.match(html, /Set the tiers/);
 });
@@ -63,10 +63,10 @@ test("the toast names StatefulSets apart from apps", async () => {
   c.$ = sel => sel === "#prioRestart" ? { checked: true } : null;
   vm.runInContext("PRIORITY", c).plan = plan([row("lab/web", { tier: "low" }), row("lab/api", { tier: "low" }), row("sts:lab/postgres", { tier: "critical" })]);
   await c.window.priorityStart();
-  assert.deepEqual(toasts, ["Setting the tier of 2 apps and 1 StatefulSet; follow it in Jobs"]);
+  assert.deepEqual(toasts, ["Setting the tier of 2 apps and 1 StatefulSet. Progress is shown in Jobs."]);
 });
 
 test("What the tiers do says which partitions wait", () => {
   const html = load().priorityHtml(plan([row("sts:lab/postgres")]));
-  assert.match(html, /OnDelete, or a partition at or above its replicas/);
+  assert.match(html, /OnDelete, or a partition at or above its replica count/);
 });

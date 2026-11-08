@@ -65,7 +65,7 @@ test("the groups are listed with their tiers", () => {
 test("a row whose group tier is unknown has its select disabled, says why, and is not ticked", () => {
   const html = load().priorityHtml(plan([row("lab/fr", { group: "Home", follows: true, wanted: null, source: "group", status: "unknown_group" })]));
   assert.match(html, /<select[^>]*disabled/);
-  assert.match(html, /Group tiers couldn&#39;t be read|Group tiers couldn't be read/);
+  assert.match(html, /The group tiers could not be read/);
   assert.doesNotMatch(html, /was normal/);
 });
 

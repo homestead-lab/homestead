@@ -39,7 +39,7 @@ async function balancePlan(kind) {
   // Volume copies follow the containers moved, so each reads locally on its new host.
   const follow = kind === "volumes" && b.follow ? balanceMoves("containers").map(m => `${m.id}:${m.to}`).join(",") : "";
   try { b.plan = await api(`${path}?${new URLSearchParams({ exclude: [...b.exclude].join(","), ...(follow ? { follow } : {}) })}`); }
-  catch (e) { b.plan = null; pane.innerHTML = UI.callout("bad", "Could not work out a plan", esc(e.message)); balanceReview(); return; }
+  catch (e) { b.plan = null; pane.innerHTML = UI.callout("bad", "A plan could not be worked out", esc(e.message)); balanceReview(); return; }
   if (!$(kind === "containers" ? "#balContainers" : "#balVolumes")) return;
   pane.innerHTML = kind === "containers" ? balanceContainersHtml(b) : balanceVolumesHtml(b);
   balanceReview();
@@ -59,15 +59,15 @@ const balanceSkipped = rows => rows.length ? UI.more(`Not moved · ${rows.length
 function balanceMetrics(plan) {
   const m = plan.metrics_state;
   if (plan.metrics === false && m?.state === "waiting")
-    return UI.callout("warn", "Still reading CPU and memory", "Homestead has just started and has not had metrics-server's first figures yet, so the plan may be off. Open it again in a few seconds.");
+    return UI.callout("warn", "Still reading CPU and memory", "Homestead has just started and has not received the first figures from metrics-server yet, so the plan may be inaccurate. Open it again in a few seconds.");
   if (plan.metrics === false)
-    return UI.callout("warn", "Usage is partly unknown", esc(`A host or its apps report no live CPU and memory${m?.detail ? ` (${m.detail})` : ""}, so the plan may be off. Check metrics-server.`));
+    return UI.callout("warn", "Usage is partly unknown", esc(`A host or its apps report no current CPU and memory use${m?.detail ? ` (${m.detail})` : ""}, so the plan may be inaccurate. Check metrics-server.`));
   if (m?.state === "stale")
-    return UI.callout("warn", `CPU and memory from ${fmtAgo(m.age_s)}`, esc(`metrics-server has not answered since then${m.detail ? ` (${m.detail})` : ""}, so the plan uses its last figures and may be off.`));
+    return UI.callout("warn", `CPU and memory from ${fmtAgo(m.age_s)}`, esc(`metrics-server has not responded since then${m.detail ? ` (${m.detail})` : ""}, so the plan uses its last figures and may be inaccurate.`));
   return "";
 }
 
-const BALANCE_LEAVES_PREFERENCE = "Each one then prefers its new host, and that stays until cleared in Edit → Placement, which restarts it.";
+const BALANCE_LEAVES_PREFERENCE = "Each one then prefers its new host. That preference stays until it is cleared in Edit → Placement, which restarts it.";
 function balanceContainersHtml(b) {
   const plan = b.plan, moves = plan.moves || [];
   const meter = (before, after, label) => `${UI.meter({ now: before, after: after !== before ? after : null, warnAt: 80, label })}
@@ -77,19 +77,19 @@ function balanceContainersHtml(b) {
     meter(h.cpu_before, b.on ? h.cpu_after : h.cpu_before, "CPU"), meter(h.mem_before, b.on ? h.mem_after : h.mem_before, "Memory")]));
   const rows = (plan.apps || []).map((id, i) => {
     const m = moves.find(x => x.id === id), off = b.exclude.has(id);
-    return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
+    return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">Stays where it is</span>'
       : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GiB${m.near ? " · its volumes have a copy there" : ""}${m.replaces ? ` · replaces its preference for ${esc(m.replaces)}` : ""}${m.note ? ` · ${esc(m.note)}` : ""}</span>`];
   });
   return [
     balanceSwitch("containers", b, "Balance containers"),
     UI.lead(!b.on ? "Containers are left where they are."
       : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host. ${BALANCE_LEAVES_PREFERENCE}`
-      : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
-      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, only an admin can move it, or it has no other host it may run on. See Not moved below."
-      : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
+      : plan.quiet === "even" ? "The hosts already carry similar CPU and memory, so no move is worth a restart."
+      : plan.quiet === "nothing-movable" ? "No container can move. Each one is tied to a host, left out, movable only by an admin, or has no other host it may run on. See Not moved below."
+      : "No single move evens out the hosts enough to be worth a restart. The containers that could move are too small to change the CPU or memory much."),
     balanceMetrics(plan),
     UI.section("Hosts", hosts),
-    b.on && rows.length ? UI.section(`Containers · ${rows.length}`, balanceHint("Untick a container to leave it where it is; the moves are worked out again without it.")
+    b.on && rows.length ? UI.section(`Containers · ${rows.length}`, balanceHint("Untick a container to leave it where it is. The moves are then worked out again without it.")
       + UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], rows)) : "",
     balanceSkipped((plan.skipped || []).map(s => [s.id, s.why])),
   ].join("");
@@ -105,20 +105,20 @@ function balanceVolumesHtml(b) {
   }));
   const rows = (plan.apps || []).map((app, i) => {
     const mine = moves.filter(m => m.app === app), off = b.exclude.has(app);
-    return [balanceTick("volumes", app, i, off), off ? '<span class="ui-help">left where they are</span>'
+    return [balanceTick("volumes", app, i, off), off ? '<span class="ui-help">Left where they are</span>'
       : mine.map(m => `<div><span class="mono">${esc(m.claim)}</span> <span class="sub">${esc(gb(m.size_gb))} · ${esc(m.from)} → ${esc(m.to)}${m.follows ? " · follows its container there" : ""}</span></div>`).join("")];
   });
   return [
     balanceSwitch("volumes", b, "Balance volume copies"),
     b.on && balanceMoves("containers").length ? `<label class="switch balance-switch"><input type="checkbox" id="balFollow" ${b.follow ? "checked" : ""}${balanceOff()}
       onchange="balanceFollow(this.checked)"> Move a copy of each moved container's volumes to its new host</label>
-      <p class="ui-help">So it reads its data locally there. Off, its volumes stay where they are and it reads them over the network.</p>` : "",
+      <p class="ui-help">The container then reads its data locally. When this is off, its volumes stay where they are and it reads them over the network.</p>` : "",
     UI.lead(!b.on ? "Volume copies are left where they are."
-      : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts${moves.some(m => m.follows) ? ", and so each container moved has a copy of its volumes on its new host" : ""}. Nothing restarts: each copy is built on its new host before the old one is removed.`
-      : (plan.closed || []).length ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
+      : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts${moves.some(m => m.follows) ? ", and so each container moved has a copy of its volumes on its new host" : ""}. Nothing restarts, because each copy is built on its new host before the old one is removed.`
+      : (plan.closed || []).length ? `Nothing can move now. ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies, because ${plan.closed.length === 1 ? "it is" : "they are"} cordoned, not ready, or closed to new copies in Longhorn.`
       : "The hosts are as even as moving copies can make them."),
     UI.section("Hosts", hosts),
-    b.on && rows.length ? UI.section(`Apps · ${rows.length}`, balanceHint("Untick an app to leave its volumes where they are; the moves are worked out again without it.")
+    b.on && rows.length ? UI.section(`Apps · ${rows.length}`, balanceHint("Untick an app to leave its volumes where they are. The moves are then worked out again without it.")
       + UI.table([{ label: "App" }, { label: "Copies it moves", className: "grow" }], rows)) : "",
     balanceSkipped((plan.skipped || []).map(s => [s.claim, s.why])),
   ].join("");
@@ -132,13 +132,13 @@ function balanceReview() {
   const pending = ["containers", "volumes"].some(k => BALANCE[k].on && !BALANCE[k].plan);
   pane.innerHTML = pending ? '<div class="empty"><span class="spin2"></span> Waiting for the plans…</div>' : [
     UI.lead(!(containers.length || volumes.length) ? "Nothing to balance with these choices."
-      : balanceReadOnly() ? "The plan as Homestead suggests it." : "Starts what is below, as jobs you can follow and stop in Jobs."),
+      : balanceReadOnly() ? "The plan as Homestead suggests it." : "Starts the moves below as jobs, which can be followed and stopped in Jobs."),
     UI.facts([
-      ["Containers", !BALANCE.containers.on ? "left where they are" : containers.length
-        ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
-      ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
-        ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
-    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host within 10 minutes, the job stops there and the rest are not moved; once that container runs, review again to move the rest. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
+      ["Containers", !BALANCE.containers.on ? "Left where they are" : containers.length
+        ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "Nothing worth moving"],
+      ["Volume copies", !BALANCE.volumes.on ? "Left where they are" : volumes.length
+        ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "Nothing to move"]]),
+    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move. If one does not start on its new host within 10 minutes, the job stops and the rest are not moved. When that container is running, review again to move the rest. Volume copies are built one at a time, and stopping discards the copy being built.</p>' : "",
     containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now", { attrs: balanceOff() }) : "",
   ].join("");
   const go = $("#balanceGo");
@@ -165,7 +165,7 @@ window.balanceItem = async (kind, id, on) => {
 window.balanceStart = async () => {
   const containers = balanceMoves("containers"), volumes = balanceMoves("volumes");
   if (!containers.length && !volumes.length) return;
-  if (containers.length && !$("#balanceRestart")?.checked) return toast("Tick Restart to confirm the container restarts", "bad");
+  if (containers.length && !$("#balanceRestart")?.checked) return toast("Tick Restart them now to confirm the container restarts", "bad");
   const button = $("#balanceGo");
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
   const started = [];
@@ -182,7 +182,7 @@ window.balanceStart = async () => {
           moves: BALANCE.volumes.plan.moves }) });
       started.push(`${volumes.length} volume cop${volumes.length === 1 ? "y" : "ies"}`);
     }
-    closeModal(); toast(`Balancing ${started.join(" and ")}; follow it in Jobs`, "ok");
+    closeModal(); toast(`Balancing ${started.join(" and ")}. Progress is shown in Jobs.`, "ok");
   } catch (e) {
     toast((started.length ? `Started ${started.join(" and ")}, but ` : "") + e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Start balancing"; }
@@ -210,7 +210,7 @@ async function reservationsPlan() {
   const query = RESERVE.chosen ? `?${new URLSearchParams({ chosen: [...RESERVE.chosen].join(",") })}` : "";
   let plan;
   try { plan = await api(`/api/workloads/requests/plan${query}`); }
-  catch (e) { if (asked === RESERVE.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps' use", esc(e.message)); return; }
+  catch (e) { if (asked === RESERVE.asked) pane.innerHTML = UI.callout("bad", "The apps' use could not be read", esc(e.message)); return; }
   if (asked !== RESERVE.asked || !$("#resPlan")) return;
   RESERVE.plan = plan;
   if (!RESERVE.chosen) RESERVE.chosen = new Set(plan.apps.filter(a => a.chosen).map(a => a.id));
@@ -235,18 +235,18 @@ function reservationsHtml(plan) {
     a.changes.map(c => `<div>${a.changes.length > 1 ? `<span class="mono">${esc(c.container)}</span> ` : ""}
       <span>${esc(reserveNow(c, "cpu"))} → <b>${esc(editCpuWords(parseInt(c.cpu, 10)))}</b> CPU · ${esc(reserveNow(c, "memory"))} → <b>${esc(reservedMemory(parseInt(c.memory, 10)))}</b></span>
       <span class="sub">usually at or under ${esc(editCpuWords(c.cpu_p95_m))} and ${esc(reservedMemory(c.mem_p95_mi))}, peak ${esc(reservedMemory(c.mem_max_mi))} over ${esc(editSpan(c))}${c.lowers ? " · lowers it" : ""}${c.capped.length ? " · held at its limit" : ""}${(c.from_limit || []).some(r => !c.capped.includes(r)) ? " · no longer reserves its whole limit" : ""}</span></div>`).join("")
-      + (a.replicas ? "" : `<div class="sub">Stopped: takes the new reservation when it next starts.</div>`)]);
+      + (a.replicas ? "" : `<div class="sub">Stopped. It uses the new reservation when it next starts.</div>`)]);
   const managed = (plan.skipped || []).filter(s => s.yaml), other = (plan.skipped || []).filter(s => !s.yaml);
   return [
-    UI.lead(over ? `${chosen.length} apps are ticked; one run changes at most ${plan.max}. Untick some, and set the rest afterwards.`
+    UI.lead(over ? `${chosen.length} apps are ticked, but one run changes at most ${plan.max}. Untick some, and set the rest afterwards.`
       : chosen.length ? `Sets what ${chosen.length} app${chosen.length === 1 ? "" : "s"} reserve${chosen.length === 1 ? "s" : ""} from their use over the last week. Each restarts once, one at a time.`
-      : apps.length ? "Tick the apps to change." : "Every app's reservation already matches its use, or has too few readings yet."),
+      : apps.length ? "Tick the apps to change." : "Every app's reservation already matches its use, or has too few readings so far."),
     rows.length ? UI.section(`Apps · ${rows.length}`, UI.table([{ label: "App" }, { label: "Reservation", className: "grow" }], rows)) : "",
     managed.length ? UI.more(`Applied by Flux or Argo CD · ${managed.length}`, managed.map(s => `<p><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</p>
       <pre class="mono small">${esc(s.yaml)}</pre>`).join(""), false, "reserve-managed") : "",
     other.length ? UI.more(`Not changed · ${other.length}`, `<ul class="ui-list">${other.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "reserve-other") : "",
-    UI.more("How the reservations are worked out", `<p>Each container's use is read every five minutes. The reservation is 95% of the week's readings with headroom - CPU 1.5 times, memory 1.25 times - and never above a limit. Apps reserving nothing are ticked; others are offered unticked, since a reservation may have been set on purpose.</p>
-      <p>Apps change one at a time, each waiting for the last to run again. An app with no host that has room for its new reservation, or changed since this review, is skipped. If one does not come back within ten minutes, the job stops and the rest are not changed. Follow and stop it in Jobs.</p>`, false, "reserve-how"),
+    UI.more("How the reservations are worked out", `<p>Each container's use is read every five minutes. The reservation is the 95th percentile of the week's readings plus headroom: 1.5 times for CPU and 1.25 times for memory. It is never above a limit. Apps that reserve nothing are ticked. Others are offered unticked, because their reservation may have been set on purpose.</p>
+      <p>Apps change one at a time, and each waits until the previous one is running again. An app is skipped if no host has room for its new reservation, or if it changed since this review. If an app does not come back within ten minutes, the job stops and the rest are not changed. The job can be followed and stopped in Jobs.</p>`, false, "reserve-how"),
     chosen.length && !over ? UI.ack("reserveRestart", chosen.length === 1 ? "Restart it now" : `Restart these ${chosen.length} apps now`) : "",
   ].join("");
 }
@@ -260,13 +260,13 @@ window.reservationsStart = async () => {
   // What was reviewed: the plan's own ticks, which its token covers.
   const plan = RESERVE.plan, apps = (plan?.apps || []).filter(a => a.chosen);
   if (!apps.length) return;
-  if (!$("#reserveRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  if (!$("#reserveRestart")?.checked) return toast("Tick the restart box to confirm the restarts", "bad");
   const button = $("#reserveGo");
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
     await api("/api/workloads/requests", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ apps: apps.map(a => ({ id: a.id, changes: a.changes })), review_token: plan.review_token, restart: true }) });
-    closeModal(); toast(`Setting reservations on ${apps.length} app${apps.length === 1 ? "" : "s"}; follow it in Jobs`, "ok");
+    closeModal(); toast(`Setting reservations on ${apps.length} app${apps.length === 1 ? "" : "s"}. Progress is shown in Jobs.`, "ok");
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set reservations"; }
@@ -293,7 +293,7 @@ async function priorityPlan() {
   const picks = Object.entries(PRIORITY.picks).map(([id, tier]) => `${id}=${tier}`).join(",");
   let plan;
   try { plan = await api(`/api/workloads/priority/plan${picks ? `?${new URLSearchParams({ chosen: picks })}` : ""}`); }
-  catch (e) { if (asked === PRIORITY.asked) pane.innerHTML = UI.callout("bad", "Could not read the apps", esc(e.message)); return; }
+  catch (e) { if (asked === PRIORITY.asked) pane.innerHTML = UI.callout("bad", "The apps could not be read", esc(e.message)); return; }
   if (asked !== PRIORITY.asked || !$("#prioPlan")) return;
   PRIORITY.plan = plan;
   pane.innerHTML = priorityHtml(plan);
@@ -327,11 +327,11 @@ function priorityHtml(plan) {
     `<span class="mono">${esc(chips[a.kind] ? `${a.ns}/${a.name}` : a.id)}</span>${chips[a.kind] ? ` ${UI.chip(chips[a.kind])}` : ""}${a.tier !== a.current ? ` ${UI.chip(`was ${a.current}`, "info")}` : ""}`,
     `${prioritySelect(`prio_${i}`, a.tier, `${a.managed || a.status === "unknown_group" ? "disabled" : ""} onchange="priorityItem(${jsq(a.id)},this.value)" aria-label="${esc(a.id)} tier"`)}
       <span class="sub">${priorityStatus(a)}</span>
-      <span class="sub">${esc(a.note || (a.status === "unknown_group" ? "Group tiers couldn't be read; try again shortly." : "") || (a.suggested && a.suggested !== "normal" ? `suggested ${a.suggested}: it ${a.why}` : ""))}</span>`]);
+      <span class="sub">${esc(a.note || (a.status === "unknown_group" ? "The group tiers could not be read. Try again shortly." : "") || (a.suggested && a.suggested !== "normal" ? `Suggested ${a.suggested}, because it ${a.why}` : ""))}</span>`]);
   return [
-    UI.lead(over ? `${changes.length} apps would change; one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
-      : changes.length ? [restarting ? `Changes the tier of ${and(count(restarting - sets, "app"), count(sets, "StatefulSet"))}. Each restarts once, one at a time${sets ? "; a StatefulSet one pod at a time" : ""}.` : "",
-        held ? `${and(count(vms, "VM"), count(heldSets, "StatefulSet"))} ${held === 1 ? "takes its" : "take their"} new tier when ${held === 1 ? "it next starts" : "they next start"}; none restarts now.` : ""].filter(Boolean).join(" ")
+    UI.lead(over ? `${changes.length} apps would change, but one run changes at most ${plan.max}. Set some back, and change the rest afterwards.`
+      : changes.length ? [restarting ? `Changes the tier of ${and(count(restarting - sets, "app"), count(sets, "StatefulSet"))}. Each restarts once, one at a time${sets ? ", and a StatefulSet one copy at a time" : ""}.` : "",
+        held ? `${and(count(vms, "VM"), count(heldSets, "StatefulSet"))} ${held === 1 ? "takes its" : "take their"} new tier when ${held === 1 ? "it next starts" : "they next start"}. None restarts now.` : ""].filter(Boolean).join(" ")
       : "Every app keeps its tier. Choose a tier to change one."),
     // What the cluster's classes get wrong (#429), said once.
     (plan.warnings || []).length ? UI.callout("warn", "Check first", `<ul class="ui-list">${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`) : "",
@@ -339,8 +339,8 @@ function priorityHtml(plan) {
       `<li><b>${esc(g.name)}</b> ${esc(g.tier === null ? "tier unknown" : g.tier || "no tier")} · ${g.apps} app${g.apps === 1 ? "" : "s"}</li>`).join("")}</ul>`) : "",
     UI.section(`Apps, StatefulSets and VMs · ${rows.length}`, UI.table([{ label: "App" }, { label: "Tier", className: "grow" }], rows)),
     (plan.skipped || []).length ? UI.more(`Left alone · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`, false, "prio-skipped") : "",
-    UI.more("What the tiers do", `<p>When the cluster is short of room - after a host fails, but also as apps restart, update or grow - critical apps fit first and may evict any pod of a lower tier: low apps, and anything with no tier, VMs included. Normal apps may evict low ones. Low apps wait, evict nothing, and are evicted first. Normal is the cluster's default class, or no class where there is none. VMs take tiers too, from their next start. StatefulSets take tiers of their own, never a group's; one that waits for its pods to be deleted (OnDelete, or a partition at or above its replicas) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so none can evict it; it restarts once to do so.</p>
-      <p>A tier uses the cluster's own class where one fits; Homestead makes one, just above or below the default, only where none does. Apps then change one at a time, each waiting for the last to run again, and a StatefulSet one pod at a time. If one does not come back within ten minutes - for a StatefulSet, ten per pod - the job stops and the rest are not changed.</p>`, false, "prio-how"),
+    UI.more("What the tiers do", `<p>When the cluster is short of room, after a host fails or as apps restart, update or grow, critical apps are placed first. They may stop anything of a lower tier to make room: low apps, and anything with no tier, including VMs. Normal apps may stop low ones. Low apps wait, stop nothing, and are stopped first. Normal is the cluster's default class, or no class if there is none. VMs take tiers too, from their next start. StatefulSets have their own tiers, never a group's. A StatefulSet that waits for its copies to be deleted (OnDelete, or a partition at or above its replica count) takes its tier when they next restart, and Homestead never deletes them. Homestead ranks itself at least as high as any app, so no app can stop it. It restarts once to do so.</p>
+      <p>A tier uses the cluster's own class if one fits. Homestead creates a class just above or below the default only if none fits. Apps then change one at a time, and each waits until the previous one is running again. A StatefulSet changes one copy at a time. If one does not come back within ten minutes, or ten minutes per copy for a StatefulSet, the job stops and the rest are not changed.</p>`, false, "prio-how"),
     changes.length && !over ? UI.ack("prioRestart", !restarting ? "Set the tiers" : restarting === 1 ? "Restart it now" : `Restart these ${restarting}${sets ? "" : " apps"} now`) : "",
   ].join("");
 }
@@ -353,7 +353,7 @@ window.priorityItem = (id, tier) => {
 window.priorityStart = async () => {
   const plan = PRIORITY.plan, changes = (plan?.apps || []).filter(a => a.tier !== a.current);
   if (!changes.length) return;
-  if (!$("#prioRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  if (!$("#prioRestart")?.checked) return toast("Tick the confirmation box first", "bad");
   const button = $("#prioGo");
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
@@ -361,7 +361,7 @@ window.priorityStart = async () => {
       body: JSON.stringify({ changes: changes.map(a => ({ id: a.id, current: a.current, tier: a.tier, follow: !!a.follow })), review_token: plan.review_token, restart: true }) });
     const sets = changes.filter(a => a.kind === "sts").length, apps = changes.length - sets;
     const named = [apps || !sets ? `${apps} app${apps === 1 ? "" : "s"}` : "", sets ? `${sets} StatefulSet${sets === 1 ? "" : "s"}` : ""];
-    closeModal(); toast(`Setting the tier of ${named.filter(Boolean).join(" and ")}; follow it in Jobs`, "ok");
+    closeModal(); toast(`Setting the tier of ${named.filter(Boolean).join(" and ")}. Progress is shown in Jobs.`, "ok");
   } catch (e) {
     toast(e.message, "bad");
     if (button) { button.disabled = false; button.textContent = "Set tiers"; }
