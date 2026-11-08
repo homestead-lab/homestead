@@ -357,7 +357,7 @@ class RetireWaitTests(unittest.TestCase):
         job = self.look(ident, 3)
         self.c.kube.fail(self.NODE, 400, times=99, method="PATCH")
         job = self.look(ident)
-        self.assertIn("not letting the disk go yet", job["message"])
+        self.assertIn("has not released the disk yet", job["message"])
         self.pass_time(self.LIMIT)
         job = self.look(ident)
         self.assertEqual("failed", job["status"])
@@ -1055,7 +1055,7 @@ class ReplaceFailedDiskTests(unittest.TestCase):
         self.assertIn("1 volume had the only copy on it", item["message"])
         self.assertIn("Homestead could not confirm another whole copy of 1 volume", item["message"])
         # What to do differs: an only copy needs the drive or a backup; an unconfirmed one, another retire later.
-        self.assertIn("retire this disk again once their other copy is whole", item["message"])
+        self.assertIn("Replace this disk again once their other copy is complete", item["message"])
 
     def test_a_volume_unconfirmed_later_still_gets_its_own_half_hour(self):
         c = Cluster(self)

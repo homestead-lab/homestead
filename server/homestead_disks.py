@@ -528,7 +528,7 @@ def add(cfg):
         wipe = bool(cfg.get("wipe"))
         if not wipe and engine == "LonghornV1" and (row["fstype"] or any(
                 _bd_row(b)["parent"] == row["path"] for b in _blockdevices() or [])):
-            raise ValueError(f"{row['path']} already holds a filesystem or partitions; tick erase to wipe and use it")
+            raise ValueError(f"{row['path']} already holds a filesystem or partitions. Tick Erase it first to wipe and use it.")
         spec = bd.get("spec") or {}
         if "provision" in spec or "provisioner" in spec:
             body = {"spec": {"provision": True, "provisioner": {"longhorn": {"engineVersion": engine}},
@@ -538,8 +538,8 @@ def add(cfg):
                 raise ValueError("this Harvester release adds disks to the V1 engine only")
             body = {"spec": {"fileSystem": {"provisioned": True, "forceFormatted": wipe}}}
         _patch(f"{BD}/{name}", body, f"adding {row['path']}")
-        return {"ok": True, "detail": f"Harvester is {'wiping and ' if wipe else ''}adding {row['path']} on {row['node']} to Longhorn; "
-                                      "it appears in Longhorn within a minute or two"}
+        return {"ok": True, "detail": f"Harvester is {'wiping and ' if wipe else ''}adding {row['path']} on {row['node']} to Longhorn. "
+                                      "It appears in Longhorn within a minute or two."}
     path = str(cfg.get("path") or "").strip()
     block = engine == "LonghornV2"
     if not re.fullmatch(r"/[A-Za-z0-9._/-]+", path) or ".." in path.split("/"):
@@ -569,7 +569,7 @@ def _disk_id(lh, path):
         # Another path has this key (/mnt/disk_2 and /mnt/disk-2): one of its own, from the whole path.
         disk_id = f"{disk_id[:46].rstrip('-')}-{hashlib.sha256(path.encode()).hexdigest()[:8]}"
     if (disks.get(disk_id) or {}).get("path", path) != path:
-        raise ValueError(f"Longhorn already has a disk called {disk_id}, at {disks[disk_id].get('path')}; nothing was changed")
+        raise ValueError(f"Longhorn already has a disk called {disk_id}, at {disks[disk_id].get('path')}. Nothing was changed.")
     return disk_id
 
 
@@ -605,13 +605,13 @@ def evict(node, disk_id, on=True):
 def remove(node, disk_id):
     disk, status = _lh_disk(node, disk_id)
     if status.get("scheduledReplica"):
-        raise ValueError(f"{disk_id} still holds {len(status['scheduledReplica'])} replica(s); evict it first")
+        raise ValueError(f"{disk_id} still holds {len(status['scheduledReplica'])} volume cop{'y' if len(status['scheduledReplica']) == 1 else 'ies'}. Move {'it' if len(status['scheduledReplica']) == 1 else 'them'} off first.")
     # The disk's own status can be empty while it is not ready; the replicas
     # themselves say what is on it.
     on_it = [r for r in _replicas(strict=True)
              if _on_disk(r, node, disk, status.get("diskUUID", ""), status.get("scheduledReplica") or {})]
     if on_it:
-        raise ValueError(f"{disk_id} still holds {len(on_it)} replica(s); evict it first")
+        raise ValueError(f"{disk_id} still holds {len(on_it)} volume cop{'y' if len(on_it) == 1 else 'ies'}. Move {'it' if len(on_it) == 1 else 'them'} off first.")
     if disk.get("allowScheduling", True) is not False:
         raise ValueError("stop scheduling on the disk before removing it")
     bds = _blockdevices()
@@ -622,9 +622,9 @@ def remove(node, disk_id):
         body = ({"spec": {"provision": False}} if "provision" in spec or "provisioner" in spec
                 else {"spec": {"fileSystem": {"provisioned": False}}})
         _patch(f"{BD}/{bd['metadata']['name']}", body, "removing the disk")
-        return {"ok": True, "detail": f"Harvester is releasing {disk.get('path')} from Longhorn; its data stays on the disk"}
+        return {"ok": True, "detail": f"Harvester is releasing {disk.get('path')} from Longhorn. Its data stays on the disk."}
     _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}}, "removing the disk")
-    return {"ok": True, "detail": f"Longhorn no longer uses {disk.get('path')} on {node}; its files are left where they are"}
+    return {"ok": True, "detail": f"Longhorn no longer uses {disk.get('path')} on {node}. Its files are left in place."}
 
 
 # ---- a failed disk, replaced -------------------------------------------------
@@ -918,7 +918,7 @@ def retire_step(item):
                 return "failed", progress, (f"Longhorn has not let new replicas be stopped on {path} after "
                                             f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire went no further and "
                                             f"the disk stays in Longhorn. {_back_on(ref)} Resume job tries again from here.")
-            return "running", progress, f"Stopping new replicas first - {said}"
+            return "running", progress, f"Stopping new volume copies first: {said}"
         ref.pop("recheck")
         return "running", progress, "No new replicas go to the disk"
     if phase == "stop":
@@ -985,18 +985,18 @@ def retire_step(item):
         if waiting:
             return "running", 40, (
                 f"Waiting: Homestead could not confirm another whole copy of {volumes(waiting)} (a copy "
-                "may be rebuilding, or its host not Ready), so their replicas here stay; asking again")
+                "may be rebuilding, or its host may not be ready), so their copies on this disk stay. Asking again.")
         if keep or unconfirmed:
             ref["phase"] = "done"
             ref["kept"] = sorted(keep | unconfirmed)
-            said = ["Failed replicas removed, so their volumes rebuild from their healthy copies. The disk itself is kept"]
+            said = ["Failed volume copies removed, so their volumes are rebuilt from their healthy copies. The disk itself is kept"]
             if keep:
-                said.append(f"{volumes(keep)} had the only copy on it: reconnect the drive to get "
-                            "them back; if it is dead, restore them from a backup and replace the disk again")
+                said.append(f"{volumes(keep)} had the only copy on it. Connect the drive again to get "
+                            "them back. If it has failed, restore them from a backup and replace the disk again")
             if unconfirmed:
                 said.append(f"Homestead could not confirm another whole copy of {volumes(unconfirmed)} within "
-                            f"{UNCONFIRMED_WAIT // 60} minutes, so their replicas here stay: retire this disk again "
-                            "once their other copy is whole")
+                            f"{UNCONFIRMED_WAIT // 60} minutes, so their copies on this disk stay. Replace this disk again "
+                            "once their other copy is complete")
             return "succeeded", 100, said[0] + ". " + ". ".join(s[0].upper() + s[1:] for s in said[1:]) + "."
         if scheduled:
             if _waited_out(ref, "records_since"):
@@ -1024,7 +1024,7 @@ def retire_step(item):
                 return "running", 80, "Taking the disk out of Longhorn"
             if _waited_out(ref, "remove_since"):
                 return "failed", 70, _still_held(f"the disk ({refused})", ref, disk_id)
-            return "running", 70, f"Longhorn is not letting the disk go yet - {refused}"
+            return "running", 70, f"Longhorn has not released the disk yet: {refused}"
         ref["phase"] = "cleanup"
         return "running", 80, "Taking the disk out of Longhorn"
     if phase == "cleanup":
@@ -1055,8 +1055,8 @@ def alert_facts(inv):
                 facts.append({"key": f"disks:{node}:{disk['id']}", "category": "outage", "severity": "critical",
                               "title": f"Longhorn disk is not ready on {node}",
                               "resolved": f"Longhorn disk warning cleared: {node} / {disk['path']}",
-                              "body": (disk.get("missing") or disk.get("problem") or "Longhorn reports it not ready")
-                                      + f" ({disk['path']}). Check volume replicas; workload availability depends on healthy copies.",
+                              "body": (disk.get("missing") or disk.get("problem") or "Longhorn reports that it is not ready")
+                                      + f" ({disk['path']}). Check the volume copies, because apps depend on healthy copies.",
                               "href": f"/nodes?node={node}&section=storage"})
     return facts
 
@@ -1137,7 +1137,7 @@ def set_up(cfg):
     words = (f"{device} kept its Longhorn data and is mounted at {path}" if kept
              else f"{device} is {'given to the V2 engine' if engine == 'v2' else f'formatted and mounted at {path}'}")
     return {"ok": True, "path": path, "tags": tags,
-            "detail": f"{words}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
+            "detail": f"{words}. Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
 
 
 def os_space(node):
@@ -1170,7 +1170,7 @@ def use_os_space(cfg):
         return added
     how = "given to the V2 engine" if engine == "v2" else f"mounted at {path}"
     return {"ok": True, "path": path, "tags": tags,
-            "detail": f"A {where} is {how}; Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
+            "detail": f"A {where} is {how}. Longhorn is adding it on {node}" + (f", tagged {', '.join(tags)}" if tags else "")}
 
 
 def _give_longhorn(node, path, engine, tags, device):
@@ -1185,7 +1185,7 @@ def _give_longhorn(node, path, engine, tags, device):
         if ready:
             return {"ok": True, "path": path, "detail": f"{device} is mounted at {path}, which Longhorn already uses on {node}"}
         if status.get("scheduledReplica"):
-            raise ValueError(f"Longhorn's disk at {path} on {node} still lists replicas; replace it from its row first")
+            raise ValueError(f"Longhorn's disk at {path} on {node} still lists volume copies. Replace it from its row first.")
         # The old entry for this folder, from before anything was mounted there.
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: {"allowScheduling": False}}}}, "clearing the old entry")
         _patch(f"{LH}/nodes/{node}", {"spec": {"disks": {disk_id: None}}}, "clearing the old entry")
