@@ -18,7 +18,7 @@ test('zero hugepage capacity offers host preparation and disables enabling',asyn
   assert.match(t.fields['#lhV2Setup'].innerHTML,/Prepare host/);
   // The action is the footer's, and the body says why it can't be taken yet (#504).
   assert.match(t.fields['#lhV2Foot'].outerHTML,/class="ui-actions-end"[\s\S]*lhV2ReviewEnable\(\)[^>]*disabled/);
-  assert.match(t.fields['#lhV2Setup'].innerHTML,/V2 can be enabled once what still needs attention is resolved/);
+  assert.match(t.fields['#lhV2Setup'].innerHTML,/V2 can be turned on once the remaining problems are resolved/);
   t.c.lhV2ReviewEnable();assert.doesNotMatch(t.html(),/id="lhV2Confirm"/);
 });
 test('host preparation requires acknowledgement and consumes confirmation before awaiting',async()=>{
@@ -36,7 +36,7 @@ test('finishing a request after closing does not reopen setup',async()=>{
 });
 test('configured hosts offer the existing reboot review while preparation remains saved',async()=>{
   const t=setup();Object.assign(t.plan.nodes[0],{configured:true,needs_reboot:true,job:{name:'job',state:'succeeded'}});
-  await t.c.lhV2Setup();assert.match(t.fields['#lhV2Setup'].innerHTML,/Review reboot/);assert.doesNotMatch(t.fields['#lhV2Setup'].innerHTML,/>Prepare host</);
+  await t.c.lhV2Setup();assert.match(t.fields['#lhV2Setup'].innerHTML,/Review restart/);assert.doesNotMatch(t.fields['#lhV2Setup'].innerHTML,/>Prepare host</);
   await t.c.lhV2Reboot('k3s-test');assert.deepEqual(t.sent[0],['k3s-test','reboot']);
 });
 test('engine enabled is not declared ready and cluster messages are escaped',async()=>{
