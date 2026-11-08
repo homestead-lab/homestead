@@ -24,20 +24,20 @@ function setRestartBody(plan, node) {
   const facts = UI.facts([
     ["Not ready since", `${esc(setRestartClock(plan.down_since))} (${esc(setRestartAgo(plan.down_seconds))})`],
     ["Last heard from", esc(plan.last_heard ? setRestartClock(plan.last_heard) : "not known")],
-    ["Longhorn", (plan.relied_on || []).length ? "sees the host as down" : "sees the host as down, with no engine of these volumes running on it"],
+    ["Longhorn", (plan.relied_on || []).length ? "sees the host as down" : "sees the host as down, running none of these volumes"],
     ...volumes.map(v => [`Volume ${v.pvc}`, `the current copy is on ${esc(v.copy_on)}`]),
     ...(plan.relied_on || []).map(r => ["Relied on", esc(r)]),
   ]);
   const podList = UI.table([{ label: "Pod to remove" }, { label: "State" }], pods.map(p => [`<span class="mono">${esc(p.name)}</span>`,
-    p.terminating ? "already being deleted; its deletion is made final" : "stuck on the host"]));
+    p.terminating ? "being deleted; made final" : "stuck on the host"]));
   return `<div class="ui-stack">
     ${UI.lead(esc(`${set.ns}/${set.name} has a pod on ${node}, which has stopped answering.`))}
     ${set.wait_mode ? UI.callout("warn", "This app is set to wait for its host to come back; this overrides that once") : ""}
     ${UI.section("What Homestead checked", facts)}
     ${UI.section("What will happen", `<ul class="ui-list"><li>The stuck pod is removed; the StatefulSet starts it again on another host.</li>
-      <li>Its volume is reattached there. Without the out-of-service taint, Kubernetes can wait about 6 minutes before it detaches a volume from a host that doesn't answer, so a slow start is not a failure.</li></ul>`)}
+      <li>Its volume is reattached there. That can take about 6 minutes; a slow start is not a failure.</li></ul>`)}
     ${UI.section("Pods", podList)}
-    <p class="ui-help">These checks are the promise. Homestead cannot tell a host that is off from one that is only cut off from the network.</p>
+    <p class="ui-help">Homestead cannot tell a host that is off from one only cut off from the network.</p>
     ${UI.typedConfirm({ id: "sr_confirm", expect: set.name, button: "sr_run" })}
     ${UI.actions(UI.button("Start on another host", `setRestartRun(${jsArg(set.ns)},${jsArg(set.name)},${jsArg(node)})`,
       { kind: "danger", id: "sr_run", disabled: true, attrs: 'data-need="admin"' }))}</div>`;

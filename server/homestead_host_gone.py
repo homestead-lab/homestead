@@ -109,7 +109,7 @@ def _left_on_host(kind, ref):
 
 
 def _released(kind, ref):
-    lines = ["Longhorn upgrades, cluster shutdown and OS rollouts, which this job holds back cluster-wide.",
+    lines = ["Longhorn upgrades, cluster shutdown and OS rollouts.",
              f"Disk and host jobs on a host named {ref.get('node', '')}.",
              "Starting V2 cleanup (disabling Longhorn V2)."]
     if kind == "disk-v2-convert" and ref.get("volumes"):
@@ -156,9 +156,8 @@ def _snapshot(item, read, actor, namespace):
     except Unreadable as error:
         helper = None
         blockers.append(f"The helper Job {ref.get('job')} could not be read ({error}).")
-    warnings = ["Nothing on the host is changed. Homestead records the end and, if it is still the same Job, "
-                "deletes the helper Job listed below. Cancelling stays refused.",
-                "The job's record stays in Jobs, with what it did, until you dismiss it."]
+    warnings = ["Homestead records the end, and deletes the helper Job below if it is still the same Job.",
+                "The job's record stays in Jobs until you dismiss it."]
     if "replaced" in evidence.values():
         warnings.insert(0, f"A host named {node} is in the cluster with a new identity. If it is the same machine and it was "
                            "not reinstalled, what this job left there is still on it.")

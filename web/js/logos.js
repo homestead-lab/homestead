@@ -76,7 +76,7 @@ function logoSyncSave() {
 window.wlLogo = (ns, name, back = null) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
   Object.assign(LOGO, { kind: "workload", ns, name, tiles: [], chosen: -1, back, os: "" });
-  logoDialog(name, "Pick a logo from the app store. Homestead keeps its own copy, so it stays if the store drops the app. Nothing restarts.",
+  logoDialog(name, "Pick a logo from the app store. Homestead keeps a copy. Nothing restarts.",
     w.icon ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "");
 };
 
@@ -84,7 +84,7 @@ window.wlLogo = (ns, name, back = null) => {
 window.vmLogo = (ns, name, back = null) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || {};
   Object.assign(LOGO, { kind: "vm", ns, name, tiles: [], chosen: -1, back, os: v.os_logo || "" });
-  logoDialog(name, "Pick its operating system's logo, or one from the app store. Without one of its own, a VM shows the logo of the OS it reports. Nothing restarts.",
+  logoDialog(name, "Pick its OS logo, or one from the app store. Without one, it shows the logo of the OS it reports. Nothing restarts.",
     v.has_logo || v.logo_os_set ? UI.button("Use its OS's logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "", "");
 };
 

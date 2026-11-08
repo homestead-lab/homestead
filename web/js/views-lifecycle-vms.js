@@ -258,7 +258,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
 `;
   const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
-      ? "The storage class for a blank or downloaded disk. A disk from a Harvester image always lives on that image's own class."
+      ? "The storage class for a blank or downloaded disk. A disk from a Harvester image always uses that image's own class."
       : "The storage class for the disk. The cluster's default class is chosen for you.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
     ${UI.more("How the disk is made", `<p>${opts.harvester

@@ -906,16 +906,14 @@ window.smartDisk = async (node, disk) => {
     target.innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
         ${UI.chip(diskHealthWord(health.state), diskHealthTone(health.state) || "neutral")}</div>
-      ${(t => t ? `<div class="note"><b>${esc(t[0].toUpperCase() + t.slice(1))}.</b> Homestead leaves a drive the host has spun down asleep and shows its last reading, without a temperature.</div>` : "")(diskAsleepText(s, health))}
+      ${(t => t ? `<div class="note"><b>${esc(t[0].toUpperCase() + t.slice(1))}.</b> Homestead doesn't wake it: this is its last reading, without a temperature.</div>` : "")(diskAsleepText(s, health))}
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
       ${health.issues?.length ? `${UI.callout(health.state === "critical" ? "bad" : "warn", { html: `${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}` }, `<ul class="diskfindings">${health.issues.map(issue =>
           `<li>${UI.chip(issue.severity, issue.severity === "critical" ? "bad" : "warn")} ${esc(issue.reason)}</li>`).join("")}</ul>
         <span class="dim xs">Measured against the drive-health policy in Settings.</span>`)}`
-      : s.available ? `${UI.callout("ok", { html: `No defects reported.` }, `Every counter is within the
-          thresholds set in Settings${s.health ? `, and the drive's own overall-health check says ${esc(s.health)}` : ""}.`)}` : ""}
+      : s.available ? `${UI.callout("ok", { html: `No defects reported.` }, `Every counter is within your thresholds${s.health ? `; the drive's own check says ${esc(s.health)}` : ""}.`)}` : ""}
       ${active ? UI.callout("info", "Self-test running", `<p>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</p>`) : ""}
-      ${health.stale_probe ? `${UI.callout("warn", { html: `The node probe predates this release.` }, `Wear and life figures come from the probe, which has not picked up the current scripts yet.
-        Homestead updates it when it starts; if this persists, check Settings → Homestead.`)}` : ""}
+      ${health.stale_probe ? `${UI.callout("warn", { html: `The node probe predates this release.` }, `Wear and life figures may be missing until it updates, when Homestead starts. If this persists, check Settings → Homestead.`)}` : ""}
       <div class="smartstats">
         ${stat("Life remaining", health.life_pct == null ? null : health.life_pct + "%", lifeTone(health.life_pct))}
         ${health.spare_pct == null ? "" : stat("Spare blocks", health.spare_pct + "%", lifeTone(health.spare_pct))}
@@ -942,7 +940,7 @@ window.smartDisk = async (node, disk) => {
         <div class="dv">${UI.chip(s.health || "not reported", smartTone(s.health) || "neutral")}</div></div>
       <div class="sec">Self-test history</div>
       ${tests.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td>${UI.chip(t.status || "Unknown", smartTestTone(t.status) || "neutral")}</td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
-      <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">Tests run inside the drive. A long test can reduce disk performance while active.</div></div><div class="row">
+      <div class="smart-actions"><div><b>Run a drive self-test</b><div class="dim xs">A long test can slow the disk while it runs.</div></div><div class="row">
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'short')">Short test</button>
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>

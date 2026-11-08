@@ -9,17 +9,17 @@ const TASK_ICON = {
 /* Ready-made protection: the jobs a sensible policy needs, made in one go.
    A plan's jobs are ordinary jobs afterwards, edited or deleted one by one. */
 const PROTECT_PLANS = [
-  { id: "snapshots", title: "Snapshots", blurb: "Hourly snapshots kept for a day, daily ones kept for a week. Stored on the volumes themselves: quick to roll back to, and no use if the volume itself is lost.",
+  { id: "snapshots", title: "Snapshots", blurb: "Quick to roll back to, but stored on the volume: no use if the volume is lost.",
     jobs: [{ name: "hourly-snapshot", task: "snapshot", cron: "0 * * * *", retain: 24, concurrency: 2 },
       { name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 }] },
-  { id: "backups", title: "Snapshots and backups", blurb: "A daily snapshot kept for a week, a daily backup kept for two weeks and a weekly one kept for two months, uploaded to the backup target so they outlive the cluster.",
+  { id: "backups", title: "Snapshots and backups", blurb: "Backups go to the backup target, so they outlive the cluster.",
     needsTarget: true,
     jobs: [{ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 },
       { name: "daily-backup", task: "backup", cron: "30 2 * * *", retain: 14, concurrency: 1 },
       { name: "weekly-backup", task: "backup", cron: "0 3 * * 0", retain: 8, concurrency: 1 }] },
   // No trim job (#927): Longhorn's tries every volume in its groups and fails on
   // detached ones and VM disks, and one in default switches Homestead's own off.
-  { id: "tidy", title: "Housekeeping", blurb: "A weekly purge of the system snapshots Longhorn takes during rebuilds. Space an app has freed is given back by the weekly trim under Housekeeping on this page: Homestead trims every attached volume itself.",
+  { id: "tidy", title: "Housekeeping", blurb: "Purges the snapshots Longhorn takes during rebuilds. Freed space comes back through Homestead's weekly trim.",
     jobs: [{ name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
@@ -67,8 +67,7 @@ function objectStoreCard(store, target) {
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
       restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
-    <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
-      the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
+    <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket is stored on the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
       cluster. It exists so an app or VM can be rebuilt somewhere else.</div>
   </div>`;
 }
@@ -505,11 +504,10 @@ function planList(group, chosen) {
 window.lhPlans = (group = "default") => {
   if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a plan could replace a job unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
-  modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
+  modal("Protection plans", `${UI.lead("A plan sets up the jobs for a policy. Edit or delete them afterwards like any other job.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
       `<option value="${esc(g)}" ${g === group ? "selected" : ""}>${esc(g)}${g === "default" ? " - volumes with no other group" : ""}</option>`).join("")}</select>
-      <div class="dim xs" style="margin-top:6px">A plan for a group of its own needs the group first:
-        <a class="linkish" onclick="lhGroup()">make one</a>.</div></div>
+      <div class="dim xs" style="margin-top:6px">For a group of its own, <a class="linkish" onclick="lhGroup()">make the group</a> first.</div></div>
     <div class="plan-list" id="lp_list">${planList(group, "snapshots")}</div>
     ${UI.actions(`<button class="btn pri" onclick="lhPlanApply()">Set up plan</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };

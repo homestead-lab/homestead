@@ -96,7 +96,7 @@ function fmShellHtml() {
     <div class="fm-panes">${[0, 1].map(i => `<section class="fm-pane" id="fm_pane${i}" onpointerdown="fmFocus(${i}, true)"></section>`).join("")}</div>
     <div class="fm-panel" id="fm_panel" hidden></div>
     <div class="fm-actions" id="fm_actions"></div>
-    <div class="fm-foot"><span class="dim xs" id="fm_status">Each volume is opened by a small helper that stops a minute after you stop using it; the next action starts it again.</span>
+    <div class="fm-foot"><span class="dim xs" id="fm_status">A small helper opens each volume; it stops a minute after you finish.</span>
       <button class="btn" data-dialog-dismiss="true" onclick="fmClose()">Close</button></div>`;
 }
 
@@ -203,7 +203,7 @@ function fmPaintActions() {
         ${UI.button(picked.length === 1 && one.kind === "file" ? "Download" : "Download zip", "fmDownload()")}
         ${other && !other.snapshot ? UI.button(`Restore to ${to}`, "fmRestoreReview()", { kind: "pri", attrs: 'data-need="admin"' }) : ""}
         <button type="button" class="btn quiet" onclick="fmSelectAll(${FM.active}, false)">Clear</button>`
-      : `<span class="dim xs">${FM.busy ? esc(FM.busy) : "This is the snapshot, read-only. Select files to download them, or to restore them into the folder open on the other side."}</span>`;
+      : `<span class="dim xs">${FM.busy ? esc(FM.busy) : "Read-only. Select files to download, or to restore into the folder on the other side."}</span>`;
     return;
   }
   host.innerHTML = picked.length ? `<span class="fm-count">${picked.length} selected</span>
@@ -215,7 +215,7 @@ function fmPaintActions() {
       ${across ? UI.button(`Move → ${to}`, "fmTransfer(true)", { attrs: 'data-need="admin"' }) : ""}
       ${UI.button("Delete", "fmDelete()", { kind: "danger", attrs: 'data-need="admin"' })}
       <button type="button" class="btn quiet" onclick="fmSelectAll(${FM.active}, false)">Clear</button>`
-    : `<span class="dim xs">${FM.busy ? esc(FM.busy) : "Select files to download, change or copy them to the other pane. Double-click a folder to open it, a text file to edit it."}</span>`;
+    : `<span class="dim xs">${FM.busy ? esc(FM.busy) : "Select files to download, change or copy across. Double-click a folder or text file to open it."}</span>`;
 }
 
 window.fmFocus = (index, quiet = false) => {

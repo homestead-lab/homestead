@@ -939,7 +939,7 @@ def _send_restart(ref, move, dep, role, skip, progress, i, total, now):
     _cooldown(ref, move, now)
     if written:
         _watch(ref, move, written, now)
-    return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should land on {move['to']}"
+    return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should start on {move['to']}"
 
 
 def _watch(ref, move, value, now):

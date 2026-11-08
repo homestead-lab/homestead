@@ -144,7 +144,7 @@ the run goes on. Choose
 weekly window install updates instead.
 
 The node's **Disks** card draws each disk's partition table to scale - each
-partition's size, filesystem and mount, what sits on it (LVM, RAID) and space
+partition's size, filesystem and mount, what is on it (LVM, RAID) and space
 left unallocated.
 
 ![Node detail](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-node-detail.jpg)
@@ -355,7 +355,7 @@ finishing, before anything is cordoned:
   volumes still attached to the host that no pod there uses.
 - What Homestead couldn't check ("Homestead couldn't check …"), never left out.
 
-Each has its own **Drain anyway** tick: the normal cordon and drain still run.
+Tick one to drain anyway: the normal cordon and drain still run.
 A forced restart sends no drain and doesn't ask.
 
 **During the drain.** When a disruption budget refuses an eviction because its

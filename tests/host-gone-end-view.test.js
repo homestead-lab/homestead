@@ -43,7 +43,7 @@ test("the review lists what is left, escaped, and needs the host name and the ti
   assert.match(html,/homestead-allocation-x/);
   assert.match(html,/Longhorn upgrades, cluster shutdown and OS rollouts/);
   assert.match(html,/Nothing on the host is changed/);
-  assert.match(html,/and that host is gone/);
+  assert.match(html,/which is gone, so it can.t finish/);
   assert.match(html,/id="hostGoneName"[^>]*data-typed-expect="node-a"/);
   await t.ctx.hostGoneResolve();assert.equal(t.sent.length,1,"nothing without the name and the tick");
   t.fields["#hostGoneAck"].checked=true;t.fields["#hostGoneName"].value="node-b";
@@ -66,7 +66,7 @@ test("a blocked or tokenless review never sends the end",async()=>{
   await blocked.ctx.hostGoneReview("job");
   assert.match(blocked.fields["#mbody"].innerHTML,/still in the cluster with the same identity/);
   assert.match(blocked.fields["#mbody"].innerHTML,/Homestead checks whether that host is gone/);
-  assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/and that host is gone/,"a blocked review does not claim the host is gone");
+  assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/which is gone, so it can.t finish/,"a blocked review does not claim the host is gone");
   assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/id="hostGoneName"/);
 });
 

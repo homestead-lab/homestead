@@ -91,8 +91,8 @@
     const outage = !!plan.planned_outage, hold = plan.hold || [], volumes = plan.volumes || [], drain = plan.drain_blockers || [];
     const budgets = plan.maintenance?.budgets || [], local = plan.maintenance?.local_storage || [];
     const lead = outage
-      ? `<b>${esc(node)}</b> is the cluster's only host, so nothing is cordoned, stopped or moved. Homestead only records the maintenance, and its uptime and alerts follow that.`
-      : `Homestead cordons <b>${esc(node)}</b>, stops what waits for it, moves the rest and waits for drained pods to leave, then marks it in maintenance. No power is sent: reboot or shut it down yourself when you are ready.`;
+      ? `<b>${esc(node)}</b> is the only host, so nothing is stopped or moved. Homestead only records the maintenance, for uptime and alerts.`
+      : `Homestead drains <b>${esc(node)}</b> - stopping what waits for it, moving the rest - then marks it in maintenance. Power is up to you.`;
     const summary = [UI.lead(lead),
       UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
         hold.length ? ["Waits for the host", String(hold.filter(h => h.default === "wait").length)] : null,
@@ -112,8 +112,8 @@
       : `<div class="ui-empty">${outage ? "Nothing is stopped or moved." : "No apps or VMs run on this host."}</div>`;
     const copies = volumes.length ? UI.table([{ label: "Volume" }, { label: "Copies elsewhere" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(String(v.healthy_elsewhere), v.risk === "unavailable" ? "bad" : v.risk === "single-copy" ? "warn" : "ok")]))
       : `<div class="ui-empty">No Longhorn copy on this host was found.</div>`;
-    const blockers = `<p class="ui-help">Each can stall the drain: fix it and review again, or drain anyway.</p>` + drain.map((b, i) =>
-      `<div>${UI.ack(`mm_blocker_${i}`, `Drain anyway: ${b.what}`, { onchange: "hostMaintenanceReady()", attrs: `data-mm-ack="1" data-drain-ack="${esc(b.id)}"` })}${UI.more("Why, and what to do", `${esc(b.why)} ${esc(b.fix)}`, false, `mm_blocker_fix_${i}`)}</div>`).join("");
+    const blockers = `<p class="ui-help">Each can stall the drain. Fix it and review again, or tick it to drain anyway.</p>` + drain.map((b, i) =>
+      `<div>${UI.ack(`mm_blocker_${i}`, b.what, { onchange: "hostMaintenanceReady()", attrs: `data-mm-ack="1" data-drain-ack="${esc(b.id)}"` })}${UI.more("Why", `${esc(b.why)} ${esc(b.fix)}`, false, `mm_blocker_fix_${i}`)}</div>`).join("");
     const sections = [{ key: "summary", title: "Summary", html: summary },
       drain.length ? { key: "drain", title: `Before draining · ${drain.length}`, html: blockers } : null,
       { key: "apps", title: `Apps and VMs · ${hold.length}`, html: apps },

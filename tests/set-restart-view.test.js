@@ -39,7 +39,7 @@ test("the review shows each check as a fact, every pod and volume, and the typed
   assert.match(html, /25 min/);
   assert.match(html, /Last heard from/);
   assert.match(html, /postgres-0/); assert.match(html, /postgres-1/);
-  assert.match(html, /already being deleted/);
+  assert.match(html, /being deleted; made final/);
   assert.match(html, /data-postgres-0/); assert.match(html, /current copy is on[^]*node1/);
   assert.match(html, /data-typed-expect="postgres"/);
   assert.match(html, /id="sr_run"[^>]*disabled/);
@@ -66,7 +66,7 @@ test("a review without anything relied on shows no such row", async () => {
   const t = setup();
   await t.ctx.setRestartReview("data", "postgres", "node2");
   assert.doesNotMatch(t.html(), /Relied on/);
-  assert.match(t.html(), /no engine of these volumes running on it/);
+  assert.match(t.html(), /running none of these volumes/);
 });
 
 test("a set that waits by its own setting says this overrides that once", async () => {

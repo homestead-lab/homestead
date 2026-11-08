@@ -2,7 +2,7 @@
 // captured whole and measured against the design rules in docs/design.md.
 //
 //   node scripts/audit_dialogs.mjs            all dialogs
-//   node scripts/audit_dialogs.mjs vm         only those whose name has "vm"
+//   node scripts/audit_dialogs.mjs vm         only those whose name has "vm" (vm,disk: either)
 //
 // Writes release-assets/dialogs/<name>-<width>.png, and report.json with each
 // dialog's measurements. It exits non-zero when a dialog breaks a rule that
@@ -23,49 +23,44 @@ const DIALOG_WORDS = 120, REVIEW_WORDS = 100;
 // three for the demo's figures) so it can only get shorter: a rewrite lowers its number, and one under the budget
 // leaves this list. Every other dialog keeps to the budget.
 const WORD_CAPS = {
-  "add-harvester-host-3": 274,
-  "snapshot-restore-in-manager": 213,
   "node-if-down": 211,
   "disks": 192,
-  "node-reboot-before-draining": 178,
-  "host-join-storage": 173,
-  "disk-v2-region-identity": 173,
-  "snapshot-files-ready": 163,
-  "node-shutdown": 161,
-  "jobs-host-gone-end": 160,
-  "workload-edit-waits-for-managed": 159,
-  "disk-v2-region-review": 158,
-  "disk-v2-review": 158,
-  "runtime-move-review": 155,
+  "snapshot-restore-in-manager": 203,
+  "disk-v2-region-identity": 169,
+  "add-harvester-host-3": 164,
+  "host-join-storage": 159,
   "deploy-review-yaml": 155,
-  "protection-plans": 150,
+  "workload-edit-waits-for-managed": 150,
+  "jobs-host-gone-end": 149,
+  "disk-v2-region-review": 149,
+  "disk-v2-review": 149,
   "add-host-control-plane": 149,
   "image-update-batch": 148,
-  "runtime-move-retirement": 143,
-  "workload-edit-placement": 142,
-  "disk-v2-region-erase": 140,
-  "disk-v2-erase": 140,
+  "node-reboot-before-draining": 145,
+  "runtime-move-review": 145,
   "add-host": 140,
   "add-host-tiebreaker": 140,
-  "image-update-cordoned-details": 140,
-  "node-single-host-shutdown": 140,
-  "workload-edit-waits-for": 137,
-  "node-single-host-reboot": 135,
-  "component-upgrade-check-blocked": 133,
-  "disk-v2-blocked": 133,
-  "set-restart-review": 132,
-  "vm-logo": 130,
-  "workload-edit-waits-for-cycle": 129,
+  "disk-v2-region-erase": 139,
+  "disk-v2-erase": 139,
+  "snapshot-files-ready": 146,
+  "runtime-move-retirement": 134,
+  "protection-plans": 133,
+  "disk-v2-blocked": 132,
+  "vm-logo": 129,
   "workload-edit-hardware": 129,
-  "node-maintenance-review": 129,
+  "workload-edit-waits-for": 128,
+  "workload-edit-placement": 127,
+  "image-update-cordoned-details": 126,
   "vm-import-unraid": 126,
-  "smart-disk": 126,
   "workload-outage-actions": 125,
   "log-alerts": 125,
+  "set-restart-review": 122,
+  "node-single-host-shutdown": 121,
+  "node-shutdown": 120,
   "released-volume-reused-delete": 118,
-  "os-update-review-several": 118,
-  "node-reboot": 113,
-  "volume-delete": 110,
+  "node-single-host-reboot": 116,
+  "os-update-review-several": 116,
+  "node-maintenance-review": 115,
   "image-updates": 109
 };
 // design.md, Notices: a warning or an error is a summary bar of short
@@ -395,7 +390,7 @@ const WIDTHS = [["desktop", 1440, 900, false], ["mobile", 390, 844, true]];
 // CI splits the list across runners: AUDIT_SHARD of AUDIT_SHARDS, each every Nth dialog.
 const SHARDS = Math.max(1, Number(process.env.AUDIT_SHARDS || 1));
 const SHARD = Number(process.env.AUDIT_SHARD || 0) % SHARDS;
-const todo = DIALOGS.filter(([name]) => !only || name.includes(only)).filter((_, j) => j % SHARDS === SHARD);
+const todo = DIALOGS.filter(([name]) => !only || only.split(",").some(part => name.includes(part))).filter((_, j) => j % SHARDS === SHARD);
 const shares = Array.from({ length: WORKERS }, (_, i) => todo.filter((_, j) => j % WORKERS === i)).filter((share) => share.length);
 await Promise.all(WIDTHS.flatMap((width) => shares.map((share) => audit(width, share))));
 await browser.close();

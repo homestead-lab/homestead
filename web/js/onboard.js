@@ -15,30 +15,28 @@ function guideCopy(value) {
 }
 
 function guideScreens(g) {
+  // Each screen's answer in a few words; the why is on hover (design.md, Verbosity budget).
   const role = g.management_count < 3
-    ? `<b>Default Role</b>. This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"};
-       Harvester promotes new hosts to management until there are three.`
-    : "<b>Default Role</b> - with three management nodes already, it joins as a worker. Pick <b>Worker Role</b> to say so outright.";
+    ? `<b>Default Role</b> ${tip(`This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"}; Harvester promotes new hosts to management until there are three.`)}`
+    : `<b>Default Role</b>: it joins as a worker ${tip("With three management hosts already, a new one joins as a worker. Worker Role says so outright.")}`;
   const rows = [
     ["Installation mode", "<b>Join an existing Harvester cluster</b>"],
     ["Node role", role],
-    ["Password", "Set the <span class=\"mono\">rancher</span> password for SSH and console access."],
-    ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 240 GiB or more."],
-    ["Data disk", "A second disk for VM and volume data, if the machine has one. On a single-disk machine, leave it as the installation disk."],
-    ["Persistent size", "Leave the default (150 GiB)."],
-    ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name here; any unique lowercase name works</span>`
-      : "A unique lowercase name, such as the next number after your other hosts."],
-    ["Management network", `The network card that is plugged into your LAN - the installer shows which have a link. Add a second
-      for a bond if you cabled two. <b>VLAN</b>: none, unless your other hosts use one. <b>Bond mode</b>: active-backup.
-      <b>IPv4</b>: DHCP with a reservation on your router, or Static with an address outside the DHCP range. <b>MTU</b>: 1500.`],
-    ["DNS servers", "Your LAN's DNS - usually your router. Only asked for a static address."],
+    ["Password", "The <span class=\"mono\">rancher</span> password for SSH and the console."],
+    ["Installation disk", "An SSD of 240 GiB or more. <b>It is erased.</b>"],
+    ["Data disk", `A second disk, if it has one ${tip("For VM and volume data. On a single-disk machine, leave it as the installation disk.")}`],
+    ["Persistent size", "The default (150 GiB)."],
+    ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name</span>`
+      : "A unique lowercase name."],
+    ["Management network", `The card on your LAN; active-backup, MTU 1500 ${tip("The installer shows which cards have a link; add a second for a bond if you cabled two. VLAN: none, unless your other hosts use one. IPv4: DHCP with a reservation on your router, or Static with an address outside the DHCP range.")}`],
+    ["DNS servers", "Your router, for a static address."],
     ["Management address", g.vip ? `${guideCopy(g.vip)} <span class="dim xs">- this cluster's VIP</span>` : "This cluster's VIP (Homestead could not read it)."],
     ["Cluster token", "The token from step 2."],
-    ["NTP servers", g.ntp.length ? guideCopy(g.ntp.join(",")) : "Leave the default."],
-    ["Proxy address", g.proxy ? guideCopy(g.proxy) : "Leave empty."],
-    ["SSH keys", "Optional - a URL such as <span class=\"mono\">https://github.com/&lt;you&gt;.keys</span>."],
-    ["Remote config URL", "Leave empty."],
-    ["Confirm", "Check the summary and install. It takes 10-20 minutes, then reboots and joins by itself."],
+    ["NTP servers", g.ntp.length ? guideCopy(g.ntp.join(",")) : "The default."],
+    ["Proxy address", g.proxy ? guideCopy(g.proxy) : "Empty."],
+    ["SSH keys", "Optional: <span class=\"mono\">https://github.com/&lt;you&gt;.keys</span>."],
+    ["Remote config URL", "Empty."],
+    ["Confirm", "Install. It takes 10-20 minutes, then reboots and joins."],
   ];
   return `<div class="guide-screens">${rows.map(([screen, answer]) =>
     `<div class="guide-screen"><span>${screen}</span><div>${answer}</div></div>`).join("")}</div>`;

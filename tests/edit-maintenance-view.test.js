@@ -118,7 +118,7 @@ test('forced review never promises a Longhorn drain wait', async () => {
   const t = setup({...hostReview, force:true,
     maintenance: {budgets: [{pod:'longhorn-system/manager',budget:'longhorn-system/manager',allowed:0,wait_for_drain:true}]}});
   await t.c.window.nodePowerReview('host1', 'reboot', true);
-  assert.match(t.html(), /does not cordon or drain/);
+  assert.match(t.html(), /no cordon or drain/);
   assert.doesNotMatch(t.html(), /waits for Longhorn during drain/);
 });
 function hostFields(t) {
@@ -199,8 +199,8 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     hostFields(t);
     t.fields['#pw_outage']={checked:false};
     await t.c.window.nodePowerReview('host1',action);
-    assert.match(t.html(), /planned whole-cluster outage/);
-    assert.match(t.html(), /does not evict pods/);
+    assert.match(t.html(), /the whole cluster goes down/);
+    assert.match(t.html(), /without evicting pods/);
     assert.match(t.html(), /id="pw_outage"/);
     assert.doesNotMatch(t.html(), /Override these checks|id="pw_allow"|waits for Longhorn during drain|host stays cordoned/);
     if(action==='poweroff') assert.match(t.html(), /powered on by hand/);
@@ -345,7 +345,7 @@ test('on the only host everything stops first and starts again', async () => {
   const t=setup({...hostReview,action:'poweroff',planned_outage:true,stranded:[{ns:'lab',name:'plex'}],
     hold:[{id:'Deployment/lab/plex',kind:'Deployment',ns:'lab',name:'plex',here:1,hosts:[],options:['wait'],default:'wait',why:'the only host'}]});
   await t.c.window.nodePowerReview('host1','poweroff');
-  assert.match(t.html(), /stops the apps and VMs below first/);
+  assert.match(t.html(), /stops the apps and VMs below cleanly/);
   assert.match(t.html(), /Nothing can move off the only host/);
   assert.doesNotMatch(t.html(), /<select id="pw_hold_0"/);
 });

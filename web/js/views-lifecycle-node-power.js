@@ -23,7 +23,7 @@ window.nodeActions = async name => {
   const actions = `<div class="ui-insight-list">
     ${cordoned
       ? action("Cordoned", `${declared ? "Uncordoning doesn't end its maintenance. " : ""}New pods do not land here. Allow scheduling again when the host is ready for work.`, UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
-      : action("Cordon", "Stop new pods landing here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
+      : action("Cordon", "Stop new pods starting here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
     ${action("If this host goes down", "What stops, what waits, what moves and where, which volumes are at risk and which addresses move.",
       UI.button("Preview", `nodeIfDown(${jsArg(name)},() => nodeActions(${jsArg(name)}))`))}
     ${action("Move apps off", "Move every app on this host to another, cordoning it first.", UI.button("Move all off", `evacuateNode(${jsArg(name)})`, { attrs: 'data-need="admin"' }))}
@@ -187,10 +187,10 @@ const NODE_POWER = UI.reviewFlow({
   const drainBlockers = nodePowerDrainBlockers(plan);
   const strandedMove = !outage && (plan.stranded || []).some(w => hold.some(h => h.ns === w.ns && h.name === w.name && h.options.includes("move")));
   const lead = outage
-    ? `<b>${esc(node)}</b> is the cluster's only host, so this is a planned whole-cluster outage. Homestead stops the apps and VMs below first, so their volumes detach in order, then asks the host to ${action === "reboot" ? "reboot" : "power off"}; it leaves scheduling unchanged and does not evict pods. What was stopped starts again when the host is back.`
+    ? `<b>${esc(node)}</b> is the only host, so the whole cluster goes down. Homestead stops the apps and VMs below cleanly, without evicting pods, then ${action === "reboot" ? "reboots" : "powers off"} the host. They start again when it is back.`
     : forced
-    ? `Forced: Homestead does not cordon or drain <b>${esc(node)}</b>. It asks the host's own systemd to ${action === "reboot" ? "reboot" : "power off"}, which stops everything in order, as its power button would.`
-    : `Homestead cordons <b>${esc(node)}</b>, stops what waits for it, moves the rest and waits for drained pods to leave, then ${action === "reboot" ? "reboots" : "shuts down"} the host. Live migration and restart elsewhere are not guaranteed.`;
+    ? `Forced: no cordon or drain. <b>${esc(node)}</b> ${action === "reboot" ? "reboots" : "powers off"} as its power button would, stopping everything in order.`
+    : `Homestead drains <b>${esc(node)}</b> - stopping what waits for it, moving the rest - then ${action === "reboot" ? "reboots" : "shuts down"} the host.`;
   const summary = [
     UI.lead(lead),
     UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
@@ -204,11 +204,11 @@ const NODE_POWER = UI.reviewFlow({
         + (overridable ? `<label class="switch" data-need="admin"><input type="checkbox" onchange="if (this.checked) nodePowerReview(${jsq(node)},${jsq(action)},true)">
             Override these checks - ${esc(action === "reboot" ? "reboot" : "shut down")} anyway, without cordon or drain</label>` : "")
       : concerns.length ? UI.callout(forced ? "bad" : "warn", forced ? "Forced - what happens" : "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : "",
-    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect apps and VMs and storage when the host returns." : plan.cordoned ? "The host was cordoned before this and stays so." : "The host is cordoned while it is down, and scheduling is allowed again when it is back with its volumes available.")),
+    UI.more("After the request", "Follow it in Recent jobs. " + (outage || forced ? "Check apps, VMs and storage when the host is back." : plan.cordoned ? "The host was cordoned before this and stays so." : "The host takes new pods again once it is back with its volumes.")),
   ].join("");
   const apps = plan.hold ? (hold.length
-      ? `<p class="ui-help">${outage ? "Nothing can move off the only host: each is stopped cleanly first and started again when the host is back."
-          : "Move starts it on another host now. Wait stops it cleanly before the host goes and starts it here again when it is back - for what is tied to this host, or would rather wait than move."}</p>`
+      ? `<p class="ui-help">${outage ? "Nothing can move off the only host: each stops cleanly and starts again after."
+          : "Move starts it on another host now. Wait stops it and starts it here again after - for what is tied to this host."}</p>`
         + UI.table([{ label: "App or VM" }, { label: "While the host is down" }], hold.map((h, i) => [
           `<span class="mono">${esc(h.ns)}/${esc(h.name)}</span> <span class="sub">${h.kind === "VirtualMachine" ? "VM" : esc(h.kind)}${h.here > 1 ? ` · ${h.here} pods` : ""}</span>`,
           !h.options.length ? UI.chip(h.why || "stop it by hand", "bad")
@@ -225,9 +225,9 @@ const NODE_POWER = UI.reviewFlow({
     ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
     : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`;
   // A removable row's button opens its own review (nodePowerRemoveOrphans).
-  const blockersHtml = `<p class="ui-help">Each can stall the drain: fix it and review again, or drain anyway.</p>`
-    + drainBlockers.map((b, i) => `<div>${UI.ack(`pw_blocker_${i}`, `Drain anyway: ${b.what}`, { onchange: "nodePowerReady()", attrs: `data-drain-ack="${esc(b.id)}"` })}
-      ${UI.more("Why, and what to do", `${esc(b.why)} ${esc(b.fix)}`, false, `pw_blocker_fix_${i}`)}${!b.can_remove ? ""
+  const blockersHtml = `<p class="ui-help">Each can stall the drain. Fix it and review again, or tick it to drain anyway.</p>`
+    + drainBlockers.map((b, i) => `<div>${UI.ack(`pw_blocker_${i}`, b.what, { onchange: "nodePowerReady()", attrs: `data-drain-ack="${esc(b.id)}"` })}
+      ${UI.more("Why", `${esc(b.why)} ${esc(b.fix)}`, false, `pw_blocker_fix_${i}`)}${!b.can_remove ? ""
         : can("admin") ? UI.button("Remove orphan records", `nodePowerRemoveOrphans(${i})`, { id: `pw_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"` })
         : `<p class="ui-help">An admin can remove these orphan records here.</p>`}</div>`).join("");
   const sections = [
@@ -237,7 +237,7 @@ const NODE_POWER = UI.reviewFlow({
     { key: "volumes", title: `Volume copies · ${volumes.length}`, html: copies },
     budgets.length ? { key: "budgets", title: `Disruption budgets · ${budgets.length}`, html: UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
       `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${plural(b.allowed, "disruption")} allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
-    local.length ? { key: "local", title: `Local and external storage · ${local.length}`, html: `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
+    local.length ? { key: "local", title: `Local and external storage · ${local.length}`, html: `<p class="ui-help">${outage ? "Temporary pod data may be lost. Host-local and external storage may be unavailable while the host is down." : "Drain deletes emptyDir data, and host-local paths stay behind. Check external storage does not depend on this host."}</p>`
       + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`])) } : null,
   ];
   // The confirmation stays in view whichever section is open.

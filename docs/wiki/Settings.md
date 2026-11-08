@@ -326,8 +326,7 @@ Then each app stays where it is if it is **critical**, or its tier can't be read
 until the next opening of the update window (with no days set, until you move it); if
 a scheduled job on its volume is running or runs within the run; if it moved
 automatically in the last 24 hours; or if a restart can't move it, as above. A
-restart may land on another host than planned, which counts as moved; landing back
-where it was stops the run.
+restart may start on another host than planned, which counts as moved; starting again on its own host stops the run.
 
 Settings shows what it is waiting for, and the alert under *Hosts joining* says what
 is moving, what waits and what is left out. Once a look has passed all of this and

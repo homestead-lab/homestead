@@ -293,7 +293,7 @@ class ProofTests(Review):
         self.assertIn("Longhorn upgrades, cluster shutdown and OS rollouts", " ".join(v2["released"]))
         alloc = self.preview("alloc")["plan"]
         self.assertIn("partly grown", " ".join(alloc["left_on_host"]))
-        self.assertIn("Nothing on the host is changed", " ".join(alloc["warnings"]))
+        self.assertIn("deletes the helper Job below", " ".join(alloc["warnings"]))
 
     def test_queued_work_left_nothing_on_the_host(self):
         self.save(stuck("disk-allocation", "queued", job_id="alloc"))

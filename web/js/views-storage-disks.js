@@ -215,7 +215,7 @@ window.diskSetup = async (node, device) => {
         ${modes.includes("erase") ? choice("erase", "Erase it and format", "Everything on it is destroyed.", !modes.includes("import")) : ""}</div>
       <div class="f" id="ds_fs_row"><label>Filesystem</label><select id="ds_fs"><option value="ext4">ext4</option><option value="xfs">XFS</option></select></div>
       <div id="ds_confirm_row">${UI.typedConfirm({ id: "ds_confirm", expect: device, oninput: "diskSetupChanged()", help: "This erases it." })}</div>
-      <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing lands on the system disk if the drive dies, fstab names it
+      <p class="dim xs">Mounted the safe way: the empty folder is locked so nothing is written to the system disk if the drive dies, fstab names it
         by UUID with <span class="mono">nofail</span> so the host still starts without it (a copy of fstab is kept first), and the mount is checked
         before Longhorn is told. New disks are tagged <span class="mono">ssd</span> or <span class="mono">hdd</span>.</p>
       ${UI.actions(UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Set it up", `diskSetupGo(${jsArg(node)},${jsArg(device)})`, { kind: "pri", id: "ds_go", attrs: 'data-need="admin"' }))}`
@@ -351,7 +351,7 @@ function diskMountGuide(device) {
   return `<div class="note" style="margin-bottom:12px"><b>Mount it on the host first</b>, as root on ${device ? "that machine" : "the machine the disk is in"}:
     <pre class="mono xs" style="white-space:pre-wrap;margin:8px 0">${esc(lines.join("\n"))}</pre>
     <span class="dim xs"><b>nofail</b> lets the machine start when this drive is dead or missing - without it, it stops at an emergency
-    shell. The empty folder is locked (<span class="mono">chattr +i</span>) so that, with the drive gone, nothing lands on the system disk
+    shell. The empty folder is locked (<span class="mono">chattr +i</span>) so that, with the drive gone, nothing is written to the system disk
     in its place: Longhorn marks the disk failed, and Homestead offers to replace it.</span></div>`;
 }
 

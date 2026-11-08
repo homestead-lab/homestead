@@ -354,12 +354,12 @@ const OSU_REVIEW_LOADING = '<div id="osuReviewLoading" class="empty"><span class
    hosts', or one under "can't start", are plain lines. */
 function osUpdatesVerdict(h, plain) {
   const said = text => esc(text.replace(/^./, c => c.toUpperCase()).replace(/\.$/, ""));
-  const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install; a restart is checked again when it is due.`]
+  const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install; a restart is checked when due.`]
     : h.restart_refusal && h.restart_may_clear ? ["info", "If this host needs a restart, Homestead may wait up to 15 minutes first.",
-      `${said(h.restart_refusal)}. This can clear by itself. If it hasn't by then, the updates stay installed and the host waits for you: its row then offers Restart….`]
+      `${said(h.restart_refusal)}. This can clear by itself; if not, the host waits for you to choose Restart….`]
     : h.restart_refusal ? ["warn", "If this host needs a restart, Homestead will not do it by itself today.",
-      `${said(h.restart_refusal)}. The updates install and the host waits for you: its row then offers Restart…, where you can accept this.`]
-    : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is cordoned and drained through disruption budgets, restarted, and given back once Ready with healthy volumes."];
+      `${said(h.restart_refusal)}. The updates install; the host then waits for you to choose Restart….`]
+    : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is drained, restarted, and given back once Ready with healthy volumes."];
   return plain ? `<p class="small"><b>${esc(title)}</b>${body ? ` ${body}` : ""}</p>` : UI.callout(kind, title, body);
 }
 function osUpdatesReviewHost(h, several, plain) {
@@ -368,17 +368,17 @@ function osUpdatesReviewHost(h, several, plain) {
     : h.updates.some(u => HOS_KERNEL.test(u.name)) ? `${UI.chip("likely", "warn")} <span class="dim xs">a kernel update is in the list</span>`
     : "only if an update asks for one";
   return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "up to date"], ["Restart", restart],
-      h.homestead_here ? ["Homestead", `${UI.chip("runs on this host", "info")} <span class="dim xs">a restart moves it: this page can stop answering for a few minutes; the update carries on.${several ? " It goes last." : ""}</span>`] : null])}
+      h.homestead_here ? ["Homestead", `${UI.chip("runs on this host", "info")} <span class="dim xs">a restart can stop this page answering for a few minutes; the update carries on.${several ? " It goes last." : ""}</span>`] : null])}
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
     <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>`;
 }
 function osUpdatesReviewHtml(review, restart) {
   const names = review.hosts.map(h => h.node), several = names.length > 1;
-  const others = "Other hosts are not touched; their automatic updates wait until this ends.";
+  const others = "Other hosts' automatic updates wait until this ends.";
   return `<div class="ui-stack">
     ${review.blocked ? UI.callout("bad", "This can't start now.", esc(review.blocked)) : ""}
     ${UI.lead(several
-      ? `Install what is waiting on ${osuHosts(names.length)}, one at a time: ${names.map(n => `<b>${esc(n)}</b>`).join(", then ")}. ${others} A failed install stops the run before the next host, and hosts restarted before a host can change what its checks say.`
+      ? `Install what is waiting on ${osuHosts(names.length)}, one at a time: ${names.map(n => `<b>${esc(n)}</b>`).join(", then ")}. A failure stops the run. ${others}`
       : `Install what is waiting on <b>${esc(names[0])}</b>. ${others}`)}
     ${review.hosts.map(h => several ? UI.section(h.node, osUpdatesReviewHost(h, true, true)) : osUpdatesReviewHost(h, false, !!review.blocked)).join("")}
     <div class="f"><label for="osu_review_restart">After installing</label><select id="osu_review_restart" onchange="osUpdatesReviewRestart()">

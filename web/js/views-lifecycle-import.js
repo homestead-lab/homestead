@@ -703,7 +703,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose Source data safety", "How the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.")}</div>
     <div id="im_map_picture"></div>
     <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
-    ${keeps && cfg.guessed_path ? `${UI.callout("warn", "", `Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
+    ${keeps && cfg.guessed_path ? `${UI.callout("warn", "", `Nothing this container mounts is under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
       so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.`)}` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>

@@ -523,14 +523,14 @@ window.hostGoneReview = async id => {
     HOST_GONE = {id, ...review};
     $("#mbody").innerHTML = UI.lead(p.blocked
         ? `This job pinned <b>${esc(p.node)}</b>. Homestead checks whether that host is gone before the job can be ended.`
-        : `This job can no longer finish: it pinned <b>${esc(p.node)}</b>, and that host is gone. Ending it keeps its record and stops it holding anything back.`) +
+        : `It pinned <b>${esc(p.node)}</b>, which is gone, so it can't finish. Ending it keeps its record and releases what it held back.`) +
       UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to end" : "Nothing on the host is changed",
         p.blocked ? (p.blockers || []).map(esc).join("<br>") : (p.warnings || []).map(esc).join("<br>")) +
       UI.section("What may remain on the machine", hostGoneList(p.left_on_host)) +
       ((p.left_in_cluster || []).length ? UI.section("Left in the cluster", hostGoneList(p.left_in_cluster)) : "") +
       UI.section("No longer held back once it ends", hostGoneList(p.released)) +
       (!p.blocked ? UI.typedConfirm({ id: "hostGoneName", expect: p.confirm, oninput: "hostGoneReady()" }) +
-        UI.ack("hostGoneAck", "I checked the list above. End the job; nothing on the host is changed.", {onchange:"hostGoneReady()"}) : "") +
+        UI.ack("hostGoneAck", "I checked the lists. End the job.", {onchange:"hostGoneReady()"}) : "") +
       UI.actions(UI.cancel("Keep the job") + UI.button("End the job", "hostGoneResolve()", {kind:"danger", id:"hostGoneApply", disabled:true}));
     if ($(".modalbox")) $(".modalbox").scrollTop = 0;
   } catch (error) {

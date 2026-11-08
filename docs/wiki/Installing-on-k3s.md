@@ -421,7 +421,7 @@ storage setup. Plan the disks before installing the OS:
 - **V2 (SPDK)** needs a whole drive of its own, given to it raw.
 - **Safe mounts.** Homestead mounts a drive with `nofail` in `/etc/fstab`, and
   locks the empty folder, so a machine whose drive dies still starts and nothing
-  lands on the system disk in its place. See
+  is written to the system disk in its place. See
   [Storage](Storage#booting-with-a-dead-or-missing-drive).
 
 ## 4. Addresses for apps

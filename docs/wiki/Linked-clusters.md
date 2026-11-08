@@ -182,7 +182,7 @@ the link** instead.
 
 - Every request between clusters is signed, carries the time, and is used
   once: it cannot be altered or replayed.
-- The shared key lives in a Kubernetes Secret, `homestead-fleet-key`, in
+- The shared key is kept in a Kubernetes Secret, `homestead-fleet-key`, in
   Homestead's namespace on each cluster.
 - Requests between clusters travel over the address you give. On a LAN you do
   not trust, give each cluster an `https://` address.

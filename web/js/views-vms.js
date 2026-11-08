@@ -1118,21 +1118,21 @@ window.uvmImport = async (source, id) => {
     ${settingRow("Firmware", `As on ${kind}; change it later under the VM's Hardware.`, `<span class="mono small">${esc(hw)}</span>`)}`;
   const disks = `
     ${UI.field("Storage class", `<select id="uvm_sc" onchange="uvmRoom()">${classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(c)}${facts[c]?.default ? " (default)" : ""}</option>`).join("")}</select>`,
-      { tipHtml: tip("The storage class for the disks. Longhorn keeps copies on several nodes, so the VM can run on any of them.") })}
+      { tipHtml: tip("Longhorn keeps copies on several hosts, so the VM can run on any of them.") })}
     ${vm.disks.map((d, i) => settingRow(`${i ? `Disk ${i + 1}` : "Boot disk"} · ${esc(d.path.split("/").pop())}`,
       `${esc(d.size_gb)} GiB ${esc(d.format)}, ${esc(uvmSize(d.used))} in use · ${esc(d.bus.toUpperCase())} bus${d.unraid_bus !== d.bus ? ` (was ${esc(d.unraid_bus)})` : ""}`,
       i ? `<label class="toggle"><input type="checkbox" class="uvm-disk" data-i="${d.index}" checked onchange="uvmPicture();uvmRoom()"><span></span></label>` : '<span class="dim small">always</span>')).join("")}
-    <p class="ui-help">The whole disk crosses the network, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
+    <p class="ui-help">Whole disks are copied, empty space too: ${esc(uvmSize(vm.disks.reduce((t, d) => t + d.size, 0)))} at about 110 MiB/s on gigabit.</p>`;
   const lan = (opts.network_details || []).filter(n => n.vms !== false);
   const network = `
     ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
-      { tipHtml: tip(`${kind === "Proxmox" ? "vmbr0 on Proxmox" : "br0 on Unraid"} is the LAN: pick the LAN network here, and the VM is a machine on it like before. The pod network reaches it through a Service instead.`) })}
+      { tipHtml: tip(`${kind === "Proxmox" ? "vmbr0 on Proxmox" : "br0 on Unraid"} is the LAN: pick the LAN here to keep the VM on it. The pod network reaches it through a Service.`) })}
     ${vm.nic.mac ? settingRow("Keep its MAC address", `${esc(vm.nic.mac)} - so your router's DHCP reservation still gives it the same address.`,
       '<label class="toggle"><input type="checkbox" id="uvm_mac" checked onchange="uvmPicture()"><span></span></label>') : ""}
     ${UI.field("Network card", `<select id="uvm_nic" onchange="uvmPicture()">${["virtio", "e1000e", "e1000", "rtl8139"].map(m => `<option ${m === vm.nic.nic_model ? "selected" : ""}>${m}</option>`).join("")}</select>`,
       { tipHtml: tip(`As on ${kind}. VirtIO needs its driver in the guest; Windows has it if it used VirtIO on ${kind}.`) })}`;
   const behind = [...vm.dropped.map(d => `<p><b>${esc(d.what)}</b> ${esc(d.detail)}: ${esc(d.reason)}.</p>`), ...vm.notes.map(n => `<p>${esc(n)}.</p>`)];
-  modal(`Import VM · ${name}`, UI.lead(`From ${esc(source)}. The VM here is made stopped once its disks have arrived; ${esc(name)} on ${kind} is left as it is.`)
+  modal(`Import VM · ${name}`, UI.lead(`From ${esc(source)}. It is created stopped once its disks are copied; the ${kind} VM is not changed.`)
     + '<div id="uvm_picture"></div><div id="uvm_room"></div>'
     + stepper("uvm_steps", [{ title: "Settings", html: settings }, { title: "Disks", html: disks }, { title: "Network", html: network }],
       '<button class="btn pri" data-need="admin" id="uvm_go" onclick="uvmStart()">Import</button>')

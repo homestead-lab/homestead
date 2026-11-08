@@ -107,7 +107,7 @@ test('LV erase review identifies the whole filesystem and the protected siblings
   Object.assign(t.plan,{region_kind:'lvm',layout,device:'/dev/dm-1',mountpoint:'/var/lib/longhorn'});
   await t.c.diskV2Open('node-1','data');
   assert.match(t.fields['#diskV2Review'].innerHTML,/Erase contents/);
-  assert.match(t.fields['#diskV2Review'].innerHTML,/do not represent physical extents/);
+  assert.match(t.fields['#diskV2Review'].innerHTML,/not their position on it/);
   Object.assign(t.prep,{...t.plan});
   await t.c.diskV2Watch('task-1');await t.c.diskV2EraseReview('task-1');
   assert.match(t.html(),/Erase all contents of/);assert.match(t.html(),/Keep its size and boundary/);
@@ -121,7 +121,7 @@ test('whole-disk PV renders its OS and selected logical volumes without invented
     {path:'/dev/dm-1',kind:'lvm',size_bytes:1000,mountpoint:'/var/lib/longhorn',children:[]}
   ]}});
   assert.match(html,/\/dev\/dm-0/);assert.match(html,/\/dev\/dm-1/);
-  assert.match(html,/share this disk/);assert.match(html,/do not represent physical extents/);
+  assert.match(html,/share this disk/);assert.match(html,/not their position on it/);
   assert.match(html,/Contains selected volume/);assert.match(html,/Erase contents/);
   assert.doesNotMatch(html,/pmap-seg free/);
 });

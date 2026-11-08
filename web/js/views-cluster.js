@@ -192,16 +192,13 @@ function componentsCard(r, settings = false) {
 }
 
 const COMPONENT_EFFECT = {
-  cluster: (c, to) => `Each host is cordoned and restarted on ${to} in turn - the servers one at a time, then the agents.
-    Apps on a host wait or move while it restarts. On a one-node cluster everything, Homestead too, is away for a minute or two;
-    this page comes back by itself. The first time, Rancher's system-upgrade-controller is installed to do it.`,
+  cluster: (c, to) => `Each host restarts on ${to} in turn, servers first; its apps wait or move meanwhile.
+    On a one-node cluster everything, Homestead too, is away for a minute or two.`,
   longhorn: (c, to) => `Upgrade Longhorn to ${to} after checking its V2 volumes and host requirements.`,
   kubevirt: (c, to) => `KubeVirt's operator rolls ${to} out. Running VMs carry on, and move to the new version as they restart or live-migrate.`,
   cdi: (c, to) => `CDI's operator rolls ${to} out. Disk imports under way may restart.`,
-  "kube-vip": (c, to) => `The kube-vip chart is upgraded to ${to} with its current values. The agent restarts on each host in turn;
-    each virtual IP is unavailable for a few seconds while it moves to another host.`,
-  multus: (c, to) => `The Multus chart is upgraded to ${to} with its current values. The agent restarts on each host. Running pods are not affected;
-    pods scheduled during the restart may start a few seconds later.`,
+  "kube-vip": (c, to) => `kube-vip is upgraded to ${to}, keeping its values. Each virtual IP drops for a few seconds as its host's agent restarts.`,
+  multus: (c, to) => `Multus is upgraded to ${to}, keeping its values. Running pods are not affected; new ones may start a few seconds late.`,
 };
 
 window.componentUpgrade = async id => {
@@ -212,7 +209,7 @@ window.componentUpgrade = async id => {
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
     ${componentCheckSection(c.check)}
-    ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
+    ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first.</p>` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button>`)}`);
 };

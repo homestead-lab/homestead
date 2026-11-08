@@ -174,7 +174,7 @@ test("a queue says one thing, passes over an app already up to date, and can ski
   assert.match(html, /Rollout failed\. No automatic retry: check its job before trying it again\./, "sentences, not a run-on");
   assert.match(html, /imageQueueJob\(&quot;job-loki&quot;\)|imageQueueJob\("job-loki"\)/, "its job is one click away");
   assert.match(html, /Skip and continue with 1 more/);
-  assert.match(html, /The app not started keeps its current image; review it again to update/, "what closing does");
+  assert.match(html, /the app not started keeps its image/, "what closing does");
   await t.ctx.imageQueueSkip();
   html = t.fields["#imageQueue"].innerHTML;
   assert.match(html, /3 apps · 1 updated · 1 already up to date · 1 failed/);

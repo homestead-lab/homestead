@@ -278,7 +278,7 @@ function outageSectionHtml(kind, row) {
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
         ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
       <label class="switch" data-need="admin" title="For a self-hosted ntfy or Gotify"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address</label>
-      ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries a sentence as text, content and message, for chat services and Home Assistant; ntfy gets it as the message, Gotify with a title and priority. Once saved, the address shows only up to its host: the rest, where tokens sit, is kept and shows as (hidden). It never reaches this host, link-local or metadata addresses, and a LAN address only when an admin allows it.</p>`, false)}</div>
+      ${UI.more("How it is sent", `<p class="dim xs">Generic JSON sends a sentence as text, content and message, for chat services and Home Assistant. Once saved, the address after its host shows as (hidden), as it may hold a token. It never calls this host, link-local or metadata addresses, nor a LAN one unless an admin allows it.</p>`, false)}</div>
     ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
 }
 

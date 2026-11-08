@@ -6,7 +6,7 @@ function runtimeScope(plan,retire=false){
   return UI.facts([
     ['Host',esc(plan.node)],['Selected logical volume',`<span class="mono">${esc(plan.device)}</span>`],
     ['LV size',esc(diskV2GiB(plan.size_bytes))],['Runtime files',esc(diskV2GiB(plan.runtime_bytes))]
-  ])+diskV2Region(plan,{label:retire?'Retire files':'Move runtime',summary:retire?'Remove only verified archived runtime files from the selected LV. Keep its filesystem and boundary.':'Copy runtime onto the OS filesystem. Keep the selected LV and all its original files.'})+
+  ])+diskV2Region(plan,{label:retire?'Retire files':'Move runtime',summary:retire?'Remove only the archived runtime files. The LV and its filesystem stay.':'Copy runtime to the OS filesystem. The LV and its files stay.'})+
   UI.more('Locations and what stays',UI.facts([
     ['Runtime destination on OS',`<span class="disk-v2-identity mono">${esc(plan.destination)}</span>`],
     ['Original LV retained at',`<span class="disk-v2-identity mono">${esc(plan.retained)}</span>`]
@@ -27,12 +27,12 @@ window.runtimeMoveOpen=async(node,disk)=>{
     if(sequence!==runtimeSequence||$('#runtimeReview')!==host||$('#modal')?.classList.contains('hidden'))return;
     if(plan.operation)return runtimeMoveWatch(plan.operation.id);
     runtimeApproval={node,disk,request_id:plan.request_id,capacity_token:plan.capacity_token};
-    host.innerHTML=UI.lead('Move shared V1 and V2 runtime files onto the OS filesystem. Keep the original logical volume until its archive is verified.')+
+    host.innerHTML=UI.lead('Move Longhorn’s runtime files to the OS filesystem. The logical volume is kept until the copy is verified.')+
       UI.steps([{title:'Move runtime'},{title:'Retire original files'},{title:'Review V2'}],0)+
-      UI.callout('warn','Two maintenance restarts','First restart to move runtime. Review retirement after the host returns, then restart again to remove only its archived original files. A single-host cluster is unavailable during each restart.')+
+      UI.callout('warn','Two maintenance restarts','One moves the runtime; after a second review, the next removes the archived originals. A single-host cluster is down for each.')+
       runtimeScope(plan)+`<p class="ui-help">${esc(diskV2GiB(plan.runtime_bytes*2))} for runtime and archive · ${esc(diskV2GiB(plan.available_bytes))} free on OS</p>`+UI.meter({now:plan.runtime_bytes*200/plan.available_bytes,label:'Runtime and archive as a share of OS free space'})+
-      UI.more('Safety and recovery','<p class="ui-help">Every replica, backing image and temporary storage file must be moved or separately removed first. The host verifies its devices and copies before Kubernetes starts. An ambiguous result blocks startup and keeps both copies. Local recovery instructions are stored with the maintenance receipt. Do not change LVM, mounts or Longhorn disk registrations during this workflow.</p>')+
-      UI.ack('runtimeConfirm','Stage this runtime move; I will review and restart the host separately',{onchange:"$('#runtimeStart').disabled=!this.checked"})+
+      UI.more('Safety and recovery','<p class="ui-help">Move or remove every replica and backing image first. The host checks the copy before Kubernetes starts; if unsure, it stops and keeps both. Recovery steps are saved with the receipt. Leave LVM, mounts and Longhorn disks alone until it ends.</p>')+
+      UI.ack('runtimeConfirm','Stage the move; I restart the host separately',{onchange:"$('#runtimeStart').disabled=!this.checked"})+
       UI.actions(UI.cancel('Close')+UI.button('Stage runtime move','runtimeMoveStart()',{kind:'pri',id:'runtimeStart',disabled:true,attrs:'data-need="admin"'}));
     window.applyRole?.();
   }catch(e){if($('#runtimeReview')===host)host.innerHTML=UI.callout('warn','Runtime move unavailable',esc(e.message))+UI.actions(UI.cancel('Close'));}
@@ -75,10 +75,10 @@ window.runtimeRetireReview=async id=>{
   try{
     const plan=await runtimePost('retirement-review',{id});if(sequence!==runtimeSequence||$('#runtimeRetirementReview')!==host||$('#modal')?.classList.contains('hidden'))return;
     runtimeApproval=plan;
-    modal('Retire archived runtime files','<div id="runtimeRetirement">'+UI.lead('The relocated runtime is active. Remove its verified original files from the retained LV during the next maintenance restart.')+
-      UI.callout('warn','Only archived runtime files are removed','The original filesystem, LV boundary and Longhorn disk identity remain. Any changed or additional file blocks retirement. Preparing the LV for V2 still requires a separate erase approval.')+
+    modal('Retire archived runtime files','<div id="runtimeRetirement">'+UI.lead('The moved runtime is in use. The next restart removes the archived originals from the LV.')+
+      UI.callout('warn','Only archived runtime files are removed','The filesystem, LV and disk identity stay. A changed or extra file stops it. Erasing for V2 is approved separately.')+
       runtimeScope(plan,true)+UI.typedConfirm({id:'runtimeDevice',expect:plan.device,oninput:'runtimeRetireReady()'})+
-      UI.ack('runtimeRetireConfirm','Remove the verified archived originals at the next restart',{onchange:'runtimeRetireReady()'})+
+      UI.ack('runtimeRetireConfirm','Remove the archived originals at the next restart',{onchange:'runtimeRetireReady()'})+
       UI.actions(UI.cancel('Close')+UI.button('Retire after restart','runtimeRetire()',{kind:'danger',id:'runtimeRetire',disabled:true,attrs:'data-need="admin"'}))+'</div>',true,'disk-v2');
     window.applyRole?.();
   }catch(e){if(sequence===runtimeSequence&&$('#runtimeRetirementReview')===host&&!$('#modal')?.classList.contains('hidden'))host.innerHTML=UI.callout('warn','Retirement review unavailable',esc(e.message))+UI.actions(UI.cancel('Close')+UI.button('Review again',`runtimeRetireReview(${jsArg(id)})`,{kind:'pri'}));}

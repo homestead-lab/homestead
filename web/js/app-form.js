@@ -75,9 +75,8 @@ function appFormPlacement(prefix, p, w, nodes, containers, { startsHtml = "", mi
   return `<section class="placement card flat" id="${id("placement")}" data-prefix="${prefix}">
     <div class="sec" style="margin-top:0">Placement</div>
     <div class="place-level"><div class="place-title">Containers in this pod</div>
-      <div class="dim small" id="${id("pod_containers")}">${names.length > 1 ? `${names.map(n => UI.chip(n, "neutral")).join(" ")} always run together on one node, sharing its network and any pod volumes.`
-        : `${UI.chip(names[0] || w.name || "This app", "neutral")} is this pod's only container.`}
-        Containers in one pod cannot be spread apart; to run one on its own host, make it an app of its own and use the rules below.</div></div>
+      <div class="dim small" id="${id("pod_containers")}">${names.length > 1 ? `${names.map(n => UI.chip(n, "neutral")).join(" ")} always run together on one host. To run one apart, make it an app of its own.`
+        : `${UI.chip(names[0] || w.name || "This app", "neutral")} is this pod's only container.`}</div></div>
     <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
         <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="${id("rep")}" value="${w.start_replicas ?? w.replicas ?? 1}" min="${minCopies}" max="5" ${w.autostart === false ? "disabled" : ""}></div>

@@ -198,7 +198,7 @@ test("a restart the checks would refuse: the review offers no restart, and says 
   assert.match(html, /will not do it by itself/);
   assert.match(html, /3 orphan records\./);
   assert.doesNotMatch(html, /3 orphan records\.\./);
-  assert.match(html, /row then offers Restart…/);
+  assert.match(html, /waits for you to choose Restart…/);
   assert.doesNotMatch(html, /nodePowerReview|nodeActions/, "a restart before installing would be the wrong order");
   assert.equal((html.match(/<button/g) || []).length, 2, "go and cancel");
   assert.doesNotMatch(button(html, "osu_review_go"), /\bdisabled\b/, "the update itself goes ahead");
@@ -234,7 +234,7 @@ test("checks that could not be read are not called a refusal", async () => {
 test("Homestead's own host is allowed, with the note", async () => {
   const one = await reviewed(preview([previewHost("node-a", { homestead_here: true })]));
   assert.match(one.html(), /runs on this host/);
-  assert.match(one.html(), /stop answering for a few minutes/);
+  assert.match(one.html(), /stop this page answering for a few minutes/);
   assert.match(one.html(), /carries on/);
   assert.doesNotMatch(one.html(), /goes last/);
   assert.doesNotMatch(button(one.html(), "osu_review_go"), /\bdisabled\b/);
