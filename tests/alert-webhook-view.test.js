@@ -32,7 +32,7 @@ test("the card says where alerts go, and only an admin changes it", () => {
   assert.match(html, /ntfy.*https:\/\/ntfy\.example\.com\/\(hidden\)/);
   assert.match(html, /Warnings and critical/);
   assert.match(html, /HTTP 502/);
-  assert.deepEqual(actions.map(a => [a.label, a.need]), [["Edit", "admin"]]);
+  assert.deepEqual(actions.map(a => [a.label, a.need]), [["Edit settings", "admin"]]);
   const off = load();
   assert.match(off.ctx.alertHookCardHtml({ webhook: "", format: "generic", min_severity: "degraded" }, 1000), /<span class="ui-chip neutral">off/);
   assert.deepEqual(off.actions.map(a => [a.label, a.need]), [["Set up", "admin"]]);

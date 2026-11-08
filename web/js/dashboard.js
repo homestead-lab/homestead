@@ -4,24 +4,24 @@ const Dashboard = (() => {
   const widgets = Object.freeze({
     compute: {title:"Compute", description:"Live CPU and memory", width:4, widths:[4,6,8,12]},
     throughput: {title:"Throughput", description:"Network traffic and local disk", width:4, widths:[4,6,8,12]},
-    storage: {title:"Storage", description:"Capacity and replica health", width:4, widths:[4,6,8,12]},
+    storage: {title:"Storage", description:"Capacity and the health of volume copies", width:4, widths:[4,6,8,12]},
     nodes: {title:"Host health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
     cpu: {title:"Top CPU", description:"The busiest apps", width:6, widths:[4,6,8,12]},
     memory: {title:"Top memory", description:"Apps using the most RAM", width:6, widths:[4,6,8,12]},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
     ...Object.fromEntries([
-      ["health","Health suggestions","Prioritized checks and next steps"],
+      ["health","Health suggestions","Checks and next steps, most important first"],
       ["workloads","App and VM health","Readiness and stopped apps and VMs"],
-      ["containers","Containers","Compact app status and live usage"],
-      ["vms","Virtual machines","Compact VM status and live usage"],
+      ["containers","Containers","App status and current use, in brief"],
+      ["vms","Virtual machines","VM status and current use, in brief"],
       ["backups","Backup freshness","Oldest external backups and missing copies"],
       ["updates","Updates awaiting review","Container, platform and host updates"],
       ["jobs","Running and failed jobs","Active work and outcomes needing attention"],
     ].map(([id,title,description])=>[id,{title,description,width:6,widths:[4,6,8,12],optional:true}])),
     ...Object.fromEntries(["custom","custom2","custom3","custom4"].map(id=>[id,{title:"Custom text / HTML",description:"Notes and static HTML · up to 4 cards",width:6,widths:[4,6,8,12],custom:true,optional:true}])),
-    portal: {title:"Portal links", description:"Your apps and devices", width:6, widths:[4,6,8,12]},
-    monitoring: {title:"Monitoring", description:"Apps up, slow and down · more history as it widens", width:6, widths:[4,6,8,12], optional:true, own:true},
-    timeline: {title:"Since you were last here", description:"Changes, restarts, jobs and alerts while you were away", width:6, widths:[4,6,8,12], optional:true, own:true},
+    portal: {title:"Portal links", description:"Links to apps and devices", width:6, widths:[4,6,8,12]},
+    monitoring: {title:"Monitoring", description:"Apps that are up, slow and down · More history when wider", width:6, widths:[4,6,8,12], optional:true, own:true},
+    timeline: {title:"Since the last visit", description:"Changes, restarts, jobs and alerts since the last visit", width:6, widths:[4,6,8,12], optional:true, own:true},
   });
   const widths = {4:"One third",6:"Half",8:"Two thirds",12:"Full width"};
   const defaults = () => Object.entries(widgets).filter(([id,w])=>id!=="portal" && !w.optional).map(([id,w])=>({id,width:w.width,height:0}));
@@ -116,7 +116,7 @@ const Dashboard = (() => {
         layout=normalize(answer.layout);revision=answer.revision;loadError="";loadedAt=Date.now();
         if(answer.layout!==null)clearLegacy();
         return true;
-      }catch(error){if(requestedSession===session && user===ME)loadError=error.message || "Could not load your dashboard layout.";return false;}
+      }catch(error){if(requestedSession===session && user===ME)loadError=error.message || "The dashboard layout could not be loaded.";return false;}
       finally{if(requestedSession===session)layoutRequest=null;}
     })();
     return layoutRequest;
@@ -129,7 +129,7 @@ const Dashboard = (() => {
     if (id === "nodes") return dashboardNodes(STATE.data.ov?.nodes || [], item.display || "compact");
     if (id === "monitoring") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Monitoring", "", '<button class="btn sm" onclick="go(\'monitoring\')">Open</button>')}
       <div id="dashboardMonitoring" class="dashboard-resource-scroll" data-width="${item.width || 6}">${monitorWidget(item)}</div></div>`;
-    if (id === "timeline") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Since you were last here", "", '<button class="btn sm" onclick="go(\'timeline\')">Open</button>')}
+    if (id === "timeline") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Since the last visit", "", '<button class="btn sm" onclick="go(\'timeline\')">Open</button>')}
       <div id="dashboardTimeline" class="dashboard-resource-scroll">${Timeline.widget(item)}</div></div>`;
     if (widgets[id]?.optional) return HealthInsights.widget(id,item);
     if (id === "portal") return `<div class="card flat dashboard-portal dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
@@ -138,11 +138,11 @@ const Dashboard = (() => {
     return apiObject.content[id] || '<div class="card flat empty">Data unavailable</div>';
   }
   function portalBody(item=settings("portal")) {
-    if (STATE.data.dashboardPortalError) return '<div class="empty small">Portal links could not be loaded. <button class="btn sm" onclick="Dashboard.loadPortal(true)">Retry</button></div>';
+    if (STATE.data.dashboardPortalError) return '<div class="empty small">The portal links could not be loaded. <button class="btn sm" onclick="Dashboard.loadPortal(true)">Try again</button></div>';
     const data = STATE.data.portal;
     if (!data) return '<div class="empty small">Loading links…</div>';
     const links=(data.links || []).filter(link=>!item.groups || item.groups.includes(link.section || ""));
-    return links.length ? portalTiles(links, {compact:true, list:item.display!=="tiles"}) : `<div class="empty small">${data.links?.length?"No links match these sections.":"No links yet. Add apps and devices in Portal."}</div>`;
+    return links.length ? portalTiles(links, {compact:true, list:item.display!=="tiles"}) : `<div class="empty small">${data.links?.length?"No links match these sections.":"There are no links yet. Add apps and devices in Portal."}</div>`;
   }
   async function loadMonitoring() {
     if (!(draft || read()).some(item=>item.id==="monitoring")) return;
@@ -187,7 +187,7 @@ const Dashboard = (() => {
         ${edit?`<button type="button" class="dashboard-select" aria-label="Configure ${widgets[item.id].title}" onclick="Dashboard.select(${jsq(item.id)})"></button>
           <button type="button" class="dashboard-resize" data-dash-resize="${item.id}" aria-label="Resize ${widgets[item.id].title}" title="Drag to resize, or use Widget settings">↘</button>`:""}
       </section>`).join("")}</div>
-      ${items.length?"":`<div class="dashboard-empty card flat"><b>Your dashboard, your way</b><p class="dim">${edit?"Choose a widget from the library to get started.":"Add the information you use most."}</p>${edit?"":'<button class="btn hide-sm" onclick="Dashboard.start()">Add widgets</button><span class="only-sm">Open this dashboard on a larger screen to add widgets.</span>'}</div>`}
+      ${items.length?"":`<div class="dashboard-empty card flat"><b>A dashboard arranged as needed</b><p class="dim">${edit?"Choose a widget from the library to start.":"Add the information used most often."}</p>${edit?"":'<button class="btn hide-sm" onclick="Dashboard.start()">Add widgets</button><span class="only-sm">Open this dashboard on a larger screen to add widgets.</span>'}</div>`}
     </div>`;
   }
   function groupOptions(item) {
@@ -196,7 +196,7 @@ const Dashboard = (() => {
     const values=[...new Set([...(available || []),...(item.groups || [])])].sort((a,b)=>a.localeCompare(b));
     const label=item.id==="portal"?"Sections":"Groups";
     return `<fieldset class="dashboard-group-options"><legend>${label}</legend><label class="dashboard-check"><input type="checkbox" ${!item.groups?"checked":""} data-all-groups onchange="Dashboard.allGroups(this.checked)"> All ${label.toLowerCase()}</label>
-      <div class="dashboard-group-list">${values.map(value=>`<label class="dashboard-check"><input type="checkbox" data-group="${esc(value)}" ${!item.groups || item.groups.includes(value)?"checked":""} onchange="Dashboard.group(this.dataset.group,this.checked)"> ${esc(value || "Ungrouped")}</label>`).join("") || `<span class="dim small">${available?"No groups yet.":"Loading groups…"}</span>`}</div></fieldset>`;
+      <div class="dashboard-group-list">${values.map(value=>`<label class="dashboard-check"><input type="checkbox" data-group="${esc(value)}" ${!item.groups || item.groups.includes(value)?"checked":""} onchange="Dashboard.group(this.dataset.group,this.checked)"> ${esc(value || "Ungrouped")}</label>`).join("") || `<span class="dim small">${available?"There are no groups yet.":"Loading groups…"}</span>`}</div></fieldset>`;
   }
   function syncGroups(){
     const item=settings(selected),host=document.getElementById("dashboardGroupOptions");if(!host)return;
@@ -221,23 +221,23 @@ const Dashboard = (() => {
         <div id="dashboardGroupOptions">${groupOptions(item)}</div>
         <div class="dashboard-order"><button class="btn sm" ${index===0?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index-1})">↑ Earlier</button><button class="btn sm" ${index===draft.length-1?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index+1})">↓ Later</button></div>
         <button class="btn sm danger" onclick="Dashboard.remove(${jsq(item.id)})">Remove widget</button>`:""}</div>
-      ${UI.moduleHeader("Widgets", "Add what you use. Remove what you don’t.")}
+      ${UI.moduleHeader("Widgets", "Add the widgets that are useful, and remove the rest.")}
       <div class="dashboard-catalog">${Object.entries(widgets).filter(([id,w])=>!w.custom || id===(Object.keys(widgets).find(key=>widgets[key].custom && !draft.some(item=>item.id===key)) || "custom4")).map(([id,w])=>{
         const added=draft.some(item=>item.id===id);
         return `<button type="button" class="dashboard-catalog-item${id===selected?" on":""}" onclick="Dashboard.${added?"select":"add"}(${jsq(id)})" aria-label="${added?"Configure":"Add"} ${esc(w.title)}"><span><b>${esc(w.title)}</b><small>${w.description}</small></span><span aria-hidden="true">${added?"✓":"＋"}</span></button>`;
       }).join("")}</div>
-      ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Use Start column to leave a gap, or Start a new row to leave the rest of a row empty. Cards grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. Your layout follows your account across browsers and devices.")}
+      ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Use Start column to leave a gap, or Start a new row to leave the rest of a row empty. Cards grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. The layout is saved to the account and appears on every browser and device.")}
     </div></aside>`;
   }
   function editor(message="") {
     if(draft===null)return;
     const focus=document.activeElement, focusId=focus?.dataset.dashDrag;
-    paint(`${UI.pageHeader("Edit dashboard", "Arrange your widgets. Your layout follows your account.")}
-      <div class="dashboard-mobile-notice only-sm" role="status">Use a larger screen to continue arranging widgets. Your unsaved changes are kept.</div>
+    paint(`${UI.pageHeader("Edit dashboard", "Arrange the widgets. The layout is saved to the account.")}
+      <div class="dashboard-mobile-notice only-sm" role="status">Use a larger screen to continue arranging widgets. Unsaved changes are kept.</div>
       <div class="dashboard-edit-toolbar"><div class="row">${UI.chip("Editing", "neutral")}<span class="dim small">${draft.length} widgets</span><span class="dim small">${dirty()?"Unsaved changes":"Layout saved"}</span></div>
         <div class="row"><button class="btn sm" onclick="Dashboard.history(-1)" ${undo.length?"":"disabled"}>Undo</button><button class="btn sm" onclick="Dashboard.history(1)" ${redo.length?"":"disabled"}>Redo</button><button class="btn sm" onclick="Dashboard.reset()">Reset layout</button>
         <button class="btn sm" aria-pressed="${phone}" onclick="Dashboard.preview()">${phone?"Desktop canvas":"Phone preview"}</button>${UI.button("Cancel", "Dashboard.cancel()", {disabled:saving, attrs: 'data-dialog-dismiss="true"' })}${UI.button(saving?"Saving…":"Save layout", "Dashboard.save()", {kind:"pri",disabled:saving})}</div></div>
-      ${(STATE.data.ov?.health_issues || []).length ? UI.callout("warn", "Cluster needs attention", esc(STATE.data.ov.health_summary || "Review cluster health after editing.")) : ""}
+      ${(STATE.data.ov?.health_issues || []).length ? UI.callout("warn", "Cluster needs attention", esc(STATE.data.ov.health_summary || "Check the cluster's health after editing.")) : ""}
       <div class="dashboard-edit-layout"><div class="dashboard-workbench"><div class="dashboard-canvas-label"><span>${phone?"Phone · stacked layout":"Grid · drag to arrange"}</span><span>${phone?"Order is shared with desktop":"12 columns · automatic rows"}</span></div>${render(true)}</div>${inspector()}</div>
       <div id="dashboardStatus" class="sr-only" role="status" aria-live="polite">${esc(message)}</div>`);
     const current=draft.find(item=>item.id===selected);
@@ -298,12 +298,12 @@ const Dashboard = (() => {
       const answer=await api(endpoint,{method:"POST",body:JSON.stringify({revision:baseline,layout:{version:1,items:draft}})});
       if(requestedSession!==session || user!==ME)return;
       layout=normalize(answer.layout);revision=answer.revision;loadedUser=user;loadedAt=Date.now();clearLegacy();
-    }catch(e){loadedAt=0;if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "Your layout could not be saved. Try again.","bad");}return;}
+    }catch(e){loadedAt=0;if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "The layout could not be saved. Try again.","bad");}return;}
     if(requestedSession!==session || user!==ME)return;
-    saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
+    saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to the account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
-  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, loadMonitoring, loadTimeline, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"Your saved layout could not be refreshed. Editing is unavailable until it reconnects."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
+  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, loadMonitoring, loadTimeline, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"The saved layout could not be refreshed. Editing is unavailable until the connection returns."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
     invalidate(){window.HealthInsights?.reset();session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
     add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(id==="monitoring")loadMonitoring();if(id==="timeline")loadTimeline();if(widgets[id]?.optional && !widgets[id].custom && !widgets[id].own)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
