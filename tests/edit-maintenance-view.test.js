@@ -64,16 +64,16 @@ test("An uncertain edit requires fresh saved state instead of replaying addition
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 1);
   assert.equal(scrolled, true);
-  assert.equal(t.fields["#editGo"].textContent, "Inspect before saving again");
+  assert.equal(t.fields["#editGo"].textContent, "Check before saving again");
   assert.equal(t.fields["#editGo"].disabled, true);
   assert.equal(t.fields["#editGo"].onclick, null);
   assert.match(t.html(), /Some changes may already be saved/);
-  assert.match(t.html(), /Reload saved app/);
-  assert.match(t.html(), /does not need a new name/);
+  assert.match(t.html(), /Reload app/);
+  assert.match(t.html(), /discards the unsaved changes in this form/);
   await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
   await t.c.window.editSave("lab","demo");
   assert.equal(t.sent.length,1);
-  assert.match(t.notices.at(-1),/Reload the saved app/);
+  assert.match(t.notices.at(-1),/Reload the app/);
 });
 
 test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
@@ -81,7 +81,7 @@ test("Rename review explains a name-only outage and requires a separate acknowle
   await t.c.window.editReview({ ns: "lab", name: "old", workload_name: "new" });
   assert.match(t.html(), /&lt;old&gt;/);
   assert.match(t.html(), /Only the app name changes/);
-  assert.match(t.html(), /Save other edits separately/);
+  assert.match(t.html(), /Save other changes separately/);
   assert.match(t.html(), /short outage/);
   assert.match(t.html(), /Rename app/);
   await t.c.window.confirmEdit();
@@ -168,8 +168,8 @@ test("Storage move has one plain-language review with escaped paths and both pla
   assert.match(t.html(), /&lt;main&gt;/);
   assert.match(t.html(), /data-label="From">old/);
   assert.match(t.html(), /new\/&lt;folder&gt;/);
-  assert.match(t.html(), /Existing destination files may be overwritten/);
-  assert.match(t.html(), /no automatic rollback or retry/);
+  assert.match(t.html(), /Files that already exist at the destination may be overwritten/);
+  assert.match(t.html(), /Nothing is retried or undone automatically/);
   assert.match(t.html(), /Temporary copy helper/);
   assert.match(t.html(), /Start data move/);
   await t.c.window.confirmEdit();
@@ -185,9 +185,9 @@ test("uncertain rename directs inspection of both names and never offers stale r
   await t.c.window.editReview({ns:'lab',name:'old',workload_name:'new'});
   t.fail();t.fields['#editCapacityConfirm'].checked=true;
   await t.c.window.confirmEdit();
-  assert.match(t.html(),/Inspect both app names/);
-  assert.match(t.html(),/Inspect apps/);
-  assert.doesNotMatch(t.html(),/Reload saved app/);
+  assert.match(t.html(),/Check both app names/);
+  assert.match(t.html(),/Check apps/);
+  assert.doesNotMatch(t.html(),/Reload app/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
 

@@ -73,13 +73,13 @@ const field = (c, w) => c.appFormPlacement("e", { apart: [], together: [] }, { f
 
 test("Edit offers its group's tier first, for an app in a group", () => {
   const html = field(load(), { priority: "group", priority_group: "Home", priority_group_tier: "critical" });
-  assert.match(html, /<option value="group" selected>From its group: critical, from Home<\/option>/);
-  assert.match(html, /takes Home's tier/);
+  assert.match(html, /<option value="group" selected>From its group: critical, set on Home<\/option>/);
+  assert.match(html, /uses Home's tier/);
 });
 
 test("a group with no tier is offered as normal", () => {
   const html = field(load(), { priority: "low", priority_group: "Home", priority_group_tier: "" });
-  assert.match(html, /value="group"\s*>From its group: normal, Home has no tier/);
+  assert.match(html, /value="group"\s*>From its group: normal, because Home has no tier/);
   assert.match(html, /<option value="low" selected>/);
 });
 
