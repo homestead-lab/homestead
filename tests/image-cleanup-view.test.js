@@ -38,7 +38,7 @@ test("the automatic clean-up says its days and its last run", () => {
   const { ctx } = load();
   const html = ctx.imageCleanupRow(images, { auto: true, after_days: 30, last: { at: Date.now() / 1000 - 600, removed: 2, freed_mb: 1384 } });
   assert.match(html, /on · 30 days/);
-  assert.match(html, /Images nothing uses for 30 days are removed from every host, checked hourly · last: removed 2 \(1384 MiB\) 10m ago/);
+  assert.match(html, /Images unused for 30 days are removed from every host, checked hourly · last: removed 2 \(1384 MiB\) 10m ago/);
 });
 
 test("with nothing unused, Clean all unused is off; an unread setting says so", () => {
