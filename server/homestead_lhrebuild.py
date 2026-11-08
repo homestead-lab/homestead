@@ -2,12 +2,15 @@
 
 Longhorn rebuilds a missing replica only while its volume is attached. A
 volume nothing uses can sit with one copy for good - nas-backup did, until a
-reboot found its only copy on the host being drained. Longhorn 1.9 and later
-can rebuild detached volumes itself (offline replica rebuilding); Homestead
-turns that on once, by default, and leaves the setting alone after that.
-Older Longhorn has no such setting: there Homestead attaches the volume
-itself, with no frontend - nothing can mount it - until its copies are whole,
-and steps aside the moment anything else wants the volume.
+reboot found its only copy on the host being drained.
+
+Homestead attaches such a volume itself, with no frontend - nothing can mount
+it - until its copies are whole, and releases it as soon as anything else asks
+for it. Longhorn 1.9 and later can do this too (offline replica rebuilding),
+but its rebuild keeps the volume until the rebuild finishes, even when an app
+on another host is waiting for it: after a host failure, Home Assistant waited
+for a 15 GB copy before it could start. So Homestead turns Longhorn's own off,
+once (OWN marks the setting), and uses its own on every version.
 """
 import time
 import urllib.error
@@ -18,6 +21,8 @@ LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 SETTING = "offline-replica-rebuilding"
 # Marks the setting as one Homestead has set once; after that it is yours.
 DEFAULTED = "homestead.io/offline-rebuilding-default"
+# Marks Longhorn's own offline rebuilding as switched off in favour of Homestead's.
+OWN = "homestead.io/offline-rebuilding-own"
 TICKET = "homestead-rebuild"
 # A fallback attachment that has not made the volume whole by then is let go.
 TICKET_LIMIT = 6 * 3600
@@ -111,15 +116,12 @@ def _hosts():
 
 
 def status():
-    found = setting()
     volumes, replicas = _items(f"{LH}/volumes"), _items(f"{LH}/replicas")
     rows = short(volumes, replicas, _hosts())
     held = _tickets()
     for row in rows:
         row["rebuilding"] = row["name"] in held
-    supported = found is not None
-    return {"supported": supported, "enabled": found[0] if supported else bool(_enabled()),
-            "short": rows}
+    return {"supported": True, "enabled": bool(_enabled()), "short": rows}
 
 
 def _tickets():
@@ -134,14 +136,24 @@ def _tickets():
 
 
 def save(enabled):
-    """Turn offline rebuilding on or off for the whole cluster."""
-    found = setting()
-    if found is None:
-        return {"ok": True, "enabled": bool(enabled), "supported": False}
-    ksend("PATCH", f"{LH}/settings/{SETTING}",
-          {"metadata": {"annotations": {DEFAULTED: "set"}}, "value": "true" if enabled else "false"},
-          ctype="application/merge-patch+json")
+    """Homestead's offline rebuilding on or off. Longhorn's own stays off
+    (_use_own), so the answer is Homestead's preference alone."""
     return {"ok": True, "enabled": bool(enabled), "supported": True}
+
+
+def _use_own(found):
+    """Once: Longhorn's own offline rebuilding off, and any volume an earlier
+    Homestead set to use it back to the cluster's setting, so only Homestead's
+    holds - which give way to apps - rebuild detached volumes."""
+    value, item = found
+    if ((item.get("metadata") or {}).get("annotations") or {}).get(OWN):
+        return
+    for each in _items(f"{LH}/volumes"):
+        if (each.get("spec") or {}).get("offlineRebuilding") == "enabled":
+            ksend("PATCH", f"{LH}/volumes/{each['metadata']['name']}", {"spec": {"offlineRebuilding": "ignored"}},
+                  ctype="application/merge-patch+json")
+    ksend("PATCH", f"{LH}/settings/{SETTING}", {"metadata": {"annotations": {OWN: "1"}}, "value": "false"},
+          ctype="application/merge-patch+json")
 
 
 def rebuild_now(volume):
@@ -153,10 +165,6 @@ def rebuild_now(volume):
         raise ValueError("This volume is not a detached volume short of copies; refresh")
     if not row["whole"]:
         raise ValueError("This volume has no whole copy to rebuild from; restore it from a backup instead")
-    if setting() is not None:
-        ksend("PATCH", f"{LH}/volumes/{volume}", {"spec": {"offlineRebuilding": "enabled"}},
-              ctype="application/merge-patch+json")
-        return {"ok": True, "detail": f"Longhorn is rebuilding {row['claim']} while it is detached"}
     _hold(volume, row["hosts"][0])
     return {"ok": True, "detail": f"Homestead is holding {row['claim']} attached, with nothing able to mount it, "
                                   "until its copies are rebuilt"}
@@ -183,16 +191,13 @@ def _release(volume):
 def tick():
     """Run by the leader every minute or so.
 
-    Turns Longhorn's offline rebuilding on once, by default. Where Longhorn
-    has no such setting, holds one short volume at a time attached until it
-    is whole, and lets go of one whose copies are whole, that anything else
-    asked for, or that has not finished in six hours."""
+    Turns Longhorn's own offline rebuilding off once (_use_own). Holds one
+    short volume at a time attached until it is whole, and lets go of one
+    whose copies are whole, that anything else asked for, or that has not
+    finished in six hours."""
     found = setting()
     if found is not None:
-        value, item = found
-        if not value and not ((item.get("metadata") or {}).get("annotations") or {}).get(DEFAULTED):
-            save(True)
-        return
+        _use_own(found)
     held = _tickets()
     volumes = {(v.get("metadata") or {}).get("name"): v for v in _items(f"{LH}/volumes")}
     for name, info in held.items():

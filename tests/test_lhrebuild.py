@@ -117,28 +117,49 @@ class ShortTests(unittest.TestCase):
 
 
 class DefaultTests(RebuildCase):
-    def test_offline_rebuilding_is_turned_on_once(self):
-        cluster = Cluster(self, "false")
+    def test_longhorns_own_offline_rebuilding_is_turned_off_once(self):
+        """Its rebuild keeps a volume until it finishes, even while an app on
+        another host waits for it; Homestead's holds give way."""
+        cluster = Cluster(self, "true")
         self.bind()
         R.tick()
         method, path, body = cluster.sent[0]
-        self.assertEqual((f"{LH}/settings/{R.SETTING}", "true"), (path, body["value"]))
-        self.assertIn(R.DEFAULTED, body["metadata"]["annotations"], "marked, so it is never forced back on")
-        self.assertEqual("true", cluster.kube.object(path)["value"])
+        self.assertEqual((f"{LH}/settings/{R.SETTING}", "false"), (path, body["value"]))
+        self.assertIn(R.OWN, body["metadata"]["annotations"], "marked, so it is done once")
+        self.assertEqual("false", cluster.kube.object(path)["value"])
 
-    def test_a_setting_turned_off_after_that_is_left_alone(self):
-        cluster = Cluster(self, "false", {R.DEFAULTED: "set"})
-        self.bind()
+    def test_volumes_set_to_longhorns_rebuild_go_back_to_the_cluster_setting(self):
+        cluster = Cluster(self, "true")
+        cluster.volumes({**volume("v1"), "spec": {"numberOfReplicas": 2, "offlineRebuilding": "enabled"}})
+        self.bind(enabled=False)
+        R.tick()
+        self.assertIn(("PATCH", f"{LH}/volumes/v1", {"spec": {"offlineRebuilding": "ignored"}}), cluster.sent)
+
+    def test_once_marked_the_setting_is_left_alone(self):
+        cluster = Cluster(self, "true", {R.OWN: "1"})
+        self.bind(enabled=False)
         R.tick()
         self.assertEqual([], cluster.sent)
 
-    def test_rebuild_now_uses_longhorns_offline_rebuild_where_it_has_one(self):
-        cluster = Cluster(self, "false", {R.DEFAULTED: "set"})
+    def test_rebuild_now_holds_the_volume_where_longhorn_has_its_own_too(self):
+        cluster = Cluster(self, "false", {R.OWN: "1"})
         cluster.volumes(volume("v1"))
         cluster.replicas(replica("v1", "k1"))
         self.bind()
         R.rebuild_now("v1")
-        self.assertEqual([("PATCH", f"{LH}/volumes/v1", {"spec": {"offlineRebuilding": "enabled"}})], cluster.sent)
+        method, path, body = cluster.sent[0]
+        self.assertEqual(f"{LH}/volumeattachments/v1", path)
+        self.assertIn(R.TICKET, body["spec"]["attachmentTickets"])
+
+    def test_a_hold_gives_way_to_an_app_where_longhorn_has_its_own_too(self):
+        cluster = Cluster(self, "false", {R.OWN: "1"})
+        cluster.volumes(volume("v1"))
+        cluster.replicas(replica("v1", "k1"))
+        cluster.attachment("v1", {R.TICKET: {"id": R.TICKET, "parameters": {"since": str(int(time.time()))}},
+                                  "csi-abc": {"id": "csi-abc", "nodeID": "k2"}})
+        self.bind()
+        R.tick()
+        self.assertIn(("PATCH", f"{LH}/volumeattachments/v1", {"spec": {"attachmentTickets": {R.TICKET: None}}}), cluster.sent)
 
 
 class FallbackTests(RebuildCase):

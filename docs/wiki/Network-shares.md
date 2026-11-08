@@ -143,6 +143,17 @@ that deletes files on the volume directly, such as Sonarr or Radarr, is not
 affected. Files already in a bin when a limit is first set are removed by
 their own modified date, not the date they were deleted.
 
+### After a host failure
+
+Each shared volume is served from one host by Longhorn's share manager. With
+**Restart shared folders quickly after a host failure** on (under
+**Settings → Hardware and storage**, and on by default), Longhorn moves it to
+another host within about a minute; off, only after Kubernetes gives up on the
+host, which takes several minutes. The SMB server itself restarts on another
+host about 15 seconds after its host stops responding. A volume that is
+rebuilding a copy stays readable and writable, so shares keep working during a
+rebuild.
+
 ### Partial SMB service after a storage or node failure
 
 One SMB pod normally mounts every configured share. If a host holding the only

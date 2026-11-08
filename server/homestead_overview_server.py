@@ -370,23 +370,27 @@ def push_alerts(fresh):
                      urgency="high" if urgent else "normal")
 
 
-# Whether Longhorn's policy for a down node has been settled (LHCAP.ensure_node_down).
+# Whether Longhorn's recovery defaults have been settled (LHCAP.ensure_recovery_defaults).
 _node_down_settled = [False]
+RECOVERY_WORDS = {LHCAP.NODE_DOWN: "apps with storage now move off a failed host",
+                  LHCAP.RWX_FAST: "shared folders now restart quickly after a host failure",
+                  LHCAP.REPLENISH: "Longhorn now waits an hour for a failed host before copying its data again"}
 
 
 def _settle_node_down():
-    """Once: a failed host lets go of its volumes, so an app set to move does
-    (LHCAP.NODE_DOWN_RELEASE). Harvester keeps Longhorn's settings itself."""
+    """Once: Longhorn's defaults that keep a failed host's apps and shares
+    down, or copy all its data again after a short outage, become Homestead's
+    (LHCAP.RECOVERY_DEFAULTS). Harvester keeps Longhorn's settings itself."""
     if _node_down_settled[0]:
         return
     if cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version):
         _node_down_settled[0] = True
         return
-    changed = LHCAP.ensure_node_down()
-    if changed is not None:
-        _node_down_settled[0] = True
-    if changed:
-        print("longhorn: pods on a failed node are now deleted, so their volumes can attach elsewhere", flush=True)
+    results = LHCAP.ensure_recovery_defaults()
+    _node_down_settled[0] = all(result is not None for result in results.values())
+    for name, changed in results.items():
+        if changed:
+            print(f"longhorn: {RECOVERY_WORDS.get(name, name)}", flush=True)
 
 
 def _alerts_loop():
