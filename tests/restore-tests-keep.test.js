@@ -29,11 +29,11 @@ function view(answer = LIST) {
 
 test("Restore tests show the placeholder only before the first list", async () => {
   const { ctx } = view();
-  assert.match(ctx.restoreTestsSection(), /Finding each app's newest backups/);
+  assert.match(ctx.restoreTestsSection(), /Finding the newest backups of each app/);
   ctx.STATE.data.restoreTests = LIST;
   const html = ctx.restoreTestsSection();
   assert.match(html, /paperless/);
-  assert.doesNotMatch(html, /Finding each app's newest backups/);
+  assert.doesNotMatch(html, /Finding the newest backups of each app/);
 });
 
 test("the Data Protection page paints the Restore tests section", () => {
