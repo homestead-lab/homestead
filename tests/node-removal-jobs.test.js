@@ -64,8 +64,8 @@ test("Gone for good asks for the acknowledgement and sends the reviewed job ids"
   await t.c.window.nodeRemoval("node3");
   t.choose("gone");
   assert.equal(t.controls.rm_jobs.closest("label").hidden, false);
-  assert.match(t.body.innerHTML, /Remove it anyway\. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed\./);
-  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves it as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed.");
+  assert.match(t.body.innerHTML, /Remove the host anyway\. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed\./);
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves the job as it is. The saved job stays, and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once the host is removed.");
   assert.equal(t.controls.rm_go.disabled, true, "not until it is accepted");
   t.controls.rm_jobs.checked = true;
   t.c.window.nodeRemovalMode();
@@ -80,8 +80,8 @@ test("Several saved jobs are named in the plural", async () => {
   await t.c.window.nodeRemoval("node3");
   assert.match(t.body.innerHTML, /Saved disk jobs on node3/);
   t.choose("gone");
-  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves them as they are. " + stay);
-  assert.ok(t.body.innerHTML.includes("Remove it anyway. " + stay));
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves the jobs as they are. " + stay);
+  assert.ok(t.body.innerHTML.includes("Remove the host anyway. " + stay));
 });
 
 test("A disk retire or V2 cleanup left behind is described as the server says, escaped", async () => {
@@ -89,8 +89,8 @@ test("A disk retire or V2 cleanup left behind is described as the server says, e
   const t = setup(plan([{ ...JOB, kind: "disk-retire" }, { ...JOB, id: "job-2", kind: "longhorn-v2-cleanup" }], stay));
   await t.c.window.nodeRemoval("node3");
   t.choose("gone");
-  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves them as they are. " + stay);
-  assert.ok(t.body.innerHTML.includes("Remove it anyway. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts. The disk retire job does so until it stops; it fails by itself once Longhorn's record of &lt;node3&gt; is deleted."));
+  assert.equal(t.controls.rm_jobs_hint.textContent, "Gone for good leaves the jobs as they are. " + stay);
+  assert.ok(t.body.innerHTML.includes("Remove the host anyway. The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts. The disk retire job does so until it stops; it fails by itself once Longhorn's record of &lt;node3&gt; is deleted."));
   assert.doesNotMatch(t.body.innerHTML, /end them from Jobs/);
 });
 
