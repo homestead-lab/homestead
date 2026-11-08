@@ -21,17 +21,17 @@ const row = (name, extra = {}) => ({ name, provisioner: "driver.longhorn.io", de
 
 test("an install class that is here: Make default does not change Homestead's class", () => {
   const text = card([row("fast", { default: true }), row("longhorn", { homestead_default: true, homestead_reason: "install" })]);
-  assert.match(text, /Homestead puts new volumes on longhorn \(its install class\); making another class the default here does not change that\./);
+  assert.match(text, /Homestead puts new volumes on longhorn \(the class it was installed with\)\. Making another class the default here does not change that\./);
 });
 
 test("no install class here: Homestead follows the cluster's default", () => {
   const text = card([row("fast", { default: true, homestead_default: true, homestead_reason: "default" }), row("longhorn")]);
-  assert.match(text, /Homestead puts new volumes on fast, the cluster's default: making another class the default here moves new volumes there too\./);
+  assert.match(text, /Homestead puts new volumes on fast, the cluster's default\. Making another class the default here moves new volumes to it as well\./);
 });
 
 test("nothing marked default: Longhorn's usual class, and Make default would change it", () => {
   const text = card([row("longhorn", { homestead_default: true, homestead_reason: "fallback" })]);
-  assert.match(text, /Homestead puts new volumes on longhorn \(no class is marked default\); making a class the default here moves new volumes there\./);
+  assert.match(text, /Homestead puts new volumes on longhorn \(no class is marked as the default\)\. Making a class the default here moves new volumes to it\./);
 });
 
 test("an answer without the field says nothing rather than guess", () => {
@@ -69,5 +69,5 @@ test("the new class dialog's default switch says the same as the card", async ()
   await ctx.storageClassCreate().catch(() => {});
   const text = shown[0].replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
   assert.match(text, /Make this the cluster's default class/);
-  assert.match(text, /Homestead puts new volumes on longhorn \(its install class\); making another class the default here does not change that\./);
+  assert.match(text, /Homestead puts new volumes on longhorn \(the class it was installed with\)\. Making another class the default here does not change that\./);
 });

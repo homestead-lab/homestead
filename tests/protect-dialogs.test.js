@@ -175,7 +175,7 @@ test("warning and error boxes in Data Protection only go down", () => {
 test("New storage class says nothing about migration until Live-migratable is ticked", () => {
   const storage = require("./helpers/storage-source")();
   assert.match(storage, /<div id="sc_hint" hidden><\/div>/);
-  assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Migratable is for VM live migration/);
+  assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Live-migratable is for moving running VMs/);
   const hint = between(storage, "window.storageClassHint", "\n};\n");
   assert.match(hint, /hint\.hidden = !on/);
   assert.match(hint, /UI\.callout\("warn"/);
