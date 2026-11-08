@@ -31,7 +31,7 @@ const fmtWhen = v => {
 const fmtNext = v => { const at = asDate(v); return at ? `<span data-tip="${esc(utcTip(at))}">${esc(fmtAt(at, { weekday: true }))}</span>` : "—"; };
 /* Said once on a page or dialog that shows times to come in local time. */
 const yourZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
-const zoneLine = () => `Times are in your time zone (${yourZone()})`;
+const zoneLine = () => `Times are in this browser's time zone (${yourZone()})`;
 const upChip = sec => `<span class="uptime"><span class="ld"></span>${fmtUp(sec)}</span>`;
 const svcUrl = (ip, port) => `${[443, 8443, 9443].includes(+port) ? "https" : "http"}://${ip}:${port}`;
 window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener");
@@ -39,8 +39,8 @@ window.openSvc = (ip, port) => window.open(svcUrl(ip, port), "_blank", "noopener
 const plural = (n, word, many = word + "s") => `${n} ${Number(n) === 1 ? word : many}`;
 /* A Kubernetes state as people write it: "NotReady" is "Not ready". Callers
    keep the raw state in a tooltip. */
-const STATE_WORDS = { ErrorUnschedulable: "Can't be scheduled", ErrImagePull: "Image can't be pulled",
-  ImagePullBackOff: "Image can't be pulled" };
+const STATE_WORDS = { ErrorUnschedulable: "No host can run it", ErrImagePull: "Image cannot be downloaded",
+  ImagePullBackOff: "Image cannot be downloaded" };
 const stateWords = state => STATE_WORDS[state] || String(state ?? "").replace(/([a-z])([A-Z])/g, "$1 $2")
   .replace(/ (.*)$/, (all, rest) => " " + rest.toLowerCase());
 

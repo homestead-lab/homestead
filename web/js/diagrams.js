@@ -77,12 +77,12 @@
     const list = (rows || []).slice(0, 5), n = Math.max(list.length, 1);
     const h = Math.max(96, 24 + n * 32);
     const mid = h / 2;
-    let b = box(6, mid - 22, 74, 44, "dg-lan", 8) + text(43, mid - 3, "your LAN", "dg-xs dg-dim", "middle") + text(43, mid + 11, "phones, TVs", "dg-xs dg-dim", "middle");
+    let b = box(6, mid - 22, 74, 44, "dg-lan", 8) + text(43, mid - 3, "the LAN", "dg-xs dg-dim", "middle") + text(43, mid + 11, "phones, TVs", "dg-xs dg-dim", "middle");
     b += line(`M82 ${mid}H106`);
     b += pill(176, mid - 12, ip || "not chosen", 136, !ip);
     if (!list.length) {
       b += line(`M246 ${mid}H284`, "dg-line dg-dash-line");
-      b += box(288, mid - 12, 170, 24, "dg-app dg-dash", 5) + text(298, mid + 4, opts.empty || "apps you put here, a port each", "dg-xs dg-dim");
+      b += box(288, mid - 12, 170, 24, "dg-app dg-dash", 5) + text(298, mid + 4, opts.empty || "apps placed here, a port each", "dg-xs dg-dim");
     }
     list.forEach((r, i) => {
       const y = mid - (list.length - 1) * 16 + i * 32;
@@ -91,7 +91,7 @@
       b += line(`M344 ${y}H356`);
       b += app(360, y - 10, 120, r.app) + (r.node ? text(486, y + 4, clip(r.node, 18), "dg-xs dg-dim dg-mono") : "");
     });
-    const label = ip ? `VIP ${ip}: ${list.map(r => `port ${r.port} to ${r.app}${r.node ? " on " + r.node : ""}`).join(", ") || "nothing on it yet"}` : "A VIP not chosen yet";
+    const label = ip ? `Virtual IP ${ip}: ${list.map(r => `port ${r.port} to ${r.app}${r.node ? " on " + r.node : ""}`).join(", ") || "nothing on it yet"}` : "A virtual IP not chosen yet";
     return figure(svg(610, h, b, label), opts.caption || "");
   }
 
@@ -192,8 +192,8 @@
     b += box(122, 32, 112, 46, via ? "dg-vip" : "dg-vip dg-dash", 12) + text(178, 52, via || "a tunnel", "dg-s", "middle")
       + text(178, 67, via ? "outbound only" : "or Tailscale", "dg-xxs dg-dim", "middle");
     b += line("M236 55H262") + box(266, 24, 120, 62, "dg-node", 8) + text(276, 44, "Homestead", "dg-b") + text(276, 62, clip(address || "", 20), "dg-xs dg-mono dg-dim");
-    const said = url ? `Your phone reaches ${url} over HTTPS, so it can install Homestead and get notifications`
-      : "Without HTTPS a phone can open Homestead on your network, but not install it as an app with notifications";
+    const said = url ? `A phone reaches ${url} over HTTPS, so it can install Homestead and receive notifications`
+      : "Without HTTPS, a phone can open Homestead on the local network, but cannot install it as an app with notifications";
     return figure(svg(392, 112, b + text(6, 106, clip(url ? url : "needed for notifications on a phone", 64), "dg-xs dg-dim"), said));
   }
 
@@ -268,7 +268,7 @@
         if (what === "host address") {
           items.push(["addr", opts.address ? `${opts.address} · this host` : "this host's address"]);
           vips.slice(0, 2).forEach(ip => items.push(["vip", ip]));
-          if (vips.length > 2) items.push(["more", `+${vips.length - 2} more VIPs`]);
+          if (vips.length > 2) items.push(["more", `+${vips.length - 2} more virtual IPs`]);
         } else items.push(["lan", what]);
       }
       const from = t.kind === "bridge" ? brX + 76 : t.kind === "bond" ? BX + BW : NX + NW, y = centre[t.name];

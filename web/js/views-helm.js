@@ -97,7 +97,7 @@ window.helmRelease = async (ns, name) => {
         <div class="dim xs">${esc(r.description || "")}</div></div><div class="row">${helmStatus(r.status)} ${UI.chip(`revision ${r.revision}`, "neutral", { size: "slim" })}
         ${editable ? `<span data-need="admin">${actionBar([{ label: "Uninstall", icon: "trash", run: `helmUninstall(${jsq(ns)},${jsq(name)})`, need: "admin", danger: true }], { shown: 0, label: `More actions for ${name}` })}</span>` : ""}</div></div>
       ${editable ? `<div class="note" style="margin-top:10px">From <span class="mono">${esc(r.source.repo || r.source.chart)}</span> through a HelmChart: change the version or values and the Helm controller upgrades it.</div>`
-        : `<div class="note" style="margin-top:10px">Installed some other way${r.system ? " - it is part of the platform" : ""}. Homestead shows it but does not change it, since whatever installed it would change it back.</div>`}
+        : `<div class="note" style="margin-top:10px">Installed another way${r.system ? " as part of the platform" : ""}. Homestead shows it but does not change it, because whatever installed it would undo the change.</div>`}
       ${UI.sectionForm("helm_release", [
         { key: "values", title: "Values", html: values },
         { key: "notes", title: "Notes", html: `<pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre>` },
@@ -134,8 +134,8 @@ window.helmInstall = async () => {
         <div class="f"><label>Release name</label><input id="hi_name" class="mono"></div></div>
       <div class="f"><label>Namespace</label><input id="hi_ns" class="mono" list="hi_ns_list" value="${esc(unread ? "" : namespaces.includes("lab") ? "lab" : namespaces[0] || "default")}"${unread ? ' placeholder="e.g. lab"' : ""}>
         <datalist id="hi_ns_list">${namespaces.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
-        ${unread ? `<div class="ui-help badtext">Could not read the namespaces (${esc(unread)}): type the one to install into.</div>` : ""}</div>
-      <div class="f"><label>Values ${tip("Only what you change from the chart's defaults. The defaults are shown on the right to copy from.")}</label>
+        ${unread ? `<div class="ui-help badtext">The namespaces could not be read (${esc(unread)}). Enter the one to install into.</div>` : ""}</div>
+      <div class="f"><label>Values ${tip("Only the values that differ from the chart's defaults. The defaults are shown on the right to copy from.")}</label>
         <div class="helm-values-pair"><textarea id="hi_values" class="mono helm-values" rows="14" spellcheck="false" placeholder="# e.g.\n# persistence:\n#   enabled: true"></textarea>
         <pre id="hi_defaults" class="mono helm-values dim" title="The chart's defaults"></pre></div></div>
       ${UI.actions(`<button class="btn pri" data-need="admin" onclick="helmInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
@@ -175,7 +175,7 @@ window.helmPick = async i => {
 window.helmManual = () => {
   $("#hi_form").hidden = false;
   $("#hi_version").outerHTML = '<input id="hi_version" class="mono" placeholder="latest">';
-  $("#hi_defaults").textContent = "# enter the repository and chart; defaults are shown for charts found by search";
+  $("#hi_defaults").textContent = "# Enter the repository and chart. Defaults are shown for charts found by search.";
 };
 window.helmInstallGo = async () => {
   const body = { repo: $("#hi_repo").value.trim(), chart: $("#hi_chart").value.trim(), version: $("#hi_version").value.trim(),
