@@ -90,7 +90,7 @@ window.lhV2Apply = async () => {
     const result=await api(`/api/longhorn/v2/${approval.action}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...approval,request_id,confirm:true})});
     if(result.operation) window.noteOperation?.(result.operation);
     if(sequence===lhV2Sequence && $('#lhV2Confirm')===confirmation && !$('#modal')?.classList.contains('hidden')) await lhV2Setup();
-  } catch(e) { toast(e.message+'. Open the setup again and check the saved tasks before trying again.','bad'); }
+  } catch(e) { toast(String(e.message).replace(/\.$/, "")+'. Open the setup again and check the saved tasks before trying again.','bad'); }
 };
 function lhV2ReturnToSetup() {
   if(typeof MODAL_STACK!=='undefined' && MODAL_STACK.length) MODAL_STACK[MODAL_STACK.length-1].onReturn=()=>lhV2Setup();

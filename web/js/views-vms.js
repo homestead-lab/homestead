@@ -386,7 +386,7 @@ const VM_POWER = UI.reviewFlow({
       // lost. Inspect the current VM state before initiating a fresh review.
       if ($("#vmPowerApply") === button) {
         button.textContent = "Inspect VM before retrying";
-        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(error.message)}. The request was not repeated, and its result is not known. Check the VM and its entry in Recent jobs before trying again. Shut down and Force off are still available.`)}`);
+        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. The request was not repeated, and its result is not known. Check the VM and its entry in Recent jobs before trying again. Shut down and Force off are still available.`)}`);
         if ($(".modalbox")) $(".modalbox").scrollTop = 0;
       }
       toast(error.message, "bad");
@@ -735,7 +735,7 @@ const VM_EDIT = UI.reviewFlow({
       if (error?.status === 409) throw error; // conflict() below
       if ($("#vmEditApply") === button) {
         button.textContent = "Inspect VM before retrying";
-        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(error.message)}. Some changes to the VM, its disks or its Secrets may already be saved. No request was repeated, and the VM was not restarted. Close this review and check the VM before editing it again.`)}`);
+        $("#mbody").insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. Some changes to the VM, its disks or its Secrets may already be saved. No request was repeated, and the VM was not restarted. Close this review and check the VM before editing it again.`)}`);
       }
       toast(error.message, "bad");
       return false;
@@ -746,7 +746,7 @@ const VM_EDIT = UI.reviewFlow({
   conflict: (error, review) => {
     VM_EDIT_AGAIN = review;
     toast(error.message, "bad");
-    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not saved as reviewed", `${esc(error.message)}. The review was out of date. Some changes to the VM, its disks or its Secrets may already be saved. No request was repeated, and the VM was not restarted. Review again to see the VM as it is now.`)
+    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not saved as reviewed", `${esc(String(error.message).replace(/\.$/, ""))}. The review was out of date. Some changes to the VM, its disks or its Secrets may already be saved. No request was repeated, and the VM was not restarted. Review again to see the VM as it is now.`)
       + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" onclick="vmEditReviewAgain()">Review again</button>`);
     $("#mbody")?.querySelector(".ui-actions-end .btn.pri")?.focus();
     return false;
@@ -916,14 +916,14 @@ const K3S = UI.reviewFlow({
       if (window.refreshOperations) refreshOperations(true);
       if (e?.status === 409) throw e; // conflict() below
       toast(e.message, "bad"); button.disabled = true; button.textContent = "Check the cluster before retrying";
-      $("#mbody")?.insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(e.message)}. Some VMs, disks or Secrets may already exist. No request was repeated. Check Jobs and Virtual machines before reviewing again.`)}`);
+      $("#mbody")?.insertAdjacentHTML("afterbegin", `${UI.callout("bad", "", `${esc(String(e.message).replace(/\.$/, ""))}. Some VMs, disks or Secrets may already exist. No request was repeated. Check Jobs and Virtual machines before reviewing again.`)}`);
     }
   },
   // The server says the review is out of date: offer a fresh one of the same batch.
   conflict: (error, review) => {
     K3S_AGAIN = review;
     toast(error.message, "bad");
-    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not created as reviewed", `${esc(error.message)}. The review was out of date. Some VMs, disks or Secrets may already exist. No request was repeated. Review again to see the current state.`)
+    if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Not created as reviewed", `${esc(String(error.message).replace(/\.$/, ""))}. The review was out of date. Some VMs, disks or Secrets may already exist. No request was repeated. Review again to see the current state.`)
       + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="k3sReviewBack()">Back to configuration</button><button class="btn pri" onclick="k3sReviewAgain()">Review again</button>`);
     $("#mbody")?.querySelector(".ui-actions-end .btn.pri")?.focus();
   },
@@ -1014,7 +1014,7 @@ const VM_DISK_REMOVE = UI.reviewFlow({
       toast(result.message, "ok");
       closeModal(); resetPaint(); viewVmImport();
     } catch (error) {
-      $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}. It was not sent again. Check the job list and the disk, then review again.`)}${UI.actions(UI.cancel("Close"))}`;
+      $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. It was not sent again. Check the job list and the disk, then review again.`)}${UI.actions(UI.cancel("Close"))}`;
       toast(error.message, "bad");
     }
   },

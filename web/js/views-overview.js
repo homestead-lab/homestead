@@ -1039,7 +1039,7 @@ window.allocationProbeSave = async (enabled, button) => {
     const result = await api("/api/node/probe/allocation", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     toast(result.detail, "ok");
     modalBack();
-  } catch (e) { toast(`${e.message}. Reopen VM allocation to read the current configuration before another change.`, "bad"); }
+  } catch (e) { toast(`${String(e.message).replace(/\.$/, "")}. Reopen VM allocation to read the current configuration before another change.`, "bad"); }
 };
 
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `

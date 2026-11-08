@@ -391,12 +391,12 @@ const VM_CREATE = UI.reviewFlow({
       closeModal(); go("vms");
       if (!cfg.isolated && review.network.serviceMode) {
         try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
-        catch(error) { toast(`The VM was created, but its virtual IP could not be set up. ${error.message}. Use Edit → Network to set it up.`,"bad"); }
+        catch(error) { toast(`The VM was created, but its virtual IP could not be set up. ${String(error.message).replace(/\.$/, "")}. Use Edit → Network to set it up.`,"bad"); }
       }
     } catch(error) {
       if($("#vmCreateApply") === button) {
         button.textContent = "Check before creating again";
-        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. The request was not sent again. Images, disks, sign-in settings or the VM itself may already exist. Check Virtual machines and Volumes before starting a new review. Disks that were kept are not deleted automatically.`)}`);
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. The request was not sent again. Images, disks, sign-in settings or the VM itself may already exist. Check Virtual machines and Volumes before starting a new review. Disks that were kept are not deleted automatically.`)}`);
       }
       toast(error.message,"bad");
     }

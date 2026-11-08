@@ -301,7 +301,7 @@
         mounts: [], can_add: true, needs_wipe: false, longhorn: [],
         blockdevice: { name: "bd-node3-sdc", path: "/dev/sdc", provisioned: false, fstype: "", state: "Active" } }],
   };
-  // Which node answers for the management VIP and serves shared volumes.
+  // Which node answers for the management virtual IP and serves shared volumes.
   const demoDuties = {
     "harvester-node1": { vips: ["192.0.2.210", "192.0.2.214", "192.0.2.215", "192.0.2.216"], management_vip: ["192.0.2.210"], rwx: [], control_plane_vip: false },
     "harvester-node2": { vips: [], management_vip: [], rwx: ["share-media", "frigate-config"], control_plane_vip: false },
@@ -599,7 +599,7 @@
   const exposed = workloads.filter(row => row.ports.length);
   const network = {
     controller: { name: "kube-vip", installed: true, desired: 3, ready: 3, healthy: true,
-      mode: "ARP Service controller · explicit VIP allocation" },
+      mode: "ARP Service controller · explicit virtual IP allocation" },
     summary: { services: 8, app_services: 3, load_balancers: 3, vips: 3,
       listeners: 3, unhealthy: 0, ready_endpoints: 3 },
     available_vips: ["192.0.2.230", "192.0.2.231", "192.0.2.217", "192.0.2.218"], available_vip_count: 4,
@@ -641,7 +641,7 @@
     ingresses: [],
   };
   /* Nodes & addresses: node1 answers for the management address and the app
-     VIPs; the file shares' address is answered for and left off its Service,
+     virtual IPs; the file shares' address is answered for and left off its Service,
      the fault Homestead records for kube-vip. */
   const listener = (port, service, workloads, ready = 1) => ({ port, protocol: "TCP", namespace: service === "ingress-expose" ? "kube-system" : "lab", service, workloads, ready });
   const place = (ip, node, listeners, state = "ok", reason = "") => ({ ip, kind: "vip", node, controller: "kube-vip", listeners,
@@ -865,7 +865,7 @@
       return node ? report.hosts[node] || { node, available: false, ports: [], conditions: [], reason: "No node probe answers on this host." } : report;
     }, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
-    // Homestead's own services, on node addresses until put on a VIP (views-network.js).
+    // Homestead's own services, on node addresses until put on a virtual IP (views-network.js).
     "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [
       { id: "web", label: "Homestead's web page", namespace: "lab", workload: "homestead", present: true, vip: "", vip_service: "",
         node_addresses: ["192.0.2.207", "192.0.2.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
@@ -877,7 +877,7 @@
       { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.0.2.242, as homestead-vip" },
       { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.0.2.242" },
       { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.0.2.242, as homestead-smb-vip" }] },
-    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main VIP",
+    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main virtual IP",
       services: [{ namespace: "lab", name: "homestead-vip", ports: ["8088/TCP"], targets: ["homestead"] },
         { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.0.2.242 is now 192.0.2.210; 2 Services moved with it" },
     "/api/welcome": { show: false, done: false, harvester: false, load_balancer: "kube-vip", steps: {
@@ -2419,7 +2419,7 @@ ssh_pwauth: true
     "/api/addons/longhorn": { ok: true, name: "longhorn", job: "helm-install-longhorn", copies: 2,
       detail: "Longhorn is being installed, keeping 2 copies of each volume." },
     "/api/addons/kube-vip": { ok: true, name: "kube-vip", job: "helm-install-kube-vip", interface: "eth0", class_only: true,
-      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Your VIPs" },
+      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Your virtual IPs" },
     "/api/addons/multus": { ok: true, name: "multus", job: "helm-install-multus",
       detail: "Multus is being installed on every node; pods already running are left as they are. LAN networks can be made once it is up" },
     "/api/addons/kubevirt": { ok: true, name: "homestead-kubevirt", job: "helm-install-homestead-kubevirt",
@@ -3686,7 +3686,7 @@ ssh_pwauth: true
     ["settings", "Settings", "Site name, health thresholds, update policy, App Store feed", true],
     ["users", "Users and roles", "Every account, its role and password", false, "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup."],
     ["hardware", "Hardware features", "Device mappings: iGPU, Coral, USB and the rest", true],
-    ["vips", "VIPs", "Your saved VIPs, their labels and the default workload VIP", true],
+    ["vips", "Virtual IPs", "Your saved virtual IPs, their labels and the default workload virtual IP", true],
     ["ipam", "IP addresses", "Subnets, documented addresses, and the UniFi connection", true],
     ["mqtt", "MQTT", "The broker, its credentials and what is published", true],
     ["portal", "Portal", "Its sections and tiles", true],
@@ -3701,7 +3701,7 @@ ssh_pwauth: true
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
         state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
-    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
+    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, virtual IPs, Portal" },
   });
   const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
   const demoKeys = { scopes: { read: "Read status: the cluster, nodes, containers, VMs, alerts and jobs",

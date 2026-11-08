@@ -221,7 +221,7 @@ const IMAGE_REVIEW = UI.reviewFlow({
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   },
   failed: error => {
-    $("#mbody").innerHTML = UI.callout("bad", "The review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
+    $("#mbody").innerHTML = UI.callout("bad", "The review could not finish.", `${esc(String(error.message).replace(/\.$/, ""))}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
   },
   blocked: rows => rows.some(row => row.preview.capacity.blocked), ack: "imageCapacityApprove", button: "imageCapacityApply",
   apply: async rows => {

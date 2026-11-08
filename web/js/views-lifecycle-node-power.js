@@ -4,7 +4,7 @@ window.nodeActions = async name => {
   let qr = {}, impact = { workloads: [], stranded: [] };
   try { [qr, impact] = await Promise.all([api("/api/quorum"), api(`/api/node/impact?node=${encodeURIComponent(name)}`)]); }
   catch (e) {
-    return childModal("Host actions unavailable", `${UI.callout("bad", "", `The checks of what this host affects could not be completed. ${esc(e.message)}. Restart and shutdown are not available until the checks work.`)}
+    return childModal("Host actions unavailable", `${UI.callout("bad", "", `The checks of what this host affects could not be completed. ${esc(String(e.message).replace(/\.$/, ""))}. Restart and shutdown are not available until the checks work.`)}
       <button class="btn" onclick="closeModal()">Close</button>`);
   }
   window.__nodeImpact = impact;
@@ -279,7 +279,7 @@ const NODE_POWER = UI.reviewFlow({
     } catch (e) {
       // A power job already going for this host: follow it rather than start another.
       if (e.body?.operation?.id) return window.nodePowerFollow(e.body.operation.id);
-      toast(e.message + ". Check Recent jobs and the host before making another request.", "bad");
+      toast(String(e.message).replace(/\.$/, "") + ". Check Recent jobs and the host before making another request.", "bad");
       if (button) {
         button.disabled = false; button.textContent = "Review host again";
         button.onclick = () => window.nodePowerReview(node, action);

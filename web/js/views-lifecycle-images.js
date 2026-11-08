@@ -116,7 +116,7 @@ window.imageCleanAllReview = async () => {
   modal("Clean all unused images", '<div class="empty"><span class="spin2"></span> Finding unused images…</div>');
   let review;
   try { review = await api("/api/images/cleanup-unused/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The images could not be checked", `${esc(e.message)}. Nothing was removed.`) + UI.actions(UI.cancel("Close")); return; }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The images could not be checked", `${esc(String(e.message).replace(/\.$/, ""))}. Nothing was removed.`) + UI.actions(UI.cancel("Close")); return; }
   STATE.data.imageCleanReview = review;
   if (!review.count) { $("#mbody").innerHTML = UI.lead("No image is unused. Every cached image is running, used by a stopped app or a scheduled job, or kept for Roll back.") + UI.actions(UI.cancel("Close")); return; }
   $("#mbody").innerHTML = UI.lead(`Removes ${review.count} unused image${review.count === 1 ? "" : "s"} from every host that holds them, freeing about <b>${bytesText(review.freed_mb * 1024 ** 2)}</b> across ${review.hosts.length} host${review.hosts.length === 1 ? "" : "s"}. Running images, images for stopped apps and scheduled jobs, Roll back copies, and Harvester's and Kubernetes' own images are kept. An image removed here is downloaded again if something needs it later.`)

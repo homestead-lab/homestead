@@ -83,7 +83,7 @@
   window.hostMaintenanceReady = () => flow.ready();
   window.hostMaintenanceApply = async () => {
     try { await flow.apply(); }
-    catch (error) { toast(`${error.message}. Inspect Recent jobs and the host before asking again.`, "bad"); }
+    catch (error) { toast(`${String(error.message).replace(/\.$/, "")}. Inspect Recent jobs and the host before asking again.`, "bad"); }
   };
 
   function renderReview(plan, node) {

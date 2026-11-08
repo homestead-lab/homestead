@@ -755,7 +755,7 @@ async function refreshSnapshotDialog(token, vol, label) {
     host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
     if (window.applyRole) applyRole();
   } catch (e) {
-    if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "The snapshots could not be refreshed", `${esc(e.message)}. Homestead is trying again. An earlier cleanup may still be running.`);
+    if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "The snapshots could not be refreshed", `${esc(String(e.message).replace(/\.$/, ""))}. Homestead is trying again. An earlier cleanup may still be running.`);
   }
   if ($("#snapshot_live") === host) {
     clearTimeout(SNAPSHOT_TIMER);

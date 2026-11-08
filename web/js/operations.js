@@ -492,7 +492,7 @@ const POWER_RECOVERY = UI.reviewFlow({
       toast(result.detail,"ok");closeModal();
     } catch(error) {
       if ($("#powerRecoveryApply")===button) {
-        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. Nothing was retried. Check the job before starting a new review.`)}`);
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. Nothing was retried. Check the job before starting a new review.`)}`);
         if ($(".modalbox")) $(".modalbox").scrollTop=0;
       }
       toast(error.message,"bad");
