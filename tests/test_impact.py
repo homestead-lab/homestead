@@ -167,8 +167,9 @@ class HostLocalTests(unittest.TestCase):
         self.assertEqual(("stops", "its volume web-data is stored on node2", []), (r["outcome"], r["why"], r["notes"]))
 
     def test_a_deployment_on_longhorn_is_unchanged(self):
-        r = self.row(self.preview([app("web", claims=["web-data"])], volumes=[vol("web-data", [("node2", True), ("node1", True)])],
-                                  pvs={("lab", "web-data"): []}), "web")
+        result = IMPACT.preview("node2", [app("web", claims=["web-data"])], [], [], [], [vol("web-data", [("node2", True), ("node1", True)])],
+                                [], NODES, pvs={("lab", "web-data"): []}, node_down="delete-both-statefulset-and-deployment-pod")
+        r = self.row(result, "web")
         self.assertEqual(("moves", ["node1", "node3"], []), (r["outcome"], r["to"], r["notes"]))
 
     def test_a_volume_pinned_to_several_hosts_is_not_host_local(self):
@@ -208,7 +209,7 @@ class StatefulSetTests(unittest.TestCase):
         r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO))
         self.assertEqual("waits", r["outcome"])
         self.assertTrue(r["why"].startswith("waits until its pod is deleted: Kubernetes doesn't start"), r["why"])
-        self.assertIn("Longhorn can do this for you", r["why"])
+        self.assertIn("To have Longhorn do this", r["why"])
         self.assertEqual("node_down", r["setting"])
 
     def test_with_longhorns_deletion_policy_and_a_copy_elsewhere_it_moves(self):
@@ -289,7 +290,7 @@ class StatefulSetTests(unittest.TestCase):
 
     def test_an_unread_policy_makes_it_unknown(self):
         r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down=None))
-        self.assertEqual(("unknown", "couldn't be checked: Longhorn's Pods on a failed node setting"), (r["outcome"], r["why"]))
+        self.assertEqual(("unknown", "couldn't be checked: whether apps with storage can move off a failed host"), (r["outcome"], r["why"]))
 
     def test_a_set_with_no_pod_here_is_not_listed(self):
         self.assertEqual([], self.preview([sts(pods=(("node1", True),))])["apps"])
@@ -316,3 +317,42 @@ class StatefulSetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeploymentVolumeTests(unittest.TestCase):
+    """A Deployment's replacement starts elsewhere, but a volume one host mounts
+    at a time stays attached to the down host until its old pod is deleted:
+    the forecast says "moves" only when Longhorn's policy deletes it."""
+    def row(self, node_down, modes=("ReadWriteOnce",), failover="move"):
+        volume = {**vol("ha-config", [("node2", True), ("node1", True)]), "access_modes": list(modes)}
+        result = IMPACT.preview("node2", [app("ha", claims=["ha-config"], failover=failover)], [], [], [], [volume], [], NODES,
+                                pvs={("lab", "ha-config"): []}, node_down=node_down)
+        return next(r for r in result["apps"] if r["name"] == "ha")
+
+    def test_left_at_do_nothing_it_waits_and_names_the_volume_and_the_setting(self):
+        r = self.row("do-nothing")
+        self.assertEqual(("waits", "node_down"), (r["outcome"], r.get("setting")))
+        self.assertIn("ha-config is still attached to the failed host", r["why"])
+        self.assertIn("Allow apps with storage to move off a failed host", r["why"])
+
+    def test_a_policy_for_statefulsets_alone_still_leaves_it_waiting(self):
+        self.assertEqual("waits", self.row("delete-statefulset-pod")["outcome"])
+
+    def test_with_a_policy_that_deletes_deployment_pods_it_moves(self):
+        for policy in ("delete-deployment-pod", "delete-both-statefulset-and-deployment-pod"):
+            r = self.row(policy)
+            self.assertEqual(("moves", ["node1", "node3"]), (r["outcome"], r["to"]), policy)
+            self.assertIn("once Longhorn deletes its pod", r["why"])
+
+    def test_an_unread_policy_is_said_not_guessed(self):
+        r = self.row(None)
+        self.assertEqual("unknown", r["outcome"])
+        self.assertIn("apps with storage can move off a failed host", r["why"])
+
+    def test_a_volume_many_hosts_mount_moves_whatever_the_policy(self):
+        self.assertEqual("moves", self.row("do-nothing", modes=("ReadWriteMany",))["outcome"])
+
+    def test_an_app_set_to_wait_still_waits_for_its_host(self):
+        r = self.row("do-nothing", failover="wait")
+        self.assertEqual("waits", r["outcome"])
+        self.assertNotIn("setting", r)

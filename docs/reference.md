@@ -1986,9 +1986,14 @@ node to come back (for hardware-bound apps), or Kubernetes' five-minute
 default. **If a node fails** on Containers sets every container in one list;
 each editor has it under *Placement*. The choice is the pod's tolerations
 for the unreachable and not-ready taints, so it shows for containers made
-elsewhere too. A moved container's single-node volume follows it only if
-Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
-pods; the dialog says whether it does and sets it, as does Settings > Hardware and storage.
+elsewhere too. A moved container's single-host volume follows it only if Longhorn releases
+it from the failed host: its *Pod Deletion Policy When Node is Down* set to
+delete both kinds of pod. Homestead's leader sets this once on clusters still
+at Longhorn's default, and marks the setting so that any later choice is kept;
+on Harvester, Harvester manages it. **Allow apps with storage to move off a
+failed host** in Settings > Hardware and storage changes it, and the
+*held-volumes* alert lists the volumes still attached to a host three minutes
+after it stopped responding.
 
 Kubernetes never moves a container back once its host returns. **Settings >
 Placement > When a host comes back** can raise an alert offering the moves, or

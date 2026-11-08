@@ -18,7 +18,7 @@ function setup(payload = {}, state = {}) {
 }
 
 const WAITS = "waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere while the old one might still run. "
-  + "Longhorn can do this for you: Settings → Hardware and storage → Longhorn storage → Pods on a failed node.";
+  + "To have Longhorn do this, turn on Settings → Hardware and storage → Allow apps with storage to move off a failed host.";
 const waits = { kind: "set", ns: "data", name: "postgres", icon: "", here: 1, copies: 3, keeps_answering: true,
   outcome: "waits", setting: "node_down", why: WAITS, notes: [] };
 
@@ -35,8 +35,8 @@ test("a row Longhorn's setting can help says it in one line, with the why behind
   const html = setup().impactApp(waits);
   const visible = html.replace(/<details[^]*?<\/details>/g, "");
   assert.match(visible, /<span class="small">waits until its pod is deleted\. <button/);
-  assert.doesNotMatch(visible, /Kubernetes doesn|Longhorn can do this/);
-  assert.match(html, /<details class="ui-more"[^>]*>\s*<summary>Why it waits<\/summary>[^]*Kubernetes doesn&#39;t start[^]*Pods on a failed node\./);
+  assert.doesNotMatch(visible, /Kubernetes doesn|To have Longhorn do this/);
+  assert.match(html, /<details class="ui-more"[^>]*>\s*<summary>Why it waits<\/summary>[^]*Kubernetes doesn&#39;t start[^]*move off a failed host\./);
 });
 
 test("one copy reads copy, and a row the setting can't help has no link", () => {

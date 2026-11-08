@@ -11,7 +11,7 @@ Worked out from what Homestead already knows, read only:
   with its device. On a drain, a migratable VM moves live instead.
 * a StatefulSet's pod is never started on another host while the old one
   might still run: it stops where an app would, waits until its pod is
-  deleted - by hand, or by Longhorn's "Pods on a failed node" setting - and
+  deleted - by hand, or by Longhorn, when apps with storage are allowed to move off a failed host - and
   moves once Longhorn deletes it, after its failover setting's delay; one set
   to wait waits for its host, as an app does. Where its volumes are stored, or that
   setting, couldn't be read, it says so instead of guessing.
@@ -39,10 +39,21 @@ FAILOVER_WORDS = {
 SET_DELETED_BY = ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod")
 SET_WAITS = ("waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere "
              "while the old one might still run.")
-SET_POINTER = " Longhorn can do this for you: Settings → Hardware and storage → Longhorn storage → Pods on a failed node."
+SET_POINTER = " To have Longhorn do this, turn on Settings → Hardware and storage → Allow apps with storage to move off a failed host."
 # Longhorn deletes only a pod already leaving the down host, so it moves after
 # its failover delay; one set to wait never leaves, and waits for the host.
 SET_MOVES = "moves once Longhorn deletes its pod, "
+# A Deployment's replacement starts elsewhere after its failover delay, but a
+# volume one host mounts at a time stays attached to the down host until its
+# old pod is deleted - by Longhorn, when its policy covers Deployments.
+DEPLOY_DELETED_BY = ("delete-deployment-pod", "delete-both-statefulset-and-deployment-pod")
+DEPLOY_WAITS = "waits until its old pod is deleted, because its volume {claim} is still attached to the failed host."
+
+
+def _single_host_claims(volumes, ns, claims):
+    """The claims among these that are Longhorn volumes one host mounts at a time."""
+    return [c for c in claims or [] if (v := _volume_for(volumes, ns, c)) is not None
+            and set(v.get("access_modes") or ["ReadWriteOnce"]) & {"ReadWriteOnce", "ReadWriteOncePod"}]
 ORDER = {"stops": 0, "waits": 1, "unknown": 2, "moves": 3}
 
 
@@ -145,7 +156,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
     if pvs is None and len(longhorn) < len(claims):
         unread.append("where its volumes are stored")
     if node_down is None and all_longhorn:
-        unread.append("Longhorn's Pods on a failed node setting")
+        unread.append("whether apps with storage can move off a failed host")
     if stop is None:
         unread.append("where its volumes' copies are")
     if allowed is not None and not [h for h in allowed if h != node]:
@@ -220,8 +231,17 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
         elif stop is None:
             row.update(outcome="unknown", why="couldn't be checked: where its volumes' copies are")
         else:
-            verb, when = FAILOVER_WORDS.get(w.get("failover") or "default", FAILOVER_WORDS["default"])
-            row.update(outcome=verb, why=when, to=hosts)
+            mode = w.get("failover") or "default"
+            verb, when = FAILOVER_WORDS.get(mode, FAILOVER_WORDS["default"])
+            held = [] if verb == "waits" else _single_host_claims(volumes, ns, w.get("claims"))
+            if held and node_down is None:
+                row.update(outcome="unknown", why="couldn't be checked: whether apps with storage can move off a failed host")
+            elif held and node_down not in DEPLOY_DELETED_BY:
+                row.update(outcome="waits", why=DEPLOY_WAITS.format(claim=held[0]) + SET_POINTER, setting="node_down")
+            elif held:
+                row.update(outcome=verb, why=SET_MOVES + when, to=hosts)
+            else:
+                row.update(outcome=verb, why=when, to=hosts)
         apps.append(row)
     for v in vms or []:
         if v.get("node") != node or not v.get("running"):
