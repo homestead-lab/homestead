@@ -281,7 +281,7 @@ window.homesteadReleaseAsk = () => {
   const { self, failed } = homesteadUpdates();
   if (!self) return toast("Homestead itself is not in the update report yet: check again", "bad");
   modal("Install a Homestead release", `<div class="ui-stack">
-    <p class="ui-lead">For when Homestead cannot offer the release you want${failed.length ? ", as now, because its release check failed" : ""}. Enter a release from the <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases page ${icon("ext")}</a>. It is reviewed before anything changes.</p>
+    <p class="ui-lead">For when Homestead cannot offer the release needed${failed.length ? ", as now, because its release check failed" : ""}. Enter a release from the <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases page ${icon("ext")}</a>. It is reviewed before anything changes.</p>
     ${UI.field("Release", `<input id="hsReleaseName" placeholder="2.8.334" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')homesteadReleaseReview()">`, { help: `This Homestead runs v${esc(HOMESTEAD_VERSION)}. A preview is named like 2.8.334-dev.1.` })}
     ${UI.actions(UI.button("Review", "homesteadReleaseReview()", { kind: "pri" }), UI.cancel())}</div>`);
   setTimeout(() => $("#hsReleaseName")?.focus(), 0);

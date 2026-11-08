@@ -66,7 +66,7 @@ function gitopsYamlBlock(yaml, secret = {}, { scope = "edit", file = "", adds = 
   // The app's own Secret exists only once Homestead has saved the app, never in git.
   const needs = secret?.name ? `<p class="ui-help">It refers to Secret <span class="mono">${esc(secret.name)}</span> (keys ${
     (secret.keys || []).map(key => `<span class="mono">${esc(key)}</span>`).join(", ")}), not to the values. That Secret exists only once
-    Homestead has ${saved} the app: in git, create it yourself first (for example with SOPS), or ${save} here first.</p>` : "";
+    Homestead has ${saved} the app. In git, create it first (for example with SOPS), or ${save} here first.</p>` : "";
   const download = file ? UI.button(`Download ${file}`, `gitopsDownload(${GITOPS_DOWNLOADS.push({ name: file, yaml }) - 1})`, { kind: "sm" }) : "";
   return UI.more("YAML for git", `<p class="ui-help">${GITOPS_SCOPES[scope] || GITOPS_SCOPES.edit}
     Values Homestead keeps in the app's Secret, and values with a password or token in them, are left out; still check it

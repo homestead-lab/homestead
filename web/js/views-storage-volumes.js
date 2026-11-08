@@ -494,9 +494,9 @@ window.volumeDelete = async x => {
     ]),
     UI.section("1. Detach", UI.checklist([
       { state: detached ? "ok" : verifyPending ? "warn" : "bad",
-        title: detached ? "Already detached." : verifyPending ? "Longhorn reports the volume as detached, but some checks are incomplete." : "Stop the apps that use this volume first.",
+        title: detached ? "Already detached." : verifyPending ? "Longhorn reports the volume as detached, but some checks are incomplete." : "Stop the apps that use it first.",
         detailHtml: verifyPending ? "Refresh the review to run the remaining checks before deleting." :
-          `Stopping an app keeps the volume and its data. Homestead does not stop the apps and VMs below.${(p.stale_consumers || []).length ? " Finished jobs do not keep the volume in use." : ""}` },
+          `Homestead does not stop them, and stopping keeps the data.${(p.stale_consumers || []).length ? " Finished jobs do not keep the volume in use." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
         detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> has finished. It is usually an import's copy job, and would otherwise stop the volume from being deleted.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounted at" }], consumers)

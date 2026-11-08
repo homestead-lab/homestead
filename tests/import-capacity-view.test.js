@@ -74,7 +74,7 @@ test("copy review explains unknown space estimates and retained partial copies",
   await t.ctx.importReview({name:'app',mappings:[{remote_path:'/data',mount_path:'/config'}]});
   assert.match(t.fields.html,/Copy safety checks/);
   assert.match(t.fields.html,/could not be measured are listed in the job log/);
-  assert.match(t.fields.html,/a failed copy keeps both the source and the destination/);
+  assert.match(t.fields.html,/a failed copy keeps both sides/);
 });
 
 test("shared phase warnings appear once above collapsed capacity details",async()=>{

@@ -177,7 +177,7 @@ test("a cordoned single host leads with one actionable error and keeps the revie
   assert.match(visible,/The only host is cordoned\. Uncordon it before updating\./);
   assert.doesNotMatch(visible,/scheduling order|placement requirements|data-permissions|updated pod estimates|Resolve the placement/);
   assert.doesNotMatch(html.match(/<details[^>]*>/)[0],/\bopen\b/,"Details starts collapsed even when blocked");
-  assert.match(html,/The estimate covers every container/);
+  assert.match(html,/The estimate includes every container/);
   assert.match(html,/No memory limit is set for data-permissions/);
   t.fields["#imageCapacityApprove"].checked=true;
   await t.ctx.imageReviewedApply();

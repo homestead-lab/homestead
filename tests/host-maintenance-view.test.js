@@ -40,7 +40,7 @@ test("the review shows what a reboot's does, with a reason and a duration", asyn
   await t.c.hostMaintenanceReview("node1");
   const [title, html] = t.shown.modal.at(-1);
   assert.match(title, /Maintenance · node1/);
-  for (const word of ["Check this", "lab/web", "lab/data", 'id="mm_reason"', 'id="mm_hours"', "Until it is ended", 'id="mm_confirm"', "Restarting or turning off the host is done separately"]) assert.ok(html.includes(word), word);
+  for (const word of ["Check this", "lab/web", "lab/data", 'id="mm_reason"', 'id="mm_hours"', "Until it is ended", 'id="mm_confirm"', "The host is restarted or shut down separately"]) assert.ok(html.includes(word), word);
 });
 
 test("the send button stays disabled until the name is typed, a reason is given and blockers are ticked", async () => {

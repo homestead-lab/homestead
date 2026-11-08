@@ -27,7 +27,7 @@ window.composeImport = async () => {
     <div class="compose-left">
       <div class="compose-editorwrap"><div class="compose-editor" id="composeEditor"><div class="empty"><span class="spin2"></span>starting the editor</div></div>
         <div class="compose-hint" id="composeHint" ${COMPOSE.text ? "hidden" : ""}>Paste a <b>docker-compose.yml</b> here.<br>
-          It is checked as you type; <span class="mono">Ctrl+Enter</span> checks now.</div></div>
+          It is checked while typing, and <span class="mono">Ctrl+Enter</span> checks it now.</div></div>
       <details class="compose-vars" ${COMPOSE.variables ? "open" : ""}>
         <summary>Variables <span class="dim xs">· the .env file, for \${NAME} in the file</span></summary>
         <textarea id="composeVars" rows="4" spellcheck="false" placeholder="DB_PASSWORD=change-me">${esc(COMPOSE.variables)}</textarea>

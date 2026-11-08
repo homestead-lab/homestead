@@ -327,8 +327,8 @@ window.addonInstall = async key => {
 /* What each role does, and its command (homestead_platform.join_guide). */
 const JOIN_ROLES = [
   ["app", "App host", "Runs apps and holds storage."],
-  ["control-plane", "App host + control plane", "Also votes on the cluster state. With three voting hosts, the cluster keeps running if one fails."],
-  ["tiebreaker", "Tiebreaker (votes only)", "Only votes on the cluster state. It runs no apps and stores no data. A Raspberry Pi is enough."],
+  ["control-plane", "App host + control plane", "Also votes on the cluster state. Three voting hosts survive one failure."],
+  ["tiebreaker", "Tiebreaker (votes only)", "Only votes. It runs no apps and stores no data, so a Raspberry Pi is enough."],
 ];
 const INSTALLER = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh";
 function joinCommandHtml(g, role) {
@@ -356,7 +356,7 @@ function joinLonghornHtml(g, role) {
   if (role === "tiebreaker") return `<p class="dim small">Not needed. A tiebreaker runs no apps and stores no data.</p>`;
   const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
   const storage = `<details><summary>Storage setting for the installer</summary>`
-    + (g.storage_path ? `<p class="dim small">This cluster keeps Longhorn data in this folder. If the installer asks for one, give it exactly this.</p>${guideCopy(g.storage_path)}`
+    + (g.storage_path ? `<p class="dim small">The installer may ask for this cluster's Longhorn data folder. Enter exactly this one.</p>${guideCopy(g.storage_path)}`
       + (g.storage_supported ? "" : `<p class="dim small">The installer cannot prepare a custom folder, so set it up manually.</p>`)
       : `<p class="dim small">The storage folder could not be read. If the installer asks for it, check it on an existing server rather than guessing.</p>`)
     + `</details>`;
@@ -386,12 +386,12 @@ window.platformJoinGuide = async (role = "app") => {
     <section class="guide-step"><h4><span>1</span>Read the join token</h4>
       <p>It is stored on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}.</p>
       ${guideCopy(`sudo cat ${g.token_file}`)}
-      <p class="dim xs">Keep it private. Anyone with it can join a machine to the cluster.</p></section>
+      <p class="dim xs">Keep it private, because it lets any machine join the cluster.</p></section>
     <section class="guide-step"><h4><span>2</span>Role</h4>
       <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
         onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div></section>
     <section class="guide-step"><h4><span>3</span>Install Longhorn's host packages</h4><div id="joinLonghorn">${joinLonghornHtml(g, role)}</div></section>
     <section class="guide-step"><h4><span>4</span>Join the cluster</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>5</span>Check that it joined</h4><p class="dim small">It appears on the Hosts page within a minute or two, and becomes ready when its network is up.</p>
+    <section class="guide-step"><h4><span>5</span>Check that it joined</h4><p class="dim small">It appears under Hosts within two minutes, and is ready once its network is up.</p>
       <div>${UI.button("View hosts", "closeModal();go('nodes')", { kind: "pri" })}</div></section>`;
 };

@@ -95,7 +95,7 @@ window.vmStore = async (check = false) => {
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Publisher images for <b>${esc(s.arch)}</b> hosts. ${tip("Cloud-init sets the password for the user shown and expands the image to the size of the VM disk.")}</p>
     ${s.harvester ? `${UI.more("Image downloads and updates", "Kept images are downloaded once and copied for each VM. Automatic updates check twice a day. Older builds are removed only when no disk was made from them.")}` : `<div class="note">${esc(s.note)}</div>`}
-    ${(s.own || []).length ? `<div class="sec">Your images on this cluster</div>
+    ${(s.own || []).length ? `<div class="sec">Images on this cluster</div>
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
@@ -118,7 +118,7 @@ window.vmStore = async (check = false) => {
             ${s.harvester ? `<td data-label="Here">${state(r)}${current(r)}</td>` : ""}<td data-actions>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
       }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
-      <span class="dim xs">Import your own disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
+      <span class="dim xs">Import a disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
       ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
   if (window.applyRole) applyRole();
   const box = $("#vmStoreFilter");
@@ -550,7 +550,7 @@ window.vmEdit = async (ns, name) => {
   $("#mbody").innerHTML = UI.sectionForm("ve", [
     {key:"general", title:"General", html:`
       ${vmEditResourceFields(v)}
-      <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after you stop it. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
+      <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after it is stopped. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
         <select id="ve_strategy">${["RerunOnFailure", "Always", "Manual", "Halted"].map(x => vmOpt(x, x, v.run_strategy)).join("")}</select></div>
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
@@ -879,7 +879,7 @@ const K3S = UI.reviewFlow({
     const warnings = cap.warnings || [];
     const stopped = cap.blocked || plan.ok === false;
     childModal(`Create cluster · ${name}`, [
-      UI.lead(stopped ? `<b>${esc(name)}</b> can't be created until what is below is resolved.`
+      UI.lead(stopped ? `<b>${esc(name)}</b> cannot be created until the problems below are resolved.`
         : `Creates ${plan.nodes.length} VMs for <b>${esc(name)}</b>, which install ${esc(String(K3S_SETUPS[plan.setup] || plan.setup).replace(/, as in a new installation$/, ""))}${plan.kubevirt ? " and KubeVirt" : ""} and join within 10 to 15 minutes.${plan.url ? ` Its own Homestead is then available at <span class="mono">${esc(plan.url)}</span>.` : ""}`),
       UI.notices([...blockers.map(b => ["bad", b]), ...(stopped && !blockers.length ? [["bad", "The cluster cannot be created with the current settings."]] : []),
         ...warnings.map(w => ["warn", w])], stopped ? "Can't create" : "Check first"),
@@ -1127,7 +1127,7 @@ window.uvmImport = async (source, id) => {
   const network = `
     ${UI.field("Network", `<select id="uvm_net" onchange="uvmPicture()">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? " · LAN" : ""}</option>`).join("")}<option value="pod">Pod network - reached through a Service</option></select>`,
       { tipHtml: tip(`${kind === "Proxmox" ? "vmbr0 on Proxmox" : "br0 on Unraid"} is the LAN: pick the LAN here to keep the VM on it. The pod network reaches it through a Service.`) })}
-    ${vm.nic.mac ? settingRow("Keep its MAC address", `${esc(vm.nic.mac)} - so your router's DHCP reservation still gives it the same address.`,
+    ${vm.nic.mac ? settingRow("Keep its MAC address", `${esc(vm.nic.mac)}, so that the router's DHCP reservation still gives it the same address.`,
       '<label class="toggle"><input type="checkbox" id="uvm_mac" checked onchange="uvmPicture()"><span></span></label>') : ""}
     ${UI.field("Network card", `<select id="uvm_nic" onchange="uvmPicture()">${["virtio", "e1000e", "e1000", "rtl8139"].map(m => `<option ${m === vm.nic.nic_model ? "selected" : ""}>${m}</option>`).join("")}</select>`,
       { tipHtml: tip(`The same as on ${kind}. VirtIO needs its driver in the guest system. Windows has it if it used VirtIO on ${kind}.`) })}`;
@@ -1157,7 +1157,7 @@ const UVM_ROOM = UI.reviewFlow({
     host.innerHTML = blockers.length || warnings.length
       ? UI.notices([...blockers.map(b => ["bad", b]), ...warnings.map(w => ["warn", w])], blockers.length ? "Can't import" : "Check first")
         + (!blockers.length ? UI.ack("uvm_room_ok", reviewAck("Imports"), { onchange: "uvmRoomReady()" }) : "")
-      : `<p class="ui-help">${esc(room.storage_class)} has room: these disks take ${esc(room.needed_gb)} of the ${esc(room.free_gb)} GiB it can still place.</p>`;
+      : `<p class="ui-help">${esc(room.storage_class)} has room for these disks: ${esc(room.needed_gb)} of ${esc(room.free_gb)} GiB.</p>`;
     uvmRoomReady();
   },
 });

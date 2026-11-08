@@ -31,13 +31,13 @@ function clusterVipText(overview, info, hostsUnread) {
 function userRow(u, admin, count) {
   const me = u.name === ME;
   const role = !admin ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span>`
-    : me ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span><div class="dim xs">Your own role cannot be changed here</div>`
+    : me ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span><div class="dim xs">An account cannot change its own role</div>`
     : `<select class="role-select" aria-label="Role for ${esc(u.name)}" onchange="userRoleSet(${jsq(u.name)},this)" data-was="${esc(u.role)}">
         ${["viewer", "operator", "admin"].map(r => `<option value="${r}"${u.role === r ? " selected" : ""}>${ROLE_NAMES[r]} - ${esc(ROLE_SHORT[r])}</option>`).join("")}</select>`;
   const actions = admin ? actionBar([
     { label: "Sign-in history", run: `userSignins(${jsq(u.name)})` },
     !me && count > 1 && { label: "Remove", run: `userRemove(${jsq(u.name)})`, danger: true }], { shown: 0, label: `More actions for ${u.name}` }) : "";
-  return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ` ${UI.chip("you", "ok")}` : ""}</td>
+  return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ` ${UI.chip("this account", "ok")}` : ""}</td>
     <td data-label="Role">${role}</td><td data-label="Last sign-in" class="dim xs mono">${esc(u.last_login || "never")}</td>${admin ? `<td>${actions}</td>` : ""}</tr>`;
 }
 
@@ -85,7 +85,7 @@ const SETTINGS_SECTIONS = [
   ["connections", "Connections", "UniFi, MQTT, alert webhook, App Store", ["connections", "mqtt", "apps", "integrations"], "Cluster", "plug"],
   ["access", "Users and access", "Accounts and roles", ["access"], "Cluster", "users"],
   ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster", "bug"],
-  ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you", "user"],
+  ["you", "Personal", "Appearance, this device, account", ["you", "device", "general"], "This account only", "user"],
 ];
 const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
 

@@ -29,12 +29,12 @@ function guideScreens(g) {
     ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name</span>`
       : "A unique lowercase name."],
     ["Management network", `The network card on the LAN, active-backup, MTU 1500 ${tip("The installer shows which network cards have a link. Add a second card for a bond if two are connected. VLAN: none, unless the other hosts use one. IPv4: DHCP with a reservation on the router, or Static with an address outside the DHCP range.")}`],
-    ["DNS servers", "Your router, for a static address."],
+    ["DNS servers", "The router's address, for a static address."],
     ["Management address", g.vip ? `${guideCopy(g.vip)} <span class="dim xs">(this cluster's virtual IP)</span>` : "This cluster's virtual IP (Homestead could not read it)."],
     ["Cluster token", "The token from step 2."],
     ["NTP servers", g.ntp.length ? guideCopy(g.ntp.join(",")) : "The default."],
     ["Proxy address", g.proxy ? guideCopy(g.proxy) : "Empty."],
-    ["SSH keys", "Optional: <span class=\"mono\">https://github.com/&lt;you&gt;.keys</span>."],
+    ["SSH keys", "Optional: <span class=\"mono\">https://github.com/&lt;user&gt;.keys</span>."],
     ["Remote config URL", "Empty."],
     ["Confirm", "Install. It takes 10-20 minutes, then reboots and joins."],
   ];

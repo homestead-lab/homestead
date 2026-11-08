@@ -158,7 +158,7 @@ function networkSectionLine(key) {
   const said = {
     overview: () => networkAttentionAll().length ? "" : data ? "Nothing needs attention" : "Status and attention",
     services: () => data && plural(data.summary.app_services, "app Service"),
-    vips: () => data && (data.registered_vips === null ? "Couldn't read Your virtual IPs"
+    vips: () => data && (data.registered_vips === null ? "The virtual IPs could not be read"
       : `${plural(data.registered_vips.length, "virtual IP")}${data.shared_vip?.ip ? ` · default ${data.shared_vip.ip}` : ""}`),
     addresses: () => data && `${plural((data.addresses?.nodes || []).length, "host")} · ${data.summary.listeners} listening`,
     ip: () => STATE.data.ipam ? plural((STATE.data.ipam.subnets || []).length, "subnet") : "Subnets, DHCP and reservations",
@@ -471,7 +471,7 @@ window.networkServiceDelete = async (namespace, name) => {
 };
 
 function networkModalPort(port = {}, first = false) {
-  return `<div class="f4 net-port" data-port-name="${esc(port.name || "")}"><div><label>Port on your LAN</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
+  return `<div class="f4 net-port" data-port-name="${esc(port.name || "")}"><div><label>Port on the LAN</label><input class="np-port" type="number" min="1" max="65535" value="${esc(port.port || port.container || "")}"></div>
     <div><label>Port inside the app or VM</label><input class="np-target" type="text" value="${esc(port.target_port || port.port || port.container || "")}"></div>
     <div><label>Protocol</label><select class="np-protocol"><option>TCP</option><option ${port.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
     <div><label>&nbsp;</label><button class="btn sm" type="button" onclick="this.closest('.net-port').remove();networkInvalidateReview()" ${first ? "disabled" : ""}>Remove</button></div></div>`;
@@ -745,7 +745,7 @@ window.vipAddPicture = () => {
   const host = $("#va_picture");
   if (!host || !window.Diagram) return;
   const ip = ($("#va_start")?.value || "").trim();
-  host.innerHTML = Diagram.vip(/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : "", [], { empty: $("#va_default")?.checked ? "new apps share it, a port each" : "apps you put here, a port each" });
+  host.innerHTML = Diagram.vip(/^\d{1,3}(\.\d{1,3}){3}$/.test(ip) ? ip : "", [], { empty: $("#va_default")?.checked ? "new apps share it, a port each" : "apps placed here, a port each" });
 };
 window.vipAddKindChanged = () => {
   const range = $("#va_kind").value === "range";
@@ -893,5 +893,5 @@ function networkVmNetsList(opts) {
       <div class="vip-name"><b class="mono">${esc(n.name)}</b><span class="dim xs">${n.vlan ? `VLAN ${esc(n.vlan)}` : n.lan ? "untagged" : esc(n.type || "network")}${n.bridge ? ` · ${esc(n.bridge)}` : ""}</span></div>
       ${UI.chip(n.lan ? (n.type === "macvlan" ? "LAN · containers" : n.type === "macvtap" ? "LAN · VMs" : "LAN") : "not bridged", n.lan ? "ok" : "neutral",
         { tip: n.type === "macvlan" ? "macvlan: containers only - a VM needs a macvtap network or one on a host bridge" : n.type === "macvtap" ? "macvtap: VMs only, each with its own address on the LAN; a VM cannot be reached from its own host this way" : "" })}</div>`).join("")}</div>`
-    : `<div class="card flat empty small">No LAN networks yet. <b>＋ LAN network</b> makes one on your LAN, untagged like the hosts or on a VLAN.</div>`;
+    : `<div class="card flat empty small">There are no LAN networks yet. <b>＋ LAN network</b> creates one on the LAN, either untagged like the hosts or on a VLAN.</div>`;
 }

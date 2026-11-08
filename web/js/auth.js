@@ -319,7 +319,7 @@ window.pwChange = () => modal("Change password", `
   <div class="f"><label for="pw_new2">Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
   ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-  <div class="note" style="margin-top:14px">Changing your password signs out every other
+  <div class="note" style="margin-top:14px">Changing the password signs out every other
   session, including on other devices.</div>`);
 
 window.doPwChange = async () => {

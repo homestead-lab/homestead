@@ -96,7 +96,7 @@ function fmShellHtml() {
     <div class="fm-panes">${[0, 1].map(i => `<section class="fm-pane" id="fm_pane${i}" onpointerdown="fmFocus(${i}, true)"></section>`).join("")}</div>
     <div class="fm-panel" id="fm_panel" hidden></div>
     <div class="fm-actions" id="fm_actions"></div>
-    <div class="fm-foot"><span class="dim xs" id="fm_status">A small helper opens each volume; it stops a minute after you finish.</span>
+    <div class="fm-foot"><span class="dim xs" id="fm_status">A small helper opens each volume, and stops a minute after the last action.</span>
       <button class="btn" data-dialog-dismiss="true" onclick="fmClose()">Close</button></div>`;
 }
 
@@ -173,7 +173,7 @@ function fmPaintPane(index) {
       ${snap
         ? `<span class="fm-snaptitle"><b>${esc(fmSnapshotTitle(snap))}</b> <span class="dim xs">read-only${snap.endsAt ? ` · open until ${esc(fmtAt(snap.endsAt))}` : ""}</span></span>`
         : `<select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>`}
-      <span class="fm-state ${pane.state}">${pane.state === "ready" ? "" : pane.state === "error" ? "" : pane.state === "stopped" ? "helper stopped · it starts again when you act" : "working…"}</span>
+      <span class="fm-state ${pane.state}">${pane.state === "ready" ? "" : pane.state === "error" ? "" : pane.state === "stopped" ? "helper stopped · it starts again at the next action" : "working…"}</span>
       <div class="fm-tools">
         ${snap ? "" : `<button type="button" class="iconbtn" title="New folder" aria-label="New folder" data-need="admin" onclick="fmNewFolder(${index})">${icon("plus")}</button>
         <label class="iconbtn" title="Upload files" aria-label="Upload files" data-need="admin">${icon("import")}<input type="file" multiple hidden onchange="fmUpload(${index}, this)"></label>`}

@@ -146,7 +146,7 @@ window.storeDetails = async key => {
   try { app = Object.assign({}, summary, await api("/api/appstore/app?key=" + encodeURIComponent(key))); }
   catch (e) {
     $("#mbody").innerHTML = UI.error(e, { retry: `storeDetails(${jsArg(key)})`, dialog: true,
-      title: e.body?.loading ? "The catalogue is still loading" : "Couldn't read this app" });
+      title: e.body?.loading ? "The catalogue is still loading" : "This app could not be read" });
     return;
   }
   STORE_APPS.set(key, app);

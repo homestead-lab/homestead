@@ -42,7 +42,7 @@ test("incomplete inventory reports detached but unverified and keeps deletion bl
   await r.context.volumeDelete(target);
   assert.match(r.html(), /Longhorn reports the volume as detached, but some checks are incomplete/);
   assert.match(r.html(), /No app or VM that uses this volume was found, but some information could not be read/);
-  assert.doesNotMatch(r.html(), /Stop the apps that use this volume first/);
+  assert.doesNotMatch(r.html(), /Stop the apps that use it first/);
   assert.match(r.html(), /Refresh review/);
   r.confirm();
   assert.equal(r.elements["#vd_go"].disabled, true);
@@ -108,7 +108,7 @@ test("an attached volume still asks the user to stop and unmount it", async () =
   p.longhorn.attached_node = "k3s-2";
   const r = review(async () => p);
   await r.context.volumeDelete(target);
-  assert.match(r.html(), /Stop the apps that use this volume first/);
+  assert.match(r.html(), /Stop the apps that use it first/);
   assert.doesNotMatch(r.html(), /Longhorn reports the volume as detached/);
 });
 

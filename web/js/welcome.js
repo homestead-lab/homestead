@@ -210,7 +210,7 @@ const SETUP_STEPS = {
     title: "Hostname", lead: s => s.done ? `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>.`
       : `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>. A hostname makes the address easier to remember and supports HTTPS certificates.`,
     actions: () => [],
-    more: "<p>Add a DNS record for the virtual IP on the router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the virtual IP changes.</p>",
+    more: "<p>Add a DNS record for the virtual IP on the router or local DNS server, for example homestead.lan, or use the tunnel's public hostname. Update the DNS record if the virtual IP changes.</p>",
   },
   lan: {
     title: "LAN networks",

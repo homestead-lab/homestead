@@ -234,7 +234,7 @@ window.srcAdd = (kind = STATE.view === "vmimport" ? "proxmox" : "unraid") => {
 /* The lead and the appdata folder follow the type: a Proxmox host has no appdata. */
 window.srcKindChanged = () => {
   const kind = $("#sc_kind").value;
-  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.`;
+  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then check its SSH fingerprint. No sign-in is attempted until it is trusted.`;
   $("#sc_path_field").hidden = kind === "proxmox";
   $("#sc_name").placeholder = kind === "proxmox" ? "proxmox" : "unraid";
 };
@@ -1454,10 +1454,10 @@ const IMPORT_REVIEW = UI.reviewFlow({
 
     childModal("Review import", `<div class="update-review">
       <div class="reviewbox"><b>${esc(config.name)}</b><p>${esc(config.image)}</p>
-        ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copies from a snapshot or backup. The check of the original container is skipped, so make sure the folders are correct." : "Everything that writes to these folders must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after each folder is copied." : " Homestead cannot check other programs that write to them.")}</p>` : ""}
+        ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copies from a snapshot or backup. The check of the original container is skipped, so make sure the folders are correct." : "Everything that writes to these folders must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after each folder is copied." : " Other programs are not checked.")}</p>` : ""}
         ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
       </div>${warningItems.length ? UI.callout(result.capacity.blocked ? "bad" : "warn", result.capacity.blocked ? "The import cannot start" : "Check before importing", `<ul class="ui-list">${warningItems.join("")}</ul>`) : ""}
-      ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space at the destination is checked against the measured size of the source folders. Folders that could not be measured are listed in the job log. The space is not reserved. An unsafe destination path stops the copy, and a failed copy keeps both the source and the destination.') : ''}
+      ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space at the destination is checked against the size of the source folders, and folders that could not be measured are listed in the job log. The space is not reserved. An unsafe path stops the copy, and a failed copy keeps both sides.') : ''}
       ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> Import anyway and replace existing files</label>' : ''}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Import app</button>`)}</div>`, true);

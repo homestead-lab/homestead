@@ -344,7 +344,7 @@ const CAPACITY_ROLLOUT_ROUTINE = [
 ];
 function capacityNoteWords(text) {
   if (text.startsWith("memory is not limited for ")) return `No memory limit is set for ${text.slice("memory is not limited for ".length)}, so its memory use can be higher than this estimate.`;
-  if (text.startsWith("updated pod estimates include every container")) return "The estimate covers every container in the updated app, including its start-up steps.";
+  if (text.startsWith("updated pod estimates include every container")) return "The estimate includes every container and start-up step.";
   if (text.startsWith("post-stop capacity assumes")) return "Capacity becomes available after the old copies stop and release their ports and volumes. Releasing storage can take longer.";
   if (text.startsWith("live RAM still includes old pods")) return "Current memory use still includes the old copies, so the estimate counts it until they stop.";
   if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the update. Placement and start-up later on can still delay its completion.";

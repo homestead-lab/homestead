@@ -257,7 +257,7 @@ test("pinned: New k3s cluster's review reads the same and needs the tick", async
 test("pinned: a stopped, blocked or unusable k3s review cannot create, and a failed plan only toasts", async () => {
   let t = k3s({ ok: false, stopped: ["no address"] });
   await t.ctx.k3sReview();
-  assert.match(t.html(), /<b>demo<\/b> can't be created until what is below is resolved\./);
+  assert.match(t.html(), /<b>demo<\/b> cannot be created until the problems below are resolved\./);
   assert.match(t.html(), /demo-server-1: no address/);
   assert.doesNotMatch(t.html(), /k_capacity_confirm/);
   assert.equal(t.ctx.k3sReviewReady(), false);
@@ -375,7 +375,7 @@ test("pinned: the import's room check says the class has room, or asks, or block
   assert.equal(t.html(), '<p class="ui-help"><span class="spin2"></span>Checking that the storage class has room for the disks…</p>');
   await checking;
   assert.deepEqual(t.sent, [{ path: "/api/vms/import-unraid/room", body: { storage_class: "fast", disks: [{ virtual: 10, size_gb: 10 }] } }]);
-  assert.equal(t.html(), '<p class="ui-help">fast has room: these disks take 10 of the 90 GiB it can still place.</p>');
+  assert.equal(t.html(), '<p class="ui-help">fast has room for these disks: 10 of 90 GiB.</p>');
   assert.equal(t.fields["#uvm_go"].disabled, false);
   t = room(() => ({ level: "tight", blockers: [], warnings: ["Tight on fast"] }));
   await t.ctx.uvmRoom();
@@ -407,7 +407,7 @@ test("pinned: only the newest room check is shown, none once the dialog is gone,
   const first = t.ctx.uvmRoom(), second = t.ctx.uvmRoom();
   answers[1].resolve({ storage_class: "fast", needed_gb: 15, free_gb: 90, blockers: [], warnings: [] }); await second;
   answers[0].resolve({ blockers: ["old answer"], warnings: [] }); await first;
-  assert.match(t.html(), /take 15 of the 90 GiB/);
+  assert.match(t.html(), /disks: 15 of 90 GiB/);
   assert.equal(t.ctx.uvmRoomReady(), true);
   const third = t.ctx.uvmRoom();
   delete t.fields["#uvm_room"];

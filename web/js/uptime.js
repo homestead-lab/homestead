@@ -141,7 +141,7 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
   const option = (value, label, help) => `<label class="answer-mode"><input type="radio" name="ans_mode" value="${value}" ${mode === value ? "checked" : ""}
     onchange="answerModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Checked every ${(u.every || 60) === 60 ? "minute" : `${Math.round(u.every / 60)} minutes`}. ${u.down_after || 3} failed checks in a row mark it as down and raise an alert.`))}
+    ${UI.lead(esc(`Checked every ${(u.every || 60) === 60 ? "minute" : `${Math.round(u.every / 60)} minutes`}. ${u.down_after || 3} failures in a row raise an alert.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
@@ -212,7 +212,7 @@ window.vmMonitoring = (ns, name, back = null) => {
   const option = (value, label, help, extra = "") => `<label class="answer-mode"><input type="radio" name="vm_mon" value="${value}" ${c.mode === value ? "checked" : ""}
     onchange="vmMonitorModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span>${extra}</span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc("Checked every minute. 3 failed checks in a row mark it as down and raise an alert. Saving never restarts the VM."))}
+    ${UI.lead(esc("Checked every minute. 3 failures in a row raise an alert. Saving never restarts the VM."))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}

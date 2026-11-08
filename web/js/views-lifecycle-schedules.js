@@ -26,7 +26,7 @@ function jobNext(j) {
 // Homestead's own can be run, and only those it made there edited.
 function jobOwner(j) {
   const where = j.ns ? `<div class="dim xs">${esc(j.ns)}</div>` : "";
-  if (j.owner === "longhorn") return `${where}<div class="dim xs" data-tip="Change it in Data protection or Longhorn.">Longhorn recurring job · read-only</div>`;
+  if (j.owner === "longhorn") return `${where}<div class="dim xs" data-tip="Change it in Data protection or Longhorn.">Longhorn schedule · read-only</div>`;
   if (j.owner === "flux") return `${where}<div class="dim xs" data-tip="Change it in the git repository Flux applies.">Applied by Flux · read-only</div>`;
   if (j.managed !== false) return where;
   return `${where}<div class="dim xs" data-tip="Change it where it was created${j.runnable === false ? "" : ". Run now still works"}.">Not created here · ${

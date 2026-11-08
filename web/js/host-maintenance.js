@@ -92,7 +92,7 @@
     const budgets = plan.maintenance?.budgets || [], local = plan.maintenance?.local_storage || [];
     const lead = outage
       ? `<b>${esc(node)}</b> is the only host, so nothing is stopped or moved. Homestead only records the maintenance, for uptime and alerts.`
-      : `Homestead drains <b>${esc(node)}</b>, which stops what waits for it and moves the rest, then marks it as in maintenance. Restarting or turning off the host is done separately.`;
+      : `Homestead drains <b>${esc(node)}</b>, which stops what waits for it and moves the rest, then marks it in maintenance. The host is restarted or shut down separately.`;
     const summary = [UI.lead(lead),
       UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
         hold.length ? ["Waits for the host", String(hold.filter(h => h.default === "wait").length)] : null,

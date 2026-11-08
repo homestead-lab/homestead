@@ -139,7 +139,7 @@ test("a CronJob in another namespace says where it is and who applied it, and is
 test("a Longhorn recurring job is named as one", async () => {
   const { ctx, out } = setup([job({ ns: "longhorn-system", owner: "longhorn", managed: false, runnable: false })]);
   await ctx.viewSchedules();
-  assert.match(out.html, /Longhorn recurring job/);
+  assert.match(out.html, /Longhorn schedule/);
 });
 
 test("a failed last run is shown with its reason and the last success", async () => {

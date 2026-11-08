@@ -263,7 +263,7 @@ function dashboardScope(o) {
   const count = `${o.nodes_total} host${o.nodes_total === 1 ? "" : "s"}`;
   if (!fleetAll()) return `Live health, capacity and placement across ${count}`;
   const me = (FLEET.view?.members || []).find(m => m.self);
-  return `${esc(me?.name || "This cluster")} only · ${count} · the Dashboard doesn't combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's hosts</button>`;
+  return `${esc(me?.name || "This cluster")} only · ${count} · The Dashboard does not combine clusters yet. <button type="button" class="linkish" onclick="go('nodes')">Every cluster's hosts</button>`;
 }
 
 /* A host's state, worked out once for the dashboard, Nodes and its own page
@@ -483,7 +483,7 @@ function nodeCard(n) {
       ${["stale", "unreachable"].includes(n.probe?.state) && n.temps ? `<div class="between"><span class="dim xs">PROBE</span>
         <span class="small ${n.probe.state === "unreachable" ? "t-warm" : "dim"}">${n.probe.state === "unreachable" ? "not answering · " : ""}last reading ${esc(probeAge(n.probe.age_s))} ago</span></div>` : ""}
     </div>
-    <div class="nodepods"><span class="small mono" data-tip="${n.pods_wl} of your pods (bright) and ${n.pods_sys} system pods">
+    <div class="nodepods"><span class="small mono" data-tip="${n.pods_wl} app pods (bright) and ${n.pods_sys} system pods">
       <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
       <div class="podgrid">${dots}</div></div>
     <div class="nodebadges">
@@ -535,7 +535,7 @@ function comparisonDisk(n, d) {
 }
 function nodePodDots(n) {
   const sys = Math.max(0, Number(n.pods_sys) || 0), wl = Math.max(0, Number(n.pods_wl) || 0);
-  return `<div class="podgrid" role="img" aria-label="${wl} of your pods and ${sys} system pods" data-tip="${wl} of your pods (bright) · ${sys} system pods">
+  return `<div class="podgrid" role="img" aria-label="${wl} app pods and ${sys} system pods" data-tip="${wl} app pods (bright) · ${sys} system pods">
     ${'<i></i>'.repeat(Math.min(sys,80))}${'<i class="wl"></i>'.repeat(Math.min(wl,40))}</div>`;
 }
 
@@ -715,7 +715,7 @@ window.nodeRemember = n => NODE_PICK.node.set(n.name, n);
 const nodeIds = n => n.workload_ids || n.workloads.map(w => `lab/${w}`);
 function nodeWorkloadChips(n) {
   const ids = nodeIds(n), selecting = NODE_PICK.on.has(n.name), picked = NODE_PICK.picked.get(n.name) || new Set();
-  if (!ids.length) return '<span class="dim xs">nothing of yours is scheduled here</span>';
+  if (!ids.length) return '<span class="dim xs">No apps are scheduled here</span>';
   const chips = ids.map(id => { const [ns, name] = id.split("/");
     return selecting
       ? `<button type="button" class="tag movable" aria-pressed="${picked.has(id)}" data-id="${esc(id)}" onclick="nodeToggle(${jsq(n.name)},${jsq(id)})">${esc(name)}</button>`
@@ -911,7 +911,7 @@ window.smartDisk = async (node, disk) => {
       ${health.issues?.length ? `${UI.callout(health.state === "critical" ? "bad" : "warn", { html: `${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}` }, `<ul class="diskfindings">${health.issues.map(issue =>
           `<li>${UI.chip(issue.severity, issue.severity === "critical" ? "bad" : "warn")} ${esc(issue.reason)}</li>`).join("")}</ul>
         <span class="dim xs">Measured against the drive-health policy in Settings.</span>`)}`
-      : s.available ? `${UI.callout("ok", { html: `No defects reported.` }, `Every counter is within your thresholds${s.health ? `; the drive's own check says ${esc(s.health)}` : ""}.`)}` : ""}
+      : s.available ? `${UI.callout("ok", { html: `No defects reported.` }, `Every counter is within the thresholds${s.health ? `, and the drive's own check reports ${esc(s.health)}` : ""}.`)}` : ""}
       ${active ? UI.callout("info", "Self-test running", `<p>${esc(s.test.status || "In progress")}${s.test.remaining_percent == null ? "" : ` · ${esc(s.test.remaining_percent)}% remaining`}</p>`) : ""}
       ${health.stale_probe ? `${UI.callout("warn", { html: `The node probe predates this release.` }, `Wear and life figures may be missing until it updates, when Homestead starts. If this persists, check Settings → Homestead.`)}` : ""}
       <div class="smartstats">
@@ -957,7 +957,7 @@ window.probeInstallConfirm = () => childModal("Install the node probe?", `
   <div class="note"><b>Monitoring part.</b> Reads <span class="mono">/sys</span>,
     <span class="mono">/proc</span> and <span class="mono">/dev</span> without changing them, has no extra
     permissions, and runs with a read-only system.</div>
-  ${UI.callout("warn", { html: `Reading drive health needs extra permissions` }, `The part that reads drive health runs with extra permissions, but with a read-only system, isolated from other processes, and only answers signed requests. ${tip("Direct access to the drives is needed to read their health. Without it, drive health is not available.")}`)}
+  ${UI.callout("warn", { html: `Reading drive health needs extra permissions` }, `It runs isolated, with a read-only system, and answers only signed requests. ${tip("Direct access to the drives is needed to read their health. Without it, drive health is not available.")}`)}
   ${UI.actions(`<button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not now</button>`)}`);
 

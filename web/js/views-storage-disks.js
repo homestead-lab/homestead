@@ -12,7 +12,7 @@ function diskRowsHtml(node, disks, harvester) {
       const pct = x.size_gb ? Math.round(x.used_gb / x.size_gb * 100) : 0;
       return `<div class="disk-lh">
         <div class="between"><span class="mono xs">${esc(x.path)}${x.type === "block" ? ` ${UI.chip("V2", "info")}` : ""}</span>
-          <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} volume cop${x.replicas === 1 ? "y" : "ies"}</span></div>
+          <span class="mono xs">${esc(sizePair(x.used_gb, x.size_gb))} used · ${esc(sizeText(x.allocated_gb))} allocated · ${x.replicas} cop${x.replicas === 1 ? "y" : "ies"}</span></div>
         ${meter(pct, "", "disk")}
         ${x.reserved_gb > 0 ? UI.more('Capacity breakdown',UI.facts([
           [x.type==='block'?'Store capacity':'Filesystem capacity',esc(sizeText(x.capacity_gb))],
