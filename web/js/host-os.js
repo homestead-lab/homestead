@@ -24,20 +24,20 @@ function hostOsAge(at) {
 }
 
 function hostOsBody(node, f) {
-  if (!f) return `${UI.lead("Not read yet: the leader reads each host within ten minutes of starting, then every six hours.")}
+  if (!f) return `${UI.lead("Not read yet. The leading Homestead reads each host within ten minutes of starting, then every six hours.")}
     ${UI.actions(UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }))}`;
   const updates = f.updates || [], sec = f.security || 0;
   const updateText = f.upgrading ? UI.chip("installing now", "info")
     : updates.length ? `${updates.length} waiting ${sec ? UI.chip(`${sec} security`, "warn") : ""}`
-    : f.package_manager ? "up to date" : "no package manager Homestead knows";
+    : f.package_manager ? "Up to date" : "No supported package manager";
   const failed = f.failed_units || [];
   const facts = UI.facts([
     ["System", esc(f.os || "—")],
     ["Kernel", `<span class="mono">${esc(f.kernel || "—")}</span>`],
     ["Updates", updateText],
-    ["Restart", f.reboot ? `${UI.chip("needed", "warn")} <span class="dim xs">${esc(f.reboot_for || "to finish an update")}</span>` : "not needed"],
-    ["Services", failed.length ? `${UI.chip(`${failed.length} failed`, "bad")} <span class="mono xs">${esc(failed.join(", "))}</span>` : "all running"],
-    ["Clock", f.ntp === false ? UI.chip("not synchronised", "warn") : f.ntp ? "synchronised" : "—"],
+    ["Restart", f.reboot ? `${UI.chip("needed", "warn")} <span class="dim xs">${esc(f.reboot_for || "to finish an update")}</span>` : "Not needed"],
+    ["Services", failed.length ? `${UI.chip(`${failed.length} failed`, "bad")} <span class="mono xs">${esc(failed.join(", "))}</span>` : "All running"],
+    ["Clock", f.ntp === false ? UI.chip("not synchronised", "warn") : f.ntp ? "Synchronised" : "—"],
     ["Automatic updates", hostOsAuto(f.auto)],
     ["Root filesystem", `${UI.meter({ now: f.root_used_pct || 0, warnAt: 90 })}<span class="dim xs">${f.root_used_pct || 0}% of ${sizeText(f.root_total_gb || 0)}</span>`],
   ]);
@@ -49,12 +49,12 @@ function hostOsBody(node, f) {
   return `${facts}${list}
     <div class="dim xs" style="margin-top:8px">Read ${hostOsAge(f.at)}${lists}${last}</div>
     ${UI.actions([
-      f.reboot ? UI.button("Restart…", `nodeActions(${jsArg(node)})`, { attrs: 'data-need="admin"' }) : "",
+      f.reboot ? UI.button("Restart host…", `nodeActions(${jsArg(node)})`, { attrs: 'data-need="admin"' }) : "",
       UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }),
       updates.length && !f.upgrading ? UI.button(`Install ${updates.length} update${updates.length === 1 ? "" : "s"}`,
         `hostOsUpgrade(${jsArg(node)})`, { kind: "pri", attrs: 'data-need="admin"' }) : "",
     ].join(""))}
-    <div class="dim xs" style="margin-top:8px">Every host, one at a time, or in a weekly window:
+    <div class="dim xs" style="margin-top:8px">To update every host one at a time, or in a weekly window, open
       <a class="linkish" onclick="osUpdates()">OS updates</a>.</div>`;
 }
 
@@ -95,7 +95,7 @@ window.hostOsCheck = async node => {
 window.hostOsUpgrade = async node => {
   const f = HOST_OS.cache[node]?.facts || {};
   const count = (f.updates || []).length;
-  const ok = await ask(`Install ${count} update${count === 1 ? "" : "s"} on ${node}? Its package manager (${f.package_manager || "the host's"}) refreshes its lists and upgrades everything waiting. Apps and VMs keep running; ${f.reboot || (f.updates || []).some(u => HOS_KERNEL.test(u.name)) ? "a kernel update then needs a restart, from Host actions" : "a restart is only needed if an update asks for one"}.`,
+  const ok = await ask(`Install ${count} update${count === 1 ? "" : "s"} on ${node}? Its package manager (${f.package_manager || "the host's"}) refreshes its lists and installs every waiting update. Apps and VMs keep running. ${f.reboot || (f.updates || []).some(u => HOS_KERNEL.test(u.name)) ? "A kernel update then needs a restart, from Host actions" : "A restart is needed only if an update asks for one"}.`,
     { title: "Install updates", ok: "Install updates" });
   if (!ok) return;
   try {
@@ -138,7 +138,7 @@ function partitionMap(d) {
   if (!(d.partitions || []).length) segs.push(d.fstype ? { name: d.name, size, fstype: d.fstype, mounts: d.mount ? [d.mount] : [] } : { size });
   else if (size - at > size * 0.004) segs.push({ size: size - at });
   const label = s => s.name ? `${s.name} · ${hostOsBytes(s.size)}${s.fstype ? ` · ${hostOsFilesystem(s.fstype)}` : ""}${(s.mounts || []).length ? ` · ${s.mounts.join(", ")}` : (s.holds || []).length ? ` · holds ${s.holds.join(", ")}` : ""}`
-    : `unallocated · ${hostOsBytes(s.size)}`;
+    : `Unallocated · ${hostOsBytes(s.size)}`;
   return `<div class="pmap-disk"><div class="between"><span class="small"><b class="mono">${esc(d.name)}</b>
       <span class="dim xs">${hostOsBytes(d.size)} · ${d.table ? esc(d.table.toUpperCase()) : (d.partitions || []).length ? "partitioned" : d.fstype ? `whole-disk ${esc(hostOsFilesystem(d.fstype))} filesystem` : "blank"}</span></span></div>
     <div class="pmap" role="img" aria-label="${esc(`${d.name}: ${segs.map(label).join("; ")}`)}">${segs.map(s =>
@@ -185,7 +185,7 @@ function osUpdatesRowAction(name, f, r) {
   if (f.upgrading) return UI.chip("installing now", "info");
   // Both when both wait: a host the checks refused may have new updates by now.
   return [(f.updates || []).length ? UI.button("Update…", `osUpdatesReview([${jsArg(name)}])`, { attrs: 'data-need="admin"' }) : "",
-    f.reboot ? UI.button("Restart…", `nodePowerReview(${jsArg(name)},"reboot")`, { attrs: 'data-need="admin"' }) : ""].join(" ").trim();
+    f.reboot ? UI.button("Restart host…", `nodePowerReview(${jsArg(name)},"reboot")`, { attrs: 'data-need="admin"' }) : ""].join(" ").trim();
 }
 const osUpdatesRowPick = (name, f, r) => osUpdatesRunning(r) || f.upgrading || !(f.updates || []).length ? "" :
   `<label class="osu-pick" data-need="admin"><input type="checkbox" data-osu-pick="${esc(name)}" aria-label="${esc(`Select ${name}`)}" onchange="osUpdatesPicked()"></label>`;
@@ -207,12 +207,12 @@ function osUpdatesHostsHtml(r, actions = false) {
   // Right under the table: the ticks are here, and the dialog's own buttons a long way down.
   const picked = actions && !osUpdatesRunning(r) ? `<div class="osu-picked">${UI.button("Update selected hosts…", "osUpdatesReviewPicked()", { id: "osu_picked", attrs: 'data-need="admin" hidden' })}</div>` : "";
   return rows.length ? UI.table([{ label: "Host" }, { label: "Updates" }, { label: "Restart" }, { label: "Automatic updates" }, ...(actions ? [{ label: "" }] : [])], rows) + picked
-    : UI.lead("No host has been read yet; the leader reads each within ten minutes of starting.");
+    : UI.lead("No host has been read yet. The leading Homestead reads each host within ten minutes of starting.");
 }
 function osUpdatesUnavailableHtml() {
   return STATE.platform?.harvester
-    ? UI.callout("info", "Harvester updates its own hosts.", `Its hosts' operating system comes with Harvester. ${UI.actions(UI.button("Open Cluster", "go('cluster')"))}`)
-    : UI.callout("info", "Host updates are managed here on k3s and RKE2.", "Use your platform's host tools to update this cluster's operating systems.");
+    ? UI.callout("info", "Harvester updates its own hosts.", `The hosts' operating system is part of Harvester. ${UI.actions(UI.button("Open Cluster", "go('cluster')"))}`)
+    : UI.callout("info", "Host updates are managed here only on k3s and RKE2.", "Use the platform's own tools to update this cluster's operating systems.");
 }
 window.osUpdatesCardPaint = async () => {
   const card = $("#settingsHostUpdates");
@@ -240,16 +240,16 @@ window.osUpdatesCardPaint = async () => {
         ${last ? UI.callout(last.status === "failed" ? "bad" : "info", osUpdatesLastRun(last), `${esc(last.message || "")}${osUpdatesSkipLine(r, "<br>")}`)
           : !run && r.window_skip ? UI.callout("warn", "", osUpdatesSkipLine(r)) : ""}
         ${check.running ? UI.progress(Math.round(check.done.length * 100 / Math.max(1, check.hosts.length)),
-          { label: "Reading every host again", detail: `${check.done.length} of ${check.hosts.length} · each refreshes its package lists first` }) : ""}
+          { label: "Reading every host again", detail: `${check.done.length} of ${check.hosts.length} · Each host refreshes its package lists first.` }) : ""}
         ${osUpdatesHostsHtml(r)}
         <p class="dim small">${s.manage === "homestead" ? "Managed by Homestead, one host at a time" : "Managed by each host's automatic updates"}
-          · ${esc(windowText)} · ${s.reboot === "never" ? "Rollout restarts: manual" : "Rollout restarts: when needed, drained first"}.
+          · ${esc(windowText)} · ${s.reboot === "never" ? "Restarts during updates: manual" : "Restarts during updates: when needed, drained first"}.
           Manage host updates to change the schedule or start a reviewed update.</p>
       </div>`;
     if (window.applyRole) applyRole();
   } catch (e) {
     if ($("#settingsHostUpdates") !== card) return;
-    card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "Host update status could not be read.", esc(e.message));
+    card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "The host update status could not be read.", esc(e.message));
   }
 };
 
@@ -269,7 +269,7 @@ window.osUpdates = async (child = false) => {
   (child ? childModal : modal)("OS updates", '<div class="empty"><span class="spin2"></span> reading every host</div>', true);
   let r;
   try { r = await api("/api/os-updates"); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "OS updates could not be read.", esc(e.message)); return; }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The OS update settings could not be read.", esc(e.message)); return; }
   if (!r.applies) {
     $("#mbody").innerHTML = osUpdatesUnavailableHtml();
     return;
@@ -280,9 +280,9 @@ window.osUpdates = async (child = false) => {
     <div id="osu_status">${osUpdatesStatusHtml(r)}</div>
     <div id="osu_hosts">${osUpdatesHostsHtml(r, true)}</div>
     ${UI.section("Settings", `
-      <div class="f"><label>Who installs updates ${tip("Ubuntu's unattended-upgrades installs security updates on each host by itself, and with Automatic-Reboot restarts it without a drain; Homestead then holds it off only while it updates hosts. Chosen, Homestead switches it off on every host and installs updates itself, one host at a time, restarting through its review and drain.")}</label>
+      <div class="f"><label>Who installs updates ${tip("Ubuntu's unattended-upgrades installs security updates on each host automatically, and with Automatic-Reboot it restarts the host without draining it. Homestead pauses it only while it updates hosts itself. If Homestead is chosen, it turns unattended-upgrades off on every host and installs updates itself, one host at a time, with its review and drain before each restart.")}</label>
         <select id="osu_manage">
-          <option value="ubuntu" ${s.manage === "ubuntu" ? "selected" : ""}>Each host, by itself (Ubuntu's automatic updates)</option>
+          <option value="ubuntu" ${s.manage === "ubuntu" ? "selected" : ""}>Each host automatically (Ubuntu's automatic updates)</option>
           <option value="homestead" ${s.manage === "homestead" ? "selected" : ""}>Homestead, one host at a time</option></select></div>
       <label class="switch"><input type="checkbox" id="osu_on" ${s.schedule.enabled ? "checked" : ""} onchange="osUpdatesWindow()"> <span>A weekly window</span></label>
       <div id="osu_window" ${s.schedule.enabled ? "" : "hidden"}>
@@ -291,10 +291,10 @@ window.osUpdates = async (child = false) => {
           `<option value="${h}" ${s.schedule.hour === h ? "selected" : ""}>${String(h).padStart(2, "0")}:00</option>`).join("")}</select></div></div>
       <div class="f"><label>Restarts</label><select id="osu_reboot">
         <option value="when-needed" ${s.reboot === "when-needed" ? "selected" : ""}>When an update needs one, drained first</option>
-        <option value="never" ${s.reboot === "never" ? "selected" : ""}>Never - I restart hosts myself</option></select></div>
+        <option value="never" ${s.reboot === "never" ? "selected" : ""}>Never (hosts are restarted manually)</option></select></div>
       <label class="check"><input type="checkbox" id="osu_single" ${s.single_copy ? "checked" : ""}> Restart a host even when a volume has its only healthy copy there - that volume is unavailable until the host is back</label>
       ${UI.actions(UI.button("Save settings", "osUpdatesSave()", { id: "osu_save", attrs: 'data-need="admin"' }))}`)}
-    ${UI.more("What an update does", `<p class="small">Updates run one host at a time, with Homestead's leader last, on every host or the ones you choose. Restarts use Host actions checks: running VMs, a sole etcd member, a volume's only copy or anything that would keep the host from draining can block them, and that host then waits for you. Hosts drain through disruption budgets and resume scheduling once Ready with healthy storage. Failed installs stop the queue. Ubuntu automatic updates pause on every host during the run.</p>`)}
+    ${UI.more("What an update does", `<p class="small">Updates run one host at a time, on every host or on the chosen ones, with the host running the leading Homestead last. Restarts use the Host actions checks. Running VMs, a single voting host, a volume's only copy, or anything that would stop the drain can prevent a restart, and that host then waits for an admin. Hosts are drained within their disruption budgets, and uncordoned once ready with healthy storage. A failed installation stops the queue. Ubuntu's automatic updates pause on every host during the run.</p>`)}
     <div id="osu_run">${osUpdatesRunActions(run)}</div></div>`;
   if (window.applyRole) applyRole();
   osUpdatesFollow(run);
@@ -317,8 +317,8 @@ function osUpdatesStatusHtml(r) {
 }
 // The weekly window something was in the way of, until a window or every host runs.
 const osUpdatesSkipLine = (r, before = "") => !r.window_skip ? "" : r.window_skip.blip
-  ? `${before}<b>Window not started yet: ${esc(r.window_skip.why)}.</b> It looks again every few minutes while its hour lasts.`
-  : `${before}<b>Window skipped because ${esc(r.window_skip.why)}</b> · ${esc(hostOsAge(r.window_skip.last_try))}`;
+  ? `${before}<b>The window has not started yet, because ${esc(r.window_skip.why)}.</b> It checks again every few minutes during its hour.`
+  : `${before}<b>The window was skipped because ${esc(r.window_skip.why)}</b> · ${esc(hostOsAge(r.window_skip.last_try))}`;
 // A hold that has kept failing during the run: that host could restart itself.
 function osUpdatesHoldsHtml(run) {
   const failing = Object.entries(run.hold_failed || {}).filter(([, row]) => row.noted);
@@ -330,7 +330,7 @@ const osuSmaller = run => run.reason === "asked-hosts" && (run.nodes || []).leng
 const osUpdatesLastRun = last => osuSmaller(last) ? `Last run: ${last.nodes.join(", ")}, ${last.status || "finished"}` : `Last run ${last.status || "finished"}`;
 // A run of one host has nothing to stop after, unless it is waiting for its restart.
 const osUpdatesRunActions = run => run
-  ? (run.node?.waiting ? UI.actions(UI.button("Stop and leave this host to me", "osUpdatesStop()", { attrs: 'data-need="admin"' }))
+  ? (run.node?.waiting ? UI.actions(UI.button("Stop and leave this host", "osUpdatesStop()", { attrs: 'data-need="admin"' }))
     : run.nodes.length === 1 ? "" : UI.actions(UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' })))
   : UI.actions(UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }));
 
@@ -354,36 +354,36 @@ const OSU_REVIEW_LOADING = '<div id="osuReviewLoading" class="empty"><span class
    hosts', or one under "can't start", are plain lines. */
 function osUpdatesVerdict(h, plain) {
   const said = text => esc(text.replace(/^./, c => c.toUpperCase()).replace(/\.$/, ""));
-  const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install; a restart is checked when due.`]
+  const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install, and a restart is checked when it is due.`]
     : h.restart_refusal && h.restart_may_clear ? ["info", "If this host needs a restart, Homestead may wait up to 15 minutes first.",
-      `${said(h.restart_refusal)}. This can clear by itself; if not, the host waits for you to choose Restart….`]
-    : h.restart_refusal ? ["warn", "If this host needs a restart, Homestead will not do it by itself today.",
-      `${said(h.restart_refusal)}. The updates install; the host then waits for you to choose Restart….`]
-    : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is drained, restarted, and given back once Ready with healthy volumes."];
+      `${said(h.restart_refusal)}. This can clear by itself. If it does not, the host waits for an admin to choose Restart host….`]
+    : h.restart_refusal ? ["warn", "If this host needs a restart, Homestead will not restart it automatically today.",
+      `${said(h.restart_refusal)}. The updates install, and the host then waits for an admin to choose Restart host….`]
+    : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is drained, restarted, and uncordoned once it is ready with healthy volumes."];
   return plain ? `<p class="small"><b>${esc(title)}</b>${body ? ` ${body}` : ""}</p>` : UI.callout(kind, title, body);
 }
 function osUpdatesReviewHost(h, several, plain) {
   const count = h.updates.length;
   const restart = h.reboot ? `${UI.chip("needed", "warn")} <span class="dim xs">${esc(h.reboot_for || "to finish an update")}</span>`
     : h.updates.some(u => HOS_KERNEL.test(u.name)) ? `${UI.chip("likely", "warn")} <span class="dim xs">a kernel update is in the list</span>`
-    : "only if an update asks for one";
-  return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "up to date"], ["Restart", restart],
-      h.homestead_here ? ["Homestead", `${UI.chip("runs on this host", "info")} <span class="dim xs">a restart can stop this page answering for a few minutes; the update carries on.${several ? " It goes last." : ""}</span>`] : null])}
+    : "Only if an update asks for one";
+  return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "Up to date"], ["Restart", restart],
+      h.homestead_here ? ["Homestead", `${UI.chip("runs on this host", "info")} <span class="dim xs">A restart can stop this page from responding for a few minutes, but the update continues.${several ? " It is updated last." : ""}</span>`] : null])}
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
     <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>`;
 }
 function osUpdatesReviewHtml(review, restart) {
   const names = review.hosts.map(h => h.node), several = names.length > 1;
-  const others = "Other hosts' automatic updates wait until this ends.";
+  const others = "The other hosts' automatic updates wait until this finishes.";
   return `<div class="ui-stack">
-    ${review.blocked ? UI.callout("bad", "This can't start now.", esc(review.blocked)) : ""}
+    ${review.blocked ? UI.callout("bad", "This cannot start now.", esc(review.blocked)) : ""}
     ${UI.lead(several
       ? `Install what is waiting on ${osuHosts(names.length)}, one at a time: ${names.map(n => `<b>${esc(n)}</b>`).join(", then ")}. A failure stops the run. ${others}`
       : `Install what is waiting on <b>${esc(names[0])}</b>. ${others}`)}
     ${review.hosts.map(h => several ? UI.section(h.node, osUpdatesReviewHost(h, true, true)) : osUpdatesReviewHost(h, false, !!review.blocked)).join("")}
     <div class="f"><label for="osu_review_restart">After installing</label><select id="osu_review_restart" onchange="osUpdatesReviewRestart()">
       <option value="when-needed"${restart === "when-needed" ? " selected" : ""}>Restart ${several ? "a host" : "it"} if an update needs one, drained first</option>
-      <option value="never"${restart === "never" ? " selected" : ""}>Do not restart; I will do it</option></select></div>
+      <option value="never"${restart === "never" ? " selected" : ""}>Do not restart (restart manually)</option></select></div>
     ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })
       + UI.button(OSU_REVIEW_TITLE(names), "osUpdatesReviewedApply()", { kind: "pri", id: "osu_review_go", attrs: 'data-need="admin"', disabled: !!review.blocked }))}
   </div>`;
@@ -471,7 +471,7 @@ window.osUpdatesSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.osUpdatesStart = async () => {
-  if (!(await ask("Update every host now, one at a time? Each installs what is waiting; a host whose update asks for a restart is drained and restarted before the next is touched. Apps and VMs move off each host while it restarts. A host whose restart the checks refuse keeps its updates and waits for you.",
+  if (!(await ask("Update every host now, one at a time? Each host installs its waiting updates. A host whose update needs a restart is drained and restarted before the next host is updated. Apps and VMs move off each host while it restarts. If the checks refuse a host's restart, it keeps its updates and waits for an admin.",
     { title: "Update every host", ok: "Update every host" }))) return;
   try {
     const r = await api("/api/os-updates/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
