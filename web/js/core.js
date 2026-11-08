@@ -43,7 +43,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.335-dev.10";
+const HOMESTEAD_VERSION = "2.8.335-dev.11";
 const ICON_BLOBS = new Map();
 /* An icon that could not be fetched is not asked for again on every refresh: its app shows its initials,
    and it is tried again after ten minutes (or on a full reload, which forgets this). (#906) */
