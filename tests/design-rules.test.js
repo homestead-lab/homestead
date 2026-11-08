@@ -49,7 +49,7 @@ test("lists' rows put their buttons in an actionBar, not loose in the row (#506)
     ["web/js/views-storage-volumes.js", /function volumeShortCell\(/, []],
     ["web/js/views-lifecycle-images.js", /async function viewImages\(/, ["Scan every host", "Stop"]],
     ["web/js/views-vms.js", /window\.vmStore = /, ["Check for newer builds"]],
-    ["web/js/vm-hardware.js", /window\.vmIsoLibrary = /, ["＋ Folder", "Save", "↻ Refresh"]],
+    ["web/js/vm-hardware.js", /window\.vmIsoLibrary = /, ["＋ Add folder", "Save setting", "↻ Refresh"]],
     ["web/js/views-helm.js", /function renderHelm\(/, ["＋ Install chart"]],
   ];
   for (const [file, start, allowed] of lists) {
