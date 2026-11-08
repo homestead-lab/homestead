@@ -36,7 +36,7 @@ test("deploy review shows unknown capacity and escapes warnings", async () => {
   await t.context.window.doDeploy();
   assert.match(t.html(), /planned &lt;volume&gt;/);
   assert.match(t.html(), /Current memory use unavailable/);
-  assert.match(t.html(), /Scheduler reservations unavailable/);
+  assert.match(t.html(), /Reservations unavailable/);
   assert.match(t.html(), /This is a snapshot\. It does not reserve capacity/);
   assert.match(t.html(), /deployCapacityConfirm/);
   assert.match(t.html(), /Deploy it despite the warnings/);

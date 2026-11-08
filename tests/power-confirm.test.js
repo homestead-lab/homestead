@@ -39,7 +39,7 @@ test("shutting down a VM asks first, and no sends nothing", async () => {
 test("stopping or restarting a container asks first", async () => {
   let t = run(wlScale, false);
   await t.wlScale("lab", "frigate", 0);
-  assert.deepEqual(t.asked.map(a => a[1]), ["Stop"]);
+  assert.deepEqual(t.asked.map(a => a[1]), ["Stop app"]);
   assert.deepEqual(t.sent, []);
   t = run(wlScale, true);
   await t.wlScale("lab", "frigate", 0);

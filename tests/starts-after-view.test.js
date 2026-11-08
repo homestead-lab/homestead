@@ -131,19 +131,19 @@ test("a row that started without an app says when and why", () => {
     start_setting: { timeout: 300, after: [] }, start_gate: "rendered" };
   const r = load().startWaitText(w, NOW);
   assert.equal(r.chip, "");
-  assert.equal(r.line, "Started without app-2 at 07:05: app-2 was not ready after 5 min");
+  assert.equal(r.line, "Started without app-2 at 07:05, because app-2 was not ready after 5 min");
 });
 
 test("a gate that doesn't match, one not committed, and a setting that can't be read", () => {
   const c = load();
   assert.equal(c.startWaitText({ start_gate: "differs", start_setting: { after: [], timeout: 300 } }, NOW).line,
-    "Its start gate doesn't match its setting: put it back in Edit → Placement");
+    "Its start order does not match its setting. Restore it in Edit → Placement.");
   assert.equal(c.startWaitText({ start_gate: "missing", start_setting: { managed: true, after: [], timeout: 300 } }, NOW).line,
-    "Its start gate isn't committed yet: commit the lines Edit shows");
+    "Its start order is not committed yet. Commit the lines shown in Edit.");
   assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs", start_note: "its Starts after setting could not be read" }, NOW).line,
-    "Could not read its Starts after setting");
+    "Its Starts after setting could not be read");
   assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs" }, NOW).line,
-    "Its Starts after setting can't be read: set it again in Edit");
+    "Its Starts after setting cannot be read. Set it again in Edit.");
   assert.equal(c.startWaitText({ start_gate: "none" }, NOW), null);
   assert.equal(c.startWaitText({}, NOW), null);
 });
@@ -158,9 +158,9 @@ test("the apps it starts after, with the gone ones marked", () => {
 
 test("Start says which stopped apps it will wait for", () => {
   const c = load();
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300), " app-2 is stopped: app-1 will wait for it up to 5 min.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 90), " app-2 and app-3 are stopped: app-1 will wait for them up to 1.5 min.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], null), " app-2 is stopped: app-1 will wait for it before it starts.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300), " app-2 is stopped, so app-1 waits for it up to 5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 90), " app-2 and app-3 are stopped, so app-1 waits for them up to 1.5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], null), " app-2 is stopped, so app-1 waits for it before it starts.");
   assert.equal(c.startWaitsLine("app-1", [], 300), "");
 });
 
@@ -245,8 +245,8 @@ test("a gate changed outside Homestead can be put back, which sends the setting 
 
 test("Start: several apps it keeps waiting for, and a read that failed", () => {
   const c = load();
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300, "wait"), " app-2 is stopped: app-1 will wait for it until it is up.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 300, "wait"), " app-2 and app-3 are stopped: app-1 will wait for them until they are up.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300, "wait"), " app-2 is stopped, so app-1 waits for it until it is up.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 300, "wait"), " app-2 and app-3 are stopped, so app-1 waits for them until they are up.");
   assert.equal(c.startWaitsLine("app-1", [], 300, "start", "could not check which apps it starts after: API down"),
     " Could not check which apps it starts after: API down.");
 });
