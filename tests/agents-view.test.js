@@ -71,7 +71,7 @@ test("approving asks first, and runs only after the acknowledgement", async () =
   await t.c.agentApproveRun("p1", null);
   assert.deepEqual(t.posts[0], ["/api/agents/requests/approve", { id: "p1" }]);
   // The dialog closes at once and says it is running; the result comes when it has finished.
-  assert.deepEqual(t.toasts[0], ["Running it", "ok"]);
+  assert.deepEqual(t.toasts[0], ["Running the request", "ok"]);
   assert.deepEqual(t.toasts.at(-1), ["Deleted", "ok"]);
 });
 

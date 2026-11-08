@@ -4,7 +4,7 @@
    a reboot gets, from the same route; what's asked for here is a reason and an
    end, and no power is sent. A dialog of its own, using UI.reviewFlow. */
 (() => {
-  const HOURS = [[1, "1 hour"], [2, "2 hours"], [4, "4 hours"], [8, "8 hours"], [24, "Until I end it (24 hours at most)"]];
+  const HOURS = [[1, "1 hour"], [2, "2 hours"], [4, "4 hours"], [8, "8 hours"], [24, "Until it is ended (24 hours at most)"]];
   const seconds = () => Math.floor(Date.now() / 1000);
   const hoursSelect = (id, chosen = 1) => `<select id="${id}">${HOURS.map(([value, label]) =>
     `<option value="${value}"${value === chosen ? " selected" : ""}>${esc(label)}</option>`).join("")}</select>`;
@@ -65,7 +65,7 @@
   const flow = UI.reviewFlow({
     preview: node => api(`/api/node/power/plan?${new URLSearchParams({ node, action: "maintenance" })}`),
     render: (plan, node) => renderReview(plan, node),
-    failed: error => toast(`Could not assess this host: ${error.message}`, "bad"),
+    failed: error => toast(`This host could not be checked. ${error.message}`, "bad"),
     blocked: plan => !plan.ready,
     button: "mm_execute",
     check: () => typedConfirmMatches("mm_confirm") && reasonNow().length >= 1 && reasonNow().length <= 120
@@ -92,7 +92,7 @@
     const budgets = plan.maintenance?.budgets || [], local = plan.maintenance?.local_storage || [];
     const lead = outage
       ? `<b>${esc(node)}</b> is the only host, so nothing is stopped or moved. Homestead only records the maintenance, for uptime and alerts.`
-      : `Homestead drains <b>${esc(node)}</b> - stopping what waits for it, moving the rest - then marks it in maintenance. Power is up to you.`;
+      : `Homestead drains <b>${esc(node)}</b>, which stops what waits for it and moves the rest, then marks it as in maintenance. Restarting or turning off the host is done separately.`;
     const summary = [UI.lead(lead),
       UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
         hold.length ? ["Waits for the host", String(hold.filter(h => h.default === "wait").length)] : null,
@@ -153,13 +153,13 @@
     UI.poll(async signal => {
       let op;
       try { op = (await api("/api/operations", { keep: true, timeout: 10000, signal })).find(row => row.id === id); }
-      catch (_) { paint(UI.lead("Homestead is not answering yet; it may be moving off this host. Still trying.")); return; }
+      catch (_) { paint(UI.lead("Homestead is not responding yet. It may be moving off this host. Still trying.")); return; }
       if (!op) { paint(UI.callout("warn", "This job is no longer listed", "Check the host's page for its maintenance.")); return false; }
       const stopped = op.status === "failed" || op.status === "cancelled", done = op.status === "succeeded";
       // A job that failed only at recording it: the event is open and what waited stays stopped.
       const opened = /^In maintenance:/.test(op.message || "");
       paint(stopped ? UI.callout(opened ? "warn" : "bad", opened ? "In maintenance, but its job did not finish" : "Maintenance was not opened", esc(op.message || ""))
-        : done ? UI.callout("ok", "In maintenance", `${esc(op.message || "")}. Power is up to you: Reboot and Shut down stay in Host actions.`)
+        : done ? UI.callout("ok", "In maintenance", `${esc(op.message || "")}. Restart host and Shut down host are still available under Host actions.`)
         : `<p class="ui-lead"><span class="spin2"></span> ${esc(op.message || "Preparing the host")}</p>`);
       if (!stopped && !done) return;
       await refreshHost(node);

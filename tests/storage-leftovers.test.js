@@ -96,7 +96,7 @@ test("each Longhorn volume opens the reviewed delete; an old copy its removal; a
   // Asked for by its PV: the review is of that volume, never of a claim found by name.
   assert.deepEqual(JSON.parse(JSON.stringify(t.calls)), [["volumeDelete", { name: "pvc-a", pvc_name: "disk-1-scratch", namespace: "vm-imports", pv: "pvc-a" }],
     ["reclassRemoveOld", "pvc-old"]]);
-  assert.match(html, /storage's own tools/);
+  assert.match(html, /storage system's own tools/);
 });
 
 test("a volume whose claim name is in use again opens the review of that PV, and says the name is taken", async () => {

@@ -17,7 +17,7 @@ window.agentLeft = agentLeft;
 const agentWhen = at => at ? (typeof agoText === "function" ? agoText(at) : fmtAt(at)) : "";
 /* A request's field names as people write them; the rest lose their
    underscores. Ids, images and addresses are shown in mono. */
-const AGENT_LABELS = { ns: "Namespace", uid: "UID", ip: "IP", vip: "VIP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
+const AGENT_LABELS = { ns: "Namespace", uid: "UID", ip: "IP", vip: "Virtual IP", load_balancer_ip: "Load balancer IP", why_admin: "Admin because",
   pvc: "PVC", url: "URL", mac: "MAC" };
 const AGENT_MONO = /(^|_)(uid|id|ip|vip|image|mac|url|pvc|digest|address)$/;
 const agentLabel = key => AGENT_LABELS[key] || String(key).replace(/_/g, " ").replace(/^./, c => c.toUpperCase())
@@ -182,7 +182,7 @@ window.agentApprove = id => {
   const r = (STATE.data.agentRequests?.requests || []).find(x => x.id === id);
   if (!r) return;
   const result = agentResult(r);
-  modal(`Approve · ${r.title || "request"}`, UI.lead(`${esc(r.key)} asks to ${esc((r.action || r.title || "").replace(/^./, c => c.toLowerCase()))}. Approving runs it now, as you.`)
+  modal(`Approve · ${r.title || "request"}`, UI.lead(`${esc(r.key)} asks to ${esc((r.action || r.title || "").replace(/^./, c => c.toLowerCase()))}. Approving runs it now, with the approver's permissions.`)
     + agentPlanHtml(r.summary)
     + UI.ack("agentOk", result.risky ? `${result.label}, as planned` : "Run it as planned", { onchange: "$('#agentGo').disabled=!this.checked" })
     + UI.actions(UI.cancel() + UI.button(result.label, `agentApproveRun(${jsArg(id)},this)`, { kind: result.risky ? "danger" : "pri", id: "agentGo", disabled: true })));
@@ -207,7 +207,7 @@ window.agentApproveRun = async (id, button) => {
   const asked = (STATE.data.agentRequests?.requests || []).find(x => x.id === id) || {};
   const command = asked.tool === "run_container_command";
   closeModal();
-  toast(command ? "Running the command; its output opens here when it finishes" : "Running it", "ok");
+  toast(command ? "Running the command. Its output opens here when it finishes." : "Running the request", "ok");
   // The server marks it running before it starts; show that while it runs.
   const repaint = setTimeout(() => { if (STATE.view === "agents") viewAgents(); }, 500);
   let r;
@@ -224,7 +224,7 @@ window.agentApproveRun = async (id, button) => {
 };
 
 window.agentDeny = async id => {
-  try { await agentPost("/api/agents/requests/deny", id); toast("Denied; the agent is told", "ok"); }
+  try { await agentPost("/api/agents/requests/deny", id); toast("Denied. The agent is informed.", "ok"); }
   catch (e) { toast(e.message, "bad"); }
   viewAgents();
 };
@@ -259,7 +259,7 @@ window.mcpCardPaint = async () => {
     ${UI.more("Connect Claude Code", `<pre class="mono small agent-raw">${esc(window.__mcpText.code)}</pre><div class="row">${copy("code")}</div>`, false, "mcp-claude-code")}
     ${UI.more("Connect Claude Desktop", `<p class="small">Add this to claude_desktop_config.json, with the key in place of hsk_...</p><pre class="mono small agent-raw">${esc(window.__mcpText.desktop)}</pre><div class="row">${copy("desktop")}</div>`, false, "mcp-claude-desktop")}
     <p class="small">Reading and routine changes run at once. Anything that deletes or restores data waits for a person to approve it on
-      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}${requests.unread ? ` <span class="badtext">Could not read how many are waiting: ${esc(requests.unread)}</span>` : ""}.</p>
+      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}${requests.unread ? ` <span class="badtext">The number waiting could not be read. ${esc(requests.unread)}</span>` : ""}.</p>
     ${UI.section("Recent calls", audit.error ? `<div class="dim small">${esc(audit.error)}</div>` : UI.table(
       [{ label: "When" }, { label: "Key" }, { label: "Tool or action" }, { label: "Outcome" }],
       (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : c.via === "mqtt" ? ' <span class="dim xs">MQTT</span>' : ""}`,

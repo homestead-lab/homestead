@@ -64,7 +64,7 @@ test("a rule that could not be counted says so, never quiet", () => {
   const run = load();
   run(`globalThis.R = ${JSON.stringify({ ...RULE, status: { state: "unread", detail: "could not read frigate" } })}`);
   const html = run(`logAlertRow(R, false)`);
-  assert.match(html, /<chip warn>Could not count<\/chip>/);
+  assert.match(html, /<chip warn>Not counted<\/chip>/);
   assert.match(html, /could not read frigate/);
   assert.equal(run(`logAlertStatus({ state: "ok" })`), "");
   assert.match(run(`logAlertStatus({ state: "slow", detail: "the expression took more than 2 seconds" })`), /more than 2 seconds/);
@@ -78,7 +78,7 @@ test("a rule can be paused and resumed, and a paused one says so, never quiet (#
   run(`globalThis.P = ${JSON.stringify({ ...RULE, paused: true, status: { state: "paused", detail: note } })}`);
   const html = run(`logAlertRow(P, false)`);
   assert.match(html, /<chip neutral>Paused<\/chip>/);
-  assert.doesNotMatch(html, /Watching|Could not count/);
+  assert.doesNotMatch(html, /Watching|Not counted/);
   assert.match(html, /ran out of time 10 minutes in a row/);
   assert.match(html, /logAlertPause\(&quot;la-0123456789ab&quot;,false\)">Resume</);
   assert.match(run(`logAlertStatus({ state: "paused", detail: "" })`), /Not counted while paused/);
@@ -122,7 +122,7 @@ test("each count is drawn at its own minute, so gaps stay gaps", () => {
 
 test("a rule for an app with nothing running says so", () => {
   const run = load();
-  assert.match(run(`logAlertStatus({ state: "absent", detail: "nothing of frigate is running" })`), /Could not count.*nothing of frigate is running/s);
+  assert.match(run(`logAlertStatus({ state: "absent", detail: "nothing of frigate is running" })`), /Not counted.*nothing of frigate is running/s);
 });
 
 test("the list says when counting stopped", () => {

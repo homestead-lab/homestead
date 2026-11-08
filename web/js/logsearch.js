@@ -36,10 +36,10 @@ function logSearchWhen(at) {
    complete one. */
 function logSearchGaps(d) {
   const gaps = [];
-  if (d.skipped_pods) gaps.push(`${d.skipped_pods} more container${d.skipped_pods === 1 ? " was" : "s were"} not searched; choose an app to search it`);
-  if ((d.capped || []).length) gaps.push(`Only the newest output of ${d.capped.join(", ")} was searched; choose a shorter time. ${d.capped.length === 1 ? "It" : "They"} wrote more than Homestead reads at once`);
-  if ((d.cut || []).length) gaps.push(`${d.cut.join(", ")} ${d.cut.length === 1 ? "was" : "were"} only partly searched; try plain text or a simpler expression. The expression took more than ${d.cut_seconds} seconds, so the newest lines were searched first`);
-  if ((d.errors || []).length) gaps.push(`Could not read: ${d.errors.slice(0, 4).join("; ")}${d.errors.length > 4 ? ` and ${d.errors.length - 4} more` : ""}`);
+  if (d.skipped_pods) gaps.push(`${d.skipped_pods} more container${d.skipped_pods === 1 ? " was" : "s were"} not searched. Choose an app to search ${d.skipped_pods === 1 ? "it" : "them"}`);
+  if ((d.capped || []).length) gaps.push(`Only the newest output of ${d.capped.join(", ")} was searched. Choose a shorter time. ${d.capped.length === 1 ? "It" : "They"} wrote more than Homestead reads at once`);
+  if ((d.cut || []).length) gaps.push(`${d.cut.join(", ")} ${d.cut.length === 1 ? "was" : "were"} only partly searched. Try plain text or a simpler expression. The expression took more than ${d.cut_seconds} seconds, so the newest lines were searched first`);
+  if ((d.errors || []).length) gaps.push(`These could not be read: ${d.errors.slice(0, 4).join("; ")}${d.errors.length > 4 ? ` and ${d.errors.length - 4} more` : ""}`);
   return gaps;
 }
 
@@ -67,7 +67,7 @@ window.logSearch = (ns = "", name = "") => {
     `<option value="${esc(a)}"${a === LOGSEARCH.app ? " selected" : ""}>${esc(a.split("/")[1])} · ${esc(a.split("/")[0])}</option>`)];
   if (LOGSEARCH.app && !apps.includes(LOGSEARCH.app)) options.push(`<option value="${esc(LOGSEARCH.app)}" selected>${esc(name)} · ${esc(ns)}</option>`);
   modal(name ? `Search logs · ${name}` : "Search logs", `<div class="ui-stack">
-    ${UI.lead("Find a line in the recent logs of every running app at once - an error, a request ID, a user. Kubernetes keeps what each running pod still holds, so this reaches back as far as that.")}
+    ${UI.lead("Find a line, such as an error, a request ID or a user, in the recent logs of every running app at once. It reaches back as far as the logs Kubernetes still keeps for each running copy.")}
     <form class="ls-form" onsubmit="event.preventDefault();logSearchRun()">
       <input id="ls_q" type="search" placeholder="error, timeout, a request ID…" aria-label="Search for" autocomplete="off" maxlength="200" value="${esc(LOGSEARCH.query)}">
       <select id="ls_app" aria-label="Apps to search">${options.join("")}</select>

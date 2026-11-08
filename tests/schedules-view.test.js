@@ -98,7 +98,7 @@ test("a CronJob Homestead did not make is read-only and says who manages it", as
     job({ name: "kubectl-job", managed: false, managed_by: "" })]);
   await ctx.viewSchedules();
   assert.match(out.html, /managed by Helm/);
-  assert.match(out.html, /not made here/);
+  assert.match(out.html, /Not created here/);
   assert.match(out.html, /Run now/);
   assert.doesNotMatch(out.html, /jobEdit\(\{/);
   assert.doesNotMatch(out.html, /jobDel\(/);
@@ -109,7 +109,7 @@ test("a schedule Homestead made can still be edited and deleted", async () => {
   await ctx.viewSchedules();
   assert.match(out.html, /jobEdit\(\{/);
   assert.match(out.html, /jobDel\(/);
-  assert.doesNotMatch(out.html, /managed by|not made here/);
+  assert.doesNotMatch(out.html, /managed by|Not created here/);
 });
 
 test("saving sends the generation the page read, and an empty one for a new schedule", async () => {

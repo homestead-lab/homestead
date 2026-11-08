@@ -156,8 +156,8 @@ function pwaWhy() {
       with a certificate — and this card will offer both. This page is on <span class="mono">${esc(location.origin)}</span>.</div>`;
   }
   if (pwaApple() && !pwaInstalled()) {
-    return `<div class="note"><b>Add Homestead to your Home Screen first.</b> On iPhone and iPad, notifications
-      reach installed web apps only (iOS 16.4 or later): tap Share, then <b>Add to Home Screen</b>, and open Homestead from there.</div>`;
+    return `<div class="note"><b>Add Homestead to the Home Screen first.</b> On iPhone and iPad, notifications
+      reach only installed web apps (iOS 16.4 or later). Tap Share, then <b>Add to Home Screen</b>, and open Homestead from there.</div>`;
   }
   return `<div class="note">This browser cannot receive push notifications.</div>`;
 }
@@ -231,7 +231,7 @@ function pwaAlertsHtml(report) {
     tone:a.acknowledged?"info":a.severity==="critical"?"bad":a.severity==="info"?"info":"warn",label:a.acknowledged?"Acknowledged":a.severity==="critical"?"Critical":a.severity==="info"?"Information":"Warning",
     actionsHtml:UI.button("Review",`closeModal();openOperation(${jsArg(a.href || '/')})`)+UI.button(a.acknowledged?"Undo":"Acknowledge",`pwaAcknowledge(${jsArg(a.key)},${jsArg(a.version)},${!!a.acknowledged})`)
   })));
-  return UI.lead("Acknowledgement quiets this condition across your devices until it worsens. Health checks remain visible.")+
+  return UI.lead("Acknowledging silences this condition on every device until it gets worse. Health checks stay visible.")+
     (pending.length?rows(pending):'<div class="empty small">No unacknowledged conditions.</div>')+
     (acknowledged.length?UI.more(`Acknowledged · ${acknowledged.length}`,rows(acknowledged)):"");
 }
@@ -261,7 +261,7 @@ function paintPwaAlerts(report) {
 function pwaAlertsLine(report) {
   const settings=$("#pwaAlerts");if(!settings)return;
   const active=report?.active || [], counts=report?`<div class="ui-help">${active.filter(a=>!a.acknowledged).length} need attention · ${active.filter(a=>a.acknowledged).length} acknowledged</div>`:"";
-  const unread=PWA_ALERTS.unread?UI.callout("warn",report?"Could not read the alerts just now":"Could not read the alerts",`${esc(PWA_ALERTS.unread)}${report?" · these counts are from the last read.":""}`):"";
+  const unread=PWA_ALERTS.unread?UI.callout("warn",report?"The alerts could not be read just now":"The alerts could not be read",`${esc(PWA_ALERTS.unread)}${report?" · These counts are from the last read.":""}`):"";
   settings.innerHTML=UI.moduleHeader("Active alerts","",UI.button("Review alerts","pwaAlertsDialog()"))+unread+counts;
 }
 async function refreshPwaAlerts(force=false) {
