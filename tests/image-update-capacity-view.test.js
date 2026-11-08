@@ -73,7 +73,7 @@ test("routine rollout estimates stay in details while actual memory risks remain
     const visible = html.split('<details')[0];
     assert.doesNotMatch(visible, /post-stop capacity|updated pod estimates|live RAM still|intermediate rolling|RollingUpdate permits/);
     assert.match(html, /Capacity becomes available after the old copies stop/);
-    assert.match(html, /Homestead will be briefly unavailable/);
+    assert.match(html, /Homestead is briefly unavailable/);
     // One app is named at the top, its change beside it: no row, no flag to point at the notice.
     assert.equal(visible.includes("upd-flag"), false);
     assert.match(visible, /ui-head-name">homestead<\/span>/);
@@ -144,7 +144,7 @@ test("a dropped connection while an app updates is asked again; an answer that r
     const html=t.fields["#imageQueue"].innerHTML;
     if(fail==="blip") assert.doesNotMatch(html, /failed|not started/);
     if(fail==="refused") assert.match(html, /cannot do this/);
-    if(fail==="contact") assert.match(html, /Homestead stopped answering while app updated/);
+    if(fail==="contact") assert.match(html, /Homestead stopped responding while app updated/);
   }
 });
 

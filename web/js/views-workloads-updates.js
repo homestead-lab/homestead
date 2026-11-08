@@ -22,7 +22,7 @@ window.checkImageUpdates = async () => {
       }
       if (!at.total) continue;
       const done = Math.min(at.done, at.total);
-      if (button && at.running) button.textContent = `Checking ${done}/${at.total}…`;
+      if (button && at.running) button.textContent = `Checking ${done} of ${at.total}…`;
       const bar = $("#scanprogress");
       if (!bar) continue;
       bar.innerHTML = at.running
@@ -38,7 +38,7 @@ window.checkImageUpdates = async () => {
     if (!report) return;      // the failure has been said already
     const updates = HomesteadUpdateState.availableWorkloads(report).length;
     const errors = report?.errors || 0;
-    toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available${errors ? `; ${errors} image${errors === 1 ? "" : "s"} could not be checked` : ""}`
+    toast(updates ? `${updates} update${updates === 1 ? "" : "s"} available${errors ? `. ${errors} image${errors === 1 ? "" : "s"} could not be checked.` : ""}`
       : errors ? `no updates found; ${errors} image${errors === 1 ? "" : "s"} could not be checked`
       : "every image is up to date", updates ? "ok" : errors ? "warn" : "ok");
     if (report && STATE.view === "workloads") renderWorkloads();
@@ -93,7 +93,7 @@ function imagePlacementBlocker(plan) {
       : "No host is ready. Restore a host's health before updating.";
   }
   if (plan.rollout?.start_blocked) return "A replacement pod cannot fit while the current pods are running. Free capacity or review the rollout policy in Details.";
-  return "No host can accept this update. Review the host, storage and placement requirements in Details.";
+  return "No host can take this update. Check the host, storage and placement requirements in Details.";
 }
 /* The same concern for several updates is said once. A blocked review leads
    only with blockers; warnings for otherwise eligible apps remain in Details.
@@ -166,10 +166,10 @@ const IMAGE_REVIEW = UI.reviewFlow({
       const preview = await api("/api/image-updates/preview", {method: "POST",
         headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
       if (IMAGE_REVIEW_OPEN !== input || !$("#imageReviewLoading")) throw new Error("This review was replaced");
-      if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("Image capacity review unavailable; no update was started");
+      if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("The capacity review is not available. No update was started.");
       rows.push({config, preview});
     }
-    if (!rows.length) throw new Error("Select at least one image change");
+    if (!rows.length) throw new Error("Choose at least one image change");
     return rows;
   },
   render: (rows, { items, action }) => {
@@ -202,26 +202,26 @@ const IMAGE_REVIEW = UI.reviewFlow({
     const sameChange = oneWords && oneWords.length && oneWords.every(w => w.join() === oneWords[0].join());
     const unread = rows.filter(r => r.preview.unread).map(({config, preview}) => ["warn", {
       short: `${config.name} is installed by its tag`,
-      more: `Homestead could not read the registry (${preview.unread}), so the cluster pulls ${config.version} by its tag. If the tag is missing, the old pod keeps serving.`}]);
+      more: `Homestead could not read the registry (${preview.unread}), so the cluster downloads ${config.version} by its tag. If the tag is missing, the old copy keeps running.`}]);
     $("#mbody").innerHTML = `<div class="update-review">${UI.dialog({ shape: "review",
       subject: one ? { kind: "App", name: one.config.name, where: `${one.config.clusterName ? `${one.config.clusterName} · ` : ""}${one.config.ns}`,
         change: sameChange ? oneWords[0] : null }
         : { kind: "Apps", name: rows.length > 3 ? `${rows.slice(0, 3).map(r => r.config.name).join(", ")} and ${rows.length - 3} more` : rows.map(r => r.config.name).join(", ") },
-      lead: `${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.`,
+      lead: `${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead is briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.`,
       issues: [...concerns.map(c => [blocked ? "bad" : "warn", c]), ...unread],
       issuesTitle: blocked ? "Update blocked" : "",
       body: `${one && sameChange ? "" : `<ul class="upd-apps">${apps}</ul>`}${rollback ? "" : '<div id="updNotes"></div>'}`,
       details: `${details}
         ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-        <p class="ui-help">Each app is checked again before it updates. A failure stops the rest, and so does closing this.</p>`,
+        <p class="ui-help">Each app is checked again before it updates. A failure stops the rest, and so does closing this dialog.</p>`,
       ack: { id: "imageCapacityApprove", sentence: concerns.length || unread.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", onchange: "imageReviewReady()" },
-      actions: { primary: { label: rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", onclick: "imageReviewedApply()", id: "imageCapacityApply", disabled: true } },
+      actions: { primary: { label: rollback ? "Start rollback" : many ? `Update ${rows.length} apps` : "Update app", onclick: "imageReviewedApply()", id: "imageCapacityApply", disabled: true } },
     })}</div>`;
     // What is in the update: read beside the review, never waited for.
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   },
   failed: error => {
-    $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
+    $("#mbody").innerHTML = UI.callout("bad", "The review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
   },
   blocked: rows => rows.some(row => row.preview.capacity.blocked), ack: "imageCapacityApprove", button: "imageCapacityApply",
   apply: async rows => {
@@ -258,7 +258,7 @@ const IMAGE_REVIEW = UI.reviewFlow({
             job = result.operation?.id || "";
             states[key] = result; paint();
             // Never start the next workload until this exact accepted generation is ready.
-            if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
+            if (!result.uid || !Number.isInteger(result.generation)) throw new Error("The update could not be identified. Check its job before continuing.");
             const deadline = Date.now() + 15 * 60 * 1000;
             let misses = 0;
             while (true) {
@@ -278,17 +278,17 @@ const IMAGE_REVIEW = UI.reviewFlow({
                 const unanswered = !error.status || error.status >= 502;
                 misses += 1;
                 if (Date.now() > deadline || !(restartsHomestead(config) || (unanswered && misses <= PROGRESS_MISSES))) {
-                  throw unanswered && !restartsHomestead(config) ? new Error(`Homestead stopped answering while ${config.name} updated (${error.message})`) : error;
+                  throw unanswered && !restartsHomestead(config) ? new Error(`Homestead stopped responding while ${config.name} updated (${error.message})`) : error;
                 }
                 states[key] = {...(states[key] || {}), phase: restartsHomestead(config) ? "restarting" : "reconnecting"}; paint();
                 await new Promise(resolve => setTimeout(resolve, 3000));
                 continue;
               }
               states[key] = state; paint();
-              if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
+              if (rolloutChanged(result, state)) throw new Error("The app changed during the update. Review the remaining updates again.");
               if (state.phase === "failed") throw new Error("Rollout failed");
               if (state.phase === "ready") { refreshAfterRollout(); break; }
-              if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
+              if (Date.now() > deadline) throw new Error("Following the update timed out. Check its job before continuing.");
               await new Promise(resolve => setTimeout(resolve, 2000));
             }
           } catch (error) {
@@ -332,7 +332,7 @@ window.imageReviewReady = () => IMAGE_REVIEW.ready();
 window.imageUpdateReview = (ns, name) => reviewImageActions([{ns, name}]);
 window.imageUpdateApply = () => imageReviewedApply();
 window.imageReviewedApply = async () => {
-  if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
+  if (!imageReviewReady()) return toast("First review the image and capacity changes and accept them", "bad");
   IMAGE_QUEUE_RUNNING = null;
   await IMAGE_REVIEW.apply();
   await IMAGE_QUEUE_RUNNING;
@@ -396,12 +396,12 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
         ${UI.chip(phase, tone)}${startError ? `<div class="updateerror">${esc(startError.error)}</div>` : ""}
         ${actions ? `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">${actions}</div>` : ""}
-        ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
+        ${waiting ? `<div class="dim xs">New copy waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
     };
   const left = notStarted.length;
   const closing = !queueMode ? ""
-    : left ? `<p class="ui-help">Closing ends the queue: ${left === 1 ? "the app not started keeps its" : `the ${left} apps not started keep their`} image. Started updates carry on in Jobs.</p>`
-    : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the apps still waiting. Started updates carry on in Jobs.</p>' : "";
+    : left ? `<p class="ui-help">Closing ends the queue. ${left === 1 ? "The app not yet started keeps its" : `The ${left} apps not yet started keep their`} image. Updates already started continue in Jobs.</p>`
+    : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the apps still waiting. Updates already started continue in Jobs.</p>' : "";
   // One track across the apps: the one updating fills its segment as it goes
   // through its stages; its stage and detail are said under the track.
   const live = running && states[rolloutKey(running)], st = live && rolloutStages(live);
@@ -417,7 +417,7 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
     subject: { name: items.length > 3 ? `${items.slice(0, 3).map(i => i.name).join(", ")} and ${items.length - 3} more` : items.map(i => i.name).join(", "),
       where: `${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}`, status },
     lead: `${done} of ${items.length} done. Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.`,
-    issues: reconnecting ? [["warn", { short: "Some updates could not be checked", more: "Showing last-known progress. Reconnecting automatically." }]] : [],
+    issues: reconnecting ? [["warn", { short: "Some updates could not be checked", more: "The last known progress is shown. Reconnecting automatically." }]] : [],
     steps: { list, current: at < 0 ? items.length : at, unit: "App" }, progress: { value: st ? st.value : null },
     body: `${(() => {
       // A row for each app that needs looking at; the ones simply waiting are one line.
@@ -431,7 +431,7 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
         label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" }))), false, "Pods") : ""}
       ${done ? UI.more(`Done · ${done}`, `<div class="batch-rollout-list">${[...ready, ...current].map(row).join("")}</div>`, false, "Updated") : ""}
       ${closing}`,
-    actions: { dismiss: queueMode ? done === items.length ? "Done" : "Close queue" : "Monitor in background" } })}</div>`;
+    actions: { dismiss: queueMode ? done === items.length ? "Done" : "Close queue" : "Continue in background" } })}</div>`;
 }
 
 window.imageUpdateBatchApply = () => imageReviewedApply();
@@ -477,11 +477,11 @@ function pullDetail(s) {
   if (pull.state === "pulling") {
     // containerd's own count of the layers fetched, against the registry's sizes.
     const amount = pull.total_bytes ? ` · ${pull.percent || 0}% of ${pullSize(pull.total_bytes)}` : "";
-    return `Fetching ${pull.image || "the image"}${pull.node ? ` on ${pull.node}` : ""}${amount} · ${pullElapsed(pull.seconds)} so far`;
+    return `Downloading ${pull.image || "the image"}${pull.node ? ` on ${pull.node}` : ""}${amount} · ${pullElapsed(pull.seconds)} so far`;
   }
-  if (pull.state === "failed") return pull.detail || "The image could not be pulled";
+  if (pull.state === "failed") return pull.detail || "The image could not be downloaded";
   if (pull.state === "pulled" && s.updated < s.desired) {
-    return `Pulled${pull.took ? ` in ${pull.took}` : ""}; starting the container`;
+    return `Downloaded${pull.took ? ` in ${pull.took}` : ""}. Starting the container.`;
   }
   return `${s.updated} replacement pod${s.updated === 1 ? "" : "s"} created`;
 }
@@ -499,8 +499,8 @@ function rolloutStages(s) {
   const desired = s.desired ?? 0;
   const list = [
     { title: "Change accepted" },
-    { title: pulling ? "Downloading image" : "Image and replacement pods",
-      detailHtml: esc(pull.state === "failed" ? pull.detail || "Image download failed" : pulling ? pullDetail(s) : `${s.updated || 0}/${desired || "?"} replacement pods created`),
+    { title: pulling ? "Downloading image" : "Image and new copies",
+      detailHtml: esc(pull.state === "failed" ? pull.detail || "Image download failed" : pulling ? pullDetail(s) : `${s.updated || 0} of ${desired || "?"} new copies created`),
       state: pull.state === "failed" ? "failed" : undefined },
     { title: "Readiness checks", detailHtml: esc(`${s.ready || 0}/${desired || "?"} pods ready; completion waits for the accepted update.`),
       state: failed && current === 2 ? "failed" : undefined },
@@ -529,7 +529,7 @@ function rolloutMarkup(s) {
     issues: [...(st.failed ? [["bad", "Review the failure details before retrying."]] : []), ...(s.problems || []).map(p => ["bad", p])], issuesTitle: st.failed ? "Update needs attention" : "",
     body: s.pods?.length ? UI.more("Pod details", UI.insightList(s.pods.map(p => ({ title: p.name, detail: [p.node || "Scheduling", p.blocked, p.waiting?.[0]?.reason].filter(Boolean).join(" · "),
       label: p.pull?.state === "pulling" ? "Pulling image" : p.phase, tone: p.blocked ? "warn" : p.phase === "Running" ? "ok" : "info" })))) : "",
-    actions: { dismiss: st.ready ? false : "Monitor in background",
+    actions: { dismiss: st.ready ? false : "Continue in background",
       start: s.can_rollback ? UI.button("Review rollback", `imageRollback(${jsArg(s.ns)},${jsArg(s.name)})`, { kind: st.failed ? "danger" : "", attrs: 'data-need="operator"' }) : "",
       primary: st.ready ? { label: "Done", onclick: "closeModal();go('workloads')" } : null } });
 }
@@ -552,7 +552,7 @@ window.monitorImageRollout = (ns, name) => {
     } catch (e) {
       if (UI.pollCancelled(signal)) return false;
       misses++;
-      paintRollout($("#mbody"), UI.callout("warn","Connection lost","Retrying automatically. The update may still be running; showing the last known progress.") + (lastState ? rolloutMarkup(lastState) : UI.actions(UI.cancel("Monitor in background"))));
+      paintRollout($("#mbody"), UI.callout("warn","Connection lost","Trying again automatically. The update may still be running, and the last known progress is shown.") + (lastState ? rolloutMarkup(lastState) : UI.actions(UI.cancel("Continue in background"))));
     }
   };
   window.__updateTimer = UI.poll(poll, 2000);
@@ -562,7 +562,7 @@ window.imageRollback = (ns, name) => reviewImageActions([{ns, name}], "rollback"
 window.imageRollbackApply = () => imageReviewedApply();
 window.wlLogs = (ns, pod, workload = "", fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "logs", ns, workload: workload || pod }, (workload || pod) + " logs");
-  if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running pod</b><br><span class="dim small">Start the container and wait for Kubernetes to create a pod.</span></div>');
+  if (!pod) return modal("Logs unavailable", '<div class="empty"><b>No running copy</b><br><span class="dim small">Start the container and wait for Kubernetes to start it.</span></div>');
   const workloadRow = (STATE.data.wl || []).find(x => x.ns === ns && x.name === workload);
   openLogs(workload || pod, `/api/logs?ns=${encodeURIComponent(ns)}&pod=${encodeURIComponent(pod)}`,
     workloadRow?.pods || null, ns);
