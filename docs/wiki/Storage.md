@@ -180,7 +180,7 @@ Settings → Hardware and storage) opens them all.
   (**Move copies off**), and be taken away once empty (**Remove from
   Longhorn**). Its files stay on the disk.
 - **Add tags** on a Longhorn disk labels it - `ssd`, `nvme`, `hdd`, anything -
-  for storage classes to choose by, and **Node tags** does the same for a
+  for storage classes to choose by, and **Host tags** does the same for a
   whole node. On Harvester, a disk Harvester added keeps its tags on its block
   device, as Harvester's dashboard does, because Harvester writes the Longhorn
   disk from it and would undo tags set on Longhorn alone.
@@ -368,11 +368,11 @@ system disk or mounted, and - mounting it read-only for a moment, without
 replaying a journal - whether it already holds Longhorn's data. Then it offers
 only what is safe for what it found:
 
-- **Format it** (a blank disk) - ext4 or XFS, typed to confirm;
+- **Format the disk** (a blank disk) - ext4 or XFS, typed to confirm;
 - **Keep its Longhorn data** (a disk from before, V1) - mounted as it is, with
   no format. Replicas that belonged to another cluster show in Longhorn as
   orphaned data; volumes come back from their backups;
-- **Erase it and format** (a disk holding anything else) - typed to confirm;
+- **Erase and format the disk** (a disk holding anything else) - typed to confirm;
 - the **V2 engine** is given the raw device by its `/dev/disk/by-id` name.
 
 A disk something else holds open is found first, rather than failing in

@@ -931,7 +931,7 @@ An existing Ubuntu image does not override the default merely because of its nam
 Other image URLs and Harvester image choices retain their existing boot defaults.
 
 New reviewed k3s VM batches use the same journal across all their resource writes.
-**Inspect batch outcome** lists every planned VM (including ones never sent),
+**Check batch outcome** lists every planned VM (including ones never sent),
 plus the image, Secret and claim targets that were attempted. Confirm the batch
 name, not a single VM's name. Inspection takes the dispatcher's shared lock and
 rechecks resource identities/versions; it cannot resolve a batch while a sender
@@ -1114,13 +1114,13 @@ history pruning preserve the recovery details. After acknowledgement, the record
 can be cleared, so save details you still need. Provisioning that may still be
 in flight cannot be stopped through this tracking action.
 
-Host **Reboot** and **Shut down** keep progress in Recent jobs. Its log includes
+Host **Restart host** and **Shut down** keep progress in Recent jobs. Its log includes
 the confirmed power helper's events and output. A failed or lost browser reply
 requires a fresh host review, not a repeat of the previous request. A helper in
 image-pull backoff may still start later: inspect it before sending anything else.
 Missing creation receipts and replacement helpers are not treated as the original.
 
-A verified single-host cluster offers normal **Reboot** and **Shut down** as a
+A verified single-host cluster offers normal **Restart host** and **Shut down** as a
 planned whole-cluster outage, without a forced override. Type the host name and
 acknowledge that applications, storage and Homestead go offline; shutdown also
 requires console or physical access to power it on again. This path leaves
@@ -1170,7 +1170,7 @@ acceptance, cancellation only stops tracking; it cannot undo the accepted reques
 An in-flight request cannot be cancelled or automatically replayed.
 Inspect **Recent jobs → Log** and the VM; **Stop** and **Force stop** remain
 available even when capacity checks or job storage are unavailable. Recovery of
-an uncertain dispatch uses **Inspect outcome** in its job, available to admins.
+an uncertain dispatch uses **Check outcome** in its job, available to admins.
 The review checks the per-job shared dispatcher lock, current VM/instance
 identity and queued power changes. A live dispatcher, deleting resources,
 unverified ownership or queued changes prevents resolution. After inspecting the
@@ -1523,7 +1523,7 @@ the handoff. Capacity warnings can be acknowledged; hard placement blockers cann
 
 A restart resumes confirmed observation steps, never an uncertain write. Failed
 or ambiguous steps retain volumes and copy Jobs without automatic rollback.
-**Inspect outcome** can release a verified inactive copy's hold after admin
+**Check outcome** can release a verified inactive copy's hold after admin
 confirmation, without changing replicas or mappings; review data before starting.
 Missing creation receipts require manual Kubernetes inspection. Initial edits
 span multiple objects and can partially apply. This is not a backup, free-space

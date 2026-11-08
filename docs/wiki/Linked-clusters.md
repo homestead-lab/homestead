@@ -55,7 +55,7 @@ same release (or one close to it).
    is the node's own address; when Homestead moves onto a VIP, or its VIP
    changes, the linked clusters are told the new one. An address you typed
    yourself is left as it is.
-4. **Link**.
+4. **Link cluster**.
 
 The password is used once, to sign in and exchange a shared key, and is not
 kept. From then on the clusters sign every request to each other with that
@@ -162,9 +162,9 @@ back** before starting another; a new move does not overwrite those objects.
 **Settings → Linked clusters** (or **Manage clusters** in the switch) lists
 every linked cluster:
 
-- **Unlink** removes one. It keeps running as it is. The rest get a new key,
+- **Unlink cluster** removes one. It keeps running as it is. The rest get a new key,
   so the one unlinked can no longer act for them.
-- **Leave** unlinks this Homestead from the others, which stay linked to each
+- **Leave linked clusters** unlinks this Homestead from the others, which stay linked to each
   other.
 - **Where the others reach this Homestead** changes this one's address - after
   a new VIP, say. The others hear straight away.
@@ -173,8 +173,8 @@ every linked cluster:
 
 Clusters added on Import for moves in earlier releases - with an account and
 password kept here - are listed under **Settings → Linked clusters → Added
-before linking**. **Link** links each with that account, then deletes the
-password; moves that named it keep working. **Forget** deletes the account and
+before linking**. **Link cluster** links each with that account, then deletes the
+password; moves that named it keep working. **Forget cluster** deletes the account and
 leaves the cluster alone. One already linked under another name offers **Use
 the link** instead.
 
@@ -190,8 +190,8 @@ the link** instead.
   in once, and the shared key is sent to the new member; unlinking sends a new
   key to every remaining member. Over a plain `http://` address (the other
   cluster's, or this one's own) anyone on that
-  network path could read them, so **Link** asks you to tick that they may be
-  sent unencrypted, **Unlink** and **Leave** say which clusters get the new
+  network path could read them, so **Link cluster** asks you to tick that they may be
+  sent unencrypted, **Unlink cluster** and **Leave linked clusters** say which clusters get the new
   key unencrypted before they send it, and Homestead itself refuses to send
   any of them over plain `http://` without that agreement. Clusters at a plain
   `http://` address are marked
@@ -215,4 +215,4 @@ it on that cluster, under **Where the others reach this Homestead**.
 time. Set NTP on the hosts.
 
 **A cluster that was unlinked while off** still lists the others. Unlink it
-there too (**Leave**), then link it again if you want it back.
+there too (**Leave linked clusters**), then link it again if you want it back.
