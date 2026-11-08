@@ -27,7 +27,7 @@ test("memory: a number with MiB or GiB, and friendly spellings", () => {
 
 test("memory: the slips Kubernetes would take are refused, saying why", () => {
   assert.match(ctx.parseMemory("390m", "Mi").error, /thousandths of a byte/);
-  assert.match(ctx.parseMemory("lots", "Mi").error, /Write a number/);
+  assert.match(ctx.parseMemory("lots", "Mi").error, /Enter a number/);
   assert.match(ctx.parseMemory("5 parsecs", "Mi").error, /not a memory unit/);
 });
 
