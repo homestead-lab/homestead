@@ -4,7 +4,7 @@
 // then opens the existing move with it picked. Nothing moves on the click.
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 
-const SENTENCE = "Homestead's data has one copy; this cluster can now keep two";
+const SENTENCE = "Homestead's data has one copy, and this cluster can now keep two";
 
 function setup({ role = "admin", copies = { state: "can-keep-two", r2: { exists: false, usable: true, why: "" } }, answer } = {}) {
   const fields = {}, sent = [], toasts = [], modals = [];
@@ -75,8 +75,8 @@ test("a refusal is shown and opens nothing", async () => {
 
 test("#620: copies that could not be read are said on the card, with the error", async () => {
   const t = setup({ copies: { state: "unknown", error: "Longhorn's nodes could not be read" } }); await t.ctx.replicasPaint();
-  assert.ok(t.ctx.STATE.data.replicaHtml.includes("Could not read Homestead&#39;s data copies: Longhorn&#39;s nodes could not be read")
-    || t.ctx.STATE.data.replicaHtml.includes("Could not read Homestead's data copies: Longhorn's nodes could not be read"));
+  assert.ok(t.ctx.STATE.data.replicaHtml.includes("The copies of Homestead&#39;s data could not be read. Longhorn&#39;s nodes could not be read")
+    || t.ctx.STATE.data.replicaHtml.includes("The copies of Homestead's data could not be read. Longhorn's nodes could not be read"));
   assert.doesNotMatch(t.ctx.STATE.data.replicaHtml, /replicasKeepTwo/);
 });
 
@@ -84,7 +84,7 @@ test("on a class that already keeps two copies, the offer raises in place: no mo
   const t = setup({ copies: { state: "can-keep-two", action: "raise", storage_class: "longhorn-r2", r2: { exists: true, usable: true, why: "" } },
     answer: { ok: true, raised: true, created: false, storage_class: "longhorn-r2", message: "Homestead's data now keeps two copies" } });
   await t.ctx.replicasPaint();
-  assert.match(t.ctx.STATE.data.replicaHtml, /in place/);
+  assert.match(t.ctx.STATE.data.replicaHtml, /without moving the data or stopping Homestead/);
   assert.doesNotMatch(t.ctx.STATE.data.replicaHtml, /opens the move/);
   await t.ctx.replicasKeepTwo();
   assert.deepEqual(t.modals, [], "no move dialog");

@@ -32,7 +32,7 @@ function setup() {
 
 test("settings separates online preparation from downtime without legacy mutation", async () => {
   const t = setup(); await t.ctx.replicasMoveData(); t.form();
-  assert.match(t.fields["#selfDataFlow"].innerHTML, /Two steps: make the new volume/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /There are two steps/);
   assert.match(t.fields["#selfDataFlow"].innerHTML, /node2 · unavailable/);
   await t.ctx.selfDataPrepareReview(); await t.ctx.selfDataPrepare();
   assert.equal(t.sent.length, 2, "unchecked preparation cannot create anything");
@@ -74,8 +74,8 @@ test("reopens completed preparation from jobs and obtains read-only final review
   assert.match(t.fields["#selfDataFlow"].innerHTML, /Review the move/); assert.equal(t.timers.length, 0);
   Object.assign(t.fields, { "#selfDataFinal": { innerHTML: "" }, "#selfDataWorker": { value: "node1" }, "#selfDataCopy": { value: "node1" } });
   await t.ctx.selfDataFinalReview();
-  assert.match(t.fields["#selfDataFinal"].innerHTML, /goes offline/);
-  assert.match(t.fields["#selfDataFinal"].innerHTML, /Take Homestead offline and move its data/);
+  assert.match(t.fields["#selfDataFinal"].innerHTML, /is offline while its data is copied/);
+  assert.match(t.fields["#selfDataFinal"].innerHTML, /Stop Homestead and move its data/);
   assert.deepEqual(t.sent.at(-1).body, { operation: "a".repeat(24), destination: "target", worker_node: "node1", copy_node: "node1" });
   t.ctx.selfDataFinalInvalidate(); assert.equal(t.fields["#selfDataFinal"].innerHTML, "");
 });
