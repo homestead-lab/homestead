@@ -77,14 +77,14 @@ test("the stop choice goes in the plan and in the start, and reopening the dialo
 test("the question before a copy says whether it keeps running, stops because it was asked to, or stops", async () => {
   const live = world(); live.ctx.moveReview("source", "vm", "desktop", "copy"); live.answer(LIVE); await settle();
   await startCopy(live);
-  assert.match(asked(live), /It keeps running while its disks are snapshotted/);
+  assert.match(asked(live), /It keeps running while its disks are backed up/);
   const stop = world(); stop.ctx.moveReview("source", "vm", "desktop", "copy"); stop.answer(LIVE); await settle();
   stop.ctx.moveStopSource("source", "vm", "desktop", true); stop.answer({ ...LIVE, live: false }); await settle();
   await startCopy(stop);
   assert.match(asked(stop), /It stops while its disks are backed up, then starts again as it was/);
   const other = world(); other.ctx.moveReview("source", "container", "camera-app", "copy"); other.answer({ ...LIVE, live: false, can_live: false }); await settle();
   const start = other.ctx.moveStart("source", "container", "camera-app"); await settle(); while (other.replies.length) other.answer({}); await start;
-  assert.match(asked(other), /The source stops while its volumes are backed up/);
+  assert.match(asked(other), /The original stops while its volumes are backed up/);
 });
 
 test("the stop switch shows only when the plan says this VM can be copied live", async () => {
@@ -121,7 +121,7 @@ test("after a refused start, a dialog opened during the send plans and starts it
   assert.doesNotMatch(w.fields["#mv_plan"].innerHTML, /A keeps running/);
   assert.equal(w.fields["#mv_go"].disabled, false);
   const sendB = w.ctx.moveStart("source", "container", "B"); await settle(); w.answer({}); await sendB;
-  assert.match(asked(w), /The source stops while its volumes are backed up/);
+  assert.match(asked(w), /The original stops while its volumes are backed up/);
   assert.deepEqual([lastBody(w, "/api/move/start").name, lastBody(w, "/api/move/start").kind], ["B", "container"]);
 });
 test("Check again during a send waits for it, then reads the plan once", async () => {

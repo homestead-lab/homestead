@@ -157,5 +157,5 @@ test("a refused Add server can be corrected and saved again; the name is sent lo
   answer = { status: 502, message: "Bad Gateway" };
   await ctx.doSrcAdd();
   assert.equal(fields["#sc_save"].disabled, true, "an uncertain save stays locked until Sources is refreshed");
-  assert.match(toasts.at(-1)[0], /refresh Sources/);
+  assert.match(toasts.at(-1)[0], /Refresh the list of servers/);
 });
