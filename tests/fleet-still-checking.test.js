@@ -48,10 +48,10 @@ test("the cluster menu shows a member being checked as still checking, with a ne
   const html = t.ctx.fleetMenuHtml();
   const lab = part(html, "Lab");
   assert.match(lab, /still checking/);
-  assert.doesNotMatch(lab, /not answering/);
+  assert.doesNotMatch(lab, /not responding/);
   assert.equal(dotOf(lab), "checking", "neutral, not red");
   const dr = part(html, "DR");
-  assert.match(dr, /not answering/);
+  assert.match(dr, /not responding/);
   assert.equal(dotOf(dr), "bad");
 });
 
@@ -60,10 +60,10 @@ test("the Fleet page shows a member being checked as still checking, with a neut
   const html = t.ctx.fleetMembersHtml(VIEW);
   const lab = part(html, "Lab");
   assert.match(lab, /·\s*still checking<\/span>/, "said in the line, not only in its tooltip");
-  assert.doesNotMatch(lab, /not answering/);
+  assert.doesNotMatch(lab, /not responding/);
   assert.equal(dotOf(lab), "checking");
   const dr = part(html, "DR");
-  assert.match(dr, /not answering/);
+  assert.match(dr, /not responding/);
   assert.equal(dotOf(dr), "bad");
 });
 
@@ -79,7 +79,7 @@ test("the move/copy picker lists a member being checked, disabled, as still chec
   assert.equal(dotOf(lab), "checking");
   const dr = part(body, "DR");
   assert.ok(disabled(dr));
-  assert.match(dr, /not answering/);
+  assert.match(dr, /not responding/);
   assert.equal(dotOf(dr), "bad");
   assert.ok(!disabled(part(body, "Branch")));
 });
@@ -105,14 +105,14 @@ test("a member whose last check failed reads not answering while it is asked aga
   const t = setup();
   t.ctx.FLEET.view = VIEW;
   for (const shed of [part(t.ctx.fleetMenuHtml(), "Shed"), part(t.ctx.fleetMembersHtml(VIEW), "Shed")]) {
-    assert.match(shed, /not answering/);
+    assert.match(shed, /not responding/);
     assert.doesNotMatch(shed, /still checking/);
     assert.equal(dotOf(shed), "bad");
   }
   t.ctx.moveToCluster("Deployment", "web");
   const shed = part(t.modals[0].body, "Shed");
   assert.ok(disabled(shed));
-  assert.match(shed, /not answering/);
+  assert.match(shed, /not responding/);
   assert.equal(dotOf(shed), "bad");
 });
 
@@ -121,5 +121,5 @@ test("the demo's view of all clusters names the lab as waiting, as the server do
   const flow = between(src, '"/api/fleet/all/flow"', "\n");
   assert.match(flow, /\{id:"d4ab1e",name:"Lab",error:"has not answered yet",state:"waiting"\}/);
   const t = setup();
-  assert.match(t.ctx.fleetMissingSentence({ name: "Lab", state: "waiting", error: "has not answered yet" }), /^Lab has not answered yet/);
+  assert.match(t.ctx.fleetMissingSentence({ name: "Lab", state: "waiting", error: "has not answered yet" }), /^Lab has not responded yet/);
 });
