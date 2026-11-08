@@ -31,7 +31,7 @@ const LH_V2_UPGRADE = UI.reviewFlow({
     lhV2UpgradePaint();
     if (!view.target) lhV2UpgradePoll(view);
   },
-  failed: e => { $('#lhV2UpgradeBody').innerHTML = UI.callout('bad','Could not check the upgrade',esc(e.message)); },
+  failed: e => { $('#lhV2UpgradeBody').innerHTML = UI.callout('bad','The upgrade could not be checked',esc(e.message)); },
 });
 // A send under way, or a settings review being read, holds the others back.
 const lhV2Busy = () => LH_V2_STARTING || LH_V2_SETTINGS.busy || LH_V2_REVIEWING;
@@ -61,7 +61,7 @@ function lhV2UpgradePaint() {
   const blockers = r[`${view.mode}_blockers`] || [];
   const supported = /^v?1\.(1[3-9]|[2-9]\d)\./.test(r.installed) && !r.harvester;
   host.innerHTML = UI.lead(view.target
-    ? 'Choose how to upgrade V2 storage. Homestead checks the cluster again when you start.'
+    ? 'Choose how to upgrade V2 storage. Homestead checks the cluster again when the upgrade starts.'
     : 'Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.')
     + UI.facts([['Installed',esc(r.installed)], ...(view.target ? [['Target',esc(r.target)]] : []), ['V2 volumes',r.v2_volumes],
       ...(!view.target ? [['Live upgrades',supported ? UI.chip(u.enabled ? 'Enabled' : 'Paused',u.enabled ? 'ok' : '') : 'Requires Longhorn 1.13+']] : []),
@@ -77,9 +77,9 @@ function lhV2UpgradePaint() {
       UI.button('Change timeout',`lhV2UpgradeSettings(${u.enabled},true)`)
     ].join('')) : '')
     + UI.more('Requirements and recovery', UI.lead('Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.')
-      + UI.lead('Back up your V2 volumes and leave disk space for replica rebuilding. Avoid volume expansion and live migration until all host upgrades finish and volumes are healthy.')
-      + UI.lead(`The host timeout is ${u.timeout} minutes. It does not apply while waiting for healthy volumes. Pausing allows the current host to finish; it does not roll back the manager or storage version.`)
-      + UI.lead('Longhorn retries failed hosts up to five times. Resolve the reported error first. Pause/resume does not reset retries; resetting the controller remains a manual recovery action in Longhorn.')
+      + UI.lead('Back up the V2 volumes and leave disk space for rebuilding volume copies. Do not expand volumes or move running VMs until all host upgrades finish and the volumes are healthy.')
+      + UI.lead(`The host timeout is ${u.timeout} minutes. It does not apply while waiting for healthy volumes. Pausing lets the current host finish, and does not roll back the manager or storage version.`)
+      + UI.lead('Longhorn retries failed hosts up to five times. Resolve the reported error first. Pausing and resuming does not reset the retries. Resetting the controller is a manual recovery step in Longhorn.')
       + `<a href="https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/" target="_blank" rel="noopener noreferrer">Longhorn upgrade documentation</a>`)
     + '<div id="lhV2UpgradeError" class="small" role="status"></div>';
   if (window.applyRole) applyRole();
@@ -102,7 +102,7 @@ window.lhV2UpgradeStart = async () => {
   if (!view?.target || lhV2Busy() || view.report[`${view.mode}_blockers`]?.length) return;
   if (view.mode === 'live' && !$('#lhV2UpgradeBackup')?.checked) return toast('Confirm that the V2 volumes are backed up first.','bad');
   const ack = $('#cmp_check_ack');
-  if (ack && !ack.checked) return toast('Tick that you have read what this upgrade breaks first','bad');
+  if (ack && !ack.checked) return toast('First tick the box to confirm that the problems were read','bad');
   LH_V2_STARTING = true;
   try {
     const result = await api('/api/cluster/components/upgrade',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -133,7 +133,7 @@ const LH_V2_SETTINGS = UI.reviewFlow({
   },
   render: (review, { enabled, timeout }) => {
     childModal('Apply V2 upgrade settings',UI.facts([['Live upgrades',enabled ? 'Enabled' : 'Paused'],['Host timeout',`${timeout} minutes`]])
-      + UI.ack('lhV2SettingsAck',enabled ? 'Turn on automatic V2 upgrades; backups are checked' : 'Pause them; the host being upgraded still finishes')
+      + UI.ack('lhV2SettingsAck',enabled ? 'Turn on automatic V2 upgrades. The backups are checked.' : 'Pause them. The host being upgraded still finishes.')
       + UI.actions([UI.button('Back','lhV2Upgrade()', { attrs: 'data-dialog-dismiss="true"' }),UI.button('Apply settings','lhV2UpgradeSettingsApply()',{kind:'pri'})].join('')));
   },
   failed: e => toast(e.message,'bad'),

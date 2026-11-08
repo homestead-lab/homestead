@@ -11,8 +11,8 @@ window.snapshotFiles = async (volume, snapshot) => {
     const linked = plan.method === 'linked-clone';
     modal('Browse snapshot', UI.head({ kind: 'Snapshot', name: plan.snapshot, where: plan.claim }) + UI.lead(`Browse and download its files. The live volume stays online.`) +
       UI.facts([['Volume', esc(plan.claim)], ['Volume capacity', fileSize(Number(plan.size))], ['Method', linked ? 'V2 linked clone · no full data copy' : 'Full snapshot copy · one temporary replica'], ['Access', 'Read-only · expires after 30 minutes']]) +
-      UI.callout(linked ? 'info' : 'warn', linked ? 'Uses the existing snapshot blocks' : 'A temporary copy is required', linked ? 'Keep the snapshot until you close the browser. Starting it can still take a while.' : 'It takes time, disk space and I/O.' + (plan.engine === 'v2' ? ' Homestead could not confirm linked clones here.' : '')) +
-      UI.more('How this works', '<p class="ui-help">A temporary copy of the snapshot, removed when you close it or after 30 minutes unused. Symbolic links and special files are left out.</p>') +
+      UI.callout(linked ? 'info' : 'warn', linked ? 'Uses the existing snapshot blocks' : 'A temporary copy is required', linked ? 'Keep the snapshot until the file browser is closed. Starting it can still take a while.' : 'It takes time, disk space and disk activity.' + (plan.engine === 'v2' ? ' Homestead could not confirm linked clones here.' : '')) +
+      UI.more('How this works', '<p class="ui-help">A temporary copy of the snapshot, removed when it is closed or after 30 minutes without use. Symbolic links and special files are left out.</p>') +
       UI.actions(UI.cancel() + UI.button('Prepare browser', 'snapshotFilesStart()', {kind:'pri', id:'snapshotFilesStart'})), true, 'snapshot-files');
   } catch (error) { toast(error.message, 'bad'); }
 };
@@ -25,7 +25,7 @@ window.snapshotFilesStart = async () => {
   snapshotFilesSession = {namespace:plan.namespace, session:'homestead-snapshot-files-' + id, source:plan};
   const session = snapshotFilesSession;
   modal('Preparing snapshot browser', '<div id="snapshotFilesProgress"></div>' + UI.actions(UI.button('Close and clean up', 'snapshotFilesClose()')), true, 'snapshot-files');
-  snapshotFilesPaint({state:'preparing', stage:'import', source:plan, message:'Requesting a temporary snapshot browser; the live volume stays online'});
+  snapshotFilesPaint({state:'preparing', stage:'import', source:plan, message:'Requesting a temporary snapshot browser. The live volume stays online.'});
   try {
     const state = await api('/api/snapshot-files/start', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({volume:plan.volume, snapshot:plan.snapshot, review_token:plan.review_token, request_id:id})});
@@ -33,7 +33,7 @@ window.snapshotFilesStart = async () => {
     snapshotFilesPaint(state);
   } catch (error) {
     if (sequence !== snapshotFilesSequence) { snapshotFilesRelease(session); return; }
-    if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Check preparation progress', esc(error.message) + ' The request may have created a copy; its saved session will be checked.');
+    if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Check the preparation progress', esc(error.message) + '. The request may have created a copy, and its saved session is checked.');
   }
   if ($('#snapshotFilesProgress')) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 2000);
 };
@@ -65,7 +65,7 @@ async function snapshotFilesPoll() {
     snapshotFilesPaint(state);
   } catch (error) {
     if (sequence !== snapshotFilesSequence) return;
-    if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Progress unavailable', esc(error.message) + ' Retrying; the temporary session expires automatically.');
+    if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Progress unavailable', esc(error.message) + '. Trying again. The temporary session expires automatically.');
   }
   if ($('#snapshotFilesProgress') && !['failed','closed','closing'].includes(snapshotFilesSession?.state)) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 3000);
 }
@@ -74,7 +74,7 @@ async function snapshotFilesRelease(session) {
   try {
     await api('/api/snapshot-files/close', {method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({namespace:session.namespace, session:session.session})});
-  } catch (error) { toast('Cleanup deferred; the temporary volume expires automatically. ' + error.message, 'warn'); }
+  } catch (error) { toast('The cleanup was postponed. The temporary volume expires automatically. ' + error.message, 'warn'); }
 }
 window.snapshotFilesDismiss = () => {
   ++snapshotFilesSequence;

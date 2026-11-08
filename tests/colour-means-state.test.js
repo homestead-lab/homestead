@@ -67,7 +67,7 @@ test("Dashboard widgets: low severity and acknowledged findings are neutral, run
 
 test("the bell: a waiting agent request is amber, alerts take their worst severity", () => {
   const src = read("web/js/homestead-update.js");
-  assert.match(src, /AI agent request"\)\} waiting for you`, "warn"\)/);
+  assert.match(src, /AI agent request"\)\} waiting for approval`, "warn"\)/);
   assert.doesNotMatch(src, /plural\(alertCount, "active alert"\), "danger"\)/);
 });
 

@@ -24,7 +24,7 @@ test('review explains linked clones separately from the full copy cost',async()=
   assert.match(full.html(),/temporary copy is required/);
   const linked=setup('linked-clone');await linked.c.snapshotFiles('vol','daily');
   assert.match(linked.html(),/no full data copy/);
-  assert.match(linked.html(),/Keep the snapshot until you close/);
+  assert.match(linked.html(),/Keep the snapshot until the file browser is closed/);
 });
 test('double clicks submit one request with the reviewed snapshot',async()=>{
   const t=setup();await t.c.snapshotFiles('vol','daily');

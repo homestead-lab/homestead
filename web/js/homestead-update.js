@@ -11,7 +11,7 @@ let HOMESTEAD_CHANNEL_SAVING = false;
 function homesteadChannelPicker() {
   const channel = STATE.data.appSettings?.updates?.channel || STATE.data.imageUpdates?.channel || "prod";
   return `<div class="srows">${settingRow("Release channel",
-    "Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.",
+    "Prod has stable releases. Dev has preview releases. Changing the channel checks for a release, and installing it still needs a review.",
     `<select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
       <option value="prod" ${channel === "prod" ? "selected" : ""}>Prod · stable</option>
       <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select>`)}</div>`;
@@ -86,8 +86,8 @@ function paintBell() {
   // Alerts that could not be refreshed are said: the counts are the last read, not now (#620).
   const alertsUnread = window.PWA_ALERTS?.unread || "";
   const rows = [
-    alertsUnread ? row("pwaAlertsDialog()", "alert", `${window.PWA_ALERTS?.report ? "Could not read the alerts just now · these counts are from the last read" : "Could not read the alerts"}: ${alertsUnread}`, "warn") : "",
-    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "warn") : "",
+    alertsUnread ? row("pwaAlertsDialog()", "alert", `${window.PWA_ALERTS?.report ? "The alerts could not be read just now · These counts are from the last read." : "The alerts could not be read."} ${alertsUnread}`, "warn") : "",
+    waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for approval`, "warn") : "",
     alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), alerts.some(a => a.severity === "critical") ? "danger" : "warn") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
@@ -96,7 +96,7 @@ function paintBell() {
   ].filter(Boolean);
   const count = waitingAgents + alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
   const words = [waitingAgents ? plural(waitingAgents, "AI agent request") : "", alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
-    errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : "", alertsUnread ? "alerts not read" : ""].filter(Boolean).join(", ") || "Nothing needs you";
+    errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : "", alertsUnread ? "alerts not read" : ""].filter(Boolean).join(", ") || "Nothing needs attention";
   const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
   if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
   if (dot) { dot.textContent = errors; dot.classList.toggle("hidden", !errors); }
@@ -104,7 +104,7 @@ function paintBell() {
   bell.classList.toggle("has-news", count > 0 || errors > 0 || !!alertsUnread);
   bell.classList.toggle("running", active.length > 0);
   const html = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
-    + (rows.length ? `<div class="bell-head">Needs attention</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')
+    + (rows.length ? `<div class="bell-head">Needs attention</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs attention</div>')
     + `<button class="bell-all" onclick="closeNotifications();pwaAlertsDialog()">All alerts</button>`
     + (operations.length ? `<button class="bell-all" onclick="closeNotifications();jobsDialog()">All jobs · ${operations.length}</button>` : "");
   for(const host of [$("#bellPop"),$("#notificationsDialogList")])if(host){const next=host.cloneNode(false);next.innerHTML=html;morph(host,next);}
@@ -235,7 +235,7 @@ function homesteadUpdateBody(inCard = false) {
     : here ? (release ? `Update to ${release}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`) : `Update ${one || "1 cluster"}`;
   return `${head}
     <div class="hs-clusters" role="group" aria-label="${picking ? "Clusters to update" : "This cluster"}">${rows}</div>
-    ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
+    ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes, and this page reconnects. "}Nothing changes until it is reviewed.</p>` : ""}
     ${(() => {
       const main = label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : "";
       const check = `<button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button>`
@@ -281,7 +281,7 @@ window.homesteadReleaseAsk = () => {
   const { self, failed } = homesteadUpdates();
   if (!self) return toast("Homestead itself is not in the update report yet: check again", "bad");
   modal("Install a Homestead release", `<div class="ui-stack">
-    <p class="ui-lead">For when Homestead cannot offer the release you want${failed.length ? ", as now: its release check failed" : ""}. Name a release from the <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases page ${icon("ext")}</a>; it is reviewed before anything changes.</p>
+    <p class="ui-lead">For when Homestead cannot offer the release you want${failed.length ? ", as now, because its release check failed" : ""}. Enter a release from the <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases page ${icon("ext")}</a>. It is reviewed before anything changes.</p>
     ${UI.field("Release", `<input id="hsReleaseName" placeholder="2.8.334" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')homesteadReleaseReview()">`, { help: `This Homestead runs v${esc(HOMESTEAD_VERSION)}. A preview is named like 2.8.334-dev.1.` })}
     ${UI.actions(UI.button("Review", "homesteadReleaseReview()", { kind: "pri" }), UI.cancel())}</div>`);
   setTimeout(() => $("#hsReleaseName")?.focus(), 0);

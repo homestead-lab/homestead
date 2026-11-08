@@ -10,7 +10,7 @@ function gitopsNote(managed, { rename = false, yaml = "" } = {}) {
     : `Marked as updated by ${by}. A change made here can be undone there. To keep it, change it there too.`;
   const tick = rename ? `<label class="switch"><input type="checkbox" id="editManagedConfirm"> ${by} will bring back the old name</label>` : "";
   return UI.callout("warn", rename ? `${managed.detected ? by : "Something else"} applies this app` : "", `<p>${body}</p>${rename
-    ? `<p>A rename makes the app under its new name and removes the old one; ${by} then brings the old one back, so there are two copies.</p>${tick}` : ""}${
+    ? `<p>A rename creates the app with its new name and removes the old one. ${by} then restores the old one, so there are two copies.</p>${tick}` : ""}${
     gitopsCopyButton(yaml)}`);
 }
 
@@ -27,7 +27,7 @@ window.gitopsCopy = async index => {
   const copy = GITOPS_COPIES[index] || {};
   const done = await copyText(copy.yaml || "");
   toast(!done ? "Copying did not work here: select the YAML and copy it"
-    : copy.whole ? "Copied. Commit it where git keeps your apps, as a file of its own"
+    : copy.whole ? "Copied. Commit it as a file of its own, where the apps are kept in git."
     : "Copied. Paste it where git keeps this app: a kustomize patch, or the same fields in its manifest", done ? "ok" : "bad");
 };
 /* Save text as a file in the browser: a link with download, as the config
@@ -58,7 +58,7 @@ function gitopsDeployAdds(adds = []) {
   if (!sure.length && !may.length) return "";
   const lead = sure.length ? `Homestead also adds at deploy time: ${sure.join("; ")}${may.length ? `, and may add ${may.join("; ")}` : ""}.`
     : `At deploy time Homestead may add ${may.join("; ")}.`;
-  return `<p class="ui-help">${esc(`${lead} Applying this file elsewhere won't add ${sure.length + may.length > 1 ? "them" : "it"}.`)}</p>`;
+  return `<p class="ui-help">${esc(`${lead} Applying this file elsewhere does not add ${sure.length + may.length > 1 ? "them" : "it"}.`)}</p>`;
 }
 function gitopsYamlBlock(yaml, secret = {}, { scope = "edit", file = "", adds = [] } = {}) {
   if (!yaml) return "";
