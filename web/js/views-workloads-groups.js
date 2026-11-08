@@ -119,7 +119,7 @@ window.manageWorkloadGroups = (keep = false) => {
   const rows = wgRows(), names = workloadGroupNames(rows);
   const count = g => rows.filter(w => g === NO_GROUP ? !w.group : w.group === g).length;
   modal("Groups", `<div class="ui-stack">
-    ${UI.lead("Tick containers, then move them into a group or out of every group. What you tick stays ticked when you change the filter. A group lasts while something is in it.")}
+    ${UI.lead("Tick containers, then move them into a group or out of every group. Ticked containers stay ticked when the filter changes. A group exists while it has something in it.")}
     <div class="wg-tools">
       <input id="wg_q" type="search" placeholder="Filter by name or namespace" aria-label="Filter containers" value="${esc(WG.q)}" oninput="wgFilter()">
       <select id="wg_group" aria-label="Show group" onchange="wgFilter()"><option value="">Every group</option>
@@ -259,7 +259,7 @@ window.saveWorkloadGroup = async (items, group, stay = false, renamedFrom = "") 
    saved and nothing restarts; Priority tiers… lists the restarts to start. */
 const GROUP_TIER = { group: "", plan: null };
 function groupTierLine(plan, group, tier) {
-  if (!plan) return "Homestead couldn't read the apps just now; the tier can still be saved.";
+  if (!plan) return "Homestead could not read the apps just now, but the tier can still be saved.";
   const rows = (plan.apps || []).filter(a => a.group === group), want = tier === "none" ? "normal" : tier;
   const follow = rows.filter(a => a.follows), restart = follow.filter(a => a.current !== want).length;
   const git = tier === "none" ? 0 : rows.filter(a => a.managed && a.current !== want).length;
@@ -279,7 +279,7 @@ window.groupTier = async index => {
     ${UI.lead(esc(`Apps that follow ${group} take this tier. Apps with a tier of their own keep it.`))}
     ${UI.field("Tier", `<select id="gt_tier" aria-label="Tier for ${esc(group)}" onchange="groupTierEffect()">${now ? "" : '<option value="" selected disabled>Choose a tier</option>'}${["critical", "normal", "low", "none"].map(t =>
       `<option value="${t}" ${t === now ? "selected" : ""}>${t[0].toUpperCase() + t.slice(1)}</option>`).join("")}</select>`)}
-    ${now ? "" : `<p class="dim small">${esc(`Homestead couldn't read ${group}'s tier just now; choose the tier it should have.`)}</p>`}
+    ${now ? "" : `<p class="dim small">${esc(`Homestead could not read ${group}'s tier just now. Choose the tier it should have.`)}</p>`}
     <p class="dim small" id="gt_effect" aria-live="polite">Reading the apps…</p>
     ${UI.actions(UI.button("Save", "groupTierSave()", { kind: "pri", id: "gtGo", attrs: 'data-need="operator"', disabled: !now }), UI.cancel())}</div>`);
   try { GROUP_TIER.plan = await api("/api/workloads/priority/plan"); } catch (e) { GROUP_TIER.plan = null; }
@@ -334,12 +334,12 @@ const mvHosts = () => ((STATE.data.nodes || []).filter(n => n.schedulable !== fa
 window.moveSeveral = async (ids = null, to = "", avoid = "") => {
   // The hosts come with the Nodes page; opened from elsewhere, read them here.
   if (!(STATE.data.nodes || []).length) {
-    try { STATE.data.nodes = await api("/api/nodes"); } catch (e) { return toast(`Could not read the hosts: ${e.message}`, "bad"); }
+    try { STATE.data.nodes = await api("/api/nodes"); } catch (e) { return toast(`The hosts could not be read. ${e.message}`, "bad"); }
   }
   Object.assign(MV, { picked: new Set(ids || []), q: "", to: to || mvHosts().find(h => h !== avoid) || "", over: {}, plan: null });
   if (ids) return mvReview();
   modal("Move several", `<div class="ui-stack">
-    ${UI.lead("Tick the containers to move, then review them together. What you tick stays ticked when you change the filter.")}
+    ${UI.lead("Tick the containers to move, then review them together. Ticked containers stay ticked when the filter changes.")}
     <div class="wg-tools"><input id="mv_q" type="search" placeholder="Filter by name or namespace" aria-label="Filter containers" oninput="mvFilter()"></div>
     <div class="wg-selbar"><b id="mv_count" aria-live="polite"></b>${UI.button("Tick all shown", "mvTickShown(true)")}${UI.button("Clear", "mvClear()")}</div>
     <div class="wg-list" id="mv_list"></div>
@@ -379,7 +379,7 @@ window.mvPlan = async () => {
   let plan;
   try { plan = await api("/api/workloads/rebalance/review", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ picks: mvPicks() }) }); }
-  catch (e) { if (seq === MV.seq) $("#mbody").innerHTML = UI.callout("bad", "Could not check the hosts", esc(e.message)); return; }
+  catch (e) { if (seq === MV.seq) $("#mbody").innerHTML = UI.callout("bad", "The hosts could not be checked", esc(e.message)); return; }
   if (seq !== MV.seq) return;              // a newer review was asked for meanwhile
   MV.plan = plan;
   const moves = plan.moves || [], stays = (plan.rows || []).filter(r => r.why);
@@ -395,8 +395,8 @@ window.mvPlan = async () => {
     : stays.length || (plan.hosts || []).some(h => h.over) ? UI.callout("warn", "Check first",
       `${stays.length ? `${stays.length} stay where they are. ` : ""}Each one moved restarts on its new host.`) : "";
   $("#mbody").innerHTML = [
-    UI.lead(!moves.length ? "None of these can move to the hosts chosen; each one says why."
-      : `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} to ${esc([...new Set(moves.map(m => m.to))].join(", "))}; each restarts there, one at a time. ${BALANCE_LEAVES_PREFERENCE}`),
+    UI.lead(!moves.length ? "None of these can move to the chosen hosts. Each one shows why."
+      : `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} to ${esc([...new Set(moves.map(m => m.to))].join(", "))}. Each one restarts there, one at a time. ${BALANCE_LEAVES_PREFERENCE}`),
     `<div class="f"><label>Move to</label>${hostSelect(MV.to, "mvTo(this.value)", "Move to")}</div>`,
     notice,
     UI.section(`Containers · ${rows.length}`, UI.table([{ label: "Container" }, { label: "Move", className: "grow" }, { label: "Host" }], rows)),
@@ -428,7 +428,7 @@ window.mvGo = async () => {
   try {
     await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ picks: plan.moves.map(m => ({ id: m.id, to: m.to })), review_token: plan.review_token, restart: true }) });
-    toast(`Moving ${plan.moves.length}; follow it in Jobs`, "ok"); closeModal(); refresh(true);
+    toast(`Moving ${plan.moves.length}. Progress is shown in Jobs.`, "ok"); closeModal(); refresh(true);
   } catch (e) { toast(e.message, "bad"); return mvPlan(); }
 };
 

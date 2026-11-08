@@ -35,8 +35,8 @@ window.composeImport = async () => {
       <div class="f2 compose-opts">
         <div class="f"><label>Namespace</label><select id="composeNs">${namespaces.map(n =>
           `<option ${n === COMPOSE.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f"><label>LAN address ${tip("The default workload VIP is configured in Networking; its published ports must be unique. A new address gives each service its own reserved VIP.")}</label>
-          <select id="composeVip">${nodeAddressesOnly() ? nodeAddressOption() : `${composeVips.shared ? `<option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Default workload VIP · ${esc(composeVips.shared)}</option>` : ""}${nodeAddressChoice(!composeVips.shared && COMPOSE.vip_mode !== "auto")}
+        <div class="f"><label>LAN address ${tip("The default virtual IP is set up in Networking, and its ports must be unique. A new address gives each service its own virtual IP.")}</label>
+          <select id="composeVip">${nodeAddressesOnly() ? nodeAddressOption() : `${composeVips.shared ? `<option value="shared" ${COMPOSE.vip_mode === "shared" ? "selected" : ""}>Default virtual IP · ${esc(composeVips.shared)}</option>` : ""}${nodeAddressChoice(!composeVips.shared && COMPOSE.vip_mode !== "auto")}
             <option value="auto" ${COMPOSE.vip_mode === "auto" ? "selected" : ""}>A new address per service</option>`}</select></div>
       </div>
     </div>
@@ -238,7 +238,7 @@ window.composeToForm = name => {
   window.__deployPrefill = JSON.parse(JSON.stringify(service.config));
   closeModal();
   go("deploy");
-  toast(`${name} is in the Deploy form. The Compose file is kept until you clear it.`, "ok");
+  toast(`${name} is in the Deploy form. The Compose file is kept until it is cleared.`, "ok");
 };
 
 window.composeClear = async () => {
@@ -262,7 +262,7 @@ window.composeCreate = async () => {
 function composeCapacityHtml(plan) {
   return `${UI.callout(plan.blocked ? "bad" : "warn", { html: `${plan.status === "fits" ? "A joint placement example fits" : plan.status === "unknown" ? "Complete placement could not be verified" : "Batch cannot fit the checked constraints"}` }, `<p>${plural(plan.pods, "planned pod")}. This is not a scheduler reservation or an OOM guarantee.</p>`)}
     <div class="dependency-list">${(plan.services || []).map(s => `<div class="drow"><div class="dl mono">${esc(s.name)} · ${plural(s.replicas, "pod")}</div><div class="dv">Each pod: ${s.pod_request_gb} GiB requested / ${s.pod_memory_gb} GiB estimated · ${s.pod_cpu_request_percent}% CPU</div></div>`).join("")}</div>
-    <div class="sec">Conservative RAM upper estimates</div><p class="dim small">Each host's upper estimate includes every batch pod that could individually fit there. The estimates can exceed a possible joint placement; they are not assigned memory.</p>
+    <div class="sec">Highest memory estimates</div><p class="dim small">Each host's estimate includes every app in the batch that could fit there on its own. The estimates can be higher than any real placement, and they are not reserved memory.</p>
     <div class="dependency-list">${(plan.nodes || []).map(n => `<div class="drow"><div class="dl mono">${esc(n.name)}</div><div class="dv">${n.metrics_available ? `${n.baseline_gb} → up to ${n.upper_gb} GiB (${n.upper_percent}%)` : "Live RAM unavailable"}</div></div>`).join("")}</div>
     ${UI.notices((plan.warnings || []).map(w => ["warn", w]))}
     ${(plan.reasons || []).length ? `<details><summary>Checked conflicts</summary>${plan.reasons.map(r => `<div class="small">${esc(r)}</div>`).join("")}</details>` : ""}
@@ -277,11 +277,11 @@ window.composeReview = async body => {
   try {
     const response = await api("/api/compose/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
     if (sequence !== COMPOSE.reviewSequence) return;
-    if (!response.capacity || !response.capacity_token) throw new Error("Batch capacity preview unavailable; refresh before creating apps.");
+    if (!response.capacity || !response.capacity_token) throw new Error("The capacity review is not available. Refresh before creating apps.");
     COMPOSE.review = { config, ...response };
     childModal("Review Compose batch", `${composeCapacityHtml(response.capacity)}
-      <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created apps or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
-      ${!response.capacity.blocked ? `<div class="note">Capacity warnings can be overridden, including conservative RAM estimates over 100%. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Create them anyway</label>` : ""}
+      <div class="note">Each service is checked again against the rest of the batch before it is created. A later failure stops the batch without deleting the apps or volumes already created. Keep a copy of the Compose file in case it is needed after a page refresh.</div>
+      ${!response.capacity.blocked ? `<div class="note">Capacity warnings, including memory estimates over 100%, can be accepted. Continuing may cause memory shortages, restarts or downtime. It does not change the reserved resources or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Create them anyway</label>` : ""}
       <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create apps</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -298,7 +298,7 @@ window.composeConfirm = async () => {
       body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
     if (!result.ok) {
       toast(`${result.failed} could not be created: ${result.error}`, "bad");
-      $("#composeApplyResult").innerHTML = `${UI.callout("bad", { html: `Batch stopped at ${esc(result.failed)}.` }, `${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Keep them; remove their definitions and satisfied depends_on references from the next batch, or deploy the remaining services individually.` : ""}<br>Volumes created before an error are retained; inspect them before retrying.`)}`;
+      $("#composeApplyResult").innerHTML = `${UI.callout("bad", { html: `Batch stopped at ${esc(result.failed)}.` }, `${esc(result.error)}${result.created.length ? `<br>Already created: ${result.created.map(esc).join(", ")}. Keep them, and remove their definitions and the depends_on references to them from the next batch, or deploy the remaining services one by one.` : ""}<br>Volumes created before the error are kept. Check them before trying again.`)}`;
       return;
     }
     Object.assign(COMPOSE, { text: "", variables: "", report: null });

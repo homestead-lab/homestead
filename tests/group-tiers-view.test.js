@@ -111,7 +111,7 @@ test("the Tier… dialog says what a tier would do before it is saved", () => {
     "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers… 1 is applied by Flux or Argo CD: change it in git.");
   assert.equal(c.groupTierLine(p, "Home", "none"), "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers…");
   assert.equal(c.groupTierLine(plan([row("lab/db", { group: "Home" })]), "Home", "low"), "No app follows Home: each has a tier of its own.");
-  assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead couldn't read the apps just now; the tier can still be saved.");
+  assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead could not read the apps just now, but the tier can still be saved.");
 });
 
 test("Set tiers sends back whether each app keeps following its group, as reviewed", async () => {
@@ -140,7 +140,7 @@ test("the Tier… dialog preselects nothing, and waits for a choice, when the gr
   await c.window.groupTier(0);
   assert.doesNotMatch(d.html(), /<option value="(critical|normal|low|none)" selected/);
   assert.match(d.html(), /<button[^>]*id="gtGo"[^>]*disabled|<button[^>]*disabled[^>]*id="gtGo"/);
-  assert.match(d.html(), /couldn(&#39;|')t read Home(&#39;|')s tier/);
+  assert.match(d.html(), /could not read Home(&#39;|')s tier/);
   assert.equal(d.els["#gtGo"].disabled, true, "Save stays off until a tier is chosen");
   const sent = []; c.api = async (path, init) => { sent.push(init.body); return {}; };
   await c.window.groupTierSave();
@@ -155,6 +155,6 @@ test("the Tier… dialog preselects the group's tier, or None, when it is known"
     const c = load(), d = tierDialog(c, known);
     await c.window.groupTier(0);
     assert.match(d.html(), new RegExp(`<option value="${picked}" selected`));
-    assert.doesNotMatch(d.html(), /couldn(&#39;|')t read/);
+    assert.doesNotMatch(d.html(), /could not read/);
   }
 });
