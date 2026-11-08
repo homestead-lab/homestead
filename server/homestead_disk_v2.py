@@ -41,7 +41,7 @@ def _get(path, optional=False):
     try:
         obj = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
     except urllib.error.HTTPError as error:
-        raise ValueError(f'Disk preparation inventory is unavailable (HTTP {error.code}); nothing is assumed empty') from error
+        raise ValueError(f'The disk list for preparation is unavailable (HTTP {error.code}), so nothing is assumed to be empty') from error
     if obj is KUBE.GONE:
         return None
     if not isinstance(obj, dict):
@@ -54,7 +54,7 @@ def _items(path):
     meta = obj.get('metadata') or {}
     if (not isinstance(obj.get('items'), list) or not isinstance(meta, dict)
             or meta.get('continue') or meta.get('remainingItemCount') not in (None, 0)):
-        raise ValueError('Disk preparation inventory is incomplete or paginated; no empty result is assumed')
+        raise ValueError('The disk list for preparation is incomplete, so nothing is assumed to be empty')
     return obj['items']
 
 
@@ -88,7 +88,7 @@ def _upgrade_idle():
 def _inventory(node, disk):
     node, disk = _name(node), _name(disk)
     if platform(True).get('harvester'):
-        raise ValueError('Harvester owns disk preparation; use its disk management')
+        raise ValueError('Harvester manages disk preparation. Use its disk management.')
     _upgrade_idle()
     kube = {n['metadata']['name']: n for n in _items('/api/v1/nodes')}
     lhs = {n['metadata']['name']: n for n in _items(LH + '/nodes')}
@@ -204,7 +204,7 @@ def parse_host_facts(path, out, err=''):
     """Parse identity evidence; callers retain their own contents policy."""
     error = next((line[4:] for line in out.splitlines() if line.startswith('ERR ')), '')
     if error or 'END' not in out.splitlines():
-        raise ValueError(error or 'Host disk inspection did not finish; ' + str(err or '')[:160])
+        raise ValueError(error or 'The check of the host disk did not finish. ' + str(err or '')[:160])
     lines = {line.partition(' ')[0]: line.partition(' ')[2].strip() for line in out.splitlines()}
     device = lines.get('DEVICE', '')
     if not re.fullmatch(r'/dev/(?:[a-z]+[0-9]*|nvme\d+n\d+(?:p\d+)?|mmcblk\d+(?:p\d+)?|dm-\d+)', device):
@@ -242,7 +242,7 @@ def _other_stores(node, lh, facts, selected):
     for name, spec in stores.items():
         path = spec.get('path')
         if not isinstance(path, str) or not path.startswith('/') or '\n' in path:
-            raise ValueError('A V1 store path cannot be inspected; no erase is permitted')
+            raise ValueError('A V1 store path cannot be checked, so the disk cannot be erased')
         script += ['S=$(findmnt -rn --target ' + shlex.quote(path) + ' -o SOURCE)',
                    'D=$(readlink -f "$S")', '[ -b "$D" ]',
                    'printf \'STORE %s %s\\n\' ' + shlex.quote(name) + ' "$D"']
@@ -252,7 +252,7 @@ def _other_stores(node, lh, facts, selected):
         raise ValueError('Every V1 store must be reachable and inspected before erasing')
     seen = {line.split()[1]: line.split()[2] for line in out.splitlines() if line.startswith('STORE ') and len(line.split()) == 3}
     if set(seen) != set(stores):
-        raise ValueError('V1 store inventory is incomplete; no erase is permitted')
+        raise ValueError('The list of V1 stores is incomplete, so the disk cannot be erased')
     impacted = [name for name, device in seen.items() if device == facts['device'] and name != selected]
     if impacted:
         raise ValueError('Other V1 stores use this filesystem: ' + ', '.join(impacted) + '. Move or separately delete their data and remove these store registrations first')
@@ -262,7 +262,7 @@ def _residual_claims(node, disk_uuid):
     for image in _items(LH + '/backingimages'):
         if any(disk_uuid in (image.get(section, {}).get(field) or {}) for section, field in (
                 ('spec', 'diskFileSpecMap'), ('status', 'diskFileStatusMap'))):
-            raise ValueError('Backing image ' + image['metadata']['name'] + ' still claims this disk; relocate or separately remove it first')
+            raise ValueError('Backing image ' + image['metadata']['name'] + ' still uses this disk. Move it or remove it separately first.')
     for orphan in _items(LH + '/orphans'):
         spec = orphan.get('spec') or {}
         params = spec.get('parameters') or {}
@@ -274,7 +274,7 @@ def _placements(inv):
     mine = [r for r in inv['replicas'] if _on_disk(r, inv)]
     listed = set(inv['status'].get('scheduledReplica') or {})
     if listed - {r['metadata']['name'] for r in mine}:
-        raise ValueError('Longhorn lists replicas that cannot be inspected; wait before evacuating')
+        raise ValueError('Longhorn lists volume copies that cannot be checked. Wait before moving copies off.')
     if inv['status'].get('scheduledBackingImage'):
         raise ValueError('Remove or relocate backing-image copies from this disk in Longhorn first')
     rows, blockers, budget, scheduled, planned = [], [], {}, {}, {}
@@ -303,7 +303,7 @@ def _placements(inv):
             blockers.append(f'{name}: not all requested replicas are confirmed RW')
         others = [r for r in rw if not _on_disk(r, inv)]
         if not others:
-            blockers.append(f'{name}: this disk holds its only healthy copy; add a healthy replica elsewhere first')
+            blockers.append(f'{name}: this disk holds its only healthy copy. Add a healthy copy on another disk first.')
         held_nodes = {r['spec'].get('nodeID') for r in others}
         held_disks = {(r['spec'].get('nodeID'), r['spec'].get('diskID')) for r in others}
         held_nodes.update(n for n, d in planned.get(name, []))
@@ -416,13 +416,13 @@ def start(body):
             return public(prior)
         if _active_for(node, disk) or any(i.get('status') not in ops.TERMINAL and i.get('ref', {}).get('node') == node
                 and i.get('kind') in (KIND, 'node-power', 'host-os', 'longhorn-v2-prepare', 'disk-retire') for i in saved):
-            raise ValueError('A disk or host maintenance task is already active; open it first')
+            raise ValueError('A disk or host maintenance task is already running. Open it first.')
         inv = _inventory(node, disk)
         facts = _host_facts(inv['spec']['path'], node)
         rows, blockers = _placements(inv)
         cfg = {'action': 'evacuate', 'node': node, 'disk': disk, 'request_id': request_id, 'capacity_token': body.get('capacity_token')}
         if facts['longhorn_uuid'] != inv['status']['diskUUID'] or not REVIEW.valid(cfg, _context(inv, facts, rows)):
-            raise ValueError('Disk identity, placement or host state changed; review evacuation again')
+            raise ValueError('The disk, its placement or the host changed. Review moving the copies off again.')
         if blockers:
             raise ValueError(' '.join(blockers))
         ref = {'node': node, 'disk': disk, 'phase': 'evacuating', 'request_id': request_id, 'approval': body['capacity_token'],
@@ -430,7 +430,7 @@ def start(body):
                'lh_uid': inv['lh']['metadata']['uid'], 'disk_uuid': inv['status']['diskUUID'],
                'original_disk': copy.deepcopy(inv['spec']), 'hardware': facts, 'volumes': rows}
         op = ops.start(KIND, 'Prepare ' + facts['device'] + ' for Longhorn V2', {'kind': 'Node', 'name': node},
-                       '/nodes?node=' + quote(node, safe='') + '&section=storage', ref, 'Queued replica evacuation; no device erase is authorized')
+                       '/nodes?node=' + quote(node, safe='') + '&section=storage', ref, 'Moving volume copies off is queued. The device is not erased.')
         return public(next(i for i in ops.stored() if i['id'] == op['id']))
 
 
@@ -459,13 +459,13 @@ def status(operation_id):
 
 def _verify_original(inv, ref):
     if inv['host']['metadata']['uid'] != ref['node_uid'] or inv['lh']['metadata']['uid'] != ref['lh_uid']:
-        raise ValueError('Host identity changed; stop and review the disk again')
+        raise ValueError('The host changed. Stop and review the disk again.')
     if inv['status']['diskUUID'] != ref['disk_uuid']:
-        raise ValueError('Longhorn disk identity changed; nothing further is changed')
+        raise ValueError('The Longhorn disk changed, so nothing more is changed')
     expected = copy.deepcopy(ref['original_disk'])
     expected.update(allowScheduling=False, evictionRequested=True)
     if inv['spec'] not in (ref['original_disk'], expected) or ref.get('eviction_started') and inv['spec'] != expected:
-        raise ValueError('The disk configuration changed outside this task; stop and review it again')
+        raise ValueError('The disk settings changed outside this task. Stop and review it again.')
 
 
 def _evacuated(inv, ref):
@@ -474,13 +474,13 @@ def _evacuated(inv, ref):
     mine = [r for r in inv['replicas'] if _on_disk(r, inv)]
     ref['remaining'] = max(len(mine), len(inv['status'].get('scheduledReplica') or {}))
     if ref['remaining'] or inv['status'].get('scheduledBackingImage'):
-        return False, 'Waiting for replica evacuation; ' + str(ref['remaining']) + ' replicas still on this disk'
+        return False, 'Waiting for the volume copies to move off. ' + str(ref['remaining']) + ' are still on this disk.'
     for row in ref['volumes']:
         volume = inv['volumes'].get(row['volume'])
         if not volume:
-            return False, row['volume'] + ': the tracked volume disappeared; stop and review its deletion and remaining files before starting a new preparation'
+            return False, row['volume'] + ': the volume disappeared. Stop, and check its deletion and remaining files before starting a new preparation.'
         if not _same_volume(volume, row):
-            return False, row['volume'] + ': volume identity, size or replica target changed, or migration/expansion is active; stop and review again'
+            return False, row['volume'] + ': the volume, its size or its number of copies changed, or it is moving or growing. Stop and review again.'
         status = volume.get('status') or {}
         if status.get('state') != 'attached' or status.get('robustness') != 'healthy' or len(_rw(inv, row['volume'])) < row['replicas']:
             return False, row['volume'] + ': waiting for healthy RW replacement replicas'
@@ -508,7 +508,7 @@ def prepare_review(operation_id):
             raise ValueError(reason)
         facts = _host_facts(inv['spec']['path'], ref['node'])
         if facts != ref['hardware']:
-            raise ValueError('Physical disk or filesystem identity changed; no erase is authorized')
+            raise ValueError('The physical disk or filesystem changed, so the disk is not erased')
         request_id = secrets.token_hex(12)
         cfg = {'action': 'prepare', 'operation_id': item['id'], 'request_id': request_id}
         context = {'hardware': facts, 'host_uid': ref['node_uid'], 'boot_id': inv['host']['status']['nodeInfo']['bootID'], 'disk_uuid': ref['disk_uuid'],
@@ -691,7 +691,7 @@ def _job(ref, create=False):
     expected = _job_body(ref)
     if not obj:
         if not create:
-            raise ValueError('Preparation helper is missing. Its erase will not be repeated; inspect the host receipt and disk')
+            raise ValueError('The preparation helper is missing. Its erase is not repeated. Check the host record and the disk.')
         try:
             obj = ksend('POST', path.rsplit('/', 1)[0], expected)
         except urllib.error.HTTPError as error:
@@ -707,7 +707,7 @@ def _job(ref, create=False):
             or len(actual.get('containers', [])) != 1
             or any(actual['containers'][0].get(k) != target['containers'][0][k] for k in ('name', 'image', 'command', 'securityContext'))
             or any(actual['containers'][0].get(k) for k in ('env', 'envFrom', 'args', 'volumeMounts')) or actual.get('volumes')):
-        raise ValueError('Preparation helper identity or configuration changed; nothing is repeated or deleted')
+        raise ValueError('The preparation helper or its settings changed, so nothing is repeated or deleted')
     ref['job_uid'] = meta['uid']
     return obj
 
@@ -717,7 +717,7 @@ def progress(item):
     try:
         if ref['phase'] == 'complete':
             _cleanup(ref)
-            return 'succeeded', 100, 'Disk is ready for V2 replicas; existing volumes retain their engine'
+            return 'succeeded', 100, 'The disk is ready for V2 volume copies. Existing volumes keep their engine.'
         if ref['phase'] in ('evacuating', 'awaiting-erase'):
             inv = _inventory(ref['node'], ref['disk'])
             _verify_original(inv, ref)
@@ -727,7 +727,7 @@ def progress(item):
                 if inv['spec'] != wanted:
                     _patch_disk(inv, wanted)
                 ref['eviction_started'] = True
-                return 'running', 10, 'Longhorn is moving replicas to other V1 disks; no erase is authorized'
+                return 'running', 10, 'Longhorn is moving volume copies to other V1 disks. The disk is not erased yet.'
             def evacuation():
                 ready, reason = _evacuated(inv, ref)
                 ref['phase'] = 'awaiting-erase' if ready else 'evacuating'
@@ -739,20 +739,20 @@ def progress(item):
             host = _get('/api/v1/nodes/' + ref['node'])
             lh = _get(LH + '/nodes/' + ref['node'])
             if host['metadata'].get('uid') != ref['node_uid'] or host['status']['nodeInfo'].get('bootID') != ref['boot_id'] or lh['metadata'].get('uid') != ref['lh_uid']:
-                raise ValueError('Host identity or boot changed; no preparation is dispatched')
+                raise ValueError('The host or its start-up changed, so no preparation is started')
             if ref['disk'] in (lh.get('spec', {}).get('disks') or {}):
                 inv = _inventory(ref['node'], ref['disk'])
                 _verify_original(inv, ref)
                 ready, reason = _evacuated(inv, ref)
                 if not ready:
-                    return 'running', 70, reason + '; the reviewed erase has not started'
+                    return 'running', 70, reason + '. The reviewed erase has not started.'
                 _patch_disk(inv, None)
             # Removing the entry prevents new Longhorn replicas landing there.
             # An independently scheduled/unobserved replica still stops dispatch.
             _no_replicas(ref)
             ref['phase'] = 'dispatching'
             ops.checkpoint(item)
-            return 'running', 75, 'V1 entry removed; dispatching the reviewed one-shot preparation helper'
+            return 'running', 75, 'V1 entry removed. Starting the reviewed preparation helper.'
         if ref['phase'] == 'dispatching':
             if _get(f'/apis/batch/v1/namespaces/{NS}/jobs/{ref["job"]}', True):
                 # Dispatch may have succeeded before its response/checkpoint
@@ -761,25 +761,25 @@ def progress(item):
                 _job(ref)
                 ref['phase'] = 'preparing'
                 ops.checkpoint(item)
-                return 'running', 80, 'Following the saved preparation helper; its erase is not dispatched again'
+                return 'running', 80, 'Following the saved preparation helper. Its erase is not started again.'
             host = _get('/api/v1/nodes/' + ref['node'])
             if (host['metadata'].get('uid') != ref['node_uid']
                     or host.get('status', {}).get('nodeInfo', {}).get('bootID') != ref['boot_id'] or not _ready(host)):
-                raise ValueError('Host identity, boot or readiness changed; no preparation helper is dispatched')
+                raise ValueError('The host, its start-up or its readiness changed, so no preparation helper is started')
             _no_replicas(ref)
             _replacement_health(ref)
             _job(ref, create=True)
             ref['phase'] = 'preparing'
             ops.checkpoint(item)
-            return 'running', 80, 'Unmounting and preparing the evacuated device; open the task log'
+            return 'running', 80, 'Unmounting and preparing the emptied device. Open the task log to follow it.'
         if ref['phase'] == 'preparing':
             job = _job(ref)
             if job.get('status', {}).get('failed'):
                 ref['preparation_log'] = '\n'.join(s.get('text', '') for s in logs(item))[-8000:]
                 ops.checkpoint(item)
-                return 'failed', 80, 'Device preparation failed. Inspect its log; partial changes are retained and erasing is not retried automatically.'
+                return 'failed', 80, 'Device preparation failed. Check its log. Partial changes are kept, and erasing is not retried automatically.'
             if not job.get('status', {}).get('succeeded'):
-                return 'running', 80, 'Preparing the device; helper continues independently of Homestead'
+                return 'running', 80, 'Preparing the device. The helper continues even if Homestead stops.'
             ref['phase'] = 'registering'
             ref['preparation_log'] = '\n'.join(s.get('text', '') for s in logs(item))[-8000:]
             ops.checkpoint(item)
@@ -791,14 +791,14 @@ def progress(item):
             lh = _get(LH + '/nodes/' + ref['node'])
             entry = (lh.get('spec', {}).get('disks') or {}).get(ref['v2_disk'])
             if lh['metadata'].get('uid') != ref['lh_uid'] or entry != _new_disk(ref):
-                raise ValueError('The registered V2 disk configuration changed; inspect it before continuing')
+                raise ValueError('The V2 disk settings changed. Check them before continuing.')
             ds = (lh.get('status', {}).get('diskStatus') or {}).get(ref['v2_disk']) or {}
             if not _ready({'status': ds}) or not _ready({'status': ds}, 'Schedulable') or not ds.get('diskUUID'):
                 return 'running', 95, 'Waiting for Longhorn to report the new V2 block disk ready and schedulable'
             ref['phase'] = 'complete'
             ops.checkpoint(item)
             _cleanup(ref)
-            return 'succeeded', 100, 'Disk is ready for V2 replicas. Existing volumes keep their data engine; choose a V2 storage class to move a volume.'
+            return 'succeeded', 100, 'The disk is ready for V2 volume copies. Existing volumes keep their data engine. Choose a V2 storage class to move a volume.'
         return 'running', item.get('progress', 0), 'Inspect the saved disk preparation task'
     except ValueError as error:
         # Before erase, a blocked check is recoverable without abandoning the
@@ -809,10 +809,10 @@ def progress(item):
 def _no_replicas(ref):
     lh = _get(LH + '/nodes/' + ref['node'])
     if lh['metadata'].get('uid') != ref['lh_uid'] or ref['disk'] in (lh.get('spec', {}).get('disks') or {}):
-        raise ValueError('The old disk entry is present or the host identity changed; no erase is dispatched')
+        raise ValueError('The old disk entry is still there or the host changed, so the disk is not erased')
     probe = {'node': ref['node'], 'status': {'diskUUID': ref['disk_uuid']}, 'spec': ref['original_disk']}
     if any(_on_disk(r, probe) for r in _items(LH + '/replicas')):
-        raise ValueError('A replica still refers to the evacuated disk; no erase is dispatched')
+        raise ValueError('A volume copy still refers to the emptied disk, so the disk is not erased')
     _other_stores(ref['node'], lh, ref['hardware'], None)
     _residual_claims(ref['node'], ref['disk_uuid'])
     _upgrade_idle()
@@ -826,11 +826,11 @@ def _replacement_health(ref):
     for row in ref['volumes']:
         volume = volumes.get(row['volume'])
         if not volume:
-            raise ValueError(row['volume'] + ': tracked volume disappeared; no erase is dispatched')
+            raise ValueError(row['volume'] + ': the volume disappeared, so the disk is not erased')
         if (not _same_volume(volume, row) or volume.get('status', {}).get('state') != 'attached'
                 or volume.get('status', {}).get('robustness') != 'healthy'
                 or len(_rw(inv, row['volume'])) < row['replicas']):
-            raise ValueError(row['volume'] + ': replacement replica health changed; no erase is dispatched')
+            raise ValueError(row['volume'] + ': the health of its new copy changed, so the disk is not erased')
 
 
 def _new_disk(ref):
@@ -849,14 +849,14 @@ def _register(ref):
             raise ValueError('V2 disk name is already used by a different device')
         return
     if any(d.get('path') == desired['path'] for d in disks.values()):
-        raise ValueError('The prepared block device has another Longhorn entry; inspect it before registering')
+        raise ValueError('The prepared block device has another Longhorn entry. Check it before adding the disk.')
     _verify_blank(ref)
     host = _get('/api/v1/nodes/' + ref['node'])
     if host['metadata'].get('uid') != ref['node_uid']:
-        raise ValueError('Host identity changed after preparation; no V2 entry was added')
+        raise ValueError('The host changed after preparation, so no V2 entry was added')
     fresh = _get(LH + '/nodes/' + ref['node'])
     if fresh.get('spec', {}).get('disks', {}) != disks:
-        raise ValueError('Longhorn disk entries changed during verification; checking again')
+        raise ValueError('The Longhorn disk entries changed during the check. Checking again.')
     meta = fresh['metadata']
     ksend('PATCH', LH + '/nodes/' + ref['node'], [
         {'op': 'test', 'path': '/metadata/uid', 'value': ref['lh_uid']},
@@ -886,7 +886,7 @@ def _verify_blank(ref):
         script = script.replace('echo VERIFIED', 'fail() { echo "ERROR $*"; exit 1; }\n' + REGION.verify(facts) + 'echo VERIFIED')
     out, err = HOST.run(ref['node'], script, timeout=60)
     if 'VERIFIED' not in out.splitlines():
-        raise ValueError('The blank device or its completion receipt could not be verified; no V2 entry was added')
+        raise ValueError('The blank device or its completion record could not be checked, so no V2 entry was added')
 
 
 def _cleanup(ref):
@@ -904,8 +904,8 @@ def _cleanup(ref):
 
 def cancel_plan(item):
     can = item['ref']['phase'] in ('evacuating', 'awaiting-erase', 'cancelled')
-    return {'can': can, 'why_not': '' if can else 'Device preparation is already approved; its erase cannot be safely interrupted or forgotten',
-            'mode': 'stop', 'needs': 'admin', 'undo': ['Stop requesting further replica evacuation'],
+    return {'can': can, 'why_not': '' if can else 'Device preparation is already approved. Its erase cannot be stopped safely.',
+            'mode': 'stop', 'needs': 'admin', 'undo': ['Stop moving further volume copies off'],
             'keeps': ['Replacement replicas remain. The original disk stays disabled for new replicas. No device is erased.'], 'severity': 'low'}
 
 
@@ -914,7 +914,7 @@ def cancel_run(item, options):
         raise ValueError(cancel_plan(item)['why_not'])
     ref = item['ref']
     if ref['phase'] == 'cancelled':
-        return 'Evacuation stopped; disk remains mounted and disabled for new replicas'
+        return 'Moving copies off was stopped. The disk stays mounted and takes no new volume copies.'
     host = _get('/api/v1/nodes/' + ref['node'])
     lh = _get(LH + '/nodes/' + ref['node'])
     inv = {'host': host, 'lh': lh, 'node': ref['node'], 'disk': ref['disk'],
@@ -931,7 +931,7 @@ def cancel_run(item, options):
         _patch_disk(inv, desired)
     ref['phase'] = 'cancelled'
     ops.keep_cancel_ref(item)
-    return 'Evacuation stopped; disk remains mounted and disabled for new replicas'
+    return 'Moving copies off was stopped. The disk stays mounted and takes no new volume copies.'
 
 
 def mutation_guard(node, disk=None, device=None):
@@ -941,7 +941,7 @@ def mutation_guard(node, disk=None, device=None):
             if (item.get('kind') == KIND and ref.get('node') == node and not CONFLICTS.settled(item)
                     and (disk is None and device is None or disk is not None and disk in (ref.get('disk'), ref.get('v2_disk'))
                          or device is not None and device in (ref.get('hardware', {}).get('device'), ref.get('hardware', {}).get('by_id'), ref.get('hardware', {}).get('mountpoint'), *ref.get('hardware', {}).get('parents', [])))):
-                raise ValueError('This disk has a saved V2 preparation task; open that task before changing it')
+                raise ValueError('This disk has a saved V2 preparation task. Open that task before changing it.')
 
 
 def tasks():
