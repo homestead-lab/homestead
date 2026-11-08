@@ -36,7 +36,7 @@ test("no Released volume is no row, and an unread list is said, not hidden", () 
   assert.equal(H.advice(base(facts([]))).filter(r => r.id === "released-volumes").length, 0);
   const unknown = H.advice(base({ released: { state: "unknown", error: "forbidden", volumes: [] }, iscsi: { state: "n/a", hosts: [] } }))
     .find(r => r.id === "released-volumes");
-  assert.equal(unknown.title, "Could not read Released volumes");
+  assert.equal(unknown.title, "Released volumes could not be read");
   assert.equal(unknown.detail, "forbidden");
   assert.ok(H.advice({ ...base(), leftovers: null }).some(r => r.id === "unknown:leftovers"));
 });
@@ -53,7 +53,7 @@ test("a host's stale iSCSI sessions are a row on that host, saying what fails an
 
 test("unread instance-managers are said; no probe reporting sessions is no row", () => {
   const unknown = H.advice(base({ released: { state: "ok", volumes: [] }, iscsi: { state: "unknown", error: "forbidden", hosts: [] } }));
-  assert.ok(unknown.some(r => r.id === "iscsi" && r.title === "Could not check hosts' iSCSI sessions"));
+  assert.ok(unknown.some(r => r.id === "iscsi" && r.title === "The hosts' iSCSI sessions could not be checked"));
   assert.equal(H.advice(base({ released: { state: "ok", volumes: [] }, iscsi: { state: "n/a", hosts: [] } })).filter(r => r.id.startsWith("iscsi")).length, 0);
 });
 
