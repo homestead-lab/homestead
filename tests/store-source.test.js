@@ -98,3 +98,45 @@ test("an app's page opened while the catalogue is still loading offers Try again
   assert.match(html, /Try again/);
   assert.match(html, /storeDetails\(/);
 });
+
+function detailsPage(app) {
+  elements = { "#mbody": element() };
+  context.modal = (_title, html) => { elements["#mbody"].innerHTML = html; };
+  context.icon = () => "";
+  context.api = async () => app;
+  return elements["#mbody"];
+}
+
+for (const blocked of [true, false]) {
+  test(`app details render a Boolean blocked=${blocked} profile with its explanation`, async () => {
+    const body = detailsPage({ name: "Example", repo: "example/app:latest", deploy: { app_profile: {
+      blocked, level: "dependency", label: blocked ? "Needs Kubernetes design" : "Dependency review",
+      dependencies: [{ name: "Host container-runtime control" }],
+      notes: ["This template needs a Kubernetes-specific deployment design."],
+    } } });
+    await context.storeDetails("Example|example/app:latest");
+    assert.match(body.innerHTML, /Host container-runtime control/);
+    assert.match(body.innerHTML, /This template needs a Kubernetes-specific deployment design/);
+    assert.match(body.innerHTML, blocked ? /Needs Kubernetes design/ : /Dependency review/);
+    assert.doesNotMatch(body.innerHTML, /reading the template|Try again/);
+  });
+}
+
+test("app details without a compatibility profile still open", async () => {
+  const body = detailsPage({ name: "Example", repo: "example/app:latest", desc: "An example app." });
+  await context.storeDetails("Example|example/app:latest");
+  assert.match(body.innerHTML, /An example app/);
+  assert.doesNotMatch(body.innerHTML, /reading the template|Try again/);
+});
+
+test("a details rendering failure offers retry and a retry can show the app", async () => {
+  const body = detailsPage({ name: "Example", categories: 42 });
+  await context.storeDetails("Example|example/app:latest");
+  assert.match(body.innerHTML, /Try again/);
+  assert.match(body.innerHTML, /storeDetails\(/);
+  assert.doesNotMatch(body.innerHTML, /reading the template/);
+  context.api = async () => ({ name: "Example", categories: [], desc: "Recovered details." });
+  await context.storeDetails("Example|example/app:latest");
+  assert.match(body.innerHTML, /Recovered details/);
+  assert.doesNotMatch(body.innerHTML, /Try again/);
+});

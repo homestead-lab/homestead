@@ -142,49 +142,48 @@ const STORE_LINKS = [["project", "Project"], ["support", "Support"], ["github", 
 window.storeDetails = async key => {
   const summary = STORE_APPS.get(key) || {};
   modal(summary.name || "App", '<div class="empty"><span class="spin2"></span>reading the template</div>', true, "store");
-  let app;
-  try { app = Object.assign({}, summary, await api("/api/appstore/app?key=" + encodeURIComponent(key))); }
-  catch (e) {
+  try {
+    const app = Object.assign({}, summary, await api("/api/appstore/app?key=" + encodeURIComponent(key)));
+    STORE_APPS.set(key, app);
+    const jsKey = esc(JSON.stringify(key));
+    const profile = app.deploy?.app_profile;
+    const facts = [
+      ["Categories", (app.categories || []).join(", ")],
+      ["Maintainer", app.maintainer],
+      ["Added", storeDate(app.first_seen)],
+      ["Updated", storeDate(app.last_update)],
+      ["Downloads", app.downloads ? storeCount(app.downloads) : ""],
+      ["Stars", app.stars ? String(app.stars) : ""],
+      ["Image", app.repo],
+      ["Network", app.network],
+      ["License", app.license],
+    ].filter(([, value]) => value);
+    $("#mbody").innerHTML = `
+      <div class="store-detail-head">${storeIcon(app, "store-detail-icon")}
+        <div class="store-detail-title"><h3>${esc(app.name)}</h3>
+          <div class="dim small">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official container</span>' : ""}</div>
+          <div class="row store-tags">${(app.categories || []).slice(0, 4).map(c => UI.chip(c, "neutral")).join("")}
+            ${app.beta ? UI.chip("beta", "warn") : ""}${app.privileged ? UI.chip("asks for privileged", "bad") : ""}</div></div>
+        <button class="btn pri" onclick="storeInstall(${jsKey})">Configure &amp; deploy</button></div>
+      <div class="row store-links">${STORE_LINKS.filter(([k]) => app.links?.[k]).map(([k, label]) =>
+        `<a class="btn sm" href="${safeHref(app.links[k])}" target="_blank" rel="noopener noreferrer">${label} ${icon("ext")}</a>`).join("")}</div>
+      ${app.spotlight ? `<div class="store-spot"><div class="store-spot-badge"><b>Monthly<br>spotlight</b><span>${esc(app.spotlight.month)}</span></div>
+        <div><b>Why it was picked</b><p>${esc(app.spotlight.reason || "")}</p>${app.spotlight.who ? `<span class="dim xs">— ${esc(app.spotlight.who)}</span>` : ""}</div></div>` : ""}
+      <div class="store-overview">${esc(app.overview || app.desc || "No description provided.")}</div>
+      ${app.comment ? `${UI.callout("warn", { html: `From the catalogue moderators:` }, `${esc(app.comment)}`)}` : ""}
+      ${app.requires ? `<div class="note"><b>Requires:</b> ${esc(app.requires)}</div>` : ""}
+      ${profile ? `${UI.callout(profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` }, `${esc(
+        [...(profile.dependencies || []), ...(profile.notes || [])].slice(0, 4)
+          .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean).join(" · ")
+        || "Homestead reviews its storage, ports and hardware when you configure it.")}`)}` : ""}
+      ${(app.screenshots || []).length ? `<div class="sec">Screenshots</div><div class="store-shots">${app.screenshots.map(src =>
+        `<a href="${safeHref(src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}
+      <div class="sec">Details</div>
+      <div class="store-facts">${facts.map(([label, value]) => `<div><span>${label}</span><b class="${label === "Image" ? "mono" : ""}">${esc(value)}</b></div>`).join("")}</div>`;
+  } catch (e) {
     $("#mbody").innerHTML = UI.error(e, { retry: `storeDetails(${jsArg(key)})`, dialog: true,
       title: e.body?.loading ? "The catalogue is still loading" : "Couldn't read this app" });
-    return;
   }
-  STORE_APPS.set(key, app);
-  const jsKey = esc(JSON.stringify(key));
-  const profile = app.deploy?.app_profile;
-  const facts = [
-    ["Categories", (app.categories || []).join(", ")],
-    ["Maintainer", app.maintainer],
-    ["Added", storeDate(app.first_seen)],
-    ["Updated", storeDate(app.last_update)],
-    ["Downloads", app.downloads ? storeCount(app.downloads) : ""],
-    ["Stars", app.stars ? String(app.stars) : ""],
-    ["Image", app.repo],
-    ["Network", app.network],
-    ["License", app.license],
-  ].filter(([, value]) => value);
-  $("#mbody").innerHTML = `
-    <div class="store-detail-head">${storeIcon(app, "store-detail-icon")}
-      <div class="store-detail-title"><h3>${esc(app.name)}</h3>
-        <div class="dim small">${esc(app.maintainer || "")}${app.official ? ' · <span class="store-official">official container</span>' : ""}</div>
-        <div class="row store-tags">${(app.categories || []).slice(0, 4).map(c => UI.chip(c, "neutral")).join("")}
-          ${app.beta ? UI.chip("beta", "warn") : ""}${app.privileged ? UI.chip("asks for privileged", "bad") : ""}</div></div>
-      <button class="btn pri" onclick="storeInstall(${jsKey})">Configure &amp; deploy</button></div>
-    <div class="row store-links">${STORE_LINKS.filter(([k]) => app.links?.[k]).map(([k, label]) =>
-      `<a class="btn sm" href="${safeHref(app.links[k])}" target="_blank" rel="noopener noreferrer">${label} ${icon("ext")}</a>`).join("")}</div>
-    ${app.spotlight ? `<div class="store-spot"><div class="store-spot-badge"><b>Monthly<br>spotlight</b><span>${esc(app.spotlight.month)}</span></div>
-      <div><b>Why it was picked</b><p>${esc(app.spotlight.reason || "")}</p>${app.spotlight.who ? `<span class="dim xs">— ${esc(app.spotlight.who)}</span>` : ""}</div></div>` : ""}
-    <div class="store-overview">${esc(app.overview || app.desc || "No description provided.")}</div>
-    ${app.comment ? `${UI.callout("warn", { html: `From the catalogue moderators:` }, `${esc(app.comment)}`)}` : ""}
-    ${app.requires ? `<div class="note"><b>Requires:</b> ${esc(app.requires)}</div>` : ""}
-    ${profile ? `${UI.callout(profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` }, `${esc(
-      [...(profile.blocked || []), ...(profile.dependencies || []), ...(profile.notes || [])].slice(0, 4)
-        .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean).join(" · ")
-      || "Homestead reviews its storage, ports and hardware when you configure it.")}`)}` : ""}
-    ${(app.screenshots || []).length ? `<div class="sec">Screenshots</div><div class="store-shots">${app.screenshots.map(src =>
-      `<a href="${safeHref(src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}
-    <div class="sec">Details</div>
-    <div class="store-facts">${facts.map(([label, value]) => `<div><span>${label}</span><b class="${label === "Image" ? "mono" : ""}">${esc(value)}</b></div>`).join("")}</div>`;
 };
 
 /* The port a card links to first: the app's web UI, usually. */
