@@ -483,8 +483,8 @@ window.volumeDelete = async x => {
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
       : UI.callout("ok", "Impact check passed.", p.released ? `This is not the volume ${esc(p.name)} uses now; that one is not changed.`
-        : p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
-        : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
+        : p.orphan ? "The PVC is already gone. Deleting this detached volume removes its data for good."
+        : "Detached, and no app or VM uses it. Choose what happens to its data."),
     p.released ? releasedBesideCurrent(p) : "",
     UI.facts([
       ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
@@ -496,16 +496,16 @@ window.volumeDelete = async x => {
       { state: detached ? "ok" : verifyPending ? "warn" : "bad",
         title: detached ? "Already detached." : verifyPending ? "Longhorn reports detached; safety checks are incomplete." : "Stop and unmount this claim first.",
         detailHtml: verifyPending ? "Refresh the review to verify the remaining checks before deleting." :
-          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the apps and VMs listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+          `Detaching keeps the PVC and data. Homestead does not stop the apps and VMs below for you.${(p.stale_consumers || []).length ? " Finished ones do not hold it." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
-        detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
+        detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> finished, usually an import's copy job. Otherwise Kubernetes could hold the claim in Terminating.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
       : `<div class="ui-empty">${p.inventory_complete === false ? "No app or VM references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
     UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
-        <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
+        <span><b>Delete claim, keep data</b><small>The PV is set to Retain, then the PVC is deleted. Recovering or removing the data later is done in Kubernetes or Longhorn.</small></span></label>
       <label class="volume-delete-option danger ${permanentBlocked ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_data" onchange="volumeDeleteGate()" ${permanentBlocked ? "disabled" : ""}>
-        <span><b>Permanently delete data</b><small>${p.orphan ? "The PVC is already absent. Longhorn and CSI remove the retained backing objects through their normal controllers; finalizers are never forced." : "The PV policy becomes Delete, and the PVC and backing PV are removed."} The Longhorn volume, replicas and ${count(p.snapshots?.count || 0, "on-volume snapshot are", "on-volume snapshots are")} removed; ${count(p.backups?.count || 0, "external backup remains", "external backups remain")}.</small></span></label>
+        <span><b>Permanently delete data</b><small>${p.orphan ? "Longhorn removes what is left in the normal way; finalizers are never forced." : "The PVC and its PV are removed."} The Longhorn volume, replicas and ${count(p.snapshots?.count || 0, "on-volume snapshot are", "on-volume snapshots are")} removed; ${count(p.backups?.count || 0, "external backup remains", "external backups remain")}.</small></span></label>
     </div>`),
     UI.more("Objects affected", UI.facts([
       ["Claim", `<span class="mono">${esc(p.namespace)}/${esc(p.name)}</span> · ${esc(p.phase)} · ${esc(p.requested_storage || "size unknown")}`],

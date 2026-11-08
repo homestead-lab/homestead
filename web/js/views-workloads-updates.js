@@ -202,7 +202,7 @@ const IMAGE_REVIEW = UI.reviewFlow({
     const sameChange = oneWords && oneWords.length && oneWords.every(w => w.join() === oneWords[0].join());
     const unread = rows.filter(r => r.preview.unread).map(({config, preview}) => ["warn", {
       short: `${config.name} is installed by its tag`,
-      more: `Homestead could not read the registry (${preview.unread}), so ${config.version} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`}]);
+      more: `Homestead could not read the registry (${preview.unread}), so the cluster pulls ${config.version} by its tag. If the tag is missing, the old pod keeps serving.`}]);
     $("#mbody").innerHTML = `<div class="update-review">${UI.dialog({ shape: "review",
       subject: one ? { kind: "App", name: one.config.name, where: `${one.config.clusterName ? `${one.config.clusterName} · ` : ""}${one.config.ns}`,
         change: sameChange ? oneWords[0] : null }
@@ -213,7 +213,7 @@ const IMAGE_REVIEW = UI.reviewFlow({
       body: `${one && sameChange ? "" : `<ul class="upd-apps">${apps}</ul>`}${rollback ? "" : '<div id="updNotes"></div>'}`,
       details: `${details}
         ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
-        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`,
+        <p class="ui-help">Each app is checked again before it updates. A failure stops the rest, and so does closing this.</p>`,
       ack: { id: "imageCapacityApprove", sentence: concerns.length || unread.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", onchange: "imageReviewReady()" },
       actions: { primary: { label: rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", onclick: "imageReviewedApply()", id: "imageCapacityApply", disabled: true } },
     })}</div>`;
@@ -400,8 +400,8 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
     };
   const left = notStarted.length;
   const closing = !queueMode ? ""
-    : left ? `<p class="ui-help">Closing ends the queue. ${left === 1 ? "The app not started keeps its" : `The ${left} apps not started keep their`} current image; review ${left === 1 ? "it" : "them"} again to update. Updates already started carry on in Jobs.</p>`
-    : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the queue before the apps still waiting. Updates already started carry on in Jobs.</p>' : "";
+    : left ? `<p class="ui-help">Closing ends the queue: ${left === 1 ? "the app not started keeps its" : `the ${left} apps not started keep their`} image. Started updates carry on in Jobs.</p>`
+    : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the apps still waiting. Started updates carry on in Jobs.</p>' : "";
   // One track across the apps: the one updating fills its segment as it goes
   // through its stages; its stage and detail are said under the track.
   const live = running && states[rolloutKey(running)], st = live && rolloutStages(live);

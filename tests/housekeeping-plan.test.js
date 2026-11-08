@@ -24,7 +24,7 @@ test("no protection plan makes a Longhorn trim job; Housekeeping keeps the snaps
   for (const plan of plans) assert.ok(!plan.jobs.some(j => j.task === "filesystem-trim"), `${plan.id} makes no trim job`);
   const tidy = plans.find(p => p.id === "tidy");
   assert.equal(tidy.jobs.map(j => j.task).join(), "snapshot-cleanup");
-  assert.match(tidy.blurb, /Homestead trims every attached volume itself/);
+  assert.match(tidy.blurb, /Homestead's weekly trim/);
 });
 
 const UNREAD = { total: 1, protected: null, backed_up: null, unprotected: [], groups: ["default"], group_rows: [], clashes: [],

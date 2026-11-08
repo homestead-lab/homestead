@@ -356,9 +356,9 @@ function joinLonghornHtml(g, role) {
   if (role === "tiebreaker") return `<p class="dim small">Not needed: a tiebreaker runs no apps and holds no storage.</p>`;
   const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
   const storage = `<details><summary>Storage setting for the installer</summary>`
-    + (g.storage_path ? `<p class="dim small">This cluster uses the folder below for Longhorn data. If the Homestead installer asks for a storage folder, copy this value exactly. It keeps data in the space prepared for this cluster.</p>${guideCopy(g.storage_path)}`
-      + (g.storage_supported ? "" : `<p class="dim small">This custom folder requires manual storage setup; the guided installer cannot prepare it.</p>`)
-      : `<p class="dim small">The cluster's storage setting could not be read. If the Homestead installer asks for it, follow its instructions to read the value on an existing server. Do not guess a folder.</p>`)
+    + (g.storage_path ? `<p class="dim small">This cluster keeps Longhorn data in this folder. If the installer asks for one, give it exactly this.</p>${guideCopy(g.storage_path)}`
+      + (g.storage_supported ? "" : `<p class="dim small">The installer cannot prepare a custom folder: set it up by hand.</p>`)
+      : `<p class="dim small">The storage folder could not be read. If the installer asks, read it from an existing server; don't guess.</p>`)
     + `</details>`;
   return guideCopy(g.longhorn)
     + `<p class="dim xs">Every host that runs apps needs these, even one that holds no copies. Longhorn's pods keep restarting? See the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;

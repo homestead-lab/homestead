@@ -52,8 +52,8 @@ test("the dialog shows one acknowledgement per drain blocker, with its fix", asy
   await t.c.window.nodePowerReview("host1", "reboot");
   const html = t.html();
   assert.match(html, /Before draining · 2/);
-  assert.match(html, /id="pw_blocker_0"[\s\S]*Drain anyway: 3 orphan records for engines that now run on host2/);
-  assert.match(html, /id="pw_blocker_1"[\s\S]*Drain anyway: Pod apps\/app-0 on host1 has been terminating for 60 min/);
+  assert.match(html, /id="pw_blocker_0"[\s\S]*3 orphan records for engines that now run on host2/);
+  assert.match(html, /id="pw_blocker_1"[\s\S]*Pod apps\/app-0 on host1 has been terminating for 60 min/);
   assert.match(html, /Remove the orphan records: the engines run on host2\./);
   assert.match(html, /Force-delete the &lt;pod&gt;\./);
   assert.doesNotMatch(html, /id="pw_blocker_2"/);

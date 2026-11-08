@@ -355,7 +355,7 @@ finishing, before anything is cordoned:
   volumes still attached to the host that no pod there uses.
 - What Homestead couldn't check ("Homestead couldn't check …"), never left out.
 
-Each has its own **Drain anyway** tick: the normal cordon and drain still run.
+Tick one to drain anyway: the normal cordon and drain still run.
 A forced restart sends no drain and doesn't ask.
 
 **During the drain.** When a disruption budget refuses an eviction because its

@@ -68,8 +68,8 @@ test("the installer command carries the verified storage setting, except for a t
   assert.match(ctx.joinCommandHtml(g, "control-plane"), /pinned\/install.sh[^]*HS_DIST=rke2 HS_ROLE=server HS_LONGHORN_DATA_PATH=\/var\/lib\/longhorn/);
   assert.doesNotMatch(ctx.joinCommandHtml(g, "tiebreaker"), /HS_LONGHORN_DATA_PATH/);
   assert.doesNotMatch(ctx.joinCommandHtml({ ...g, storage_path: "/custom/$(id)" }, "control-plane"), /HS_LONGHORN_DATA_PATH/);
-  assert.match(ctx.joinLonghornHtml(g, "app"), /copy this value exactly[^]*\/var\/lib\/longhorn/);
-  assert.match(ctx.joinLonghornHtml({ ...g, storage_path: null }, "app"), /could not be read[^]*Do not guess/);
+  assert.match(ctx.joinLonghornHtml(g, "app"), /give it exactly this[^]*\/var\/lib\/longhorn/);
+  assert.match(ctx.joinLonghornHtml({ ...g, storage_path: null }, "app"), /could not be read[^]*don.t guess/);
 });
 
 test("a server or tiebreaker is checked before it joins", () => {

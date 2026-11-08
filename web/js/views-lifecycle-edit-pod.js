@@ -188,9 +188,9 @@ window.editLanToggle = async () => {
 /* What a container does when the node it runs on stops answering. */
 const FAILOVER_WORDS = { move: "Move to another host", wait: "Wait for its host", default: "Kubernetes default (5 min)" };
 const FAILOVER_HELP = {
-  move: "About 15 seconds after its host stops answering, it starts on another host - for apps that should come back quickly wherever there is room.",
-  wait: "It stays with its host and starts again when that host is back - for apps tied to that host's hardware, or better restarted where they were.",
-  default: "Kubernetes moves it after five minutes, the default for anything Homestead did not deploy.",
+  move: "Starts on another host about 15 seconds after its host stops answering.",
+  wait: "Waits for its host to come back. For apps tied to that host's hardware.",
+  default: "Kubernetes moves it after five minutes.",
 };
 function failoverSelect(id, current, extra = "", label = "If its host fails") {
   return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
@@ -201,7 +201,7 @@ window.FAILOVER_HELP = FAILOVER_HELP;
 
 /* Which apps fit first when the cluster is short of room. */
 const PRIORITY_HELP = {
-  critical: "Fits first, and whenever it does not fit - after a host fails, or as it restarts, updates or grows - may evict any pod of a lower tier: low apps, and anything with no tier, VMs included - but not Homestead, which joins this tier once any app is in it. For what the house depends on: home automation, passwords, a database, DNS or a tunnel.",
+  critical: "Fits first, and may evict lower tiers to fit, VMs included - never Homestead. For what the house depends on: home automation, passwords, DNS.",
   normal: "Fits in turn, as every app does by default, and may evict low apps to fit.",
   low: "Waits for room and never evicts anything; any other app that needs room evicts it first. For batch work and CI runners.",
 };

@@ -19,8 +19,8 @@ function setup(){
 }
 test('runtime review retains source and OS while displaying accurate logical allocation',async()=>{
   const t=setup();await t.c.runtimeMoveOpen('host-1','store-1');const html=t.fields['#runtimeReview'].innerHTML;
-  assert.match(html,/Move runtime/);assert.match(html,/Host OS/);assert.match(html,/do not represent physical extents/);
-  assert.match(html,/Keep the selected LV and all its original files/);assert.doesNotMatch(html,/Erase contents/);
+  assert.match(html,/Move runtime/);assert.match(html,/Host OS/);assert.match(html,/not their position on it/);
+  assert.match(html,/The LV and its files stay/);assert.doesNotMatch(html,/Erase contents/);
   assert.equal(t.fields['#runtimeStart'].disabled,true);await t.c.runtimeMoveStart();assert.equal(t.sent.length,1);
 });
 test('runtime staging consumes approval once and does not reopen a closed dialog',async()=>{
@@ -30,7 +30,7 @@ test('runtime staging consumes approval once and does not reopen a closed dialog
   const before=t.html();t.close();t.resolve();await pending;assert.equal(t.html(),before);
 });
 test('retirement needs fresh review, exact device and separate acknowledgement',async()=>{
-  const t=setup();await t.c.runtimeRetireReview(t.item.id);assert.match(t.html(),/filesystem, LV boundary and Longhorn disk identity remain/);
+  const t=setup();await t.c.runtimeRetireReview(t.item.id);assert.match(t.html(),/filesystem, LV and disk identity stay/);
   assert.match(t.html(),/Retire files/);t.fields['#runtimeRetireConfirm'].checked=true;t.fields['#runtimeDevice'].value='/dev/dm-0';
   await t.c.runtimeRetire();assert.equal(t.sent.length,1);
   t.fields['#runtimeDevice'].value='/dev/dm-1';const pending=t.c.runtimeRetire();await t.c.runtimeRetire();

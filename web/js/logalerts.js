@@ -204,7 +204,7 @@ window.logAlerts = async () => {
   const list = $("#la_list");
   if (!list) return;
   list.innerHTML = `<div class="ui-stack">
-    ${UI.lead(`Saved log searches that raise an alert. The leader counts each once a minute, reading only what its app wrote since the last count; the alert carries the count, never the lines. ${LOGALERT.rules.length} of ${Number(d.max_rules) || 20}.`)}
+    ${UI.lead(`Saved log searches that raise an alert ${tip("Counted once a minute. An alert carries the count, never the lines.")} ${LOGALERT.rules.length} of ${Number(d.max_rules) || 20}.`)}
     ${bell}${LOGALERT.rules.length ? logAlertStale(d.counted_at) : ""}
     ${LOGALERT.rules.length ? `<div class="la-rules">${LOGALERT.rules.map(r => logAlertRow(r, raised.has(r.id))).join("")}</div>`
       : UI.empty(can("operator") ? "No log alerts yet. Search the logs, then choose Alert on this search." : "No log alerts yet.")}
