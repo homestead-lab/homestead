@@ -297,7 +297,7 @@ handing out addresses: add some under **Networking → Workload VIPs**. See
 
 **New hosts cannot join, though the dashboard works.** Something else is on the
 cluster's own address - the VIP hosts join through on port 9345. Homestead
-names any app sitting there on **Networking** and in **Settings → Homestead →
+names any app using it on **Networking** and in **Settings → Homestead →
 Addresses**; give each an address of its own (**Edit → Network**). If
 Homestead's own shared address (`LB_IP` on its Deployment) is the cluster's
 address, change it to a free one. Homestead no longer offers the cluster's

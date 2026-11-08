@@ -144,7 +144,7 @@ the run goes on. Choose
 weekly window install updates instead.
 
 The node's **Disks** card draws each disk's partition table to scale - each
-partition's size, filesystem and mount, what sits on it (LVM, RAID) and space
+partition's size, filesystem and mount, what is on it (LVM, RAID) and space
 left unallocated.
 
 ![Node detail](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-node-detail.jpg)

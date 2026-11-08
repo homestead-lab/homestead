@@ -46,7 +46,7 @@ Also have ready, on your home network:
    IPMI) can mount the ISO as virtual media instead.
 3. Boot the machine from it and choose **Create a new Harvester cluster**.
 4. Work through the screens:
-   - **Installation disk** - the SSD Harvester lives on. Its free space also
+   - **Installation disk** - the SSD Harvester is installed on. Its free space also
      holds volumes unless you give Longhorn other disks later.
    - **Hostname** - short and lower-case, e.g. `harvester-node1`.
    - **Management network** - the network card on your LAN, a **static**

@@ -128,7 +128,7 @@ function renderIpam() {
         <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
       <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`;
   if (!data.subnets.length) {
-    return networkPage("ip", `<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
+    return networkPage("ip", `<div class="empty ipam-empty"><b>No subnets yet.</b> Add the cluster's LAN, with its DHCP range, and Homestead fills in what the cluster uses.
       <div class="row" style="justify-content:center;margin-top:12px">${(data.suggested || []).map(cidr =>
         `<button class="btn pri" data-need="operator" onclick="ipamSubnets(${jsq(cidr)})">Add ${esc(cidr)}</button>`).join("")}
         <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`, { actions, actionsClass: "ipam-head-acts" });

@@ -688,7 +688,7 @@ on a schedule. VMs have the same, in their own menu.
 ## Scheduled jobs
 
 **Schedules** lists the CronJobs in every namespace, Homestead's own first: an
-app's nightly backup applied by Flux or Helm sits beside the ones made here.
+app's nightly backup applied by Flux or Helm is listed beside the ones made here.
 Each row says when it last ran and how that run ended - succeeded, failed (with
 Kubernetes' reason), running, never run - and when it last succeeded, from the
 Jobs it started. **did not run** means a run it was due to start has not started

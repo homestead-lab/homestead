@@ -76,7 +76,7 @@ and a boot disk:
   later as a CD-ROM.
 - **Root password** - set through cloud-init, so a cloud image has a login
   from its first boot. Optional for an imported disk that already has one.
-- **Storage class** - on Harvester, a disk from an image lives on that image's
+- **Storage class** - on Harvester, a disk from an image uses that image's
   own class, and every disk can live-migrate between hosts. On other clusters
   the disk goes on the class you pick; on local-path the VM stays on the host
   its disk is on.
@@ -118,7 +118,7 @@ On a **VM network bridged to the LAN** it is a machine there like any other:
 choose **Address → One of its own** and pick one of the free addresses
 [IP addresses](Networking#ip-addresses) knows of in that subnet - outside the
 DHCP range and the VIP pools. It is written into cloud-init's network config
-(matched to the VM's MAC, so it lands on the right interface whatever the
+(matched to the VM's MAC, so it is set on the right interface whatever the
 guest calls it), checked against everything already on the network, and
 recorded in IP addresses under the VM's name. Cloud-init - the password
 included - is kept in a Secret, not in the VM's own definition.

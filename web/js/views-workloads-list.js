@@ -452,7 +452,7 @@ function startReview(plan, { what = "Starts", name, kind = "", where: place = ""
       ${reservations.length ? `<ul class="ui-list">${reservations.join("")}</ul>` : ""}
       ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
       ${details}
-      <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`,
+      <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change which host it runs on. The server checks again before anything starts.</p>`,
     ack: problems.length ? { id: ackId, sentence: reviewAck(what), onchange: onAck } : null,
     actions });
 }

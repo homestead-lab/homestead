@@ -67,8 +67,7 @@ function objectStoreCard(store, target) {
     ${store.reachable_off_cluster ? "" : `<div class="note" style="margin-top:12px">
       <b>Only this cluster can read it.</b> The store has no LAN address, so another cluster cannot
       restore from these backups. Give its Service an address to migrate apps elsewhere.</div>`}
-    <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket lives on
-      the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
+    <div class="note" style="margin-top:12px"><b>This is not disaster recovery.</b> The bucket is stored on the same Longhorn storage it protects, so it survives a lost app or VM or a bad upgrade, not a lost
       cluster. It exists so an app or VM can be rebuilt somewhere else.</div>
   </div>`;
 }

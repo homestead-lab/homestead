@@ -32,3 +32,13 @@ test("no dialog or notice title is escaped twice", () => {
     .map((line, n) => twice.test(line) ? `${file}:${n + 1}` : "").filter(Boolean));
   assert.deepEqual(found, [], "pass the plain name; use { html } for a notice title with markup");
 });
+
+// Say where things are plainly: a volume is stored on a disk, an app runs on
+// a host - nothing "sits", "lives" or "lands" anywhere in what a person reads.
+test("no visible text says where something sits, lives or lands", () => {
+  const { prose } = require("./helpers/prose");
+  const placed = /\b(sits?|sitting|lives (?:on|in)|lands? on|landing)\b/i;
+  const found = files.flatMap(file => prose(fs.readFileSync(file, "utf8"))
+    .filter(piece => placed.test(piece.text)).map(piece => `${file}: ${piece.text.replace(/\s+/g, " ").slice(0, 80)}`));
+  assert.deepEqual(found, [], "say it is stored on, runs on, is in or is written to");
+});
