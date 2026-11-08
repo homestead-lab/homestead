@@ -21,10 +21,10 @@ function probeAge(seconds) {
 function probeProblem(n) {
   const p = n.probe || {};
   if (p.state !== "unreachable") return "";
-  return `The probe on ${n.name} hasn't answered the last ${p.misses} times` + (p.last_ok ? `; its last reading is ${probeAge(p.age_s)} old` : "");
+  return `The probe on ${n.name} has not responded the last ${p.misses} times.` + (p.last_ok ? ` Its last reading is ${probeAge(p.age_s)} old.` : "");
 }
 /* The kubelet's filesystem, which may not be the system drive's. */
-const NODE_FS_TIP = "The filesystem the kubelet reports for this host; Storage lists each drive.";
+const NODE_FS_TIP = "The host's own file system, as Kubernetes reports it. Storage lists each drive.";
 /* The processor, as the node probe reads it, with its cores. */
 const cpuSummary = n => [n.temps?.cpu_model, n.cpu_cap != null ? `${n.cpu_cap} core${n.cpu_cap == 1 ? "" : "s"}` : ""].filter(Boolean).map(esc).join(" · ") || "—";
 const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
@@ -90,7 +90,7 @@ function paintHealthPill(h) {
   pill.dataset.state = state;
   const checked = age === null ? "" : age < 10 ? "checked just now" : age < 60 ? `checked ${age}s ago` : `checked ${fmtAgo(age)}`;
   // An "unknown" verdict that says why (a part not read, #1002) says so.
-  pill.title = unread ? h?.summary || "Homestead could not read the cluster's health just now"
+  pill.title = unread ? h?.summary || "Homestead could not read the cluster's health"
     : [h.summary, checked].filter(Boolean).join(" · ");
 }
 /* The pill as index.html draws it, before any answer: on sign-out, so the
@@ -129,7 +129,7 @@ async function viewDash() {
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
   window.refreshPwaAlerts?.();
   paintHealthPill({ state: o.health_state || o.health, summary: o.health_summary, age_s: o.age_s });
-  $("#lbinfo").textContent = o.lb_ip ? "VIP " + o.lb_ip : "";
+  $("#lbinfo").textContent = o.lb_ip ? "Virtual IP " + o.lb_ip : "";
   const sv = $("#setVip"), sn = $("#setNodes");
   if (sv) sv.textContent = o.lb_ip || "—";
   if (sn) sn.textContent = `${o.nodes_ready}/${o.nodes_total}`;
@@ -140,7 +140,7 @@ async function viewDash() {
   const sampleAge = sampledAt ? Math.max(0, Date.now() / 1000 - sampledAt) : 0;
   const chartWindow = H.step === 300 ? "Last hour · saved five-minute samples" : "Last hour · sampled every 30 seconds";
   const noChart = histRead?.unread
-    ? `<div class="empty small">Could not read the recorded metrics: ${esc(histRead.unread)}</div>`
+    ? `<div class="empty small">The recorded metrics could not be read. ${esc(histRead.unread)}</div>`
     : '<div class="empty small">Waiting for recorded metrics</div>';
   const netNow = o.nodes.reduce((s, n) => s + (n.rx_mbps || 0), 0);
   const txNow = o.nodes.reduce((s, n) => s + (n.tx_mbps || 0), 0);
@@ -178,7 +178,7 @@ async function viewDash() {
       </div>
     </div>`,
     storage: `    <div class="card flat storagecard">
-      <div class="ctitle">Storage</div><div class="csub">Longhorn capacity and replica health</div>
+      <div class="ctitle">Storage</div><div class="csub">Longhorn capacity and the health of volume copies</div>
       ${st ? `<div class="storbody">
       <div class="stordonut">${segDonut(storParts, st.volumes, "volumes", 128)}</div>
       <div class="storstats">
@@ -190,11 +190,11 @@ async function viewDash() {
           ${st.degraded || st.faulted ? `· ${UI.chip(`${st.degraded + st.faulted} unhealthy`, st.faulted ? "bad" : "warn")}` : `· ${UI.chip("all healthy", "ok")}`}</div>
         ${tight.length ? `<a class="tag ${tight.some(n => n.level === "crit") ? "bad" : "warn"} lh-tight" onclick="go('storage')"
           data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GiB allocated, room for a ${n.room_gb} GiB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}
-        ${capRead?.unread && STATE.platform?.longhorn === true ? `<div class="csub" style="margin-top:6px">${UI.chip("Could not read Longhorn's allocation limits", "warn")}
+        ${capRead?.unread && STATE.platform?.longhorn === true ? `<div class="csub" style="margin-top:6px">${UI.chip("Longhorn's allocation limits could not be read", "warn")}
           a host near its limit is not flagged: ${esc(capRead.unread)}</div>` : ""}</div>
       </div></div>`
-      : stRead?.unread ? UI.callout("warn", "Could not read storage", esc(stRead.unread))
-      : '<div class="empty">Storage figures aren\'t available yet.</div>'}
+      : stRead?.unread ? UI.callout("warn", "Storage could not be read", esc(stRead.unread))
+      : '<div class="empty">Storage figures are not available yet.</div>'}
     </div>`,
     cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
     memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
@@ -211,7 +211,7 @@ async function viewDash() {
       title: o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded", text: o.health_summary,
       lines: (o.health_issues || []).slice(0, 4).map(x => `${x.kind} ${x.name}: ${x.reason}`),
       action: `<button class="btn sm" onclick="HealthInsights.open('health')">Review</button>` },
-    hist === null ? { title: "Chart history could not be loaded", text: "Current overview values are shown; history will retry on the next refresh." }
+    hist === null ? { title: "Chart history could not be loaded", text: "Current values are shown. The history is loaded again at the next refresh." }
       : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? { title: `Charts last sampled ${fmtAgo(sampleAge)}`, text: "Check Live charts in Settings → About." } : null,
     Dashboard.notice(),
   ])}
@@ -233,7 +233,7 @@ function dashboardAge(o) {
   if (typeof age !== "number") return "";
   if (age < 10) return ` · <span class="dim">updated just now</span>`;
   if (age < 60) return ` · <span class="dim">updated ${age}s ago</span>`;
-  return ` · ${UI.chip(`updated ${fmtAgo(age)}`, "warn", { tip: "The cluster has not answered since: these are the last numbers Homestead read" })}`;
+  return ` · ${UI.chip(`updated ${fmtAgo(age)}`, "warn", { tip: "The cluster has not responded since then. These are the last figures Homestead read." })}`;
 }
 
 /* Whether metrics-server's CPU and memory figures on Hosts, Containers,
@@ -252,7 +252,7 @@ function metricsNotice(rows) {
   if (m.state === "absent")
     return ` · <span class="dim" data-tip="metrics-server is not installed in this cluster, so there are no CPU or memory figures to show">no CPU or memory figures</span>`;
   if (m.state === "waiting")
-    return ` · <span class="dim" data-tip="Homestead has just started and is reading metrics-server for the first time: CPU and memory figures follow within seconds">reading CPU and memory…</span>`;
+    return ` · <span class="dim" data-tip="Homestead has just started and is reading CPU and memory use for the first time. The figures appear within seconds.">Reading CPU and memory…</span>`;
   return "";
 }
 
@@ -279,7 +279,7 @@ function nodeHealth(n) {
   const probe = probeProblem(n);
   const tone = critical ? "bad" : issues.length || probe || n.schedulable === false || hostOs ? "warn" : "ok";
   const status = !ready ? stateWords(n.status) || "Not ready" : issues.length ? "Drive warning"
-    : probe ? "Probe not answering" : n.schedulable === false ? "Cordoned" : hostOs ? "Host OS warning" : "Ready";
+    : probe ? "Probe not responding" : n.schedulable === false ? "Not taking new apps" : hostOs ? "Host OS warning" : "Ready";
   return { tone, status, issues: probe ? [...issues, probe] : issues, ready };
 }
 /* The node page's Storage line: its drives, any with a warning, any unused. */
@@ -373,8 +373,8 @@ window.nodeUptimePaint = async n => {
     : UI.chip(`${n.status || "Down"} now`, "bad");
   const declared = window.hostMaintenanceLine?.(u) || "";
   const head = `<div class="between"><div class="ctitle">Uptime</div><div class="row" style="gap:8px">${declared}${now}</div></div>`;
-  if (all?.unread) { host.innerHTML = `${head}<div class="dim small">Could not read uptime: ${esc(all.unread)}</div>`; return; }
-  if (!u) { host.innerHTML = `${head}<div class="dim small">No samples yet: Homestead records one every five minutes.</div>`; return; }
+  if (all?.unread) { host.innerHTML = `${head}<div class="dim small">The uptime could not be read. ${esc(all.unread)}</div>`; return; }
+  if (!u) { host.innerHTML = `${head}<div class="dim small">No measurements yet. Homestead records one every five minutes.</div>`; return; }
   const tone = uptimeTone;
   // Maintenance Homestead caused, or Harvester's maintenance mode, is listed
   // as itself; an outage inside it is not listed again (#535).
@@ -412,19 +412,19 @@ window.nodeUptimePaint = async n => {
 };
 
 /* What falls to this node rather than another: the addresses kube-vip has
-   it announce - the management VIP hosts join through among them - and the
+   it announce - the management virtual IP hosts join through among them - and the
    shared volumes whose share manager runs here. */
 function nodeDutyTags(n) {
   const d = n.duties || {};
   const tags = [];
-  if ((d.management_vip || []).length) tags.push(`<span class="tag duty info" data-tip="This host answers for the cluster's management address - the dashboard and hosts joining. If it fails, another host takes the address within seconds.">management VIP ${esc(d.management_vip.join(", "))}</span>`);
-  if (d.control_plane_vip) tags.push('<span class="tag duty info" data-tip="This host holds the control-plane address the Kubernetes API answers on">API VIP</span>');
-  if ((d.rwx || []).length) tags.push(`<span class="tag duty" data-tip="Longhorn serves these shared (RWX) volumes from this host: ${esc(d.rwx.join(", "))}. If it fails they pause until their share manager starts elsewhere">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
+  if ((d.management_vip || []).length) tags.push(`<span class="tag duty info" data-tip="This host holds the cluster's management virtual IP, used by the dashboard and by hosts joining. If it fails, another host takes the address within seconds.">management virtual IP ${esc(d.management_vip.join(", "))}</span>`);
+  if (d.control_plane_vip) tags.push('<span class="tag duty info" data-tip="This host holds the virtual IP of the Kubernetes API.">API virtual IP</span>');
+  if ((d.rwx || []).length) tags.push(`<span class="tag duty" data-tip="Longhorn serves these shared volumes from this host: ${esc(d.rwx.join(", "))}. If the host fails, they pause until Longhorn serves them from another host.">serves ${d.rwx.length} shared volume${d.rwx.length === 1 ? "" : "s"}</span>`);
   return tags.join("");
 }
 window.nodeDutyTags = nodeDutyTags;
 
-/* The node's own address and each VIP it answers for right now - the ones
+/* The node's own address and each virtual IP it answers for right now - the ones
    that move to another node if this one goes down. */
 function nodeAddressTags(n) {
   const own = [...new Set([n.addresses?.InternalIP, n.addresses?.ExternalIP].filter(Boolean))];
@@ -433,13 +433,13 @@ function nodeAddressTags(n) {
   // The mono wrapper sets the chip's font: an address reads as one.
   // .ui-chip has no margin, and three of the four places that show these have no gap: a space keeps them apart.
   return [...own.map(ip => `<span class="mono">${UI.chip(ip, "neutral", { tip: `${n.name}'s own address. Services k3s's ServiceLB publishes answer here too` })}</span>`),
-    ...vips.map(ip => `<span class="mono">${UI.chip(`VIP ${ip}`, "info", { tip: `${n.name} answers for VIP ${ip} now. If it goes down another host takes the address over` })}</span>`)].join(" ");
+    ...vips.map(ip => `<span class="mono">${UI.chip(`Virtual IP ${ip}`, "info", { tip: `${n.name} holds the virtual IP ${ip}. If it goes down, another host takes over the address.` })}</span>`)].join(" ");
 }
 
 /* A node at a glance. The head is the same shape on every card - name, roles
    and how long it has been up on two lines, then thirty days of uptime - so
    the meters below line up across a row; what falls to one node alone (a
-   VIP, shared volumes it serves) sits in the footer with its hardware. */
+   virtual IP, shared volumes it serves) sits in the footer with its hardware. */
 function nodeCard(n) {
   const dots = "<i></i>".repeat(Math.min(n.pods_sys, 80)) + '<i class="wl"></i>'.repeat(Math.min(n.pods_wl, 40));
   const bad = n.status !== "Ready";
@@ -631,11 +631,11 @@ function nodeUptimeStrip(n) {
   // was some, so a 100% never hides it; the share Ready in the tip.
   const raw = u?.windows?.["30d"], month = u?.windows_excluding_maintenance?.["30d"] ?? raw;
   const kept = u?.maintenance_s?.["30d"] || 0, outs = (u?.outages || []).filter(o => !o.maintenance).length;
-  const tip = remote ? "Open this host to view its cluster’s uptime history"
-    : unread ? `Could not read uptime: ${unread}${u ? ". Showing the last reading" : ""}` : u
+  const tip = remote ? "Open this host to see its cluster’s uptime history"
+    : unread ? `The uptime could not be read. ${unread}${u ? " The last reading is shown." : ""}` : u
     ? [kept ? `Ready ${uptimePct(raw)} of the last 30 days; ${uptimeDuration(kept)} of planned maintenance left out` : "",
-       outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded - open the host for when` : "No outage recorded"].filter(Boolean).join(". ")
-    : "No samples yet: Homestead records one every five minutes";
+       outs ? `${outs} outage${outs === 1 ? "" : "s"} recorded. Open the host to see when.` : "No outage recorded"].filter(Boolean).join(". ")
+    : "No measurements yet. Homestead records one every five minutes.";
   return `<div class="node-upstrip" data-tip="${esc(tip)}">
     <span class="dim xs">UPTIME</span>
     <div class="uptime-strip mini" aria-label="Each of the last 30 days">${days.length
@@ -644,7 +644,7 @@ function nodeUptimeStrip(n) {
       : "<i></i>".repeat(30)}</div>
     <b class="small mono uptime-${uptimeTone(month)}">${month == null ? "—" : uptimePct(month)}</b><span class="dim xs">30d${kept
       ? ` · ${uptimeDuration(kept)} maintenance` : ""}</span>${unread
-      ? `<span class="dim xs uptime-unread">Could not read uptime: ${esc(unread)}${u ? " · last reading shown" : ""}</span>` : ""}</div>`;
+      ? `<span class="dim xs uptime-unread">The uptime could not be read. ${esc(unread)}${u ? " The last reading is shown." : ""}</span>` : ""}</div>`;
 }
 
 /* A line per disk: its name, or its device; what it is - the system drive,
@@ -726,7 +726,7 @@ function nodeWorkloadChips(n) {
         ${UI.button("Clear", `nodePickAll(${jsArg(n.name)},false)`, { kind: "sm" })}
         ${UI.button("Move selected…", `nodeMoveSelected(${jsArg(n.name)})`, { kind: "sm pri", disabled: !picked.size, attrs: 'data-need="operator"' })}
         ${UI.button("Done", `nodeSelect(${jsArg(n.name)},false)`, { kind: "sm" })}</div>`
-    : `<div class="dim xs" style="margin-top:8px">Click one to move it to another host, or ${UI.button("Select", `nodeSelect(${jsArg(n.name)},true)`, { kind: "sm" })} several.</div>`;
+    : `<div class="dim xs" style="margin-top:8px">Click an app to move it to another host, or ${UI.button("Select several", `nodeSelect(${jsArg(n.name)},true)`, { kind: "sm" })}.</div>`;
   return `<div onkeydown="nodeChipsKey(event,${jsq(n.name)})"><div id="nodeChips">${chips}</div>${bar}</div>`;
 }
 window.nodeWorkloadChips = nodeWorkloadChips;
@@ -790,38 +790,38 @@ async function nodePage(name) {
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
         ${fact("CPU", cpuSummary(n))}
         ${fact("Serves", nodeDutyTags(n) || "—")}
-        ${fact("Takes new work", n.schedulable ? "yes" : UI.chip("cordoned", "warn"))}
+        ${fact("Takes new apps", n.schedulable ? "yes" : UI.chip("no", "warn", { tip: "The host is cordoned: it takes no new apps." }))}
       </div>${odd.length ? `${UI.callout("warn", "", `${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}`, { attrs: 'style="margin-top:10px"' })}` : ""}</div>`],
     ["workloads", "Apps and VMs", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
-      <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
+      <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} apps · ${n.pods_sys} system components`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div id="nodeChipsCard">${(nodeRemember(n), nodeWorkloadChips(n))}</div></div>`],
     ["storage", "Storage", nodeStorageLine(n, drives, unused), `
       <div class="card flat" id="nodeDrive" hidden></div>
       <div id="nodeDrives" class="node-drives">
-      <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and Longhorn's storage on it</div>
+      <div class="card flat"><div class="ctitle">Drives</div><div class="csub">Every drive on this host, and the Longhorn storage on it</div>
         <div id="nodeDisks" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading disks</div></div></div>
-      <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
+      <div class="card flat"><div class="ctitle">Disk activity ${tip("Live disk throughput and drive health on this host, reported by the node probe.")}</div>
         <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div></div>`],
     ["hardware", "Hardware", esc([hwNames.join(", "), nodeTemp(n).value != null ? `${nodeTemp(n).label} ${nodeTemp(n).text}` : ""].filter(Boolean).join(" · ") || "none defined"), `
-      <div class="card flat">${UI.moduleHeader(`Hardware for apps`, `What placement checks look for before a container moves or starts`, `<button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button>`)}
-        <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is defined.</span>'}</div></div>
+      <div class="card flat">${UI.moduleHeader(`Hardware for apps`, `Devices that apps can use on this host, checked before an app moves or starts`, `<button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button>`)}
+        <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is set up.</span>'}</div></div>
       <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
         <div class="pt-body" style="margin-top:10px"></div></div>
       <div class="card flat"><div class="ctitle">Temperatures</div>
         <div class="node-chips" style="margin-top:10px">${n.temps && n.temps.sensors ? ([...(n.temps.hwmon || []), ...(n.temps.thermal || [])].sort((a, b) => b.celsius - a.celsius).slice(0, 14)
           .map(t => UI.chip(`${t.chip ? t.chip + " " : ""}${t.name} ${t.celsius}°`, tempTag(t.celsius) || "neutral")).join("")
           || `<span class="small">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}°C</b> · hottest sensor <b class="${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}°C</b>${tempSource(n.temps)}</span>`)
-          : `<span class="dim small">No thermal data: it comes from the node probe. <a class="linkish" data-need="admin" onclick="probeInstallConfirm()">Install it</a></span>`}</div></div>`],
-    ["network", "Network", `${(n.rx_mbps || 0).toFixed(1)} Mb/s in${vips.length ? ` · ${vips.length} VIP${vips.length === 1 ? "" : "s"}` : ""}`, `
+          : `<span class="dim small">No temperature data. It comes from the node probe. <a class="linkish" data-need="admin" onclick="probeInstallConfirm()">Install the node probe</a></span>`}</div></div>`],
+    ["network", "Network", `${(n.rx_mbps || 0).toFixed(1)} Mb/s in${vips.length ? ` · ${vips.length} virtual IP${vips.length === 1 ? "" : "s"}` : ""}`, `
       <div class="card flat"><div class="about-grid node-facts">
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
         ${fact("Interface", `<span class="mono">${esc(n.net_iface || "—")}</span>`)}
         ${fact("In / out now", `<span class="mono">${(n.rx_mbps || 0).toFixed(2)} / ${(n.tx_mbps || 0).toFixed(2)} Mb/s</span>`)}
         ${fact("In / out since boot", `<span class="mono">${n.rx_total_gb || 0} / ${n.tx_total_gb || 0} GiB</span>`)}
       </div></div>
-      <div class="card flat"><div class="ctitle">Addresses it answers for</div><div class="csub">Its own, and the VIPs that move to another host if it goes down</div>
+      <div class="card flat"><div class="ctitle">Addresses</div><div class="csub">The host's own address, and the virtual IPs it holds, which move to another host if it goes down</div>
         <div style="margin-top:10px">${nodeAddressTags(n) || "—"}</div></div>
-      <div class="card flat" id="nodePorts"><div class="ctitle">Ports ${tip("Each network port's link, speed, errors and bond, read from the host by the node probe")}</div><div class="csub">Link, speed and errors, and what each port carries</div>
+      <div class="card flat" id="nodePorts"><div class="ctitle">Ports ${tip("Each network port's link, speed, errors and bond, read from the host by the node probe.")}</div><div class="csub">Link, speed and errors, and what each port carries</div>
         <div class="ports-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading ports</div></div></div>`],
     ["hostos", "Host OS", esc(n.os || "the host's own system"), `
       <div class="card flat" id="nodeHostOs"><div class="ctitle">Updates and services</div><div class="csub">Updates, restarts and services on the host itself</div>
@@ -936,7 +936,7 @@ window.smartDisk = async (node, disk) => {
       ${health.life_basis ? `<div class="drow"><div class="dl">Life measured from</div><div class="dv">${esc(health.life_basis)}</div></div>` : ""}
       <div class="drow"><div class="dl">Firmware</div><div class="dv mono">${esc(s.firmware || "—")}</div></div>
       <div class="drow"><div class="dl">SMART enabled</div><div class="dv">${s.smart_enabled == null ? "not reported" : s.smart_enabled ? "yes" : "no"}</div></div>
-      <div class="drow"><div class="dl">Drive's own health check ${tip("smartctl's overall-health bit. Drives report PASSED until failure is imminent, which is why Homestead judges the counters as well.")}</div>
+      <div class="drow"><div class="dl">Drive's own health check ${tip("The drive's own overall health result. Drives report PASSED until they are about to fail, so Homestead also checks the counters.")}</div>
         <div class="dv">${UI.chip(s.health || "not reported", smartTone(s.health) || "neutral")}</div></div>
       <div class="sec">Self-test history</div>
       ${tests.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Test</th><th>Result</th><th>Drive hours</th></tr></thead><tbody>${tests.map(t => `<tr><td>${esc(t.type || "Self-test")}</td><td>${UI.chip(t.status || "Unknown", smartTestTone(t.status) || "neutral")}</td><td class="mono">${esc(t.lifetime_hours ?? "—")}</td></tr>`).join("")}</tbody></table></div>` : '<div class="empty small">The drive has no self-test history.</div>'}
@@ -944,7 +944,7 @@ window.smartDisk = async (node, disk) => {
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'short')">Short test</button>
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>
-      <div class="note"><b>USB and NVMe caveat.</b> Some USB bridges hide SMART commands; NVMe exposes different counters from ATA/SATA. Homestead shows unsupported values explicitly instead of treating them as zero.</div>`;
+      <div class="note"><b>USB and NVMe drives.</b> Some USB adapters hide drive health data, and NVMe drives report different counters from SATA drives. Homestead shows values a drive does not report as unsupported, not as zero.</div>`;
   } catch (e) { target.innerHTML = UI.error(e, { retry: `smartDisk(${jsArg(node)},${jsArg(disk)})`, dialog: target.id === "mbody" }); }
 };
 
@@ -952,12 +952,12 @@ window.smartDisk = async (node, disk) => {
    granted to it; the other must be privileged to reach the drives at all, so
    installing it is stated plainly and asked for rather than assumed. */
 window.probeInstallConfirm = () => childModal("Install the node probe?", `
-  <p>The probe runs one pod on every host and reports what Kubernetes does not:
-    temperatures, host devices, per-disk throughput, and SMART drive health.</p>
-  <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
-    <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
-    capability, runs with a read-only root and cannot escalate privilege.</div>
-  ${UI.callout("warn", { html: `SMART needs a privileged container to read drive health` }, `It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}`)}
+  <p>The probe runs on every host and reports what Kubernetes does not:
+    temperatures, devices, throughput for each disk, and drive health.</p>
+  <div class="note"><b>Monitoring part.</b> Reads <span class="mono">/sys</span>,
+    <span class="mono">/proc</span> and <span class="mono">/dev</span> without changing them, has no extra
+    permissions, and runs with a read-only system.</div>
+  ${UI.callout("warn", { html: `Reading drive health needs extra permissions` }, `The part that reads drive health runs with extra permissions, but with a read-only system, isolated from other processes, and only answers signed requests. ${tip("Direct access to the drives is needed to read their health. Without it, drive health is not available.")}`)}
   ${UI.actions(`<button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not now</button>`)}`);
 
@@ -972,7 +972,7 @@ window.probeInstall = async () => {
 
 window.probeRemove = async () => {
   if (!(await ask("Remove the node probe from every host?" + String.fromCharCode(10, 10)
-      + "Temperatures, drive health and disk throughput stop being reported.", { title: "Remove the node probe", ok: "Remove", danger: true }))) return;
+      + "Temperatures, drive health and disk throughput are no longer reported.", { title: "Remove the node probe", ok: "Remove node probe", danger: true }))) return;
   try {
     const result = await api("/api/node/probe/remove", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: "{}" });
@@ -985,19 +985,19 @@ window.allocationProbeSettings = async () => {
   try {
     const current = await api("/api/node/probe/allocation");
     window._allocationProbeReview = current;
-    const capacity = current.capacity || {blocked:true, blockers:["Capacity is unavailable. Refresh before enabling."], warnings:[]};
+    const capacity = current.capacity || {blocked:true, blockers:["The capacity is not available. Refresh before turning this on."], warnings:[]};
     childModal("VM placement checks", `
-      <p>Checks whether dedicated CPUs and memory are available together before starting a NUMA VM.</p>
+      <p>Checks that dedicated CPUs and memory are available together before a NUMA VM starts.</p>
       <div class="note">${esc(current.detail || "Status unavailable")}</div>
-      ${!current.installed ? '<p>Install the node probe first in Cluster → Add-ons.</p>' : `
-      <p>Uses an extra 32–96 MiB RAM per host. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
+      ${!current.installed ? '<p>Install the node probe first, under Cluster → Add-ons.</p>' : `
+      <p>Uses an extra 32 to 96 MiB of memory on each host. Saving briefly restarts host monitoring. Apps and VMs are not restarted.</p>
       ${UI.notices(capacity.blockers.map(text => ["warn", text]))}
-      ${capacity.warnings.length ? `${UI.notices(capacity.warnings.map(text => ["warn", text]))}<label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these capacity warnings.</span></label>` : ""}
+      ${capacity.warnings.length ? `${UI.notices(capacity.warnings.map(text => ["warn", text]))}<label class="vip-check"><input id="allocationProbeCapacity" type="checkbox"><span>Continue despite these warnings</span></label>` : ""}
       <details class="vm-placement-advanced"><summary>Advanced · host access and socket location</summary>
-      <p class="dim small">The helper runs as root with no Linux capabilities and a read-only filesystem. It reads kubelet allocations through a dedicated host socket, authenticated with a separate key. The socket mount is read-only, but permits RPC calls; this helper only implements read operations. It receives no Kubernetes API token.</p>
-      <label class="f">Kubelet socket directory ${tip("Use the kubelet root directory’s pod-resources subdirectory. It must already exist on every selected probe host and contain kubelet.sock. Custom k3s/RKE2 installations may use a different root; do not enter the whole kubelet directory.")}
+      <p class="dim small">The helper runs as root, without extra Linux capabilities and with a read-only file system. It reads Kubernetes' CPU and memory allocations through a host socket, using a separate key. It only reads, and has no access to the Kubernetes API.</p>
+      <label class="f">Kubelet socket directory ${tip("The pod-resources folder inside the kubelet folder. It must exist on every host with the probe and contain kubelet.sock. Custom k3s or RKE2 installations may use a different location. Do not enter the whole kubelet folder.")}
         <input id="allocationProbeDirectory" class="input mono" value="${esc(current.directory || "/var/lib/kubelet/pod-resources")}" autocomplete="off" spellcheck="false"></label>
-      <p class="dim small">This directory must exist on every probe host. Missing or unsupported data blocks new NUMA starts; it is never treated as free capacity. Multi-NUMA hosts need Static CPU/memory management and pod-scoped single-numa-node topology policy. Checks do not reserve resources.</p>
+      <p class="dim small">This folder must exist on every host with the probe. If the data is missing or not supported, new NUMA VMs cannot start. It is never treated as free capacity. Hosts with more than one NUMA domain need static CPU and memory management, and the single-numa-node topology policy for pods. The checks do not reserve anything.</p>
       </details>
       <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>Allow read-only host allocation checks and restart monitoring.</span></label>
       ${current.enabled ? '<button class="btn sm" onclick="allocationProbeCheck(this)">Check hosts</button><div id="allocationProbeDiagnostics" role="status" aria-live="polite"></div>' : ""}
@@ -1013,23 +1013,23 @@ window.allocationProbeCheck = async button => {
   target.textContent = "Checking hosts…";
   try {
     const nodes = STATE.data?.nodes || [];
-    if (!nodes.length) { target.textContent = "Open Hosts to refresh the host list, then check again."; return; }
+    if (!nodes.length) { target.textContent = "Open Hosts to refresh the list of hosts, then check again."; return; }
     target.innerHTML = "";
     for (const node of nodes) {
       const result = await api("/api/node/probe/allocation/check?node=" + encodeURIComponent(node.name));
       target.innerHTML += `<p><b>${esc(node.name)}</b> · ${esc(result.detail)}</p>`;
     }
-  } catch (_) { target.textContent = "Host checks are unavailable. Refresh and try again."; }
+  } catch (_) { target.textContent = "The host checks are not available. Refresh and try again."; }
   finally { button.disabled = false; }
 };
 
 window.allocationProbeSave = async (enabled, button) => {
   const current = window._allocationProbeReview;
-  if (!current?.installed || !current.uid || !current.resource_version) return toast("Reload the probe configuration first", "bad");
-  if (enabled && !$("#allocationProbeConsent")?.checked) return toast("Confirm socket access and the probe restart first", "bad");
-  if (enabled && current.capacity?.blocked) return toast("Resolve the host checks before enabling", "bad");
-  if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("Review and acknowledge the capacity warnings first", "bad");
-  if (!enabled && !(await ask("Disable allocation collection? Probe pods restart; NUMA starts will remain blocked without verified allocation evidence. Apps and their volumes are unchanged.", { title: "Disable allocation collection", ok: "Disable", danger: true }))) return;
+  if (!current?.installed || !current.uid || !current.resource_version) return toast("Reload the probe settings first", "bad");
+  if (enabled && !$("#allocationProbeConsent")?.checked) return toast("First confirm the socket access and the probe restart", "bad");
+  if (enabled && current.capacity?.blocked) return toast("Fix the host check problems before turning this on", "bad");
+  if (enabled && current.capacity?.warnings?.length && !$("#allocationProbeCapacity")?.checked) return toast("First review and accept the capacity warnings", "bad");
+  if (!enabled && !(await ask("Turn off allocation checks? The probe restarts, and NUMA VMs cannot start without the checks. Apps and their volumes do not change.", { title: "Turn off allocation checks", ok: "Turn off checks", danger: true }))) return;
   const body = {enabled, directory: $("#allocationProbeDirectory")?.value || "",
     uid: current.uid, resource_version: current.resource_version, acknowledge_host_access: enabled,
     confirm_capacity: !!$("#allocationProbeCapacity")?.checked, capacity_review: current.capacity?.fingerprint};
@@ -1044,7 +1044,7 @@ window.allocationProbeSave = async (enabled, button) => {
 
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
-  <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
+  <div class="note">The test does not erase data, but a long test can slow the disk and may take hours. The progress and the result are shown in Activity.</div>
   ${UI.actions(`<button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
 
 window.smartStart = async (node, disk, type) => {
@@ -1056,9 +1056,9 @@ window.smartStart = async (node, disk, type) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.hardwareEdit = n => modal("Hardware · " + n.name, `
-  <p class="muted small">Choose which configured features apps and VMs may use on this host. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
+  <p class="muted small">Choose which hardware features apps and VMs can use on this host. Unticked features are turned off, even if they are detected. (Saving sets Kubernetes labels on the host.)</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
-  <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
+  <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported the host's hardware yet."}</div>
   ${UI.actions(`<button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 window.hardwareSave = async node => {
   const body = { node, features: selectedHardware("hw_node") };
@@ -1069,7 +1069,7 @@ window.hardwareSave = async node => {
 window.hardwareFeatureSettings = async () => {
   const defs = await loadHardwareFeatures(true);
   modal("Hardware features", `
-    <div class="between"><p class="muted small">Define reusable passthrough and placement features. iGPU remains built in; everything else is editable.</p>
+    <div class="between"><p class="muted small">Set up hardware features that apps and VMs can use. The iGPU feature is built in, and everything else can be edited.</p>
       <div class="row"><button class="btn pri sm" data-need="admin" onclick="hardwareFeatureEdit()">＋ Add feature</button></div></div>
     <div class="featurelist" style="margin-top:14px">${defs.map(f => `<div class="card flat featurecard">
       <div class="between"><div><b>${esc(f.name)}</b> ${f.builtin ? UI.chip("built in", "neutral") : ""}<div class="dim xs mono">${esc(f.id)} · ${esc(f.label)}</div></div>
@@ -1077,7 +1077,7 @@ window.hardwareFeatureSettings = async () => {
       <div class="small" style="margin-top:9px">${UI.chip(`${f.host_path} → ${f.container_path}`, "hw")} ${UI.chip(f.path_type, "neutral")}</div>
       ${f.usb_ids?.length ? `<div class="dim xs" style="margin-top:7px">USB IDs: ${esc(f.usb_ids.join(", "))}</div>` : ""}
       ${f.description ? `<div class="dim small" style="margin-top:7px">${esc(f.description)}</div>` : ""}</div>`).join("")}</div>
-    <div class="note" style="margin-top:14px">A feature adds a node selector and mounts its host path into the container. USB IDs control host detection; the configured path controls passthrough.</div>`, true);
+    <div class="note" style="margin-top:14px">A feature limits an app to hosts that have the device, and makes the device available inside the app. USB IDs are used to detect the device, and the path is used to pass it through.</div>`, true);
 };
 /* After a save or delete in the feature editor, the list it opened from is
    shown again, redrawn with the change. */
@@ -1096,23 +1096,23 @@ window.hardwareFeatureEdit = async id => {
   }
   const nodes = STATE.data.nodes || STATE.data.ov?.nodes || [];
   childModal((id ? "Edit" : "Add") + " hardware feature", `
-    <div class="f2"><div class="f"><label>Feature ID ${tip("Stable internal ID used by apps and VMs and node labels. It cannot be changed after creation.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
+    <div class="f2"><div class="f"><label>Feature ID ${tip("A fixed ID used by apps, VMs and host labels. It cannot be changed after it is created.")}</label><input id="hf_id" value="${esc(old.id)}" ${id ? "disabled" : ""} placeholder="hailo-8"></div>
       <div class="f"><label>Display name</label><input id="hf_name" value="${esc(old.name)}" placeholder="Hailo-8 accelerator"></div></div>
-    <div class="f"><label>Description</label><input id="hf_desc" value="${esc(old.description || "")}" placeholder="Optional note for operators"></div>
-    <div class="f2"><div class="f"><label>Host device path ${tip("Path present on the Harvester node. It is also used for automatic detection when USB IDs are blank.")}</label><input id="hf_host" value="${esc(old.host_path)}" placeholder="/dev/hailo0"></div>
-      <div class="f"><label>Path inside container</label><input id="hf_container" value="${esc(old.container_path)}" placeholder="/dev/hailo0"></div></div>
+    <div class="f"><label>Description</label><input id="hf_desc" value="${esc(old.description || "")}" placeholder="Optional note"></div>
+    <div class="f2"><div class="f"><label>Host device path ${tip("The device path on the host. It is also used to detect the device when the USB IDs are empty.")}</label><input id="hf_host" value="${esc(old.host_path)}" placeholder="/dev/hailo0"></div>
+      <div class="f"><label>Path inside the app</label><input id="hf_container" value="${esc(old.container_path)}" placeholder="/dev/hailo0"></div></div>
     <div class="f2"><div class="f"><label>Path type</label><select id="hf_type">${["CharDevice","Directory","BlockDevice","Socket","File"].map(x => `<option ${x === old.path_type ? "selected" : ""}>${x}</option>`).join("")}</select></div>
       <div class="f"><label>USB vendor:product IDs ${tip("Optional comma-separated VID:PID pairs, for example 18d1:9302. A matching device marks the feature present on that host.")}</label><input id="hf_usb" value="${esc((old.usb_ids || []).join(", "))}" placeholder="18d1:9302"></div></div>
     <div class="device-browser">
-      <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the host whose <span class="mono">/dev</span> tree you want to map.</div></div>
+      <div class="between"><div><b>Browse a host</b><div class="dim xs">Choose the host whose <span class="mono">/dev</span> folder to browse.</div></div>
         ${UI.chip("read only", "neutral")}</div>
-      ${hostsUnread ? `<div style="margin-top:10px">${UI.callout("warn", "Could not read the hosts", esc(hostsUnread))}</div>` : `
+      ${hostsUnread ? `<div style="margin-top:10px">${UI.callout("warn", "The hosts could not be read", esc(hostsUnread))}</div>` : `
       <div class="f2" style="margin-top:10px"><div class="f"><label>Host</label><select id="hf_browse_node" onchange="hardwareBrowseRender()">
         ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.status !== "Ready" ? " · " + esc(n.status) : ""}</option>`).join("")}</select></div>
         <div class="f"><label>Filter devices</label><input id="hf_browse_q" placeholder="coral, dri, video, tty…" oninput="hardwareBrowseRender()"></div></div>
       <div id="hf_browse_results"></div>`}
     </div>
-    <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
+    <div class="note">Passing a device through gives the app extra permissions. Use the most specific /dev path that does not change. For a USB device identified by VID:PID, /dev/bus/usb is usually needed, because bus addresses can change after a restart.</div>
     ${UI.actions(`<button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, true);
   hardwareBrowseRender();
 };
@@ -1130,12 +1130,12 @@ window.hardwareBrowseRender = () => {
   const el = $("#hf_browse_results");
   if (!el) return;
   if (!node?.temps) {
-    el.innerHTML = '<div class="empty small">No probe data from this host yet.</div>'; return;
+    el.innerHTML = '<div class="empty small">The probe has not reported from this host yet.</div>'; return;
   }
   el.innerHTML = window.__hardwareBrowseItems.length ? `<div class="device-list">${window.__hardwareBrowseItems.map((x, i) =>
     `<button class="device-row" type="button" onclick="hardwareUsePath(${i})"><span><b>${esc(x.kind === "usb" ? x.name : x.path)}</b>
       <span class="dim xs mono">${x.kind === "usb" ? `${esc(x.id)} · ${esc(x.path || "/dev/bus/usb")}` : esc(x.type)}</span></span>${UI.chip("Use", "neutral")}</button>`).join("")}</div>
-    ${window.__hardwareBrowseItems.length >= 160 ? '<div class="dim xs" style="margin-top:7px">Showing the first 160 matches — type a filter to narrow the list.</div>' : ""}`
+    ${window.__hardwareBrowseItems.length >= 160 ? '<div class="dim xs" style="margin-top:7px">The first 160 matches are shown. Type a filter to narrow the list.</div>' : ""}`
     : '<div class="empty small">No matching device paths on this host.</div>';
 };
 window.hardwareUsePath = i => {
@@ -1165,7 +1165,7 @@ window.hardwareFeatureSave = async oldId => {
 };
 window.hardwareFeatureDelete = async id => {
   const f = hardwareDef(id);
-  if (!(await ask(`Delete hardware feature "${f.name}"?\n\nExisting apps and VMs using its node label are not changed.`, { title: "Delete hardware feature", ok: "Delete", danger: true }))) return;
+  if (!(await ask(`Delete the hardware feature "${f.name}"?\n\nApps and VMs that use it are not changed.`, { title: "Delete hardware feature", ok: "Delete feature", danger: true }))) return;
   const read = (STATE.data.hardwareFeatures || []).filter(x => !x.builtin);
   const custom = read.filter(x => x.id !== id);
   try { await api("/api/hardware/features", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ features: custom, read }) });
@@ -1186,7 +1186,7 @@ async function viewNodes() {
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}
-      ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move containers and volume copies so hosts carry similar loads">${icon("layers")}Balance hosts…</button>` : ""}`)}
+      ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move apps and volume copies so that hosts carry similar loads.">${icon("layers")}Balance hosts…</button>` : ""}`)}
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
 }
 
@@ -1230,9 +1230,9 @@ function vendorBase() {
 }
 
 window.nodeShell = async name => {
-  modal(`Terminal · ${name}`, `<div class="console-security">Admin only · a root shell on ${esc(name)} itself. Session start and stop are
-      audited; commands and output are not recorded.</div>
-    <div class="consolestate" id="nodeShellState"><span class="spin2"></span> starting a helper on ${esc(name)}…</div>
+  modal(`Terminal · ${name}`, `<div class="console-security">Admins only. A root shell on ${esc(name)} itself. The start and end of each session are
+      recorded in the audit log, but commands and output are not.</div>
+    <div class="consolestate" id="nodeShellState"><span class="spin2"></span> Starting a helper on ${esc(name)}…</div>
     <div class="nodeterm" id="nodeTerm"></div>
     <div class="row" style="margin-top:8px"><button class="btn sm" id="nodeShellAgain" onclick="nodeShell(${jsq(name)})" hidden>${icon("restart")}Reconnect</button></div>`, true);
   const state = text => { const el = $("#nodeShellState"); if (el) el.innerHTML = text; };
