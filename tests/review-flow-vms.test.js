@@ -440,7 +440,7 @@ function unread() {
 test("VM Edit says it could not read the VM options, and offers no form built on a guess", async () => {
   const t = unread();
   await t.ctx.vmEdit("lab", "guest");
-  assert.match(t.html(), /Could not read what this VM can use: timed out/);
+  assert.match(t.html(), /Homestead could not read what this VM can use\. timed out/);
   assert.match(t.html(), /Try again/);
   assert.match(t.html(), /onclick="vmEdit\(/);
   assert.doesNotMatch(t.html(), /ve_strategy|ve_node|Review changes/);
@@ -450,7 +450,7 @@ test("New k3s cluster says it could not read the VM options, and keeps no empty 
   const t = unread();
   t.ctx.__vmCreateOptions = undefined;
   await t.ctx.k3sCluster();
-  assert.match(t.html(), /Could not read what a new k3s cluster can use: timed out/);
+  assert.match(t.html(), /Homestead could not read what a new k3s cluster can use\. timed out/);
   assert.doesNotMatch(t.html(), /k_name|No LAN network|Review/);
   assert.equal(t.ctx.__vmCreateOptions, undefined, "a failed read is not kept as the options");
 });

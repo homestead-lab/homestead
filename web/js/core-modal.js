@@ -339,7 +339,7 @@ async function dismissModal() {
     const question = guard();
     if (question && !(await ask(question, { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   } else if (modalIsOpen() && modalChanged()) {
-    const discard = await ask(`Discard your changes to ${$("#mtitle").textContent}?`,
+    const discard = await ask(`Discard the changes to ${$("#mtitle").textContent}?`,
       { title: "Unsaved changes", ok: "Discard changes", cancel: "Keep editing", danger: true });
     if (!discard) return;
   }

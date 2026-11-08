@@ -27,7 +27,7 @@ const HomesteadSearch = (() => {
         { sub: [x.ns, x.status, x.node].filter(Boolean).join(" · "), open: { type: "vm", ns: x.ns, name: x.name } });
     for (const x of data.nodes || [])
       add("Host", x.name, [x.os, ...(x.roles || []), ...(x.workloads || [])],
-        { sub: `${x.status} · ${x.pods_wl || 0} of your pods`, open: { type: "node", name: x.name } });
+        { sub: `${x.status} · ${x.pods_wl || 0} app copies`, open: { type: "node", name: x.name } });
     for (const x of data.volumes || [])
       add("Volume", x.pvc_name || x.name, [x.name, x.namespace, x.attached_to],
         { sub: `${x.size_gb} GiB · ${x.state}`, open: { type: "volume", name: x.pvc_name || x.name } });

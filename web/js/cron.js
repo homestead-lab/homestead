@@ -136,7 +136,7 @@ function nextRunAt(at) {
   if (!at) return '<span class="dim">never</span>';
   const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
   const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;
-  return `<span class="small" data-tip="${esc(localTime(at))}, your time">${soon}</span>`;
+  return `<span class="small" data-tip="${esc(localTime(at))}, local time">${soon}</span>`;
 }
 /* The schedule builder. Shapes people use - every few minutes or hours,
    daily, some weekdays, monthly - written to cron, with the next runs shown
@@ -177,7 +177,7 @@ function scheduleChanged() {
     return;
   }
   $("#ls_next").innerHTML = runs.length
-    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(your time)</span>`
+    ? `${esc(CRON.describe(cron))}. Next: ${runs.map(at => esc(localTime(at))).join(" · ")} <span class="dim">(local time)</span>`
     : `<span class="bad-text">That cron expression never runs, or is not five fields.</span>`;
 }
 if (typeof document !== "undefined" && document.addEventListener) {

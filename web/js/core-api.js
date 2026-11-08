@@ -83,7 +83,7 @@ async function api(path, opts) {
 /* A read the caller cannot do without. Its failure says what could not be
    read, so the page shows that rather than a form built on a guess (#620). */
 function mustRead(path, what, opts) {
-  return api(path, opts).catch(e => { throw Object.assign(new Error(`Could not read ${what}: ${e.message}`), { status: e.status }); });
+  return api(path, opts).catch(e => { throw Object.assign(new Error(`Homestead could not read ${what}. ${e.message}`), { status: e.status }); });
 }
 
 // Node only (tests): the same names, for require(). The browser has no `module`.

@@ -81,7 +81,7 @@ test("the schedule editor offers Data Protection's shapes and saves the cron the
   Object.assign(fields("#ls_kind"), { value: "daily" });
   Object.assign(fields("#ls_time"), { value: "04:30" });
   ctx.scheduleChanged();
-  assert.match(fields("#ls_next").innerHTML, /Every day at 04:30 UTC\. Next: .*\(your time\)/);
+  assert.match(fields("#ls_next").innerHTML, /Every day at 04:30 UTC\. Next: .*\(local time\)/);
   await ctx.jobSave();
   assert.equal(out.calls[0].body.schedule, "30 4 * * *");
 });

@@ -52,7 +52,7 @@ test("typing in a dialog's field and pressing Escape asks before the changes go"
   c.answer = false;
   await c.dismissModal();
   assert.equal(c.asked.length, 1);
-  assert.equal(c.asked[0].message, "Discard your changes to Edit · frigate?");
+  assert.equal(c.asked[0].message, "Discard the changes to Edit · frigate?");
   assert.equal(c.asked[0].ok, "Discard changes");
   assert.equal(c.asked[0].danger, true, "discarding typed work is red");
   assert.equal(c.asked[0].cancel, "Keep editing");
@@ -148,13 +148,13 @@ test("stacked dialogs each keep their own changes", async () => {
   c.type(size, "20");
   c.answer = false;
   await c.dismissModal();
-  assert.equal(c.asked.at(-1).message, "Discard your changes to Add drive?");
+  assert.equal(c.asked.at(-1).message, "Discard the changes to Add drive?");
   c.answer = true;
   await c.dismissModal();
   assert.equal(c.title(), "Edit · host-a");
   c.answer = false;
   await c.dismissModal();
-  assert.equal(c.asked.at(-1).message, "Discard your changes to Edit · host-a?");
+  assert.equal(c.asked.at(-1).message, "Discard the changes to Edit · host-a?");
   assert.ok(c.isOpen());
 });
 

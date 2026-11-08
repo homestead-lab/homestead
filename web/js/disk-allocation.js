@@ -15,7 +15,7 @@ function allocationDiagram(plan,role,target) {
   }
   return `<div class="allocation-diagram">${bar('Current',current)}${bar('Proposed',proposed)}</div>`+
     UI.table([{label:'Allocation'},{label:'Current'},{label:'Proposed'}],current.map((a,i)=>[esc(a.label),esc(allocationGiB(a.size)),esc(allocationGiB(proposed[i].size))]))+
-    `<p class="ui-help">Logical allocation in ${esc(plan.vg)}; these bars do not show physical partition positions.</p>`;
+    `<p class="ui-help">Allocation in ${esc(plan.vg)}. These bars do not show where the partitions are on the disk.</p>`;
 }
 function allocationLimits() {
   return UI.more('Reducing or moving space', '<p class="ui-help">This change uses unallocated LVM space. It does not move or shrink partitions. Shrinking the OS requires offline maintenance and a verified backup. Homestead does not support XFS shrinking.</p><p class="ui-help">Reclaiming Longhorn space needs every affected store and its data moved or deliberately deleted first, followed by recreating the empty area. That workflow is not available here. Free space inside a filesystem is not unallocated LVM space.</p>');
@@ -94,7 +94,7 @@ window.diskAllocationWatch=async id=>{
       const done=item.phase==='complete',failed=item.status==='failed',settled=done||item.phase==='cancelled';
       host.innerHTML=UI.lead(esc(item.message))+UI.facts([['Host',esc(item.node)],['Mount folder',esc(item.mountpoint)],['Approved total',esc(allocationGiB(item.target_bytes))],['State',UI.chip(done?'Complete':settled?'No growth applied':failed?'Needs inspection':'Growing',done?'ok':failed&&!settled?'warn':'')]])+
         (!settled&&!failed?UI.progress(item.progress,{label:'Storage growth'}):'')+
-        (failed&&!settled?UI.callout('warn','Check before changing allocation','The logical volume may have grown before its filesystem. Recheck reads the saved job and current sizes; it does not repeat the growth command.'):'')+
+        (failed&&!settled?UI.callout('warn','Check before changing allocation','The logical volume may have grown before its filesystem. Checking again reads the saved job and the current sizes, and does not repeat the command that grows it.'):'')+
         UI.actions(UI.cancel('Close')+(failed&&!settled?UI.button('Recheck outcome',`diskAllocationRecheck(${jsArg(id)})`,{kind:'pri',attrs:'data-need="admin"'}):settled?UI.button('View allocation',`diskAllocationOpen(${jsArg(item.node)})`,{kind:'pri'}):''),UI.button('Job log',`diskAllocationLog(${jsArg(id)})`));
       window.noteOperation?.(item);window.applyRole?.();if(['succeeded','failed','cancelled'].includes(item.status))return;
     }catch(e){if($('#allocationStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message)+' Completion is not assumed.')+UI.actions(UI.cancel('Close'));}

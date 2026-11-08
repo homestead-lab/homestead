@@ -54,7 +54,7 @@ async function loadFsFreeze() {
   const toggle = `<label class="switch" data-need="admin"><input type="checkbox" id="fsf_on" ${d.enabled ? "checked" : ""}
     onchange="fsFreezeReview(this.checked)"> Freeze filesystems for snapshots</label>`;
   const notices = UI.notices([
-    d.unknown_value ? ["warn", `Longhorn's setting holds "${d.value}", which is neither on nor off; it is shown as off.`] : null,
+    d.unknown_value ? ["warn", `Longhorn's setting is "${d.value}", which is neither on nor off, so it is shown as off.`] : null,
     d.old_kernels.length ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => `${k.host} (${k.kernel})`).join(", ")}: Longhorn warns that a volume failing mid-freeze can leave its filesystem stuck until that host restarts.`] : null,
     d.from_chart ? ["info", "Longhorn's chart sets this too: applying the chart again puts the chart's value back."] : null].filter(Boolean));
   host.innerHTML = UI.section("Consistent snapshots", `${fsFreezeSummary(d)}${notices}
@@ -79,7 +79,7 @@ window.fsFreezeReview = on => {
     ${UI.notices([
       d.unknown_value ? ["warn", `Longhorn's setting holds "${d.value}", which this replaces.`] : null,
       old ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => k.host).join(", ")}. If a volume fails mid-freeze, its filesystem can stay stuck until that host restarts.`] : null,
-      on ? ["info", "If a freeze fails, Longhorn fails that snapshot rather than take it unfrozen; the job says so."] : null,
+      on ? ["info", "If a freeze fails, Longhorn fails that snapshot instead of taking it unfrozen, and the job reports this."] : null,
       !on && stay.length ? ["info", `Still frozen, set to always: ${stay.join(", ")}.`] : null,
       d.from_chart ? ["info", "Longhorn's chart sets this too: applying the chart again puts its value back."] : null].filter(Boolean))}
     ${old ? UI.ack("fsf_old", "Turn it on anyway", { onchange: "$('#fsf_go').disabled=!this.checked" }) : ""}
