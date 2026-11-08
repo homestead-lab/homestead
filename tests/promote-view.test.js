@@ -12,7 +12,7 @@ function setup({ plan = PLAN, platform = { distribution: "k3s", harvester: false
   const c = { console, URLSearchParams, Map, Promise, document: { addEventListener() {} },
     STATE: { platform, data: { nodes: [{ name: "app-1", roles }, { name: "server-1", roles: ["control-plane", "etcd", "master"] }] } },
     $: key => key === "#promoteAck" ? ack : {}, esc: s => String(s ?? "").replaceAll("<", "&lt;"), childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; },
-    toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
+    toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {}, tip: () => "",
     api: async (path, options) => {
       if (path === "/api/quorum") return { members: ["server-1", "server-2"], ready: ["server-1", "server-2"], total: 2, quorum_needs: 2, can_lose: 0 };
       if (path.startsWith("/api/node/impact")) return { workloads: [], stranded: [] };
@@ -46,7 +46,7 @@ test("the review lists warnings, settings and stages, and starts with the review
   await t.c.nodePromoteReview("app-1");
   assert.match(t.html(), /2 → 3 members/);
   assert.match(t.html(), /<details class="ui-more"[^]*Settings[^]*--cluster-cidr/, "raw flags sit in Details");
-  assert.match(t.html(), /Drain[^]*Reinstall[^]*etcd/);
+  assert.match(t.html(), /Drain[^]*Reinstall[^]*Start voting/);
   assert.doesNotMatch(t.html(), /disabled/);
   await t.c.nodePromoteStart("app-1");
   assert.deepEqual(t.sent, [], "nothing is sent before the outage is acknowledged");

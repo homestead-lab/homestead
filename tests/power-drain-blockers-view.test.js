@@ -100,7 +100,7 @@ test("Remove orphan records opens a review listing each record and where its eng
   assert.match(html, /orphan-1/);
   assert.match(html, /vol-a-e-0/);
   assert.match(html, /host2/);
-  assert.match(html, /Remove 1 orphan record/);
+  assert.match(html, /Remove 1 leftover record/);
   assert.equal(0, t.sent.length, "opening the review removes nothing");
 });
 
@@ -155,11 +155,11 @@ test("a failed removal gives the button back", async () => {
   const t = setup(plan, { removeFails: true });
   await t.c.window.nodePowerReview("host1", "reboot");
   t.c.window.nodePowerRemoveOrphans(0);
-  t.fields["#pw_orphans_remove"] = { disabled: false, textContent: "Remove 1 orphan record" };
+  t.fields["#pw_orphans_remove"] = { disabled: false, textContent: "Remove 1 leftover record" };
   await t.c.window.nodePowerRemoveOrphansConfirm(0);
   assert.equal(t.fields["#pw_orphans_remove"].disabled, false);
-  assert.equal(t.fields["#pw_orphans_remove"].textContent, "Remove 1 orphan record");
-  assert.match(t.notices.join(" "), /Could not remove the orphan records: HTTP 500/);
+  assert.equal(t.fields["#pw_orphans_remove"].textContent, "Remove 1 leftover record");
+  assert.match(t.notices.join(" "), /The leftover records could not be removed\. HTTP 500/);
   assert.equal(1, t.fetched.length, "nothing is reviewed again");
 });
 
@@ -168,5 +168,5 @@ test("only an admin gets the Remove orphan records button; others see why", asyn
   await t.c.window.nodePowerReview("host1", "reboot");
   assert.doesNotMatch(t.html(), /pw_blocker_remove_0/);
   assert.match(t.html(), /Remove the orphan records: the engines run on host2\./);
-  assert.match(t.html(), /An admin can remove these orphan records/);
+  assert.match(t.html(), /An admin can remove these leftover records/);
 });

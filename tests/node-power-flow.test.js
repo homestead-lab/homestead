@@ -57,5 +57,5 @@ test("a plan that fails while it is drawn says the host could not be assessed", 
   await w.c.nodePowerReview("host1", "reboot");
   const toasts = w.log.filter(e => e[0] === "toast");
   assert.equal(toasts.length, 1);
-  assert.match(toasts[0][1], /^Could not assess this host: /);
+  assert.match(toasts[0][1], /^This host could not be checked\. /);
 });
