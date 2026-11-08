@@ -46,7 +46,7 @@ test("stopping or restarting a container asks first", async () => {
   assert.deepEqual(t.sent, [["/api/scale", { ns: "lab", name: "frigate", replicas: 0, confirm_capacity: false }]]);
   t = run(wlRestart, false);
   await t.wlRestart("lab", "frigate");
-  assert.deepEqual([t.asked.map(a => a[1]), t.sent], [["Restart"], []]);
+  assert.deepEqual([t.asked.map(a => a[1]), t.sent], [["Restart app"], []]);
   t = run(wlRestart, true);
   await t.wlRestart("lab", "frigate");
   assert.deepEqual(t.sent, [["/api/restart", { ns: "lab", name: "frigate" }]]);
