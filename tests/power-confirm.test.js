@@ -25,7 +25,7 @@ const wlRestart = slice("web/js/views-workloads.js", "window.wlRestart = async",
 test("shutting down a VM asks first, and no sends nothing", async () => {
   let t = run(vmPower, false);
   await t.vmPower("lab", "win11", "stop");
-  assert.deepEqual(t.asked.map(a => a.slice(1)), [["Shut down", "Shut down"]]);
+  assert.deepEqual(t.asked.map(a => a.slice(1)), [["Shut down VM", "Shut down VM"]]);
   assert.deepEqual(t.sent, []);
   t = run(vmPower, true);
   await t.vmPower("lab", "win11", "stop");
