@@ -59,25 +59,25 @@ window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.
 // Say exactly what is observed; configuration is not proof of end-to-end health.
 const SETUP_CHECKS = {
   health: "Checks the current health reports for hosts, apps, VMs and volumes.",
-  quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
-  placement: "Checks that a way of sharing the work is chosen; Kubernetes' default counts. It does not check where apps run now.",
+  quorum: "Checks the number of servers that manage the cluster. One server is accepted for a lab.",
+  placement: "Checks that a way of sharing the work is chosen. Kubernetes' default counts. It does not check where apps run now.",
   clocks: "Checks the time-sync reports available from hosts.",
-  address: "Checks whether Homestead is using a registered VIP.",
+  address: "Checks whether Homestead uses a reserved virtual IP address.",
   smb: "Checks that the SMB server is installed and enabled, not that clients can access its shares.",
   https: "Uses HTTPS in this browser or an address you previously checked. A saved address is not retested automatically.",
   hostname: "Checks whether this browser opened Homestead by name.",
-  lan: "Checks for saved LAN network definitions that support VMs and containers. It does not test host interfaces or DHCP; it confirms configuration, not connectivity.",
+  lan: "Checks for saved LAN networks for VMs and apps. It checks the settings, not the connection, and does not test host network cards or DHCP.",
   disks: "Checks for unused non-system disks in the disk inventory.",
-  storage: "Checks the default storage class and its replica count against ready hosts.",
+  storage: "Checks the default storage class and its number of copies against the ready hosts.",
   backups: "Checks that a backup target is configured. This does not verify a backup or restore.",
-  config: "Records a settings export. Homestead cannot check where you saved the file.",
+  config: "Records a settings export. Homestead cannot check where the file is saved.",
   osupdates: "Checks that the OS update schedule is enabled, not that every host has updated.",
-  appearance: "Your choice, saved on this device. Homestead does not check how it looks.",
-  phone: "Checks whether this browser is running as an installed app; other devices are not checked.",
+  appearance: "A choice saved on this device. Homestead does not check how it looks.",
+  phone: "Checks whether this browser runs Homestead as an installed app. Other devices are not checked.",
   notifications: "Checks for a registered notification device on this account, not delivery.",
   people: "Checks that at least two administrator accounts exist.",
   unifi: "Checks that a UniFi address is configured, not that the connection is healthy.",
-  ipam: "Checks that subnets are added and scanned, and synced from UniFi when it is connected - not that every address is documented.",
+  ipam: "Checks that subnets are added and scanned, and synced from UniFi when it is connected. It does not check that every address is recorded.",
   unraid: "Checks that an import source is added, not that an import has succeeded.",
   homeassistant: "Checks for an unexpired API key, not a working Home Assistant connection.",
   linked: "Checks that another cluster is linked.",
@@ -91,8 +91,8 @@ function setupIntroHtml(ids, status) {
     ${UI.moduleHeader(`Welcome to Homestead`, `A guide to your cluster and your own preferences`, ``)}
     ${UI.lead("Work through the basics, or pick a step from the list. Optional steps can be skipped and revisited later.")}
     ${UI.steps([
-      { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked; some choices need your confirmation." },
-      { title: "Configure your cluster", detailHtml: "Use Return to setup after visiting a configuration page. Next moves to the following step without marking the current one complete." },
+      { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked. Some steps need a confirmation." },
+      { title: "Set up the cluster", detailHtml: "Use Return to setup after visiting a settings page. Next moves to the following step without marking the current one complete." },
       { title: "Return when needed", detailHtml: "This guide opens each time an administrator signs in, until it is finished. The book icon in the top bar always opens it." },
     ])}
     ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }))}
@@ -123,7 +123,7 @@ function setupStatus(id, steps, skips) {
 
 function setupStatusLabel(id, status, facts = {}) {
   if (status === "done") {
-    if (id === "appearance") return "Confirmed by you";
+    if (id === "appearance") return "Confirmed";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
     if (["placement", "lan", "smb", "backups", "osupdates", "unifi", "ipam", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
@@ -131,7 +131,7 @@ function setupStatusLabel(id, status, facts = {}) {
   }
   if (status === "skipped") return "Skipped by choice";
   if (status === "attention") return "Needs attention";
-  return id === "appearance" ? "Your confirmation" : "Not yet complete";
+  return id === "appearance" ? "Needs confirmation" : "Not yet complete";
 }
 
 function setupVisible(state) {
@@ -153,58 +153,58 @@ const SETUP_STEPS = {
   },
   quorum: {
     title: "Hosts and quorum", lead: s => s.servers === 2
-      ? "The control plane needs a majority of its servers. With two servers, both must be available. A third server - or a small machine as a tiebreaker, holding only a vote - lets it lose one."
-      : s.servers >= 3 ? `The control plane has ${s.servers} servers and can tolerate ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} server failures while maintaining a majority.`
-      : "A single server is suitable for a lab, but has no control-plane failover. Use three servers for redundancy.",
+      ? "The cluster needs a majority of its servers to run. With two servers, both must be available. A third server, or a small machine that only votes as a tiebreaker, allows one to fail."
+      : s.servers >= 3 ? `The cluster has ${s.servers} servers, and keeps running if ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} of them fail.`
+      : "A single server is suitable for a lab, but the cluster stops if it fails. Use three servers for redundancy.",
     body: s => window.Diagram ? Diagram.quorum((s.members?.length ? s.members : (s.nodes || []).map(n => n.name)).map(name =>
       ({ name, ready: (s.ready || []).includes(name) || (s.nodes || []).some(n => n.name === name && n.ready),
         tiebreaker: (s.tiebreakers || []).includes(name) }))) : "",
     actions: s => [s.servers === 2 && ["k3s", "rke2"].includes(window.STATE?.platform?.distribution)
       ? { label: "Add a tiebreaker", run: "platformJoinGuide('tiebreaker')", pri: true }
       : { label: "Add a host", run: "platformJoinGuide()", pri: true }],
-    more: "<p>Worker hosts run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
+    more: "<p>Worker hosts run apps and can store volume copies. They do not count towards the majority of servers.</p>",
   },
   placement: {
     title: "How hosts share the work", lead: s => s.mode === "standby"
-      ? `Hot spare: ${esc((s.hosts || []).filter(h => h.standby).map(h => h.name).join(", ") || "no host")} take${(s.hosts || []).filter(h => h.standby).length === 1 ? "s" : ""} apps only when the others cannot.`
-      : s.mode === "spread" ? `Spread by capacity: each app goes where most room is left, by what apps reserve.${s.unreserved ? ` ${s.unreserved} app${s.unreserved === 1 ? " reserves" : "s reserve"} nothing yet.` : ""}`
-      : s.mode ? "Kubernetes default: apps are placed one by one, as Kubernetes does."
-      : "With more than one host, choose how they share the apps: in proportion to their size, or with a host kept in reserve for when another fails.",
+      ? `Hot spare. ${esc((s.hosts || []).filter(h => h.standby).map(h => h.name).join(", ") || "no host")} take${(s.hosts || []).filter(h => h.standby).length === 1 ? "s" : ""} apps only when the others cannot.`
+      : s.mode === "spread" ? `Spread by capacity. Each app goes to the host with the most room left, based on what apps reserve.${s.unreserved ? ` ${s.unreserved} app${s.unreserved === 1 ? " reserves" : "s reserve"} nothing yet.` : ""}`
+      : s.mode ? "Kubernetes default. Apps are placed one by one in Kubernetes' usual way."
+      : "With more than one host, choose how they share the apps: in proportion to their size, or with a host kept free for when another fails.",
     body: s => UI.facts((s.hosts || []).map(h => [h.name, h.standby ? (h.tainted ? "standby" : "standby · not marked yet")
       : h.takes_work ? "takes apps" : "not taking work now"])),
     actions: s => [{ label: s.mode ? "Change in Settings" : "Choose in Settings", run: "settingsTab('placement');go('settings')", pri: !s.mode }],
-    more: "<p><b>Spread by capacity</b> needs apps to reserve CPU and memory: the scheduler places by what they reserve, not what they use. <b>Hot spare</b> marks hosts the scheduler avoids while it has a choice; nothing in any app changes. Either way, apps that moved while a host was away can move back when it returns - Settings, Placement, When a host comes back.</p>",
+    more: "<p><b>Spread by capacity</b> needs apps to reserve CPU and memory, because apps are placed by what they reserve, not by what they use. <b>Hot spare</b> keeps the chosen hosts free while other hosts have room. No app is changed. In both cases, apps that moved while a host was away can move back when it returns, under Settings › Placement › When a host comes back.</p>",
   },
   clocks: {
     title: "Time synchronisation", lead: s => s.done ? "Available host reports show synchronised clocks." :
-      `Accurate clocks are required for certificates and cluster coordination. Hosts without confirmed time synchronisation: ${esc((s.unsynced || []).join(", ") || "unknown")}.`,
+      `Accurate clocks are needed for certificates and for the cluster to work together. Hosts without confirmed time synchronisation: ${esc((s.unsynced || []).join(", ") || "unknown")}.`,
     actions: () => [{ label: "Open Hosts", run: "go('nodes')", pri: true }],
-    more: "<p>Review time synchronisation on the host's Hosts page. The installer's diagnostic tool can enable it where it is disabled.</p>",
+    more: "<p>Check time synchronisation on the host's page under Hosts. The installer's diagnostic tool can turn it on where it is off.</p>",
   },
   address: {
-    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. Its virtual IP (VIP) can move between hosts for failover. Applications can share the VIP on separate ports.`
+    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. This virtual IP address moves to another host if its host fails. Apps can share it on separate ports.`
       : s.harvester ? "Harvester assigned Homestead an address during installation."
-      : "Reserve a virtual IP (VIP) outside your router's DHCP range. It provides an address that can move between hosts for failover and can be shared by Homestead and applications.",
+      : "Reserve a virtual IP address outside the router's DHCP range. It moves to another host if its host fails, and Homestead and apps can share it.",
     body: s => window.Diagram ? Diagram.vip(s.done ? (s.url || "").replace(/^https?:\/\//, "").replace(/:\d+$/, "") : "",
       [{ port: (s.url || "").match(/:(\d+)$/)?.[1] || "8080", app: "Homestead" }]) : "",
     actions: s => s.done ? [] : ["kube-vip", "metallb"].includes(s.load_balancer)
-      ? [s.vips ? { label: "Put Homestead on a VIP", run: "go('network');setTimeout(() => window.selfAddressMove && selfAddressMove(), 800)", pri: true }
+      ? [s.vips ? { label: "Move Homestead to a virtual IP", run: "go('network');setTimeout(() => window.selfAddressMove && selfAddressMove(), 800)", pri: true }
         : { label: "Add a VIP", run: "go('network');setTimeout(() => window.vipAdd && vipAdd(), 800)", pri: true }]
       : [{ label: "Install kube-vip", run: "settingsTab('hardware');go('settings')", pri: true }],
   },
   https: {
     title: "HTTPS and remote access", lead: s => s.done
-      ? s.here ? "This browser is using HTTPS. You can install Homestead as an app and enable notifications on supported devices."
-        : `An HTTPS address was checked previously: <span class="mono">${esc(s.url)}</span>. Open it to confirm access from your device.`
-      : "HTTPS enables app installation and notifications. Use Cloudflare Tunnel for a public hostname without router port forwarding, or Tailscale for private access from your devices.",
+      ? s.here ? "This browser uses HTTPS. Homestead can be installed as an app, and notifications turned on, on supported devices."
+        : `An HTTPS address was checked before: <span class="mono">${esc(s.url)}</span>. Open it on each device to confirm access.`
+      : "HTTPS allows Homestead to be installed as an app and to send notifications. Use Cloudflare Tunnel for a public address without port forwarding on the router, or Tailscale for private access from known devices.",
     body: s => `${window.Diagram ? Diagram.remote(s.done ? (s.tunnels?.length ? "your tunnel" : "HTTPS") : "", s.url || (s.here ? location.origin : ""), location.host) : ""}
       ${s.done && s.url ? "" : `<div class="ui-field" style="margin-top:10px"><label>Check an existing HTTPS address</label>
         <div class="row" style="gap:8px;flex-wrap:nowrap"><input id="setup_https" class="mono" placeholder="https://homestead.example.com" value="${esc(s.url || "")}">
-        <button class="btn" onclick="setupHttpsCheck(this)">Check</button></div></div>`}
+        <button class="btn" onclick="setupHttpsCheck(this)">Check address</button></div></div>`}
       <p class="small dim">If Cloudflare Access protects the address, open it and sign in, then reopen this guide there. The server check cannot sign in through Access.</p>
       ${(s.tunnels || []).length ? `<div class="dim xs" style="margin-top:6px">Configured connectors: ${esc(s.tunnels.join(", "))}</div>` : ""}`,
     actions: () => [{ label: "Set up a Cloudflare Tunnel", run: "setupTunnel('cloudflare')", pri: true }, { label: "Set up Tailscale", run: "setupTunnel('tailscale')" }],
-    more: "<p><b>Cloudflare Tunnel</b> needs a Cloudflare account and a domain on Cloudflare. Select Set up a Cloudflare Tunnel for the account, domain, connector and access steps.</p><p><b>Tailscale</b> needs a reusable auth key from its admin console. Your devices must join the same tailnet. Enable HTTPS certificates and configure <span class=\"mono\">tailscale serve</span> for an HTTPS address.</p>",
+    more: "<p><b>Cloudflare Tunnel</b> needs a Cloudflare account and a domain on Cloudflare. Select Set up a Cloudflare Tunnel for the account, domain, connector and access steps.</p><p><b>Tailscale</b> needs a reusable auth key from its admin console. The devices must join the same tailnet. Turn on HTTPS certificates and set up <span class=\"mono\">tailscale serve</span> for an HTTPS address.</p>",
   },
   hostname: {
     title: "Hostname", lead: s => s.done ? `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>.`
@@ -214,18 +214,18 @@ const SETUP_STEPS = {
   },
   lan: {
     title: "LAN networks",
-    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating apps and VMs that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
+    lead: () => "A LAN network gives a VM or app its own address on the local network. Set one up before creating apps and VMs that need direct LAN access. Apps that only need published ports can use a shared app address instead.",
     body: s => `${UI.steps([
-      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run them." },
-      { title: "Choose the network and addresses", detailHtml: "Use an untagged network for your usual LAN, or a VLAN configured on your switch. VMs can use your router’s DHCP; reserve static addresses outside its DHCP range when assigning addresses yourself." },
-      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test an app’s address and connectivity before relying on it." },
+      { title: "Choose the host interface", detailHtml: "Choose the network card or bridge connected to the LAN. It must exist on every host that will run them." },
+      { title: "Choose the network and addresses", detailHtml: "Use an untagged network for the usual LAN, or a VLAN set up on the switch. VMs can use the router’s DHCP. Reserve static addresses outside its DHCP range when assigning addresses by hand." },
+      { title: "Create and test the network", detailHtml: "A host bridge works for both VMs and apps. Networks for only VMs or only apps are also possible. After saving, test an app’s address and connection before relying on it." },
     ])}<div class="about-grid"><div><span>VM networks</span><b>${esc((s.vms || []).join(", ") || "Not configured")}</b></div><div><span>Container networks</span><b>${esc((s.containers || []).join(", ") || "Not configured")}</b></div></div>`,
     actions: () => [{ label: "Configure LAN networks", run: "go('network', { params: { section: 'lan' } })", pri: true }],
-    more: "<p>VM-only macvtap networks cannot be used by containers, and container-only macvlan networks cannot be used by VMs. With either, the host may be unable to reach its own guests directly. A host bridge avoids that limitation. Creating a bridge can briefly interrupt host networking; review the network page’s checks before applying it.</p>",
+    more: "<p>VM-only networks (macvtap) cannot be used by apps, and app-only networks (macvlan) cannot be used by VMs. With either, the host may not be able to reach its own VMs or apps directly. A host bridge avoids this. Creating a bridge can briefly interrupt the host's network, so review the checks on the network page before applying it.</p>",
   },
   disks: {
-    title: "Disks for Longhorn", lead: s => s.done ? "No unused non-system disks are reported in the inventory."
-      : `${(s.unused || []).length} unused non-system disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Review each disk before assigning it to Longhorn. Disk tags let storage classes select HDD, SSD or NVMe storage.`,
+    title: "Disks for Longhorn", lead: s => s.done ? "No unused disks, apart from system disks, are reported."
+      : `${(s.unused || []).length} unused disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Check each disk before giving it to Longhorn. Disk tags let storage classes choose HDD, SSD or NVMe disks.`,
     body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Host</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? UI.chip(d.kind, "neutral") : ""}</td><td data-label="Node">${esc(d.node)}</td>
         <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GiB</td>
@@ -233,29 +233,29 @@ const SETUP_STEPS = {
     actions: () => [],
   },
   storage: {
-    title: "Default storage", lead: s => s.done ? `New volumes default to <b>${esc(s.default)}</b>, configured for ${s.copies} replica${s.copies === 1 ? "" : "s"}.`
-      : !s.default ? "Choose a default storage class, or specify a class whenever you create a volume."
+    title: "Default storage", lead: s => s.done ? `New volumes use <b>${esc(s.default)}</b> by default, with ${s.copies} cop${s.copies === 1 ? "y" : "ies"}.`
+      : !s.default ? "Choose a default storage class, or choose a class each time a volume is created."
       : s.provisioner !== "driver.longhorn.io" ? `The default class, ${esc(s.default)}, uses a different storage provider. Review that provider's redundancy, or choose a Longhorn class.`
-      : `The default class, ${esc(s.default)}, requests ${s.copies} replica${s.copies === 1 ? "" : "s"} across ${s.nodes} ready host${s.nodes === 1 ? "" : "s"}. ${s.copies > s.nodes ? "There are not enough ready hosts for that replica count." : "Additional replicas could improve redundancy."} The suggested count is ${s.target}.`,
+      : `The default class, ${esc(s.default)}, keeps ${s.copies} cop${s.copies === 1 ? "y" : "ies"}, and ${s.nodes} host${s.nodes === 1 ? " is" : "s are"} ready. ${s.copies > s.nodes ? "There are not enough ready hosts for that number of copies." : "More copies would improve redundancy."} The suggested number is ${s.target}.`,
     body: s => (window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `host ${i + 1}`), s.copies || 1) : "")
       + '<div id="setupStorageSuggestions" aria-live="polite"><p class="small dim">Loading storage suggestions…</p></div>',
     actions: () => [{ label: "Custom storage class", run: "setupStorageCustom()" },
       { label: "Manage storage classes", run: "settingsTab('hardware');go('settings')" }],
-    more: "<p>Suggestions use Longhorn V1, allow expansion and keep data when a claim is deleted. Replicas go on different hosts; one replica has no redundancy. Review any suggestion to change its settings before creating it. SSD and HDD suggestions select disks by their Longhorn tags, rather than detecting drive hardware.</p><p>Changing the default affects new volumes only. Existing classes and volumes keep their settings. Use Volumes to move an existing volume to another class.</p>",
+    more: "<p>The suggestions use Longhorn V1, allow resizing and keep the data when a volume is removed. Copies go on different hosts, and a single copy gives no redundancy. Review a suggestion to change its settings before creating it. The SSD and HDD suggestions choose disks by their Longhorn tags, not by detecting the drive type.</p><p>Changing the default affects only new volumes. Existing storage classes and volumes keep their settings. To move an existing volume to another class, use Volumes.</p>",
   },
   smb: {
-    title: "SMB", lead: s => s.error ? "Review the SMB server and share configuration in Settings and Network shares." : s.done ? "The SMB server is installed and enabled. Add or review shares, then check access from a client on your LAN."
-      : s.installed ? "The SMB server is installed but switched off. Enable it in Settings to serve your network shares."
-      : "Enable SMB so computers on your LAN can access network shares. Choose its address, then add a share.",
+    title: "SMB", lead: s => s.error ? "Review the SMB server and share configuration in Settings and Network shares." : s.done ? "The SMB server is installed and turned on. Add or review shares, then check access from a computer on the LAN."
+      : s.installed ? "The SMB server is installed but turned off. Turn it on in Settings to serve the network shares."
+      : "Turn on SMB so that computers on the LAN can use network shares. Choose its address, then add a share.",
     body: s => s.installed ? UI.facts([["Server", s.enabled ? "Enabled" : "Off"], ["Configured shares", esc(s.shares ?? 0)],
       ["Address", s.address ? `<span class="mono">${esc(s.address)}</span>` : "Not reported"]]) : "",
     actions: () => [{ label: "Network shares", run: "go('shares')" },
       { label: "Configure SMB", run: "settingsTab('hardware');go('settings')", pri: true }],
-    more: "<p>Settings → Hardware and storage → Add-ons controls the SMB server. Creating the first share can also install it. Network shares lets you add a volume and choose SMB users or guest access. Review the address and permissions before connecting a client.</p>",
+    more: "<p>The SMB server is managed under Settings → Hardware and storage → Add-ons. Creating the first share can also install it. Network shares is where a volume is added and SMB users or guest access are chosen. Check the address and permissions before connecting a computer.</p>",
   },
   backups: {
-    title: "Backups", lead: s => s.done ? "A backup destination is configured. Set a backup schedule and test a restore before relying on it." :
-      "Choose the built-in backup storage or an S3 or NFS destination. Longhorn replicas provide redundancy; backups also need a separate destination to protect against loss of the cluster or site.",
+    title: "Backups", lead: s => s.done ? "A backup destination is set up. Set a backup schedule and test a restore before relying on it." :
+      "Choose the built-in backup storage or an S3 or NFS destination. Volume copies protect against a failed disk or host. Backups also need a separate destination to protect against losing the whole cluster or site.",
     actions: s => s.done ? [] : [{ label: "Set up backups", run: "go('protect');setTimeout(() => window.objectStoreSetup && objectStoreSetup(), 600)", pri: true }],
   },
   config: {
@@ -265,19 +265,19 @@ const SETUP_STEPS = {
   },
   osupdates: {
     title: "OS updates", lead: s => s.done ? "The host OS update schedule is enabled. Review host status and recent update results." :
-      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with app or VM draining and a restart when required.",
+      "Schedule host OS updates in a maintenance window. Hosts update one at a time. Apps and VMs are moved off each host first, and the host restarts when needed.",
     actions: () => [{ label: "Review the update schedule", run: "osUpdates()", pri: true }],
   },
   appearance: {
     title: "Appearance", lead: () => "Choose a theme, page density and card or row layout. These preferences apply to this device.",
-    actions: s => [{ label: "Open appearance", run: "settingsTab('you');go('settings')", pri: !s.done }, { label: s.done ? "Undo my confirmation" : "Mark as done on this device", run: `setupLocalDone('appearance', ${!s.done})` }],
+    actions: s => [{ label: "Open appearance", run: "settingsTab('you');go('settings')", pri: !s.done }, { label: s.done ? "Undo confirmation" : "Mark as done on this device", run: `setupLocalDone('appearance', ${!s.done})` }],
   },
   phone: {
     title: "Install the app", lead: s => s.installed ? "This browser is running Homestead as an installed app." : s.secure
       ? "Install Homestead for a home-screen icon, a full-screen view and notifications on supported devices."
-      : "Open Homestead over HTTPS to install it as an app. Configure HTTPS in the Access section first.",
+      : "Open Homestead over HTTPS to install it as an app. Set up HTTPS in the Access section first.",
     body: s => `<div class="tblwrap"><table class="tbl stack dense"><tbody>
-      <tr><td><b>iPhone and iPad</b></td><td class="small">In Safari: Share, then Add to Home Screen. Notifications need iOS 16.4 or later, and the app opened from the home screen.</td></tr>
+      <tr><td><b>iPhone and iPad</b></td><td class="small">In Safari, choose Share, then Add to Home Screen. Notifications need iOS 16.4 or later, with the app opened from the home screen.</td></tr>
       <tr><td><b>Android</b></td><td class="small">In Chrome: the menu, then Install app.</td></tr>
       <tr><td><b>A computer</b></td><td class="small">In Chrome or Edge: the install icon in the address bar.</td></tr></tbody></table></div>`,
     actions: s => s.installed ? [] : s.secure ? [{ label: "Install now", run: "pwaInstall()", pri: true }] : [{ label: "Get HTTPS", run: "setupOpen('https')", pri: true }],
@@ -286,35 +286,35 @@ const SETUP_STEPS = {
     title: "Notifications", lead: s => s.done ? "At least one notification device is registered for this account. Send a test from Settings to confirm delivery." : !s.secure
       ? "Open Homestead over HTTPS before enabling notifications on this device."
       : s.permission === "denied" ? "This browser blocks notifications. Allow them in the browser's site settings, then return here."
-      : "Receive alerts for disk failures, unavailable hosts and pending updates. Choose which notifications to receive.",
+      : "Get alerts for failed disks, unavailable hosts and waiting updates, and choose which notifications to get.",
     actions: s => s.done ? [{ label: "Choose notification types", run: "pwaCategories()" }] : s.secure && s.permission !== "denied" ? [{ label: "Enable notifications", run: "pwaEnable().then(() => viewSetup())", pri: true }] : [],
   },
   people: {
     title: "Users", lead: s => s.done ? "At least two administrator accounts exist." :
-      "Add a second administrator to reduce the risk of losing access. Give other users their own operator or viewer accounts with the permissions they need.",
+      "Add a second administrator to reduce the risk of losing access. Give other people their own operator or viewer accounts with the permissions they need.",
     actions: () => [{ label: "Manage users", run: "settingsTab('access');go('settings')", pri: true }],
   },
   unifi: {
-    title: "UniFi", lead: s => s.done ? "A UniFi Network address is configured. Check the connection in Settings." :
-      "Connect UniFi Network to import devices and address reservations and help avoid DHCP conflicts when assigning VIPs.",
+    title: "UniFi", lead: s => s.done ? "A UniFi Network address is set up. Check the connection in Settings." :
+      "Connect UniFi Network to import devices and address reservations, and to help avoid address clashes when choosing addresses for Homestead and apps.",
     actions: s => s.done ? [] : [{ label: "Connect UniFi", run: "settingsTab('connections');go('settings')", pri: true }],
   },
   ipam: {
     title: "IP addresses",
-    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN apps."
-      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN apps.",
+    lead: s => s.done ? "The subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free addresses for apps and VMs."
+      : "Keep track of the LAN's addresses. Add the subnets with their DHCP ranges, import what UniFi knows, and scan to see which addresses are in use. Homestead then warns about clashes and suggests free addresses for apps and VMs.",
     body: s => {
       const subnets = s.subnets || [];
       const unscanned = subnets.filter(n => !n.scanned);
       const stage = !subnets.length ? 0 : s.unifi && !s.synced ? 1 : unscanned.length ? 2 : 3;
       return UI.steps([
-        { title: "Add your subnets", detailHtml: subnets.length
+        { title: "Add the subnets", detailHtml: subnets.length
           ? `${subnets.map(n => `<span class="mono">${esc(n.cidr)}</span>${n.name ? ` ${esc(n.name)}` : ""}`).join(", ")}. Add each subnet's gateway and DHCP range so addresses inside it are not offered as static ones.`
-          : "Add each subnet up to /22 with its gateway and DHCP range. The subnets your hosts are on are suggested." },
-        { title: "Sync from UniFi", detailHtml: !s.unifi ? "Optional: connect UniFi in the previous step to bring in its networks, devices and DHCP reservations."
+          : "Add each subnet, up to /22, with its gateway and DHCP range. The subnets the hosts are on are suggested." },
+        { title: "Sync from UniFi", detailHtml: !s.unifi ? "Optional. Connect UniFi in the previous step to import its networks, devices and DHCP reservations."
           : s.synced ? `Synced ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - s.synced))))}. Sync again after changing reservations in UniFi.`
           : "Bring in UniFi's networks, devices and DHCP reservations." },
-        { title: "Scan for what answers", detailHtml: !subnets.length ? "After adding a subnet, scan it to find the devices that answer on it."
+        { title: "Scan for devices", detailHtml: !subnets.length ? "After adding a subnet, scan it to find the devices on it."
           : unscanned.length ? `${unscanned.length} subnet${unscanned.length === 1 ? " has" : "s have"} not been scanned yet. A scan takes a minute or two and runs in the background.`
           : "Every subnet has been scanned. Scan again from the page whenever devices change." },
       ], stage);
@@ -333,28 +333,28 @@ const SETUP_STEPS = {
     },
   },
   unraid: {
-    title: "Unraid imports", lead: s => s.done ? "An import source has been added. Review its connection before importing containers or VMs." :
-      "Add an Unraid server to import containers with their settings and app data, or VMs with their disks. Review the destination settings before starting an import.",
+    title: "Unraid imports", lead: s => s.done ? "An import server has been added. Check its connection before importing apps or VMs." :
+      "Add an Unraid server to import apps with their settings and appdata, or VMs with their disks. Check the settings before starting an import.",
     actions: s => s.done ? [{ label: "Import containers", run: "go('imports')" }, { label: "Import VMs", run: "go('vmimport')" }] : [{ label: "Add your Unraid server", run: "go('imports');setTimeout(() => window.srcAdd && srcAdd(), 700)", pri: true }],
   },
   homeassistant: {
-    title: "Home Assistant", lead: s => s.done ? "An unexpired API key is available. Configure the integration in Home Assistant and test the connection." :
-      "Create an API key for Home Assistant to read cluster status or control apps and VMs. Limit its permissions and allowed source addresses to what the integration needs.",
+    title: "Home Assistant", lead: s => s.done ? "A valid API key exists. Set up the integration in Home Assistant and test the connection." :
+      "Create an API key so that Home Assistant can read the cluster's status or control apps and VMs. Limit its permissions and allowed addresses to what the integration needs.",
     actions: () => [{ label: "Create an API key", run: "settingsTab('access');go('settings');setTimeout(() => window.apiKeyNew && apiKeyNew(), 900)", pri: true }],
   },
   linked: {
     title: "Linked clusters", lead: s => s.done ? "Another cluster is linked. Review its connection and access from Settings." :
-      "Link another Homestead cluster to view its pages and move applications between clusters.",
+      "Link another Homestead cluster to view its pages and move apps between clusters.",
     actions: s => s.done ? [] : [{ label: "Link a cluster", run: "settingsTab('fleet');go('settings')" }],
   },
   starter: {
-    title: "Applications", lead: s => s.done ? "An application other than Homestead has been added. Check its status on the Containers page." :
-      "Browse the App Store to deploy an application. An uptime monitor or service dashboard is a useful place to start.",
+    title: "Applications", lead: s => s.done ? "An app other than Homestead has been added. Check its status on the Containers page." :
+      "Browse the App Store to deploy an app. An uptime monitor or a service dashboard is a good first app.",
     actions: () => [{ label: "Uptime monitor", run: "setupStore('uptime-kuma')", pri: true }, { label: "Dashboard", run: "setupStore('homepage')" }, { label: "Open the App Store", run: "go('store')" }],
   },
   console: {
     title: "Host console", lead: s => s.done ? "The host console is enabled. Review each host's installation status in Settings." :
-      "Show CPU, memory, disks, addresses and cluster status on each host's local screen. You can exit the console to reach the login prompt.",
+      "Show CPU, memory, disks, addresses and cluster status on each host's own screen. The console can be closed to reach the sign-in prompt.",
     actions: () => [{ label: "Review the host console", run: "settingsTab('hardware');go('settings')", pri: true }],
   },
 };
@@ -392,12 +392,12 @@ function setupStorageRecipes(s, classes, inv) {
   });
 }
 function setupStorageSuggestionsHtml(recipes, classes = []) {
-  return '<p class="small dim">Choose a recipe to review. You can change every setting before creating the class.</p>'
+  return '<p class="small dim">Choose a suggestion to review. Every setting can be changed before the class is created.</p>'
     + homesteadClassLine(classes)
     + '<div class="setup-storage-grid">' + recipes.map((r, i) => {
-      const status = r.hosts === null ? "Disk availability could not be checked. Review placement before creating."
-        : !r.hosts ? (r.disk_tags.length ? `No schedulable V1 disk has the ${r.disk_tags[0]} tag. Tag disks first, or change the tag in the editor.` : "No schedulable V1 disks are reported.")
-        : `${r.hosts} eligible host${r.hosts === 1 ? "" : "s"} reported.` + (r.hosts < r.replicas ? ` Fewer than ${r.replicas}; volumes may run short of replicas. Adjust placement or replicas.` : "");
+      const status = r.hosts === null ? "Disk availability could not be checked. Check the disk tags before creating."
+        : !r.hosts ? (r.disk_tags.length ? `No usable V1 disk has the ${r.disk_tags[0]} tag. Tag disks first, or change the tag in the editor.` : "No usable V1 disks are reported.")
+        : `${r.hosts} suitable host${r.hosts === 1 ? "" : "s"} reported.` + (r.hosts < r.replicas ? ` This is fewer than ${r.replicas}, so volumes may have fewer copies than asked for. Change the disk tags or the number of copies.` : "");
       const action = r.existing ? r.existing.default ? UI.chip("Current default", "ok")
         : UI.button("Make default", `setupStorageDefault(${i}, this)`)
         : UI.button("Review and create", `setupStorageReview(${i})`);
@@ -406,7 +406,7 @@ function setupStorageSuggestionsHtml(recipes, classes = []) {
         <span class="mono small setup-storage-name">${esc(r.name)}</span>
         <p class="small">${r.replicas} replica${r.replicas === 1 ? " · no redundancy" : "s · different hosts"}${r.disk_tags.length ? ` · ${esc(r.disk_tags[0])} tag` : ""}</p>
         <p class="xs ${r.hosts !== null && r.hosts < r.replicas ? "badtext" : "dim"}">${esc(status)}</p>
-        ${r.existing ? '<p class="xs dim">Matching class already exists.</p>' : ""}<div class="setup-storage-action">${action}</div>
+        ${r.existing ? '<p class="xs dim">A matching class already exists.</p>' : ""}<div class="setup-storage-action">${action}</div>
       </section>`;
     }).join("") + '</div>' + UI.button("Refresh suggestions", "setupStorageLoad(true)");
 }
@@ -421,7 +421,7 @@ window.setupStorageLoad = async (force = false) => {
   const [classes, disks] = await entry.promise;
   if (STATE.data.setup !== state || STATE.view !== "setup" || $("#setupStorageSuggestions") !== host || setupStorageInventory.get(state) !== entry) return;
   if (classes.status === "rejected") {
-    host.innerHTML = `<p class="small badtext">Could not load storage classes: ${esc(classes.reason?.message || "unavailable")}</p>` + UI.button("Try again", "setupStorageLoad(true)");
+    host.innerHTML = `<p class="small badtext">The storage classes could not be loaded. ${esc(classes.reason?.message || "")}</p>` + UI.button("Try again", "setupStorageLoad(true)");
     return;
   }
   entry.recipes = setupStorageRecipes(state.steps.storage || {}, classes.value, disks.status === "fulfilled" ? disks.value : null);
@@ -487,16 +487,16 @@ function setupStepHtml(id, state, status, ids) {
   const others = actions.filter(a => a !== mainAction).map(a => ({ label: a.label, run: a.run }));
   const rest = others.length ? actionBar(others, { shown: 0, label: `More for ${step.title}` }) : "";
   const onward = next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`, { kind: main ? "" : "pri" })
-    : UI.button("Finish guide", "setupFinish()", { kind: main ? "" : "pri" }) + tip("Finish guide stops the reminder. It does not mark unfinished checks as passed.");
+    : UI.button("Finish guide", "setupFinish()", { kind: main ? "" : "pri" }) + tip("Finish guide stops the reminders. It does not mark unfinished checks as passed.");
   const skip = st === "done" ? "" : st === "skipped"
     ? UI.button("Undo skip", `setupSkip(${jsArg(id)}, false)`) : UI.button("Skip this step", `setupSkip(${jsArg(id)}, true)`);
   return `<section class="card flat setup-card" data-step="${id}">
       ${UI.moduleHeader(`${esc(step.title)}`, `${UI.chip(setupStatusLabel(id, st, s), st === "done" && id !== "appearance" ? "ok" : st === "attention" ? "warn" : "")}`, ``)}
-      <p class="small dim">${esc(SETUP_CHECKS[id])}${st === "skipped" ? " Skipping leaves it unchecked." : ""}</p>
+      <p class="small dim">${esc(SETUP_CHECKS[id])}${st === "skipped" ? " A skipped step is not checked." : ""}</p>
       ${UI.lead(step.lead(s))}
-      ${s.error ? UI.callout("warn", "Homestead could not check this just now", esc(s.error)) : ""}
+      ${s.error ? UI.callout("warn", "Homestead could not check this", esc(s.error)) : ""}
       ${step.body ? `<div class="setup-body">${step.body(s)}</div>` : ""}
-      ${step.more ? UI.more("How this works", step.more) : ""}
+      ${step.more ? UI.more("More information", step.more) : ""}
       ${UI.actions(rest + onward + main, skip)}
     </section>`;
 }
@@ -535,7 +535,7 @@ window.setupReminders = async hidden => {
   try {
     await api("/api/setup/hide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden }) });
     if (!hidden) await api("/api/setup/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ completed: false }) });
-    toast(hidden ? "Setup reminder stopped. The book icon still opens the guide." : "Setup reminder enabled", "ok");
+    toast(hidden ? "Setup reminders stopped. The book icon still opens the guide." : "Setup reminders turned on", "ok");
     await viewSetup();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -544,7 +544,7 @@ window.setupFinish = async () => {
   try {
     await api("/api/setup/complete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ completed: true }) });
     await welcomeCheck();
-    toast("Guide completed. Reopen it anytime from the book icon.", "ok");
+    toast("Guide completed. It can be opened again at any time from the book icon.", "ok");
     go("dash");
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -584,21 +584,21 @@ function setupCloudflareHtml(state) {
   const dashboard = link("https://dash.cloudflare.com/", "Open Cloudflare");
   const origin = state.steps.address?.service_url || state.steps.address?.url || "";
   const steps = [
-    { title: "Account and domain", lead: "You need a Cloudflare account and a domain you own. Cloudflare's Free plan is sufficient for this setup; registering or renewing a domain is a separate cost.",
-      body: `<ol><li>Create an account or sign in to Cloudflare.</li><li>Add your domain and select the Free plan. Review its DNS records, including mail records.</li><li>At your domain registrar, replace the nameservers with the ones Cloudflare provides. Wait until the domain is Active.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/", "Domain setup instructions")}</p>` },
-    { title: "Create the tunnel", lead: "Create a tunnel and copy its connector token. Homestead will run the connector for you.",
-      body: `<ol><li>In Cloudflare, open Networking › Tunnels and create a tunnel named Homestead.</li><li>Under Setup Environment, select Docker.</li><li>Copy only the token after <span class="mono">--token</span> in the command. Keep it private; paste it into the deployment form in the next step.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/tunnel/get-started/", "Tunnel setup instructions")}</p>` },
-    { title: "Deploy the connector", lead: "Open the prepared deployment, paste your tunnel token and review the settings before deploying.",
-      body: "<p>Use Return to setup to come back here. In Cloudflare, wait for the tunnel to show Healthy. The connector needs outbound internet access on port 7844; router port forwarding is not required.</p>",
+    { title: "Account and domain", lead: "This needs a Cloudflare account and a domain. Cloudflare's Free plan is enough. Registering or renewing a domain is a separate cost.",
+      body: `<ol><li>Create an account or sign in to Cloudflare.</li><li>Add the domain and choose the Free plan. Check its DNS records, including mail records.</li><li>At the domain registrar, replace the nameservers with the ones Cloudflare gives. Wait until the domain shows as Active.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/", "Domain setup instructions")}</p>` },
+    { title: "Create the tunnel", lead: "Create a tunnel and copy its connector token. Homestead runs the connector.",
+      body: `<ol><li>In Cloudflare, open Networking › Tunnels and create a tunnel named Homestead.</li><li>Under Setup Environment, choose Docker.</li><li>Copy only the token after <span class="mono">--token</span> in the command. Keep it private, and paste it into the deployment form in the next step.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/tunnel/get-started/", "Tunnel setup instructions")}</p>` },
+    { title: "Deploy the connector", lead: "Open the prepared deployment, paste the tunnel token and review the settings before deploying.",
+      body: "<p>Use Return to setup to come back here. In Cloudflare, wait for the tunnel to show Healthy. The connector needs outgoing internet access on port 7844. No port forwarding is needed on the router.</p>",
       action: UI.button("Open connector deployment", "setupTunnelDeploy('cloudflare')", { kind: "pri" }) },
-    { title: "Control access", lead: "Configure Cloudflare Access before publishing the hostname to limit who can reach Homestead.",
-      body: `<ol><li>Open Zero Trust and choose the Free plan if asked. Cloudflare may request payment details for account setup.</li><li>Go to Access controls › Applications. Create a Self-hosted and private application, and add the public hostname you will use, for example <span class="mono">homestead.example.com</span>.</li><li>Add an Allow policy with the specific email addresses you want to admit. One-time PIN lets those users sign in with an emailed code.</li></ol><p>You will still sign in to Homestead with your Homestead account.</p><p>${link("https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/", "Access setup instructions")} · ${link("https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/", "Email sign-in instructions")}</p>${UI.more("Additional protection", `<p>Homestead can also validate Cloudflare Access tokens. See the ${link("https://github.com/homestead-lab/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel", "deployment security guide")} for the required settings.</p>`)}` },
-    { title: "Publish the hostname", lead: "Add a route from your public hostname to Homestead's address inside the cluster.",
-      body: `<ol><li>In Networking › Tunnels, select your tunnel. Under Routes, add a Published application.</li><li>Use the same hostname as your Access application.</li><li>Set the Service URL to ${origin ? `<span class="mono">${esc(origin)}</span>` : "the VIP address and port shown in Cluster address"}, then save the route.</li></ol>
-        ${origin ? "" : `<p>Configure Homestead's cluster address before publishing the route. ${UI.button("Review cluster address", "setupOpen('address')")}</p>`}
-        <p>The service address must be reachable from the connector. Use the cluster Service address above, including its port; a cluster VIP also works. <span class="mono">localhost</span> refers to the connector itself.</p>` },
-    { title: "Test in your browser", lead: "Open your new HTTPS hostname, sign in through Cloudflare Access, then sign in to Homestead.",
-      body: "<p>Reopen this guide from the book icon at the new address. The HTTPS step checks that your browser is using HTTPS. Also test from a device outside your home network.</p><p>The server's address check cannot sign in through Cloudflare Access. Use the browser test with Access enabled.</p>",
+    { title: "Control access", lead: "Set up Cloudflare Access before publishing the address, to limit who can reach Homestead.",
+      body: `<ol><li>Open Zero Trust and choose the Free plan if asked. Cloudflare may request payment details for account setup.</li><li>Go to Access controls › Applications. Create a Self-hosted and private application, and add the public address to use, for example <span class="mono">homestead.example.com</span>.</li><li>Add an Allow policy with the email addresses that may sign in. One-time PIN lets those users sign in with a code sent by email.</li></ol><p>Users still sign in to Homestead with their Homestead account.</p><p>${link("https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/", "Access setup instructions")} · ${link("https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/", "Email sign-in instructions")}</p>${UI.more("Additional protection", `<p>Homestead can also validate Cloudflare Access tokens. See the ${link("https://github.com/homestead-lab/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel", "deployment security guide")} for the required settings.</p>`)}` },
+    { title: "Publish the hostname", lead: "Add a route from the public address to Homestead's address inside the cluster.",
+      body: `<ol><li>In Networking › Tunnels, choose the tunnel. Under Routes, add a Published application.</li><li>Use the same address as the Access application.</li><li>Set the Service URL to ${origin ? `<span class="mono">${esc(origin)}</span>` : "the address and port shown in Cluster address"}, then save the route.</li></ol>
+        ${origin ? "" : `<p>Set up Homestead's cluster address before publishing the route. ${UI.button("Review cluster address", "setupOpen('address')")}</p>`}
+        <p>The connector must be able to reach this address. Use the address above, including its port. The cluster's virtual IP address also works. <span class="mono">localhost</span> means the connector itself.</p>` },
+    { title: "Test in a browser", lead: "Open the new HTTPS address, sign in through Cloudflare Access, then sign in to Homestead.",
+      body: "<p>Open this guide again from the book icon at the new address. The HTTPS step checks that the browser uses HTTPS. Also test from a device outside the home network.</p><p>The server's address check cannot sign in through Cloudflare Access, so use the browser test when Access is on.</p>",
       action: UI.button("Return to HTTPS overview", "setupCloudflareOpen(null)", { kind: "pri" }) },
   ];
   const current = steps[stage];
@@ -606,7 +606,7 @@ function setupCloudflareHtml(state) {
     ${UI.moduleHeader(`Set up Cloudflare Tunnel`, `Step ${stage + 1} of ${steps.length} · ${esc(current.title)}`, ``)}
     ${UI.sectionNavigation("cloudflare-guide", steps, {current:stage, guide:true, onSelect:key => `setupCloudflareOpen(${Number(key)})`, onChange:"setupCloudflareOpen(Number(this.value))"})}
     ${UI.lead(current.lead)}<div class="setup-body small">${current.body}</div>
-    <p class="small dim">These steps guide changes in Cloudflare. Homestead does not verify or mark them complete when you select Next.</p>
+    <p class="small dim">These steps describe changes in Cloudflare. Homestead does not check them or mark them complete when Next is chosen.</p>
     ${UI.actions((current.action || "") + (stage > 0 ? UI.button("Back", `setupCloudflareOpen(${stage - 1})`, { attrs: 'data-dialog-dismiss="true"' }) : "") + (stage < steps.length - 1 ? UI.button(`Next: ${steps[stage + 1].title}`, `setupCloudflareOpen(${stage + 1})`) : ""), UI.button("Back to HTTPS options", "setupCloudflareOpen(null)"))}
   </section>`;
 }
