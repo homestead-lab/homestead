@@ -307,6 +307,33 @@ class AppStoreTemplateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Needs Kubernetes design"):
             server.DEPLOY_ROUTES.ensure_profile_compatible(cfg)
 
+    def test_removing_the_socket_in_deploy_lifts_the_block(self):
+        # #1294: the profile is worked out again from the config as sent, so a
+        # template edited into a supported shape deploys; the imported flag counts for nothing.
+        cfg = APPSTORE.template_to_cfg({
+            "name": "Generic dashboard", "repo": "example/dashboard:latest", "config": [{
+                "@attributes": {"Target": "/var/run/docker.sock", "Type": "Path"},
+                "value": "/var/run/docker.sock",
+            }],
+        })
+        self.assertTrue(cfg["app_profile"]["blocked"])
+        edited = {**cfg, "volumes": []}
+        again = MANIFESTS.analyze_deploy_intent(edited)
+        self.assertFalse(again["app_profile"]["blocked"])
+        server.DEPLOY_ROUTES.ensure_profile_compatible(again)
+
+    def test_the_socket_is_found_by_its_host_path_and_in_any_container(self):
+        by_source = {"name": "a", "volumes": [{"path": "/sock", "source": "/run/containerd/containerd.sock", "type": "host"}]}
+        self.assertTrue(MANIFESTS.analyze_deploy_intent(by_source)["app_profile"]["blocked"])
+        named = {"name": "a", "volumes": [{"path": "/data", "source": "/var/run/docker.sock", "kind": "new-rwo"}]}
+        self.assertFalse(MANIFESTS.analyze_deploy_intent(named)["app_profile"]["blocked"],
+                         "a new volume named like the socket is not the host's socket")
+        sidecar = {"name": "a", "volumes": [], "additional_containers": [
+            {"name": "helper", "volumes": [{"path": "/var/run/docker.sock", "source": "/var/run/docker.sock", "kind": "host"}]}]}
+        profile = MANIFESTS.analyze_deploy_intent(sidecar)["app_profile"]
+        self.assertTrue(profile["blocked"])
+        self.assertEqual("/var/run/docker.sock", profile["blocked_path"])
+
 
 class SidecarDeploymentTests(unittest.TestCase):
     def setUp(self):

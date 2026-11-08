@@ -138,6 +138,17 @@ window.storeInstall = key => {
 const STORE_LINKS = [["project", "Project"], ["support", "Support"], ["github", "GitHub"], ["registry", "Registry"],
   ["readme", "Read me"], ["video", "Video"], ["discord", "Discord"], ["web", "Website"]];
 
+/* What Homestead makes of a template, for Details. app_profile.blocked is
+   true or false (#1294), never a list: what blocks it is in its notes. */
+function storeProfileHtml(profile) {
+  if (!profile) return "";
+  const said = [...(profile.blocked ? (profile.notes || []).slice(0, 1) : []), ...(profile.dependencies || []), ...(profile.notes || [])]
+    .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean);
+  const lines = [...new Set(said)].slice(0, 4);
+  return UI.callout(profile.blocked ? "bad" : profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` },
+    esc(lines.join(" · ") || "Homestead reviews its storage, ports and hardware when you configure it."));
+}
+
 /* One app, in full: what it is, who keeps it, why it was picked, what it asks for. */
 window.storeDetails = async key => {
   const summary = STORE_APPS.get(key) || {};
@@ -150,6 +161,11 @@ window.storeDetails = async key => {
     return;
   }
   STORE_APPS.set(key, app);
+  // A template Homestead reads oddly still shows an error with Try again, not a dialog stuck loading (#1294).
+  try { storeDetailsPaint(key, app); }
+  catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `storeDetails(${jsArg(key)})`, dialog: true, title: "This app could not be shown" }); }
+};
+function storeDetailsPaint(key, app) {
   const jsKey = esc(JSON.stringify(key));
   const profile = app.deploy?.app_profile;
   const facts = [
@@ -177,10 +193,7 @@ window.storeDetails = async key => {
     <div class="store-overview">${esc(app.overview || app.desc || "No description provided.")}</div>
     ${app.comment ? `${UI.callout("warn", { html: `From the catalogue moderators:` }, `${esc(app.comment)}`)}` : ""}
     ${app.requires ? `<div class="note"><b>Requires:</b> ${esc(app.requires)}</div>` : ""}
-    ${profile ? `${UI.callout(profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` }, `${esc(
-      [...(profile.blocked || []), ...(profile.dependencies || []), ...(profile.notes || [])].slice(0, 4)
-        .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean).join(" · ")
-      || "Homestead reviews its storage, ports and hardware when you configure it.")}`)}` : ""}
+    ${storeProfileHtml(profile)}
     ${(app.screenshots || []).length ? `<div class="sec">Screenshots</div><div class="store-shots">${app.screenshots.map(src =>
       `<a href="${safeHref(src)}" target="_blank" rel="noopener noreferrer"><img src="${esc(src)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.remove()"></a>`).join("")}</div>` : ""}
     <div class="sec">Details</div>
@@ -208,5 +221,5 @@ window.wlPrimaryPortSave = async (ns, name) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  STORE_MODE, STORE_MODES, STORE_APPS, storeCount, storeKey, storeDate, storeMetric, storeIcon, storeCard, storeSource, storeSection, viewStore, STORE_LINKS
+  STORE_MODE, STORE_MODES, STORE_APPS, storeCount, storeKey, storeDate, storeMetric, storeIcon, storeCard, storeSource, storeSection, viewStore, STORE_LINKS, storeProfileHtml, storeDetailsPaint
 };
