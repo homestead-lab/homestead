@@ -25,7 +25,7 @@ function setup({cleanup=true,mode="forget",copy=false,blocked=false,named=false,
 }
 test("retained failed k3s jobs have a review action and cannot be cleared silently",()=>{
   const t=setup();t.ctx.renderOperations();
-  assert.match(t.elements["#jobList"].innerHTML,/Review retained resources/);
+  assert.match(t.elements["#jobList"].innerHTML,/Review kept resources/);
   assert.doesNotMatch(t.elements["#jobList"].innerHTML,/>Clean up<|dismissOperation\(/);
   assert.equal(t.elements["#jobClear"].hidden,true);
 });
@@ -36,7 +36,7 @@ test("failed tracking-only confirmation does not claim cleanup and requires the 
   assert.match(t.modal.body,/Nothing is deleted or stopped in the cluster/);
   assert.match(t.modal.body,/All VMs, disks, Secrets and IP-address records remain/);
   assert.match(t.modal.body,/Keep tracking/);
-  assert.doesNotMatch(t.modal.body,/Remove what it made|Cleaning up removes/);
+  assert.doesNotMatch(t.modal.body,/Remove what it created|Cleaning up removes/);
   await t.ctx.cancelOperationGo("old");assert.equal(t.calls.length,1);
   t.elements["#oc_confirm"].value="k3s-lab";t.ctx.cancelOperationGate();
   assert.equal(t.elements["#oc_go"].disabled,false);
@@ -47,12 +47,12 @@ test("failed tracking-only confirmation does not claim cleanup and requires the 
 });
 test("actual destructive cleanup plans still say what they remove",async()=>{
   const t=setup({mode:"rollback"});await t.ctx.cancelOperation("old");
-  assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Remove what it made/);
+  assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Remove what it created/);
 });
 test("a cleanup that says its own action does not claim to remove anything",async()=>{
   const t=setup({mode:"rollback",named:true});await t.ctx.cancelOperation("old");
   assert.match(t.modal.title,/Clean up/);assert.match(t.modal.body,/Let replicas back/);
-  assert.doesNotMatch(t.modal.body,/Remove what it made|What cleaning up removes/);
+  assert.doesNotMatch(t.modal.body,/Remove what it created|What cleaning up removes/);
 });
 test("a failed Helm upgrade's review says it puts settings back, in its title, lead and button",async()=>{
   const lead="This upgrade failed. Putting back returns the chart's version and values; the job stays in the list as failed";
@@ -60,36 +60,36 @@ test("a failed Helm upgrade's review says it puts settings back, in its title, l
   await t.ctx.cancelOperation("old");
   assert.equal(t.modal.title,"Put back earlier settings · Legacy build");
   assert.match(t.modal.body,/Putting back returns the chart's version and values/);
-  assert.match(t.modal.body,/What it puts back/);
+  assert.match(t.modal.body,/What it restores/);
   assert.match(t.modal.body,/>Put back earlier settings<\/button>/);
-  assert.doesNotMatch(t.modal.body,/Remove what it made|Cleaning up removes|What cleaning up removes/);
+  assert.doesNotMatch(t.modal.body,/Remove what it created|Cleaning up removes|What cleaning up removes/);
 });
 
 test("a failed disk retire's Clean up does not read as removing anything",()=>{
   const t=setup({kind:"disk-retire",tracking:false});t.ctx.renderOperations();
   const html=t.elements["#jobList"].innerHTML;
   assert.match(html,/>Clean up</);
-  assert.match(html,/Says what it puts back/);
-  assert.doesNotMatch(html,/what cleanup removes|btn sm danger/);
+  assert.match(html,/Shows what it restores/);
+  assert.doesNotMatch(html,/what cleaning up removes|btn sm danger/);
 });
 test("a failed Helm upgrade's Clean up says it puts back, and is not red",()=>{
   const t=setup({kind:"helm",tracking:false});t.ctx.renderOperations();
   const html=t.elements["#jobList"].innerHTML;
   assert.match(html,/>Clean up</);
-  assert.match(html,/Says what it puts back/);
-  assert.doesNotMatch(html,/what cleanup removes|btn sm danger/);
+  assert.match(html,/Shows what it restores/);
+  assert.doesNotMatch(html,/what cleaning up removes|btn sm danger/);
 });
 test("another kind's Clean up still warns",()=>{
   const t=setup({tracking:false});t.ctx.renderOperations();
   const html=t.elements["#jobList"].innerHTML;
-  assert.match(html,/what cleanup removes/);assert.match(html,/btn sm danger/);
+  assert.match(html,/what cleaning up removes/);assert.match(html,/btn sm danger/);
 });
 
 test("copy recovery needs typed name AND partial-data acknowledgement without promising rollback",async()=>{
   const t=setup({copy:true});await t.ctx.cancelOperation("old");
-  assert.match(t.modal.title,/Inspect storage copy/);
+  assert.match(t.modal.title,/Check storage copy/);
   assert.match(t.modal.body,/Release the hold only/);
-  assert.doesNotMatch(t.modal.body,/Cleaning up removes|What carries on/);
+  assert.doesNotMatch(t.modal.body,/Cleaning up removes|What continues/);
   t.elements["#oc_confirm"].value="k3s-lab";t.ctx.cancelOperationGate();
   assert.equal(t.elements["#oc_go"].disabled,true);
   await t.ctx.cancelOperationGo("old");assert.equal(t.calls.length,1);
@@ -100,6 +100,6 @@ test("copy recovery needs typed name AND partial-data acknowledgement without pr
 
 test("active copy recovery has no submit button",async()=>{
   const t=setup({copy:true,blocked:true});await t.ctx.cancelOperation("old");
-  assert.match(t.modal.body,/copy hold cannot be released yet/);
+  assert.match(t.modal.body,/paused copy cannot be released yet/);
   assert.doesNotMatch(t.modal.body,/id="oc_go"/);
 });
