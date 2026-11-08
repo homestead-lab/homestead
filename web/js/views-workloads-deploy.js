@@ -27,7 +27,7 @@ window.deployAddContainer = () => {
 };
 window.deployRemovePrimary = async () => {
   const cfg = collect(), extras = [...(cfg.additional_containers || [])];
-  if (!extras.length) return toast("Keep at least one container in this pod", "bad");
+  if (!extras.length) return toast("An app needs at least one container", "bad");
   const next = extras.shift();
   const cleared = { command: [], args: [], env_meta: [], env_bindings: {}, template_devices: [], volume_owners: {}, app_profile: null, gpu: false, cap_add: [], privileged: false, tun: false };
   await viewDeploy({ ...cfg, ...cleared, ...next, ...(next.privileges || {}),
@@ -92,58 +92,58 @@ async function viewDeploy(pre) {
   const sections = appFormSections("deploy", {
     basics: `
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, UI.chip(DCFG.app_profile.intent || "template", DCFG.app_profile.level === "dependency" ? "warn" : "neutral"))}
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Check what this template needs.`, UI.chip(DCFG.app_profile.intent || "template", DCFG.app_profile.level === "dependency" ? "warn" : "neutral"))}
         ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
-        ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
+        ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy it separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
-      <div class="f"><label>Deployment model ${tip("A new app gets its own pod and lifecycle. Adding to an existing app creates a sidecar container; Kubernetes restarts that app's pods to apply it.")}</label>
-        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>New app · independent pod</option>
-          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>Add container to existing app · shared pod</option></select></div>
+      <div class="f"><label>Deploy as ${tip("A new app runs on its own and is started, stopped and updated separately. Adding a container to an existing app runs it next to that app's containers, and that app restarts to add it.")}</label>
+        <select id="d_target_mode"><option value="new" ${DCFG.target_mode !== "existing" ? "selected" : ""}>A new app</option>
+          <option value="existing" ${DCFG.target_mode === "existing" ? "selected" : ""}>A container in an existing app</option></select></div>
       <div id="d_join_wrap" class="joinbox">
         <div class="f"><label>Existing app</label><select id="d_target_workload"></select></div>
         <div id="d_join_note" class="note"></div>
       </div>
-      <div class="f" id="d_workload_name_wrap"><label>App name ${tip("The stable name for this app. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the app name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
+      <div class="f" id="d_workload_name_wrap"><label>App name ${tip("The app's name in Kubernetes. It must use lowercase letters, numbers and dashes.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
+      <div class="f"><label>Container name ${tip("The name of this container inside the app. It can differ from the app name, and must use lowercase letters, numbers and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
+      <div class="f"><label>Image ${tip("The image and tag to download, for example ghcr.io/home-assistant/home-assistant:stable.")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="row" id="d_primary_actions"><button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button></div>
-      ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
+      ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a website. For a website, Homestead uses its logo if it is an SVG or at least 64 px. Homestead keeps a copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
       <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
       ${appFormContainerBlock("d", "deploy", "")}
       <div id="d_containers_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
     `,
     hardware: `
       <div class="f2 compact-fields">
-        <div class="f"><label>CPU reserved ${tip('The share of a CPU core the scheduler keeps for this container: 100% is one core. It is not a limit; the container can use more when the host has it spare.')}</label>${UI.quantity("cpu", "d_cpu", DCFG.cpu, { placeholder: "5", label: "CPU reserved" })}</div>
-        <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "d_mem", DCFG.memory, { placeholder: "128", label: "Memory reserved" })}</div>
+        <div class="f"><label>CPU reserved ${tip('The share of a CPU core kept free for this container. 100% is one core. It is not a limit: the container can use more when the host has spare CPU.')}</label>${UI.quantity("cpu", "d_cpu", DCFG.cpu, { placeholder: "5", label: "CPU reserved" })}</div>
+        <div class="f"><label>Memory reserved ${tip('The memory kept free for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "d_mem", DCFG.memory, { placeholder: "128", label: "Memory reserved" })}</div>
       </div>
-      <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", "d_mem_limit", DCFG.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "d_mem" })}</div>
-      <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto hosts marked as having that hardware.")}</div>
+      <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use. Above it, the container is stopped and restarted. Leave it empty for no limit. It cannot be lower than Memory reserved.')}</label>${UI.quantity("memory", "d_mem_limit", DCFG.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "d_mem" })}</div>
+      <div class="sec">Hardware ${tip("Homestead gives the container the device, and runs it only on hosts that have that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
-      <div class="sec">Privileges ${tip("What the container may do to its host beyond the defaults. VPN containers need the tunnel.")}</div>
-      ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">Imported privileges: review host access before deploying.</div>' : ""}
+      <div class="sec">Privileges ${tip("What the container may do on its host beyond the defaults. VPN containers need the tunnel device.")}</div>
+      ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">These privileges were imported. Check the host access before deploying.</div>' : ""}
       ${privilegeFields("d_pv", DCFG)}
-      ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported device mappings:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. Matching hardware features were selected; review them before deploying.</div>` : ""}
+      ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported devices:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. The matching hardware was selected. Check it before deploying.</div>` : ""}
       <div id="d_hardware_containers"></div>
     `,
     environment: `
-      <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
+      <div class="sec">Environment ${tip("Environment variables are passed to the container. Defaults from the App Store are filled in and can be changed.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ Add variable</button>
       <div id="d_environment_containers"></div>
     `,
     storage: `
-      <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
-      ${UI.more("Choose a storage type", "RWO suits a single app. RWX allows sharing across hosts. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
-      <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
+      <div class="sec">Storage ${tip("The path is inside the container. The data can be stored on a new Longhorn volume, an existing volume, a volume the app already uses, or a folder on one host.")}</div>
+      ${UI.more("Storage types", "A single-host volume (RWO) suits most apps. A shared volume (RWX) can be used by apps on several hosts. An existing volume keeps its data. A volume the app already uses is shared between its containers. A host folder ties the app to that host.")}
+      <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ Add storage</button>
       <div id="d_storage_containers"></div>
     `,
     // Edit's section (#844), applied in the first rollout. A joined app keeps its own.
-    placement: `<div id="d_placement_join" class="empty small" hidden>The app it joins keeps its own placement, copies and tier: change them in its Edit.</div>
+    placement: `<div id="d_placement_join" class="empty small" hidden>The app keeps its own placement, copies and tier. Change them in its Edit.</div>
       <div id="d_placement_wrap">${appFormPlacement("d", DCFG.placement || {}, deployPlacementApp(DCFG), nodes0(liveNodes), [{ name: DCFG.container_name }], { minCopies: 0 })}</div>`,
     address: `${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
-        portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button><div id="d_address_containers"></div>`})}
+        portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ Add port</button><div id="d_address_containers"></div>`})}
     `,
     monitoring: monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : ""),
     summary: `
@@ -154,12 +154,12 @@ async function viewDeploy(pre) {
     hardware: "Set resources and host access for the first container.",
     environment: "Set the values the first container needs.",
     storage: "Choose where the first container stores its data.",
-    placement: "Choose its hosts, how its copies spread and which apps it runs beside.",
+    placement: "Choose its hosts, how its copies are spread and which apps it runs next to.",
     address: "Choose how clients reach the app.",
-    monitoring: "Choose how Homestead checks the app is up.",
-    summary: "Check the configuration, then review capacity and rollout impact.",
+    monitoring: "Choose how Homestead checks that the app is running.",
+    summary: "Check the settings, then review the capacity and the effect of deploying.",
   } });
-  paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
+  paint(`${UI.pageHeader("Deploy a container", "Set up the app, then review it before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
       {page:true,cancelHtml:UI.button("Cancel", "go('workloads')", { attrs: 'data-dialog-dismiss="true"' })})}</div>`);
@@ -185,22 +185,22 @@ function renderDeployTargets() {
   const select = $("#d_target_workload"); if (!select) return;
   select.innerHTML = DOPT.deployments.length
     ? DOPT.deployments.map(d => `<option value="${esc(d.name)}" ${d.name === DCFG.target_workload ? "selected" : ""}>${esc(d.name)} · ${d.containers.length} container${d.containers.length === 1 ? "" : "s"}</option>`).join("")
-    : `<option value="">No Deployments in this namespace</option>`;
+    : `<option value="">No apps in this namespace</option>`;
   if (!select.value && DOPT.deployments.length) select.value = DOPT.deployments[0].name;
   updateJoinNote();
 }
 function updateJoinNote() {
   const target = selectedTarget(), note = $("#d_join_note"); if (!note) return;
   note.innerHTML = target
-    ? `<b>Shared lifecycle:</b> Adding this container updates <span class="mono">${esc(target.name)}</span> and may restart all ${target.containers.length} existing containers. Network and placement are shared; review shows the rollout impact.`
-    : `<b>No existing app is available.</b> Select another namespace or create a new app.`;
+    ? `<b>Started and stopped together.</b> Adding this container updates <span class="mono">${esc(target.name)}</span> and may restart all ${target.containers.length} of its containers. The network and placement are shared. The review shows the effect.`
+    : `<b>No existing app is available.</b> Choose another namespace or create a new app.`;
 }
 async function refreshDeployOptions() {
   collect();
   const ns = $("#d_ns").value;
   APP_FORM_PLACEMENT.d.ns = ns;
   try { DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(ns)); }
-  catch (e) { toast("Could not load namespace storage: " + e.message, "bad"); DOPT = { deployments: [], pvcs: [], storage_classes: [] }; }
+  catch (e) { toast("The namespace's storage could not be loaded. " + e.message, "bad"); DOPT = { deployments: [], pvcs: [], storage_classes: [] }; }
   DCFG.target_workload = ""; renderDeployTargets(); renderVols(); renderDeployContainers(); applyDeployMode(); syncSummary();
 }
 function applyDeployMode() {
@@ -265,27 +265,27 @@ function syncSummary() {
   if (c.target_mode !== "existing") appFormPodContainers("d", [c.container_name, ...(c.additional_containers || []).map(item => item.name)]);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
-    (c.target_mode === "existing" ? "" : row("◈", "App / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
-    (c.additional_containers?.length ? row("▣", "Containers in each pod", [c.container_name, ...c.additional_containers.map(item => item.name)].map(esc).join(", ")) : "") +
+    (c.target_mode === "existing" ? "" : row("◈", "App", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
+    (c.additional_containers?.length ? row("▣", "Containers", [c.container_name, ...c.additional_containers.map(item => item.name)].map(esc).join(", ")) : "") +
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
-    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins app" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Added to app" : "Copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     (c.target_mode === "existing" ? "" : row("⌖", "Placement", `<span class="small">${esc(deployPlacementWords(c))}</span>`)) +
-    row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
-    row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
+    row("◴", "Reserved", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
+    row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">No limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
-    row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">none</span>') +
-    row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} VIP` : ""}</span>`) +
+    row("▤", "Hardware", c.hardware.length ? hardwareTags(c.hardware) : '<span class="dim">None</span>') +
+    row("◎", "Network", `<span class="small">${esc(c.network_mode)}${c.network_mode === "loadbalancer" ? ` · ${esc(c.vip_mode)} virtual IP` : ""}</span>`) +
     row("⇄", "Ports", c.ports.length ? c.ports.map(p => UI.chip(`${p.host}→${p.container}`, p.expose ? "info" : "neutral")).join(" ") : '<span class="dim">—</span>') +
-    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => UI.chip(`${v.source || (v.kind === "ephemeral" ? "temporary" : "choose source")} · ${v.kind}`, "neutral")).join(" ") : '<span class="dim">—</span>') +
-    row("≡", "Env vars", Object.keys(c.env).length ? UI.chip(`${Object.keys(c.env).length} set`, "neutral") : '<span class="dim">—</span>');
+    row("▥", "Storage", c.volumes.length ? c.volumes.map(v => UI.chip(`${v.source || (v.kind === "ephemeral" ? "temporary" : "choose a source")} · ${v.kind}`, "neutral")).join(" ") : '<span class="dim">—</span>') +
+    row("≡", "Environment", Object.keys(c.env).length ? UI.chip(`${Object.keys(c.env).length} set`, "neutral") : '<span class="dim">—</span>');
 }
 function addPort(cp = "", hp = "", ex = true, protocol = "TCP") {
   const d = document.createElement("div"); d.className = "f4 port-row";
   d.innerHTML = `<div><label>Container port</label><input class="pc" type="number" value="${cp}"></div>
     <div><label>LAN port</label><input class="ph" type="number" value="${hp}"></div>
     <div><label>Protocol</label><select class="pp"><option ${protocol === "TCP" ? "selected" : ""}>TCP</option><option ${protocol === "UDP" ? "selected" : ""}>UDP</option></select></div>
-    <label class="switch" style="margin:0 0 10px"><input class="pe" type="checkbox" ${ex ? "checked" : ""}>Expose</label>
+    <label class="switch" style="margin:0 0 10px"><input class="pe" type="checkbox" ${ex ? "checked" : ""}>On the LAN</label>
     <button class="iconbtn row-remove" type="button" title="Remove port" onclick="this.parentElement.remove();syncSummary()">×</button>`;
   $("#d_ports").appendChild(d); d.addEventListener("input", syncSummary); if (!DRENDERING) syncSummary();
 }
@@ -297,10 +297,10 @@ function deployVolumePicker() {
     classFacts: () => DOPT.storage_class_facts || {},
     podVolumes: () => selectedTarget()?.volumes || [],
     allowPod: () => $("#d_target_mode")?.value === "existing",
-    podLabel: "Existing volume in selected pod",
-    podEmpty: "Choose a volume from the selected app…",
-    podUnavailable: "No reusable volumes in the selected app",
-    podHelp: "Mounts a volume already defined on the selected app into this sidecar.",
+    podLabel: "A volume the selected app uses",
+    podEmpty: "Choose a volume of the selected app…",
+    podUnavailable: "The selected app has no volumes to share",
+    podHelp: "Gives this container a volume that the selected app already uses.",
     onChange: () => { if (!DRENDERING) syncSummary(); },
   });
 }
@@ -313,7 +313,7 @@ function addEnv(k = "", v = "", meta = {}) {
   const d = document.createElement("div"); d.className = "f3 env-row";
   const editor = meta.options?.length
     ? `<select class="ev">${meta.options.map(option => `<option ${option === v ? "selected" : ""}>${esc(option)}</option>`).join("")}</select>`
-    : `<input class="ev" type="${meta.masked ? "password" : "text"}" value="${esc(v)}" ${meta.binding ? `readonly placeholder="Assigned ${esc(meta.binding)} at deploy time"` : ""}>`;
+    : `<input class="ev" type="${meta.masked ? "password" : "text"}" value="${esc(v)}" ${meta.binding ? `readonly placeholder="Set to ${esc(meta.binding)} when deployed"` : ""}>`;
   d.innerHTML = `<div><label>Key</label><input class="ek" type="text" value="${esc(k)}"></div>
     <div><label title="${esc(`${meta.label || "Value"}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${meta.binding}` : ""}`)}">${esc(meta.label || "Value")}${meta.required ? " · required" : ""}${meta.generate ? " · generated securely" : ""}${meta.binding ? ` · bound to ${esc(meta.binding)}` : ""}</label>${editor}${meta.description ? `<span class="dim xs">${esc(meta.description)}</span>` : ""}</div>
     <button class="iconbtn row-remove" type="button" title="Remove variable" onclick="this.parentElement.remove();syncSummary()">×</button>`;
@@ -343,13 +343,13 @@ const CAPACITY_ROLLOUT_ROUTINE = [
   /^intermediate rolling-update placement and readiness are not fully simulated; a fitting first pod is not a completion guarantee$/,
 ];
 function capacityNoteWords(text) {
-  if (text.startsWith("memory is not limited for ")) return `No memory limit is set for: ${text.slice("memory is not limited for ".length)}. Memory use can exceed this estimate.`;
-  if (text.startsWith("updated pod estimates include every container")) return "The estimate covers all containers in the updated pod, including initialization.";
-  if (text.startsWith("post-stop capacity assumes")) return "Capacity becomes available after old pods stop and release their ports and volumes. Storage detach may take longer.";
-  if (text.startsWith("live RAM still includes old pods")) return "Live memory usage still includes the old pods, so the estimate keeps that usage until they stop.";
-  if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the rollout. Later placement and readiness can still delay completion.";
+  if (text.startsWith("memory is not limited for ")) return `No memory limit is set for ${text.slice("memory is not limited for ".length)}, so its memory use can be higher than this estimate.`;
+  if (text.startsWith("updated pod estimates include every container")) return "The estimate covers every container in the updated app, including its start-up steps.";
+  if (text.startsWith("post-stop capacity assumes")) return "Capacity becomes available after the old copies stop and release their ports and volumes. Releasing storage can take longer.";
+  if (text.startsWith("live RAM still includes old pods")) return "Current memory use still includes the old copies, so the estimate counts it until they stop.";
+  if (text.startsWith("intermediate rolling-update placement")) return "The check covers starting the update. Placement and start-up later on can still delay its completion.";
   const rolling = text.match(/^RollingUpdate permits (\d+) extra pod\(s\) and (\d+) unavailable replica\(s\);/);
-  if (rolling) return `The rollout allows ${plural(rolling[1], "extra pod")} and ${plural(rolling[2], "unavailable replica")}. Pods still stopping can temporarily increase the total.`;
+  if (rolling) return `The update allows ${plural(rolling[1], "extra copy", "extra copies")} and ${plural(rolling[2], "unavailable copy", "unavailable copies")}. Copies that are still stopping can briefly increase the total.`;
   return text;
 }
 function capacityNotes(plan) {
@@ -371,40 +371,40 @@ window.capacityNotes = capacityNotes;
 function deployCapacityHtml(plan, overlap = false, imageChange = false, { notice = true } = {}) {
   if (!plan) return "";
   const { concerns: needs, caveats } = capacityNotes(plan);
-  const title = overlap ? "New pods alongside current pods" : plan.rollout ? "Updated pod: capacity after old pods stop" : "Placement and memory";
-  const blocked = overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy."
-    : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below."
-    : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
+  const title = overlap ? "New copies next to the current copies" : plan.rollout ? "Capacity after the old copies stop" : "Placement and memory";
+  const blocked = overlap ? "The new and old copies do not fit together. The update may have to wait for old copies to stop."
+    : plan.rollout?.start_blocked ? "The update cannot start within its availability settings. The reasons are listed below."
+    : "This app does not fit its placement rules. Change its resources, volumes or host before deploying.";
   const shown = needs;
   const concerns = shown.length ? `<ul class="ui-list">${shown.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plural(plan.rollout.replicas, "desired replica"))} · ${plan.rollout.ownership_known
-      ? `${esc(plural(plan.rollout.owned_pods.length, "existing pod"))} identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
-      : "Pod ownership is unverified; released capacity is unknown."}</p>
-    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plural(plan.rollout.max_surge, "extra pod"))}, ${esc(plural(plan.rollout.max_unavailable, "unavailable replica"))}. Intermediate rollout steps remain unverified.</p>` : ""}` : "";
-  const requests = `${esc(plural(plan.additional, plan.vm ? "VM launcher" : "pod"))}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
+      ? `${esc(plural(plan.rollout.owned_pods.length, "existing copy", "existing copies"))} found. ${esc(plan.rollout.release_request_gb)} GiB of reserved memory is released only after they stop.`
+      : "The existing copies could not be identified, so the capacity they release is unknown."}</p>
+    ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plural(plan.rollout.max_surge, "extra copy", "extra copies"))} and ${esc(plural(plan.rollout.max_unavailable, "unavailable copy", "unavailable copies"))}. The steps during the update are not checked.</p>` : ""}` : "";
+  const requests = `${esc(plural(plan.additional, plan.vm ? "VM" : "copy", plan.vm ? "VMs" : "copies"))}, ${plan.vm?.request_is_lower_bound ? "reserving at least" : "each reserving"} ${esc(plan.pod_request_gb)} GiB of memory. ${plan.vm?.cpu_request_is_estimate ? "Estimated CPU" : "CPU reserved"}: ${esc(plan.pod_cpu_request_percent)}% (100% is one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and its launcher" : "per copy, including its start-up steps"}.`;
   return `<div class="deploy-capacity ui-stack">
     ${overlap ? "" : capacityPlacementHtml(plan)}
     ${UI.section(title, [
-      !notice ? "" : plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p>"}`)
-        : concerns ? UI.callout("warn", "Placement and memory need review.", concerns) : "",
+      !notice ? "" : plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This prevents placement. It is not only a capacity warning. Resolve the host, hardware or storage problems listed before continuing.</p>"}`)
+        : concerns ? UI.callout("warn", "Check the placement and memory.", concerns) : "",
       plan.pod_request_gb !== undefined && plan.pod_request_gb !== null ? `<p class="ui-help">${requests}</p>` : "",
-      capacityHosts(plan.candidates || [], { unavailable: "Live RAM unavailable",
-        reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM", placement: plan.placement }),
+      capacityHosts(plan.candidates || [], { unavailable: "Current memory use unavailable",
+        reserved: plan.rollout ? "Reserved memory after the old copies stop" : "Reserved memory", placement: plan.placement }),
     ].join(""))}
     ${UI.more("How this is estimated", `${rollout}
-      ${caveats.length ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
-      ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
-      <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the app or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
-    ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
+      ${caveats.length ? `<p>The estimate assumes:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${!overlap && !plan.blocked ? "<p>Capacity warnings, such as high expected memory use or missing usage figures, can be accepted. Continuing may cause memory shortages, restarts or downtime. It does not change the reserved resources or limits.</p>" : ""}
+      <p>This is a snapshot. It does not reserve capacity or guarantee that memory is sufficient. ${plan.vm ? "Homestead checks again before acting on the VM. It cannot guarantee that the guest starts or that the VM moves successfully." : imageChange ? "Homestead checks again before changing the app or its recovery settings." : "Homestead checks again before creating anything. The planned volumes have not been created yet."}</p>`, !!plan.blocked)}
+    ${plan.rollout?.overlap ? UI.more(`While the old copies are still running${plan.rollout.start_blocked ? " · the update cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
   </div>`;
 }
 /* The capacity warnings, or the blocker and what blocks, as the dialog's notice. */
 function deployCapacityIssues(plan) {
   if (!plan) return { issues: [], title: "" };
   const needs = capacityNotes(plan).concerns;
-  if (plan.blocked) return { title: plan.rollout?.start_blocked ? "The rollout cannot start" : "It cannot fit",
-    issues: [["bad", { short: plan.rollout?.start_blocked ? "No replacement pod fits within the current availability policy." : "It cannot fit the checked placement constraints.",
-      more: "This is a placement blocker, not just a capacity warning: change its resources, volumes or host selection." }], ...needs.map(w => ["bad", w])] };
+  if (plan.blocked) return { title: plan.rollout?.start_blocked ? "The update cannot start" : "It does not fit",
+    issues: [["bad", { short: plan.rollout?.start_blocked ? "No new copy fits within the availability settings." : "It does not fit its placement rules.",
+      more: "This prevents placement. It is not only a capacity warning. Change its resources, volumes or host." }], ...needs.map(w => ["bad", w])] };
   return { title: "", issues: needs.map(w => ["warn", w]) };
 }
 window.deployReviewReady = () => DEPLOY.ready();
@@ -419,27 +419,27 @@ function deployInvalid(message, selector) {
 const DEPLOY = UI.reviewFlow({
   preview: async c => {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-    if (plan.app_profile?.blocked) throw new Error(plan.app_profile.label || "this app needs a Kubernetes-specific design");
-    if (!plan.capacity) throw new Error("Capacity preview unavailable; refresh Homestead before deploying.");
+    if (plan.app_profile?.blocked) throw new Error(plan.app_profile.label || "This app needs a setup designed for Kubernetes");
+    if (!plan.capacity) throw new Error("The capacity review is not available. Refresh Homestead before deploying.");
     return { config: JSON.parse(JSON.stringify(c)), plan: plan.capacity, token: plan.capacity_token, preview: plan };
   },
   render: (review, c) => {
     const joining = c.target_mode === "existing", plan = review.preview;
     const notice = deployCapacityIssues(plan.capacity);
-    const restart = plan.capacity.rollout?.paused ? "Save the paused template; resuming is reviewed again"
-      : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app's template without starting it" : `Restart every container in ${c.target_workload} as its pods roll out`;
-    modal(joining ? "Review shared-pod change" : "Review deployment", `<div class="update-review">${UI.dialog({ shape: "review",
+    const restart = plan.capacity.rollout?.paused ? "Save the paused app. Resuming it is reviewed again."
+      : plan.capacity.rollout?.replicas === 0 ? "Change the stopped app without starting it" : `Restart every container in ${c.target_workload}`;
+    modal(joining ? "Review added container" : "Review deployment", `<div class="update-review">${UI.dialog({ shape: "review",
       subject: joining ? { kind: "App", name: c.target_workload, where: c.namespace } : { kind: "New app", name: c.workload_name, where: c.namespace },
-      lead: `${joining ? `Adds ${esc(c.container_name)} to it.` : `Creates it with container ${esc(c.container_name)}.`} ${esc(plan.impact?.message || "Review the Kubernetes objects before continuing.")}`,
+      lead: `${joining ? `Adds ${esc(c.container_name)} to it.` : `Creates it with the container ${esc(c.container_name)}.`} ${esc(plan.impact?.message || "Check what is created before continuing.")}`,
       issues: notice.issues, issuesTitle: notice.title,
       body: `${plan.app_profile?.notes?.length ? `<div class="app-profile ${esc(plan.app_profile.level || "review")}">${plan.app_profile.notes.map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}</div>` : ""}
-        ${UI.facts([["Image", `<span class="mono">${esc(c.image)}</span>`], ["Ports", esc(c.ports.length)], ["Storage mappings", esc(c.volumes.length)]])}
+        ${UI.facts([["Image", `<span class="mono">${esc(c.image)}</span>`], ["Ports", esc(c.ports.length)], ["Storage", esc(c.volumes.length)]])}
         ${deployCapacityHtml(plan.capacity, false, false, { notice: false })}
         ${joining ? UI.ack("deployConfirm", restart, { onchange: "deployReviewReady()" }) : ""}
         ${gitopsYamlBlock(plan.yaml, plan.secret, { scope: joining ? "added" : "app", file: plan.yaml_file, adds: plan.deploy_adds })}`,
       ack: plan.capacity?.requires_confirmation ? { id: "deployCapacityConfirm", sentence: "Deploy it despite the warnings", onchange: "deployReviewReady()" } : null,
       actions: { dismiss: { label: "Cancel", onclick: "closeModal()" },
-        primary: { label: joining ? "Add container & restart pod" : "Deploy app", onclick: "confirmDeploy()", id: "deployGo",
+        primary: { label: joining ? "Add container and restart app" : "Deploy app", onclick: "confirmDeploy()", id: "deployGo",
           disabled: !!(joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked) } } })}</div>`, true);
   },
   failed: e => toast(e.message, "bad"),
@@ -450,7 +450,7 @@ const DEPLOY = UI.reviewFlow({
     const c = { ...review.config, capacity_token: review.token,
       confirm_capacity: !!$("#deployCapacityConfirm")?.checked };
     try { $("#deployGo").disabled = true; const r = await api("/api/deploy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
-      const kept = (r.reused_volumes || []).length ? ` - kept the existing ${r.reused_volumes.join(", ")}, which nothing was using` : "";
+      const kept = (r.reused_volumes || []).length ? `. The existing ${r.reused_volumes.join(", ")} was reused, because nothing was using it` : "";
       closeModal(); toast((c.target_mode === "existing" ? `${c.container_name} added to ${c.target_workload}` : `${c.workload_name} deployed`) + kept, "ok"); go("workloads");
     } catch (e) {
       const button = $("#deployGo");
@@ -468,7 +468,7 @@ window.doDeploy = async () => {
   try { await logoReady("#d_icon"); } catch (e) { return deployInvalid(e.message, "#d_icon"); }
   if (click !== DEPLOY_CLICKS) return;
   const c = collect();
-  if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
+  if (c.app_profile?.blocked) return toast(c.app_profile.label || "This template cannot be deployed directly", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
   if (c.target_mode === "new" && !c.workload_name) return deployInvalid("App name is required.", "#d_workload_name");
   if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing app.", "#d_target_workload");
@@ -480,7 +480,7 @@ window.doDeploy = async () => {
   };
   const unnamed = extra.findIndex(container => !container.name || !container.image);
   if (unnamed >= 0) return deployInvalid("Every container needs a name and image.", extraField(unnamed, extra[unnamed].name ? "image" : "container_name"));
-  if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Container names must be unique in this pod.", "#d_container_name");
+  if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Each container in an app needs a unique name.", "#d_container_name");
   const storageIssue = [volumeListIssue(c.volumes), ...extra.map(container => volumeListIssue(container.volumes))].find(Boolean);
   if (storageIssue) {
     const vols = volumeListIssue(c.volumes) ? "#d_vols" : extraField(extra.findIndex(container => volumeListIssue(container.volumes)), "vols");
@@ -489,7 +489,7 @@ window.doDeploy = async () => {
   await DEPLOY.open(c);
 };
 window.confirmDeploy = async () => {
-  if (!window.deployReviewReady()) return toast("Review the deployment and acknowledge its warnings first", "bad");
+  if (!window.deployReviewReady()) return toast("First review the deployment and accept its warnings", "bad");
   await DEPLOY.apply();
 };
 

@@ -72,7 +72,7 @@ test("routine rollout estimates stay in details while actual memory risks remain
     const html = t.fields["#mbody"].innerHTML;
     const visible = html.split('<details')[0];
     assert.doesNotMatch(visible, /post-stop capacity|updated pod estimates|live RAM still|intermediate rolling|RollingUpdate permits/);
-    assert.match(html, /Capacity becomes available after old pods stop/);
+    assert.match(html, /Capacity becomes available after the old copies stop/);
     assert.match(html, /Homestead will be briefly unavailable/);
     // One app is named at the top, its change beside it: no row, no flag to point at the notice.
     assert.equal(visible.includes("upd-flag"), false);
@@ -80,7 +80,7 @@ test("routine rollout estimates stay in details while actual memory risks remain
     // An update does not change whether a container has a memory limit.
     if (extra[0]?.startsWith("memory")) {
       assert.doesNotMatch(visible, /No memory limit/);
-      assert.match(html, /No memory limit is set for: data-permissions/);
+      assert.match(html, /No memory limit is set for data-permissions/);
     }
     if (extra[0]?.startsWith("projected")) assert.match(visible, /projected RAM reaches 95%/);
     assert.equal(t.ctx.imageReviewReady(), false, "restart acknowledgement remains required");
@@ -177,8 +177,8 @@ test("a cordoned single host leads with one actionable error and keeps the revie
   assert.match(visible,/The only host is cordoned\. Uncordon it before updating\./);
   assert.doesNotMatch(visible,/scheduling order|placement requirements|data-permissions|updated pod estimates|Resolve the placement/);
   assert.doesNotMatch(html.match(/<details[^>]*>/)[0],/\bopen\b/,"Details starts collapsed even when blocked");
-  assert.match(html,/The estimate covers all containers/);
-  assert.match(html,/No memory limit is set for: data-permissions/);
+  assert.match(html,/The estimate covers every container/);
+  assert.match(html,/No memory limit is set for data-permissions/);
   t.fields["#imageCapacityApprove"].checked=true;
   await t.ctx.imageReviewedApply();
   assert.equal(t.sent.filter(row=>row.path.endsWith('/apply')).length,0);
