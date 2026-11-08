@@ -40,7 +40,7 @@ window.wlFailover = async () => {
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
     ${lh?.unread ? UI.callout("warn", "Could not read whether apps with storage can move off a failed host", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Apps with storage cannot move", moving
       ? "If a host fails, Longhorn releases its storage, so apps set to move restart on another host with their storage."
-      : "If a host fails, Longhorn keeps its storage attached to it, so apps that use storage stay stopped until the host is back.", moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Allow them to move</button>` })}` : ""}
+      : "If a host fails, Longhorn keeps its storage attached to it, so apps that use it stay stopped until the host is back.", moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Allow them to move</button>` })}` : ""}
     ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
     ${UI.actions(`<button class="btn" onclick="wlFailover()">Try again</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}` : `
