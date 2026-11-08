@@ -129,7 +129,7 @@ class LegacyMoveTests(unittest.TestCase):
         self.now += LIMIT
         job = self.look(ident)
         self.assertEqual("failed", job["status"])
-        self.assertIn("Carry on", job["message"])
+        self.assertIn("Resume job", job["message"])
         self.assertIn("old copy", job["message"])
         self.assertTrue(job["resumable"])
         self.assertEqual(0, self.replicas(), "half-way through a swap nothing is started on either volume")

@@ -55,7 +55,7 @@ class NetworkingTests(unittest.TestCase):
     def test_changed_default_cannot_silently_replace_reviewed_address(self):
         cfg = self.edit_service_config()
         cfg.update(vip_mode="shared", reviewed_vip="192.0.2.243")
-        with self.assertRaisesRegex(ValueError, "changed since review"):
+        with self.assertRaisesRegex(ValueError, "changed since the review"):
             SVC.create_service(cfg)
         self.assertFalse(self.sent)
 

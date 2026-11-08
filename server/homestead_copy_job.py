@@ -373,7 +373,7 @@ def resolve(item, read, send, ops, admission):
     if phase == "restore_intent":
         return resumed_restore(item, read, send)
     if phase in ("preparing", "copy_intent", "release_intent", "recovery_intent"):
-        return "running", percent, "A request may be unfinished. Inspect outcome; Homestead will not replay it."
+        return "running", percent, "A request may be unfinished. Choose Check outcome. Homestead does not send it again."
     try:
         if phase == "starting":
             dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
@@ -450,7 +450,7 @@ def resolve(item, read, send, ops, admission):
         # Preserve intent phase when the response is uncertain; never infer
         # success from a same-name replacement or repeat the upstream request.
         ref["retain_resources"] = True
-        return "failed", percent, reason + ". Inspect outcome before starting anything; volumes were retained and no rollback was attempted."
+        return "failed", percent, reason + ". Choose Check outcome before starting anything. The volumes were kept, and nothing was rolled back."
 
 
 KEPT = "The new volumes and the copy Job were kept for inspection."

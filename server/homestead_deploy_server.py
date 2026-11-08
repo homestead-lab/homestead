@@ -354,7 +354,7 @@ def apply_deploy_bindings(cfg):
         if binding == "vip":
             vip = cfg.get("lb_ip") or ""
             if not vip:
-                raise ValueError(f"{key} requires a dedicated Service VIP")
+                raise ValueError(f"{key} needs its own virtual IP")
             updated["env"][key] = vip
     return updated
 

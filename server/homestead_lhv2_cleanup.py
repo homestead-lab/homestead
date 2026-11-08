@@ -109,7 +109,7 @@ def start(body):
         plan = review()
         cfg = {'request_id': body.get('request_id'), 'capacity_token': body.get('capacity_token')}
         if not REVIEW.valid(cfg, _context(plan)): raise ValueError('Host memory ownership changed or review expired; review again')
-        op = SETUP.ops.start(KIND, 'Disable V2 and release owned resources', {'kind': 'Cluster', 'name': 'longhorn'},
+        op = SETUP.ops.start(KIND, 'Turn off V2 and release its resources', {'kind': 'Cluster', 'name': 'longhorn'},
                             '/settings?tab=hardware', {**_context(plan), 'nodes': plan['nodes'], 'managers': plan['managers'],
                             'approval': body['capacity_token'], 'phase': 'stopping'}, 'Waiting for V2 to stop; host memory is unchanged')
         return status(op['id'])

@@ -396,8 +396,8 @@ def _apply_container_volumes(ns, spec, container_requests):
                 if kind in ("new-rwo", "new-rwx") and claim not in seen_claims:
                     seen_claims.add(claim)
                     if _pvc_exists(ns, claim):
-                        raise ValueError(f"volume {claim} already exists — choose "
-                                         "“Existing PVC” to mount it without recreating it")
+                        raise ValueError(f"The volume {claim} already exists. Choose "
+                                         "“Existing volume” to use it without creating it again.")
                     pending.append({
                         "name": claim,
                         "size_gb": max(1, int(row.get("size_gb") or 5)),

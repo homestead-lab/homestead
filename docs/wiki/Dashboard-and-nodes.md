@@ -493,7 +493,7 @@ pressure, core services, and platform warnings from the last day.
   for good asks you to tick that the job stays, and keeps blocking Longhorn
   upgrades, shutdown and OS rollouts until it ends. A disk preparation,
   storage allocation or runtime maintenance is ended from Jobs once the host is
-  removed (**End: host removed** on the job, for admins: it checks the host is
+  removed (**End job for removed host** on the job, for admins: it checks the host is
   really gone, lists what the job may have left on the machine, and changes
   nothing there); a disk retire fails by itself once Longhorn's record of the
   host is deleted; a V2 cleanup ends on its next round, or, if it staged a RAM

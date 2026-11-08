@@ -145,7 +145,7 @@ def service_plan(cfg, require_workload=True):
     elif mode == "manual":
         vip = STATE._ipv4(cfg.get("vip"), "specific VIP")
         if vip in state["node_ips"]:
-            raise ValueError(f"{vip} is a cluster node address and cannot be used as a Service VIP")
+            raise ValueError(f"{vip} is a cluster host address and cannot be used as a virtual IP")
         # An address this Service already carries stays its own: an edit
         # elsewhere in the workload never fails on the address it has (#306).
         if not (existing and vip in (existing.get("external_ips") or [])):
@@ -155,7 +155,7 @@ def service_plan(cfg, require_workload=True):
             warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")
 
     if "reviewed_vip" in cfg and cfg["reviewed_vip"] != vip:
-        raise ValueError("VIP allocation changed since review; review the address and ports again")
+        raise ValueError("The virtual IP changed since the review. Review the address and ports again.")
     if cfg.get("update") and (existing.get("lb_class") or "") != (PLATFORM.vip_spec(vip).get("loadBalancerClass") or ""):
         raise ValueError("Changing this Service's load-balancer class requires replacement. Create an additional VIP Service first; the original listener is left untouched.")
     owners = []

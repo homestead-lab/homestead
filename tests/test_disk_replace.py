@@ -294,7 +294,7 @@ class RetireWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertFalse(job["resumable"])
         self.assertIn("start the retire again", job["message"])
-        self.assertNotIn("Carry on", job["message"])
+        self.assertNotIn("Resume job", job["message"])
         with self.assertRaisesRegex(ValueError, "review"):
             JOBS.resume(ident)
 
@@ -347,7 +347,7 @@ class RetireWaitTests(unittest.TestCase):
         ident = self.refused_removing()
         job = self.look(ident)
         self.assertFalse(job["cleanable"])
-        self.assertIn("Carry on", job["message"])
+        self.assertIn("Resume job", job["message"])
         self.assertNotIn("Clean up", job["message"])
         with self.assertRaises(ValueError):
             JOBS.cancel(ident)
@@ -424,7 +424,7 @@ class RetireWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertIn("working again", job["message"])
         self.assertNotIn("Clean up", job["message"], "it can't be cleaned up at this step")
-        self.assertIn("Allow new replicas", job["message"])
+        self.assertIn("Allow new copies", job["message"])
         self.assertEqual([], self.c.kube.writes)
         self.assertTrue(self.disk_in_longhorn())
 
@@ -493,7 +493,7 @@ class RetireWaitTests(unittest.TestCase):
         job = self.look(ident)
         self.assertEqual("failed", job["status"], job["message"])
         self.assertIn("30 minutes", job["message"])
-        self.assertIn("Carry on", job["message"])
+        self.assertIn("Resume job", job["message"])
         self.assertNotIn("Clean up", job["message"], "it can't be cleaned up at this step")
         self.assertTrue(job["resumable"])
         self.assertFalse(job["cleanable"])
@@ -643,7 +643,7 @@ class RetireWaitTests(unittest.TestCase):
         ident = self.failed()
         job = self.look(ident)
         self.assertNotIn("Clean up lets replicas", job["message"])
-        self.assertIn("Allow new replicas", job["message"])
+        self.assertIn("Allow new copies", job["message"])
         plan = JOBS.cancel_plan(ident)
         self.assertEqual([], plan["undo"])
         self.assertIn("Nothing on the disk changes", " ".join(plan["keeps"]))
@@ -721,9 +721,9 @@ class RetireWaitTests(unittest.TestCase):
 
     def test_the_failed_message_says_how_to_let_replicas_back_once_it_is_dismissed(self):
         ident = self.failed()
-        self.assertIn("Nodes > Disks > Allow new replicas", self.look(ident)["message"])
+        self.assertIn("Hosts > Disks > Allow new copies", self.look(ident)["message"])
         page = "".join(part.read_text() for part in sorted((Path(__file__).resolve().parents[1] / "web/js").glob("views-storage*.js")))
-        self.assertIn("'Allow new replicas'", page, "the message names this menu entry")
+        self.assertIn("'Allow new copies'", page, "the message names this menu entry")
         JOBS.dismiss(ident)
         DISKS.set_scheduling("node3", "bd-sdb", True)
         self.assertIs(True, self.scheduling())
@@ -849,16 +849,16 @@ class RetireWaitTests(unittest.TestCase):
     def test_the_failed_message_names_the_buttons_on_the_page(self):
         ident = self.failed()
         message = self.look(ident)["message"]
-        self.assertIn("Carry on", message)
+        self.assertIn("Resume job", message)
         self.assertIn("Clean up", message)
-        self.assertNotIn("Resume", message)
+        self.assertNotIn("Carry on", message)
         self.assertNotIn("Cancel", message)
 
     def test_a_forced_retire_says_to_start_again_and_how_to_clean_up(self):
         message = self.look(self.failed(force=True, confirm="bd-sdb"))["message"]
         self.assertIn("Clean up", message)
         self.assertIn("start the retire again", message)
-        self.assertNotIn("Carry on", message)
+        self.assertNotIn("Resume job", message)
 
     def test_the_plan_for_a_failed_retire_says_it_lets_replicas_back(self):
         plan = JOBS.cancel_plan(self.failed())

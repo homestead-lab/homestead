@@ -1056,7 +1056,7 @@ def stop_prepull(name):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-    return {"ok": True, "daemonset": name, "message": f"Pre-pull {name} stopped"}
+    return {"ok": True, "daemonset": name, "message": f"Pre-download {name} stopped"}
 
 
 def forget_rollback(namespace, name):

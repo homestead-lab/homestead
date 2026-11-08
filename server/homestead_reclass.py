@@ -842,7 +842,7 @@ def resolve(item):
             return _rollback(ref["namespace"], ref, f"Kubernetes kept answering that {what} does not exist.", item)
         return "failed", item.get("progress", 0), (
             f"Stopped at '{ref.get('phase')}': Kubernetes kept answering that {what} does not exist. "
-            "Nothing is lost - the original is kept as an old copy - and Carry on picks up from this step.")
+            "Nothing is lost, because the original is kept as an old copy, and Resume job continues from this step.")
 
 
 def resumable(item):
@@ -1121,8 +1121,8 @@ def _resolve(item):
             if not ref.get("new_pv"):
                 return _rollback(ns, ref, f"The new volume was not bound within {START_LIMIT // 60} minutes.", item)
             return "failed", item.get("progress", 0), (
-                f"Stopped at 'swap' after {START_LIMIT // 60} minutes: {result[2]}. Nothing is lost - the original is "
-                "kept as an old copy - and Carry on picks up from this step.")
+                f"Stopped at 'swap' after {START_LIMIT // 60} minutes: {result[2]}. Nothing is lost, because the original is "
+                "kept as an old copy, and Resume job continues from this step.")
         return result
     if phase == "start":
         _steps(item, "start")

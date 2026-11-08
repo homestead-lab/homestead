@@ -45,9 +45,9 @@ def registered():
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return []
-        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"The virtual IPs could not be read ({str(error)[:160]})") from error
     except Exception as error:
-        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"The virtual IPs could not be read ({str(error)[:160]})") from error
     try:
         rows = json.loads((cm.get("data") or {}).get("vips.json") or "[]")
     except ValueError:
@@ -70,12 +70,12 @@ def set_default_vip(ip):
         raise ValueError("Install kube-vip or MetalLB before choosing a workload VIP; ServiceLB uses node addresses")
     def choose(rows):
         if not any(row["ip"] == ip for row in rows):
-            raise ValueError("Add this reserved address to Your VIPs first")
+            raise ValueError("Add this reserved address under Virtual IPs first")
         for row in rows:
             row["default"] = row["ip"] == ip
         return rows
     _update_registered(choose)
-    return {"ok": True, "ip": ip, "detail": "Default workload VIP saved; existing Services are unchanged"}
+    return {"ok": True, "ip": ip, "detail": "Default virtual IP saved. Existing services are not changed."}
 
 
 def _update_registered(change):
@@ -86,7 +86,7 @@ def _update_registered(change):
     an empty one to save over."""
     def apply(stored):
         if stored is not None and not isinstance(stored, list):
-            raise ValueError("Your VIPs could not be read (vips.json is not a list); nothing was changed")
+            raise ValueError("The virtual IPs could not be read (vips.json is not a list). Nothing was changed.")
         rows = [row for row in (stored or []) if isinstance(row, dict) and row.get("ip")]
         return sorted(change(rows), key=lambda r: int(ipaddress.ip_address(r["ip"])))
     return KUBE.update_json(_vip_map_path(), "vips.json", apply, read=STATE.kget, write=STATE.ksend,
@@ -251,7 +251,7 @@ def _moved_back(failed, moved, moving, old, new, maybe=()):
     if rest:
         where.append(f"{_names(rest)} {_is(rest)} on {old}")
     return (f"{failed}, and putting Services back on {old} failed: " + "; ".join(where)
-            + f". Your VIPs still names {old}. Do not try the move again until {_names(stuck + unknown)} "
+            + f". Virtual IPs still lists {old}. Do not try the move again until {_names(stuck + unknown)} "
             f"{_is(stuck + unknown)} back on {old} (Edit on each)")
 
 
@@ -273,11 +273,11 @@ def change_vip(old, new, apply=False):
     rows = registered()
     entry = next((row for row in rows if row["ip"] == old), None)
     if entry is None:
-        raise ValueError(f"{old} is not one of Your VIPs")
+        raise ValueError(f"{old} is not one of the virtual IPs")
     if new in state["node_ips"]:
-        raise ValueError(f"{new} is a node's own address")
+        raise ValueError(f"{new} is a host's own address")
     if any(row["ip"] == new for row in rows):
-        raise ValueError(f"{new} is already one of Your VIPs; move the Services with Edit on each instead")
+        raise ValueError(f"{new} is already one of the virtual IPs. Move the services with Edit on each instead.")
     INV.check_address(new, state)
     if any(new in (row.get("external_ips") or []) for row in state["services"]):
         raise ValueError(f"{new} is already used by a Service")

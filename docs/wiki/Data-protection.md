@@ -21,7 +21,7 @@ Deleting a recovery point or cleaning up a system checkpoint requires an impact
 review and exact-name confirmation. A persistent job follows the request,
 Longhorn merge/purge progress and verified disappearance from the snapshot and
 engine inventories. It survives refresh/restart, reports errors and offers
-**Carry on** after a timeout; removal cannot be cancelled or undone. Reported
+**Resume job** after a timeout; removal cannot be cancelled or undone. Reported
 purge percentages are Longhorn's, not estimates of bytes reclaimed.
 
 Longhorn can retain a removed snapshot while it is the direct parent of Volume

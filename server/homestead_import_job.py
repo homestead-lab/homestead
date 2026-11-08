@@ -173,7 +173,7 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
 def status(item, read):
     ref = item["ref"]
     if ref.get("phase") != "copying":
-        return "running", item.get("progress", 0), "Import setup is active or interrupted. Inspect outcome; no write will be automatically repeated."
+        return "running", item.get("progress", 0), "The import setup is running or was interrupted. Choose Check outcome. Nothing is written again automatically."
     try:
         now = verify_claims(ref["namespace"], ref["claims"], read)
         ref["claims"] = now

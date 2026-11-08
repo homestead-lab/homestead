@@ -441,7 +441,7 @@ def status(item, ops):
     try:
         with LOCKS.worker_lock(item["id"], ops, timeout=.01):
             before = _before(item)
-            return "running", item.get("progress", 0), "Rename dispatcher is no longer active. Inspect both workload names and choose Inspect outcome; requests are never replayed." + (f" {before}." if before else "")
+            return "running", item.get("progress", 0), "The rename is no longer running. Check both app names and choose Check outcome. Requests are never sent again." + (f" {before}." if before else "")
     except Exception:
         return "running", item.get("progress", 0), item.get("message") or "Inspect the rename if progress has stopped; requests are never replayed"
 

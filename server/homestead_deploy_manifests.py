@@ -125,7 +125,7 @@ def analyze_deploy_intent(cfg):
     network = str(updated.get("template_network") or "bridge").lower()
     if network == "host":
         intents.append("network")
-        notes.append("The source requests host networking; review node port collisions and failover, or switch to a Service VIP.")
+        notes.append("The source uses host networking. Check for port conflicts on the hosts and how it fails over, or switch to a virtual IP.")
     elif network not in ("bridge", "default", "") and not dns:
         intents.append("network")
         notes.append("The source custom network is represented by a dedicated Kubernetes VIP.")

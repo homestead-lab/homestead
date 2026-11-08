@@ -257,7 +257,7 @@ def plan(node):
     if not _ready(host):
         blockers.append(f"{node} is not Ready")
     if own_node() == node:
-        blockers.append(f"Homestead runs on {node}. Move it to another host first (Host actions › Move all off), then review again")
+        blockers.append(f"Homestead runs on {node}. Move it to another host first (Host actions › Move apps off), then review again")
     shared, known = PLATFORM.shared_server_args(nodes)
     if not known:
         blockers.append("The servers' shared settings could not be read from k3s.io/node-args")

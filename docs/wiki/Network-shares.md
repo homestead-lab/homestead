@@ -164,7 +164,7 @@ When Longhorn reports recoverable storage on a Ready node for at least two minut
 the shares are re-added automatically. Removing or re-adding mounts **restarts SMB
 and briefly interrupts all client connections**. If restoring a share fails the
 rollout check while SMB was serving, the working subset is restored and automatic
-retries stop. Resolve the storage/mount problem, then use **Repair / retry recovery**.
+retries stop. Resolve the storage/mount problem, then use **Repair SMB server**.
 This starts a new stability check instead of bypassing it. Polling is normally once
 a minute, so these are minimum stability windows, not outage-time guarantees.
 

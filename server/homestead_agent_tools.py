@@ -1040,7 +1040,7 @@ TOOLS = [
          execute=_route("POST", "/api/volumes/old-copies/remove"), role="admin"),
     Tool("list_cached_images", "Cached images", "read", READ, "Container images pre-pulled onto the hosts.",
          run=_get("/api/images")),
-    Tool("prepull_image", "Pre-pull an image", "storage:manage", CHANGE,
+    Tool("prepull_image", "Pre-download an image", "storage:manage", CHANGE,
          "Pulls an image onto hosts ahead of time, so an app starts fast; nodes to limit which.",
          {"image": S, "nodes": {"type": "array", "items": S}}, ["image"],
          run=_post("/api/images/prepull", {"image": "image", "nodes": "nodes"})),

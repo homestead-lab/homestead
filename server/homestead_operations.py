@@ -1436,7 +1436,7 @@ def dismiss(operation_id):
         if _receipt_needed(match):
             raise ValueError("This power receipt is still needed for recovery or replay protection; inspect its job and wait for the approval to expire")
         if _recovery_needed(match):
-            raise ValueError("This job retains partial-resource recovery details. Review retained resources before clearing its history.")
+            raise ValueError("This job keeps recovery details for resources it left. Choose Review kept resources before clearing it.")
         items = [item for item in items if item.get("id") != operation_id]
         _write(items)
     return {"ok": True, "id": operation_id}

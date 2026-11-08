@@ -177,7 +177,7 @@ Settings → Hardware and storage) opens them all.
 - On k3s and other clusters, mount the disk on the host (an `/etc/fstab` line)
   and give Longhorn the folder - or the raw device, for the V2 engine.
 - A Longhorn disk can stop taking new copies, have them moved elsewhere
-  (**Move replicas off**), and be taken away once empty (**Remove from
+  (**Move copies off**), and be taken away once empty (**Remove from
   Longhorn**). Its files stay on the disk.
 - **Add tags** on a Longhorn disk labels it - `ssd`, `nvme`, `hdd`, anything -
   for storage classes to choose by, and **Node tags** does the same for a
@@ -451,7 +451,7 @@ system's space the system's:
 - **A floor.** When a root filesystem holding a Longhorn disk falls under 15%
   free (never under 10 GB), Homestead stops Longhorn placing new copies there,
   and says so as an alert; above 20% (15 GB) it may again. Copies already there
-  stay: **Move replicas off** moves them, or give Longhorn a volume of its own.
+  stay: **Move copies off** moves them, or give Longhorn a volume of its own.
 
 ### Disk tags
 

@@ -868,17 +868,17 @@ def _waited_out(ref, key):
 def _back_on(ref):
     """How replicas get back onto the disk, in the words on the page."""
     if ref.get("phase") in ("remove", "cleanup"):
-        return "It can no longer be cleaned up: check it on Nodes > Disks, where Allow new replicas lets replicas onto it."
+        return "It can no longer be cleaned up. Check it under Hosts > Disks, where Allow new copies lets volume copies onto it again."
     if ref.get("was_scheduling", True):
-        return "Clean up lets replicas onto it again, as does Nodes > Disks > Allow new replicas once this job is dismissed."
-    return "It took no new replicas when this retire started either: Nodes > Disks > Allow new replicas changes that."
+        return "Clean up lets volume copies onto it again, as does Hosts > Disks > Allow new copies once this job is dismissed."
+    return "It already took no new volume copies when this job started. Hosts > Disks > Allow new copies changes that."
 
 
 def _still_held(what, ref, disk_id):
     if ref.get("force") and ref.get("phase") != "remove":
         on = "To go on, start the retire again for a fresh review."
     else:
-        on = "Carry on tries again from here."
+        on = "Resume job tries again from here."
     return (f"Longhorn has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
             f"no new replicas and stays in Longhorn. {_back_on(ref)} {on}")
 
@@ -909,7 +909,7 @@ def retire_step(item):
                                         f"Longhorn. {_back_on(ref)}")
         if ready is None:
             return "failed", progress, (f"Longhorn does not say whether {path} works, so this retire stops here and the "
-                                        f"disk stays in Longhorn. {_back_on(ref)} Carry on asks again.")
+                                        f"disk stays in Longhorn. {_back_on(ref)} Resume job asks again.")
         try:
             _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
         except ValueError as refused:
@@ -917,7 +917,7 @@ def retire_step(item):
             if _waited_out(ref, "recheck_since"):
                 return "failed", progress, (f"Longhorn has not let new replicas be stopped on {path} after "
                                             f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire went no further and "
-                                            f"the disk stays in Longhorn. {_back_on(ref)} Carry on tries again from here.")
+                                            f"the disk stays in Longhorn. {_back_on(ref)} Resume job tries again from here.")
             return "running", progress, f"Stopping new replicas first - {said}"
         ref.pop("recheck")
         return "running", progress, "No new replicas go to the disk"
@@ -1038,9 +1038,9 @@ def retire_step(item):
                     raise
         ref["phase"] = "done"
         return "succeeded", 100, (
-            f"{ref.get('path') or disk_id} is out of Longhorn on {node}. Add the new drive there (Nodes > Disks > "
-            "Add to Longhorn); volumes that had nowhere else to go rebuild onto it, and the rest are rebuilding "
-            "on other nodes now - Volumes shows each one's progress.")
+            f"{ref.get('path') or disk_id} is out of Longhorn on {node}. Add the new drive there (Hosts > Disks > "
+            "Add to Longhorn). Volumes that had nowhere else to go are rebuilt onto it, and the rest are being rebuilt "
+            "on other hosts now. The Volumes page shows the progress of each.")
     return item.get("status", "succeeded"), item.get("progress", 100), item.get("message", "")
 
 

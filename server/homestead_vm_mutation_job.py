@@ -200,7 +200,7 @@ def resume_cleanups(ops, send):
 
 def status(item):
     return "running", item.get("progress", 0), (
-        "VM configuration dispatch is in progress or was interrupted. Inspect outcome if it has stopped; no resource request is automatically resent.")
+        "The VM change is in progress or was interrupted. If it has stopped, choose Check outcome. No request is sent again automatically.")
 
 
 def cancel_plan(item):

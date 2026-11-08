@@ -103,7 +103,7 @@ def start(cfg, ops):
 def resolve(item):
     ref = item["ref"]
     if time.time() - ref["since"] > TIMEOUT:
-        return "failed", item.get("progress", 0), "Cleanup still pending after one hour. Longhorn may continue; inspect the snapshot/head dependency, then Carry on to monitor again."
+        return "failed", item.get("progress", 0), "The cleanup is still pending after one hour. Longhorn may continue. Check how the snapshot depends on the current data, then choose Resume job to follow it again."
     volume = KUBE.get_optional(f"{API}/volumes/{ref['volume']}", read=kget)
     if not volume or volume["metadata"].get("uid") != ref["volume_uid"]:
         return "failed", 0, "Backing volume disappeared or changed; no further actions taken"

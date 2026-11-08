@@ -504,7 +504,7 @@ def install_kube_vip(cfg=None):
     return {"ok": True, "name": CHARTS["kube-vip"], "job": f"helm-install-{CHARTS['kube-vip']}",
             "interface": interface, "class_only": class_only,
             "detail": (f"kube-vip is being installed{f', announcing on {interface}' if interface else ''}. "
-                       "Add the addresses it may hand out under Networking > Your VIPs")}
+                       "Add the addresses it may assign under Networking > Virtual IPs.")}
 
 
 # ------------------------------------------------------------------ KubeVirt
