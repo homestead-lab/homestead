@@ -28,12 +28,12 @@ const fails = () => Promise.reject(new Error("HTTP 404"));
 
 test("platform unread and the policy unread: Longhorn may not be installed", async () => {
   const html = await failover(null, fails);
-  assert.match(html, /\[warn\|Could not read Longhorn's node-failure policy\|HTTP 404\. Longhorn may not be installed on this cluster\.\]/);
+  assert.match(html, /\[warn\|Could not read whether apps with storage can move off a failed host\|HTTP 404\. Longhorn may not be installed on this cluster\.\]/);
 });
 
 test("Longhorn known to be installed: the failed read is said as it is", async () => {
   const html = await failover({ longhorn: true }, fails);
-  assert.match(html, /\[warn\|Could not read Longhorn's node-failure policy\|HTTP 404\]/);
+  assert.match(html, /\[warn\|Could not read whether apps with storage can move off a failed host\|HTTP 404\]/);
   assert.doesNotMatch(html, /may not be installed/);
 });
 

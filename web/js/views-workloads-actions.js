@@ -38,9 +38,9 @@ window.wlFailover = async () => {
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
     <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
-    ${lh?.unread ? UI.callout("warn", "Could not read Longhorn's node-failure policy", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Volume attachment blocks failover", `${moving
-      ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another host takes its volume with it.`
-      : "Single-node volumes stay attached to the failed host until Longhorn releases them."}`, moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Let Longhorn release them</button>` })}` : ""}
+    ${lh?.unread ? UI.callout("warn", "Could not read whether apps with storage can move off a failed host", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Apps with storage cannot move", moving
+      ? "If a host fails, Longhorn releases its storage, so apps set to move restart on another host with their storage."
+      : "If a host fails, Longhorn keeps its storage attached to it, so apps that use it stay stopped until the host is back.", moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Allow them to move</button>` })}` : ""}
     ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
     ${UI.actions(`<button class="btn" onclick="wlFailover()">Try again</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}` : `
@@ -68,11 +68,11 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!(await ask("Let Longhorn delete the pods of a node that stops answering, so their volumes can attach elsewhere?\n\nThis is Longhorn's \"Pod Deletion Policy When Host is Down\" set to delete-both-statefulset-and-deployment-pod.", { title: "Pod deletion when a host is down", ok: "Allow" }))) return;
+  if (!(await ask("If a host fails, Longhorn will delete its pods and release their storage, so apps set to move can restart on another host.\n\nRisk: if the host has only lost its network connection and is still running, its copy of an app may keep running, and any data that copy writes after the switch-over is lost.", { title: "Allow apps with storage to move", ok: "Allow" }))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
-    toast("Longhorn now lets go of a failed node's volumes", "ok"); wlFailover();
+    toast("Apps with storage can now move off a failed host", "ok"); wlFailover();
   } catch (e) { toast(e.message, "bad"); }
 };
 

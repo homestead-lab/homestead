@@ -15,7 +15,9 @@ The V2 (SPDK) data engine is switched on here too. On Harvester its own
 setting drives Longhorn's and prepares the hosts, so that is what changes.
 """
 import json
+import time
 import urllib.error
+from datetime import datetime
 import homestead_disk_v2 as DISK_V2
 import homestead_operations as OPS
 import homestead_routes
@@ -34,6 +36,17 @@ V2 = "v2-data-engine"
 NODE_DOWN = "node-down-pod-deletion-policy"
 NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-pod",
                     "delete-both-statefulset-and-deployment-pod")
+# Longhorn's default, do-nothing, keeps a down node's pods - and with them
+# every volume one node mounts at a time - until a person deletes them: an app
+# set to move starts on another host and waits there for its volume for as
+# long as the host is down. Homestead sets the policy once (ensure_node_down);
+# the mark on the setting keeps a later choice, do-nothing included, as it is.
+NODE_DOWN_RELEASE = "delete-both-statefulset-and-deployment-pod"
+NODE_DOWN_MARK = "homestead.io/node-down-set"
+# A down host still holding a volume this long after it stopped answering:
+# past the 15 s failover and Longhorn's own clean-up, so the alert names a
+# stuck volume, not one about to be let go.
+HELD_GRACE = 180
 # How many replicas one node rebuilds at once. More gets a failed node's
 # volumes whole again sooner, at the cost of disk and network while it runs.
 # Longhorn reads 0 as never rebuild, which would leave volumes a copy short
@@ -68,6 +81,98 @@ def node_down(read=None):
         return None
     value = item.get("value") if item.get("value") not in (None, "") else item.get("default")
     return str(value) if value not in (None, "") else "do-nothing"
+
+
+def ensure_node_down(read=None, send=None):
+    """Once per cluster: Longhorn's default policy for a down node becomes
+    NODE_DOWN_RELEASE, so a failed host lets go of its volumes. True when it
+    was changed, False when the setting was marked already or someone had
+    chosen a policy, None when it couldn't be read (Longhorn not installed,
+    say) - tried again later."""
+    read, send = read or kget, send or ksend
+    try:
+        item = read(f"{LH}/settings/{NODE_DOWN}") or {}
+    except Exception:
+        return None
+    if ((item.get("metadata") or {}).get("annotations") or {}).get(NODE_DOWN_MARK):
+        return False
+    value = item.get("value") if item.get("value") not in (None, "") else item.get("default")
+    change = value in (None, "", "do-nothing")
+    body = {"metadata": {"annotations": {NODE_DOWN_MARK: "1"}}, **({"value": NODE_DOWN_RELEASE} if change else {})}
+    send("PATCH", f"{LH}/settings/{NODE_DOWN}", body, ctype="application/merge-patch+json")
+    return change
+
+
+def _ready_since(node):
+    """(ready, since): whether a node is Ready, and when that last changed."""
+    cond = next((c for c in (node.get("status") or {}).get("conditions") or [] if c.get("type") == "Ready"), {})
+    return cond.get("status") == "True", cond.get("lastTransitionTime") or ""
+
+
+def held_volumes(attachments, nodes, pvs, policy, now, parse_time):
+    """The single-host Longhorn volumes each down host still holds, HELD_GRACE
+    after it went down: their apps cannot start anywhere else meanwhile.
+    attachments, nodes, pvs: the Kubernetes lists; policy: NODE_DOWN's value,
+    or None unread; parse_time: an RFC 3339 time to seconds."""
+    claims = {}
+    for pv in pvs or []:
+        spec = pv.get("spec") or {}
+        ref = spec.get("claimRef") or {}
+        if set(spec.get("accessModes") or []) & {"ReadWriteOnce", "ReadWriteOncePod"} and ref.get("name"):
+            claims[pv["metadata"]["name"]] = f"{ref.get('namespace')}/{ref['name']}"
+    held = {}
+    for node in nodes or []:
+        ready, since = _ready_since(node)
+        try:
+            down_for = now - parse_time(since)
+        except Exception:
+            continue
+        if ready or down_for < HELD_GRACE:
+            continue
+        name = node["metadata"]["name"]
+        rows = sorted(claims[a["spec"]["source"]["persistentVolumeName"]] for a in attachments or []
+                      if (a.get("spec") or {}).get("nodeName") == name
+                      and (a.get("spec") or {}).get("attacher") == "driver.longhorn.io"
+                      and (a.get("status") or {}).get("attached")
+                      and ((a.get("spec") or {}).get("source") or {}).get("persistentVolumeName") in claims)
+        if rows:
+            held[name] = {"claims": rows, "down_minutes": int(down_for // 60), "policy": policy}
+    return held
+
+
+def held_alert_facts(held):
+    """One alert per down host still holding volumes, naming them: the summary
+    first, then why, and the way out (design.md, Notices)."""
+    facts = []
+    for node, row in sorted(held.items()):
+        count, names = len(row["claims"]), ", ".join(row["claims"][:6]) + (" and more" if len(row["claims"]) > 6 else "")
+        releasing = row["policy"] in ("delete-deployment-pod", NODE_DOWN_RELEASE)
+        why = ("Longhorn is set to release them but has not done so yet. Check the longhorn-manager logs."
+               if releasing else
+               f"To fix this, turn on Allow apps with storage to move off a failed host (Settings, Hardware and storage), "
+               f"or bring {node} back online.")
+        facts.append({"signals": {"held": count}, "key": f"held-volumes:{node}", "category": "outage", "severity": "critical",
+                      "title": f"{node} is down; {count} volume{'s are' if count != 1 else ' is'} still attached to it",
+                      "resolved": f"No volumes are attached to {node} any more",
+                      "body": f"Apps that use these volumes cannot start on another host: {names}. {why}",
+                      "href": "/settings?tab=cluster"})
+    return facts
+
+
+def held_status(now=None):
+    """held_volumes from the cluster as it is now."""
+    parse = lambda text: datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    held = held_volumes(KUBE.items("/apis/storage.k8s.io/v1/volumeattachments", read=kget),
+                        KUBE.items("/api/v1/nodes", read=kget),
+                        KUBE.items("/api/v1/persistentvolumes", read=kget),
+                        None, now or time.time(), parse)
+    # The policy only changes what the alert advises, so it is read only when
+    # there is something to advise on: an unread Longhorn never empties the list.
+    if held:
+        policy = node_down()
+        for row in held.values():
+            row["policy"] = policy
+    return held
 
 
 def _int(text, default):
@@ -186,6 +291,11 @@ def save(cfg, *, allow_v2_enable=False):
         if cfg["node_down"] not in NODE_DOWN_VALUES:
             raise ValueError("pod deletion when a node is down is one of " + ", ".join(NODE_DOWN_VALUES))
         _patch_setting(NODE_DOWN, cfg["node_down"])
+        try:
+            ksend("PATCH", f"{LH}/settings/{NODE_DOWN}", {"metadata": {"annotations": {NODE_DOWN_MARK: "1"}}},
+                  ctype="application/merge-patch+json")
+        except Exception:
+            pass        # unmarked: the next save marks it; until then only a do-nothing chosen here could be changed
         done.append("pods on a failed node: " + cfg["node_down"])
     if "v2" in cfg and bool(cfg["v2"]) != bool(current["v2"].get("enabled")):
         value = "true" if cfg["v2"] else "false"

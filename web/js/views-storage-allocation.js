@@ -66,10 +66,13 @@ async function lhSettingsPaint() {
       `<label class="toggle"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
       ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}`
       : offlineUnread ? `<div class="dim small" style="margin-top:10px">Could not read whether Longhorn rebuilds copies of detached volumes: ${esc(offlineUnread)}</div>` : ""}
-    <div class="f" style="margin-top:10px"><label>Pods on a failed host ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead host, so a container moving to another host cannot mount it there until the host is back. Containers > If a host fails chooses which containers move.")}</label>
-      <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the host"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
-        ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
-        .map(([v, l]) => `<option value="${v}" ${v === cap.node_down ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="srows" style="margin-top:10px">${settingRow(`Allow apps with storage to move off a failed host ${tip("When a host fails, Longhorn keeps its storage attached to it, so apps that use that storage cannot start on another host. With this on, Longhorn deletes the failed host's pods and releases their storage.")}`,
+      ["do-nothing", "delete-both-statefulset-and-deployment-pod"].includes(cap.node_down) ? "" : `Currently set outside Homestead to ${esc(cap.node_down)}. Turning this on applies it to all apps.`,
+      `<label class="toggle"><input type="checkbox" id="lh_nodedown" data-was="${esc(cap.node_down)}" ${cap.node_down === "delete-both-statefulset-and-deployment-pod" ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
+    ${UI.more("Effects and risks", `<p><b>On:</b> if a host fails, apps set to move restart on another host within a few minutes, with their storage.</p>
+      <p><b>Off:</b> those apps stay stopped until the failed host is back online.</p>
+      <p><b>Storage:</b> either way, any volume with a copy on the failed host is left with one copy fewer. After 10 minutes, Longhorn creates a new copy on another host if one has enough space. If none does, the volume runs with fewer copies until the failed host is back. A volume whose only copy is on the failed host is unavailable until then.</p>
+      <p><b>Risk of turning it on:</b> Homestead cannot tell a host that has failed from one that has only lost its network connection. If the host is still running, its copy of an app may keep running too, and any data that copy writes after the switch-over is lost. Leave this off if your hosts sometimes lose their network connection while still running, or if an app must never run twice.</p>`, false, "lh-nodedown-why")}
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
     <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Past a host's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused; nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
     <div class="dim xs" style="margin-top:8px">What fills a disk for real is data written: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all hosts now.</div>
@@ -100,9 +103,16 @@ window.lhPreview = () => {
   $("#lh_largest").innerHTML = lhLargest(preview);
 };
 
+/* The switch's answer: a policy to save only when it was turned on or off. */
+function lhNodeDownChoice() {
+  const box = $("#lh_nodedown");
+  if (!box) return "";
+  const was = box.dataset.was === "delete-both-statefulset-and-deployment-pod";
+  return box.checked === was ? "" : box.checked ? "delete-both-statefulset-and-deployment-pod" : "do-nothing";
+}
 window.lhSettingsSave = async () => {
   const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value,
-    node_down: $("#lh_nodedown")?.value || "", ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
+    node_down: lhNodeDownChoice(), ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const offline = $("#lh_offline"), was = STATE.data.lhOffline;
@@ -114,5 +124,5 @@ window.lhSettingsSave = async () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  lhLevel, lhShort, lhNodeRows, lhLargest, lhCapacityCard, lhSettingsPaint
+  lhLevel, lhShort, lhNodeRows, lhLargest, lhCapacityCard, lhSettingsPaint, lhNodeDownChoice
 };

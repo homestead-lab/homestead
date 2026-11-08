@@ -550,7 +550,7 @@ try {
     await page.evaluate(failing, "/api/longhorn/capacity");
     await page.evaluate(() => wlFailover());
     await settled(page);
-    assert.match(await body(), /Could not read Longhorn's node-failure policy[\s\S]*timed out/);
+    assert.match(await body(), /Could not read whether apps with storage can move off a failed host[\s\S]*timed out/);
     await close();
 
     // If a host fails: an unread container list is said, and nothing is saved against an old one.

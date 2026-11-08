@@ -317,6 +317,7 @@ def _alert_sources():
     take("addresses", lambda: VIPS.alert_facts(cached("network", keep, INV.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
+    take("held-volumes", lambda: LHCAP.held_alert_facts(LHCAP.held_status()))
     take("disks", lambda: DISKS.alert_facts(cached("disks", keep, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", keep, NODES.ports_report)))
@@ -369,6 +370,25 @@ def push_alerts(fresh):
                      urgency="high" if urgent else "normal")
 
 
+# Whether Longhorn's policy for a down node has been settled (LHCAP.ensure_node_down).
+_node_down_settled = [False]
+
+
+def _settle_node_down():
+    """Once: a failed host lets go of its volumes, so an app set to move does
+    (LHCAP.NODE_DOWN_RELEASE). Harvester keeps Longhorn's settings itself."""
+    if _node_down_settled[0]:
+        return
+    if cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version):
+        _node_down_settled[0] = True
+        return
+    changed = LHCAP.ensure_node_down()
+    if changed is not None:
+        _node_down_settled[0] = True
+    if changed:
+        print("longhorn: pods on a failed node are now deleted, so their volumes can attach elsewhere", flush=True)
+
+
 def _alerts_loop():
     LOGALERTS.start()
     # The summary push (#921) has its own thread: building one reads the Timeline.
@@ -378,6 +398,10 @@ def _alerts_loop():
         if LEADER.is_leader():
             try:
                 with self_data_activity():
+                    try:
+                        _settle_node_down()
+                    except Exception as error:
+                        print(f"longhorn node-down policy: {str(error)[:160]}", flush=True)
                     push_alerts(ALERTS.observe(_alert_sources()))
                 beat("alerts", LOOK_SECONDS, leader_only=True)
             except Exception as error:

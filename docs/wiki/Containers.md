@@ -1195,10 +1195,27 @@ container's editor has it under *Placement*:
 | **Wait for its node** | it stays with that node and starts again when the node is back - for apps tied to that host's hardware (a Coral, a Zigbee stick), or better restarted where they were |
 | **Kubernetes default** | Kubernetes moves it after five minutes - what anything Homestead did not deploy has |
 
-A container whose volume one node mounts at a time only really moves if
-Longhorn lets go of the volume on the dead node. The dialog says whether it
-will, and **Let Longhorn release them** sets Longhorn's *Pod Deletion Policy
-When Node is Down* so it does; it is also under **Settings → Hardware and storage**.
+A container whose volume can be attached to only one host at a time can move
+only if Longhorn releases that volume from the failed host. This is the
+**Allow apps with storage to move off a failed host** setting under
+**Settings → Hardware and storage**. Homestead turns it on once, when it first
+starts, unless someone has already changed it; after that, your choice is kept.
+The dialog shows whether it is on, and **Allow them to move** turns it on.
+
+**Risk of turning it on:** Homestead cannot tell a host that has failed from one
+that has only lost its network connection. If the host is still running, its
+copy of an app may keep running too, and any data that copy writes after the
+switch-over is lost. With the setting off, those apps stay stopped until the
+failed host is back online. While a failed host still has volumes attached, an
+alert lists them.
+
+**Storage:** either way, any volume with a copy on the failed host is left with
+one copy fewer. After 10 minutes, Longhorn creates a new copy on another host
+if one has enough space and the disk tags the volume's storage class requires.
+If none does, the volume runs with fewer copies until the failed host is back,
+when the old copy is brought up to date. A volume whose only copy is on the
+failed host is unavailable until then.
+
 Changing a container's choice restarts it.
 
 ## Architecture

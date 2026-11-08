@@ -10,7 +10,7 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
 | **Placement** | How hosts share the work - Kubernetes' default, spread by capacity, or a hot spare; whether the other hosts have room if one fails; and whether containers move back when a host returns |
 | **Monitoring** | when bars and node cards turn amber or red; drive health |
-| **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
+| **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds, whether apps with storage may move off a failed host and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
 | **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the alert webhook (alerts to ntfy, Gotify or any webhook, see [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#alert-webhook)); the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
@@ -211,8 +211,7 @@ and after the move, and what would wait.
 The apps and VMs that would move are placed - not those that stop anyway
 (pinned, on host-local storage, or using hardware only that host has), nor
 those set to wait for their host to come back. A StatefulSet's pod needs room
-only when the preview says it moves - when Longhorn's **Pods on a failed
-node** setting deletes it; one that waits until its pod is deleted, or
+only when the preview says it moves - when **Allow apps with storage to move off a failed host** is on; one that waits until its pod is deleted, or
 couldn't be checked, needs none, and the sentence says how many wait and how many
 couldn't be checked: *1 app waits until its pod is deleted and 1 app couldn't
 be checked; If this host goes down says why.* When StatefulSets couldn't be
