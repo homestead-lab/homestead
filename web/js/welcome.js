@@ -62,7 +62,7 @@ const SETUP_CHECKS = {
   quorum: "Checks the number of servers that manage the cluster. One server is accepted for a lab.",
   placement: "Checks that a way of sharing the work is chosen. Kubernetes' default counts. It does not check where apps run now.",
   clocks: "Checks the time-sync reports available from hosts.",
-  address: "Checks whether Homestead uses a reserved virtual IP address.",
+  address: "Checks whether Homestead uses a reserved virtual IP (VIP).",
   smb: "Checks that the SMB server is installed and enabled, not that clients can access its shares.",
   https: "Uses HTTPS in this browser or an address you previously checked. A saved address is not retested automatically.",
   hostname: "Checks whether this browser opened Homestead by name.",
@@ -182,14 +182,14 @@ const SETUP_STEPS = {
     more: "<p>Check time synchronisation on the host's page under Hosts. The installer's diagnostic tool can turn it on where it is off.</p>",
   },
   address: {
-    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. This virtual IP address moves to another host if its host fails. Apps can share it on separate ports.`
+    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. This virtual IP (VIP) moves to another host if its host fails. Apps can share it on separate ports.`
       : s.harvester ? "Harvester assigned Homestead an address during installation."
-      : "Reserve a virtual IP address outside the router's DHCP range. It moves to another host if its host fails, and Homestead and apps can share it.",
+      : "Reserve a virtual IP (VIP) outside the router's DHCP range. It moves to another host if its host fails, and Homestead and apps can share it.",
     body: s => window.Diagram ? Diagram.vip(s.done ? (s.url || "").replace(/^https?:\/\//, "").replace(/:\d+$/, "") : "",
       [{ port: (s.url || "").match(/:(\d+)$/)?.[1] || "8080", app: "Homestead" }]) : "",
     actions: s => s.done ? [] : ["kube-vip", "metallb"].includes(s.load_balancer)
       ? [s.vips ? { label: "Move Homestead to a virtual IP", run: "go('network');setTimeout(() => window.selfAddressMove && selfAddressMove(), 800)", pri: true }
-        : { label: "Add a VIP", run: "go('network');setTimeout(() => window.vipAdd && vipAdd(), 800)", pri: true }]
+        : { label: "Add a virtual IP", run: "go('network');setTimeout(() => window.vipAdd && vipAdd(), 800)", pri: true }]
       : [{ label: "Install kube-vip", run: "settingsTab('hardware');go('settings')", pri: true }],
   },
   https: {
@@ -210,11 +210,11 @@ const SETUP_STEPS = {
     title: "Hostname", lead: s => s.done ? `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>.`
       : `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>. A hostname makes the address easier to remember and supports HTTPS certificates.`,
     actions: () => [],
-    more: "<p>Add a DNS record for the VIP on your router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the VIP changes.</p>",
+    more: "<p>Add a DNS record for the virtual IP on the router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the virtual IP changes.</p>",
   },
   lan: {
     title: "LAN networks",
-    lead: () => "A LAN network gives a VM or app its own address on the local network. Set one up before creating apps and VMs that need direct LAN access. Apps that only need published ports can use a shared app address instead.",
+    lead: () => "A LAN network gives a VM or app its own address on the local network. Set one up before creating apps and VMs that need direct LAN access. Apps that only need published ports can use a shared virtual IP instead.",
     body: s => `${UI.steps([
       { title: "Choose the host interface", detailHtml: "Choose the network card or bridge connected to the LAN. It must exist on every host that will run them." },
       { title: "Choose the network and addresses", detailHtml: "Use an untagged network for the usual LAN, or a VLAN set up on the switch. VMs can use the router’s DHCP. Reserve static addresses outside its DHCP range when assigning addresses by hand." },
@@ -296,13 +296,13 @@ const SETUP_STEPS = {
   },
   unifi: {
     title: "UniFi", lead: s => s.done ? "A UniFi Network address is set up. Check the connection in Settings." :
-      "Connect UniFi Network to import devices and address reservations, and to help avoid address clashes when choosing addresses for Homestead and apps.",
+      "Connect UniFi Network to import devices and address reservations, and to help avoid address clashes when choosing virtual IPs.",
     actions: s => s.done ? [] : [{ label: "Connect UniFi", run: "settingsTab('connections');go('settings')", pri: true }],
   },
   ipam: {
     title: "IP addresses",
-    lead: s => s.done ? "The subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free addresses for apps and VMs."
-      : "Keep track of the LAN's addresses. Add the subnets with their DHCP ranges, import what UniFi knows, and scan to see which addresses are in use. Homestead then warns about clashes and suggests free addresses for apps and VMs.",
+    lead: s => s.done ? "The subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free addresses for virtual IPs and VMs."
+      : "Keep track of the LAN's addresses. Add the subnets with their DHCP ranges, import what UniFi knows, and scan to see which addresses are in use. Homestead then warns about clashes and suggests free addresses for virtual IPs and VMs.",
     body: s => {
       const subnets = s.subnets || [];
       const unscanned = subnets.filter(n => !n.scanned);
@@ -596,7 +596,7 @@ function setupCloudflareHtml(state) {
     { title: "Publish the hostname", lead: "Add a route from the public address to Homestead's address inside the cluster.",
       body: `<ol><li>In Networking › Tunnels, choose the tunnel. Under Routes, add a Published application.</li><li>Use the same address as the Access application.</li><li>Set the Service URL to ${origin ? `<span class="mono">${esc(origin)}</span>` : "the address and port shown in Cluster address"}, then save the route.</li></ol>
         ${origin ? "" : `<p>Set up Homestead's cluster address before publishing the route. ${UI.button("Review cluster address", "setupOpen('address')")}</p>`}
-        <p>The connector must be able to reach this address. Use the address above, including its port. The cluster's virtual IP address also works. <span class="mono">localhost</span> means the connector itself.</p>` },
+        <p>The connector must be able to reach this address. Use the address above, including its port. The cluster's virtual IP (VIP) also works. <span class="mono">localhost</span> means the connector itself.</p>` },
     { title: "Test in a browser", lead: "Open the new HTTPS address, sign in through Cloudflare Access, then sign in to Homestead.",
       body: "<p>Open this guide again from the book icon at the new address. The HTTPS step checks that the browser uses HTTPS. Also test from a device outside the home network.</p><p>The server's address check cannot sign in through Cloudflare Access, so use the browser test when Access is on.</p>",
       action: UI.button("Return to HTTPS overview", "setupCloudflareOpen(null)", { kind: "pri" }) },
