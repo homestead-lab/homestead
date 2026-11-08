@@ -17,15 +17,15 @@ const answerBlank = () => ({ state: STATE.data.uptime?.unread ? "unread" : "unkn
 function uptimeUnreadNote() {
   const u = STATE.data.uptime;
   if (!u?.unread) return "";
-  return u.apps ? UI.callout("warn", "Could not read the checks just now", `${esc(u.unread)} · the states shown are from the last read.`)
-    : UI.callout("warn", "Could not read the checks", esc(u.unread));
+  return u.apps ? UI.callout("warn", "The checks could not be read just now", `${esc(u.unread)} · The states shown are from the last read.`)
+    : UI.callout("warn", "The checks could not be read", esc(u.unread));
 }
 
 /* A monitoring dialog for one not in a list this page read: its settings are
    unknown, so nothing is offered that would save over them. */
 const monitorUnreadRow = (name, list, what, back = "") => modal(`Monitoring · ${name}`, (Array.isArray(list)
   ? UI.callout("warn", `${name} was not found`, `It is not in the list of ${what} last read, so there is nothing here to change.`)
-  : UI.callout("bad", `Could not read ${name}'s settings`, `The ${what} could not be read, so how it is checked now is not known here. Open it again from the ${what === "VMs" ? "Virtual machines" : "Containers"} page.`))
+  : UI.callout("bad", `${name}'s settings could not be read`, `The ${what} could not be read, so how it is checked now is not known. Open it again from the ${what === "VMs" ? "Virtual machines" : "Containers"} page.`))
   + UI.actions(back ? UI.button("Back", back, { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel("Close")));
 const monitorOpen = (w, vm = false) => `${vm ? "vmMonitoring" : "wlMonitoring"}(${jsq(w.ns)},${jsq(w.name)})`;
 
@@ -36,9 +36,9 @@ const answerSince = at => fmtAt(at);
 function answerDetail(a) {
   const last = a.last || {};
   if (a.state === "off") return a.why ? a.why[0].toUpperCase() + a.why.slice(1) : "Not checked";
-  if (a.state === "down") return `Since ${answerSince(a.since)} · ${last.error || "no answer"}`;
-  if (a.state === "maintenance") return "Moving: its host was put in maintenance, so this isn't counted as an outage";
-  if (a.state === "unknown") return "First checks under way";
+  if (a.state === "down") return `Since ${answerSince(a.since)} · ${last.error || "no response"}`;
+  if (a.state === "maintenance") return "Moving, because its host is in maintenance, so this is not counted as an outage";
+  if (a.state === "unknown") return "First checks in progress";
   if (a.state === "unread") return "The checks could not be read";
   return [last.code ? `HTTP ${last.code}` : "connection accepted", last.ms !== null && last.ms !== undefined ? `${last.ms} ms` : ""].filter(Boolean).join(" · ");
 }
@@ -99,11 +99,11 @@ function monitorPorts(ports) {
 function monitorPortSelect(id, ports, chosen = "") {
   const list = monitorPorts(ports);
   if (list.length < 2 && !chosen) return "";
-  const main = list.some(p => p.primary) ? "Its main port" : "Any port it publishes";
+  const main = list.some(p => p.primary) ? "Its main port" : "Any of its ports";
   const gone = chosen && !list.some(p => String(p.port) === String(chosen));
-  return `<select id="${id}" aria-label="Port to ask"><option value="">${main}</option>
+  return `<select id="${id}" aria-label="Port to check"><option value="">${main}</option>
     ${list.map(p => `<option value="${p.port}"${String(p.port) === String(chosen) ? " selected" : ""}>Port ${p.port}${p.name ? ` · ${esc(p.name)}` : ""}${p.primary ? " · main" : ""}</option>`).join("")}
-    ${gone ? `<option value="${esc(chosen)}" selected>Port ${esc(chosen)} · no longer published</option>` : ""}</select>`;
+    ${gone ? `<option value="${esc(chosen)}" selected>Port ${esc(chosen)} · no longer available</option>` : ""}</select>`;
 }
 
 /* The Monitoring field in Deploy's and Edit's Address step. */
@@ -111,11 +111,11 @@ function monitoringFieldHtml(prefix, value = "", ports = null) {
   const { mode, port, path } = monitorParts(value);
   const choice = (v, label) => `<option value="${v}" ${mode === v ? "selected" : ""}>${label}</option>`;
   const portSelect = ports ? monitorPortSelect(`${prefix}_mon_port`, ports, port) : "";
-  return `<div class="f monitoring-field"><label for="${prefix}_mon">Monitoring ${typeof tip === "function" ? tip("Homestead asks the app at its address every minute and alerts you when it is down. Changing this never restarts it.") : ""}</label>
+  return `<div class="f monitoring-field"><label for="${prefix}_mon">Monitoring ${typeof tip === "function" ? tip("Homestead checks the app at its address every minute and raises an alert when it is down. Changing this never restarts it.") : ""}</label>
     <div class="row monitoring-row"><select id="${prefix}_mon" onchange="monitoringModeChanged(this)">
       ${choice("auto", "Automatic")}${choice("http", "A web page at a path")}${choice("tcp", "A connection to its port")}${choice("off", "Not monitored")}</select>
     ${portSelect ? `<span class="monitoring-port"${mode === "off" ? " hidden" : ""}>${portSelect}</span>` : ""}
-    <input id="${prefix}_mon_path" class="monitoring-path" placeholder="/health" value="${esc(mode === "http" ? path : "")}" ${mode === "http" ? "" : "hidden"} aria-label="Path to ask"></div></div>`;
+    <input id="${prefix}_mon_path" class="monitoring-path" placeholder="/health" value="${esc(mode === "http" ? path : "")}" ${mode === "http" ? "" : "hidden"} aria-label="Path to check"></div></div>`;
 }
 
 window.monitoringModeChanged = select => {
@@ -141,7 +141,7 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
   const option = (value, label, help) => `<label class="answer-mode"><input type="radio" name="ans_mode" value="${value}" ${mode === value ? "checked" : ""}
     onchange="answerModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Checked every ${(u.every || 60) === 60 ? "minute" : `${Math.round(u.every / 60)} minutes`}; ${u.down_after || 3} misses in a row mark it down and raise an alert.`))}
+    ${UI.lead(esc(`Checked every ${(u.every || 60) === 60 ? "minute" : `${Math.round(u.every / 60)} minutes`}. ${u.down_after || 3} failed checks in a row mark it as down and raise an alert.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
@@ -150,14 +150,14 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
     <div class="answer-figures"><div><span class="dim xs">LAST 24 HOURS</span><b class="mono">${answerShare(a.uptime_24h)}</b></div>
       <div><span class="dim xs">LAST 30 DAYS</span><b class="mono">${answerShare(a.uptime_30d)}</b></div></div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
-      ${option("auto", "Automatic", "Any web answer, or a connection")}
-      ${option("http", "A web page", "A web answer below 500 at a path")}
+      ${option("auto", "Automatic", "Any web response, or a connection")}
+      ${option("http", "A web page", "A web response below 500 at a path")}
       <div class="f answer-path"${mode === "http" ? "" : " hidden"}><label for="ans_path">Path</label><input id="ans_path" value="${esc(mode === "http" ? path : "/")}" placeholder="/health"></div>
-      ${option("tcp", "A connection", "The port takes a connection")}
-      ${option("off", "Not monitored", "No checks, no alerts")}</div>
-      ${portSelect ? `<div class="f answer-port"${mode === "off" ? " hidden" : ""}><label for="ans_port">Port to ask</label>${portSelect}</div>` : ""}`)}
+      ${option("tcp", "A connection", "The port accepts a connection")}
+      ${option("off", "Not monitored", "No checks and no alerts")}</div>
+      ${portSelect ? `<div class="f answer-port"${mode === "off" ? " hidden" : ""}><label for="ans_port">Port to check</label>${portSelect}</div>` : ""}`)}
     ${outageSectionHtml("app", w)}
-    ${UI.actions(UI.cancel() + UI.button("Save", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
+    ${UI.actions(UI.cancel() + UI.button("Save monitoring", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
 };
 
 window.answerModeChanged = () => {
@@ -212,23 +212,23 @@ window.vmMonitoring = (ns, name, back = null) => {
   const option = (value, label, help, extra = "") => `<label class="answer-mode"><input type="radio" name="vm_mon" value="${value}" ${c.mode === value ? "checked" : ""}
     onchange="vmMonitorModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span>${extra}</span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc("Checked every minute; 3 misses in a row mark it down and raise an alert. Saving never restarts the VM."))}
+    ${UI.lead(esc("Checked every minute. 3 failed checks in a row mark it as down and raise an alert. Saving never restarts the VM."))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${uptimeUnreadNote()}
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
     ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}</div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
-      ${option("auto", "Automatic", `The first usual port that answers${a.port ? ` (${a.port} now)` : ""}`, `<span class="dim xs">${tip("SSH, RDP, HTTPS, HTTP, Proxmox and Home Assistant, in that order. A VM none of them answer on is not monitored.")}</span>`)}
-      ${option("tcp", "A port", "The port takes a connection")}
-      ${option("http", "A web page", "A web answer below 500")}
+      ${option("auto", "Automatic", `The first common port that responds${a.port ? ` (${a.port} now)` : ""}`, `<span class="dim xs">${tip("SSH, RDP, HTTPS, HTTP, Proxmox and Home Assistant, in that order. A VM that responds on none of them is not monitored.")}</span>`)}
+      ${option("tcp", "A port", "The port accepts a connection")}
+      ${option("http", "A web page", "A web response below 500")}
       <div class="f2 vm-mon-where"${["tcp", "http"].includes(c.mode) ? "" : " hidden"}>
         <div class="f"><label for="vm_mon_port">Port</label><input id="vm_mon_port" inputmode="numeric" value="${esc(c.port || a.port || "")}" placeholder="22"></div>
         <div class="f vm-mon-path"${c.mode === "http" ? "" : " hidden"}><label for="vm_mon_path">Path</label><input id="vm_mon_path" value="${esc(c.path)}" placeholder="/"></div></div>
-      ${option("off", "Not monitored", "No checks, no alerts")}</div>`)}
+      ${option("off", "Not monitored", "No checks and no alerts")}</div>`)}
     ${outageSectionHtml("vm", v)}
     ${UI.actions((back ? UI.button("Back", "vmMonitorBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel())
-      + UI.button("Save", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
+      + UI.button("Save monitoring", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
 };
 
 window.vmMonitorModeChanged = () => {
@@ -243,7 +243,7 @@ window.vmMonitorBack = () => { const back = window.__vmMonitorBack; window.__vmM
 window.vmMonitorSave = async () => {
   const go = $("#vm_mon_go"), mode = $("#mbody input[name=vm_mon]:checked")?.value || "auto";
   const body = { ns: go.dataset.ns, name: go.dataset.name, mode, port: ($("#vm_mon_port")?.value || "").trim(), path: ($("#vm_mon_path")?.value || "").trim() || "/" };
-  if (["tcp", "http"].includes(mode) && !body.port) return toast("Choose the port to ask", "bad");
+  if (["tcp", "http"].includes(mode) && !body.port) return toast("Choose the port to check", "bad");
   go.disabled = true;
   try {
     const result = await api("/api/vms/monitoring", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -262,23 +262,23 @@ window.vmMonitorSave = async () => {
 function outageSectionHtml(kind, row) {
   const a = row.outage_actions || {}, r = a.restart || null;
   const key = `${kind}:${row.ns}/${row.name}`, now = (STATE.data.uptime?.actions || {})[key] || {};
-  const lastHook = now.webhook ? (now.webhook.ok ? `Last call: ${now.webhook.event}, taken` : `Last call: ${now.webhook.event}, failed - ${now.webhook.error}`) : "";
-  const status = [now.restarts ? `Restarted ${now.restarts} time${now.restarts === 1 ? "" : "s"} in this outage${now.gave_up ? "; out of tries" : ""}` : "",
-    now.last_error ? `The last restart could not be done: ${now.last_error}` : "", lastHook].filter(Boolean);
+  const lastHook = now.webhook ? (now.webhook.ok ? `Last call: ${now.webhook.event}, accepted` : `Last call: ${now.webhook.event}, failed. ${now.webhook.error}`) : "";
+  const status = [now.restarts ? `Restarted ${now.restarts} time${now.restarts === 1 ? "" : "s"} in this outage${now.gave_up ? ", with no tries left" : ""}` : "",
+    now.last_error ? `The last restart failed. ${now.last_error}` : "", lastHook].filter(Boolean);
   return UI.section("When it is down", `<div class="ui-stack outage-actions">
     <label class="switch"><input type="checkbox" id="oa_restart"${r ? " checked" : ""} onchange="outageToggle()"> Restart it</label>
     <div class="outage-restart"${r ? "" : " hidden"}>${UI.fields(
       UI.field("After it has been down for", `<div class="outage-unit"><input id="oa_after" type="number" inputmode="numeric" min="1" max="1440" value="${r?.after_min || 5}"><span class="dim small">minutes</span></div>`),
       UI.field("At most", `<div class="outage-unit"><input id="oa_max" type="number" inputmode="numeric" min="1" max="10" value="${r?.max || 3}"><span class="dim small">times</span></div>`,
-        { help: "Then it alerts and stops trying until it has been up 30 minutes." }))}
-      <p class="dim xs">${kind === "vm" ? "A clean reboot, only with a port chosen above. " : ""}Never while a job is working on it.</p></div>
-    <label class="switch" title="Called when it goes down, comes back, is restarted or gives up, and after an automatic update"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
+        { help: "Then it raises an alert and stops trying until the app has been up for 30 minutes." }))}
+      <p class="dim xs">${kind === "vm" ? "A clean restart, only when a port is chosen above. " : ""}Never while a job is working on it.</p></div>
+    <label class="switch" title="Called when it goes down, comes back, is restarted or stops trying, and after an automatic update"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
       ${UI.field("Format", webhookFormatSelect("oa_format", a.format))}
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
-        ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
+        ${UI.button("Send test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
       <label class="switch" data-need="admin" title="For a self-hosted ntfy or Gotify"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address</label>
-      ${UI.more("How it is sent", `<p class="dim xs">Generic JSON sends a sentence as text, content and message, for chat services and Home Assistant. Once saved, the address after its host shows as (hidden), as it may hold a token. It never calls this host, link-local or metadata addresses, nor a LAN one unless an admin allows it.</p>`, false)}</div>
+      ${UI.more("How it is sent", `<p class="dim xs">Generic JSON sends a sentence as text, content and message, for chat services and Home Assistant. Once saved, the part of the address after the host is shown as (hidden), because it may contain a token. It never calls this host, link-local or metadata addresses, or a LAN address unless an admin allows it.</p>`, false)}</div>
     ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
 }
 
@@ -322,7 +322,7 @@ async function outageSave(kind, row) {
 
 window.outageTest = async (kind, ns, name) => {
   const webhook = ($("#oa_url")?.value || "").trim();
-  if (!webhook) return toast("Type the webhook address first", "bad");
+  if (!webhook) return toast("Enter the webhook address first", "bad");
   try {
     const r = await api("/api/monitoring/actions/test", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind, ns, name, webhook, format: $("#oa_format")?.value || "generic" }) });
@@ -378,26 +378,26 @@ function renderMonitoring() {
   const unread = STATE.data.uptime?.unread && !STATE.data.uptime.apps;
   const range = MONITOR.range, every = STATE.data.uptime?.every || 60;
   // Checks not read are not counted as none up.
-  const said = unread ? "checks not read" : [s.down && `<span class="crit-text">${s.down} down</span>`, s.slow && `<span class="med-text">${s.slow} slow</span>`,
+  const said = unread ? "Checks not read" : [s.down && `<span class="crit-text">${s.down} down</span>`, s.slow && `<span class="med-text">${s.slow} slow</span>`,
     `${s.up} up`, s.off && `${s.off} not monitored`].filter(Boolean).join(" · ");
   const head = `<tr><th>App or VM</th><th>State</th><th class="mon-bars">${range === "day" ? "Last 24 hours" : "Last 30 days"}</th>
-    <th data-nosort>${range === "day" ? "24 h" : "30 days"}</th><th class="mon-target">Asked</th><th data-nosort></th></tr>`;
+    <th data-nosort>${range === "day" ? "24 h" : "30 days"}</th><th class="mon-target">Checked</th><th data-nosort></th></tr>`;
   const row = ({ w, a, vm }) => `<tr class="clickable" onclick="if(!event.target.closest('button,a'))${monitorOpen(w, vm)}">
       <td class="cell-name" data-sort="${esc(w.name)}"><div class="vm-name-cell">${vm && typeof vmAvatar === "function" ? vmAvatar(w) : appAvatar(w.name, w.icon)}<div class="vm-name-text"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(vm ? `${w.ns} · VM` : w.ns)}</div></div></div></td>
       <td data-label="State" data-sort="${monitorRank[a.state] ?? 5}"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
         <div class="dim xs">${esc(answerDetail(a))}</div></td>
       <td data-label="${range === "day" ? "24 hours" : "30 days"}" class="mon-bars">${a.state === "off" ? '<span class="dim xs">—</span>' : answerStrip(range === "day" ? a.strip : a.days, "wide mon", range)}</td>
       <td data-label="Share" class="mono small" data-sort="${(range === "day" ? a.uptime_24h : a.uptime_30d) ?? -1}">${a.state === "off" ? "—" : answerShare(range === "day" ? a.uptime_24h : a.uptime_30d)}</td>
-      <td data-label="Asked" class="mono xs dim mon-target">${esc(a.target || "")}</td>
+      <td data-label="Checked" class="mono xs dim mon-target">${esc(a.target || "")}</td>
       <td data-actions>${actionBar([{ label: "Change", icon: "gear", run: monitorOpen(w, vm), need: "operator", ariaLabel: `Change how ${w.name} is monitored` }], { label: `Actions for ${w.name}` })}</td></tr>`;
-  paint(`${UI.pageHeader("Monitoring", `${watched.length} app${watched.length === 1 ? "" : "s"} and VM${watched.length === 1 ? "" : "s"} asked every ${every === 60 ? "minute" : `${Math.round(every / 60)} minutes`} · ${said}`,
+  paint(`${UI.pageHeader("Monitoring", `${watched.length} app${watched.length === 1 ? "" : "s"} and VM${watched.length === 1 ? "" : "s"} checked every ${every === 60 ? "minute" : `${Math.round(every / 60)} minutes`} · ${said}`,
       `<div class="seg" role="group" aria-label="Range"><button type="button" class="${range === "day" ? "on" : ""}" aria-pressed="${range === "day"}" onclick="monitorRange('day')">24 hours</button><button type="button" class="${range === "month" ? "on" : ""}" aria-pressed="${range === "month"}" onclick="monitorRange('month')">30 days</button></div>`)}
     ${uptimeUnreadNote()}
-    ${MONITOR.vmsUnread ? UI.callout("warn", "Could not read the VMs", `${esc(MONITOR.vmsUnread)} · they are left out of this list.`) : ""}
-    ${MONITOR.wlUnread ? UI.callout("warn", "Could not read the apps just now", `${esc(MONITOR.wlUnread)} · this is the list last read.`) : ""}
+    ${MONITOR.vmsUnread ? UI.callout("warn", "The VMs could not be read", `${esc(MONITOR.vmsUnread)} · They are left out of this list.`) : ""}
+    ${MONITOR.wlUnread ? UI.callout("warn", "The apps could not be read just now", `${esc(MONITOR.wlUnread)} · This is the list from the last read.`) : ""}
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact mon-table" data-sort="monitoring"><thead>${head}</thead><tbody>${rows.map(row).join("")}</tbody></table></div></div>`
-      : '<div class="empty">No apps yet. Deploy one, and Homestead starts asking it at its address.</div>'}
-    ${UI.more("How monitoring works", `<p>Every minute the leading Homestead asks each running app at its address, as a browser would: an HTTP answer below 500 counts, and so does a port that takes the connection but does not speak HTTP. With no main port chosen, each of its ports is tried. Three misses in a row is down, which raises an alert; the first answer clears it. Over 2 seconds is slow. Stopped apps are not asked.</p><p>A VM publishes no port, so Homestead tries the usual ones - SSH, RDP, HTTPS, HTTP, Proxmox, Home Assistant - and keeps the first that answers; a VM none of them answer on is not monitored until you choose its port.</p><p>Choose what is asked for each one here, in an app's Edit dialog under Address, or from a VM's menu. Changing it never restarts anything.</p>`)}`);
+      : '<div class="empty">There are no apps yet. When one is deployed, Homestead starts checking it at its address.</div>'}
+    ${UI.more("How monitoring works", `<p>Every minute, the leading Homestead checks each running app at its address, as a browser would. An HTTP response below 500 counts, and so does a port that accepts the connection but does not use HTTP. If no main port is chosen, each of its ports is tried. Three failed checks in a row mark it as down, which raises an alert, and the first response clears it. A response that takes over 2 seconds is slow. Stopped apps are not checked.</p><p>A VM has no listed ports, so Homestead tries the common ones (SSH, RDP, HTTPS, HTTP, Proxmox and Home Assistant) and keeps the first that responds. A VM that responds on none of them is not monitored until its port is chosen.</p><p>Choose what is checked for each one here, in an app's Edit dialog under Address, or from a VM's menu. Changing it never restarts anything.</p>`)}`);
 }
 window.viewMonitoring = viewMonitoring;
 
@@ -408,8 +408,8 @@ window.viewMonitoring = viewMonitoring;
 function monitorWidget(item = {}) {
   const u = STATE.data.uptime;
   if (!u) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
-  if (u.unread && !u.apps) return UI.callout("warn", "Could not read the checks", esc(u.unread));
-  return (MONITOR.vmsUnread ? `<div class="dim xs">Could not read the VMs · they are left out</div>` : "") + (u.unread ? `<div class="dim xs">Could not read the checks just now · these are from the last read</div>` : "") + monitorWidgetRows(item);
+  if (u.unread && !u.apps) return UI.callout("warn", "The checks could not be read", esc(u.unread));
+  return (MONITOR.vmsUnread ? `<div class="dim xs">The VMs could not be read · They are left out.</div>` : "") + (u.unread ? `<div class="dim xs">The checks could not be read just now · These are from the last read.</div>` : "") + monitorWidgetRows(item);
 }
 function monitorWidgetRows(item) {
   const rows = monitorRows().filter(r => r.a.state !== "off"), s = monitorSummary(rows), width = item.width || 6;
@@ -435,7 +435,7 @@ function monitorWidgetRows(item) {
 function monitoringStepHtml(w) {
   const a = answerOf(w);
   return `<div class="sec" style="margin-top:0">Monitoring</div>
-    <p class="dim small">Homestead asks this app at its address every minute and alerts you when it is down. Changing how it is asked never restarts it.</p>
+    <p class="dim small">Homestead checks this app at its address every minute and raises an alert when it is down. Changing how it is checked never restarts it.</p>
     ${uptimeUnreadNote()}
     ${a ? `<div class="answer-head"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
