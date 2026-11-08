@@ -42,6 +42,28 @@ const deployDefaults = () => ({ name: "", workload_name: "", container_name: "",
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });
 let DCFG = deployDefaults(), DOPT = { deployments: [], pvcs: [], storage_classes: [], shared_storage_classes: [] }, DRENDERING = false;
+/* The storage row that would give a container the host's container runtime
+   socket, as the server reads it (homestead_deploy_manifests.runtime_socket),
+   from the form as it is now: removing the row in Storage lifts the block (#1294). */
+const RUNTIME_SOCKETS = ["/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock",
+  "/var/run/containerd/containerd.sock", "/var/run/crio/crio.sock", "/run/k3s/containerd/containerd.sock"];
+function deployRuntimeSocket(c) {
+  const rows = [...(c.volumes || []).map(v => [c.container_name, v]),
+    ...(c.additional_containers || []).flatMap(x => (x.volumes || []).map(v => [x.name, v]))];
+  const hit = rows.find(([, v]) => {
+    const host = v.kind === "host" || v.type === "host";
+    return RUNTIME_SOCKETS.includes(String(v.path || "").replace(/\/+$/, ""))
+      || (host && RUNTIME_SOCKETS.includes(String(v.source || "").replace(/\/+$/, "")));
+  });
+  return hit ? { container: hit[0], path: hit[1].path || hit[1].source } : null;
+}
+function deployBlockedHtml(c) {
+  const socket = deployRuntimeSocket(c);
+  if (!socket) return "";
+  return UI.callout("bad", "Review is not available yet",
+    `${esc(socket.container || "A container")} mounts the host's container runtime socket at <span class="mono">${esc(socket.path)}</span>, which lets it create and control other containers. Homestead does not deploy that. Remove that row under Storage to continue: features that need the socket then do not work.
+    <div class="row" style="margin-top:8px"><button type="button" class="btn sm" onclick="UI.selectSection('containerDeploy','storage')">Open Storage</button></div>`);
+}
 function generatedSecret() {
   const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -147,6 +169,7 @@ async function viewDeploy(pre) {
     `,
     monitoring: monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : ""),
     summary: `
+      <div id="d_blocked"></div>
       <div id="d_summary" class="deploy-summary"></div>
     `,
   }, { leads: {
@@ -161,7 +184,7 @@ async function viewDeploy(pre) {
   } });
   paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
-      UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
+      UI.button("Review deployment", "doDeploy()", {kind:"pri",id:"d_review",disabled:!!deployRuntimeSocket(DCFG)}),
       {page:true,cancelHtml:UI.button("Cancel", "go('workloads')", { attrs: 'data-dialog-dismiss="true"' })})}</div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
@@ -262,6 +285,9 @@ function syncSummary() {
   // cannot show what [hidden] hides with !important.
   const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.hidden = !(c.network_mode === "loadbalancer" && c.vip_mode === "manual");
   const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
+  // The block follows the form: it lifts when the socket row goes (#1294).
+  const blocked = $("#d_blocked"); if (blocked) blocked.innerHTML = deployBlockedHtml(c);
+  const review = $("#d_review"); if (review) review.disabled = !!deployRuntimeSocket(c);
   if (c.target_mode !== "existing") appFormPodContainers("d", [c.container_name, ...(c.additional_containers || []).map(item => item.name)]);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
@@ -468,7 +494,7 @@ window.doDeploy = async () => {
   try { await logoReady("#d_icon"); } catch (e) { return deployInvalid(e.message, "#d_icon"); }
   if (click !== DEPLOY_CLICKS) return;
   const c = collect();
-  if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
+  if (deployRuntimeSocket(c)) { UI.selectSection("containerDeploy", "summary"); return toast("Remove the container runtime socket under Storage first", "bad"); }
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
   if (c.target_mode === "new" && !c.workload_name) return deployInvalid("App name is required.", "#d_workload_name");
   if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing app.", "#d_target_workload");
@@ -495,7 +521,7 @@ window.confirmDeploy = async () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  DEPLOY_CONTAINER_NEXT, deployContainerStorage, renderDeployContainers, deployDefaults, DCFG, generatedSecret,
+  DEPLOY_CONTAINER_NEXT, deployContainerStorage, renderDeployContainers, deployDefaults, DCFG, RUNTIME_SOCKETS, deployRuntimeSocket, deployBlockedHtml, generatedSecret,
   deployPlacementApp, viewDeploy, selectedTarget, renderDeployTargets, updateJoinNote, refreshDeployOptions,
   applyDeployMode, collect, deployPlacementWords, syncSummary, addPort, deployVolumePicker, addVol, addEnv,
   renderPorts, renderVols, renderEnv, CAPACITY_ROUTINE, CAPACITY_ROLLOUT_ROUTINE, capacityNoteWords,

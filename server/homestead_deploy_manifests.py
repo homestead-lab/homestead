@@ -25,6 +25,27 @@ import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
 
 
+RUNTIME_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock",
+                   "/var/run/containerd/containerd.sock", "/var/run/crio/crio.sock", "/run/k3s/containerd/containerd.sock")
+
+
+def runtime_socket(cfg):
+    """The first storage row, in any container of the config, that gives a
+    container the host's container runtime socket: by the path inside the
+    container, or by the host path behind it (#1294). None when there is none.
+    Read from the config as submitted, so a row removed in Deploy is gone."""
+    rows = list(cfg.get("volumes") or [])
+    for extra in cfg.get("additional_containers") or []:
+        rows += list(extra.get("volumes") or [])
+    for item in rows:
+        path = str(item.get("path") or "").rstrip("/")
+        host = (item.get("type") == "host" or item.get("kind") == "host")
+        source = str(item.get("source") or "").rstrip("/") if host else ""
+        if path in RUNTIME_SOCKETS or source in RUNTIME_SOCKETS:
+            return item
+    return None
+
+
 def analyze_deploy_intent(cfg):
     """Derive portable Kubernetes guidance from template semantics, never app names."""
     updated = dict(cfg)
@@ -108,14 +129,16 @@ def analyze_deploy_intent(cfg):
         dependencies.append({"kind": "cache", "name": "External cache endpoint",
                              "required": True, "managed": False})
 
-    runtime_socket = next((item for item in volumes
-                           if item.get("path") in ("/var/run/docker.sock", "/run/containerd/containerd.sock")), None)
-    blocked = bool(runtime_socket)
+    socket = runtime_socket(updated)
+    blocked = bool(socket)
     if blocked:
         intents.append("safety")
         dependencies.append({"kind": "runtime", "name": "Host container-runtime control",
                              "required": True, "managed": False})
-        notes.append("This template requests a host container-runtime socket and can create or control other containers; it needs a Kubernetes-specific deployment design.")
+        where = socket.get("source") or socket.get("path") or "the host's runtime socket"
+        notes.append(f"This template mounts the host's container runtime socket ({where}), which lets it create and control "
+                     "other containers. Homestead does not deploy that. Remove the socket under Storage to deploy without "
+                     "it: features that need the socket then do not work.")
     if dependencies:
         intents.append("dependency")
         notes.append("Review the external services listed below before deployment.")
@@ -138,7 +161,7 @@ def analyze_deploy_intent(cfg):
              "Dedicated VIP" if dns else "Storage review" if "storage" in intents else "Template review")
     updated["app_profile"] = {"intent": intents[0], "intents": intents, "level": level,
                               "label": label, "notes": notes, "dependencies": dependencies,
-                              "blocked": blocked}
+                              "blocked": blocked, "blocked_path": (socket or {}).get("path") or ""}
     return updated
 
 
