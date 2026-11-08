@@ -25,7 +25,7 @@ const DIALOG_WORDS = 120, REVIEW_WORDS = 100;
 const WORD_CAPS = {
   "node-if-down": 211,
   "disks": 192,
-  "snapshot-restore-in-manager": 189,
+  "snapshot-restore-in-manager": 203,
   "disk-v2-region-identity": 169,
   "add-harvester-host-3": 164,
   "host-join-storage": 159,
@@ -42,7 +42,7 @@ const WORD_CAPS = {
   "add-host-tiebreaker": 140,
   "disk-v2-region-erase": 139,
   "disk-v2-erase": 139,
-  "snapshot-files-ready": 135,
+  "snapshot-files-ready": 146,
   "runtime-move-retirement": 134,
   "protection-plans": 133,
   "disk-v2-blocked": 132,
