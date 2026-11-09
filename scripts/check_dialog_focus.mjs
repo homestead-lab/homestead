@@ -13,7 +13,7 @@ try {
   const inDialog = () => page.evaluate(() => !!document.activeElement?.closest(".modalbox"));
 
   // Open a dialog from a button the keyboard reached.
-  const opener = page.getByRole("button", { name: /Add VIP/ }).first();
+  const opener = page.getByRole("button", { name: /Add virtual IP/ }).first();
   await opener.focus();
   const openerId = await opener.evaluate(el => { el.dataset.focusCheck = "opener"; return el.outerHTML.slice(0, 60); });
   await opener.press("Enter");

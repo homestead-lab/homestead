@@ -48,7 +48,7 @@ const prose = text => /[A-Za-z]{2,} [A-Za-z]{2,}/.test(text) && !/^[\s\w.#:[\]=-
 const BANNED = [
   [/\b(can't|couldn't|don't|doesn't|isn't|won't|wasn't|aren't|haven't|hasn't|shouldn't|wouldn't)\b/i, "write it out (cannot, could not, do not…)"],
   [/\byou(r|rs|rself)?\b/i, "neutral voice: no you or your"],
-  [/\bYour VIPs\b|\bworkload VIP\b|\bService VIP\b/, "say virtual IP (VIP only in chips and table headers)"],
+  [/\bYour VIPs\b|\bworkload VIP\b|\bService VIP\b|\b[Aa]pp address\b/,"say virtual IP (VIP only in chips and table headers)"],
   [/\bCarry on\b|\bInspect outcome\b|\bMake ready\b/, "use the current button names (Resume job, Check outcome, Prepare)"],
   [/\brecurring jobs?\b/i, "Longhorn recurring jobs are schedules (keep the term in a tip)"],
 ];

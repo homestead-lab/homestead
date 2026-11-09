@@ -34,7 +34,7 @@ try {
     await page.locator("#views h2").filter({ hasText: /^Containers$/ }).waitFor();
     await page.waitForFunction(() => STATE.data.imageUpdates?.checked_at);
     assert.equal(await page.locator("#views .phead .pill.crit").count(), scenario === "healthy" ? 0 : 1);
-    assert.equal(await page.getByRole("img", { name: /^Registry check unavailable:/ }).count(), scenario === "healthy" ? 0 : 1);
+    assert.equal(await page.getByRole("img", { name: /^Registry check unavailable\./ }).count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-containers-${width}.png`, fullPage: true });
     await page.evaluate(() => go("vms"));

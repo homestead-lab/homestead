@@ -382,7 +382,7 @@
   ],
   [
    "insertAdjacentHTML",
-   "<div class=\"ui-callout warn\" id=\"editSaveNotice\" role=\"alert\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review expired</b><div class=\"ui-callout-body\"><p>Some changes may already be saved, including new containers or volumes. Reload the app to see what was applied before making another change. Reloading discards the unsaved changes in this form.</p>\n      <button class=\"btn\" onclick=\"wlEdit(\"lab\",\"demo\",true)\">Reload app</button></div></div>\n    </div>"
+   "<div class=\"ui-callout warn\" id=\"editSaveNotice\" role=\"alert\" role=\"alert\">\n      <span class=\"ui-callout-icon\"><svg class=\"ui-icon\" aria-hidden=\"true\"><use href=\"#i-alert\"/></svg></span>\n      <div><b>Review expired</b><div class=\"ui-callout-body\"><p>Some changes may already be saved, including new containers or volumes. Reload the saved settings to see what was applied before making another change. Reloading discards the unsaved changes in this form.</p>\n      <button class=\"btn\" onclick=\"wlEdit(\"lab\",\"demo\",true)\">Reload saved settings</button></div></div>\n    </div>"
   ],
   [
    "state",

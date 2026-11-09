@@ -48,7 +48,7 @@
       y += 24;
     }
     if (vms) { b += vm(30, y, 162, vms === 1 ? "1 virtual machine" : `${vms} virtual machines`); y += 24; }
-    if (!apps.length && !vms) b += text(30, y + 14, "nothing of yours runs here", "dg-xs dg-dim");
+    if (!apps.length && !vms) b += text(30, y + 14, "no app or VM runs here", "dg-xs dg-dim");
     // drives
     let dy = top + 22;
     b += text(236, dy - 8 + 0, "Drives", "dg-xs dg-dim dg-b");

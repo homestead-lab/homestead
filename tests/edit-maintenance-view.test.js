@@ -68,7 +68,7 @@ test("An uncertain edit requires fresh saved state instead of replaying addition
   assert.equal(t.fields["#editGo"].disabled, true);
   assert.equal(t.fields["#editGo"].onclick, null);
   assert.match(t.html(), /Some changes may already be saved/);
-  assert.match(t.html(), /Reload app/);
+  assert.match(t.html(), /Reload saved settings/);
   assert.match(t.html(), /discards the unsaved changes in this form/);
   await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
   await t.c.window.editSave("lab","demo");
@@ -187,7 +187,7 @@ test("uncertain rename directs inspection of both names and never offers stale r
   await t.c.window.confirmEdit();
   assert.match(t.html(),/Check both app names/);
   assert.match(t.html(),/Check apps/);
-  assert.doesNotMatch(t.html(),/Reload app/);
+  assert.doesNotMatch(t.html(),/Reload saved settings/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
 

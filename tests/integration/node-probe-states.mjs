@@ -43,7 +43,7 @@ try {
     await page.evaluate(() => HealthInsights.open("health"));
     await page.waitForFunction(() => document.querySelector("#clusterHealth")?.textContent.includes("node-b: maximum 95°C"));
     assert.doesNotMatch(await page.locator("#clusterHealth").textContent(), /node-c: maximum/);
-    assert.match(await page.locator("#clusterHealth").textContent(), /Max observed temperature 95°C \(node-b/, "not node-c's old 96°C");
+    assert.match(await page.locator("#clusterHealth").textContent(), /Highest temperature 95°C \(node-b/, "not node-c's old 96°C");
     await page.evaluate(() => closeModal());
 
     // Hosts as cards: the temperature line waits, and a PROBE line gives the age.

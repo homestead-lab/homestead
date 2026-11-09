@@ -534,7 +534,7 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
   const choices = await vipChoices(data);
   window.__networkChoices = choices;
   const open = editing && modalIsOpen() ? childModal : modal;
-  open(editing ? `Network access · ${name}` : selectedVip ? `Use ${selectedVip}` : "Connect an app to your network", `<div id="net_editor" data-nested="${editing ? "1" : "0"}">
+  open(editing ? `Network access · ${name}` : selectedVip ? `Use ${selectedVip}` : "Connect an app to the network", `<div id="net_editor" data-nested="${editing ? "1" : "0"}">
     <p class="net-intro">${selectedVip && choose ? `Choose the app or VM that devices on the LAN will reach at <b class="mono">${esc(selectedVip)}</b>, then its ports.`
       : "Choose the address and ports that devices on the LAN use to reach this app."} Nothing changes until the changes are reviewed and applied.</p>
     <div class="f" ${editing ? "hidden" : ""}><label for="net_workload">Which app or VM?</label><select id="net_workload" onchange="networkWorkloadChanged()">${options}</select></div>

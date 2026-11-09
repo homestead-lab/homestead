@@ -748,7 +748,7 @@
     desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
     trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200,
     maintainer: "blakeblackshear", official: true, categories: ["HomeAutomation", "Security"],
-    spotlight: { date: 1785556800, month: "Aug 2026", reason: "Local AI object detection for every camera you own.", who: "Homestead demo" },
+    spotlight: { date: 1785556800, month: "Aug 2026", reason: "Local AI object detection for every camera.", who: "Homestead demo" },
     deploy: {
       name: "frigate", image: "ghcr.io/blakeblackshear/frigate:stable", icon: "",
       ports: [{ container: 8971, host: 8971, expose: true, protocol: "TCP" },
@@ -834,7 +834,7 @@
       const req = JSON.parse(init.body), members = req.members || [];
       const refusals = [];
       if (members.length < 2) refusals.push("a bond needs two or more NICs");
-      if (members.includes("enp3s0") && !req.allow_down) refusals.push("enp3s0 has no link: plug it in, or confirm you want it in the bond anyway");
+      if (members.includes("enp3s0") && !req.allow_down) refusals.push("enp3s0 has no link. Plug it in, or confirm that it belongs in the bond anyway.");
       if (req.mode === "802.3ad" && !req.lacp_confirmed) refusals.push("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, which works on any switch");
       return { node: req.node, action: req.action, bond: "bond0", members, mode: req.mode || "active-backup", primary: req.primary, keep: "",
         address: "192.0.2.12/24", carries_on: "bond0", renamed: true, refusals, digest: "demo", rollback_seconds: 240,
@@ -1075,7 +1075,7 @@
           { mac: "52:54:00:3a:1c:07" },
           { tpm: true, hyperv: true,
             dropped: [{ what: "GPU or PCI device", detail: "0000:01:00.0", hardware: true, reason: "passthrough is tied to Unraid's hardware; add it from Homestead's hardware devices in Edit VM" },
-              { what: "CD-ROM", detail: "virtio-win-0.1.262.iso", reason: "an ISO is only needed to install; add one in Edit VM if you still need it" },
+              { what: "CD-ROM", detail: "virtio-win-0.1.262.iso", reason: "an ISO is only needed to install. Add one in Edit VM if it is still needed." },
               { what: "CPU pinning", detail: "vcpupin", reason: "Unraid's own tuning for its cores; the core count comes across" }],
             notes: ["its TPM comes across as a new one - Unraid keeps the old one's contents - so BitLocker, if it is on, asks once for its recovery key"] }),
       ] };
@@ -1826,12 +1826,12 @@ ssh_pwauth: true
       return {capacity_token:"demo-host-gone-review",plan:{id,kind:op.kind,node,phase:"preparing",blocked:false,blockers:[],
         evidence:{node:"missing",longhorn:"missing"},requires_confirmation:true,confirm:node,
         left_on_host:["/dev/sdb (serial DEMO123, /dev/disk/by-id/ata-DEMO) may be partly erased: the erase helper may have started on it."],
-        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host: deleted when you end the job, only if it is still the same Job."],
+        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host, is deleted when the job is ended, only if it is still the same Job."],
         released:["Longhorn upgrades, cluster shutdown and OS rollouts, which this job holds back cluster-wide.",
           `Disk and host jobs on a host named ${node}.`,"Starting V2 cleanup (disabling Longhorn V2).",
           "Storage jobs on the volumes it moved to other hosts: pvc-demo-photos."],
         warnings:["Nothing on the host is changed. Homestead records the end and, if it is still the same Job, deletes the helper Job listed below. Cancelling stays refused.",
-          "The job's record stays in Jobs, with what it did, until you dismiss it."]}};
+          "The job's record stays in Jobs, with what it did, until it is dismissed."]}};
     },
     "/api/operations/host-gone/resolve": (url, init) => {
       const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
@@ -1889,7 +1889,7 @@ ssh_pwauth: true
         keeps:["This older job has no creation identity receipts. A matching name or label cannot prove it is the original VM; automatic cleanup is disabled.",
           "All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
           "Inspect each VM separately before removing it. No addresses are freed and readiness is not verified.",
-          "After acknowledgement, the finished tracking record can be cleared. Save any recovery details you still need."] };
+          "After this is accepted, the finished record can be cleared. Save any recovery details that are still needed."] };
       if (op.kind === "reclass") return { ...base, can: false, needs: "admin",
         why_not: "Use Review storage move to pause safely. Kept data is not rolled back or deleted." };
       return { ...base, mode: "rollback", action: "Cancel and put back",
@@ -2140,7 +2140,7 @@ ssh_pwauth: true
       }
       if (plan.action === "maintenance") {
         plan.warnings = plannedOutage
-          ? ["This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. It only records the maintenance. Whatever you then do to the host takes the whole cluster with it"]
+          ? ["This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. It only records the maintenance. Anything then done to the host affects the whole cluster."]
           : ["DaemonSets and static pods remain on the host; their services stop if it goes down.", ...plan.warnings.slice(1)];
         if (plannedOutage) plan.hold = [];
         if (window.__demoDeclared?.[plan.node]) Object.assign(plan, { ready: false, blockers: ["This host is already in maintenance"], hard_blockers: ["This host is already in maintenance"] });
@@ -2419,7 +2419,7 @@ ssh_pwauth: true
     "/api/addons/longhorn": { ok: true, name: "longhorn", job: "helm-install-longhorn", copies: 2,
       detail: "Longhorn is being installed, keeping 2 copies of each volume." },
     "/api/addons/kube-vip": { ok: true, name: "kube-vip", job: "helm-install-kube-vip", interface: "eth0", class_only: true,
-      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Your virtual IPs" },
+      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Virtual IPs" },
     "/api/addons/multus": { ok: true, name: "multus", job: "helm-install-multus",
       detail: "Multus is being installed on every host. Pods already running are left as they are. LAN networks can be created once it is running." },
     "/api/addons/kubevirt": { ok: true, name: "homestead-kubevirt", job: "helm-install-homestead-kubevirt",
@@ -2467,7 +2467,7 @@ ssh_pwauth: true
         images: [
           row("ubuntu-24.04", "Ubuntu", "Ubuntu 24.04 LTS", "Server", "The standard server image", "ubuntu", 597,
             H ? { kept: true, auto: true, ready: true, update: true, versions: [here("default/image-7f3a2c", 3)] } : {}),
-          row("ubuntu-24.04-minimal", "Ubuntu", "Ubuntu 24.04 LTS", "Minimal", "Smaller: fewer packages and no manuals, for a server you set up yourself", "ubuntu", 252),
+          row("ubuntu-24.04-minimal", "Ubuntu", "Ubuntu 24.04 LTS", "Minimal", "Smaller, with fewer packages and no manuals, for a server set up by hand", "ubuntu", 252),
           row("ubuntu-22.04", "Ubuntu", "Ubuntu 22.04 LTS", "Server", "The standard server image", "ubuntu", 701),
           row("debian-13", "Debian", "Debian 13 (trixie)", "Cloud", "A kernel slimmed for VMs - the usual choice", "debian", 325,
             H ? { kept: true, auto: true, versions: [{ image: "default/image-91bd0e", added: now, ready: false, failed: false, progress: 42 }] } : {}),
@@ -2889,7 +2889,7 @@ ssh_pwauth: true
         blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,
-          message: "Destination prepared. Review the move when you are ready for downtime." }] : [] };
+          message: "Destination prepared. Review the move when ready for downtime." }] : [] };
     },
     "/api/self/data/prepare/archive/preview": (url, init) => ({ id: JSON.parse(init.body).id,
       destination: "homestead-data-prepared", source: "homestead-data", capacity_token: "demo-only",
@@ -2938,7 +2938,7 @@ ssh_pwauth: true
       const body = JSON.parse(init?.body || "{}");
       const w = workloads.find(x => x.ns === body.ns && x.name === body.name);
       if (w) w.update_mode = body.mode;
-      return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits for you to update it` };
+      return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits to be updated manually` };
     },
     // Schedules (schedules.js): paperless overnight, the k3s test VMs out of
     // working hours - one of whose last starts was refused for room.
@@ -3686,7 +3686,7 @@ ssh_pwauth: true
     ["settings", "Settings", "Site name, health thresholds, update policy, App Store feed", true],
     ["users", "Users and roles", "Every account, its role and password", false, "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup."],
     ["hardware", "Hardware features", "Device mappings: iGPU, Coral, USB and the rest", true],
-    ["vips", "Virtual IPs", "Your saved virtual IPs, their labels and the default workload virtual IP", true],
+    ["vips", "Virtual IPs", "The saved virtual IPs, their labels and the default app virtual IP", true],
     ["ipam", "IP addresses", "Subnets, documented addresses, and the UniFi connection", true],
     ["mqtt", "MQTT", "The broker, its credentials and what is published", true],
     ["portal", "Portal", "Its sections and tiles", true],
@@ -3739,7 +3739,7 @@ ssh_pwauth: true
       decided_by: "demo", detail: "Deleted the snapshot snap-0412 of frigate-config", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
       action: "Delete the snapshot snap-0412 of frigate-config", summary: { action: "Delete the snapshot snap-0412 of frigate-config", plan: { volume: "frigate-config", size_gb: 4.2 } }, args: { volume: "frigate-config", snapshot: "snap-0412" }, result: { ok: true } },
     { id: "d9a2b6c15e847f03", tool: "restore_backup", title: "Restore a backup", status: "failed", reason: "", created: ago(300), expires: ago(270), ended: ago(288),
-      decided_by: "demo", detail: "The cluster changed since you reviewed this: the volume paperless-data is now 24 GiB, not 20 GiB. Ask the agent to try again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
+      decided_by: "demo", detail: "The cluster changed since this was reviewed: the volume paperless-data is now 24 GiB, not 20 GiB. Ask the agent to try again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
       action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", summary: { action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", plan: { size_gb: 20 } }, args: { backup: "backup-7f3a91" }, result: null },
     { id: "e0b3c7d2a9f15846", tool: "delete_vm", title: "Delete a VM", status: "denied", reason: "Not used", created: ago(1500), expires: ago(1470), ended: ago(1490),
       decided_by: "demo", detail: "denied by demo", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
@@ -4024,7 +4024,7 @@ ssh_pwauth: true
       const bar = document.createElement("div");
       bar.id = "demoBanner";
       bar.className = "demobanner";
-      bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing you do here is saved. `
+      bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing done here is saved. `
         + '<a href="https://github.com/homestead-lab/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
       document.body.prepend(bar);
     };
@@ -4048,7 +4048,7 @@ ssh_pwauth: true
       saved ||= {revision:null,layout:null};
       if(init?.method === "POST") {
         const body=JSON.parse(init.body);
-        if(body.revision!==saved.revision)return new Response(JSON.stringify({error:"Your dashboard changed in another session. Cancel and reopen the editor to load the latest layout."}),{status:409,headers:{"Content-Type":"application/json"}});
+        if(body.revision!==saved.revision)return new Response(JSON.stringify({error:"The dashboard changed in another session. Cancel and open the editor again to load the latest layout."}),{status:409,headers:{"Content-Type":"application/json"}});
         saved={revision:crypto.randomUUID(),layout:body.layout};localStorage.setItem(storageKey,JSON.stringify(saved));
       }
       return new Response(JSON.stringify(saved),{status:200,headers:{"Content-Type":"application/json"}});

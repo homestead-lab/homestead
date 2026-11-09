@@ -424,7 +424,7 @@ window.vmOpen = async (ns, name) => {
         <td class="mono small">${esc(d.claim || "—")}${d.storage_class ? `<div class="dim xs">${esc(d.storage_class)}</div>` : ""}</td>
         <td class="mono">${esc(d.size || "—")}</td><td>${d.boot ? `#${d.boot}` : ""}</td></tr>`).join("")}</tbody></table>`;
   // The tab's one action is its own, above the table, not part of a note (#559).
-  const network = `<div class="between vm-net-head">${UI.lead("A VM on the cluster network can use the default app address or its own address, with port mappings. A VM on a bridged network gets its address from DHCP or uses a static address.")}
+  const network = `<div class="between vm-net-head">${UI.lead("A VM on the cluster network can use the default virtual IP or one of its own, with port mappings. A VM on a bridged network gets its address from DHCP or uses a static address.")}
       <button class="btn sm" data-need="operator" onclick="networkManage(${jsq(v.ns)},${jsq(v.name)},'VirtualMachine')">Configure VIP / ports</button></div>
       <table class="tbl dense stack"><thead><tr><th>Interface</th><th>Network</th><th>MAC</th><th>Addresses</th></tr></thead><tbody>
       ${v.nics.map(n => `<tr><td><b>${esc(n.name)}</b><div class="dim xs">${esc(n.model)}</div></td><td>${esc(n.network || "—")}</td>
@@ -569,8 +569,8 @@ window.vmEdit = async (ns, name) => {
       <p class="dim small">Removes the virtual network cards at the next start. Clear this option to add a card. A passed-through physical network card still works.</p>
       ${v.implicit_network ? UI.callout("warn", "A network card is added when the VM starts", "No network card is saved, so KubeVirt adds its default one. Choose Isolated VM to prevent this, or add a network card.") : ""}
       <div id="ve_network_controls">
-      <div class="note small"><b>App address (default or chosen)</b><p>Forwards the chosen ports to the VM through the cluster network. It is not the VM's own IP or MAC address. Set it separately from network card changes, and save those first if a cluster network card is being added.</p>
-        <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)},'VirtualMachine')">Set app address</button></div>
+      <div class="note small"><b>Virtual IP (default or chosen)</b><p>A virtual IP (VIP) forwards the chosen ports to the VM through the cluster network. It is not the VM's own IP or MAC address. Set it separately from network card changes, and save those first if a cluster network card is being added.</p>
+        <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)},'VirtualMachine')">Set virtual IP</button></div>
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Interface</th><th>Model</th><th>Network</th><th>MAC</th><th></th></tr></thead>
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>

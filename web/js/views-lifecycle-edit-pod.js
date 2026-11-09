@@ -734,8 +734,8 @@ const EDIT_REVIEW = UI.reviewFlow({
       button.onclick = null;
       $("#mbody").insertAdjacentHTML("beforeend", `${UI.callout("warn", { html: `${esc(e.message)}` }, `<p>${renaming
       ? "The rename may have partly completed. Check both app names and Recent jobs before doing anything else."
-      : "Some changes may already be saved, including new containers or volumes. Reload the app to see what was applied before making another change. Reloading discards the unsaved changes in this form."}</p>
-      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Check apps" : "Reload app"}</button>`, { id: "editSaveNotice", attrs: 'role="alert"' })}`);
+      : "Some changes may already be saved, including new containers or volumes. Reload the saved settings to see what was applied before making another change. Reloading discards the unsaved changes in this form."}</p>
+      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Check apps" : "Reload saved settings"}</button>`, { id: "editSaveNotice", attrs: 'role="alert"' })}`);
       $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
     }
   },
