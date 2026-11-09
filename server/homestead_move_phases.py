@@ -61,7 +61,7 @@ def _joining(move):
         if not support["ready"]:
             since = move.setdefault("flags", {}).setdefault("snapshot_wait_started", time.time())
             if time.time() - since > STATE.START_GRACE:
-                raise ValueError("CSI snapshot support did not become ready; repair the snapshot controller, then retry. The source has not been stopped")
+                raise ValueError("CSI snapshot support did not become ready. Repair the snapshot controller, then try again. The source has not been stopped.")
             return STATE._note(move, 1, support["message"])
     there = STATE.CLIENT.remote(move["cluster"], "/api/move/target")
     if TARGET._borrow_target(move, there):
@@ -76,7 +76,7 @@ def _quiescing(move):
             # Revalidate inventory immediately before interrupting the source.
             definition = STATE._definition(move)
             if move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
-                raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
+                raise ValueError("The source passthrough devices or vBIOS changed. Cancel and review this transfer again.")
             VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
         if not flags.get("quiesce_requested"):
             if move.get("transfer_mode") == "copy":
@@ -91,7 +91,7 @@ def _quiescing(move):
     status = STATE._source_status(move)
     if move.get("live") and not (status.get("origin") or {}).get("_copy_live"):
         # A source that ignored the request to keep running stopped it instead.
-        raise ValueError(f"{move['cluster']} did not hold {move['name']} for a live copy; update Homestead there, then retry")
+        raise ValueError(f"{move['cluster']} did not hold {move['name']} for a live copy. Update Homestead there, then try again.")
     if status.get("running") and not move.get("live"):
         return STATE._note(move, 6, f"Waiting for {move['name']} to stop on {move['cluster']}")
     if move["kind"] == "volume":
@@ -99,13 +99,13 @@ def _quiescing(move):
     if (move.get("transfer_mode") == "copy" or move.get("host_devices")) and not move.get("definition"):
         definition = STATE._definition(move)
         if move["kind"] == "vm" and move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
-            raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
+            raise ValueError("The source passthrough devices or vBIOS changed. Cancel and review this transfer again.")
         keys = ("claim", "volume", "size_gb", "access_mode", "volume_mode")
         if [tuple(c.get(k) for k in keys) for c in definition["claims"]] != [tuple(c.get(k) for k in keys) for c in move["claims"]]:
-            raise ValueError("The source disks changed; cancel this copy and review it again")
+            raise ValueError("The source disks changed. Cancel this copy and review it again.")
         move["definition"] = definition
     if move.get("live"):
-        return STATE._advance(move, "backing-up", 10, f"{move['name']} keeps running on {move['cluster']}; snapshotting its disks")
+        return STATE._advance(move, "backing-up", 10, f"{move['name']} keeps running on {move['cluster']}. Taking snapshots of its disks.")
     return STATE._advance(move, "backing-up", 10, f"{move['name']} stopped on {move['cluster']}")
 
 
@@ -134,7 +134,7 @@ def _backing_up(move):
         if state in ("error", "failed") or row.get("error"):
             summary, full = backup_failure(row.get("error") or state)
             raise ValueError(f"Backing up {row['claim']} failed on {move['cluster']}: {summary}. "
-                             "Retry failed backups takes a fresh snapshot; completed backups are kept."
+                             "Retry failed backups takes a new snapshot, and finished backups are kept."
                              + (f" Longhorn said: {full}" if full and full != summary else ""))
         image = row.get("image") or {}
         if str(image.get("state", "")).lower() in ("error", "failed") or image.get("error"):
@@ -160,7 +160,7 @@ def _releasing_source(move):
     if not flags.get("source_released"):
         STATE._source_action(move, "release")
         flags["source_released"] = True
-    return STATE._advance(move, "syncing", 50, "Source running state restored; restoring the stopped copy here")
+    return STATE._advance(move, "syncing", 50, "The source runs as it did before. Restoring the stopped copy here.")
 
 
 def _request_sync(move):
@@ -296,7 +296,7 @@ def _restoring(move):
         if claim.get("action") == "skip":
             if not existing:
                 raise ValueError(f"volume {claim['claim']} was to be skipped, using one already in {namespace} "
-                                 "here, but there is none; create it, then retry")
+                                 "here, but there is none. Create it, then try again.")
             claim.update(created=True, restored=True)
             continue
         if claim.get("action") == "blank" and not existing:
@@ -334,8 +334,8 @@ def _restoring(move):
     if all(c["restored"] for c in move["claims"]):
         TARGET._release_target(move)
         if move["kind"] == "volume":
-            return _finish(move, "succeeded", f"{move['name']} is here; the original stays on "
-                                              f"{move['cluster']} until you remove it there")
+            return _finish(move, "succeeded", f"{move['name']} is here. The original stays on "
+                                              f"{move['cluster']} until it is removed there.")
         return STATE._advance(move, "creating", 86, "Every volume is restored here")
     average = sum(states) / max(1, len(states))
     return STATE._note(move, 56 + 29 * average / 100,
@@ -511,13 +511,13 @@ def _starting(move):
         ready = have >= want
         waiting = f"Waiting for {name} to become ready: {have} of {want}"
     if ready:
-        return _finish(move, "succeeded", f"{name} is running here; still stopped on "
-                                          f"{move['cluster']} until you remove it there")
+        return _finish(move, "succeeded", f"{name} is running here. It stays stopped on "
+                                          f"{move['cluster']} until it is removed there.")
     if time.time() - float(flags["started"]) > STATE.START_GRACE:
         # The data arrived; the application not starting is a different
         # problem, and one to be looked at rather than waited on for ever.
         raise ValueError(f"{name} was created and started here but is not ready after "
-                         f"{STATE.START_GRACE // 60} minutes; check its logs. It is still stopped "
+                         f"{STATE.START_GRACE // 60} minutes. Check its logs. It is still stopped "
                          f"on {move['cluster']}")
     return STATE._note(move, 95, waiting)
 
@@ -564,7 +564,7 @@ def _cleanup_resources(move):
         if flags.get("destination_deletion_pending"):
             pending.append("destination object deletion")
         if any(c.get("cleanup_retain") for c in move.get("claims") or []):
-            notes.append("Retain storage policy keeps the removed destination disks; remove them separately if no longer needed")
+            notes.append("The Retain storage policy keeps the removed destination disks. Remove them separately if they are no longer needed")
         if pending:
             pass  # The source backup remains available until restore users are gone.
         elif move.get("cleanup_protocol") == 1 and (flags.get("quiesce_requested") or flags.get("quiesced")):
@@ -578,13 +578,13 @@ def _cleanup_resources(move):
                 pending.append("source transfer backups or snapshots")
             notes += result.get("retained") or []
         elif move.get("cleanup_protocol") != 1 and flags.get("backed_up"):
-            notes.append("Older source transfer backups retained; their ownership cannot be verified")
+            notes.append("Older backups from source transfers are kept, because what owns them cannot be confirmed")
         flags["resource_cleanup_pending"] = bool(pending)
-        move["cleanup_message"] = ("Temporary resource cleanup pending; Homestead retries automatically"
+        move["cleanup_message"] = ("The cleanup of temporary resources is waiting. Homestead retries automatically."
                                    if pending else "; ".join(str(note) for note in notes))
     except Exception:
         flags["resource_cleanup_pending"] = True
-        move["cleanup_message"] = "Temporary resource cleanup pending; check both clusters. Homestead retries automatically"
+        move["cleanup_message"] = "The cleanup of temporary resources is waiting. Check both clusters. Homestead retries automatically."
     STATE._update(move, flags={"resource_cleanup_pending": flags["resource_cleanup_pending"]},
             cleanup_message=move["cleanup_message"])
 
@@ -692,8 +692,8 @@ def _start_source_again(move):
         return ""
     name, cluster = move["name"], move["cluster"]
     if flags.get("start_requested") or flags.get("started") or move.get("phase") in ("starting", "done"):
-        return (f". {name} may already be running here, so it stays stopped on {cluster}; check it here, "
-                f"then Cancel puts it back there")
+        return (f". {name} may already be running here, so it stays stopped on {cluster}. Check it here, "
+                f"then Cancel returns it there")
     clash = _address_claimed_here(move)
     if clash:
         return (f". {name} stays stopped on {cluster}: its address may be announced by both clusters ({clash}). "
@@ -708,7 +708,7 @@ def _start_source_again(move):
         return (f". {name} may still be stopped on {cluster}: starting it again there got no clear answer "
                 f"({str(error)[:160]}). Cancel puts it back there")
     flags["source_released"] = flags["released_on_give_up"] = True
-    return f". {name} runs again on {cluster}; Cancel tidies what this move made here"
+    return f". {name} runs again on {cluster}. Cancel removes what this move created here"
 
 
 def tick_all():

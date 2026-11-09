@@ -101,7 +101,7 @@ def logs_refusal(error, pod, container):
     if "waiting to start" in message or "ContainerCreating" in message or "PodInitializing" in message:
         return f"{who} has not started yet, so there are no logs. It shows here once it is running."
     if "not found" in message and "pods" in message:
-        return f"{pod} no longer exists; the workload has probably replaced it. Reopen the logs."
+        return f"{pod} no longer exists. The app has probably replaced it. Open the logs again."
     if "terminated" in message:
         return f"{who} has stopped and Kubernetes kept no logs from it."
     return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
@@ -289,7 +289,7 @@ def edit(request):
         owner = UPDATES.managed_by(dep_now)
         if owner:
             if PRIORITY.tier_of(((dep_now.get("spec") or {}).get("template") or {}).get("spec") or {})[0] != b["priority"]:
-                raise ValueError(f"{b['name']}'s tier is set where {owner['by']} applies it; set priorityClassName there")
+                raise ValueError(f"{b['name']}'s tier is set where {owner['by']} applies it. Set priorityClassName there.")
             b.pop("priority", None)
     # The same for its start order (#746): Homestead shows the lines to commit.
     first_gate = None
@@ -648,18 +648,18 @@ def move_capacity_plan(body):
     current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     context = {"action": "host-move", **rollout_review_context(current)}
     if current["spec"].get("paused"):
-        raise ValueError("paused workloads cannot be moved; resume and review placement again")
+        raise ValueError("A paused app cannot be moved. Resume it and review the placement again.")
     if current["spec"]["template"]["spec"].get("nodeName"):
-        raise ValueError("this pod template uses a direct nodeName binding; remove it before using reviewed host placement")
+        raise ValueError("This pod template sets nodeName directly. Remove it before choosing a host here.")
     # A move stops the old pods. Never interpret incomplete ownership as free
     # capacity, nor invite consent to stopping a workload on that assumption.
     pods = ROLLOUT_CAPACITY.items(read, "/api/v1/pods")
     _, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
     if not known:
-        raise ValueError("pod ownership is unavailable; no move can be reviewed until inventory is complete")
+        raise ValueError("Homestead cannot tell what owns the pods. No move can be reviewed until it can.")
     nodes = copy.deepcopy(PLACE.get_nodes())
     if node and not any(n["name"] == node for n in nodes):
-        raise ValueError("selected host no longer exists; review placement again")
+        raise ValueError("The chosen host no longer exists. Review the placement again.")
     proposed = copy.deepcopy(current)
     mode = PLACE.apply_node_placement(proposed, node, body.get("pin", False))
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
@@ -677,7 +677,7 @@ def move_capacity_plan(body):
         target = review(pinned)
         capacity["blocked"] = capacity["blocked"] or target["blocked"]
     capacity["move"] = {"node": node, "mode": mode, "target": target}
-    capacity["warnings"].append("A preferred host is not guaranteed; Kubernetes may choose another eligible host, including the current host. Hard pinning prevents failover.")
+    capacity["warnings"].append("A preferred host is not guaranteed. Kubernetes may choose another suitable host, including the current one. Pinning to one host prevents failover.")
     spec = proposed["spec"]["template"]["spec"]
     if any("hostPath" in v for v in spec.get("volumes", [])):
         capacity["warnings"].append("Host paths are not copied: files and devices may differ on the destination. Verify required host-local data before moving.")
@@ -732,7 +732,7 @@ def edit_capacity_plan(config):
     proposed = copy.deepcopy(prepared["deployment"])
     HOSTACCESS.require_edit(current, proposed, hardware_device_paths())
     if proposed["spec"].get("paused") and proposed["spec"].get("replicas", 1) > current["spec"].get("replicas", 1):
-        raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
+        raise ValueError("More replicas for a paused Deployment need a separate capacity review. Resume it before editing the replicas.")
     if prepared["name"] != name:
         count = proposed["spec"].get("replicas", 1)
         proposed = WORKLOAD_EDIT._renamed_deployment(proposed, ns, prepared["name"])
@@ -757,8 +757,8 @@ def edit_capacity_plan(config):
         plan["blocked"] = plan["blocked"] or helper_plan["blocked"]
         plan["requires_confirmation"] = True
         plan["warnings"] += ["Copy helper: " + warning for warning in helper_plan["warnings"]]
-        plan["warnings"].append("Storage copy stops all containers. Placement is checked again before copying and restarting. Failed or uncertain steps keep the data and require inspection; no automatic rollback or deletion.")
-        plan["warnings"].append("Destination files may be merged or overwritten. This is not a backup or filesystem free-space/consistency guarantee; avoid external writers during the copy.")
+        plan["warnings"].append("The storage copy stops all containers. Placement is checked again before copying and restarting. A failed or uncertain step keeps the data and needs to be checked. Nothing is rolled back or deleted automatically.")
+        plan["warnings"].append("Destination files may be merged or overwritten. This is not a backup, and it does not guarantee free space or a consistent filesystem. Avoid other writers during the copy.")
     if moves or prepared["name"] != name or proposed["spec"].get("replicas", 1):
         import_blocker = PLACE.IMPORT_GUARD.pending(current, ns, kget)
         if import_blocker:
@@ -775,7 +775,7 @@ def edit_capacity_plan(config):
                                      for port in exposed]})
         plan["container_changes"] = {"added": additions, "removed": removals}
         plan["requires_confirmation"] = True
-        plan["warnings"].append("Changing the containers rolls every pod in this workload. Removed containers stop; persistent volumes and their data are retained.")
+        plan["warnings"].append("Changing the containers replaces every pod in this app. Removed containers stop. Persistent volumes and their data are kept.")
     if config.get("lan"):
         plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
     return prepared, context, plan
@@ -789,14 +789,14 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
             services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
         except urllib.error.HTTPError as error:
             if error.code != 404:
-                raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
-                                 f"try again in a moment ({str(error)[:120]})") from error
+                raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known. "
+                                 f"Try again in a moment ({str(error)[:120]}).") from error
             services = []       # a 404 listing a namespace's Services: there are none
         except Exception as error:
             # Opened with no Service, every port would show unexposed, and
             # saving would remove the Service and release its address.
-            raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
-                             f"try again in a moment ({str(error)[:120]})") from error
+            raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known. "
+                             f"Try again in a moment ({str(error)[:120]}).") from error
     listeners = _service_listeners(deployment, services)
     annotations = deployment["metadata"].get("annotations", {}) or {}
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()

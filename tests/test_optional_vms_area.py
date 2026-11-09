@@ -133,9 +133,9 @@ class VmAreaReadTests(unittest.TestCase):
         self.assertEqual(({"claims": {"app-data": None}}, []), (inventory, rows))
         with self.assertRaisesRegex(ValueError, "deployment app already exists"):
             CONTAINER_IMPORT.import_inventory(prepared, Paths(http_error(404), deployments={"metadata": {"uid": "u1"}}, **{"/pods": pods}))
-        with self.assertRaisesRegex(ValueError, "Import inventory is incomplete"):
+        with self.assertRaisesRegex(ValueError, "import information is incomplete"):
             CONTAINER_IMPORT.import_inventory(prepared, Paths(http_error(404), deployments={"metadata": {}}, **{"/pods": pods}))
-        with self.assertRaisesRegex(ValueError, "Import inventory is incomplete"):
+        with self.assertRaisesRegex(ValueError, "import information is incomplete"):
             CONTAINER_IMPORT.import_inventory(prepared, Paths(http_error(404), deployments=None, **{"/pods": pods}))
         with self.assertRaises(urllib.error.HTTPError):
             CONTAINER_IMPORT.import_inventory(prepared, Paths(http_error(500), **{"/pods": pods}))

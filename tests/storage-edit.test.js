@@ -52,7 +52,7 @@ test("supported expansion uses the claim request and submits new size", async ()
 test("failed check offers no save action", async () => {
   const { context } = editor(async () => { throw new Error("Unavailable"); });
   await context.window.volumeEdit(volume);
-  assert.match(context.html, /Could not check this volume/);
+  assert.match(context.html, /The volume could not be checked/);
   assert.doesNotMatch(context.html, /volumeEditNow|id="ve_size"/);
 });
 
@@ -76,7 +76,7 @@ test("eligible missing classes offer an admin review before creation", async () 
   await context.window.volumeEdit(volume);
   assert.match(context.html, /data-need="admin"[^>]*volumeClassRepairReview/);
   context.window.volumeClassRepairReview("lab", "example-data", "example-restore");
-  assert.match(context.html, /No backup is restored, and volume sizes and data stay unchanged/);
+  assert.match(context.html, /Volume sizes and data do not change, and no backup is restored/);
   assert.equal(calls.length, 1);
   const button = { disabled: false };
   await context.window.volumeClassRepairNow("lab", "example-data", "example-restore", button);

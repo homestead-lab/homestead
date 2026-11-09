@@ -84,9 +84,9 @@ def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_ch
     blockers.extend(reason for decision in inspection["decisions"] for reason in decision["blockers"])
     common = []
     if unresolved:
-        common.append("An API request has no confirmed outcome. Inspect its Kubernetes audit trail and retained resources; this screen cannot safely retry or adopt it.")
+        common.append("An API request has no confirmed outcome. Check its Kubernetes audit trail and the kept resources. This screen cannot safely retry it or take it over.")
     if any(row["relationship"] == "unavailable" for row in rows):
-        common.append("Some retained resources could not be read; restore access before continuing.")
+        common.append("Some kept resources could not be read. Restore access before continuing.")
     blockers += common
     held = item.get("status") == "failed" and bool(ref.get("storage_hold"))
     can_continue = held and phase not in ("done", "rolled-back") and not blockers
@@ -108,7 +108,7 @@ def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_ch
     can_rollback = not rollback["blockers"]
     if can_rollback:
         warnings.append("Rolling back restarts what this move stopped on the original volume. The copy is then kept as an old "
-                        "copy under Volumes, with the Retain reclaim policy, for you to remove; nothing is deleted.")
+                        "copy under Volumes, with the Retain reclaim policy, to be removed later. Nothing is deleted.")
     allowed = {"continue": can_continue, "retry": can_continue and not verified, "finish": can_continue and verified,
                "rollback": can_rollback, "pause": can_pause}
     plan = {"id": item["id"], "claim": ref["claim"], "namespace": ref["namespace"],
@@ -133,7 +133,7 @@ def preview(ident, ops, read, actor, helper_admission, restart_admission, *, run
         return {"plan": plan, "tokens": tokens}
 
 
-DETAIL = {"pause": "Move paused; data and running copy jobs retained",
+DETAIL = {"pause": "Move paused. The data and running copy jobs are kept.",
           "rollback": "Move queued to roll back onto the original volume with fresh safety checks",
           "finish": "Move queued to finish on the copied volume with fresh safety checks"}
 
@@ -154,7 +154,7 @@ def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_
         ref["storage_recovery"] = {"action": action, "by": actor, "at": time.time(),
                                    "revision": ref.get("storage_recovery", {}).get("revision", 0) + 1}
         if action == "pause":
-            ref["storage_hold"] = "Paused: no further handoff steps will run. Already accepted copy jobs may continue; workloads and data remain as they are."
+            ref["storage_hold"] = "Paused. No further handover steps run. Copy jobs already accepted may continue. The apps and data stay as they are."
             ops._finish(item, "failed", item.get("progress", 0), ref["storage_hold"])
         else:
             _set_aside(item)
@@ -169,8 +169,8 @@ def act(body, ops, read, actor, helper_admission, restart_admission, *, runtime_
             ref.pop("storage_hold", None)
             item["finished_at"] = ""
             ops._finish(item, "running", item.get("progress", 0),
-                        "Review accepted; rolling back onto the original volume with fresh checks" if action == "rollback" else
-                        "Review accepted; continuing from confirmed steps with fresh checks")
+                        "Review accepted. Rolling back to the original volume with new checks." if action == "rollback" else
+                        "Review accepted. Continuing from the confirmed steps with new checks.")
         t.save(items)
         return {"ok": True, "operation": ops._public(item),
                 "detail": DETAIL.get(action, "Move queued to continue with fresh safety checks")}

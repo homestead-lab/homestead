@@ -45,9 +45,9 @@ def registered():
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return []
-        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"The virtual IPs could not be read ({str(error)[:160]})") from error
     except Exception as error:
-        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"The virtual IPs could not be read ({str(error)[:160]})") from error
     try:
         rows = json.loads((cm.get("data") or {}).get("vips.json") or "[]")
     except ValueError:
@@ -67,15 +67,15 @@ def set_default_vip(ip):
         raise ValueError("A node address cannot be the default workload VIP")
     INV.check_address(ip, state)
     if PLATFORM.detect().get("load_balancer") not in ("kube-vip", "metallb"):
-        raise ValueError("Install kube-vip or MetalLB before choosing a workload VIP; ServiceLB uses node addresses")
+        raise ValueError("Install kube-vip or MetalLB before choosing an app virtual IP. ServiceLB uses the hosts' own addresses.")
     def choose(rows):
         if not any(row["ip"] == ip for row in rows):
-            raise ValueError("Add this reserved address to Your VIPs first")
+            raise ValueError("Add this reserved address under Virtual IPs first")
         for row in rows:
             row["default"] = row["ip"] == ip
         return rows
     _update_registered(choose)
-    return {"ok": True, "ip": ip, "detail": "Default workload VIP saved; existing Services are unchanged"}
+    return {"ok": True, "ip": ip, "detail": "Default virtual IP saved. Existing services are not changed."}
 
 
 def _update_registered(change):
@@ -86,7 +86,7 @@ def _update_registered(change):
     an empty one to save over."""
     def apply(stored):
         if stored is not None and not isinstance(stored, list):
-            raise ValueError("Your VIPs could not be read (vips.json is not a list); nothing was changed")
+            raise ValueError("The virtual IPs could not be read (vips.json is not a list). Nothing was changed.")
         rows = [row for row in (stored or []) if isinstance(row, dict) and row.get("ip")]
         return sorted(change(rows), key=lambda r: int(ipaddress.ip_address(r["ip"])))
     return KUBE.update_json(_vip_map_path(), "vips.json", apply, read=STATE.kget, write=STATE.ksend,
@@ -116,7 +116,7 @@ def add_vips(cfg, ipam_records=None):
             if ip in have:
                 skipped.append(f"{ip} is already on the list")
             elif ip in nodes:
-                skipped.append(f"{ip} is a node's own address")
+                skipped.append(f"{ip} is a host's own address")
             elif ip in state["platform_addresses"]:
                 skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
             elif ip in state["foreign_addresses"]:
@@ -147,7 +147,7 @@ def remove_vip(ip):
     users = next((row for row in state["vips"] if row["ip"] == ip), None)
     if users:
         names = sorted({f"{l['namespace']}/{l['service']}" for l in users["listeners"]})
-        raise ValueError(f"{ip} is in use by {', '.join(names)}; remove or move those first")
+        raise ValueError(f"{ip} is in use by {', '.join(names)}. Remove or move those first.")
     def remove(rows):
         if any(row["ip"] == ip and row.get("default") for row in rows):
             raise ValueError("Choose another default workload VIP before removing this address")
@@ -239,19 +239,19 @@ def _moved_back(failed, moved, moving, old, new, maybe=()):
         except Exception:
             (stuck if any(row is m for m, _ in moved) else unknown).append(row)
     if not stuck and not unknown:
-        return (f"{failed}; nothing was moved"
+        return (f"{failed}. Nothing was moved"
                 + (f" ({_names([row for row, _ in moved])} moved back to {old})" if moved else "")
-                + "; try the move again")
+                + ". Try the move again.")
     rest = [row for row in moving if row not in stuck and row not in unknown]
     where = []
     if stuck:
         where.append(f"{_names(stuck)} {_is(stuck)} still on {new}")
     if unknown:
-        where.append(f"{_names(unknown)} may be on either address; check {'it' if len(unknown) == 1 else 'them'} in Edit")
+        where.append(f"{_names(unknown)} may be on either address, so check {'it' if len(unknown) == 1 else 'them'} in Edit")
     if rest:
         where.append(f"{_names(rest)} {_is(rest)} on {old}")
     return (f"{failed}, and putting Services back on {old} failed: " + "; ".join(where)
-            + f". Your VIPs still names {old}. Do not try the move again until {_names(stuck + unknown)} "
+            + f". Virtual IPs still lists {old}. Do not try the move again until {_names(stuck + unknown)} "
             f"{_is(stuck + unknown)} back on {old} (Edit on each)")
 
 
@@ -273,11 +273,11 @@ def change_vip(old, new, apply=False):
     rows = registered()
     entry = next((row for row in rows if row["ip"] == old), None)
     if entry is None:
-        raise ValueError(f"{old} is not one of Your VIPs")
+        raise ValueError(f"{old} is not one of the virtual IPs")
     if new in state["node_ips"]:
-        raise ValueError(f"{new} is a node's own address")
+        raise ValueError(f"{new} is a host's own address")
     if any(row["ip"] == new for row in rows):
-        raise ValueError(f"{new} is already one of Your VIPs; move the Services with Edit on each instead")
+        raise ValueError(f"{new} is already one of the virtual IPs. Move the services with Edit on each instead.")
     INV.check_address(new, state)
     if any(new in (row.get("external_ips") or []) for row in state["services"]):
         raise ValueError(f"{new} is already used by a Service")
@@ -285,7 +285,7 @@ def change_vip(old, new, apply=False):
               if old in (row.get("requested_ips") or []) + (row.get("external_ips") or [])]
     system = [f"{row['namespace']}/{row['name']}" for row in moving if row.get("system")]
     if system:
-        raise ValueError(f"{', '.join(system)} on {old} belong to the cluster; Homestead does not move them")
+        raise ValueError(f"{', '.join(system)} on {old} belong to the cluster, so Homestead does not move them")
     plan = {"old": old, "new": new, "default": bool(entry.get("default")), "label": entry.get("label", ""),
             "services": [{"namespace": row["namespace"], "name": row["name"],
                           "ports": [f"{p['port']}/{p['protocol']}" for p in row.get("ports") or []],
@@ -309,8 +309,8 @@ def change_vip(old, new, apply=False):
                 row.pop("default", None)
         return rows + [now]
     _update_registered(move)
-    plan["detail"] = (f"{old} is now {new}" + (f"; {len(moving)} Service{'s' if len(moving) != 1 else ''} moved with it"
-                                               if moving else "") + ("; still the default workload VIP" if entry.get("default") else ""))
+    plan["detail"] = (f"{old} is now {new}" + (f". {len(moving)} Service{'s' if len(moving) != 1 else ''} moved with it"
+                                               if moving else "") + (". It is still the default app virtual IP" if entry.get("default") else ""))
     return plan
 
 

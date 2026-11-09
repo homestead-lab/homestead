@@ -95,7 +95,7 @@ def evidence(spec, namespace, configuration, read=None):
             if resource and (not isinstance(resource, str) or not QUALIFIED.fullmatch(resource)):
                 raise ValueError("Unresolved device resource")
             cache[path] = resource
-            result["warnings"].append(f"LAN network {ns}/{name} is defined; physical links, bridge and CNI readiness still need host validation")
+            result["warnings"].append(f"LAN network {ns}/{name} is defined. The physical links, bridge and CNI still need to be checked on the host.")
             return resource
         except Exception:
             blockers.append(f"LAN network {ns}/{name} identity/device requirements could not be verified")
@@ -104,7 +104,7 @@ def evidence(spec, namespace, configuration, read=None):
     for network in networks:
         iface = by_name.get(network.get("name")) or {}
         if network.get("resourceClaim"):
-            blockers.append("VM network uses dynamic resource allocation; resolved claim/device placement must be checked before starting")
+            blockers.append("The VM network uses dynamic resource allocation. Its device placement must be checked before starting.")
         if "multus" in network:
             resource = attachment((network.get("multus") or {}).get("networkName"))
             if resource:
@@ -134,7 +134,7 @@ def evidence(spec, namespace, configuration, read=None):
             # Include that demand, but do not claim to reproduce admission.
             if resource:
                 requests[resource] = requests.get(resource, 0) + 1
-                result["warnings"].append("Binding-network devices include webhook-dependent allocation; review the resulting launcher")
+                result["warnings"].append("The binding network's devices depend on a webhook for allocation. Review the launcher that results.")
         if name not in seen:
             seen.add(name)
             result["sidecars"] += bool(plugin.get("sidecarImage"))
@@ -144,5 +144,5 @@ def evidence(spec, namespace, configuration, read=None):
             except (ValueError, TypeError):
                 blockers.append("Network binding memory overhead is invalid")
             if set(overhead) - {"memory"}:
-                result["warnings"].append("Network binding declares non-memory overhead; version-dependent launcher admission may add resources")
+                result["warnings"].append("The network binding declares extra resources besides memory, and some KubeVirt versions add more to the launcher")
     return result

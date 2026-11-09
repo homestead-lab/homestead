@@ -167,4 +167,4 @@ class StatusTests(unittest.TestCase):
     def test_a_helper_that_stood_down_fails_the_job_with_its_reason(self):
         state, _, message = self.status({"action": "reboot", "handoff": True}, helper_phase="Succeeded")
         self.assertEqual("failed", state)
-        self.assertIn("did not detach", message)
+        self.assertIn("was not released", message)

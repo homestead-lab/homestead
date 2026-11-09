@@ -208,7 +208,7 @@ class StatefulSetTests(unittest.TestCase):
     def test_on_longhorn_left_at_do_nothing_it_waits_with_the_pointer(self):
         r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO))
         self.assertEqual("waits", r["outcome"])
-        self.assertTrue(r["why"].startswith("waits until its pod is deleted: Kubernetes doesn't start"), r["why"])
+        self.assertTrue(r["why"].startswith("waits until its pod is deleted, because Kubernetes does not start"), r["why"])
         self.assertIn("To have Longhorn do this", r["why"])
         self.assertEqual("node_down", r["setting"])
 

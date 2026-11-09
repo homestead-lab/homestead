@@ -153,7 +153,7 @@ class DeployYaml(unittest.TestCase):
         # The read failed: Deploy refuses and asks to try again, so nothing is sure yet.
         with mock.patch.object(PRIORITY, "ladder", return_value=PRIORITY._fallback(forbidden=False)):
             self.assertEqual([{"what": "a PriorityClass homestead-critical if the cluster has none "
-                                       "(its classes could not be read just now; Deploy waits until they can)",
+                                       "(its classes could not be read just now, so Deploy waits until they can)",
                                "certain": False}], self.preview(self.cfg)["deploy_adds"])
 
     def test_a_one_word_password_typed_into_deploy_is_a_secret_key_in_the_yaml(self):

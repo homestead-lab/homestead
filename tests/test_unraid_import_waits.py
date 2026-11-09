@@ -142,7 +142,7 @@ class ImportWaitTests(unittest.TestCase):
             self.assertIn(words, job["message"])
         self.assertNotIn("cleared", job["message"], "nothing of the disk's was cleared")
         self.assertNotIn("Volumes", job["message"], "that page lists no Pending claim and removes no DataVolume")
-        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), "what to do is whole, within a job's limit: " + job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove anything not wanted under Import > Disk images."), "what to do is whole, within a job's limit: " + job["message"])
         self.assertNotIn("kubectl", job["message"])
         for path in kept + [self.path(name) for name in DVS]:
             self.assertTrue(self.kube.object(path), path + " is CDI's or the disk's, and stays")
@@ -227,7 +227,7 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertIn(f"CDI has not finished {DVS[1]} after", job["message"])
         self.assertIn(f"{DVS[0]} is finished", job["message"])
-        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove anything not wanted under Import > Disk images."), job["message"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
 
     def ended_with_vm_name(self, name, first_finished=False):
@@ -266,7 +266,7 @@ class ImportWaitTests(unittest.TestCase):
                 with self.subTest(length=length, first_finished=first_finished):
                     message = self.ended_with_vm_name(("f" if first_finished else "n") * length, first_finished)
                     self.assertLessEqual(len(message), 500)
-                    self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
+                    self.assertTrue(message.endswith("An admin can remove anything not wanted under Import > Disk images."), message)
                     self.assertNotIn("kubectl", message)
                     if self.dvs[1] in message:
                         kinds.add("named")
@@ -320,7 +320,7 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIn("not finished", job["message"])
         self.assertIn("copy Job", job["message"])
         self.assertTrue(self.ref()["retain_resources"])
-        with self.assertRaisesRegex(ValueError, "still active"):
+        with self.assertRaisesRegex(ValueError, "still running"):
             UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         self.phase("Succeeded")
         job = self.look()
@@ -383,17 +383,17 @@ class ImportWaitTests(unittest.TestCase):
         self.look()
         self.now += CONVERT_LIMIT
         message = self.look()["message"]
-        for words in ("make the VM from it under Import", "check it boots", "bus, MAC and TPM", "under another name"):
+        for words in ("create the VM from it under Import", "check that it starts", "bus, MAC and TPM", "under another name"):
             self.assertIn(words, message)
         self.assertNotIn("attach", message)
-        self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
+        self.assertTrue(message.endswith("An admin can remove anything not wanted under Import > Disk images."), message)
 
     def test_several_disks_are_not_promised_a_vm_with_all_of_them(self):
         self.to_convert()
         self.look()
         self.now += CONVERT_LIMIT
         message = self.look()["message"]
-        for words in ("from one disk", "can't attach the others", "under another name"):
+        for words in ("from one disk", "not with the others", "under another name"):
             self.assertIn(words, message)
         self.assertNotIn("make the VM from them", message)
 

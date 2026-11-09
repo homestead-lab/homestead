@@ -28,7 +28,7 @@ from homestead_storage_journal import Held
 from fakes.kube import Kube
 from fakes.self_data_move import Move, NS
 
-CUTOVER_WORDS = "Cutover has been requested"
+CUTOVER_WORDS = "switch-over has been requested"
 
 
 class Base(unittest.TestCase):
@@ -211,7 +211,7 @@ class GoingBackTests(Base):
         self.hold()
         self.kube.discard(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/source")
         for action in ("resume", "return-original"):
-            with self.assertRaisesRegex(Held, "(?s)The original volume.*no longer exists.*won't do"):
+            with self.assertRaisesRegex(Held, "(?s)The original volume.*no longer exists.*does not work"):
                 self.preview(action)
 
     def test_a_failed_read_of_a_volume_is_not_called_gone(self):
@@ -270,7 +270,7 @@ class GoingBackTests(Base):
         job["metadata"].pop("finalizers", None)
         job["metadata"].pop("deletionTimestamp", None)
         self.kube.add(job)
-        with self.assertRaisesRegex(Held, "no completed release"):
+        with self.assertRaisesRegex(Held, "not finished releasing"):
             self.preview("return-original")
 
     def with_a_start_entry(self, state):

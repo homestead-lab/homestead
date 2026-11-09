@@ -109,7 +109,7 @@ class VipMoveConflictTests(unittest.TestCase):
 
     def test_a_second_conflict_moves_the_others_back_and_nothing_is_moved(self):
         with Kube(registry(), *[svc(name) for name in NAMES]) as kube:
-            with self.assertRaisesRegex(ValueError, r"lab/minio kept changing.*nothing was moved.*try the move again") as caught:
+            with self.assertRaisesRegex(ValueError, r"lab/minio kept changing.*Nothing was moved.*Try the move again") as caught:
                 self.move(kube, lambda name, to: 99 if (name, to) == ("minio", NEW) else 0)
             self.assertNotIn("409", str(caught.exception))
             self.assertEqual({name: OLD for name in NAMES}, self.where(kube), "Services left on the new address")
@@ -123,7 +123,7 @@ class VipMoveConflictTests(unittest.TestCase):
     def test_an_error_other_than_a_conflict_moves_the_others_back_too(self):
         with Kube(registry(), *[svc(name) for name in NAMES]) as kube:
             kube.fail(path("minio"), 500, times=1, method="PUT")
-            with self.assertRaisesRegex(ValueError, r"lab/minio could not be moved.*nothing was moved.*try the move again"):
+            with self.assertRaisesRegex(ValueError, r"lab/minio could not be moved.*Nothing was moved.*Try the move again"):
                 self.move(kube, lambda name, to: 0)
             self.assertEqual({name: OLD for name in NAMES}, self.where(kube))
             self.assertEqual([OLD], self.registry_ips(kube))
@@ -131,7 +131,7 @@ class VipMoveConflictTests(unittest.TestCase):
     def test_a_write_that_landed_though_its_reply_was_lost_is_moved_back_too(self):
         with Kube(registry(), *[svc(name) for name in NAMES]) as kube:
             kube.fail(path("minio"), 500, times=1, method="PUT", applied=True)
-            with self.assertRaisesRegex(ValueError, r"nothing was moved"):
+            with self.assertRaisesRegex(ValueError, r"Nothing was moved"):
                 self.move(kube, lambda name, to: 0)
             self.assertEqual({name: OLD for name in NAMES}, self.where(kube))
             self.assertEqual("lease-minio", kube.object(path("minio"))["metadata"]["annotations"].get("kube-vip.io/leaseName"))
@@ -167,7 +167,7 @@ class VipMoveConflictTests(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 self.move(kube, lambda name, to: 0)
             message = str(caught.exception)
-            self.assertIn("lab/minio may be on either address; check it in Edit", message)
+            self.assertIn("lab/minio may be on either address, so check it in Edit", message)
             self.assertNotIn("still on", message, "nothing is known to have moved and stayed")
             self.assertRegex(message, rf"lab/web and lab/frigate are on {OLD}")
             self.assertEqual({name: OLD for name in NAMES}, self.where(kube))

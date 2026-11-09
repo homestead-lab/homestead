@@ -65,7 +65,7 @@ try {
       await go('nodes', {params: {node: 'harvester-node1'}}); nodeSectionGo('hardware');
     }, {saved, theme});
     await page.locator('#nodeDevices').getByText('IOMMU group 12 · 2 devices', {exact: true}).waitFor();
-    assert.match(await page.locator('#nodeDevices').innerText(), /Last inspected/);
+    assert.match(await page.locator('#nodeDevices').innerText(), /Last checked/);
     assert.equal(await page.locator('#nodeDevices').getByRole('button', {name: 'Refresh devices'}).count(), 1);
     const hostOverflow = await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
     assert.equal(hostOverflow, false, 'host inventory fits the viewport');

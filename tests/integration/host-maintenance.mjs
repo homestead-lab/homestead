@@ -77,7 +77,7 @@ try {
     await page.evaluate(host => nodeActions(host), HOST);
     await page.waitForSelector('button[onclick*="hostMaintenanceExtend"]');
     assert.equal(await page.locator('button[onclick*="hostMaintenanceReview"]').count(), 0);
-    assert.equal(await page.locator('button[onclick*="nodePowerReview"]').count(), 2, "Reboot and Shut down stay");
+    assert.equal(await page.locator('button[onclick*="nodePowerReview"]').count(), 2, "Restart host and Shut down host are still available");
     await shot("actions");
     await page.locator('button[onclick*="hostMaintenanceExtend"]').click();
     await page.selectOption("#mm_extend_hours", "8");

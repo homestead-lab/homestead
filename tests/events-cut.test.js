@@ -35,7 +35,7 @@ test("an events read that failed says so, never that there are no events", () =>
   const found = { "#evRows": { innerHTML: "" }, "#evCount": { textContent: "" }, "#evClear": {} };
   ctx.$ = selector => found[selector];
   ctx.eventsRender();
-  assert.match(found["#evRows"].innerHTML, /Could not read the cluster's events: Kubernetes did not answer/);
+  assert.match(found["#evRows"].innerHTML, /The cluster's events could not be read\. Kubernetes did not answer/);
   assert.doesNotMatch(found["#evRows"].innerHTML, /No events/);
   ctx.STATE.data.eventError = "";
   ctx.eventsRender();

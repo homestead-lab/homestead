@@ -33,7 +33,7 @@ test("beside the guide's Make default: the install class stays Homestead's", () 
   const classes = [row("longhorn-2"), row("longhorn", { default: true, homestead_default: true, homestead_reason: "install" })];
   const html = ctx.setupStorageSuggestionsHtml([recipe(classes[0])], classes);
   assert.match(text(html), /Make default/);
-  assert.match(text(html), /Homestead puts new volumes on longhorn \(its install class\); making another class the default here does not change that\./);
+  assert.match(text(html), /Homestead puts new volumes on longhorn \(the class it was installed with\)\. Making another class the default here does not change that\./);
 });
 
 test("the guide and the storage classes card use the same words", () => {

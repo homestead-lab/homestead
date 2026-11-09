@@ -63,7 +63,7 @@ def matches(selector, labels):
     for expr in selector.get("matchExpressions") or []:
         key, op, values = expr["key"], expr["operator"], expr.get("values", [])
         if op not in ("In", "NotIn", "Exists", "DoesNotExist"):
-            raise ValueError("Unsupported label selector; inspect the policy in Resources")
+            raise ValueError("Unsupported label selector. Check the policy in Resources.")
         if ((op == "In" and labels.get(key) not in values) or
                 (op == "NotIn" and labels.get(key) in values) or
                 (op == "Exists" and key not in labels) or (op == "DoesNotExist" and key in labels)):
@@ -95,15 +95,15 @@ def _target(obj, kind):
         if not implicit and not any("pod" in network for network in networks):
             blocked = "This VM has no pod-network interface. Its LAN interfaces need a guest or network firewall."
         if any("multus" in network for network in networks):
-            warnings.append("VM LAN/Multus interfaces are outside this policy; only its pod-network traffic is covered.")
+            warnings.append("The VM's LAN (Multus) interfaces are outside this policy. Only its pod network traffic is covered.")
     if pod.get("hostNetwork"):
-        blocked = "This workload uses host networking; configure its host or upstream firewall."
+        blocked = "This app uses host networking. Set up the firewall on its host or upstream instead."
     if not selector or not (selector.get("matchLabels") or selector.get("matchExpressions")):
         blocked = "This workload has no specific pod selector."
     if _protected(namespace, labels, name):
         blocked = "Manage platform and Homestead networking through their owning configuration."
     if meta.get("deletionTimestamp"):
-        blocked = "This workload is being deleted; refresh before configuring its firewall."
+        blocked = "This app is being deleted. Refresh before setting up its firewall."
     if (template.get("metadata") or {}).get("annotations", {}).get("k8s.v1.cni.cncf.io/networks"):
         warnings.append("Additional Multus interfaces are outside this policy.")
     return {"namespace": namespace, "name": name, "kind": kind, "uid": meta.get("uid", ""),
@@ -132,7 +132,7 @@ def _resolve(target):
     group = "kubevirt.io/v1" if kind == "VirtualMachine" else "apps/v1"
     row = _target(kget(f"/apis/{group}/namespaces/{ns}/{KINDS[kind]}/{name}"), kind)
     if not target.get("uid") or row["uid"] != target["uid"]:
-        raise ValueError("The workload was replaced; refresh and select it again")
+        raise ValueError("The app was replaced. Refresh and select it again.")
     if row["blocked"]:
         raise ValueError(row["blocked"])
     return row
@@ -147,8 +147,8 @@ def provider():
     if found:
         return {"name": ", ".join(found), "found": True, "detail": "Policy-capable network provider detected. Packet enforcement has not been tested."}
     if platform().get("distribution") == "k3s":
-        return {"name": "K3s", "found": True, "detail": "K3s includes a network-policy controller by default. Verify it has not been disabled; packet enforcement has not been tested."}
-    return {"name": "Unverified", "found": False, "detail": "No known policy controller detected. Policies only filter traffic when your network provider enforces Kubernetes NetworkPolicy."}
+        return {"name": "K3s", "found": True, "detail": "K3s includes a network policy controller by default. Check that it has not been turned off. Whether it filters traffic has not been tested."}
+    return {"name": "Unverified", "found": False, "detail": "No known policy controller was found. Policies only filter traffic when the network provider enforces Kubernetes NetworkPolicy."}
 
 
 def _rules(rows, direction):
@@ -264,15 +264,15 @@ def _existing(cfg):
         if error.code != 404:
             raise
         if cfg.get("uid") or cfg.get("resource_version"):
-            raise ValueError("The policy was removed; refresh before continuing") from None
+            raise ValueError("The policy was removed. Refresh before continuing.") from None
         return None
     if not cfg.get("uid") or not cfg.get("resource_version"):
-        raise ValueError("A policy with this name already exists; choose another name or edit it")
+        raise ValueError("A policy with this name already exists. Choose another name or edit it.")
     meta = existing["metadata"]
     if meta.get("uid") != cfg["uid"] or meta.get("resourceVersion") != cfg["resource_version"]:
-        raise ValueError("The policy changed; refresh and review it again")
+        raise ValueError("The policy changed. Refresh and review it again.")
     if not _editable(existing):
-        raise ValueError("This policy is managed elsewhere or has unsupported changes; inspect it in Resources")
+        raise ValueError("This policy is managed elsewhere or has unsupported changes. Check it in Resources.")
     return existing
 
 
@@ -291,19 +291,19 @@ def preview(cfg):
     spec = _spec(config, target["selector"])
     existing = _existing(cfg)
     if existing and _editable(existing)["target"] != config["target"]:
-        raise ValueError("A policy cannot be moved to another workload; create a new policy")
+        raise ValueError("A policy cannot be moved to another app. Create a new policy.")
     pods = _items(f"/api/v1/namespaces/{namespace}/pods")
     selected = [pod for pod in pods if matches(target["selector"], pod.get("metadata", {}).get("labels", {}))]
     for pod in selected:
         meta = pod.get("metadata", {})
         if pod.get("spec", {}).get("hostNetwork") or _protected(namespace, meta.get("labels", {}), meta.get("name", "")):
-            raise ValueError("This selector includes host-network or platform pods; it cannot be managed here")
+            raise ValueError("This selector includes host-network or platform pods, so it cannot be managed here")
     policies = _items(_path(namespace))
     overlaps = [obj for obj in policies if obj["metadata"]["name"] != name and any(
         matches(obj.get("spec", {}).get("podSelector", {}), labels)
         for labels in [target["labels"]] + [pod["metadata"].get("labels", {}) for pod in selected])]
     warnings = list(target["warnings"])
-    warnings.append("Policies add allowed traffic together. Other matching policies can allow traffic this policy omits; rules have no priority order.")
+    warnings.append("Policies add their allowed traffic together. Other matching policies can allow traffic that this policy leaves out. Rules have no priority order.")
     if overlaps:
         warnings.append("Other matching policies: " + ", ".join(obj["metadata"]["name"] for obj in overlaps))
     if not selected:
@@ -337,7 +337,7 @@ def preview(cfg):
 def save(cfg):
     result = preview(cfg)
     if not cfg.get("review") or cfg["review"] != result["review"]:
-        raise ValueError("The firewall plan changed or was not reviewed; review it again before applying")
+        raise ValueError("The firewall plan changed or was not reviewed. Review it again before applying.")
     obj = result["manifest"]
     ksend("PUT" if result["update"] else "POST", _path(cfg["namespace"], cfg["name"] if result["update"] else ""), obj)
     return {"ok": True, "message": "Firewall policy saved. Verify connectivity and network-provider enforcement."}
@@ -350,7 +350,7 @@ def remove(cfg):
     meta = existing["metadata"]
     ksend("DELETE", _path(meta["namespace"], meta["name"]), {"apiVersion": "v1", "kind": "DeleteOptions",
           "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}})
-    return {"ok": True, "message": "Policy removed; remaining policies still apply."}
+    return {"ok": True, "message": "Policy removed. The remaining policies still apply."}
 
 
 # Its routes and who may use them (homestead_routes.py).

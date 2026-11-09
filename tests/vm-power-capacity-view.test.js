@@ -41,7 +41,7 @@ test("start restart and resume review before dispatch and require acknowledgemen
     assert.equal(t.sent.length,1);
     assert.equal(t.sent[0].path,"/api/vm/power/preview");
     assert.match(t.fields["#mbody"].innerHTML,/Halted.*Always/s);
-    assert.match(t.fields["#mbody"].innerHTML,/not a configured memory limit/);
+    assert.match(t.fields["#mbody"].innerHTML,/is not a limit/);
     await t.ctx.vmPowerReviewedApply();
     assert.equal(t.sent.length,1);
     t.fields["#vmPowerApprove"].checked=true;
@@ -57,8 +57,8 @@ test("start restart and resume review before dispatch and require acknowledgemen
 test("unknown renderer CPU allowance is not presented as an exact request", async()=>{
   const t=setup({cpuEstimate:true});
   await t.ctx.vmPower("lab","guest","start");
-  assert.match(t.fields["#mbody"].innerHTML,/conservative IO-thread allowance/);
-  assert.match(t.fields["#mbody"].innerHTML,/RAM requests are lower bounds/);
+  assert.match(t.fields["#mbody"].innerHTML,/allows extra room/);
+  assert.match(t.fields["#mbody"].innerHTML,/The memory figures are minimums/);
   assert.doesNotMatch(t.fields["#mbody"].innerHTML,/Scheduler requests are lower bounds/);
 });
 test("fresh state needs its own checkbox and exact typed VM name", async()=>{
@@ -94,7 +94,7 @@ test("power errors consume approval and explain uncertain outcome without retry"
   await t.ctx.vmPowerReviewedApply();
   await t.ctx.vmPowerReviewedApply();
   assert.equal(t.sent.length,2);
-  assert.match(t.fields["#mbody"].innerHTML,/outcome may be uncertain/);
+  assert.match(t.fields["#mbody"].innerHTML,/its result is not known/);
   assert.equal(t.fields[".modalbox"].scrollTop,0);
   assert.equal(t.fields["#vmPowerApply"].disabled,true);
 });
@@ -112,12 +112,12 @@ test("failed boot without a guest offers Stop retries in detail and compact view
   for(const compact of [false,true]){
     const html=t.ctx.vmActionButton({ns:"lab",name:"guest",stop_retries:true},"stop",false,compact);
     assert.match(html,/aria-label="Stop retries"/);
-    assert.match(html,/keep the VM off until you start it/);
+    assert.match(html,/keep the VM off until it is started/);
     assert.doesNotMatch(html,/Ask the guest/);
   }
   const running=t.ctx.vmActionButton({ns:"lab",name:"guest",stop_retries:false},"stop");
   assert.match(running,/aria-label="Shut down"/);
-  assert.match(running,/Ask the guest to power off/);
+  assert.match(running,/Ask the guest system to shut down/);
 });
 test("a stale preview cannot replace a newer VM review", async()=>{
   const t=setup();

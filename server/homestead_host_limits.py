@@ -72,7 +72,7 @@ def tick():
             continue    # another change has the host: next round, and the others go on (#597)
         words = out.split()
         if not words or words[0] not in ("KEPT", "RAISED"):
-            raise ValueError(f"could not check {name}'s inotify limits: {(err or out)[:200]}")
+            raise ValueError(f"Homestead could not check {name}'s inotify limits: {(err or out)[:200]}")
         state[name] = {"at": int(time.time()), "result": " ".join(words[:5])}
         if words[0] == "RAISED":
             raised[name] = f"{words[1]} instances, {words[2]} watches -> {words[3]}, {words[4]}"

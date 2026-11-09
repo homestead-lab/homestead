@@ -60,7 +60,7 @@ class SecurityTests(unittest.TestCase):
 
     def test_unknown_renderer_and_architecture_are_hard_blockers(self):
         for version in (None, "v1.9.0-vendor", "v1.10.0", "v2.0.0", "v1.2.0"):
-            self.assertIn("unverified", str(self.evidence(version)["blockers"]))
+            self.assertIn("not confirmed", str(self.evidence(version)["blockers"]))
         for architecture in (None, "arm64", "s390x"):
             self.spec["architecture"] = architecture
             self.assertIn("amd64", str(self.evidence()["blockers"]))

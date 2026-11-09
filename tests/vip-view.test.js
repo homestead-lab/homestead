@@ -63,8 +63,8 @@ test("VIP cards separate identity, usage and actions; default cannot be removed"
   const { ctx } = setup();
   const html = ctx.networkVipCard({ ip: "192.0.2.108", free: false, label: "<media>", used_by: ["lab/media"] }, { shared_vip: { ip: "192.0.2.108" } });
   assert.match(html, /vip-card-heading/);
-  assert.match(html, /Default workload VIP/);
-  assert.match(html, /Use this VIP/);
+  assert.match(html, /Default VIP/);
+  assert.match(html, /Use this virtual IP/);
   assert.match(html, /&lt;media>/);
   assert.doesNotMatch(html, /vipRemove|vipDefault/);
   const blocked = ctx.networkVipCard({ ip: "192.0.2.1", free: true }, { node_ips: ["192.0.2.1"] });
@@ -74,9 +74,9 @@ test("VIP cards separate identity, usage and actions; default cannot be removed"
 test("add form explains activation, DHCP and default semantics", () => {
   const { ctx } = setup();
   ctx.vipAdd();
-  for (const text of ["outside your router", "saving it alone", "will not move", "One VIP", "A range of VIPs"]) assert.ok(ctx.html.includes(text), text);
+  for (const text of ["outside the router", "Saving it here does not make it respond", "do not move", "One virtual IP", "A range of virtual IPs"]) assert.ok(ctx.html.includes(text), text);
   ctx.STATE.platform.load_balancer = "metallb";
-  ctx.vipAdd(); assert.match(ctx.html, /does not configure MetalLB/);
+  ctx.vipAdd(); assert.match(ctx.html, /does not change MetalLB/);
   ctx.STATE.platform.load_balancer = "servicelb";
   ctx.vipAdd(); assert.match(ctx.html, /id="va_default" type="checkbox" disabled/);
 });
@@ -114,7 +114,7 @@ test("failed default retains successful reservation and explains recovery", asyn
   const original = ctx.api;
   ctx.api = (url, opts) => url.endsWith("/default") ? Promise.reject(new Error("Provider unavailable")) : original(url, opts);
   await ctx.vipAddGo();
-  assert.match(elements["#va_result"].textContent, /Saved addresses remain available/);
+  assert.match(elements["#va_result"].textContent, /The saved addresses are still available/);
   assert.equal(ctx.closed, undefined);
   assert.equal(ctx.refreshed, true);
   assert.equal(elements["#va_save"].disabled, false);
@@ -130,7 +130,7 @@ test("a failed default says Homestead was not moved either when it was asked to 
   ctx.api = (url, opts) => url.endsWith("/default") ? Promise.reject(new Error("Provider unavailable")) : original(url, opts);
   await ctx.vipAddGo();
   assert.equal(requests.filter(r => r.url === "/api/self/address").length, 0);
-  assert.match(elements["#va_result"].textContent, /Default not changed: Provider unavailable\. Homestead was not moved either\. Saved addresses remain available/);
+  assert.match(elements["#va_result"].textContent, /The default was not changed: Provider unavailable\. Homestead was not moved either\. The saved addresses are still available/);
 });
 
 test("a failed default says nothing about Homestead when it was not asked to move", async () => {
@@ -141,7 +141,7 @@ test("a failed default says nothing about Homestead when it was not asked to mov
   ctx.api = (url, opts) => url.endsWith("/default") ? Promise.reject(new Error("Provider unavailable")) : original(url, opts);
   await ctx.vipAddGo();
   assert.doesNotMatch(elements["#va_result"].textContent, /Homestead/);
-  assert.match(elements["#va_result"].textContent, /Default not changed: Provider unavailable\. Saved addresses remain available/);
+  assert.match(elements["#va_result"].textContent, /The default was not changed: Provider unavailable\. The saved addresses are still available/);
 });
 
 test("partial range additions stay visible and never ask for a default on a skipped start", async () => {
@@ -153,8 +153,8 @@ test("partial range additions stay visible and never ask for a default on a skip
   await ctx.vipAddGo();
   assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
   assert.match(elements["#va_result"].textContent, /skipped/);
-  assert.match(elements["#va_result"].textContent, /Default not changed: 192\.0\.2\.108 was not added/);
-  assert.doesNotMatch(elements["#va_result"].textContent, /Default workload VIP/);
+  assert.match(elements["#va_result"].textContent, /The default was not changed, because 192\.0\.2\.108 was not added/);
+  assert.doesNotMatch(elements["#va_result"].textContent, /Default virtual IP/);
   assert.equal(ctx.closed, undefined);
 });
 
@@ -166,8 +166,8 @@ test("a refused start address asks for no default and claims no saved addresses"
   await ctx.vipAddGo();
   assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
   assert.equal(ctx.STATE.data.ov.lb_ip, undefined);
-  assert.match(elements["#va_result"].textContent, /Default not changed: 192\.0\.2\.108 was not added/);
-  assert.doesNotMatch(elements["#va_result"].textContent, /Saved addresses remain available/);
+  assert.match(elements["#va_result"].textContent, /The default was not changed, because 192\.0\.2\.108 was not added/);
+  assert.doesNotMatch(elements["#va_result"].textContent, /The saved addresses are still available/);
   assert.equal(ctx.closed, undefined);
 });
 
@@ -180,7 +180,7 @@ test("a start missing from added and skipped claims no default in the message or
   assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
   const said = JSON.stringify(notices) + elements["#va_result"].textContent;
   assert.doesNotMatch(said, /is the default workload VIP/);
-  assert.match(said, /Default not changed: 192\.0\.2\.108 was not added/);
+  assert.match(said, /The default was not changed, because 192\.0\.2\.108 was not added/);
 });
 
 test("a start address already on the list asks for no default", async () => {
@@ -191,7 +191,7 @@ test("a start address already on the list asks for no default", async () => {
   await ctx.vipAddGo();
   assert.equal(requests.filter(r => r.url.endsWith("/default")).length, 0);
   assert.match(elements["#va_result"].textContent, /already on the list/);
-  assert.match(elements["#va_result"].textContent, /Default not changed/);
+  assert.match(elements["#va_result"].textContent, /The default was not changed/);
 });
 
 /* Homestead itself goes on a new VIP only when that VIP becomes the default,
@@ -226,7 +226,7 @@ test("Your VIPs that couldn't be read say so, never no saved VIPs or no default"
     summary: { vips: 0 }, unread: ["VIP registry"] };
   ctx.STATE.data.network = data;
   const html = ctx.networkVipsHtml(data);
-  assert.match(html, /Couldn(?:'|&#39;)t read Your VIPs/);
+  assert.match(html, /The virtual IPs could not be read/);
   assert.match(html, /timed out/);
   assert.doesNotMatch(html, /No saved VIPs/);
   assert.doesNotMatch(html, /not configured/);

@@ -17,7 +17,7 @@ class PublicationGateTests(unittest.TestCase):
     def test_coordinator_cannot_stop_without_publication_receipt(self):
         c = Cluster(published=False)
         before = len(c.sent)
-        with self.assertRaisesRegex(Held, "not durably published"):
+        with self.assertRaisesRegex(Held, "not saved safely"):
             c.step()
         self.assertEqual(before, len(c.sent))
         self.assertEqual(2, c.objects[c.dep_path]["spec"]["replicas"])
@@ -33,9 +33,9 @@ class PublicationGateTests(unittest.TestCase):
 
     def test_copied_receipt_cannot_authorize_replacement_anchor(self):
         c = Cluster()
-        c.objects[c.anchor.path]["metadata"]["uid"] = "replacement"
+        c.objects[c.anchor.path]["metadata"]["uid"] = "replacing it"
         with self.assertRaises(Held):
-            c.fresh().load(operation=c.handle["operation"], uid="replacement")
+            c.fresh().load(operation=c.handle["operation"], uid="replacing it")
 
 
 @unittest.skipUnless(os.name == "posix", "requires the actual Linux publication/filesystem semantics")
@@ -111,12 +111,12 @@ class PointerPublicationTests(unittest.TestCase):
         def swap(fd):
             sync(fd)
             if stat.S_ISDIR(os.fstat(fd).st_mode):
-                original.rename(self.root / "retained")
+                original.rename(self.root / "kept")
                 original.mkdir()
         with mock.patch.object(S.os, "fsync", side_effect=swap):
             with self.assertRaisesRegex(Held, "directory changed"):
                 S.publish_pointer(str(original), self.c.anchor)
-        self.assertTrue((self.root / "retained" / S.MARKER).exists())
+        self.assertTrue((self.root / "kept" / S.MARKER).exists())
         self.assert_unarmed()
 
     def test_stale_control_after_publication_does_not_get_acknowledged(self):

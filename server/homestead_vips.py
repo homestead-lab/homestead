@@ -238,8 +238,8 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
             pending = [s for s in row["services"] if s["controller"] == "servicelb" and not s["routed"]]
             if pending:
                 row["state"] = "pending"
-                row["reason"] = (f"ServiceLB has not published {', '.join(s['name'] for s in pending)} here - "
-                                 "another Service holds the same port on the nodes' addresses")
+                row["reason"] = (f"ServiceLB has not published {', '.join(s['name'] for s in pending)} here, because "
+                                 "another Service holds the same port on the hosts' addresses")
             continue
         if not row["services"]:
             continue
@@ -252,13 +252,13 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
             row["state"] = "ok"
         elif not row["ready"]:
             row["state"] = "idle"
-            row["reason"] = ("Nothing behind it is running, so no node answers for it; it comes back "
-                             "when a workload on it starts")
+            row["reason"] = ("Nothing behind it is running, so no host answers for it. It comes back "
+                             "when an app on it starts.")
         else:
             row["state"] = "unannounced"
             row["reason"] = (f"{row['controller'] or 'The load balancer'} is not answering for {row['ip']} "
-                             "on any node although its workloads are running - check that it is running "
-                             "and takes these Services")
+                             "on any host, although its apps are running. Check that it is running "
+                             "and handles these Services.")
 
     for node in node_rows:
         node["vips"] = sorted((ip for ip, row in addresses.items() if row["kind"] == "vip" and row["node"] == node["name"]),

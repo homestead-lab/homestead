@@ -20,7 +20,7 @@ test("Image Cache: only active is green; rollback, stopped and scheduled are neu
 test("Image Cache: an image kept because a record could not be read is amber and says why", () => {
   const unreadable = map("web/js/views-lifecycle-images.js", "IMAGE_REASONS").unreadable;
   assert.equal(unreadable?.tone, "warn");
-  assert.equal(unreadable.tip, "Kept: a record that says which images are in use couldn't be read");
+  assert.equal(unreadable.tip, "Kept, because a record of which images are in use could not be read.");
 });
 
 test("Schedules and Import show a running or waiting job as neutral, not amber", () => {
@@ -67,7 +67,7 @@ test("Dashboard widgets: low severity and acknowledged findings are neutral, run
 
 test("the bell: a waiting agent request is amber, alerts take their worst severity", () => {
   const src = read("web/js/homestead-update.js");
-  assert.match(src, /AI agent request"\)\} waiting for you`, "warn"\)/);
+  assert.match(src, /AI agent request"\)\} waiting for approval`, "warn"\)/);
   assert.doesNotMatch(src, /plural\(alertCount, "active alert"\), "danger"\)/);
 });
 
@@ -90,7 +90,7 @@ test("other progress states are neutral too: installing, starting, rebuilding, c
   assert.match(platform, /UI\.chip\(`\$\{probe\.ready[^`]*`, "neutral"\)/);
   assert.match(platform, /UI\.chip\(`removing ·[^`]*`, "neutral"\)/);
   assert.match(platform, /UI\.chip\(`\$\{c\.current\} of[^`]*`, "neutral"\)/);
-  assert.match(platform, /UI\.chip\("partial service", "warn"\)/, "a partly served share still needs a person");
+  assert.match(platform, /UI\.chip\("partly serving", "warn"\)/, "a partly served share still needs a person");
   assert.match(require("./helpers/storage-source")(), /UI\.chip\(`rebuilding \$\{rebuild\.pct\}%`, "neutral"/);
   assert.doesNotMatch(require("./helpers/storage-source")(), /UI\.chip\(`rebuilding[^`]*`, "(warn|med)"/);
   assert.match(read("web/js/vm-hardware.js"), /UI\.chip\("copying", "neutral"\)/);

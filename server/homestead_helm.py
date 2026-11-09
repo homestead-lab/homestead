@@ -310,7 +310,7 @@ def upgrade(cfg):
     read = cfg.get("generation")
     now = (item.get("metadata") or {}).get("generation", "")
     if read is not None and str(read) != str(now):
-        raise ValueError(f"{name} changed since this dialog opened; open it again to see the change, then upgrade")
+        raise ValueError(f"{name} changed since this dialog opened. Open it again to see the change, then upgrade.")
     spec = item.setdefault("spec", {})
     before = settings(item)
     if "version" in cfg:
@@ -342,7 +342,7 @@ def upgrade(cfg):
 
 
 def no_change_words(name):
-    return f"This upgrade changed none of {name}'s settings, so nothing ran; if its last upgrade failed, it still has"
+    return f"This upgrade changed none of {name}'s settings, so nothing ran. If its last upgrade failed, it still has"
 
 
 def settings(item):
@@ -392,7 +392,7 @@ def uninstall(namespace, name):
     # uninstall has run: then the chart going is proof that it did. The uid tells
     # that chart from one made again under its name.
     meta = item.get("metadata") or {}
-    return {"ok": True, "detail": f"{name} is being uninstalled; volumes its chart kept are left in place",
+    return {"ok": True, "detail": f"{name} is being uninstalled. Volumes its chart kept are left in place.",
             "chart": {"namespace": home, "chart_uid": meta.get("uid", ""), "uninstall_seen": bool(meta.get("finalizers")),
                       "earlier_job": earlier}}
 
@@ -499,7 +499,7 @@ def _no_job(item, ref, earlier=False):
         if action == "uninstall":
             again = ref.get("chart_made_again")
             if ref.get("uninstall_seen"):
-                return "succeeded", 100, f"Helm removed {gone}" + ("; a chart of that name has been made since" if again else "")
+                return "succeeded", 100, f"Helm removed {gone}" + (". A chart with that name has been created since" if again else "")
             return "failed", 5, (f"The HelmChart {gone} {'was removed and made again' if again else 'is gone'}, but Homestead "
                                  "did not see its uninstall run. The Helm page shows whether its release is still there")
         ref["chart_gone"] = True   # the job list reads no chart: it offers nothing to put back on this
@@ -510,7 +510,7 @@ def _no_job(item, ref, earlier=False):
     what = (f"did not replace its earlier job {ref['name']} in {ref['namespace']} within" if earlier
             else f"had no job {ref['name']} in {ref['namespace']} for")
     return "failed", 5, (f"The Helm controller {what} {JOB_MISSING_LIMIT // 60} minutes, so Homestead has stopped "
-                         "following it. Check that the controller is running; the Helm page shows what is installed")
+                         "following it. Check that the controller is running. The Helm page shows what is installed.")
 
 
 def _job_failed(job):
@@ -543,7 +543,7 @@ def job_status(item):
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
     if _job_failed(job):
-        return "failed", 100, f"Helm failed; the {ref['name']} job's log in {ref['namespace']} says why"
+        return "failed", 100, f"Helm failed. The log of the {ref['name']} job in {ref['namespace']} says why."
     if status.get("active"):
         return "running", 40, "Helm is running"
     if status.get("failed"):

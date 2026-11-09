@@ -34,7 +34,7 @@ Replicated storage alone does not make that GPU available on another node.
 1. Open **Nodes → select a host → Hardware → Devices for VMs**.
 2. Choose **Look at its devices**, or **Refresh devices** if already inspected.
    Locate the GPU by model, PCI address and vendor/device IDs.
-3. Check **IOMMU**. On k3s/RKE2, **Switch IOMMU on** prepares the host's kernel
+3. Check **IOMMU**. On k3s/RKE2, **Turn on IOMMU** prepares the host's kernel
    command line; restart the host through Host actions, then inspect it again.
    Firmware settings must also be enabled. If Homestead reports that the host
    has no supported GRUB configuration, follow the host OS's bootloader procedure
@@ -184,7 +184,7 @@ change; removing the device also removes its managed ROM. Clearing only the ROM
 does not restore the virtual display. Switching back to the web console leaves
 UEFI enabled, so it does not undo an earlier firmware change.
 
-When no VM needs the device, use **Give back** on its host to return it to the
+When no VM needs the device, use **Return to host** on its host to return it to the
 host driver. If a boot display does not return immediately, a planned host
 restart may be needed. Container hardware users will need the host driver again.
 

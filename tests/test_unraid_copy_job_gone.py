@@ -172,10 +172,10 @@ class CopyJobGoneTests(unittest.TestCase):
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
         self.assertEqual(
-            "The copy Jobs for win11-disk, win11-disk-2 are gone, so Homestead can't tell how those copies ended. "
-            "No VM was made. The VM on Unraid is unchanged. "
-            "No disk was removed. If CDI does finish, a VM can be made from one disk under Import, and Homestead can't "
-            "attach the others yet; otherwise import again under another name. An admin can remove what you don't want under Import > Disk images.",
+            "The copy Jobs for win11-disk, win11-disk-2 are gone, so Homestead cannot tell how those copies ended. "
+            "No VM was created. The VM on Unraid is not changed. "
+            "No disk was removed. If CDI does finish, a VM can be created from one disk under Import, but not with "
+            "the others yet. Otherwise, import again under another name. An admin can remove anything not wanted under Import > Disk images.",
             job["message"])
         self.assert_kept_and_let_go(jobs)
 
@@ -191,12 +191,12 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("failed", job["status"], job["message"])
         self.imp.commit_vm.assert_not_called()
         self.assertEqual(
-            "The copy Jobs for win11-disk, win11-disk-2 are gone, so Homestead can't tell how those copies ended. "
-            "No VM was made. The VM on Unraid is unchanged. "
-            "CDI reports them finished, but that doesn't prove all the data arrived. They are kept "
-            "and hold their storage. A VM can be made from one disk under Import, and Homestead can't attach the "
-            "others yet; otherwise import again under another name. Or an admin can remove them under Import > Disk images"
-            "; temporary storage not all cleared", job["message"])
+            "The copy Jobs for win11-disk, win11-disk-2 are gone, so Homestead cannot tell how those copies ended. "
+            "No VM was created. The VM on Unraid is not changed. "
+            "CDI reports them finished, but that does not prove all the data arrived. They are kept "
+            "and hold their storage. A VM can be created from one disk under Import, but not with the "
+            "others yet. Otherwise, import again under another name. Or an admin can remove them under Import > Disk images"
+            ". Some temporary storage was not cleared", job["message"])
         self.assertNotIn("kubectl", job["message"])
         self.assertNotIn("Volumes", job["message"], "that page removes no DataVolume")
         self.assert_kept_and_let_go(jobs)
@@ -208,8 +208,8 @@ class CopyJobGoneTests(unittest.TestCase):
         jobs, kept, temporary = self.finished_and_gone()
         job = self.end()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("under Import > Disk images; temporary storage cleared"), job["message"])
-        self.assertIn("The VM on Unraid is unchanged", job["message"])
+        self.assertTrue(job["message"].endswith("under Import > Disk images. Its temporary storage was cleared."), job["message"])
+        self.assertIn("The VM on Unraid is not changed", job["message"])
         self.imp.commit_vm.assert_not_called()
         for path in temporary:
             self.assertIsNone(self.kube.object(path), path + " is temporary and holds storage")
@@ -236,7 +236,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("failed", job["status"], job["message"])
         self.assertNotIn("temporary", job["message"])
         self.assertIn(f"CDI reports {DVS[0]} finished, and it is kept.", job["message"])
-        self.assertTrue(job["message"].endswith("An admin can remove what you don't want under Import > Disk images."), job["message"])
+        self.assertTrue(job["message"].endswith("An admin can remove anything not wanted under Import > Disk images."), job["message"])
         self.assertNotIn("kubectl", job["message"])
         for path in kept + temporary:
             self.assertTrue(self.kube.object(path), path)
@@ -252,7 +252,7 @@ class CopyJobGoneTests(unittest.TestCase):
             self.kube.discard(path)
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage not all cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Some temporary storage was not cleared"), job["message"])
         for path in one + two + temporary + more:
             self.assertTrue(self.kube.object(path), path)
         self.assert_kept_and_let_go(jobs)
@@ -278,7 +278,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.kube.add(claim)
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage not all cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Some temporary storage was not cleared"), job["message"])
         for path in kept:
             self.assertTrue(self.kube.object(path), path)
         self.assert_kept_and_let_go(jobs)
@@ -291,7 +291,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertTrue(self.ref()["retain_resources"], "the job holds the name until it's done")
         job = self.end()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Its temporary storage was cleared."), job["message"])
         self.assertFalse(self.ref()["retain_resources"])
 
     def test_a_lost_reply_removing_a_worker_carries_on_next_round(self):
@@ -299,7 +299,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.kube.fail(temporary[1], OSError("lost"), method="DELETE", applied=True)
         job = self.end()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Its temporary storage was cleared."), job["message"])
         for path in temporary:
             self.assertIsNone(self.kube.object(path), path)
 
@@ -311,7 +311,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.kube.add(mine)
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage not all cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Some temporary storage was not cleared"), job["message"])
         self.assertTrue(self.kube.object(secret))
         self.assertFalse(self.ref()["retain_resources"])
 
@@ -326,7 +326,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.now += 1
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage not all cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Some temporary storage was not cleared"), job["message"])
         for path in kept:
             self.assertTrue(self.kube.object(path), path)
         self.assert_kept_and_let_go(jobs)
@@ -379,7 +379,7 @@ class CopyJobGoneTests(unittest.TestCase):
                 self.kube.fail(f"/api/v1/namespaces/{NS}/persistentvolumeclaims", answer, method="GET")
                 job = self.look()
                 self.assertEqual("running", job["status"], job["message"])
-                self.assertIn("cleanup pending", job["message"])
+                self.assertIn("Cleanup is waiting", job["message"])
                 self.assertEqual("clearing", self.ref()["phase"])
                 self.assertTrue(self.ref()["retain_resources"])
         for prime in (temporary[0], temporary[3]):   # CDI catches up
@@ -388,7 +388,7 @@ class CopyJobGoneTests(unittest.TestCase):
             self.kube.add(claim)
         job = self.end()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertTrue(job["message"].endswith("; temporary storage cleared"), job["message"])
+        self.assertTrue(job["message"].endswith(". Its temporary storage was cleared."), job["message"])
 
     def one_disk_gone(self, finished):
         self.ident = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "solo", "skip_disks": [1]})["id"]
@@ -406,16 +406,16 @@ class CopyJobGoneTests(unittest.TestCase):
                 if finished:
                     self.kube.discard(self.path("solo-disk"))
                 message = self.one_disk_gone(finished)
-                self.assertIn("ake the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried "
-                              "over. If not, import again under another name.", message)
-                self.assertNotIn("can't attach", message)
+                self.assertIn("reate the VM from it under Import and check that it starts, because its bus, MAC and TPM are not carried "
+                              "over. If it does not, import again under another name.", message)
+                self.assertNotIn("not with the others", message)
 
     def test_several_disks_are_not_promised_a_vm_with_all_of_them(self):
         for finished in (False, True):
             with self.subTest(finished=finished):
                 message, _ = self.gone_under("many" + str(finished).lower(), finished=finished)
-                self.assertIn("VM can be made from one disk under Import, and Homestead can't attach the others yet; "
-                              "otherwise import again under another name.", message)
+                self.assertIn("VM can be created from one disk under Import, but not with the others yet. "
+                              "Otherwise, import again under another name.", message)
                 self.assertNotIn("the VM under Import", message)
 
     def test_an_older_import_with_no_receipt_clears_nothing_either(self):
@@ -438,7 +438,7 @@ class CopyJobGoneTests(unittest.TestCase):
         with self.assertRaises(ValueError) as refused:
             UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         self.assertIn("already exists", str(refused.exception))
-        self.assertNotIn("still active", str(refused.exception))
+        self.assertNotIn("still running", str(refused.exception))
 
     def test_one_disk_is_named_once_and_the_rest_of_the_import_goes_with_it(self):
         jobs = self.to_copy()
@@ -447,7 +447,7 @@ class CopyJobGoneTests(unittest.TestCase):
         job = self.look()
         self.assertEqual("failed", job["status"])
         self.assertTrue(job["message"].startswith(
-            "The copy Job for win11-disk is gone, so Homestead can't tell how that copy ended."),
+            "The copy Job for win11-disk is gone, so Homestead cannot tell how that copy ended."),
             job["message"])
         self.assert_kept_and_let_go(jobs)
 
@@ -468,11 +468,11 @@ class CopyJobGoneTests(unittest.TestCase):
         # A job's message is cut at 500 characters.
         message, names = self.gone_under("w" * 20)
         self.assertIn(f"{names[0]}, {names[1]}", message)
-        self.assertTrue(message.endswith("An admin can remove what you don't want under Import > Disk images."), message)
+        self.assertTrue(message.endswith("An admin can remove anything not wanted under Import > Disk images."), message)
 
     def test_a_finished_message_fits_a_jobs_limit(self):
         message, _ = self.gone_under("x" * 15, finished=True)
-        self.assertTrue(message.endswith("not all cleared"), message)
+        self.assertTrue(message.endswith("was not cleared"), message)
 
     def test_a_proxmox_import_names_its_own_source(self):
         jobs = self.to_copy()
@@ -480,7 +480,7 @@ class CopyJobGoneTests(unittest.TestCase):
         for path in jobs:
             self.kube.discard(path)
         job = self.look()
-        self.assertIn("The VM on Proxmox is unchanged", job["message"])
+        self.assertIn("The VM on Proxmox is not changed", job["message"])
 
     def test_the_end_keeps_cdis_objects_and_the_disks_claims(self):
         jobs = self.to_copy()
@@ -556,7 +556,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.kube.fail(f"/apis/batch/v1/namespaces/{NS}/jobs", OSError("lost"), method="POST", applied=True)
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertIn("Could not start the disk copy", job["message"])
+        self.assertIn("Homestead could not start the disk copy", job["message"])
         self.assertNotIn("gone", job["message"])
 
     def test_a_crash_after_making_the_jobs_is_setup_interrupted_not_a_gone_job(self):
@@ -568,7 +568,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertTrue(all(disk["job"] for disk in self.ref()["disks"]))
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertIn("Copy setup was interrupted", job["message"])
+        self.assertIn("The copy setup was interrupted", job["message"])
         self.assertNotIn("gone", job["message"])
 
     def test_a_crash_between_two_jobs_is_setup_interrupted_too(self):
@@ -579,7 +579,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("disks", self.ref()["phase"])
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
-        self.assertIn("Copy setup was interrupted", job["message"])
+        self.assertIn("The copy setup was interrupted", job["message"])
 
     # ------------------------------------------------------------ a Job seen finished
 
@@ -709,7 +709,7 @@ class CopyJobGoneTests(unittest.TestCase):
             UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         for words in (DVS[0], "already exists", "earlier import", "under another name", "under Import"):
             self.assertIn(words, str(refused.exception))
-        self.assertNotIn("still active", str(refused.exception), "no job holds it: the disk does")
+        self.assertNotIn("still running", str(refused.exception), "no job holds it: the disk does")
         self.assertEqual(before, [item["id"] for item in JOBS._read()], "no job that can only fail")
 
     def test_a_retry_runs_under_another_name_or_once_the_disks_are_removed(self):

@@ -121,7 +121,7 @@ def source_check(src, cfg):
     if not ident or cfg.get("source_consistency") == "snapshot":
         return ""
     if not re.fullmatch(r"[a-f0-9]{64}", str(ident)):
-        raise ValueError("Source container identity is invalid; inspect the source again")
+        raise ValueError("The source container could not be identified. Check the source again.")
     remote = "docker inspect --format '{{.Id}} {{.State.Running}} {{.State.Paused}} {{.State.Restarting}}' " + ident
     expected = ident + " false false false"
     return "source_state=$(" + command(src, remote) + ")\n" + f"[ \"$source_state\" = {shlex.quote(expected)} ] || {{ echo 'Source container is not stopped or its identity changed; copy stopped'; exit 5; }}"

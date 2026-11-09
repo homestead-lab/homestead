@@ -152,7 +152,7 @@ def create(owner, package=False):
     cleanup()
     with LOCK:
         if len([name for name in os.listdir(DIRECTORY) if name.endswith(".json")]) >= MAX_RECORDS:
-            raise ValueError("diagnostics storage is full; delete an old report first")
+            raise ValueError("Diagnostics storage is full. Delete an old report first.")
         now = time.time()
         record = {"id": secrets.token_hex(16), "owner": owner, "created": now,
                   "updated": now, "expires": now + TTL, "status": "draft" if package else "recording",
@@ -297,7 +297,7 @@ def _collect(record, selected, seconds):
                             "reason": row.get("reason"), "message": row.get("message"),
                             "object": {key: obj.get(key) for key in ("kind", "name", "namespace")}})
             return {"events": out, "limited": bool(rows.get("metadata", {}).get("continue")),
-                    "note": "Recent available Kubernetes events; timestamps may predate the selected log window."}
+                    "note": "Recent Kubernetes events. Their times may be earlier than the chosen log window."}
         source("cluster-events.json", events)
     if "jobs" in selected:
         def jobs():

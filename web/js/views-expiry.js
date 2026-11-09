@@ -81,8 +81,8 @@ async function viewExpiry() {
     ${summaryLine("expiry", [`<b>${items.length}</b> watched`, verdict, checked].filter(Boolean))}
     ${!d.checked_at ? UI.callout("info", "Not checked yet",
       "Homestead checks certificates about once an hour. The first check starts shortly after Homestead does.") : ""}
-    ${errors.length ? UI.callout("warn", "Could not read everything: what is missing here is not known to be fine",
-      errors.map(([k, v]) => `<div><b>Could not read ${esc(EXPIRY_SOURCE[k] || k)}</b>: <span class="dim small">${esc(v)}</span></div>`).join("")) : ""}
+    ${errors.length ? UI.callout("warn", "Some sources could not be read, so anything missing here is not known to be fine",
+      errors.map(([k, v]) => `<div><b>${esc(EXPIRY_SOURCE[k] || k)} could not be read</b>: <span class="dim small">${esc(v)}</span></div>`).join("")) : ""}
     ${d.stale ? UI.callout("warn", `The check has not run since ${agoText(d.checked_at)}`,
       "These are the dates from that check. Settings, Homestead's health, says whether the certificate expiry check is running.") : ""}
     ${d.partial ? UI.callout("warn", `Only the first ${d.max_secrets || 2000} TLS Secrets were checked`,
@@ -101,7 +101,7 @@ async function viewExpiry() {
     ${UI.guide("How this is checked", `<p><b>Certificates:</b> when cert-manager is installed, its Certificates give their own dates and renewal time, and their Secrets are not opened. Other TLS Secrets are read on the server, and only the certificate's dates are kept: the private key is never read out, kept or sent here.</p>
       <p><b>Renews itself:</b> a cert-manager Certificate that is Ready with its renewal ahead, or a certificate an operator rotates (KubeVirt and CDI rotate their CAs every few days). These alert only if renewal is overdue or they expire.</p>
       <p><b>Kubernetes API:</b> the certificate the API server presents. k3s and RKE2 renew it when the server restarts close to its expiry, so a server that runs for a year without a restart can run out.</p>
-      ${admin ? `<p><b>Keys:</b> Homestead API keys expire as set when they were made, and only admins see them here. The linked-cluster key never expires; it changes whenever a cluster is unlinked.</p>` : ""}
+      ${admin ? `<p><b>Keys:</b> Homestead API keys expire as set when they were made, and only admins see them here. The linked cluster key never expires, and it changes whenever a cluster is unlinked.</p>` : ""}
       <p>Checked about once an hour. Alerts come ${d.warn_days} days ahead (a warning) and ${d.critical_days} days ahead (critical).</p>`)}`);
 }
 window.viewExpiry = viewExpiry;

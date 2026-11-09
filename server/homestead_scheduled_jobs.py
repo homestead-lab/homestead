@@ -112,8 +112,8 @@ def save_job(cfg):
     now = (current or {}).get("metadata", {}).get("generation", "")
     if read is not None and str(read) != str(now):
         if read == "":
-            raise ValueError(f"a schedule named {name} already exists; reload the page to edit it")
-        raise ValueError(f"{name} changed since the page loaded; reload it and save again")
+            raise ValueError(f"A schedule named {name} already exists. Reload the page to edit it.")
+        raise ValueError(f"{name} changed since the page loaded. Reload it and save again.")
     I._bust("cron")
     if current is None:
         body = {
@@ -153,7 +153,7 @@ def save_job(cfg):
     except urllib.error.HTTPError as e:
         if e.code != 409:
             raise
-        raise ValueError(f"{name} changed since the page loaded; reload it and save again") from None
+        raise ValueError(f"{name} changed since the page loaded. Reload it and save again.") from None
 
 
 def del_job(name):

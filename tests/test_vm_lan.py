@@ -189,9 +189,9 @@ class K3sClusterTests(unittest.TestCase):
         K3S._answers = lambda ip, port, timeout=2.0: port in answers
         self.assertIn("0 of 1 VMs running", K3S.status(item)[2])
         running["phase"] = "Running"
-        self.assertIn("installing k3s", K3S.status(item)[2])
+        self.assertIn("Installing k3s", K3S.status(item)[2])
         answers.add(6443)
-        self.assertIn("installing Longhorn and Homestead", K3S.status(item)[2])
+        self.assertIn("Installing Longhorn and Homestead", K3S.status(item)[2])
         answers.add(8088)
         status, _, message = K3S.status(item)
         self.assertEqual("succeeded", status)

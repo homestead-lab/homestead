@@ -13,7 +13,7 @@ function load() {
   const form = { "#lj_name": "daily", "#lj_task": "snapshot", "#lj_cron": "0 3 * * *",
                  "#lj_retain": "5", "#lj_conc": "1", "#lj_newgroup": "" };
   const c = { window: {}, sent, toasts, LJ_GENERATION: null, STATE: { data: { lh: { groups: ["default"], tasks: { snapshot: "Snapshot" } } } },
-    esc: s => String(s ?? ""), modal() {}, closeModal() {}, resetPaint() {}, viewProtect() {}, fieldError() {},
+    esc: s => String(s ?? ""), tip: () => "", modal() {}, closeModal() {}, resetPaint() {}, viewProtect() {}, fieldError() {},
     scheduleBuilder: () => "", scheduleChanged() {}, groupCount: () => "", lhTaskChanged() {},
     $: sel => ({ value: form[sel] ?? "", hidden: false }),
     $$: () => [{ checked: true, value: "default" }],

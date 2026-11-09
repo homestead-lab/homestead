@@ -162,7 +162,7 @@ class ReviewTests(Case):
 
     def test_a_rollout_working_on_this_host_blocks_the_review(self):
         self.rollout("node-a")
-        self.assertIn("An OS update of every host is working on this host; wait for it to move on, or stop it",
+        self.assertIn("An OS update of every host is working on this host. Wait for it to move on, or stop it.",
                       self.plan()["hard_blockers"])
         with mock.patch.object(POWER, "power_enabled", lambda: True):
             self.assertTrue(self.plan(action="reboot")["ready"], "a reboot's review doesn't ask")
@@ -180,7 +180,7 @@ class ReviewTests(Case):
 
     def test_a_host_not_ready_is_refused_in_its_own_words(self):
         self.edit(lambda n: n["status"]["conditions"][0].update(status="False"))
-        self.assertIn("The host is not Ready; maintenance is declared before it goes down", self.plan()["hard_blockers"])
+        self.assertIn("The host is not ready. Maintenance must be declared before it goes down.", self.plan()["hard_blockers"])
 
     def test_there_is_no_force(self):
         with self.assertRaisesRegex(ValueError, "force"):
@@ -250,7 +250,7 @@ class JobTests(Case):
         self.assertEqual("failed", item["status"])
         self.assertIsNone(HISTORY.declared_for("node-a"))
         self.assertNotIn("power", item["message"].lower())
-        self.assertIn("aintenance was not opened", item["message"])
+        self.assertIn("aintenance was not started", item["message"])
         self.assertIn("HTTP 429", item["message"])
         self.assertTrue(self.cordoned(), "left cordoned, as a refused reboot's drain is")
 
@@ -317,7 +317,7 @@ class JobTests(Case):
     def test_a_failure_starts_again_what_it_stopped(self):
         pick = {i["id"]: "wait" for i in self.plan()["hold"]}
         self.stops_for_real()
-        with mock.patch.object(POWER, "recheck_after_drain", side_effect=ValueError("Host remains cordoned; power was not sent")):
+        with mock.patch.object(POWER, "recheck_after_drain", side_effect=ValueError("The host stays cordoned; power was not sent")):
             item = self.job(self.send(choices=pick))
         self.assertEqual("failed", item["status"])
         self.assertEqual(1, self.kube.object("/apis/apps/v1/namespaces/apps/deployments/web")["spec"]["replicas"])

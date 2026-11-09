@@ -128,7 +128,7 @@ test("not offered while the host is Ready, or for a row that does not wait", () 
 test("not offered on Harvester, which handles it itself", () => {
   const html = setup({}, down("NotReady", { platform: { harvester: true } })).impactApp(waits, "node2");
   assert.doesNotMatch(html, /setRestartReview/);
-  assert.match(html, /Harvester restarts these itself; see its VM force reset policy\./);
+  assert.match(html, /Harvester restarts these itself\. See its VM force reset policy\./);
 });
 
 test("the impact dialog applies the role after drawing the button, so viewers don't see it", async () => {

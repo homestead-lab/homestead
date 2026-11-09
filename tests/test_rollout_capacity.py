@@ -127,7 +127,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertFalse(result["rollout"]["ownership_known"])
         self.assertIsNone(result["candidates"][0]["reserved_gb"])
-        self.assertIn("ownership is unverified", " ".join(result["warnings"]))
+        self.assertIn("pods is not confirmed", " ".join(result["warnings"]))
 
     def test_missing_pods_are_unknown(self):
         self.objects["/api/v1/pods"] = OSError("offline")
@@ -144,7 +144,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.pods[0]["metadata"]["deletionTimestamp"] = "now"
         result = self.plan()
         self.assertEqual(5, result["rollout"]["release_request_gb"])
-        self.assertIn("fully terminated", " ".join(result["warnings"]))
+        self.assertIn("released their ports", " ".join(result["warnings"]))
         self.rolling()
         self.assertFalse(self.plan()["rollout"]["start_blocked"])
 
@@ -161,7 +161,7 @@ class RolloutCapacityTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertFalse(result["rollout"]["start_blocked"])
         self.assertTrue(result["rollout"]["first_pod"]["blocked"])
-        self.assertIn("allowed old-pod removal", " ".join(result["warnings"]))
+        self.assertIn("old pods being removed", " ".join(result["warnings"]))
 
     def test_unknown_or_inflight_rollout_is_not_false_proven_deadlock(self):
         self.rolling()

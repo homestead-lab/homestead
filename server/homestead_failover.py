@@ -46,7 +46,7 @@ def tolerations(podspec, mode):
     """The pod's tolerations with the node-failure ones set for this mode;
     any others (a GPU taint, say) are kept as they are."""
     if mode not in MODES:
-        raise ValueError(f"when its node fails, a container moves, waits, or keeps Kubernetes' default - not {mode!r}")
+        raise ValueError(f"When its host fails, a container moves, waits, or keeps Kubernetes' default, not {mode!r}")
     kept = [t for t in (podspec or {}).get("tolerations") or [] if t.get("key") not in KEYS]
     if mode == "move":
         kept += [{"key": key, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": FAST_SECONDS}

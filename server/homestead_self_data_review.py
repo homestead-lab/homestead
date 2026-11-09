@@ -176,7 +176,7 @@ class Review:
                                "The move would wait for it with Homestead stopped. Delete it, then review again")
                 continue
             if cfg["destination"] in used or source in used and identity(pod)["uid"] not in owned_uids:
-                raise Held("Another pod uses a data volume; stop or move that consumer before reviewing")
+                raise Held("Another pod uses a data volume. Stop or move it before reviewing.")
         autoscalers = D._inventory(read, f"/apis/autoscaling/v2/namespaces/{ns}/horizontalpodautoscalers")
         if any(h.get("spec", {}).get("scaleTargetRef", {}).get("kind") == "Deployment"
                and h["spec"]["scaleTargetRef"].get("name") == self.deployment for h in autoscalers):
@@ -219,7 +219,7 @@ class Review:
         D.validate_policy(policy)
         binding["approvals"] = {"worker": approval, "policy": policy}
         if not 0 <= self.clock() - started <= 30:
-            raise Held("The data move review took too long; check again")
+            raise Held("The data move review took too long. Check again.")
         public = {"source": source, "destination": cfg["destination"], "replicas": replicas, "requires_confirmation": True,
                   "downtime": "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
                   "stages": [{"id": s, "label": label, "conditional": s != "worker", "detail": CONDITIONAL if s != "worker" else "Starts alongside the running Homestead pods.",

@@ -28,11 +28,11 @@ def _get(path, optional=False):
     try:
         obj = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
     except urllib.error.HTTPError as error:
-        raise ValueError(f"Longhorn upgrade inventory is unavailable (HTTP {error.code}); check access and try again") from error
+        raise ValueError(f"The Longhorn upgrade information is unavailable (HTTP {error.code}). Check access and try again.") from error
     if obj is KUBE.GONE:
         return None
     if not isinstance(obj, dict):
-        raise ValueError("Longhorn upgrade inventory is incomplete; check again")
+        raise ValueError("The Longhorn upgrade information is incomplete. Check again.")
     return obj
 
 
@@ -41,7 +41,7 @@ def _items(resource, optional=False):
     if obj is None:
         return []
     if not isinstance(obj.get("items"), list):
-        raise ValueError("Longhorn upgrade inventory is incomplete; check again")
+        raise ValueError("The Longhorn upgrade information is incomplete. Check again.")
     return obj["items"]
 
 
@@ -70,7 +70,7 @@ def _set(name, value):
         return
     meta = obj.get("metadata") or {}
     if not meta.get("resourceVersion") or not meta.get("uid") or "value" not in obj:
-        raise ValueError("Longhorn setting identity could not be verified; check again")
+        raise ValueError("The Longhorn setting could not be confirmed. Check again.")
     values["v2"] = str(value)
     ksend("PATCH", LH + "/settings/" + name, [
         {"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
@@ -189,7 +189,7 @@ def plan(target="", source=""):
         for v in v2:
             name, vs, st = v["metadata"]["name"], v.get("spec") or {}, v.get("status") or {}
             if vs.get("frontend") not in ("blockdev", "nvmf") or vs.get("dataLayout", {}).get("type") == "sharded":
-                live.append(f"{name}: live upgrade supports NVMe/TCP volumes; ublk and sharded volumes need an offline upgrade.")
+                live.append(f"{name}: a live upgrade supports NVMe/TCP volumes. ublk and sharded volumes need an offline upgrade.")
             if vs.get("migrationNodeID") or st.get("currentMigrationNodeID") or st.get("expansionRequired"):
                 live.append(f"{name}: wait for its migration or expansion to finish.")
             if st.get("state") == "detached":
@@ -283,7 +283,7 @@ def _configure(body, operations=None):
     if body["enabled"]:
         _set(AUTO, "true")
     return {"ok": True, "detail": "V2 live upgrades enabled" if body["enabled"] else
-            "V2 live upgrades paused; the current host upgrade can still finish"}
+            "V2 live upgrades paused. The current host's upgrade can still finish."}
 
 
 def progress(item):
@@ -326,11 +326,11 @@ def progress(item):
         if node["error"]:
             message += "; " + node["error"]
     elif not obs["enabled"]:
-        message += "; paused before the next host"
+        message += ". Paused before the next host"
     elif any(n["state"] == "failed" for n in obs["nodes"]):
-        message += "; host upgrade failed; inspect V2 upgrade status for recovery and retries"
+        message += ". A host upgrade failed. Check the V2 upgrade status to recover and retry"
     else:
-        message += "; waiting for Longhorn's upgrade controller"
+        message += ". Waiting for Longhorn's upgrade controller"
     return "running", 40 + int(55 * done / max(1, len(obs["nodes"]))) if matching else 40, message
 
 
@@ -347,7 +347,7 @@ def ensure_vm_idle(namespace, name):
         pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{quote(claim, safe='')}")
         pv_name = pvc.get("spec", {}).get("volumeName")
         if not pv_name:
-            raise ValueError("VM storage is not bound; wait before migrating")
+            raise ValueError("The VM storage is not bound. Wait before migrating.")
         pv = _get("/api/v1/persistentvolumes/" + quote(pv_name, safe=""))
         csi = pv.get("spec", {}).get("csi") or {}
         if csi.get("driver") == "driver.longhorn.io":

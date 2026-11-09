@@ -199,7 +199,7 @@ class PriorityTests(unittest.TestCase):
         self.assertNotIn("homestead/homestead", apps)
         self.assertIn("critical once any app", {s["id"]: s for s in plan["skipped"]}["homestead/homestead"]["why"])
         self.assertEqual("normal", apps["media/jellyfin"]["tier"])
-        self.assertIn("set priorityClassName there", apps["media/jellyfin"]["note"])
+        self.assertIn("Set priorityClassName there", apps["media/jellyfin"]["note"])
         self.assertIn("unifi-high", {s["id"]: s for s in plan["skipped"]}["lab/unifi"]["why"])
         with self.assertRaisesRegex(ValueError, "not one Homestead changes"):
             priority.check("media", "jellyfin", "normal")
@@ -223,7 +223,7 @@ class PriorityTests(unittest.TestCase):
         body = {"changes": [a for a in plan["apps"] if a["tier"] != a["current"]], "review_token": plan["review_token"],
                 "restart": True}
         with mock.patch.object(priority, "operations", jobs):
-            with self.assertRaisesRegex(ValueError, "confirm the restarts"):
+            with self.assertRaisesRegex(ValueError, "Confirm the restarts"):
                 priority.start({**body, "restart": False}, "operator")
             self.running = [{"kind": priority.KIND, "status": "running"}]
             with self.assertRaisesRegex(ValueError, "already being set"):
@@ -330,7 +330,7 @@ class PriorityTests(unittest.TestCase):
     def test_a_statefulsets_tier_is_patched_on_its_own_path_and_it_rolls(self):
         self.stss = {"lab/postgres": statefulset("postgres", replicas=3)}
         item = self.sts_job("sts:lab/postgres", "low")
-        self.assertIn("it restarts", priority.status(item)[2])
+        self.assertIn("It restarts", priority.status(item)[2])
         patch = [s for s in self.sent if s[0] == "PATCH"]
         self.assertEqual([("/apis/apps/v1/namespaces/lab/statefulsets/postgres",
                            {"spec": {"template": {"spec": {"priorityClassName": "homestead-low", "priority": None, "preemptionPolicy": None}}}},
@@ -405,7 +405,7 @@ class PriorityTests(unittest.TestCase):
         rows = {a["id"]: a for a in priority.plan()["apps"]}
         git, ours = rows["sts:media/postgres"], rows["sts:lab/postgres"]
         self.assertEqual(("in_line", "normal", "normal", "Flux"), (git["status"], git["wanted"], git["tier"], git["managed"]))
-        self.assertIn("set priorityClassName there", git["note"])
+        self.assertIn("Set priorityClassName there", git["note"])
         self.assertNotIn("line", git)
         self.assertEqual(("in_line", "normal", "critical", "critical"), (ours["status"], ours["wanted"], ours["tier"], ours["suggested"]))
         with self.assertRaisesRegex(ValueError, "not one Homestead changes"):
@@ -433,7 +433,7 @@ class PriorityTests(unittest.TestCase):
         self.stss = {"lab/postgres": sts}
         self.assertTrue(next(a for a in priority.plan()["apps"] if a["id"] == "sts:lab/postgres")["restarts"])
         item = self.sts_job("sts:lab/postgres", "low")
-        self.assertIn("it restarts", priority.status(item)[2])
+        self.assertIn("It restarts", priority.status(item)[2])
         self.assertEqual("rolling", item["ref"]["stage"])
         sts = self.stss["lab/postgres"]
         sts["status"].update(updateRevision="postgres-2", updatedReplicas=1, readyReplicas=2)
@@ -938,7 +938,7 @@ class ReviewFixTests(ProtectTests):
 
     def test_the_job_makes_no_class_when_the_list_failed_for_another_reason(self):
         self.broken_list()
-        with self.assertRaisesRegex(ValueError, "couldn't read"):
+        with self.assertRaisesRegex(ValueError, "could not read"):
             P.ensure(("critical",))
         self.assertEqual([], self.posted)
 

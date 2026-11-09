@@ -32,7 +32,7 @@ window.fetch = async (url, opts = {}) => {
   const r = await _rawFetch(url, { redirect: "manual", ...opts });
   if (r.type === "opaqueredirect") {
     signInLapsed();
-    throw Object.assign(new Error("Your sign-in has expired; signing you in again"), { status: 0, signIn: true });
+    throw Object.assign(new Error("The session has expired. Signing in again."), { status: 0, signIn: true });
   }
   const served = r.headers?.get?.("X-Homestead-Version");
   const target = opts.headers?.["X-Homestead-Cluster"];
@@ -85,8 +85,8 @@ window.signInLapsed = () => {
   const bar = document.createElement("div");
   bar.className = "signin-lapsed";
   bar.setAttribute("role", "alert");
-  bar.innerHTML = again ? '<span class="spin2"></span><span>Your sign-in has expired. Signing you in again…</span>'
-    : '<span>Your sign-in has expired.</span><button class="btn sm pri" type="button" onclick="signInAgain()">Sign in</button>';
+  bar.innerHTML = again ? '<span class="spin2"></span><span>The session has expired. Signing in again…</span>'
+    : '<span>The session has expired.</span><button class="btn sm pri" type="button" onclick="signInAgain()">Sign in</button>';
   document.body.appendChild(bar);
   if (again) setTimeout(signInAgain, 700);
 };
@@ -119,7 +119,7 @@ async function authState() {
 function clusterUnavailable(error, cause = "") {
   gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.335-dev.12" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
-    <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
+    <div class="gateerr">${esc(error || "The Kubernetes API did not respond.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
     <p class="dim small">This page tries again every few seconds.</p>
     <button class="btn wide" onclick="location.reload()">Try now</button>`);
@@ -136,7 +136,7 @@ window.recoverySignIn = async () => {
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
       body: JSON.stringify({ username: document.getElementById("rg_user").value.trim(), password: document.getElementById("rg_pass").value }) });
     // An answer that is not JSON is said, with its status: never a bare "Sign-in failed".
-    const out = await r.json().catch(e => ({ error: `Sign-in failed: the answer could not be read (HTTP ${r.status}, ${e.message})` }));
+    const out = await r.json().catch(e => ({ error: `Sign-in failed. The response could not be read (HTTP ${r.status}, ${e.message}).` }));
     if (!r.ok) throw new Error(out.error || "Sign-in failed");
     location.assign(window.__recoveryReview);
   } catch (e) { err.textContent = e.message; err.hidden = false; }
@@ -146,8 +146,8 @@ function dataHandoffStarting(state = {}) {
   if (state.recovery && /^[a-f0-9]{24}$/.test(state.operation || "")) {
     const review = window.__recoveryReview = `/api/self/data/handoff/${state.operation}/view`;
     gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
-      <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been authorized.</p>
-      <p class="dim small">Review the preparation or keep using the original volume. Both volumes will be retained.</p>
+      <h2>Data move paused</h2><p>Homestead is still on its original volume. No copy or shutdown has been approved.</p>
+      <p class="dim small">Review the preparation, or keep using the original volume. Both volumes are kept.</p>
       ${state.signed_in === false ? `<p class="small">Sign in as an administrator to review it.</p>
         <input id="rg_user" autocomplete="username" aria-label="Username" placeholder="Username">
         <input id="rg_pass" type="password" autocomplete="current-password" aria-label="Password" placeholder="Password" style="margin-top:8px"
@@ -160,8 +160,8 @@ function dataHandoffStarting(state = {}) {
   gate(`<img class="mark" src="/assets/homestead-mark.svg" alt="">
     <h2>Checking the new data volume</h2>
     <p class="sub">Homestead is starting after its data move.</p>
-    <p>Changes stay paused until the move coordinator confirms the restart. Both volumes are retained.</p>
-    <p class="dim small">This page will continue automatically. Do not start the old copy.</p>`);
+    <p>Changes stay paused until the move is confirmed after the restart. Both volumes are kept.</p>
+    <p class="dim small">This page continues automatically. Do not start the old copy.</p>`);
   clearTimeout(window.__authRetry);
   window.__authRetry = setTimeout(boot, 3000);
 }
@@ -172,15 +172,15 @@ window.sessionSummary = (state = {}) => {
   const hours = Math.round((state.session_expires * 1000 - Date.now()) / 3600000);
   const left = days >= 2 ? `${days} days` : `${Math.max(1, hours)} hour${hours === 1 ? "" : "s"}`;
   return (state.remember
-    ? `Kept signed in on this device. This session lapses after ${left} unused`
-    : `This session lapses after ${left} unused`)
-    + `, and ends for good ${state.session_max_days} days after you signed in. `
+    ? `Signed in on this device. This session ends after ${left} without use`
+    : `This session ends after ${left} without use`)
+    + `, and ends for good ${state.session_max_days} days after signing in. `
     + "Signing out everywhere ends it now, on every device.";
 };
 
 window.signOutEverywhere = async () => {
   if (!(await ask("Sign out of every device, including this one?" + String.fromCharCode(10, 10)
-      + "Every session for your account stops working immediately.", { title: "Sign out everywhere", ok: "Sign out everywhere" }))) return;
+      + "Every session for this account stops working immediately.", { title: "Sign out everywhere", ok: "Sign out everywhere" }))) return;
   try {
     await _fetch("/api/auth/signout-everywhere", { method: "POST",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" } });
@@ -237,11 +237,11 @@ function loginForm(err, setup) {
         <code>kubectl -n ${esc(setupNamespace || "lab")} get secret homestead-setup -o jsonpath='{.data.code}' | base64 -d</code>${
         setupNamespace ? "." : " (Helm: use the release's namespace)."}</details></div>` : ""}
     <label class="switch gateremember"><input type="checkbox" id="lg_remember"
-      ${remember ? "checked" : ""}>Keep me signed in on this device</label>
+      ${remember ? "checked" : ""}>Stay signed in on this device</label>
     <button class="btn pri wide" id="lg_go">${setup ? "Create account" : "Sign in"}</button>
     ${setup ? `<div class="gatehint">A password needs at least 10 characters.</div>`
       : `<div class="gatehint">Homestead can deploy, move and delete apps and VMs.<br>
-        A session stays signed in while you keep using it. Leave the box unticked on a
+        A session stays signed in while it is in use. Leave the box unticked on a
         shared computer.</div>`}`);
   const go = () => setup ? doSetup() : doLogin();
   $("#lg_go").onclick = go;
@@ -306,7 +306,7 @@ window.doLogout = async () => {
   let r = null;
   try { r = await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
   if (!r || (!r.ok && r.status !== 401))
-    return toast("Could not sign out. Check the connection to Homestead and try again.", "bad");
+    return toast("Signing out failed. Check the connection to Homestead and try again.", "bad");
   stopAuthenticatedWork();
   // A fresh page, as signing out everywhere does: the next person to sign in
   // must not first see this session's pages, settings or lists.
@@ -319,7 +319,7 @@ window.pwChange = () => modal("Change password", `
   <div class="f"><label for="pw_new2">Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
   ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-  <div class="note" style="margin-top:14px">Changing your password signs out every other
+  <div class="note" style="margin-top:14px">Changing the password signs out every other
   session, including on other devices.</div>`);
 
 window.doPwChange = async () => {
@@ -328,7 +328,7 @@ window.doPwChange = async () => {
   try {
     await api("/api/auth/password", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ old: $("#pw_old").value, new: a }) });
-    toast("Password changed — other sessions signed out", "ok"); closeModal();
+    toast("Password changed. Other sessions were signed out.", "ok"); closeModal();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -347,7 +347,7 @@ window.userSignins = name => {
    (#368). A user someone else already removed is what was wanted: it says
    so and the row goes (#369). */
 async function userRemove(name) {
-  if (!(await ask(`Remove ${name}? They are signed out, and their API keys stop working.`, { title: "Remove user", ok: "Remove", danger: true }))) return;
+  if (!(await ask(`Remove ${name}? The user is signed out, and their API keys stop working.`, { title: "Remove user", ok: "Remove user", danger: true }))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: name }) });
@@ -369,7 +369,7 @@ window.api = async (path, opts) => {
     if (/not signed in/i.test(e.message)) {
       if (ME && generation === authGeneration) {
         stopAuthenticatedWork();
-        loginForm("Session expired — sign in again");
+        loginForm("The session has expired. Sign in again.");
       }
     }
     else if (/cannot do this/i.test(e.message)) toast(e.message, "bad");
@@ -424,7 +424,7 @@ async function afterAuth() {
     // A mistyped or outdated address: land on the dashboard, and say so.
     const asked = window.location.pathname;
     window.history.replaceState({ view: "dash" }, "", HomesteadRouter.urlFor("dash"));
-    toast(`There is no page at ${asked}, so here is the dashboard`, "warn");
+    toast(`There is no page at ${asked}, so the dashboard is shown`, "warn");
     go("dash", { history: false });
   } else {
     go(route.view, { history: false, fromLocation: true });
@@ -458,7 +458,7 @@ window.userAdd = () => modal("Add a user", `<div class="ui-stack">
     UI.field("Password", '<input type="password" id="nu_pass" autocomplete="new-password">'))}
   ${UI.field("Role", `<select id="nu_role">${["viewer", "operator", "admin"].map(r =>
     `<option value="${r}"${r === "operator" ? " selected" : ""}>${typeof ROLE_NAMES === "object" ? ROLE_NAMES[r] : r} - ${typeof ROLE_SHORT === "object" ? esc(ROLE_SHORT[r]) : ""}</option>`).join("")}</select>`,
-    { help: "Compare roles on the card says what each can do." })}
+    { help: "Compare roles, on the Users card, describes what each role can do." })}
   ${UI.actions(UI.cancel() + UI.button("Add user", "userAddSave(this)", { kind: "pri" }))}</div>`);
 
 window.userAddSave = async button => {
@@ -496,15 +496,15 @@ window.apiKeysPaint = async () => {
       <td><b>${esc(k.name)}</b> ${k.expired ? UI.chip("expired", "bad") : ""}${k.mcp ? ` ${UI.chip("MCP", "neutral")}` : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
       <td data-label="May">${k.scopes.map(s => UI.chip(s, "neutral")).join(" ")}</td>
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
-      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ` ${UI.chip("host", "neutral", { tip: "A host's address inside the cluster, not the client's" })}` : ""}</div>` : ""}` : '<span class="dim">never</span>'}</td>
+      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}${k.last_ip_node ? ` ${UI.chip("host", "neutral", { tip: "A host's address inside the cluster, not the client's address" })}` : ""}</div>` : ""}` : '<span class="dim">Never</span>'}</td>
       <td data-actions>${actionBar([{ label: "Edit", run: `apiKeyEdit(${jsq(k.id)})` },
         { label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 2 })}</td></tr>`).join("");
-  card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
+  card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is allowed to, and works only on the API.`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
     ${found.you?.node_address ? UI.callout("warn", "Homestead cannot see where requests come from", esc(found.you.note)) : ""}
     ${rows ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Key</th><th>May</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
-      <tbody>${rows}</tbody></table></div>` : '<div class="dim small">No keys yet.</div>'}
-    <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.
+      <tbody>${rows}</tbody></table></div>` : '<div class="dim small">There are no keys yet.</div>'}
+    <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, open a host's shell, or change settings, whatever its scopes.
       Its full description is at <span class="mono">/api/v1/openapi.json</span> on this Homestead.</div>`;
 };
 
@@ -519,7 +519,7 @@ function apiKeyForm(key) {
     + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`,
       esc(text) + ((implies[scope] || []).length ? `<div class="dim xs">Includes ${esc(implies[scope].join(", "))}</div>` : ""),
       `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${chosen.has(scope) ? "checked" : ""}><span></span></label>`)).join("")
-    + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. Off, it works only on the API.",
+    + settingRow("Allow AI agents (MCP)", "Lets an AI assistant use this key at the MCP endpoint, within these scopes. When this is off, the key works only on the API.",
       `<label class="toggle"><input type="checkbox" id="ak_mcp" ${key?.mcp ? "checked" : ""}><span></span></label>`);
 }
 window.apiKeyPreset = list => {
@@ -529,17 +529,17 @@ window.apiKeyPreset = list => {
 function apiKeyNetworksHelp() {
   const you = STATE.data.apiKeys?.you;
   return you?.node_address
-    ? `Leave this empty here: Homestead sees your request as coming from ${esc(you.address)}, a host's address inside the cluster, so it cannot tell clients apart and a limit would refuse them all.`
-    : "Addresses or networks it may be used from; anywhere if empty.";
+    ? `Leave this empty. Homestead sees requests as coming from ${esc(you.address)}, a host's address inside the cluster, so it cannot tell clients apart, and a limit would refuse all of them.`
+    : "The addresses or networks it may be used from. If empty, it can be used from anywhere.";
 }
 
 window.apiKeyEdit = id => {
   const key = (STATE.data.apiKeys?.keys || []).find(k => k.id === id);
   if (!key) return;
-  modal(`Change key · ${key.name}`, UI.lead("Changes take effect within seconds. The key itself stays the same, so whatever uses it carries on.")
+  modal(`Change key · ${key.name}`, UI.lead("Changes take effect within seconds. The key itself stays the same, so whatever uses it keeps working.")
     + UI.field("Name", `<input id="ak_name" maxlength="60" value="${esc(key.name)}">`)
     + `<div class="sec">What it may do</div>` + apiKeyForm(key)
-    + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
+    + UI.fields(UI.field("Expires", `<select id="ak_ttl"><option value="">Keep the current expiry: ${esc(keyUntil(key.expires))}</option>${API_TTLS.map(([label, s]) => `<option value="${s}">${esc(label)} from now</option>`).join("")}</select>`),
       UI.field("Only from (optional)", `<input id="ak_nets" value="${esc((key.networks || []).join(", "))}" placeholder="192.0.2.20, 198.51.100.0/24">`, { help: apiKeyNetworksHelp() }))
     + UI.actions(UI.cancel() + UI.button("Save changes", `apiKeySave(this,${jsArg(id)})`, { kind: "pri" })));
 };
@@ -547,8 +547,8 @@ window.apiKeySave = async (button, id) => {
   const body = { id, name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
   if ($("#ak_ttl").value) body.ttl_seconds = +$("#ak_ttl").value;
-  if (!body.name) return toast("Give the key a name", "bad");
-  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Enter a name for the key", "bad");
+  if (!body.scopes.length) return toast("Choose at least one scope", "bad");
   button.disabled = true;
   try {
     const done = await api("/api/auth/keys/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -559,8 +559,8 @@ window.apiKeySave = async (button, id) => {
 };
 
 window.apiKeyNew = () => {
-  modal("New API key", UI.lead("A key can do only what its scopes allow, and stops working when it expires or is revoked. You see it once.")
-    + UI.field("Name", '<input id="ak_name" placeholder="Home Assistant" maxlength="60">', { help: "What uses it, so you know which to revoke." })
+  modal("New API key", UI.lead("A key can do only what its scopes allow, and stops working when it expires or is revoked. It is shown only once.")
+    + UI.field("Name", '<input id="ak_name" placeholder="Home Assistant" maxlength="60">', { help: "What uses it, so that the right key can be revoked later." })
     + `<div class="sec">What it may do</div>` + apiKeyForm()
     + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
       UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: apiKeyNetworksHelp() }))
@@ -570,8 +570,8 @@ window.apiKeyNew = () => {
 window.apiKeyMake = async button => {
   const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
     mcp: $("#ak_mcp").checked, ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
-  if (!body.name) return toast("Give the key a name", "bad");
-  if (!body.scopes.length) return toast("Choose at least one thing it may do", "bad");
+  if (!body.name) return toast("Enter a name for the key", "bad");
+  if (!body.scopes.length) return toast("Choose at least one scope", "bad");
   button.disabled = true;
   let made;
   try {
@@ -579,9 +579,9 @@ window.apiKeyMake = async button => {
   } catch (e) { button.disabled = false; return toast(e.message, "bad"); }
   const example = `curl -H "Authorization: Bearer ${made.token}" ${location.origin}/api/v1/status`;
   window.__apiToken = made.token;
-  modal(`New key · ${made.key.name}`, UI.callout("warn", "Copy it now: it is not shown again.", "Homestead keeps only a hash of it. If it is lost, revoke it and make another.")
+  modal(`New key · ${made.key.name}`, UI.callout("warn", "Copy the key now. It is not shown again.", "Homestead stores only a hash of it. If it is lost, revoke it and create another.")
     + `<div class="f"><label>The key</label><div class="row" style="gap:8px;flex-wrap:nowrap"><input class="mono" readonly value="${esc(made.token)}" onclick="this.select()">
-      <button class="btn" onclick="copyText(window.__apiToken).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">Copy</button></div></div>`
+      <button class="btn" onclick="copyText(window.__apiToken).then(ok => toast(ok ? 'Copied' : 'Select the key and copy it', ok ? 'ok' : 'bad'))">Copy</button></div></div>`
     + UI.field("Try it", `<pre class="mono small" style="white-space:pre-wrap;word-break:break-all;margin:0">${esc(example)}</pre>`)
     + UI.more("Using it from Home Assistant", `<p>A REST sensor, for example, in configuration.yaml:</p>
       <pre class="mono small" style="white-space:pre-wrap">sensor:
@@ -596,7 +596,7 @@ window.apiKeyMake = async button => {
 };
 
 window.apiKeyRevoke = async (id, name) => {
-  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { title: "Revoke key", danger: true, ok: "Revoke" }))) return;
+  if (!(await ask(`Revoke ${name}? Anything that uses it is refused from now on.`, { title: "Revoke key", danger: true, ok: "Revoke key" }))) return;
   try {
     await api("/api/auth/keys/revoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(`${name} revoked`, "ok");

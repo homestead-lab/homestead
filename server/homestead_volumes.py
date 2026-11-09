@@ -63,7 +63,7 @@ def _items(path, label, warnings, optional=False):
                 time.sleep(min(2.0, delay))
                 continue
             warnings.append(f"{label} inventory unavailable (HTTP {error.code})" +
-                            ("; temporarily rate limited, refresh the review shortly" if error.code == 429 else ""))
+                            (". The cluster is limiting requests for now, so refresh the review shortly" if error.code == 429 else ""))
         except Exception as error:
             warnings.append(f"{label} inventory unavailable: {error}")
         return []
@@ -223,7 +223,7 @@ def deletion_plan(namespace, name, volume="", pv=""):
     longhorn_name = csi.get("volumeHandle") or pv_name
     driver = csi.get("driver", "")
     if volume and longhorn_name != volume:
-        raise ValueError("This name now belongs to a different backing volume; its claim will not be deleted")
+        raise ValueError("This name now belongs to a different volume, so its claim is not deleted")
 
     longhorn = {}
     longhorn_inventory_complete = True
@@ -284,7 +284,7 @@ def deletion_plan(namespace, name, volume="", pv=""):
     if attachment_state == "attached" or attached_node:
         blockers.append(f"Longhorn still reports the volume attached{f' to {attached_node}' if attached_node else ''}")
     if not dependency_inventory_complete:
-        blockers.append("workload dependency inventory is incomplete")
+        blockers.append("the app dependency list is incomplete")
     if not pv_inventory_complete:
         blockers.append("the bound persistent volume could not be verified")
 
@@ -343,7 +343,7 @@ def delete(cfg, validate=None):
     if validate is not None:
         plan = validate(plan)
     if not cfg.get("uid") or cfg.get("uid") != plan["uid"]:
-        raise ValueError("the volume changed after preview; review its impact again")
+        raise ValueError("The volume changed after the preview. Review its effect again.")
     # A Released volume whose claim name is in use again is confirmed by its
     # own name: the claim name is the current volume's too.
     expected = plan.get("confirm") or name
@@ -382,7 +382,7 @@ def delete(cfg, validate=None):
     return {
         "ok": True, "namespace": namespace, "name": name, "action": action,
         "pv": pv_name, "longhorn_volume": plan["longhorn"]["name"],
-        "message": "PVC deletion requested; backing data is retained" if action == "delete_claim"
+        "message": "Volume claim deletion requested. The data behind it is kept." if action == "delete_claim"
                    else "PVC and backing-data deletion requested",
     }
 
@@ -409,18 +409,18 @@ def orphan_plan(namespace, name, volume):
            if ((p.get("spec") or {}).get("csi") or {}).get("driver") == "driver.longhorn.io"
            and ((p.get("spec") or {}).get("csi") or {}).get("volumeHandle") == volume]
     if len(pvs) > 1:
-        blockers.append("Multiple PVs refer to this Longhorn volume; resolve ownership first")
+        blockers.append("More than one persistent volume refers to this Longhorn volume. Settle which one owns it first.")
     pv = pvs[0] if len(pvs) == 1 else {}
     pm, ps = pv.get("metadata") or {}, pv.get("spec") or {}
     if pv and (pv.get("status") or {}).get("phase") != "Released":
-        blockers.append("The backing PV is not Released; it may be bound or available for reuse")
+        blockers.append("The persistent volume behind it is not Released. It may be bound or available for reuse.")
     claim_ref = ps.get("claimRef") or {}
     if pv and (claim_ref.get("name") != name or claim_ref.get("namespace") != namespace):
         blockers.append("The PV claim reference differs from the selected former claim")
     for claim in _items("/api/v1/persistentvolumeclaims", "claim", warnings):
         cm, cs = claim.get("metadata") or {}, claim.get("spec") or {}
         if (cm.get("namespace"), cm.get("name")) == (namespace, name) or cs.get("volumeName") in {p["metadata"]["name"] for p in pvs}:
-            blockers.append("A PVC now references this name or backing PV; refresh before deleting")
+            blockers.append("A volume claim now refers to this name or persistent volume. Refresh before deleting.")
     for attachment in _items("/apis/storage.k8s.io/v1/volumeattachments", "CSI attachment", warnings):
         if ((attachment.get("spec") or {}).get("source") or {}).get("persistentVolumeName") in {p["metadata"]["name"] for p in pvs}:
             blockers.append("A CSI attachment still references this backing PV")
@@ -456,13 +456,13 @@ def _released_identity(pv_name, namespace, name, volume):
         raise ValueError("the persistent volume name must be a valid Kubernetes name")
     pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget)
     if pv is None:
-        raise ValueError("That Released volume no longer exists; refresh the list")
+        raise ValueError("That Released volume no longer exists. Refresh the list.")
     spec = pv.get("spec") or {}
     csi, ref = spec.get("csi") or {}, spec.get("claimRef") or {}
     if csi.get("driver") != "driver.longhorn.io" or csi.get("volumeHandle") != volume:
-        raise ValueError("This persistent volume is not that Longhorn volume's; nothing will be deleted")
+        raise ValueError("This persistent volume does not belong to that Longhorn volume, so nothing is deleted")
     if (ref.get("namespace"), ref.get("name")) != (namespace, name):
-        raise ValueError("This persistent volume was not that claim's; nothing will be deleted")
+        raise ValueError("This persistent volume did not belong to that claim, so nothing is deleted")
     return pv
 
 
@@ -479,7 +479,7 @@ def released_plan(namespace, name, volume, pv_name):
     if claim is None:
         plan = orphan_plan(namespace, name, volume)
         if plan["pv"]["name"] != pv_name:
-            raise ValueError("Another persistent volume holds that Longhorn volume; nothing will be deleted")
+            raise ValueError("Another persistent volume holds that Longhorn volume, so nothing is deleted")
         return plan
     warnings, blockers = [], []
     cm, cs, cstatus = claim.get("metadata") or {}, claim.get("spec") or {}, claim.get("status") or {}
@@ -487,9 +487,9 @@ def released_plan(namespace, name, volume, pv_name):
     current = {"claim_uid": cm.get("uid", ""), "phase": cstatus.get("phase", "Unknown"), "pv": current_pv_name,
                "pv_uid": "", "longhorn": "", "consumers": []}
     if pstatus.get("phase") != "Released":
-        blockers.append("This persistent volume is not Released; it may be bound or available for reuse")
+        blockers.append("This persistent volume is not Released. It may be bound or available for reuse.")
     if current["phase"] != "Bound" or not current_pv_name:
-        blockers.append(f"The claim now named {name} is not bound yet, so the volume it uses cannot be shown; refresh once it is")
+        blockers.append(f"The claim now named {name} is not bound yet, so the volume it uses cannot be shown. Refresh once it is.")
     if current_pv_name == pv_name:
         blockers.append("This is the volume the claim uses now")
     if not (ps.get("claimRef") or {}).get("uid") or (ps.get("claimRef") or {}).get("uid") == current["claim_uid"]:
@@ -512,7 +512,7 @@ def released_plan(namespace, name, volume, pv_name):
     path = f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}"
     lh = KUBE.get_optional(f"{path}/volumes/{volume}", read=kget)
     if lh is None:
-        raise ValueError("Longhorn no longer has that volume; refresh the list")
+        raise ValueError("Longhorn no longer has that volume. Refresh the list.")
     meta, spec, status = lh.get("metadata") or {}, lh.get("spec") or {}, lh.get("status") or {}
     ks = status.get("kubernetesStatus") or {}
     if ks.get("pvName") not in (None, "", pv_name):
@@ -524,7 +524,7 @@ def released_plan(namespace, name, volume, pv_name):
     pvs = [p for p in _items("/api/v1/persistentvolumes", "persistent volume", warnings)
            if ((p.get("spec") or {}).get("csi") or {}).get("volumeHandle") == volume]
     if len(pvs) > 1:
-        blockers.append("Multiple PVs refer to this Longhorn volume; resolve ownership first")
+        blockers.append("More than one persistent volume refers to this Longhorn volume. Settle which one owns it first.")
     for other in _items("/api/v1/persistentvolumeclaims", "claim", warnings):
         if (other.get("spec") or {}).get("volumeName") == pv_name:
             blockers.append("A claim is bound to this persistent volume")
@@ -563,10 +563,10 @@ def released_plan(namespace, name, volume, pv_name):
 
 def delete_orphan(plan, cfg):
     if cfg.get("action") != "delete_data":
-        raise ValueError("The PVC is already absent; only explicit backing-data deletion applies")
+        raise ValueError("The volume claim has already been removed. Only deleting the data behind it is possible.")
     pv = plan["pv"]
     if cfg.get("pv_uid", "") != pv.get("uid", ""):
-        raise ValueError("Backing PV changed after preview; review again")
+        raise ValueError("The persistent volume behind it changed after the preview. Review it again.")
     pinned = []
     if plan.get("released"):
         # The claim name is in use again: write only the old PV, and never one
@@ -574,7 +574,7 @@ def delete_orphan(plan, cfg):
         current = plan.get("current") or {}
         if not pv["name"] or pv["name"] == current.get("pv") or pv.get("uid") == current.get("pv_uid") \
                 or plan["longhorn"]["name"] == current.get("longhorn") or not pv.get("claim_uid"):
-            raise PermissionError("This is the volume the claim uses now; it is not deleted")
+            raise PermissionError("This is the volume the claim uses now, so it is not deleted")
         pinned = [{"op": "test", "path": "/spec/claimRef/uid", "value": pv["claim_uid"]},
                   {"op": "test", "path": "/spec/csi/volumeHandle", "value": plan["longhorn"]["name"]}]
     if pv["name"]:
@@ -595,7 +595,7 @@ def delete_orphan(plan, cfg):
             cache.pop(key, None)
     return {"ok": True, "orphan": True, "namespace": plan["namespace"], "name": plan["name"],
             "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"], "released": bool(plan.get("released")),
-            "message": "Retained backing-data deletion requested; external backups are kept"}
+            "message": "Deletion of the kept data requested. Backups stored elsewhere are kept."}
 
 
 def _review(plan):

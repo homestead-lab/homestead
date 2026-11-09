@@ -15,7 +15,7 @@ try{for(const width of [1440,390])for(const theme of ['dark','light']){
  await page.evaluate(t=>{document.documentElement.dataset.theme=t;go('nodes',{params:{node:'harvester-node1'}});},theme);
  await page.getByRole('tab',{name:/Apps and VMs/}).first().click();
  const card=page.locator('#nodeChipsCard');await card.waitFor();
- await card.getByRole('button',{name:'Select',exact:true}).click();
+ await card.getByRole('button',{name:'Select several',exact:true}).click();
  assert.equal(await card.locator('input[type=checkbox]').count(),0,'select mode keeps the chips, no tick boxes');
  const chip=name=>card.locator('button.tag.movable',{hasText:name});
  await chip('home-assistant').click();await chip('mosquitto').click();
@@ -34,8 +34,8 @@ try{for(const width of [1440,390])for(const theme of ['dark','light']){
  await page.screenshot({path:`${out}/selected-${width}-${theme}.png`});
  await page.keyboard.press('Escape');
  assert.equal(await card.locator('[aria-pressed]').count(),0,'Escape ends select mode');
- assert.equal(await page.evaluate(()=>document.activeElement?.textContent.trim()),'Select','focus lands on Select after Escape');
- await card.getByRole('button',{name:'Select',exact:true}).click();
+ assert.equal(await page.evaluate(()=>document.activeElement?.textContent.trim()),'Select several','focus lands on Select several after Escape');
+ await card.getByRole('button',{name:'Select several',exact:true}).click();
  await chip('home-assistant').click();await chip('mosquitto').click();
  await card.getByRole('button',{name:'Move selected…'}).click();
  await page.locator('#mbody').getByText('mosquitto').first().waitFor();

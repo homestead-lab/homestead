@@ -113,7 +113,7 @@ class OperationVersionTests(unittest.TestCase):
         self.legacy()
         self.start()
         (Path(self.tmp.name) / ops.STORE).unlink()
-        with self.assertRaisesRegex(ValueError, "history is missing"):
+        with self.assertRaisesRegex(ValueError, "history that existed before is missing"):
             ops._read()
         with self.assertRaises(ValueError):
             self.start()
@@ -121,13 +121,13 @@ class OperationVersionTests(unittest.TestCase):
     def test_duplicate_identity_between_stores_fails_closed(self):
         old = self.legacy()
         self.put([old], ops.STORE)
-        with self.assertRaisesRegex(ValueError, "duplicate identities"):
+        with self.assertRaisesRegex(ValueError, "same job in more than one store"):
             ops._read()
 
     def test_current_store_cannot_redirect_record_ownership_to_legacy(self):
         old = self.legacy()
         self.put([{**old, "id": "other", "_legacy_store": True}], ops.STORE)
-        with self.assertRaisesRegex(ValueError, "store ownership"):
+        with self.assertRaisesRegex(ValueError, "invalid store owner"):
             ops._read()
 
     def test_corrupt_legacy_data_never_gets_replaced_by_new_start(self):

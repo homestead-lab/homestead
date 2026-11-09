@@ -251,8 +251,8 @@ class RefusedRestoreTests(unittest.TestCase):
         self.fifteen_minutes_on()
         job = self.job(ident)
         self.assertEqual("failed", job["status"])
-        self.assertEqual("The restore could not start within 15 minutes (backup URL is not available yet); "
-                         "resume once it has cleared", job["message"])
+        self.assertEqual("The restore could not start within 15 minutes (backup URL is not available yet). "
+                         "Resume it once that has cleared.", job["message"])
 
     def test_fifteen_minutes_of_kubernetes_errors_names_them_not_csi(self):
         self.kube.fail(self.CLAIM, 503, times=3)

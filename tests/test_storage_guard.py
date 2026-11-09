@@ -143,7 +143,7 @@ class StorageGuardTests(unittest.TestCase):
             for method, target, body in (("POST", path, snapshot), ("DELETE", path + "/point", None),
                                          ("PATCH", path + "/point", {}), ("DELETE", path, None)):
                 with self.assertRaisesRegex(ValueError, "protected"): self.send(target, method, body)
-            with self.assertRaisesRegex(ValueError, "cannot be verified"):
+            with self.assertRaisesRegex(ValueError, "cannot be confirmed"):
                 self.send(path, "POST", {"metadata": {"name": "unknown"}})
         self.dispatch.assert_not_called()
 

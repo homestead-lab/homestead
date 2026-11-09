@@ -35,7 +35,7 @@ const DashboardCustom = (() => {
   }
   function render(item){
     const title=item.title || 'Custom text / HTML',content=item.content || '';
-    const body=!content?'<div class="empty small">Add your content in Widget settings.</div>':item.format==='html'?
+    const body=!content?'<div class="empty small">Add the content in Widget settings.</div>':item.format==='html'?
       `<iframe class="dashboard-custom-frame" title="${escape(title)}" sandbox="" referrerpolicy="no-referrer" srcdoc="${escape(documentHTML(content,document.documentElement.dataset.theme==='light'))}" style="height:${Math.max(160,(item.height || 360)-80)}px"></iframe>`:
       `<div class="dashboard-custom-text dashboard-resource-scroll">${escape(content)}</div>`;
     return `<div class="card flat dashboard-custom">${UI.moduleHeader(escape(title),'','')}<div class="dashboard-custom-body">${body}</div></div>`;

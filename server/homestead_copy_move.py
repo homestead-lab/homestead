@@ -114,17 +114,17 @@ def plan(name, disk_tags=(), node_tags=()):
     blockers, warnings = [], []
     wanted = int(spec.get("numberOfReplicas") or 0)
     if status.get("state") == "attached" and status.get("robustness") != "healthy":
-        blockers.append("The volume is not healthy now; let Longhorn finish repairing it first")
+        blockers.append("The volume is not healthy now. Let Longhorn finish repairing it first.")
     elif len(copies) != wanted or not all(row["whole"] for row in rows):
-        blockers.append("Its copies are being rebuilt or changed; wait until they settle")
+        blockers.append("Its copies are being rebuilt or changed. Wait until they settle.")
     elif status.get("state") not in ("attached", "detached"):
-        blockers.append(f"It is {status.get('state') or 'changing'}; wait until it is attached or detached")
+        blockers.append(f"It is {status.get('state') or 'changing'}. Wait until it is attached or detached.")
     elif status.get("state") == "detached" and "offlineRebuilding" not in spec \
             and REBALANCE._setting("offline-replica-rebuilding", "false") != "true":
         blockers.append("Start what uses it first, or turn on offline rebuilding in Longhorn. It is detached, "
                         "and this Longhorn rebuilds copies of a detached volume only with offline rebuilding on")
     if (meta.get("annotations") or {}).get(REBALANCE.MOVING):
-        blockers.append("A copy of it is moving already; follow that in Jobs")
+        blockers.append("A copy of it is already moving. Follow that in Jobs.")
     targets = [{**d, "fits": _room(d, size, actual)[0], "room_gb": _room(d, size, actual)[1]}
                for d in disks.values() if (disk_tags or node_tags) and d["takes"] and _on_target(d, disk_tags, node_tags)]
     moving = [row for row in rows if row["moves"]]
@@ -215,7 +215,7 @@ def status(item):
     def fail(why):
         _put_back(ref, keep_tags=False)
         return "failed", ref.get("progress", 0), f"{why}. {label} keeps the copies it has" + (
-            f"; {done} already moved stay where they are" if done else "")
+            f". {done} already moved stay where they are" if done else "")
 
     total = ref.get("total") or 1
     ref["progress"] = progress = int(100 * done / total)
@@ -237,7 +237,7 @@ def status(item):
         leaving = [r for r in copies if off(r)]
         if not leaving:
             _put_back(ref, keep_tags=True)
-            return "succeeded", 100, f"Moved {done} cop{'y' if done == 1 else 'ies'} of {label}; every copy is on the disks chosen"
+            return "succeeded", 100, f"Moved {done} cop{'y' if done == 1 else 'ies'} of {label}. Every copy is on the chosen disks."
         if len(copies) != ref["original"] or not all(whole_copy(r) for r in copies):
             waited = ref.setdefault("unsettled_since", now)
             if now - waited > 900:
@@ -252,7 +252,7 @@ def status(item):
         limit = 3600 + 120 * ref.get("size_gb", 0)
         if not new:
             if now - ref["started"] > 600:
-                return fail("Longhorn did not place the new copy within 10 minutes - no disk with those tags took it")
+                return fail("Longhorn did not place the new copy within 10 minutes, because no disk with those tags took it")
             return "running", progress, f"Waiting for Longhorn to place a copy of {label}"
         if off(new[0]):
             ksend("DELETE", f"{LH}/replicas/{(new[0].get('metadata') or {}).get('name')}")
@@ -271,7 +271,7 @@ def status(item):
             whole = [r for r in copies if whole_copy(r)]
             if len(whole) - 1 < ref["original"]:
                 if now - ref["started"] > 3600 + 120 * ref.get("size_gb", 0):
-                    return fail("Another copy failed during the move; the old copy is kept")
+                    return fail("Another copy failed during the move, so the old copy is kept")
                 return "running", progress, f"Waiting for Longhorn to rebuild a failed copy of {label} first"
             old = max(leaving, key=lambda r: (r.get("spec") or {}).get("nodeID") != (volume.get("status") or {}).get("currentNodeID"))
             ksend("DELETE", f"{LH}/replicas/{(old.get('metadata') or {}).get('name')}")
@@ -289,7 +289,7 @@ def status(item):
 
 def cancel_plan(item):
     return {"mode": "stop", "action": "Stop moving copies",
-            "undo": ["The copy being built now is dropped; the volume keeps the copies it had, and its old disk tags"],
+            "undo": ["The copy being built now is dropped. The volume keeps the copies it had, and its old disk tags."],
             "keeps": ["Copies already moved stay where they are"], "needs": "operator"}
 
 
@@ -309,13 +309,13 @@ def start_reviewed(b):
     except ValueError as error:
         return ROUTER.Reply(404, {"error": str(error)})
     if now["review_token"] != b.get("review_token"):
-        return ROUTER.Reply(409, {"error": "Its copies changed since the review; review again", "plan": now})
+        return ROUTER.Reply(409, {"error": "Its copies changed since the review. Review again.", "plan": now})
     if now["blockers"]:
         return ROUTER.Reply(409, {"error": now["blockers"][0], "plan": now})
     running = next((i for i in OPS.snapshot() if i.get("kind") in (KIND, REBALANCE.KIND) and i.get("status") not in OPS.TERMINAL
                     and (i.get("kind") == REBALANCE.KIND or (i.get("ref") or {}).get("volume") == name)), None)
     if running:
-        return ROUTER.Reply(409, {"error": "Copies are moving already; follow that in Jobs", "operation": running})
+        return ROUTER.Reply(409, {"error": "Copies are already moving. Follow that in Jobs.", "operation": running})
     where = ", ".join(now["disk_tags"] + now["node_tags"])
     operation = OPS.start(KIND, f"Move {now['claim']} to disks tagged {where}", {"kind": "Volume", "name": name}, "/volumes",
                           {"volume": name, "claim": now["claim"], "disk_tags": now["disk_tags"], "node_tags": now["node_tags"],

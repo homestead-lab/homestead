@@ -69,7 +69,7 @@ try {
   assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
   await page.evaluate(() => {closeModal(); return vmEdit("default", "home-assistant-os");});
   await page.evaluate(() => UI.selectSection("ve", "network"));
-  await page.getByRole("button", {name: "Configure default / selected VIP", exact: true}).click();
+  await page.getByRole("button", {name: "Set virtual IP", exact: true}).click();
   assert.equal(await page.locator("#net_workload").inputValue(), "default/home-assistant-os/VirtualMachine");
   await page.getByRole("button", {name: "Cancel", exact: true}).click();
   await page.locator("#ve_mem").waitFor({state: "attached"});

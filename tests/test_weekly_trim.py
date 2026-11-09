@@ -116,7 +116,7 @@ class RefusalWordsTests(unittest.TestCase):
                        "Longhorn could not trim it: it timed out. Longhorn said: unable to trim filesystem for volume "
                        "pvc-105c55af-35a1-4607-8711-83d106d0dbea: rpc error: code = DeadlineExceeded"):
             reason = TRIM.weekly_trim_reason(stored, "Saturday")
-            self.assertTrue(reason.startswith("Weekly trim failed: it timed out. It is tried again next Saturday;"), reason)
+            self.assertTrue(reason.startswith("Weekly trim failed: it timed out. It is tried again next Saturday,"), reason)
             self.assertIn("Longhorn said: unable to trim filesystem", reason)
             self.assertNotIn("{", reason)
 

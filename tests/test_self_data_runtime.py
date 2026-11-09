@@ -94,7 +94,7 @@ class RuntimeTests(unittest.TestCase):
     def test_local_mount_change_invalidates_report(self):
         self.ready()
         with mock.patch.object(F, "mounted_data", return_value={**MOUNT, "mount_id": "99"}):
-            with self.assertRaisesRegex(Held, "mount changed"): self.check()
+            with self.assertRaisesRegex(Held, "data volume changed"): self.check()
 
     def test_sidecar_and_ephemeral_writers_block(self):
         self.ready()

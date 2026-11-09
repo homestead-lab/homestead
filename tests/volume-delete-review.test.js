@@ -40,9 +40,9 @@ function review(api) {
 test("incomplete inventory reports detached but unverified and keeps deletion blocked", async () => {
   const r = review(async () => plan(true));
   await r.context.volumeDelete(target);
-  assert.match(r.html(), /Longhorn reports detached; safety checks are incomplete/);
-  assert.match(r.html(), /No app or VM references found in the available inventory/);
-  assert.doesNotMatch(r.html(), /Stop and unmount this claim first/);
+  assert.match(r.html(), /Longhorn reports the volume as detached, but some checks are incomplete/);
+  assert.match(r.html(), /No app or VM that uses this volume was found, but some information could not be read/);
+  assert.doesNotMatch(r.html(), /Stop the apps that use it first/);
   assert.match(r.html(), /Refresh review/);
   r.confirm();
   assert.equal(r.elements["#vd_go"].disabled, true);
@@ -92,7 +92,7 @@ test("late success and failure cannot overwrite another dialog or a newer review
     const newer = r.context.volumeDelete({...target, name: "another-volume"});
     if (fail) pendingCalls[0].reject(new Error("Unavailable")); else pendingCalls[0].resolve(plan());
     await old;
-    assert.match(r.html(), /checking mounts/);
+    assert.match(r.html(), /Checking what uses the volume/);
     assert.equal(r.context.__volumeDeletePlan, null);
     r.replace("Another dialog");
     if (fail) pendingCalls[1].reject(new Error("Unavailable")); else pendingCalls[1].resolve(plan());
@@ -108,8 +108,8 @@ test("an attached volume still asks the user to stop and unmount it", async () =
   p.longhorn.attached_node = "k3s-2";
   const r = review(async () => p);
   await r.context.volumeDelete(target);
-  assert.match(r.html(), /Stop and unmount this claim first/);
-  assert.doesNotMatch(r.html(), /Longhorn reports detached/);
+  assert.match(r.html(), /Stop the apps that use it first/);
+  assert.doesNotMatch(r.html(), /Longhorn reports the volume as detached/);
 });
 
 // #932 follow-up: a Released volume whose claim name an app uses again. The
@@ -134,7 +134,7 @@ test("a reused claim name: the review asks for that PV and sets it beside the vo
   assert.match(calls[0], /ns=lab&name=notes-data&volume=pvc-old&pv=pvc-old$/);
   const html = r.html();
   for (const text of ["pvc-old", "pv-old-uid", "Released", "pvc-new", "pv-new-uid", "Bound", "notes-7d8f"]) assert.ok(html.includes(text), text);
-  assert.match(html, /not the one/);
+  assert.match(html, /is not deleted or changed/);
   assert.match(html, /data-need="admin"/);
 });
 

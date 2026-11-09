@@ -136,8 +136,8 @@ def _helper(namespace, pvc):
     another claim is refused, never used or stopped in its place."""
     pod = _pod_status(namespace, pod_name(pvc))
     if pod is not None and _claim_of(pod) != pvc:
-        raise ValueError(f"the file browser's helper for {pvc} is in use for another volume; "
-                         "close that volume's file browser and try again")
+        raise ValueError(f"The file browser's helper for {pvc} is in use for another volume. "
+                         "Close that volume's file browser and try again.")
     return pod
 
 
@@ -169,7 +169,7 @@ def open_session(namespace, pvc):
     """Start (or reuse) the helper pod that mounts this claim."""
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
     if pvc.startswith("homestead-snapshot-files-"):
-        raise PermissionError("Snapshot copies are read-only; use their snapshot browser")
+        raise PermissionError("Snapshot copies are read-only. Use their snapshot browser.")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not browse volumes in system namespaces")
     pod = pod_name(pvc)
@@ -229,8 +229,8 @@ def _wait_ready(namespace, pod, timeout=60):
     if blocker:
         # The usual cause: a ReadWriteOnce claim still attached to its workload.
         raise ValueError(f"the file browser could not start: {blocker[:200]}")
-    raise ValueError("the file browser did not start in time; stop the workload using this "
-                     "volume and try again")
+    raise ValueError("The file browser did not start in time. Stop the app using this "
+                     "volume and try again.")
 
 
 def close_session(namespace, pvc, wait=20, sleep=time.sleep):
@@ -388,15 +388,15 @@ def read_file(namespace, pvc, path):
     if size < 0:
         raise ValueError(f"{relative} does not exist")
     if size > MAX_EDIT_BYTES:
-        raise ValueError(f"{relative} is {round(size / 1024)} KiB; only files up to "
-                         f"{MAX_EDIT_BYTES // 1024} KiB can be edited here")
+        raise ValueError(f"{relative} is {round(size / 1024)} KiB. Only files up to "
+                         f"{MAX_EDIT_BYTES // 1024} KiB can be edited here.")
     out, err = _sh(session["namespace"], session["pod"], f"cat {_quote(target)}")
     if err and not out:
         raise ValueError(err[:200])
     if b"\x00" in out:
         raise ValueError(f"{relative} looks like a binary file, so it is not editable here")
     if len(out) > MAX_EDIT_BYTES:
-        raise ValueError("the file changed size; open it again")
+        raise ValueError("The file changed size. Open it again.")
     return {"path": relative, "size": len(out), "content": out.decode("utf-8", "replace"),
             "revision": hashlib.sha256(out).hexdigest()}
 
@@ -407,7 +407,7 @@ def write_file(namespace, pvc, path, content, revision=None):
     if not relative:
         raise ValueError("choose a file to save")
     if not re.fullmatch(r"[0-9a-f]{64}", str(revision or "")):
-        raise ValueError("open the file again before saving; its revision is required")
+        raise ValueError("Open the file again before saving, because its revision is needed")
     payload = str(content if content is not None else "").encode("utf-8")
     if len(payload) > MAX_EDIT_BYTES:
         raise ValueError(f"the file is larger than {MAX_EDIT_BYTES // 1024} KiB")
@@ -421,7 +421,7 @@ def write_file(namespace, pvc, path, content, revision=None):
     acquired, err = _sh(namespace, pod,
         f"umask 077; mkdir {lk} && printf locked")
     if acquired != b"locked":
-        raise ValueError("another save holds this file; try again or inspect its .homestead-lock directory")
+        raise ValueError("Another save is using this file. Try again, or check its .homestead-lock folder.")
     digest = hashlib.sha256(payload).hexdigest()
     try:
         _, err = _sh(namespace, pod, f"umask 077; set -C; head -c {len(payload)} > {tmp}", stdin=payload or b"", timeout=60)
@@ -438,7 +438,7 @@ def write_file(namespace, pvc, path, content, revision=None):
             f"sync -f {_quote(posixpath.dirname(target))}; printf saved")
         answer, err = _sh(namespace, pod, script, timeout=60)
         if answer != b"saved":
-            raise ValueError(err[:200] or "save failed; the original or its backup is retained")
+            raise ValueError(err[:200] or "The save failed. The original or its backup is kept.")
     finally:
         # A clean-up that times out must not replace the save's own answer: the
         # file is already replaced (or the real error is on its way out).
@@ -448,7 +448,7 @@ def write_file(namespace, pvc, path, content, revision=None):
             pass
     return {"ok": True, "path": relative, "bytes": len(payload),
             "revision": digest,
-            "message": f"Saved {relative} ({len(payload)} bytes); previous contents kept as "
+            "message": f"Saved {relative} ({len(payload)} bytes). The previous contents are kept as "
                        f"{posixpath.basename(relative)}.homestead-bak"}
 
 
@@ -509,7 +509,7 @@ def _paths(paths):
     """Paths inside the volume, never the volume itself."""
     out = [safe_path(p) for p in (paths if isinstance(paths, list) else [paths])]
     if not out or any(not p for p in out):
-        raise ValueError("choose what to change; the volume itself cannot be")
+        raise ValueError("Choose what to change. The volume itself cannot be changed.")
     return out
 
 
@@ -774,7 +774,7 @@ def upload(namespace, pvc, path, name, data, offset=0, final=False, token=""):
     t, p = _quote(target), _quote(part)
     start = f"[ -d {_quote(_full(folder))} ] || {{ echo 'no such folder' >&2; exit 1; }}; " + (
         f"umask 022; : > {p}; " if offset == 0 else
-        f"[ \"$(stat -c %s {p} 2>/dev/null)\" = {offset} ] || {{ echo 'the upload lost its place; start it again' >&2; exit 1; }}; ")
+        f"[ \"$(stat -c %s {p} 2>/dev/null)\" = {offset} ] || {{ echo 'the upload lost its place, so start it again' >&2; exit 1; }}; ")
     finish = f"; mv -f -- {p} {t}" if final else ""
     _run(namespace, pvc, f"{start}head -c {len(payload)} >> {p}{finish}", stdin=payload, timeout=300)
     return {"ok": True, "token": token, "received": offset + len(payload), "done": bool(final)}

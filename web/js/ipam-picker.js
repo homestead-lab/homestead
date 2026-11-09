@@ -1,6 +1,6 @@
 /* An address field's IPAM button: any <input data-ipam> gets a small button
    inside its box that lists free addresses from Networking › IP addresses -
-   not documented, not answering a scan, outside the DHCP range and the VIP
+   not documented, not answering a scan, outside the DHCP range and the virtual IP
    pools - and puts the one picked in the field. data-ipam="multi" adds to a
    comma-separated list instead of replacing it. docs/design.md, "Address
    fields". */
@@ -75,7 +75,7 @@ async function ipamPickFor(input, button) {
   const taken = new Set(String(input.value || "").split(/[\s,]+/).filter(Boolean));
   const withFree = subnets.filter(s => (s.free || []).length);
   pop.innerHTML = `<div class="ipam-pop-head"><b>Free addresses</b>
-      <span class="dim xs">Outside DHCP and the VIP pools, and not answering a scan</span></div>
+      <span class="dim xs">Outside DHCP and the virtual IP pools, and not answering a scan</span></div>
     ${withFree.length ? withFree.map(s => `<div class="ipam-pop-subnet">
         <div class="ipam-pop-cidr">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""}</div>
         <div class="ipam-pop-list">${s.free.map(ip => `<button type="button" class="${taken.has(ip) ? "on" : ""}" data-ip="${esc(ip)}">${esc(ip)}</button>`).join("")}</div>

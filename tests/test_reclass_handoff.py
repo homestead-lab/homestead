@@ -748,7 +748,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
         def edit():
             cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"] = "Recycle"
             self.status(cluster, self.OLD_PV)
-        with self.before_review("retain-original", edit), self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.before_review("retain-original", edit), self.assertRaisesRegex(journal.Held, "changed after the review"):
             CutoverTests().finish(cluster)
         self.assertEqual([], self.retains(cluster))
         self.assertEqual("Recycle", cluster.objects[self.OLD_PV]["spec"]["persistentVolumeReclaimPolicy"])

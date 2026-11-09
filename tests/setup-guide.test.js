@@ -117,7 +117,7 @@ test("SMB and LAN network steps remain admin-only and expose the configuration a
   vm.runInContext("eval(SETUP_STEPS.lan.actions({})[0].run)",ctx);
   vm.runInContext("eval(SETUP_STEPS.smb.actions({}).find(a=>a.pri).run)",ctx);
   assert.deepEqual(opened,["network","hardware","settings"]);
-  assert.match(vm.runInContext("SETUP_CHECKS.lan",ctx),/not connectivity/);
+  assert.match(vm.runInContext("SETUP_CHECKS.lan",ctx),/not the connection/);
   assert.match(vm.runInContext("SETUP_CHECKS.smb",ctx),/not that clients can access/);
   state.admin=false;assert.equal(ids().includes("lan"),false);assert.equal(ids().includes("smb"),false);
 });

@@ -129,7 +129,7 @@ def _migrate_samba_locked(legacy):
                     break
                 time.sleep(1.5)
             else:
-                raise ValueError("homestead-smb did not become ready; the former Samba workload was restored")
+                raise ValueError("homestead-smb did not become ready, so the former Samba app was restored")
         ksend("DELETE", old_dep_path)
     except Exception as error:
         recovery = []
@@ -148,7 +148,7 @@ def _migrate_samba_locked(legacy):
             except Exception as failure:
                 recovery.append(str(failure)[:120])
         if recovery:
-            raise RuntimeError(f"SMB migration failed: {error}; recovery needs attention: "
+            raise RuntimeError(f"SMB migration failed: {error}. Recovery needs attention: "
                                + "; ".join(recovery)) from error
         raise
     _cache.pop("wl", None); _cache.pop("network", None)
@@ -262,7 +262,7 @@ def set_samba(enabled, address=""):
             ksend("PATCH", _smb_path("deployments", name), {"spec": {"replicas": 0}},
                   ctype="application/merge-patch+json")
         _cache.pop("wl", None)
-        return {"ok": True, "detail": "Samba is stopping; the shares, their volumes and passwords are kept"}
+        return {"ok": True, "detail": "Samba is stopping. The shares, their volumes and passwords are kept."}
     if not state["installed"]:
         install_samba(address)
         rows, credentials, *_ = SHARES._state()
@@ -301,7 +301,7 @@ def repair_samba(address=""):
         install_samba(address)
         result = SHARES.reconcile_samba(SAMBA_IMAGE, retry_recovery=True)
     _cache.pop("wl", None)
-    return {"ok": True, "detail": "SMB mappings checked; recovered storage must pass the stability check before shares return" if result["state"] == "current"
+    return {"ok": True, "detail": "SMB settings checked. Recovered storage must pass the stability check before the shares return." if result["state"] == "current"
             else "SMB is being repaired from the saved shares", "server": samba_state()}
 
 
@@ -366,7 +366,7 @@ def _nfs_deployment(rows, address=""):
     if not selected:
         raise ValueError("choose at least one NFS export in Network Shares first")
     if PLATFORM.detect().get("load_balancer") == "servicelb":
-        raise ValueError("NFS needs a dedicated VIP that preserves client IPs; install kube-vip under Cluster Add-ons first")
+        raise ValueError("NFS needs its own virtual IP that keeps client IP addresses. Install kube-vip under Cluster Add-ons first.")
     cfg = {"name": NFS.NAME, "container_name": NFS.NAME, "namespace": SMB_NAMESPACE,
            "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
            "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
@@ -413,7 +413,7 @@ def set_nfs(enabled, address=""):
                 ksend("PATCH", path, {"spec": {"replicas": 0}},
                       ctype="application/merge-patch+json")
             _cache.pop("wl", None)
-            return {"ok": True, "detail": "NFS stopped; exports, shares and every PVC were kept"}
+            return {"ok": True, "detail": "NFS stopped. Exports, shares and every volume were kept."}
         rows = _nfs_inventory(current)
         _nfs_exports(rows)
         if not any(row.get("nfs_clients") for row in rows):
@@ -434,7 +434,7 @@ def set_nfs(enabled, address=""):
             ksend("PATCH", path, {"spec": {"replicas": 1}},
                   ctype="application/merge-patch+json")
         _cache.pop("wl", None)
-        return {"ok": True, "detail": "NFS is starting; exports use NFSv4/TCP on port 2049"}
+        return {"ok": True, "detail": "NFS is starting. Exports use NFSv4 over TCP on port 2049."}
 
 
 def remove_nfs():
@@ -483,7 +483,7 @@ def set_nfs_export(name, clients, read_only=True):
                 pass
             raise
         return {"ok": True, "exports": nfs_state()["exports"],
-                "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
+                "detail": f"NFS export for {name} {'set' if clients else 'removed'}. Its volume was kept."}
 
 
 # Changing a share restarts the Samba server that serves it, and removing one

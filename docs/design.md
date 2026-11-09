@@ -390,6 +390,40 @@ Use rail sections when the user must complete several tasks. Never hide a
 blocker, destructive consequence, recovery instruction or required consent in
 a tooltip. Keep examples concise and use neutral, professional wording.
 
+**Clear, professional English.** Homestead is Kubernetes made easy. Every
+string a person reads - labels, help, notices, alerts, server messages and the
+wiki - follows the house style below. Keep text short by leaving things out,
+never by clipping the grammar.
+
+1. **Neutral voice.** Describe what happens, without "you" or "your": *"Apps
+   keep running while the copies move."* Instructions use the imperative:
+   *"Copy the token."* Use "you" only where a sentence cannot be written
+   without it.
+2. **Everyday words; the Kubernetes term on hover.** Say *copy*, *app*,
+   *volume*, *host*, *shared folder*. Put the Kubernetes or Longhorn term
+   (replica, pod, PersistentVolumeClaim, StatefulSet) in a `tip()` or in
+   Details for those who want it. Keep a term on screen only where it is the
+   name of the thing the person types or picks (a namespace field, a YAML
+   view).
+3. **Headings are plain noun phrases**: *"Volume copies"*, *"Effects and
+   risks"*, *"Why these volumes are kept"*. Not *"Its copies"*, *"What
+   happens"*, *"On or off?"*, and not questions.
+4. **Short sentences, one idea each**, each with a subject and a verb.
+   *"Runs apps and helps manage the cluster."* Not *"Also an etcd vote: three
+   keep the cluster up."* Prefer a full stop to a dash, a semicolon or a
+   colon; use a colon only to introduce a list, a value or an example. The
+   reasons go in Details.
+5. **Warnings are calm and factual.** State the consequence plainly and let
+   the person decide: *"Anything that copy saves after the switch is lost."*
+   No "Warning:" prefixes and no capitals for emphasis.
+6. **Buttons are a verb and an object**: *"Move copies"*, *"Review deletion"*,
+   *"Lower to 1 copy"*. Not *"Move"* alone, and not a number alone.
+
+Also: use the ordinary word, with no metaphors (nothing *sits*, *lands*,
+*lets go* or *catches up*) and no *say* as an aside; use one name for one
+thing everywhere; say what happens to the person's apps and data before how
+it works.
+
 ### Dialog shapes
 
 Every dialog is one of five shapes, built by `UI.dialog(spec)` so they read

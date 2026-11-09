@@ -122,6 +122,12 @@ def _unsettled(state):
     return any(e["state"] != "accepted" for e in state["journal"]["ref"]["storage_writes"])
 
 
+def _ended(text):
+    """A message ready for another sentence after it."""
+    text = str(text).rstrip()
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
 def recovery_help(namespace, state):
     if _unsettled(state):
         return (" Recovery needs every request's outcome, so settle this one by hand first: "
@@ -180,12 +186,12 @@ def progress(anchor, now):
                "Completion evidence is incomplete. Review the retained move record before continuing." if incomplete_done else
                "A request has no verified outcome. Nothing will be retried automatically." if held else
                "Waiting for the durable move record. Homestead has not been stopped." if preparing else
-               "The worker has not reported recently. The last verified stage is shown; do not assume the move is running." if status == "unknown" else
+               "The worker has not reported recently. The last confirmed stage is shown. Do not assume the move is running." if status == "unknown" else
                "Waiting for confirmation of the current request. It will not be sent again." if pending else
-               "Returning Homestead to its original volume; waiting for mount release and verified startup." if recovering else DESCRIPTIONS[phase])
+               "Returning Homestead to its original volume. Waiting for the volume to be released and for Homestead to start." if recovering else DESCRIPTIONS[phase])
     help_fields = {}
     if held and not preparing and state.get("plan", {}).get("worker"):
-        message += recovery_help(anchor.namespace, state)
+        message = _ended(message) + recovery_help(anchor.namespace, state)
         help_fields.update(recovery_fields(anchor.namespace, state))
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
@@ -244,20 +250,20 @@ class Runner:
                 view.update(status="held", message=self.hold, requires_review=True)
                 if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
                     view.pop("recovery_command", None)
-                    view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
+                    view.update(message=_ended(self.hold) + recovery_help(self.namespace, anchor.state),
                                 **recovery_fields(self.namespace, anchor.state))
             elif self.retry_reason and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message=f"This coordinator has not taken over yet and is retrying: {self.retry_reason}. " + view["message"])
             elif self.host_down and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message=self.host_down)
             elif self.replacing and view["status"] not in ("done", "cancelled", "held"):
-                view.update(message="A new coordinator is waiting for the previous one to stop; it changes nothing until then. " + view["message"])
+                view.update(message="A new coordinator is waiting for the previous one to stop. It changes nothing until then. " + view["message"])
             elif self.outage_since is not None and view["status"] != "done":
-                view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
+                view.update(message="The Kubernetes API is not answering. The move tries again and repeats no request. " + view["message"])
             elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"
                     and self.clock() - self.start_wait >= READY_WARN):
                 view.update(message=f"Homestead has not become ready on the new volume for {READY_WARN // 60} minutes. Both volumes "
-                            "are retained. Check the new pods' logs; the move finishes by itself once they are ready.")
+                            "are kept. Check the new pods' logs. The move finishes by itself once they are ready.")
             return view
         except Exception:
             return unavailable_status(self.operation)
@@ -355,7 +361,7 @@ class Runner:
                 # Before anything is written: the record, not this pod's environment, says what was reviewed.
                 if self.config is not None and "pointer_receipt" in anchor.state and anchor.state.get("setup", {}).get("config") != self.config:
                     self.acting = True  # refused for good, and said on its page; it writes nothing
-                    raise Held("This coordinator's configuration differs from the move's record; it changes nothing")
+                    raise Held("This coordinator's settings differ from the move's record, so it changes nothing")
                 if "pointer_receipt" in anchor.state and not self._acts(anchor):
                     return self.snapshot()
                 if anchor.state.get("runtime", {}).get("state") == "held":
@@ -372,7 +378,7 @@ class Runner:
                     from homestead_self_data_bootstrap import complete
                     setup = anchor.state.get("setup")
                     if not setup or not complete(setup) or "admission" not in setup:
-                        raise Held("The coordinator has no complete helper setup receipts; Homestead was not stopped")
+                        raise Held("The coordinator has no complete records of its helper setup, so Homestead was not stopped")
                 admit = self.admit
                 if admit is None:
                     from homestead_self_data_admission import Admitter
@@ -399,7 +405,7 @@ class Runner:
                     self._save_hold()
             except Exception as error:
                 if not self._retry_later(error):
-                    self.hold = "The data move worker could not verify its next step. Both volumes are retained; review before continuing."
+                    self.hold = "The data move worker could not confirm its next step. Both volumes are kept. Review it before continuing."
                     self._save_hold()
             return self.snapshot()
         finally:
@@ -411,7 +417,7 @@ class Runner:
         if A.stop_check_expired(anchor.state, self.clock()):
             # This move can never stop Homestead now: no wait can help it.
             self.host_down = None
-            self.hold = (f"{names} is down, and this move's copy check has expired, so it can't stop Homestead now. Homestead was not "
+            self.hold = (f"{names} is down, and this move's copy check has expired, so it cannot stop Homestead now. Homestead was not "
                          "stopped. Go back to the original volume, which writes nothing and does not need that host.")
             self._save_hold()
             return None
@@ -427,12 +433,12 @@ class Runner:
                 f"{_names([h for h in hosts if h not in removed])} is down. The move has passed the point where it can stop, so it waits with no limit and "
                 "carries on when it is back. " + (
                     f"{_names(removed)} was removed: Homestead's pod on it leaves Kubernetes by itself and a new one carries on."
-                    if removed else "Bring it back; if it won't come back, see docs/data-move-recovery.md, "
+                    if removed else "Bring it back. If it does not come back, see docs/data-move-recovery.md, "
                     "\"A host that never comes back\"."))
         self._wait_for(anchor, "host", HOST_LIMIT,
             f"{names} has been down for {HOST_LIMIT // 60} minutes, so the move stopped waiting. Nothing was forced and "
             "both volumes are retained. Bring it back, or go back to the original volume unless that is on it too.",
-            f"{names} is down. The move waits for it and carries on when it is back; after {HOST_LIMIT // 60} minutes it holds for a review.")
+            f"{names} is down. The move waits for it and continues when it is back. After {HOST_LIMIT // 60} minutes, it holds for a review.")
 
     def _wait_for(self, anchor, key, limit, held, waiting):
         """Sent nothing; every check runs again next tick. The start is in the record, so
@@ -485,7 +491,7 @@ class Runner:
         if now - self.outage_since < OUTAGE_LIMIT:
             return True
         self.hold = (f"The Kubernetes API did not answer for {OUTAGE_LIMIT // 60} minutes, so the move stopped here. "
-                     "Both volumes are retained; review the move before continuing.")
+                     "Both volumes are kept. Review the move before continuing.")
         self._save_hold()
         return True
 

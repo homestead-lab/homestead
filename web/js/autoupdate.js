@@ -36,8 +36,8 @@ window.wlUpdateMode = (ns, name) => {
   modal(`Updates · ${name}`, `<div class="ui-stack">
     ${UI.lead(esc(`How ${name} gets new images. Either way, Containers shows when one is waiting.`))}
     <div class="answer-modes">
-      ${option("manual", "When I choose", "You review each update and install it with Update.")}
-      ${option("auto", "Automatically", `In ${maintenanceWords(policy)}: a newer build of the tag it follows, never a new version. Its Longhorn volumes are snapshotted first, and if it stops answering afterwards the old image comes back and you are told.`)}
+      ${option("manual", "Manually", "Each update is reviewed and installed with Update.")}
+      ${option("auto", "Automatically", `In ${maintenanceWords(policy)}: a newer build of the tag it follows, never a new version. Its Longhorn volumes are snapshotted first. If it stops responding afterwards, the old image is restored and an alert is raised.`)}
     </div>
     ${blocked ? UI.callout("warn", "The cluster policy is notify only", "Nothing updates automatically until an admin changes it under Settings › Updates.") : ""}
     ${last ? `<div class="dim small">Last automatic update: ${esc(last.status === "succeeded" ? "worked" : last.status === "failed" ? "rolled back or stopped" : "under way")} · ${esc(last.message || "")}</div>` : ""}

@@ -107,7 +107,7 @@ class SnapshotDeleteTests(unittest.TestCase):
         self.snap["status"]["markRemoved"] = True
         state, pct, message = sd.resolve(item)
         self.assertEqual(("running", 20), (state, pct))
-        self.assertIn("fresh snapshot", message)
+        self.assertIn("new snapshot", message)
         self.assertEqual([], self.sent)
 
     def test_purge_progress_and_errors(self):

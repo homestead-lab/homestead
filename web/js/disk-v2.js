@@ -9,28 +9,28 @@ function diskV2Region(plan, scope={}) {
   const label=row=>selected(row)?(scope.label||'Erase contents'):contains(row)?'Contains selected volume':'Keep';
   const physical=(root.children||[]).filter(r=>r.kind==='part').sort((a,b)=>(a.start_bytes||0)-(b.start_bytes||0));
   const directLogical=(root.children||[]).filter(r=>r.kind!=='part');
-  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?(scope.label?'allocation-selected':'erase'):contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' - '+label(row))}"><span>${esc(label(row))}</span></span>`;
+  const segment=(row,width)=>`<span class="pmap-seg ${selected(row)?(scope.label?'allocation-selected':'erase'):contains(row)?'lvm':'sys'}" style="flex:${Math.max(0.01,width)}" title="${esc(row.path+' · '+label(row))}"><span>${esc(label(row))}</span></span>`;
   let cursor=0,bar='';
   for(const row of physical) {
     const start=Number(row.start_bytes)||cursor;
-    if(start>cursor) bar+=`<span class="pmap-seg free" style="flex:${start-cursor}" title="Other space - keep"></span>`;
+    if(start>cursor) bar+=`<span class="pmap-seg free" style="flex:${start-cursor}" title="Other space · kept"></span>`;
     bar+=segment(row,row.size_bytes);cursor=start+row.size_bytes;
   }
   if(directLogical.length) bar=segment(root,root.size_bytes);
-  else if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space - keep"></span>`;
+  else if(root.size_bytes>cursor) bar+=`<span class="pmap-seg free" style="flex:${root.size_bytes-cursor}" title="Other space · kept"></span>`;
   function rows(row,depth=0) {
     const children=row.children||[],logical=row.kind==='lvm',isSelected=selected(row);
     return `<div class="disk-v2-layout-row ${isSelected?(scope.label?'maintenance-selected':'selected'):''}">
-      <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' - '+esc((row.mountpoint==='/'?'Host OS ':row.mountpoint.startsWith('/boot')?'Boot ':'')+row.mountpoint):''}</span></div>
+      <div><strong>${esc(row.path)}</strong><span>${esc(logical?'Logical volume':row.kind==='part'?'Partition':'Disk')}${row.mountpoint?' · '+esc((row.mountpoint==='/'?'Host OS ':row.mountpoint.startsWith('/boot')?'Boot ':'')+row.mountpoint):''}</span></div>
       <span>${esc(diskV2GiB(row.size_bytes))}</span><b>${esc(label(row))}</b>
     </div>`+(children.length?`<div class="disk-v2-layout-children">${children.some(r=>r.kind==='lvm')?'<p class="ui-help">Logical volumes share this '+(row.kind==='disk'?'disk':'partition')+': the order below is not their position on it.</p>':''}${children.map(r=>rows(r,depth+1)).join('')}</div>`:'');
   }
   return `<div class="disk-v2-layout" aria-label="${esc(scope.label?'Disk layout and maintenance scope':'Disk layout and erase scope')}">
-    <div class="sec">${esc(root.path)} - ${esc(diskV2GiB(root.size_bytes))}</div>
+    <div class="sec">${esc(root.path)} · ${esc(diskV2GiB(root.size_bytes))}</div>
     <div class="pmap" role="img" aria-label="${esc(scope.label?'Physical partitions. The list identifies the selected logical volume and the regions to keep.':'Physical partitions. The list below identifies the contents to erase and the regions to keep.')}">${bar}</div>
     ${directLogical.length?rows(root):physical.map(row=>rows(row)).join('')}
     <p class="ui-help">${scope.summary?esc(scope.summary):`Erase all contents of <strong>${esc(plan.device)}</strong> (${esc(plan.mountpoint||'dedicated Longhorn filesystem')}). Keep its size and boundary.`}</p>
-  </div>`+(scope.label?'':UI.more('Device identity and checks',UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device||plan.device)}</span>`],['Disk access','AIO; Linux keeps control of the physical disk']])+ '<p class="ui-help">System files, shared mounts or leftover replica files stop it. Other partitions and logical volumes are kept.</p>'));
+  </div>`+(scope.label?'':UI.more('Device identity and checks',UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device||plan.device)}</span>`],['Disk access','AIO. Linux keeps control of the physical disk.']])+ '<p class="ui-help">System files, shared mounts or leftover replica files stop it. Other partitions and logical volumes are kept.</p>'));
 }
 const diskV2Post = (path, body) => api(`/api/disks/v2/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 function diskV2Reset() {
@@ -57,7 +57,7 @@ window.diskV2Open = async (node,disk) => {
     host.innerHTML=UI.lead('Move its V1 replicas off, then prepare it for V2.') +
       UI.steps([{title:'Evacuate V1'},{title:'Review erase'},{title:'V2 ready'}],0) +
       UI.facts([['Host',esc(plan.node)],[plan.region_kind==='lvm'?'Logical volume':plan.region_kind==='part'?'Partition':'Device',`<span class="mono">${esc(plan.device)}</span>`],['Disk size',esc(diskV2GiB(plan.size_bytes))],['Next step',plan.blockers.length?UI.chip('Needs attention','warn'):UI.chip('Ready to evacuate','ok')]]) +
-      (plan.blockers.length?UI.callout('warn','Evacuation cannot start',`<ul class="ui-list">${plan.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`):UI.callout('info','Erasing is approved separately','Nothing is erased now. Once its replicas are healthy elsewhere, you review the erase.')) +
+      (plan.blockers.length?UI.callout('warn','Evacuation cannot start',`<ul class="ui-list">${plan.blockers.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`):UI.callout('info','Erasing is approved separately','Nothing is erased now. Once its volume copies are healthy on other disks, the erase is reviewed.')) +
       diskV2Region(plan) + diskV2Volumes(plan.volumes,true) +
       UI.more('V1 and V2 capacity','<p class="ui-help">A V2 disk takes no V1 replicas. If every host already holds a copy, add a V1 disk or host first. No volume changes engine.</p>') +
       (!plan.blockers.length?UI.ack('diskV2Confirm','Stop new replicas here and move these off',{onchange:"$('#diskV2Begin').disabled=!this.checked"}):'') +
@@ -95,7 +95,7 @@ window.diskV2Watch = async id => {
       if(sequence!==diskV2Sequence || $('#diskV2Status')!==host || $('#modal')?.classList.contains('hidden')) return;
       diskV2Paint(item);window.noteOperation?.(item);
       if(['succeeded','failed','cancelled'].includes(item.status)) return;
-    } catch(e) {if($('#diskV2Status')===host) {host.__snapshot=null;host.innerHTML=UI.callout('warn','Task status unavailable',esc(e.message)+' Checking again; completion is not assumed.');}}
+    } catch(e) {if($('#diskV2Status')===host) {host.__snapshot=null;host.innerHTML=UI.callout('warn','Task status unavailable',esc(e.message)+'. Checking again. Completion is not assumed.');}}
     if(sequence===diskV2Sequence && $('#diskV2Status')===host) diskV2Timer=setTimeout(poll,4000);
   }
   await poll();
@@ -109,7 +109,7 @@ function diskV2Paint(item) {
   host.innerHTML=UI.lead(esc(item.message)) + UI.steps([{title:'Evacuate V1'},{title:'Review erase'},{title:'V2 ready'}],stage) +
     UI.facts([['Host',esc(item.node)],['Device',`<span class="mono">${esc(item.device)}</span>`],['State',UI.chip(label,done || item.needs_erase_review?'ok':stopped?'warn':'')],['V1 replicas on disk',esc(item.remaining)]]) +
     (!stopped && !item.needs_erase_review?UI.progress(item.progress,{label:'Disk preparation',detail:'Reopen this saved task from Jobs.'}):'') +
-    (item.needs_erase_review?UI.callout('info','Evacuation finished','Its replicas are healthy elsewhere. Nothing is erased until you review it.'):item.status==='failed'?UI.callout('warn','Inspect before continuing','It is not retried. Some changes may remain: check the device and the task log.'):done?UI.callout('ok','Block disk ready','Volumes keep their engine. Change storage class copies one to V2, stopping its apps.'):item.status==='cancelled'?UI.callout('info','Filesystem kept','The disk takes no new replicas; allow them again from its actions.'):'') +
+    (item.needs_erase_review?UI.callout('info','Volume copies moved off','Its volume copies are healthy on other disks. Nothing is erased until the erase is reviewed.'):item.status==='failed'?UI.callout('warn','Check before continuing','It is not retried. Some changes may remain, so check the device and the task log.'):done?UI.callout('ok','Block disk ready','Volumes keep their engine. Change storage class copies one to V2, stopping its apps.'):item.status==='cancelled'?UI.callout('info','Filesystem kept','The disk takes no new volume copies. Allow them again from its actions.'):'') +
     diskV2Volumes(item.volumes) +
     UI.actions(UI.cancel('Close') +
       (item.needs_erase_review?UI.button('Review erase',`diskV2EraseReview(${jsArg(item.id)})`,{kind:'pri',attrs:'data-need="admin"'}):done?UI.button('V2 storage class',"closeModal();storageClassCreate({engine:'v2'})",{kind:'pri',attrs:'data-need="admin"'}):''),

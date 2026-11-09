@@ -186,7 +186,7 @@ window.logoFixup = async () => {
   const named = rows.filter(r => r.suggestion?.match === "name").length, none = rows.length - charts - images - named;
   const parts = [charts && `${charts} from their Helm chart`, images && `${images} match their image`, named && `${named} by name only`, none && `${none} not found`].filter(Boolean);
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.lead(esc(`${rows.length} app${rows.length === 1 ? "" : "s"} have no logo: ${parts.join(", ")}. Tick the ones to use; chart and image matches are ticked for you.`))}
+    ${UI.lead(esc(`${rows.length} app${rows.length === 1 ? "" : "s"} have no logo: ${parts.join(", ")}. Tick the ones to use. Matches by chart or image are already ticked.`))}
     <div class="logo-fix">${rows.map((r, i) => {
       const s = r.suggestion;
       return `<div class="logo-fix-row">

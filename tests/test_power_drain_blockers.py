@@ -2,7 +2,7 @@
 
 Before anything is cordoned, the review lists what homestead_drain_blockers
 finds on the host - orphan records, engines that run elsewhere, a pod stuck
-terminating, an attachment left behind, a list it couldn't read - and a
+terminating, an attachment left behind, a list it could not read - and a
 person acknowledges each one ("drain anyway") before the normal cordon and
 drain start. A forced action sends no drain, so it skips them, and the check
 after the drain does not compare them: what a person accepted is not asked
@@ -27,7 +27,7 @@ from fakes.kube import Kube
 from rebind import keep_bound
 from test_drain_blockers import attachment, claim, engine, engine_orphan, instance_manager, pod
 
-ERROR = "acknowledge each drain blocker (or remove the orphan records) before host power control"
+ERROR = "Confirm each drain blocker, or remove the orphaned records, before restarting or shutting down the host"
 
 
 def host(name, uid):
@@ -132,7 +132,7 @@ class DrainBlockerReviewTests(unittest.TestCase):
             plan = power.plan("node-a", "reboot")
         self.assertEqual(["unread"], [row["kind"] for row in plan["drain_blockers"]])
         self.assertTrue(plan["requires_blocker_ack"])
-        self.assertIn("couldn't check", plan["drain_blockers"][0]["what"])
+        self.assertIn("could not check", plan["drain_blockers"][0]["what"])
 
     def test_the_reads_go_through_the_reviews_own_reader(self):
         seen = []

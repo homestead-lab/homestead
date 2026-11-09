@@ -125,7 +125,7 @@ class UplinkTests(unittest.TestCase):
     def test_a_host_with_an_uplink_already_is_changed_not_added(self):
         self.fake.vcs = [vlanconfig("data-all", "data", ["enp2s0"])]
         plan = UP.preview({"cluster_network": "data", "nodes": ["h1"], "nics": ["enp3s0"]}, PROBES)
-        self.assertIn("change that one instead", " ".join(plan["refusals"]))
+        self.assertIn("Change that one instead", " ".join(plan["refusals"]))
 
     def test_change_names_every_host_and_the_vms_in_the_way(self):
         self.fake.vcs = [vlanconfig("data-all", "data", ["enp2s0"])]

@@ -148,7 +148,7 @@ def apply(dep, request):
             if mode not in MODES:
                 raise ValueError(f"{target}: the rule is prefer or require")
             if (target_ns, target) == (ns, name):
-                raise ValueError("a workload is kept with or apart from others; spreading is how it keeps from itself")
+                raise ValueError("An app is kept with or apart from other apps. Spreading is how it keeps its own pods apart.")
             if (target_ns, target) in seen:
                 raise ValueError(f"{target} is named twice" + (
                     "; it cannot be kept both with and apart" if seen[(target_ns, target)] != key else ""))

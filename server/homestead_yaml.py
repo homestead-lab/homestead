@@ -154,7 +154,7 @@ class _Lines:
                 continue
             if stripped in ("---", "...") and not raw.startswith(" "):
                 if stripped == "---" and self.rows:
-                    raise YamlError("only one document is read; this starts a second", number)
+                    raise YamlError("Only one document is read, and this starts a second", number)
                 continue
             self.rows.append((number, len(text) - len(text.lstrip(" ")), stripped))
         self.i = 0

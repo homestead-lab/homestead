@@ -392,7 +392,7 @@ class AuditTests(DataDir):
             entries, unread = self.audit()
         self.assertLess(len(entries), 200)
         self.assertTrue(entries)
-        self.assertEqual(["the newest 4 KiB of the audit log were read; older lines are not shown"],
+        self.assertEqual(["the newest 4 KiB of the audit log were read, and older lines are not shown"],
                          [u["reason"] for u in unread])
 
     def test_cut_or_garbled_lines_are_skipped(self):

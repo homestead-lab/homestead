@@ -29,9 +29,9 @@ const blockedProfile = { label: "Needs Kubernetes design", level: "dependency", 
 const app = profile => ({ key: "homepage", name: "Homepage", repo: "ghcr.io/example/homepage", categories: ["Tools"],
   deploy: { name: "homepage", volumes: [SOCKET], app_profile: profile } });
 
-async function details(answer) {
+async function details(answer, key = "homepage") {
   context.api = async () => answer;
-  await context.storeDetails("homepage");
+  await context.storeDetails(key);
   return elements["#mbody"].innerHTML;
 }
 
@@ -53,6 +53,20 @@ test("a template Details cannot draw shows an error with Try again", async () =>
   const html = await details({ ...app(blockedProfile), categories: 5 });
   assert.match(html, /This app could not be shown/);
   assert.match(html, /storeDetails\(/);
+});
+
+// From #1297: an app with no compatibility profile, and Try again recovering.
+test("Details opens for an app without a compatibility profile", async () => {
+  const html = await details({ key: "homepage", name: "Example", repo: "example/app:latest", desc: "An example app." }, "example");
+  assert.match(html, /An example app/);
+  assert.doesNotMatch(html, /reading the template|Try again/);
+});
+
+test("after a drawing failure, Try again can show the app", async () => {
+  assert.match(await details({ ...app(blockedProfile), categories: 42 }), /Try again/);
+  const html = await details({ key: "homepage", name: "Example", categories: [], desc: "Recovered details." });
+  assert.match(html, /Recovered details/);
+  assert.doesNotMatch(html, /Try again|reading the template/);
 });
 
 test("Deploy finds the socket by the container path or by the host path behind it, in any container", () => {

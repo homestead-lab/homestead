@@ -256,7 +256,7 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(before, len(c.sent))
 
     def test_source_rebound_or_claim_replaced_blocks(self):
-        for path, mutate in (("/api/v1/namespaces/lab/persistentvolumeclaims/source", lambda o: o["metadata"].update(uid="replacement")),
+        for path, mutate in (("/api/v1/namespaces/lab/persistentvolumeclaims/source", lambda o: o["metadata"].update(uid="replacing it")),
                              ("/api/v1/persistentvolumes/old-pv", lambda o: o["spec"]["claimRef"].update(uid="other"))):
             c = Cluster(); mutate(c.objects[path]); before = len(c.sent)
             with self.assertRaises(Held): c.step()
@@ -362,7 +362,7 @@ class CoordinatorTests(unittest.TestCase):
     def test_copy_log_pod_replacement_is_rejected(self):
         c = self.c; c.copying(); c.finish_copy(); worker = c.worker()
         def logs(_):
-            c.objects["/api/v1/namespaces/lab/pods/copy-pod"]["metadata"]["uid"] = "replacement"
+            c.objects["/api/v1/namespaces/lab/pods/copy-pod"]["metadata"]["uid"] = "replacing it"
             return c.logs_text
         worker.logs = logs
         with self.assertRaisesRegex(Held, "replaced"): worker.step()
@@ -450,7 +450,7 @@ class CoordinatorTests(unittest.TestCase):
     def test_stale_coordinator_cannot_continue_after_control_record_advanced(self):
         c = self.c; stale = c.worker(); c.step()
         before = len(c.sent)
-        with self.assertRaisesRegex(Held, "advanced elsewhere"): stale.step()
+        with self.assertRaisesRegex(Held, "moved on elsewhere"): stale.step()
         self.assertEqual(before, len(c.sent))
 
     def test_no_restart_until_copy_pod_is_gone_even_if_job_is_gone(self):
@@ -534,7 +534,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
             self.c.objects[self.c.dep_path]["spec"]["replicas"] = 3
             self.status()
         self.before_review("stop", edit)
-        with self.assertRaisesRegex(Held, "changed after review"):
+        with self.assertRaisesRegex(Held, "changed after the review"):
             self.c.step()
         self.assertEqual([], self.puts())
         self.assertEqual(3, self.c.objects[self.c.dep_path]["spec"]["replicas"])
@@ -575,7 +575,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
             c.objects[c.dep_path]["metadata"]["finalizers"] = ["example.com/keep"]
             self.status()
         self.admission_changes("switch", edit)
-        with self.assertRaisesRegex(Held, "changed after review"):
+        with self.assertRaisesRegex(Held, "changed after the review"):
             c.step()
         self.assertEqual(before, len(self.puts()))
         self.assertEqual(["example.com/keep"], c.objects[c.dep_path]["metadata"]["finalizers"])

@@ -25,7 +25,7 @@ function setup({blocked=false,missing=false,fail=false}={}){
 test("recovery requires exact name and late-effect acknowledgement and sends once",async()=>{
   const t=setup();await t.ctx.powerRecoveryReview("job");
   assert.match(t.fields["#mbody"].innerHTML,/&lt;guest>/);
-  assert.match(t.fields["#mbody"].innerHTML,/not a retry, rollback, cancellation or proof of success/);
+  assert.match(t.fields["#mbody"].innerHTML,/does not retry, roll back or cancel anything, and it does not confirm success/);
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
   t.fields["#powerRecoveryAck"].checked=true;t.fields["#powerRecoveryName"].value="wrong";
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
@@ -72,7 +72,7 @@ test("VM save recovery uses its own endpoint, escaped receipts and truthful rete
   await t.ctx.powerRecoveryReview('job',true);
   assert.equal(t.sent[0].path,'/api/operations/vm-recovery/preview');
   const html=t.fields['#mbody'].innerHTML;
-  assert.match(html,/Resolve tracking, keep resources/);assert.match(html,/Secret · lab\/&lt;login>/);
+  assert.match(html,/Stop tracking and keep the resources/);assert.match(html,/Secret · lab\/&lt;login>/);
   assert.match(html,/replacement; not adopted/);assert.doesNotMatch(html,/separately reviewed power action/);
   t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='guest';
   await t.ctx.powerRecoveryResolve();await t.ctx.powerRecoveryResolve();
@@ -93,8 +93,8 @@ test("batch recovery lists unsent VMs and confirms the batch name, not a single 
   };
   await t.ctx.powerRecoveryReview('batch-job',true);
   const html=t.fields['#mbody'].innerHTML;
-  assert.match(html,/planned VMs and retained resources/);assert.match(html,/agent-1/);assert.match(html,/Not sent/);
-  assert.match(html,/Stop tracking batch/);assert.match(html,/releases this job's block on moving Homestead data/);
+  assert.match(html,/planned VMs and kept resources/);assert.match(html,/agent-1/);assert.match(html,/Not sent/);
+  assert.match(html,/Stop tracking batch/);assert.match(html,/this job no longer prevents moving Homestead's data/);
   assert.match(html,/does not retry the batch, stop its VMs, delete data/);
   assert.equal((html.match(/class="ui-callout(?: |")/g)||[]).length, 1);
   assert.match(html,/Identity checks and recovery limits/);
@@ -106,7 +106,7 @@ test("batch recovery lists unsent VMs and confirms the batch name, not a single 
 
 test("configuration recovery cannot be acknowledged without resource inspection data",async()=>{
   const t=setup();await t.ctx.powerRecoveryReview('job',true);
-  assert.match(t.fields['#mbody'].innerHTML,/Resource inspection is incomplete/);
+  assert.match(t.fields['#mbody'].innerHTML,/The resource check is incomplete/);
   t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='guest';
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
 });
@@ -121,8 +121,8 @@ test("import recovery has one acknowledgement, keeps identities in details and n
   };
   await t.ctx.powerRecoveryReview('import','import');
   const html=t.fields['#mbody'].innerHTML;
-  assert.match(html,/&lt;photos>/);assert.match(html,/Retained resources/);assert.match(html,/details class="ui-more"/);
-  assert.match(html,/Nothing will be retried, started or deleted/);assert.doesNotMatch(html,/id="powerRecoveryName"/);
+  assert.match(html,/&lt;photos>/);assert.match(html,/Kept resources/);assert.match(html,/details class="ui-more"/);
+  assert.match(html,/Nothing is retried, started or deleted/);assert.doesNotMatch(html,/id="powerRecoveryName"/);
   assert.equal((html.match(/type="checkbox"/g)||[]).length,1);
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
   t.fields['#powerRecoveryAck'].checked=true;await t.ctx.powerRecoveryResolve();await t.ctx.powerRecoveryResolve();

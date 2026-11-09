@@ -87,7 +87,7 @@ class Coordinator:
         if self.plan.get("worker", {}).get("uid") != worker_uid or not self.plan.get("copy_image"):
             raise Held("This coordinator does not match the reviewed worker and copy plan")
         if self.state.get("pointer_receipt") != A.pointer_digest(self.ns, self.state, anchor.handle()["uid"]):
-            raise Held("The local data handoff receipt is not durably published; Homestead was not stopped")
+            raise Held("The local handover record was not saved safely, so Homestead was not stopped")
         if self.state.get("runtime", {}).get("state") == "held":
             raise Held("This data move needs a recovery review before its coordinator can continue")
         self.dep_path = f"/apis/apps/v1/namespaces/{self.ns}/deployments/{self.state['deployment']['name']}"
@@ -104,7 +104,7 @@ class Coordinator:
     def _list(self, path):
         result = self.read(path)
         if not isinstance(result, dict) or not isinstance(result.get("items"), list) or result.get("metadata", {}).get("continue"):
-            raise Held("The data handoff inventory is incomplete; nothing more was changed")
+            raise Held("The handover information is incomplete, so nothing more was changed")
         if any(not isinstance(o, dict) or not o.get("metadata", {}).get("uid") for o in result["items"]):
             raise Held("The data handoff inventory has no reliable identities")
         return result["items"]
@@ -116,7 +116,7 @@ class Coordinator:
                   else "is being deleted" if meta.get("deletionTimestamp")
                   else "specification or metadata changed" if shape(obj) != fact["shape"] else None)
         if reason:
-            raise Held(f"Reviewed {label}: {reason}; recovery review required")
+            raise Held(f"Reviewed {label}: {reason}. Recovery needs a review.")
         return obj
 
     def _deployment(self):
@@ -137,8 +137,8 @@ class Coordinator:
             if error.code != 404:
                 raise
             raise Held(f"The {'original' if source else 'new'} volume's claim or PersistentVolume no longer exists. Both are "
-                       "kept by rule, so someone removed it. Nothing was changed. Recovery can't go on without it, and a new one "
-                       "with the same name won't do: see docs/data-move-recovery.md.") from None
+                       "always kept, so it was removed by hand. Nothing was changed. Recovery cannot continue without it, and a new one "
+                       "with the same name does not work. See docs/data-move-recovery.md.") from None
         ref = pv.get("spec", {}).get("claimRef", {})
         if (pvc.get("status", {}).get("phase") != "Bound" or pvc.get("spec", {}).get("volumeName") != pv_fact["name"]
                 or pvc["spec"].get("volumeMode", "Filesystem") != "Filesystem"
@@ -193,7 +193,7 @@ class Coordinator:
                 # before the start request, the capacity check holds on the change anyway.
                 if own and restarted and (self.going_back or self._entry("start")):
                     continue
-                raise Held("A host this data move uses was not reviewed; review the move again")
+                raise Held("A host that this data move uses was not reviewed. Review the move again.")
             if copy_uid and owner(pod, "Job", copy_uid):
                 wanted = self.anchor.state.get("copy_host_boot", pins[node])
             else:
@@ -246,12 +246,12 @@ class Coordinator:
                 down.append(pinned["name"]); removed.append(pinned["name"])
                 continue
             if node["metadata"].get("deletionTimestamp") or identity(node)["uid"] != pinned["uid"] and not only_new_pods:
-                raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
+                raise Held("A host in the handover is unavailable, replaced or restarted. Confirm that nothing on it can still write before recovering.")
             if wanted is None and not ready:
                 down.append(pinned["name"])
                 continue
             if wanted is not None and (not ready or node.get("status", {}).get("nodeInfo", {}).get("bootID") != wanted):
-                raise Held("A data handoff host is unavailable, replaced or rebooted; prove writer fencing before recovery")
+                raise Held("A host in the handover is unavailable, replaced or restarted. Confirm that nothing on it can still write before recovering.")
             lease = self.read("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + pinned["name"])
             spec = lease.get("spec", {})
             try:
@@ -264,7 +264,7 @@ class Coordinator:
                 if wanted is None:
                     down.append(pinned["name"])
                     continue
-                raise Held("A host heartbeat is stale; a missing pod does not prove its writer stopped")
+                raise Held("A host has not reported recently, and a missing pod does not prove that it stopped writing")
         # Going back from before any request writes nothing, so a down host can't matter.
         if down and not (self.going_back and not self.writer.entries):
             raise HostDown(down, removed)
@@ -283,7 +283,7 @@ class Coordinator:
         # plan cannot silently become authority after another worker advances.
         current = self.read(self.anchor.path)
         if identity(current) != identity(self.anchor.obj):
-            raise Held("The data handoff control record advanced elsewhere; refresh its current state")
+            raise Held("The handover control record moved on elsewhere. Refresh its current state.")
         self._hosts()
         dep = self._deployment()
         self._bound(True); self._bound(False)
@@ -291,16 +291,16 @@ class Coordinator:
         for hpa in self._list(f"/apis/autoscaling/v2/namespaces/{self.ns}/horizontalpodautoscalers"):
             target = hpa.get("spec", {}).get("scaleTargetRef", {})
             if target.get("kind") == "Deployment" and target.get("name") == self.state["deployment"]["name"]:
-                raise Held("An autoscaler could restart Homestead during the copy; remove it before moving data")
+                raise Held("An autoscaler could restart Homestead during the copy. Remove it before moving data.")
         if dep.get("spec", {}).get("paused"):
-            raise Held("Homestead's Deployment is paused; controllers cannot complete the data handoff")
+            raise Held("Homestead's Deployment is paused, so Kubernetes cannot finish the handover")
         if self.state["phase"] == "prepare":
             known_sets = {identity(r)["uid"] for r in self._sets()}
             for pod in self._pods():
                 mounted = claims(pod)
                 if (self.state["destination"] in mounted or self.state["source"]["name"] in mounted
                         and not any(owner(pod, "ReplicaSet", uid) for uid in known_sets)):
-                    raise Held("A data volume has an unreviewed consumer; " + (
+                    raise Held("Something that was not reviewed uses a data volume. " + (
                         "Homestead's stop request was already accepted" if self._entry("stop") else "Homestead was not stopped"))
         return dep
 
@@ -347,7 +347,7 @@ class Coordinator:
             if helper_uid and owner(pod, "Job", helper_uid):
                 continue
             if using and not own_pod:
-                raise Held("Another pod still has a data volume mounted; it will not be deleted automatically")
+                raise Held("Another pod still has a data volume mounted. It is not deleted automatically.")
             # Even a completed/terminating pod can retain its mounts. Wait for
             # normal removal instead of inferring release from its phase.
             if own_pod or using:
@@ -368,8 +368,8 @@ class Coordinator:
             names = list(self.waited_for)
             named = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
             raise Held(f"{what} did not stop within {RELEASE_LIMIT // 60} minutes: {named or 'the Deployment still counts some'}. "
-                       "Nothing was forced. Both volumes are retained. Once they are gone, review recovery; "
-                       "a pod stuck Terminating usually means a volume that will not unmount.")
+                       "Nothing was forced. Both volumes are kept. Once they have stopped, review recovery. "
+                       "A pod stuck in Terminating usually means a volume that does not unmount.")
         return self._result(message)
 
     def _admission(self, purpose, proposal):
@@ -405,9 +405,9 @@ class Coordinator:
 
     def _copy_receipt(self, job, pods):
         if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
-            raise Held("The data copy Job failed; both volumes are retained")
+            raise Held("The data copy Job failed. Both volumes are kept.")
         if len(pods) > 1:
-            raise Held("The data copy Job has multiple pods; inspect the retained copy before continuing")
+            raise Held("The data copy Job has more than one pod. Check the kept copy before continuing.")
         complete = any(c.get("type") == "Complete" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", []))
         if not complete:
             return None
@@ -469,7 +469,7 @@ class Coordinator:
             if not self._quiet(dep):
                 return self._wait("quiesce", "Waiting for all Homestead pods to release the source")
             self.anchor.advance("copy")
-            return self._result("Homestead is stopped; preparing the verified data copy")
+            return self._result("Homestead is stopped. Preparing the checked data copy.")
         if phase == "copy":
             known = self._entry("copy-job")
             job_uid = known.get("after", {}).get("uid") if known else None
@@ -480,9 +480,9 @@ class Coordinator:
             receipt = self.state.get("copy_receipt")
             if receipt and receipt["state"] == "verified":
                 self.anchor.advance("verify")
-                return self._result("Copy verified; releasing the copy pod's volume mounts")
+                return self._result("Copy checked. Releasing the copy pod's volumes.")
             if receipt and receipt["state"] == "uncertain":
-                raise Held("The data copy outcome is uncertain; it will not be repeated")
+                raise Held("The outcome of the data copy is uncertain, so it is not repeated")
             if receipt is None:
                 self.anchor.copy_started()
             if not known:
@@ -496,18 +496,18 @@ class Coordinator:
                     # boot id from before the move: the host may have rebooted since.
                     self.anchor.copy_host_seen(self.read("/api/v1/nodes/" + self.plan["copy_node"])["status"]["nodeInfo"]["bootID"])
                 self.writer.write("copy-job", "POST", self.job_path.rsplit("/", 1)[0], body)
-                return self._result("Copy Job started; waiting for verified data and metadata")
+                return self._result("Copy Job started. Waiting for the data and its details to be checked.")
             job = self.writer.observe(known)
             copy_pods = [p for p in self._pods() if owner(p, "Job", job_uid)]
             receipt = self._copy_receipt(job, copy_pods)
             if receipt is None:
-                return self._result("Copy is running; verified progress is not available yet")
+                return self._result("Copy is running. Checked progress is not available yet.")
             dep = self._environment()
             if not self._quiet(dep, helper_uid=job_uid):
                 raise Held("A source writer returned during copy verification")
             self.anchor.copy_finished(receipt)
             self.anchor.advance("verify")
-            return self._result("Copy verified; releasing the copy pod's volume mounts")
+            return self._result("Copy checked. Releasing the copy pod's volumes.")
         if phase == "verify":
             if self.state.get("copy_receipt", {}).get("state") != "verified":
                 raise Held("The data copy has no verified completion receipt")
@@ -529,7 +529,7 @@ class Coordinator:
             if not self._quiet(dep):
                 return self._wait("verify", "Waiting for volume mounts to be released after the copy")
             self.anchor.advance("switch")
-            return self._result("Copy pod released; ready to select the new data volume")
+            return self._result("Copy pod released. Ready to switch to the new data volume.")
         if phase == "switch":
             if not self._quiet(dep):
                 return self._wait("switch", "Waiting for volume mounts to be released before switching")
@@ -548,7 +548,7 @@ class Coordinator:
                     raise Held("A writer returned during cutover admission")
                 self._update_dep("switch", dep, proposed, built_from)
             self.anchor.advance("start")
-            return self._result("New data volume selected; checking restart placement")
+            return self._result("New data volume chosen. Checking where Homestead restarts.")
         if phase == "start":
             if not self._entry("start"):
                 if not self._quiet(dep):
@@ -562,13 +562,13 @@ class Coordinator:
             if not self._ready(dep):
                 return self._result(READY_WAIT)
             self.anchor.advance("done")
-            return self._result("Homestead is ready on the new data volume; the original is retained")
-        return self._result("Homestead's data move is complete; the original volume is retained")
+            return self._result("Homestead is ready on the new data volume. The original is kept.")
+        return self._result("Homestead's data move is finished. The original volume is kept.")
 
     def _return_original(self, dep):
         """Release mounts normally, then start only the unchanged source."""
         if self.state["phase"] == "done":
-            return self._result("Homestead is ready on its original volume; both volumes are retained")
+            return self._result("Homestead is ready on its original volume. Both volumes are kept.")
         if self._entry("start"):
             raise Held("Original-volume recovery is prohibited after cutover")
         if not self.writer.entries:
@@ -580,10 +580,10 @@ class Coordinator:
                     or len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]):
                 raise Held("Recovery can keep only the unchanged original Deployment")
             self.anchor.recovered()
-            return self._result("Homestead was never stopped and keeps its original volume; both volumes are retained")
+            return self._result("Homestead was never stopped and keeps its original volume. Both volumes are kept.")
         if self._entry("recover-start"):
             if self._ready(dep, original=True): self.anchor.recovered()
-            return self._result("Checking Homestead on its original volume; both volumes are retained")
+            return self._result("Checking Homestead on its original volume. Both volumes are kept.")
         known = self._entry("copy-job")
         release = self._entry("release-copy") or self._entry("recover-release-copy")
         if not self._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
@@ -604,7 +604,7 @@ class Coordinator:
         built_from, dep = dep, self._admission("recover-start", proposed)
         if not self._quiet(dep): raise Held("A writer returned during recovery admission")
         self._update_dep("recover-start", dep, proposed, built_from)
-        return self._result("Starting Homestead on its original volume; both volumes are retained")
+        return self._result("Starting Homestead on its original volume. Both volumes are kept.")
 
     def _ready(self, dep, *, original=False):
         status = dep.get("status", {})

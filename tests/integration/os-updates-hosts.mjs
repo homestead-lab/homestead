@@ -46,7 +46,7 @@ try {
       await shot('rows');
       await sideways('rows');
       assert.equal(await row(page, 'harvester-node3').getByRole('button', {name:'Update…'}).count(), 1);
-      assert.equal(await row(page, 'harvester-node2').getByRole('button', {name:'Restart…'}).count(), 1);
+      assert.equal(await row(page, 'harvester-node2').getByRole('button', {name:'Restart host…'}).count(), 1);
       assert.equal(await row(page, 'harvester-node2').locator('[data-osu-pick]').count(), 0, 'a restart alone is not ticked');
       assert.equal(await page.locator('#osu_picked').isVisible(), false, 'nothing ticked');
 
@@ -60,7 +60,7 @@ try {
       await sideways('the combined review');
       const text = await page.locator('#mbody').innerText();
       assert.ok(text.indexOf('harvester-node3') < text.indexOf('harvester-node1'), "Homestead's own host goes last");
-      assert.match(text, /goes last/);
+      assert.match(text, /It is updated last/);
       assert.equal(await page.locator('#mbody').getByRole('button', {name:/^Review|Reboot|Restart/}).count(), 0, 'no restart from the review');
       await page.locator('#mbody').getByRole('button', {name:'Cancel'}).click();
       await page.waitForSelector('#osu_hosts tbody tr');
@@ -111,7 +111,7 @@ try {
 
       // A row's Restart… is the Host actions review, and Back comes home.
       await open();
-      await row(page, 'harvester-node2').getByRole('button', {name:'Restart…'}).click();
+      await row(page, 'harvester-node2').getByRole('button', {name:'Restart host…'}).click();
       await page.waitForSelector('#pw_confirm');
       // The title reads "Reboot · harvester-node2"; the host is drawn large in the header under it.
       assert.match(await page.locator('#mtitle').textContent(), /harvester-node2/);

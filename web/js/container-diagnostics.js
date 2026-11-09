@@ -21,7 +21,7 @@ function diagnosticRestarts(history) {
   const records = history.records || [];
   if (!records.length) return box(`<p class="small dim">${history.since
     ? `No restarts kept since ${fmtWhen(new Date(history.since * 1000))}.`
-    : "Homestead has not looked yet; restarts are kept from its first look."}</p>`);
+    : "Homestead has not checked yet. Restarts are recorded from its first check."}</p>`);
   const day = records.filter(r => Date.now() - Date.parse(r.at) < 86400e3).reduce((n, r) => n + (r.count || 1), 0);
   const words = `${records[0].reason}${records[0].detail ? ` (${records[0].detail})` : ""}`;
   return box(`<p class="small">Restarted ${day} time${day === 1 ? "" : "s"} in 24 h · last: ${esc(words.charAt(0).toLowerCase() + words.slice(1))}</p>

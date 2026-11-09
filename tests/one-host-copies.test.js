@@ -34,7 +34,7 @@ test("nothing to offer is no row; a failed read is said, not hidden", () => {
   for (const state of ["none", "n/a"]) assert.equal(H.advice(base({ state, hosts: 2, volumes: [] })).filter(r => r.id === "one-host-copies").length, 0);
   assert.equal(H.advice(base(undefined)).filter(r => r.id.includes("copies")).length, 0);
   const unknown = H.advice(base({ state: "unknown", hosts: 0, volumes: [], error: "Longhorn's nodes could not be read" })).find(r => r.id === "one-host-copies");
-  assert.equal(unknown.title, "Could not read volume copies");
+  assert.equal(unknown.title, "The volume copies could not be read");
   assert.equal(unknown.detail, "Longhorn's nodes could not be read");
   assert.ok(H.advice({ ...base(), copies: null }).some(r => r.id === "unknown:copies"));
 });

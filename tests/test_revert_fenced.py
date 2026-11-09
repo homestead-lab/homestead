@@ -243,7 +243,7 @@ class ChangedAfterTheReview(Base):
 
     def test_a_start_with_no_review_is_refused(self):
         for token in (None, "", "not a review", "e30"):
-            with self.subTest(token=token), self.assertRaisesRegex(ValueError, "reload the page and open the rollback again"):
+            with self.subTest(token=token), self.assertRaisesRegex(ValueError, "Reload the page and open the rollback again"):
                 REVERT.start(VOLUME, "snap-a", self.ops, token)
         self.ops.start.assert_not_called()
 
@@ -279,13 +279,13 @@ class GivingUp(Base):
         self.kube.react("PATCH", A, beat_it)
         status, _, message = REVERT.resolve(item)
         self.assertEqual("running", status, message)
-        self.assertIn("trying again", message)
+        self.assertIn("Trying again", message)
         self.late()
         status, _, message = self.rounds(item)
         self.assertEqual("failed", status, message)
         self.assertIn("app-a changed as it was being stopped", message)
         self.assertNotIn("looking", message)
-        self.assertNotIn("trying again", message)
+        self.assertNotIn("Trying again", message)
 
 
 class OurOwnMarks(Base):

@@ -96,7 +96,7 @@ def _record(namespace, name):
     if (not _owned(record) or spec.get("deletionPolicy") != "Retain" or spec.get("driver") != "driver.longhorn.io"
             or spec.get("volumeSnapshotRef", {}).get("namespace") != namespace
             or spec.get("volumeSnapshotRef", {}).get("name") != name):
-        raise ValueError("Snapshot browser identity changed; inspect its resources")
+        raise ValueError("The snapshot browser changed. Check its resources.")
     plan = json.loads(record["metadata"].get("annotations", {}).get("homestead.io/source", "{}"))
     if plan.get("namespace") != namespace or spec.get("source") != {"snapshotHandle": f"snap://{plan.get('volume')}/{plan.get('snapshot')}"}:
         raise ValueError("Snapshot browser source identity changed")
@@ -106,7 +106,7 @@ def _record(namespace, name):
 def review(volume, snapshot):
     volume, snapshot = _name(volume), _name(snapshot)
     if not CSI.support()["ready"]:
-        raise ValueError("Snapshot browsing requires ready CSI snapshot support; enable or repair it in the cluster first")
+        raise ValueError("Browsing a snapshot needs CSI snapshot support to be ready. Turn it on or repair it in the cluster first.")
     source = kget(f"{LH}/volumes/{volume}")
     snap = kget(f"{LH}/snapshots/{snapshot}")
     state = snap.get("status", {})
@@ -126,9 +126,9 @@ def review(volume, snapshot):
     pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
     if (ref.get("uid") != pvc["metadata"].get("uid") or pvc["spec"].get("volumeName") != pv["metadata"]["name"]
             or pvc.get("status", {}).get("phase") != "Bound" or pvc["metadata"].get("deletionTimestamp")):
-        raise ValueError("Source volume binding changed; refresh the snapshot")
+        raise ValueError("The source volume's binding changed. Refresh the snapshot.")
     if pvc["spec"].get("volumeMode", "Filesystem") != "Filesystem":
-        raise ValueError("Only filesystem volumes can be browsed; VM block disks are not supported")
+        raise ValueError("Only filesystem volumes can be browsed. VM block disks are not supported.")
     sc = kget("/apis/storage.k8s.io/v1/storageclasses/" + _name(pvc["spec"].get("storageClassName")))
     if sc.get("provisioner") != "driver.longhorn.io":
         raise ValueError("Temporary browsing requires a Longhorn storage class")
@@ -190,7 +190,7 @@ def _ensure(path, body):
 def start(body):
     plan = review(body.get("volume"), body.get("snapshot"))
     if body.get("review_token") != plan["review_token"]:
-        raise ValueError("Snapshot details changed; review browsing again")
+        raise ValueError("The snapshot details changed. Review browsing again.")
     request = body.get("request_id", "")
     if not re.fullmatch(r"[a-f0-9]{24}", request):
         raise ValueError("A browser request identity is required")
@@ -198,10 +198,10 @@ def start(body):
     paths = _paths(ns, name)
     previous = _record(ns, name)
     if previous is None and len(_items(f"{CSI.API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue")) >= 4:
-        raise ValueError("Four snapshot browsers already exist; close one or wait for expiry")
+        raise ValueError("Four snapshot browsers already exist. Close one or wait for one to expire.")
     expires = previous["metadata"]["annotations"]["homestead.io/expires"] if previous else str(int(time.time()) + TTL)
     if float(expires) <= time.time() or (previous and previous["metadata"]["annotations"].get("homestead.io/closing")):
-        raise ValueError("This browser expired or is closing; wait for cleanup before opening another")
+        raise ValueError("This browser expired or is closing. Wait for the cleanup before opening another.")
     labels = {LABEL: "true", "app.kubernetes.io/managed-by": "homestead"}
     meta = {"name": name, "namespace": ns, "labels": labels}
     content_meta = {"name": name, "labels": labels, "annotations": {
@@ -266,11 +266,11 @@ def status(namespace, name):
             return {**result, "state": "failed", "message": str(error.get("message", error))}
     phase = (pod or {}).get("status", {}).get("phase")
     if phase in ("Failed", "Succeeded"):
-        return {**result, "state": "failed", "message": "The temporary file browser stopped; close it to clean up"}
+        return {**result, "state": "failed", "message": "The temporary file browser stopped. Close it to clean up."}
     clone = _clone(pvc, result["source"], name) if pvc else None
     clone_state = (clone or {}).get("status", {}).get("cloneStatus", {}) or {}
     if clone_state.get("state") == "failed":
-        return {**result, "state": "failed", "message": "Longhorn could not prepare the snapshot volume; close the browser and inspect Longhorn"}
+        return {**result, "state": "failed", "message": "Longhorn could not prepare the snapshot volume. Close the browser and check Longhorn."}
     complete = clone_state.get("state") == "completed"
     if complete and (pvc or {}).get("status", {}).get("phase") == "Bound" and phase == "Running" and any(
             c.get("type") == "Ready" and c.get("status") == "True" for c in pod["status"].get("conditions", [])):
@@ -317,7 +317,7 @@ def _clone(pvc, plan, name, require_method=True):
         if state.get("sourceVolume") != plan["volume"] or state.get("snapshot") != plan["snapshot"]:
             raise ValueError("Longhorn has not verified the selected snapshot as the clone source")
         if require_method and plan["method"] == "linked-clone" and clone.get("spec", {}).get("cloneMode") != "linked-clone":
-            raise ValueError("Longhorn did not accept linked-clone mode; no copy fallback was requested")
+            raise ValueError("Longhorn did not accept linked-clone mode, and no full copy was requested instead")
     return clone
 
 
@@ -348,7 +348,7 @@ def close(namespace, name):
     pvc = KUBE.get_optional(paths[2], read=kget)
     if pvc:
         if pvc.get("spec", {}).get("dataSource") != {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": name}:
-            raise ValueError("Temporary claim identity changed; cleanup stopped")
+            raise ValueError("The temporary volume claim changed, so cleanup stopped")
         # Delete reclaim policy must never act on a claim rebound to live data.
         _clone(pvc, json.loads(record["metadata"]["annotations"]["homestead.io/source"]), name, require_method=False)
         # A binding is fixed once set and was just checked. An unbound claim
@@ -358,7 +358,7 @@ def close(namespace, name):
     snapshot = KUBE.get_optional(paths[1], read=kget)
     if snapshot:
         if snapshot.get("spec", {}).get("source") != {"volumeSnapshotContentName": name}:
-            raise ValueError("Snapshot import identity changed; cleanup stopped")
+            raise ValueError("The snapshot import changed, so cleanup stopped")
         _delete(paths[1], snapshot, record["metadata"]["uid"])
         return {"state": "closing"}
     storage_class = KUBE.get_optional(SC + name, read=kget)
@@ -556,7 +556,7 @@ def read(namespace, name, action, path="", offset=0):
     if getattr(answer, "cut", False):
         raise ValueError("The snapshot's answer for that path is larger than Homestead reads at once (4 MiB)")
     if err or not out:
-        raise ValueError("Cannot read that path; symbolic links and special files are not browsable")
+        raise ValueError("That path cannot be read. Symbolic links and special files cannot be browsed.")
     value = json.loads(out)
     if action == "chunk":
         value["data"] = base64.b64decode(value["data"], validate=True)

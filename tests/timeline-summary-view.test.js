@@ -58,7 +58,7 @@ test("off, daily and weekly read as one line, with the next send and the last re
 test("a setting that could not be read is said, never shown as Off", async () => {
   const { T, els } = setup(null, { fail: "Homestead could not read timeline-summary.json" });
   await T.summaryPaint();
-  assert.match(els.summaryRows.innerHTML, /Could not read your summary setting/);
+  assert.match(els.summaryRows.innerHTML, /The summary setting could not be read/);
   assert.doesNotMatch(els.summaryRows.innerHTML, />Off</);
 });
 

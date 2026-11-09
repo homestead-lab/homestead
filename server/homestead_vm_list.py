@@ -24,7 +24,7 @@ def _claims(ns, strict=False):
     try:
         result = V.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
         if strict and (not isinstance(result.get("items"), list) or (result.get("metadata") or {}).get("continue")):
-            raise ValueError("PVC inventory is incomplete; refresh before editing VM disks")
+            raise ValueError("The list of volume claims is incomplete. Refresh before editing VM disks.")
         items = result.get("items", [])
     except Exception:
         if strict:

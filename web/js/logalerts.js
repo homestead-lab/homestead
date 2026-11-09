@@ -39,7 +39,7 @@ function logAlertBars(counts, threshold, window = 1, { h = 64, now = null } = {}
     return v === null ? `<rect x="${x}" y="${h - 3}" width="${bwid}" height="3" class="la-unread"/>`
       : `<rect x="${x}" y="${y(v).toFixed(1)}" width="${bwid}" height="${(h - y(v)).toFixed(1)}" class="${v > threshold ? "la-over" : "la-under"}"/>`;
   }).join("");
-  const label = `Matching lines per minute over the last hour; ${over} minute${over === 1 ? "" : "s"} over ${threshold}${unread ? `; ${unread} minute${unread === 1 ? "" : "s"} not read` : ""}`;
+  const label = `Matching lines per minute over the last hour. ${over} minute${over === 1 ? "" : "s"} over ${threshold}${unread ? `, and ${unread} minute${unread === 1 ? "" : "s"} not read` : ""}.`;
   return `<svg class="la-bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
     ${bars}<line x1="0" x2="${w}" y1="${y(threshold).toFixed(1)}" y2="${y(threshold).toFixed(1)}" class="la-limit"/></svg>
     <div class="la-axis dim xs"><span>1 hour ago</span><span>more than ${threshold} ${window === 1 ? "a minute" : `in ${window} minutes`}</span><span>now</span></div>`;
@@ -50,7 +50,7 @@ function logAlertStatus(status) {
   const state = status?.state || "";
   if (state === "paused") return `<div class="la-status small dim">${esc(status.detail || "Not counted while paused.")}</div>`;
   if (!LOGALERT_NOT_COUNTED.includes(state)) return "";
-  return `<div class="la-status small">${UI.chip("Could not count", "warn")} ${esc(status.detail || "")}</div>`;
+  return `<div class="la-status small">${UI.chip("Not counted", "warn")} ${esc(status.detail || "")}</div>`;
 }
 
 function logAlertRow(r, raised) {
@@ -76,7 +76,7 @@ function logAlertRow(r, raised) {
    that stopped moving says so rather than looking quiet. */
 function logAlertStale(countedAt, nowSeconds = Date.now() / 1000) {
   if (!countedAt || nowSeconds - countedAt <= 180) return "";
-  return UI.callout("warn", "Log alerts are not being counted", `Homestead has not counted for ${Math.round((nowSeconds - countedAt) / 60)} minutes: the log alert check on the leader has stopped or cannot run, so nothing here is current.`);
+  return UI.callout("warn", "Log alerts are not being counted", `Homestead has not counted for ${Math.round((nowSeconds - countedAt) / 60)} minutes, because the log alert check on the leading Homestead has stopped or cannot run. Nothing here is current.`);
 }
 
 /* The app choices: every app listed, and the rule's own app even when it is
@@ -104,9 +104,9 @@ window.logAlertEdit = (id = "") => {
   const appField = several
     ? UI.field("Apps", `<div class="small">${esc(rule.apps.map(a => a.split("/")[1]).join(", "))}</div>`)
     : UI.field("App", `<select id="la_app" onchange="logAlertAppChanged()">${logAlertAppOptions(apps, rule.apps[0])}</select>`,
-        { help: "A log alert watches one app; never every app." });
+        { help: "A log alert watches one app, never every app." });
   modal(id ? `Edit log alert · ${rule.name}` : "Alert on this search", `<div class="ui-stack">
-    ${UI.lead("Homestead counts the lines that match once a minute and raises an alert when there are too many. The alert says how many, never what the lines say or what you searched for: both can hold passwords and tokens, and alerts reach lock screens.")}
+    ${UI.lead("Homestead counts the matching lines once a minute and raises an alert when there are too many. The alert gives the count, never the lines or the search, because both can contain passwords and tokens, and alerts appear on lock screens.")}
     ${UI.fields(
       UI.field("Name", `<input id="la_name" maxlength="60" value="${esc(rule.name || logAlertDefaultName(rule.apps[0]))}">`, { help: "Shown in the alert. It may not repeat the search text." }),
       appField,
@@ -146,14 +146,14 @@ window.logAlertPreview = async () => {
   try {
     const d = await api("/api/logalerts/preview", { method: "POST", body: JSON.stringify(rule) });
     const total = d.counts.reduce((a, c) => a + c[1], 0);
-    const gaps = [...(d.unread || []).map(a => `Could not read ${a}: its lines are not counted here.`),
+    const gaps = [...(d.unread || []).map(a => `${a} could not be read, so its lines are not counted here.`),
       ...(d.capped || []).map(a => `${a} wrote more than Homestead reads at once: at least this many.`)];
     out.innerHTML = `<div class="la-preview-head"><b>Over the last hour</b>
       <span class="dim small">${total} matching line${total === 1 ? "" : "s"} · ${d.over_minutes ? `<b class="la-over-t">over the threshold in ${d.over_minutes} of 60 minutes</b>` : "never over the threshold"}</span></div>
       ${logAlertBars(d.counts, body.threshold, body.window)}
       ${gaps.length ? UI.callout("warn", "Part of the hour was not read", gaps.map(g => `<div>${esc(g)}</div>`).join("")) : ""}
       ${d.over_minutes > 20 ? UI.callout("warn", "This would be raised most of the time", "Raise the threshold, or count over 5 minutes, so the alert means something when it comes.") : ""}`;
-  } catch (e) { out.innerHTML = UI.callout("bad", "Could not try it", esc(e.message)); }
+  } catch (e) { out.innerHTML = UI.callout("bad", "The search could not be tried", esc(e.message)); }
 };
 
 window.logAlertSave = async () => {
@@ -200,7 +200,7 @@ window.logAlerts = async () => {
   let raised = new Set(), bell = "";
   try {
     raised = new Set(((await api("/api/alerts")).active || []).filter(a => a.key?.startsWith("logs:")).map(a => a.key.slice(5)));
-  } catch (e) { bell = UI.callout("warn", "Could not read which are raised now", esc(e.message)); }
+  } catch (e) { bell = UI.callout("warn", "The alerts raised now could not be read", esc(e.message)); }
   const list = $("#la_list");
   if (!list) return;
   list.innerHTML = `<div class="ui-stack">

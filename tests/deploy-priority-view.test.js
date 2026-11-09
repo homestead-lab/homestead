@@ -24,7 +24,7 @@ test("the Deploy form offers the tier with normal chosen, and says what each doe
   assert.match(html, /<option value="normal" selected>Normal<\/option>/);
   for (const t of ["critical", "low"]) assert.match(html, new RegExp(`<option value="${t}" >`));
   assert.match(html, /When the cluster is short of room/);
-  assert.match(html, /Fits in turn, as every app does by default/);
+  assert.match(html, /Placed in turn, like every app by default/);
 });
 
 test("a tier already chosen stays chosen", () => {
@@ -42,6 +42,6 @@ test("a tier the form does not know is shown as normal, never critical", () => {
     const html = tierField(load(), odd);
     assert.match(html, /<option value="normal" selected>/, String(odd));
     assert.doesNotMatch(html, /<option value="critical" selected>/, String(odd));
-    assert.match(html, /Fits in turn, as every app does by default/, String(odd));
+    assert.match(html, /Placed in turn, like every app by default/, String(odd));
   }
 });

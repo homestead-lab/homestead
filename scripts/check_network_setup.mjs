@@ -43,7 +43,7 @@ try {
     }
     await page.locator(".vip-section").screenshot({ path: `release-assets/network-checks/vip-cards-${width}.png` });
   }
-  await page.getByRole("button", { name: "Add VIP", exact: false }).click();
+  await page.getByRole("button", { name: "Add virtual IP", exact: false }).click();
   await page.locator("#va_start").fill("192.0.2.120");
   assert.equal(await page.locator("#va_end_wrap").isVisible(), false);
   await page.locator("#va_kind").selectOption("range");
@@ -58,7 +58,7 @@ try {
     await page.screenshot({ path: `release-assets/network-checks/vip-add-${width}.png` });
   }
   await page.evaluate(() => closeModal());
-  await page.locator(".vip-card").nth(1).getByRole("button", { name: "Use this VIP" }).click();
+  await page.locator(".vip-card").nth(1).getByRole("button", { name: "Use this virtual IP" }).click();
   // Nothing is picked for the address until someone chooses the app.
   await page.getByText("Use 192.0.2.109", {exact:true}).waitFor();
   assert.equal(await page.locator("#net_workload").inputValue(), "");
@@ -68,8 +68,8 @@ try {
   assert.equal(await page.locator("#net_lb_ip").inputValue(), "192.0.2.109");
   assert.equal(await page.evaluate(() => networkConfig().vip), "192.0.2.109");
   await page.evaluate(() => closeModal());
-  await page.getByRole("button", { name: "Expose workload" }).click();
-  await page.getByText("Connect an app to your network", {exact:true}).waitFor();
+  await page.getByRole("button", { name: "Connect an app" }).click();
+  await page.getByText("Connect an app to the network", {exact:true}).waitFor();
   await page.locator("#net_workload").waitFor({state: "attached"});
   assert.equal(await page.locator("#net_workload").inputValue(), "");
   await page.locator("#net_workload").selectOption("lab/guest/VirtualMachine");

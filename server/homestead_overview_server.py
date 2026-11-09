@@ -239,7 +239,7 @@ def set_uptime_setting(b):
         w = next((w for w in cached("wl", 5, WORKLOADS.get_workloads) if w["ns"] == ns and w["name"] == name), None)
         published = {int(p["port"]) for p in (w or {}).get("ports") or [] if p.get("port")}
         if w is not None and str(port).isdigit() and int(port) not in published:
-            raise ValueError(f"{name} does not publish port {port}; choose one of "
+            raise ValueError(f"{name} does not publish port {port}. Choose one of "
                              + (", ".join(str(p) for p in sorted(published)) or "its ports"))
     value = UPTIME.check_setting(b.get("mode"), b.get("path"), port)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
@@ -630,7 +630,7 @@ def _alerts_delivered(request):
     b = request.body
     endpoint, cursor = str(b.get("endpoint") or ""), b.get("latest")
     if not PUSH.mine(request.user, endpoint):
-        return MODULE_ROUTES.Reply(404, {"error": "This notification device is not registered to your account."})
+        return MODULE_ROUTES.Reply(404, {"error": "This notification device is not registered to this account."})
     if type(cursor) is not int or cursor < 0 or cursor > ALERTS.log(limit=0)["latest"]:
         return MODULE_ROUTES.Reply(400, {"error": "Invalid notification cursor."})
     PUSH.advance(request.user, endpoint, cursor)
@@ -770,13 +770,13 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
     if HOSTACCESS.role() not in (None, "admin"):
         raise PermissionError("only an admin can change Homestead itself")
     if deleting:
-        raise ValueError("Homestead cannot delete itself from its own page - that removes this page for good. "
-                         "Use helm uninstall, or kubectl, if that is what you want")
+        raise ValueError("Homestead cannot delete itself from its own page, because that removes this page for good. "
+                         "Use helm uninstall or kubectl if that is the intent.")
     if renaming:
         raise ValueError("Homestead cannot rename itself: its permissions, Service and data are tied to its name")
     if moving:
-        raise ValueError("Homestead's own data moves from Settings > About > Redundancy, which restarts it safely; "
-                         "a storage move here would stop the page doing the move")
+        raise ValueError("Homestead's own data moves from Settings > About > Redundancy, which restarts it safely. "
+                         "A storage move here would stop the page doing the move.")
     if stopping and not confirmed:
         raise ValueError(self_stop_warning())
 

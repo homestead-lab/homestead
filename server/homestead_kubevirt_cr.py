@@ -50,4 +50,4 @@ def update(fn, *, attempts=4, current=current, write=None):
             if error.code != 409:    # 409: KubeVirt's settings were saved meanwhile
                 raise
             error.close()
-    raise RuntimeError("This change was not saved; try again. KubeVirt's settings kept changing while they were being saved")
+    raise RuntimeError("This change was not saved. KubeVirt's settings kept changing while they were being saved. Try again.")

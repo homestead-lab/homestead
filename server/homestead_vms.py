@@ -210,7 +210,7 @@ def detail(ns, name, include_sensitive=True):
             row["cores"], row["memory"] = _cores(expanded["domain"]), _memory(expanded["domain"])
         except (ValueError, OSError):
             row["cores"], row["memory"] = None, ""
-            row["profile_error"] = "Profile resources could not be resolved. They are left unchanged; check KubeVirt and Homestead RBAC before changing hardware."
+            row["profile_error"] = "The instance type's resources could not be read. They are left as they are. Check KubeVirt and Homestead's permissions before changing hardware."
     # The VM's own page always explains a disk that is still filling.
     row["filling"] = VM_LIST._filling(vm, VM_LIST._datavolumes(ns), explain=True)
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
@@ -248,21 +248,21 @@ def _halt_crash_retries(ns, name):
     meta, status = vm.get("metadata") or {}, vm.get("status") or {}
     identity = VM_EDIT._identity(vm)
     if (meta.get("namespace"), meta.get("name")) != (ns, name) or meta.get("deletionTimestamp"):
-        raise ValueError("The VM identity changed or is deleting; refresh before stopping it")
+        raise ValueError("The VM changed or is being deleted. Refresh before stopping it.")
     if status.get("stateChangeRequests"):
-        raise ValueError("A VM power request is already queued; wait for it before stopping retries")
+        raise ValueError("A VM power request is already queued. Wait for it before stopping retries.")
     vmi = KUBE.get_optional(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}", read=kget)
     if vmi is not None:
         imeta = vmi.get("metadata") or {}
         if (imeta.get("namespace"), imeta.get("name")) != (ns, name) or not imeta.get("uid"):
-            raise ValueError("The VM instance could not be verified; refresh before stopping retries")
+            raise ValueError("The VM instance could not be confirmed. Refresh before stopping retries.")
         if (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
             return None  # A live or unfinished instance uses KubeVirt's stop API.
         if not any(owner.get("controller") is True and owner.get("kind") == "VirtualMachine"
                    and owner.get("apiVersion", "").split("/")[0] == "kubevirt.io"
                    and (owner.get("uid"), owner.get("name")) == (identity["uid"], name)
                    for owner in imeta.get("ownerReferences") or []):
-            raise ValueError("The completed VM instance has a different owner; refresh before stopping retries")
+            raise ValueError("The finished VM instance has a different owner. Refresh before stopping retries.")
     # KubeVirt refuses /stop for RerunOnFailure without an unfinished VMI.
     # This is a deliberate stop of retries, never a fallback after a refusal.
     # Fence the identity/version; a conflict is returned without retrying.
@@ -272,7 +272,7 @@ def _halt_crash_retries(ns, name):
         {"op": "test", "path": "/spec/runStrategy", "value": "RerunOnFailure"},
         {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"}
     ], ctype="application/json-patch+json")
-    return {"ok": True, "detail": f"Boot retries stopped for {name}; the VM is kept off until you start it"}
+    return {"ok": True, "detail": f"Start retries stopped for {name}. The VM stays off until it is started."}
 
 
 def power(ns, name, action, *, raw_errors=False):
@@ -327,7 +327,7 @@ def _release(ns, claim, uid, vm_name=""):
             except urllib.error.HTTPError as error:
                 raise ValueError(f"{claim} could not be kept, so nothing was deleted: {_refusal(error)}")
             if any(o.get("uid") == uid for o in _owners(path, claim) or []):
-                raise ValueError(f"{claim} still belongs to {vm_name or 'the VM'}, so nothing was deleted; try again")
+                raise ValueError(f"{claim} still belongs to {vm_name or 'the VM'}, so nothing was deleted. Try again.")
 
 
 def _owners(path, claim):
@@ -364,8 +364,8 @@ def delete(ns, name, with_disks=False):
             if not isinstance(others.get("items"), list) or (others.get("metadata") or {}).get("continue"):
                 raise ValueError("incomplete")
         except Exception:
-            raise ValueError("the other VMs could not be read, so no disk is deleted with it; "
-                             "delete the VM alone, or try again") from None
+            raise ValueError("The other VMs could not be read, so no disk is deleted with it. "
+                             "Delete the VM alone, or try again.") from None
         shared = {VM_EDIT._volume_claim(v) for other in others["items"] if other["metadata"]["name"] != name
                   for v in ((other.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []}
         claims_now = VM_LIST._claims(ns, strict=True)
@@ -416,11 +416,11 @@ def delete(ns, name, with_disks=False):
     if with_disks:
         detail += f" with {len(removed)} disk{'s' if len(removed) != 1 else ''}"
         if spared:
-            detail += f"; {', '.join(spared)} kept, as other VMs or the ISO library use {'it' if len(spared) == 1 else 'them'}"
+            detail += f". {', '.join(spared)} kept, because other VMs or the ISO library use {'it' if len(spared) == 1 else 'them'}"
     else:
         kept = [c for c in every if c not in unfinished]
         if unfinished:
-            detail += f"; the unfinished download{'s' if len(unfinished) != 1 else ''} ({', '.join(unfinished)}) stopped and removed"
+            detail += f". The unfinished download{'s' if len(unfinished) != 1 else ''} ({', '.join(unfinished)}) stopped and removed"
         if kept:
             detail += f"; {', '.join(kept)} kept"
     return {"ok": True, "detail": detail}

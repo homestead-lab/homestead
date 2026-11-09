@@ -172,7 +172,7 @@ node has been Ready.
 Downtime Homestead causes itself is recorded as **maintenance**, apart from
 outages:
 
-- a **Reboot** or **Shut down** from Host actions, from the moment power is
+- a **Restart host** or **Shut down** from Host actions, from the moment power is
   sent (the cordon and drain before it are not counted: the host is still up);
 - an **OS update**'s restart, which goes through the same steps;
 - a planned **cluster shutdown**, for every host, until the cluster is back;
@@ -367,7 +367,7 @@ drain waits while its engines leave the host (up to 5 minutes), and stops early,
 naming the orphan records or engines that keep it there, once only those are
 left.
 
-**Single-host clusters.** Normal **Reboot** and **Shut down** use a planned
+**Single-host clusters.** Normal **Restart host** and **Shut down** use a planned
 whole-cluster outage. Type the host name and acknowledge that all applications,
 storage and Homestead will go offline. To start a shut-down host again you need
 console or physical access. Homestead leaves scheduling unchanged and asks the
@@ -493,7 +493,7 @@ pressure, core services, and platform warnings from the last day.
   for good asks you to tick that the job stays, and keeps blocking Longhorn
   upgrades, shutdown and OS rollouts until it ends. A disk preparation,
   storage allocation or runtime maintenance is ended from Jobs once the host is
-  removed (**End: host removed** on the job, for admins: it checks the host is
+  removed (**End job for removed host** on the job, for admins: it checks the host is
   really gone, lists what the job may have left on the machine, and changes
   nothing there); a disk retire fails by itself once Longhorn's record of the
   host is deleted; a V2 cleanup ends on its next round, or, if it staged a RAM

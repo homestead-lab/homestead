@@ -114,7 +114,7 @@ class OptionalReadTests(unittest.TestCase):
         item = {"ref": {"namespace": "lab", "name": "data", "action": "delete_claim"}}
         _, patch = self.reading(OPS, http_error(404))
         with patch:
-            self.assertEqual(OPS._volume_delete(item), ("succeeded", 100, "Claim deleted; backing data retained"))
+            self.assertEqual(OPS._volume_delete(item), ("succeeded", 100, "Volume claim deleted. The data behind it is kept."))
         self.assert_raises_on_500(OPS, lambda: OPS._volume_delete(item))
 
     def test_revert_volume(self):

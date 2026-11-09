@@ -110,7 +110,7 @@ def set_managed(ns, name, by):
         raise ValueError("say who updates it in 60 characters or fewer")
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     if not by and managed_by(dep).get("detected") and not str(_annotation(dep, MANAGED) or "").strip():
-        raise ValueError(f"{ns}/{name} is managed by {managed_by(dep)['by']}, which Homestead detects; there is no mark to clear")
+        raise ValueError(f"{ns}/{name} is managed by {managed_by(dep)['by']}, which Homestead detects. There is no mark to clear.")
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"metadata": {"annotations": {MANAGED: by or None}}}, ctype="application/merge-patch+json")
     CHECKS.invalidate()

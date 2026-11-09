@@ -28,7 +28,7 @@ def _roots(source, destination):
 def _lost_found(root):
     path = os.path.join(root, "lost+found")
     if os.path.lexists(path) and (os.path.islink(path) or not os.path.isdir(path) or os.listdir(path)):
-        raise Held("A volume contains recovered filesystem data; inspect it before copying")
+        raise Held("A volume contains recovered filesystem data. Check it before copying.")
 
 
 def _fingerprint(info):
@@ -54,7 +54,7 @@ def inventory(root):
     def visit(path, relative):
         before = os.lstat(path)
         if before.st_dev != device:
-            raise Held("Data contains a nested filesystem; a complete copy cannot be verified")
+            raise Held("The data contains a nested filesystem, so a complete copy cannot be confirmed")
         mode = before.st_mode
         row = {"path": relative, "mode": mode, "uid": before.st_uid, "gid": before.st_gid,
                "mtime_ns": before.st_mtime_ns}
@@ -65,10 +65,10 @@ def inventory(root):
             descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
             with os.fdopen(descriptor, "rb") as stream:
                 if _fingerprint(os.fstat(stream.fileno())) != _fingerprint(before):
-                    raise Held("Data changed during verification; the copy remains held")
+                    raise Held("The data changed during the check, so the copy stays held")
                 digest = hashlib.file_digest(stream, "sha256").hexdigest()
                 if _fingerprint(os.fstat(stream.fileno())) != _fingerprint(before):
-                    raise Held("Data changed during verification; the copy remains held")
+                    raise Held("The data changed during the check, so the copy stays held")
             row.update(size=before.st_size, sha256=digest)
             key = (before.st_dev, before.st_ino)
             if before.st_nlink > 1:
@@ -78,7 +78,7 @@ def inventory(root):
         elif stat.S_ISLNK(mode):
             row["link"] = os.readlink(path)
         elif not stat.S_ISDIR(mode):
-            raise Held("Data contains a socket, device or other special file; stop its owner and inspect it")
+            raise Held("The data contains a socket, device or other special file. Stop what owns it and check it.")
         manifest.update(json.dumps(row, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode() + b"\n")
         if stat.S_ISDIR(mode):
             for name in sorted(os.listdir(path)):
@@ -86,7 +86,7 @@ def inventory(root):
                     continue
                 visit(os.path.join(path, name), relative + "/" + name if relative else name)
         if _fingerprint(os.lstat(path)) != _fingerprint(before):
-            raise Held("Data changed during verification; the copy remains held")
+            raise Held("The data changed during the check, so the copy stays held")
 
     visit(root, "")
     return {"manifest": manifest.hexdigest(), **totals}
@@ -119,7 +119,7 @@ def copy_verified(source, destination, *, timeout=86400):
         source, destination = _roots(source, destination)
         _lost_found(destination)
         if set(os.listdir(destination)) - {"lost+found"}:
-            raise Held("The destination already contains data; the copy will not overwrite or resume it")
+            raise Held("The destination already contains data, and the copy does not overwrite or continue it")
         before = inventory(source)
         available = os.statvfs(destination)
         if available.f_bavail * available.f_frsize < before["bytes"]:
@@ -132,13 +132,13 @@ def copy_verified(source, destination, *, timeout=86400):
         _sync_tree(destination)
         after, copied = inventory(source), inventory(destination)
         if before != after or copied != after:
-            raise Held("The copied data or metadata did not match; both volumes remain retained")
+            raise Held("The copied data or its details did not match. Both volumes are kept.")
         return copied
     except Held:
         raise
     except Exception:
         # Neither raw command diagnostics nor sensitive filenames enter logs.
-        raise Held("The data copy could not be verified; inspect the retained volumes and worker. Nothing was retried") from None
+        raise Held("The data copy could not be confirmed. Check the kept volumes and the worker. Nothing was retried.") from None
 
 
 def job(namespace, name, source, destination, image, operation, node):

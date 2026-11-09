@@ -17,12 +17,12 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
            "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "writes": []}
     job = ops.start(kind, f"{'Create' if kind == 'vm-create' else 'Save'} VM {name}",
                     {"kind": "VirtualMachine", "namespace": namespace, "name": name}, "/vms", ref,
-                    "Configuration intent recorded; no resource request has been sent yet")
+                    "Settings recorded. No request has been sent yet.")
     ident = job["id"]
     with POWER.worker_lock(ident, ops):
         # Recovery can win the lock between publishing intent and dispatching.
         # This state check fences that case before even image preparation.
-        ops.record_phase(ident, "writing", 0, "Preparing reviewed VM configuration; writes are recorded individually")
+        ops.record_phase(ident, "writing", 0, "Preparing the reviewed VM settings. Each write is recorded.")
         writer = WRITE.ResourceWriter(send, WRITE.operation_recorder(ops, ident))
         try:
             result = commit(writer)
@@ -43,7 +43,7 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
                     raise ValueError("VM completion does not match its verified write receipt")
                 item["ref"].update(phase="saved", retain_resources=False)
                 ops._finish(item, "succeeded", 100,
-                            "Configuration writes acknowledged by Kubernetes; guest readiness and application health are not verified")
+                            "Kubernetes accepted the settings. Whether the guest is ready and its apps are healthy is not checked.")
                 t.save(items)
                 return {**result, "operation": ops._public(item)}
         except Exception:
@@ -61,17 +61,17 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
                     if item["status"] not in ops.TERMINAL:
                         item["ref"].update(phase="failed", retain_resources=bool(writer.count))
                         ops._finish(item, "failed", item.get("progress", 0),
-                                    "VM save stopped; inspect retained write receipts. Nothing was retried." if writer.count else
-                                    "VM save stopped before any resource write; obtain a fresh review.")
+                                    "The VM save stopped. Check the kept write records. Nothing was retried." if writer.count else
+                                    "The VM save stopped before anything was written. Get a new review.")
                         t.save(items)
             except Exception:
                 pass  # existing durable intent remains the recovery authority
             if not writer.count:
                 raise  # preserve structured admission failures before writes
             if removed and removed["all"]:
-                raise ValueError(f"The cluster refused VM {name}; what this attempt made was removed and nothing was "
+                raise ValueError(f"The cluster refused VM {name}. What this attempt created was removed, and nothing was "
                                  f"retried. See job {ident}.") from None
-            raise ValueError(f"VM save failed or its outcome is uncertain. Inspect job {ident}; resources were retained and nothing was retried.") from None
+            raise ValueError(f"The VM save failed, or its outcome is uncertain. Check job {ident}. The resources were kept, and nothing was retried.") from None
 
 
 # What a refused create made and may remove: kinds made for this VM alone.
@@ -169,11 +169,11 @@ def _run_cleanup(ident, ops, send):
         code = cleanup.get("http_status")
         if left:
             names = ", ".join(f"{t.get('kind')} {t.get('name')}" for t in left)
-            message = (f"The cluster refused the VM (HTTP {code}). What it made was removed except {names}; "
-                       "inspect retained write receipts. Nothing was retried.")
+            message = (f"The cluster refused the VM (HTTP {code}). What it created was removed except {names}. "
+                       "Check the kept write records. Nothing was retried.")
         else:
-            message = (f"The cluster refused the VM (HTTP {code}); the claims, Secrets and ConfigMaps this attempt "
-                       "made were removed. Nothing was retried.")
+            message = (f"The cluster refused the VM (HTTP {code}). The volume claims, Secrets and ConfigMaps this attempt "
+                       "created were removed. Nothing was retried.")
         cleanup["state"] = "done"
         row["ref"].update(phase="failed", retain_resources=bool(left))
         ops._finish(row, "failed", row.get("progress", 0), message)
@@ -200,11 +200,11 @@ def resume_cleanups(ops, send):
 
 def status(item):
     return "running", item.get("progress", 0), (
-        "VM configuration dispatch is in progress or was interrupted. Inspect outcome if it has stopped; no resource request is automatically resent.")
+        "The VM change is in progress or was interrupted. If it has stopped, choose Check outcome. No request is sent again automatically.")
 
 
 def cancel_plan(item):
-    return {"mode": "forget", "can": False, "why_not": "Inspect the VM save outcome instead; partial writes cannot safely be cancelled or forgotten",
+    return {"mode": "forget", "can": False, "why_not": "Check the outcome of the VM save instead. Incomplete writes cannot safely be cancelled or ignored.",
             "keeps": ["All VM resources and write receipts remain unchanged"], "needs": "admin"}
 
 

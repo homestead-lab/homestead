@@ -39,12 +39,12 @@ test("the review shows each check as a fact, every pod and volume, and the typed
   assert.match(html, /25 min/);
   assert.match(html, /Last heard from/);
   assert.match(html, /postgres-0/); assert.match(html, /postgres-1/);
-  assert.match(html, /being deleted; made final/);
+  assert.match(html, /being deleted, now forced/);
   assert.match(html, /data-postgres-0/); assert.match(html, /current copy is on[^]*node1/);
   assert.match(html, /data-typed-expect="postgres"/);
   assert.match(html, /id="sr_run"[^>]*disabled/);
   assert.match(html, /data-need="admin"/);
-  assert.match(html, /stuck pod is removed; the StatefulSet starts it again on another host/i);
+  assert.match(html, /stuck copy is removed, and the StatefulSet starts it again on another host/i);
   assert.match(html, /about 6 minutes/);
   assert.doesNotMatch(html, /overrides that once/);
   assert.match(t.requests[0][0], /^\/api\/statefulset\/restart-elsewhere\/plan\?/);
@@ -72,7 +72,7 @@ test("a review without anything relied on shows no such row", async () => {
 test("a set that waits by its own setting says this overrides that once", async () => {
   const t = setup({ plan: { ...PLAN, set: { ...PLAN.set, wait_mode: true } } });
   await t.ctx.setRestartReview("data", "postgres", "node2");
-  assert.match(t.html(), /this app is set to wait for its host to come back; this overrides that once/i);
+  assert.match(t.html(), /this app is set to wait for its host to come back\. This overrides that setting once/i);
 });
 
 test("a blocked plan shows the blockers in a bad callout and no run button", async () => {

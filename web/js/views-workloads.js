@@ -29,8 +29,8 @@ const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey
 const updateOwner = update => update?.managed?.by ? update.managed : null;
 function updateOwnerTip(owner) {
   return owner.detected
-    ? `Updated by ${owner.by}${owner.source ? ` (${owner.source})` : ""}. Homestead shows when a newer image exists; change it in ${owner.by}.`
-    : `Marked as updated elsewhere: ${owner.by}. Homestead shows when a newer image exists; clear the mark under Image updates to update it here.`;
+    ? `Updated by ${owner.by}${owner.source ? ` (${owner.source})` : ""}. Homestead shows when a newer image exists. Change it in ${owner.by}.`
+    : `Marked as updated elsewhere: ${owner.by}. Homestead shows when a newer image exists. Clear the mark under Image updates to update it here.`;
 }
 function updateOwnerPill(update, slim = false) {
   const owner = updateOwner(update);
@@ -38,7 +38,7 @@ function updateOwnerPill(update, slim = false) {
   return UI.chip(`${update.available ? "update in " : "updated by "}${owner.by}`, "info", { size: slim ? "slim" : "", tip: updateOwnerTip(owner) });
 }
 window.markUpdatesElsewhere = async (ns, name) => {
-  const by = await askText(`Who updates ${name} - Renovate, CI, git? Homestead then shows its updates as a notice and does not offer to update it here.`,
+  const by = await askText(`What updates ${name}, for example Renovate, CI or git? Homestead then shows its updates as a notice and does not offer to update it here.`,
     "", {title:"Updated elsewhere", placeholder:"Renovate", ok:"Mark"});
   if (by === null) return;
   if (!by.trim()) return toast("Say who updates it", "bad");
@@ -147,7 +147,7 @@ function workloadHierarchy(w, { wide = false } = {}) {
         <b title="${esc(c.name)}">${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}
         ${c.restarts ? UI.chip(`${c.restarts} restart${c.restarts === 1 ? "" : "s"}`, "warn") : ""}
       </div>${treeImage(c.image)}${c.message && !c.ready ? `<div class="tree-why" title="${esc(c.detail || c.message)}">${esc(c.message)}${c.detail && c.detail !== c.message
-        ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container detail is unavailable for this pod.</div>`}</div>
+        ? ` <a class="linkish xs" onclick="event.stopPropagation(); modal(${jsq(`Why ${c.name} is not running`)}, '<pre class=&quot;mono small wrap-pre&quot;>' + esc(this.dataset.detail) + '</pre>')" data-detail="${esc(c.detail)}">full message</a>` : ""}</div>` : ""}`).join("") || `<div class="dim xs">Container details are unavailable for this copy.</div>`}</div>
     </div>`).join("") || `<div class="dim xs">No pods exist yet. Kubernetes creates them once the instance count is above zero.</div>`}</div>
   </details>`;
 }
@@ -254,8 +254,8 @@ window.imageUpdateCenter = async () => {
   const here = affected.filter(w => !updateOwner(w)), elsewhere = affected.filter(w => updateOwner(w));
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
-    ${UI.lead("Choose apps, review the changes, then start the update. Apps something else updates - Flux, Argo CD, or as you marked them - are listed for the notice and updated where they come from.")}
-    ${UI.more("Update policy", esc(policy.reason || "Updates require your approval before any app restarts."))}
+    ${UI.lead("Choose apps, review the changes, then start the update. Apps that something else updates, such as Flux, Argo CD or a tool they are marked with, are listed for information and updated at their source.")}
+    ${UI.more("Update policy", esc(policy.reason || "Updates need approval before any app restarts."))}
     ${available.length ? `<div class="update-selectbar">
       <label class="switch"><input type="checkbox" id="updateSelectAll" checked onchange="toggleImageUpdateSelection(this.checked)"> Select all</label>
       <span id="updateSelectedCount">${available.length} of ${available.length} selected</span>

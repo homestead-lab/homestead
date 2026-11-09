@@ -84,7 +84,7 @@ class Bond:
     never_up = (f"node-a did not come up with {ADDRESS} on bond0, so it put its old network back by itself. "
                 f"The configuration tried is kept in {BACKUP} beside the old one")
     confirming = (50, "node-a is up; confirming")
-    confirmed = (70, f"node-a carries {ADDRESS} on bond0; the rollback is disarmed")
+    confirmed = (70, f"node-a carries {ADDRESS} on bond0. The rollback is turned off.")
     restarting = 85, "Restarting {service} on node-a, so flannel carries pod traffic by bond0"
     waiting_ready = (92, "Waiting for node-a to be Ready again")
     done = "node-a carries its network on bond0"
@@ -105,8 +105,8 @@ class Bridge:
     waiting_for = f"{ADDRESS} on br0, enp1s0 in br0, the default route by br0, the gateway answering"
     never_up = (f"node-a did not come up on br0 with {ADDRESS}, so it put its old network back by itself. "
                 f"The configuration tried is kept in {BACKUP} beside the old one")
-    confirming = (40, "node-a is up on br0; confirming")
-    confirmed = (60, f"node-a is on br0, with {ADDRESS}; the rollback is disarmed")
+    confirming = (40, "node-a is up on br0. Confirming.")
+    confirmed = (60, f"node-a is on br0, with {ADDRESS}. The rollback is turned off.")
     restarting = 80, "Restarting {service} on node-a, so flannel carries pod traffic by br0"
     waiting_ready = (90, "Waiting for node-a to be Ready again")
     done = "node-a is on br0: make a LAN network on br0 for VMs and containers"
@@ -319,16 +319,16 @@ class BondOnlyCheckTests(Steps):
 
     def test_a_member_with_no_link_is_named_when_it_is_confirmed(self):
         self.host.check = "ADDR\nROUTE\nGATEWAY\nIN enp1s0\nUP enp1s0\nIN enp2s0\nARMED\nEND\n"
-        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0; the rollback is disarmed; enp2s0 has no link yet"),
+        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0. The rollback is turned off. enp2s0 has no link yet."),
                          self.step(saved_bond(), 30))
         self.host.check = "ADDR\nROUTE\nGATEWAY\nIN enp1s0\nIN enp2s0\nARMED\nEND\n"
-        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0; the rollback is disarmed; enp1s0, enp2s0 has no link yet"),
+        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0. The rollback is turned off. enp1s0, enp2s0 has no link yet."),
                          self.step(saved_bond(), 30))
 
     def test_removing_a_bond_asks_about_no_members(self):
         ref = saved_bond(action="remove", carries_on="enp1s0", mode="802.3ad")
         self.host.check = "ADDR\nROUTE\nGATEWAY\nARMED\nEND\n"
-        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on enp1s0; the rollback is disarmed"), self.step(ref, 30))
+        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on enp1s0. The rollback is turned off."), self.step(ref, 30))
         self.assertEqual(BONDS.check_script("enp1s0", ADDRESS, "bond0", [], "802.3ad"), self.host.ran[0].script)
         self.assertEqual(BONDS.CONFIRM_SCRIPT, self.host.ran[1].script, "a bond being removed waits for no switch")
 
@@ -349,7 +349,7 @@ class BondOnlyCheckTests(Steps):
     def test_up_with_no_partner_waits_for_the_switch_then_rolls_back_inside_the_hold(self):
         self.host.check = self.NO_PARTNER
         ref = saved_bond(**self.LACP)
-        waiting = ("running", 40, "node-a is up on bond0; waiting for the switch to answer LACP")
+        waiting = ("running", 40, "node-a is up on bond0. Waiting for the switch to answer LACP.")
         self.assertEqual(waiting, self.step(ref, 30))
         self.assertEqual(waiting, self.step(ref, 74.9))
         self.assertNotIn(BONDS.ROLLBACK_NOW, self.host.sent())
@@ -371,12 +371,12 @@ class BondOnlyCheckTests(Steps):
     def test_a_partner_lets_it_confirm(self):
         self.host.check = GOOD_BOND + "PARTNER\n"
         ref = saved_bond(**self.LACP)
-        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0; the rollback is disarmed"), self.step(ref, 30))
+        self.assertEqual(("running", 70, f"node-a carries {ADDRESS} on bond0. The rollback is turned off."), self.step(ref, 30))
         self.assertEqual(BONDS.check_script("bond0", ADDRESS, "bond0", ["enp1s0", "enp2s0"], "802.3ad"), self.host.ran[0].script)
 
 
 class ConfirmedStageTests(Steps):
-    """Once the rollback is disarmed: kube-vip, then k3s or RKE2 on a cluster."""
+    """Once the rollback is turned off: kube-vip, then k3s or RKE2 on a cluster."""
 
     def restart_of(self, service):
         return f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK"
@@ -763,7 +763,7 @@ class WhatAJobSavesTests(unittest.TestCase):
                           "backup": "/var/lib/homestead/netplan-1", "services": ["k3s"], "stage": "applied",
                           "change": "Bond enp1s0 + enp2s0 on h1", "lease": "this-replica/1"}, ref)
         self.assertEqual(("host-bond", "Bond enp1s0 + enp2s0 on h1", {"kind": "Node", "name": "h1"}, "/nodes?node=h1&section=network",
-                          "Applied; checking h1 - it puts its old network back in 4 minutes unless confirmed"),
+                          "Applied. Checking h1, which restores its old network in 4 minutes unless the change is confirmed."),
                          (row["kind"], row["title"], row["resource"], row["href"], row["message"]))
         self.assertNotIn("unconfirmed", op)
 
@@ -776,7 +776,7 @@ class WhatAJobSavesTests(unittest.TestCase):
                           "backup": "/var/lib/homestead/netplan-x", "stage": "applied", "services": ["k3s"],
                           "change": "Move k3s's enp1s0 into br0", "lease": "this-replica/1"}, ref)
         self.assertEqual(("host-bridge", "Move k3s's enp1s0 into br0", {"kind": "Node", "name": "k3s"}, "/nodes",
-                          "Applied; checking k3s on br0 - it puts itself back in 4 minutes unless confirmed"),
+                          "Applied. Checking k3s on br0, which restores its old network in 4 minutes unless the change is confirmed."),
                          (row["kind"], row["title"], row["resource"], row["href"], row["message"]))
         self.assertNotIn("unconfirmed", op)
 
@@ -817,14 +817,14 @@ class CancelTests(Steps):
     def test_the_review_of_an_unconfirmed_job_claims_nothing(self):
         for kind in self.each():
             self.assertEqual({"mode": "forget", "needs": "admin",
-                              "keeps": ["Homestead cannot tell how far the change got on node-a; check its network first",
+                              "keeps": ["Homestead cannot tell how far the change got on node-a. Check its network first.",
                                         "Other changes on node-a can start again at once"]},
                              kind.module.cancel_plan({"ref": saved_unconfirmed(kind.title)}))
 
     def test_stopping_tracking_lets_go_at_once_and_says_so(self):
         for kind in self.each():
             ref = kind.saved()
-            self.assertEqual("Stopped tracking it; other changes on node-a can start again", kind.module.cancel_run({"ref": ref}, {}))
+            self.assertEqual("Stopped tracking it. Other changes on node-a can start again.", kind.module.cancel_run({"ref": ref}, {}))
             self.assertEqual([("node-a", LEASE)], self.host.let_go_of)
             self.assertNotIn("lease", ref)
 

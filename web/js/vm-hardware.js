@@ -19,13 +19,13 @@
    one Windows 10 and 11 drive out of the box, and virtio stays a choice once
    the guest tools from virtio-win.iso are in. */
 const VM_PRESETS = {
-  windows11: { name: "Windows 11 / Server 2022+", about: "UEFI with Secure Boot, a kept TPM, Hyper-V enlightenments, a tablet pointer, local time, an Intel e1000e network card Windows drives without extra drivers",
+  windows11: { name: "Windows 11 / Server 2022+", about: "UEFI with Secure Boot, a TPM whose state is kept, Hyper-V enlightenments, a tablet pointer, local time, and an Intel e1000e network card that Windows supports without extra drivers",
     nic: "e1000e", hw: { firmware: "uefi", secure_boot: true, efi_persistent: true, tpm: "persistent", machine: "q35", hyperv: true,
       tablet: true, graphics: true, sound: false, rng: false, timezone: "LOCAL" } },
-  windows10: { name: "Windows 10 / Server 2019", about: "UEFI, Hyper-V enlightenments, a tablet pointer, local time, an Intel e1000e network card Windows drives without extra drivers",
+  windows10: { name: "Windows 10 / Server 2019", about: "UEFI, Hyper-V enlightenments, a tablet pointer, local time, and an Intel e1000e network card that Windows supports without extra drivers",
     nic: "e1000e", hw: { firmware: "uefi", secure_boot: false, efi_persistent: true, tpm: "off", machine: "q35", hyperv: true,
       tablet: true, graphics: true, sound: false, rng: false, timezone: "LOCAL" } },
-  linux: { name: "Linux server", about: "UEFI and a random-number device; UTC",
+  linux: { name: "Linux server", about: "UEFI, a random-number device and UTC",
     hw: { firmware: "uefi", secure_boot: false, efi_persistent: true, tpm: "off", hyperv: false, rng: true,
       tablet: false, sound: false, graphics: true, timezone: "" } },
   linuxdesktop: { name: "Linux desktop", about: "UEFI, a random-number device, a tablet pointer and sound",
@@ -34,7 +34,7 @@ const VM_PRESETS = {
   cloud: { name: "Linux cloud image (BIOS)", about: "BIOS, as most cloud images expect, and a random-number device",
     hw: { firmware: "bios", secure_boot: false, efi_persistent: false, tpm: "off", hyperv: false, rng: true,
       tablet: false, sound: false, timezone: "" } },
-  headless: { name: "Headless appliance", about: "No display - the serial console only - and a random-number device",
+  headless: { name: "Headless appliance", about: "No display, only the serial console, and a random-number device",
     hw: { graphics: false, serial: true, tablet: false, sound: false, rng: true } },
 };
 window.VM_PRESETS = VM_PRESETS;
@@ -91,32 +91,32 @@ function vmHardwareFields(h, o = {}, locked = false, creating = false, split = f
     ${creating ? "" : `<div class="row vh-presets"><label for="vh_preset" class="dim xs">Guest type</label>
       <select id="vh_preset" onchange="vmHardwarePreset(this.value); this.value = ''"><option value="">Apply a preset…</option>
         ${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}" title="${esc(p.about)}">${esc(p.name)}</option>`).join("")}</select>
-      <span class="dim xs">Sets the fields below; nothing changes until you review and save.</span></div>`}
+      <span class="dim xs">Fills in the fields below. Nothing changes until the VM is reviewed and saved.</span></div>`}
     ${section("cpu", `${creating ? "" : locked ? '<div class="note small">CPU topology is set by this VM\'s instance type.</div>' : `
       <div class="vh-3"><div class="f"><label>Sockets</label><input id="vh_sockets" type="number" min="1" max="8" value="${c.sockets}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Cores per socket</label><input id="vh_cores" type="number" min="1" max="128" value="${c.cores}" oninput="vmHardwareChanged()"></div>
         <div class="f"><label>Threads per core</label><input id="vh_threads" type="number" min="1" max="8" value="${c.threads}" oninput="vmHardwareChanged()"></div></div>`}
-      <div class="f"><label>CPU model ${tip("host-model: the host's CPU, as a named model KubeVirt can match on other hosts. host-passthrough: every feature of this host's exact CPU - fastest, but live migration only to identical CPUs. A named model keeps VMs movable across mixed hardware.")}</label>
+      <div class="f"><label>CPU model ${tip("host-model uses the host's CPU as a named model that KubeVirt can match on other hosts. host-passthrough uses every feature of this host's exact CPU. It is the fastest, but the VM can move while running only to hosts with identical CPUs. A named model keeps VMs movable across mixed hardware.")}</label>
         <select id="vh_model" onchange="vmHardwareChanged()">${models.map(m => vhOpt(m, m || "Cluster default", c.model)).join("")}</select></div>
-      ${vhCheck("vh_dedicated", "Dedicated CPUs (pinned)", c.dedicated, "Each vCPU gets a host CPU of its own, as Proxmox's affinity does. Needs the kubelet's static CPU manager policy on the host.")}
-      ${vhCheck("vh_isolate", "Isolate the emulator thread", c.isolate_emulator, "QEMU's own work runs on one more dedicated CPU, away from the guest's. Needs dedicated CPUs.")}`)}
+      ${vhCheck("vh_dedicated", "Dedicated CPUs (pinned)", c.dedicated, "Each vCPU gets its own host CPU, like CPU affinity in Proxmox. Needs the kubelet's static CPU manager policy on the host.")}
+      ${vhCheck("vh_isolate", "Isolate the emulator thread", c.isolate_emulator, "QEMU's own work runs on one more dedicated CPU, separate from the guest's CPUs. Needs dedicated CPUs.")}`)}
     ${section("firmware", `<div class="f2"><div class="f"><label>Firmware</label>
         <select id="vh_firmware" onchange="vmHardwareChanged()">${vhOpt("bios", "BIOS (SeaBIOS)", h.firmware)}${vhOpt("uefi", "UEFI (OVMF)", h.firmware)}</select></div>
-      <div class="f"><label>Machine type ${tip("q35 is KubeVirt's modern PC with PCIe - what nearly every guest wants. Leave blank for the cluster default.")}</label>
+      <div class="f"><label>Machine type ${tip("q35 is KubeVirt's modern PC with PCIe, which nearly every guest needs. Leave blank for the cluster default.")}</label>
         <select id="vh_machine" onchange="vmHardwareChanged()">${["", "q35"].concat(h.machine && h.machine !== "q35" ? [h.machine] : []).map(m => vhOpt(m, m || "Cluster default", h.machine)).join("")}</select></div></div>
-      ${vhCheck("vh_secure", "Secure Boot", h.secure_boot, "Only boots signed bootloaders - Windows 11 and most current Linux installers. Needs UEFI.")}
-      ${vhCheck("vh_efikeep", "Keep EFI variables", h.efi_persistent, "Boot entries and Secure Boot keys survive a restart, as on real hardware. Kept in a small volume per VM.")}
-      <div class="f"><label>TPM ${tip("A virtual TPM 2.0. Windows 11 needs one; kept, its state (BitLocker keys, measured boot) survives restarts.")}</label>
+      ${vhCheck("vh_secure", "Secure Boot", h.secure_boot, "Starts only signed bootloaders, such as Windows 11 and most current Linux installers. Needs UEFI.")}
+      ${vhCheck("vh_efikeep", "Keep EFI variables", h.efi_persistent, "Boot entries and Secure Boot keys are kept across restarts, as on real hardware. They are stored in a small volume for each VM.")}
+      <div class="f"><label>TPM ${tip("A virtual TPM 2.0. Windows 11 needs one. When its state is kept, BitLocker keys and measured boot data survive restarts.")}</label>
         <select id="vh_tpm" onchange="vmHardwareChanged()">${vhOpt("off", "Off", h.tpm)}${vhOpt("on", "On", h.tpm)}${vhOpt("persistent", "On, state kept", h.tpm)}</select></div>`)}
-    ${section("tuning", `${vhCheck("vh_hyperv", "Hyper-V enlightenments", h.hyperv, "Paravirtual timers, spinlocks and interrupts Windows uses to run faster under a hypervisor. For Windows guests.")}
-      ${vhCheck("vh_kvmhidden", "Hide KVM from the guest", h.kvm_hidden, "Some GPU drivers refuse to run in a VM; hiding the hypervisor's signature lets them. Only for passed-through GPUs.")}
-      <div class="f"><label>Clock ${tip("UTC suits Linux. Windows keeps its clock in local time: give the time zone, like Europe/London.")}</label>
+    ${section("tuning", `${vhCheck("vh_hyperv", "Hyper-V enlightenments", h.hyperv, "Paravirtual timers, spinlocks and interrupts that help Windows run faster under a hypervisor. For Windows guests.")}
+      ${vhCheck("vh_kvmhidden", "Hide KVM from the guest", h.kvm_hidden, "Some GPU drivers refuse to run in a VM. Hiding the hypervisor's signature lets them run. Only for passed-through GPUs.")}
+      <div class="f"><label>Clock ${tip("UTC suits Linux. Windows keeps its clock in local time, so enter the time zone, such as Europe/London.")}</label>
         <input id="vh_tz" class="mono" value="${esc(h.timezone || "")}" placeholder="UTC" oninput="vmHardwareChanged()"></div>`)}
     ${split ? "" : section("devices", vmDisplayFields(h))}
-    ${section("memory", `<div class="f2"><div class="f"><label>Hugepages ${tip("Guest memory in large pages: faster for big or busy guests, but the pages must be reserved on the host beforehand.")}</label>
+    ${section("memory", `<div class="f2"><div class="f"><label>Hugepages ${tip("Guest memory in large pages. This is faster for large or busy guests, but the pages must be reserved on the host first.")}</label>
         <select id="vh_huge" onchange="vmHardwareChanged()">${vhOpt("", "Normal pages", h.hugepages)}${vhOpt("2Mi", "2 MiB", h.hugepages)}${vhOpt("1Gi", "1 GiB", h.hugepages)}</select></div>
-      <div class="f"><label>On host drain ${tip("What happens when its host is drained for maintenance: move it running to another host, try to, or stop it.")}</label>
-        <select id="vh_evict" onchange="vmHardwareChanged()">${vhOpt("", "Cluster default", h.eviction)}${vhOpt("LiveMigrate", "Live-migrate", h.eviction)}${vhOpt("LiveMigrateIfPossible", "Live-migrate if it can", h.eviction)}${vhOpt("None", "Stop it", h.eviction)}</select></div></div>`)}
+      <div class="f"><label>When the host is drained ${tip("What happens when its host is drained for maintenance: move it to another host while it runs, try to move it, or stop it.")}</label>
+        <select id="vh_evict" onchange="vmHardwareChanged()">${vhOpt("", "Cluster default", h.eviction)}${vhOpt("LiveMigrate", "Move while running", h.eviction)}${vhOpt("LiveMigrateIfPossible", "Move while running if possible", h.eviction)}${vhOpt("None", "Stop it", h.eviction)}</select></div></div>`)}
     <div id="vh_notes"></div></div>`;
 }
 window.vmHardwareFields = vmHardwareFields;
@@ -126,10 +126,10 @@ window.vmHardwareFields = vmHardwareFields;
 function vmDisplayFields(h) {
   return `<div class="f"><label for="vh_boot_output">Display</label>
       <select id="vh_boot_output" onchange="vmBootOutputChanged()">${vhOpt("console", "Virtual display (the console's Screen)", h.boot_output || (h.graphics ? "console" : "serial"))}${vhOpt("gpu", "Passed-through GPU only (a monitor on the GPU, no virtual display)", h.boot_output)}${vhOpt("serial", "No display (serial console only)", h.boot_output || (!h.graphics ? "serial" : "console"))}</select>
-      <div class="dim xs">Keep the virtual display to use a passed-through GPU for compute or transcoding and still see the VM in the console. GPU only removes the virtual display and uses UEFI; attach the GPU under Passthrough first. Applies at the next VM start.</div></div>
-      ${vhCheck("vh_serial", "Serial console", h.serial, "A text console, and the boot log Homestead keeps.")}
-      ${vhCheck("vh_tablet", "Tablet pointer", h.tablet, "An absolute pointer, so the mouse in the console lines up with the guest's.")}
-      ${vhCheck("vh_rng", "Random-number device", h.rng, "virtio-rng: entropy from the host, so a new guest does not stall making keys.")}
+      <div class="dim xs">Keep the virtual display to use a passed-through GPU for computing or transcoding while still seeing the VM in the console. GPU only removes the virtual display and uses UEFI. Attach the GPU under Passthrough first. This applies at the next VM start.</div></div>
+      ${vhCheck("vh_serial", "Serial console", h.serial, "A text console, and the start-up log that Homestead keeps.")}
+      ${vhCheck("vh_tablet", "Tablet pointer", h.tablet, "An absolute pointer, so that the mouse in the console lines up with the guest's.")}
+      ${vhCheck("vh_rng", "Random-number device", h.rng, "virtio-rng provides randomness from the host, so that a new guest does not stall while creating keys.")}
       ${vhCheck("vh_balloon", "Memory balloon", h.balloon, "Lets the guest report and return unused memory.")}
       ${vhCheck("vh_sound", "Sound card", h.sound, "An ich9 sound card, for a desktop guest.")}
       <div id="vh_display_notes"></div>`;
@@ -178,18 +178,18 @@ function vmHardwareNotes(h, o = {}) {
   const notes = [];
   if (h.secure_boot && h.firmware !== "uefi") notes.push(["bad", "Secure Boot needs UEFI firmware."]);
   if (h.cpu.isolate_emulator && !h.cpu.dedicated) notes.push(["bad", "An isolated emulator thread needs dedicated CPUs."]);
-  if (h.cpu.dedicated) notes.push(["warn", "Dedicated CPUs need hosts whose kubelet runs the static CPU manager policy; elsewhere the VM does not start."]);
+  if (h.cpu.dedicated) notes.push(["warn", "Dedicated CPUs need hosts whose kubelet uses the static CPU manager policy. On other hosts the VM does not start."]);
   if (h.hugepages) notes.push(["warn", `${h.hugepages} hugepages must be reserved on the host (a kernel setting), or the VM does not start.`]);
   if ((h.efi_persistent || h.tpm === "persistent") && !gates.has("VMPersistentState"))
-    notes.push(["info", "Kept EFI variables and TPM state live in a small volume per VM; KubeVirt before 1.5 needs its VMPersistentState feature for them."]);
-  if (h.cpu.model === "host-passthrough") notes.push(["info", "host-passthrough: the VM can live-migrate only to hosts with the same CPU."]);
-  if (h.eviction === "LiveMigrate" && (o.nodes || []).length < 2) notes.push(["info", "Live migration needs a second host; on one host a drain waits for the VM."]);
+    notes.push(["info", "Kept EFI variables and TPM state are stored in a small volume for each VM. KubeVirt versions before 1.5 need the VMPersistentState feature for them."]);
+  if (h.cpu.model === "host-passthrough") notes.push(["info", "With host-passthrough, the VM can move while running only to hosts with the same CPU."]);
+  if (h.eviction === "LiveMigrate" && (o.nodes || []).length < 2) notes.push(["info", "Moving while running needs a second host. With one host, a drain waits for the VM."]);
   // The display's own notes, shown beside the Display field (a third element).
   if (h.boot_output === "gpu") {
     if (h.firmware !== "uefi") notes.push(["bad", "GPU only needs UEFI firmware.", "display"]);
-    notes.push(["warn", "Connect the monitor to the passed-through GPU. Its ROM must support UEFI; the guest needs GPU drivers. A BIOS-installed guest may need its bootloader repaired after switching to UEFI.", "display"]);
+    notes.push(["warn", "Connect the monitor to the passed-through GPU. Its ROM must support UEFI, and the guest needs GPU drivers. A guest installed with BIOS may need its bootloader repaired after switching to UEFI.", "display"]);
   }
-  if (!h.graphics) notes.push(["info", "With no virtual display the console's Screen stays black. Keep the serial console on for troubleshooting.", "display"]);
+  if (!h.graphics) notes.push(["info", "Without a virtual display, the console's Screen stays black. Keep the serial console on for troubleshooting.", "display"]);
   if (h.boot_output === "serial" && !h.serial) notes.push(["bad", "No display needs the serial console on.", "display"]);
   return notes;
 }
@@ -253,7 +253,7 @@ window.vmCreatePreset = id => {
   const base = window.__vhBase || {};
   vhSet(Object.fromEntries(Object.keys(VH_FIELDS).map(key => [key, base[key]])));
   vhSet(vmPresetSettings(id) || {});
-  if ($("#v_preset_about")) $("#v_preset_about").textContent = VM_PRESETS[id]?.about || "KubeVirt defaults: BIOS, UTC, a display and serial console";
+  if ($("#v_preset_about")) $("#v_preset_about").textContent = VM_PRESETS[id]?.about || "KubeVirt defaults: BIOS, UTC, a display and a serial console";
   if ($("#v_nic_model")) $("#v_nic_model").value = VM_PRESETS[id]?.nic || "virtio";
   vmHardwareChanged();
 };
@@ -270,7 +270,7 @@ window.vmIsoLibrary = async () => {
   const size = bytes => bytesText(bytes);
   const state = f => f.volume
     ? (f.state === "ready" ? UI.chip("ready", "ok") : f.state === "copying" ? UI.chip("copying", "neutral") : UI.chip("failed", "bad"))
-    : '<span class="dim xs">on the share only</span>';
+    : '<span class="dim xs">On the share only</span>';
   const volumeOf = f => lib.volumes.find(v => v.name === f.volume);
   // Each list is a stack table whose rows end in an actionBar (#506).
   const table = (heads, rows) => `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>${heads.map(h => `<th>${h}</th>`).join("")}<th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -279,30 +279,30 @@ window.vmIsoLibrary = async () => {
   const unused = v => {
     if (!v || v.used_by.length || !v.unused_since || v.state === "copying") return "";
     const left = lib.keep_days ? Math.max(0, Math.ceil((v.unused_since + lib.keep_days * 86400 - Date.now() / 1000) / 86400)) : null;
-    return ` · unused${left === null ? "" : left ? `, removed in ${left} day${left === 1 ? "" : "s"}` : ", removed soon"}`;
+    return ` · Unused${left === null ? "" : left ? `, removed in ${left} day${left === 1 ? "" : "s"}` : ", removed soon"}`;
   };
   $("#mbody").innerHTML = `<div class="ui-stack iso-lib">
-    ${UI.lead("Use ISOs from Network Shares as VM installation media. <b>Make ready</b> creates a shared copy with one replica. Originals stay on the share; lost copies can be recreated.")}
-    <div class="iso-folders"><div class="between"><b>Folders</b><button class="btn sm" data-need="admin" onclick="vmIsoAddFolder()">＋ Folder</button></div>
+    ${UI.lead("ISOs on network shares can be used to install VMs. <b>Prepare</b> creates a shared copy with one volume copy. The originals stay on the share, and lost copies can be created again.")}
+    <div class="iso-folders"><div class="between"><b>Folders</b><button class="btn sm" data-need="admin" onclick="vmIsoAddFolder()">＋ Add folder</button></div>
       ${lib.folders.length ? table(["Folder"], lib.folders.map((f, i) => `<tr><td class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</td>
-        <td data-actions>${actionBar([{ label: "Remove", run: `vmIsoRemoveFolder(${i})`, need: "admin", tip: "Stop listing this folder; its files and copies stay" }], { label: `Actions for ${f.share}${f.path ? ` / ${f.path}` : ""}` })}</td></tr>`).join(""))
-        : `<div class="dim small">${lib.shares.length ? "No folders chosen yet. Add a folder from one of your shares." : "No Network Shares yet: make one under Storage → Network shares, then choose a folder on it here."}</div>`}
+        <td data-actions>${actionBar([{ label: "Remove", run: `vmIsoRemoveFolder(${i})`, need: "admin", tip: "Stop listing this folder. Its files and copies are kept." }], { label: `Actions for ${f.share}${f.path ? ` / ${f.path}` : ""}` })}</td></tr>`).join(""))
+        : `<div class="dim small">${lib.shares.length ? "No folders have been chosen yet. Add a folder from one of the shares." : "There are no network shares yet. Create one under Storage → Network shares, then choose a folder on it here."}</div>`}
       ${(lib.problems || []).map(p => `${UI.callout("bad", "", `${esc(p.share)}${p.path ? ` / ${esc(p.path)}` : ""}: ${esc(p.error)}`, { className: "small" })}`).join("")}</div>
     ${lib.files.length ? `<div class="iso-files">${table(["File", "Copy"], lib.files.map(f => `<tr><td><b>${esc(f.name)}</b>
         <div class="dim xs mono">${esc(f.share)}${f.folder ? ` / ${esc(f.folder)}` : ""} · ${size(f.size)}${f.volume && (volumeOf(f)?.used_by || []).length
           ? ` · in ${esc(volumeOf(f).used_by.join(", "))}` : esc(unused(volumeOf(f)))}</div></td>
         <td data-label="Copy">${state(f)}</td>
         <td data-actions>${actionBar([
-          f.volume ? null : { label: "Make ready", run: `vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})`, need: "operator", tip: "Make a shared copy VMs can boot from" },
-          f.volume ? { label: "Delete copy", icon: "trash", run: `vmIsoDelete(${jsq(f.volume)})`, need: "admin", danger: true, tip: "Delete its volume; the file on the share is kept" } : null,
+          f.volume ? null : { label: "Prepare", run: `vmIsoPrepare(${jsq(f.share)},${jsq(f.path)})`, need: "operator", tip: "Create a shared copy that VMs can start from" },
+          f.volume ? { label: "Delete copy", icon: "trash", run: `vmIsoDelete(${jsq(f.volume)})`, need: "admin", danger: true, tip: "Delete its volume. The file on the share is kept." } : null,
         ], { shown: f.volume ? 0 : 1, label: `Actions for ${f.name}` })}</td></tr>`).join(""))}</div>`
-      : lib.folders.length ? '<div class="dim small">No .iso files in these folders yet.</div>' : ""}
-    ${orphans.length ? `<div class="iso-files"><div class="dim xs">VOLUMES WHOSE FILE HAS GONE OR CHANGED</div>${table(["Volume"], orphans.map(v => `<tr><td><b>${esc(v.file || v.name)}</b>
+      : lib.folders.length ? '<div class="dim small">There are no .iso files in these folders yet.</div>' : ""}
+    ${orphans.length ? `<div class="iso-files"><div class="dim xs">VOLUMES WHOSE FILE WAS REMOVED OR CHANGED</div>${table(["Volume"], orphans.map(v => `<tr><td><b>${esc(v.file || v.name)}</b>
         <div class="dim xs mono">${esc(v.name)}${v.used_by.length ? ` · in ${esc(v.used_by.join(", "))}` : esc(unused(v))}</div></td>
         <td data-actions>${actionBar([{ label: "Delete", icon: "trash", run: `vmIsoDelete(${jsq(v.name)})`, need: "admin", danger: true }], { shown: 0, label: `Actions for ${v.file || v.name}` })}</td></tr>`).join(""))}</div>` : ""}
     <div class="iso-keep"><label for="iso_keep">Remove copies no VM uses after</label>
       <input id="iso_keep" type="number" min="0" max="365" value="${esc(lib.keep_days ?? 7)}" ${can("admin") ? "" : "disabled"}> <span class="dim small">days (0 keeps them)</span>
-      <button class="btn sm" data-need="admin" onclick="vmIsoKeep()">Save</button></div>
+      <button class="btn sm" data-need="admin" onclick="vmIsoKeep()">Save setting</button></div>
     ${UI.actions(UI.cancel("Close") + UI.button("↻ Refresh", "vmIsoLibrary()"))}</div>`;
   if (window.applyRole) applyRole();
 };
@@ -325,7 +325,7 @@ window.vmIsoPrepare = async (share, path) => {
 };
 
 window.vmIsoDelete = async name => {
-  if (!(await ask("Delete this ISO's volume? The file on the share is kept, and it can be made ready again.", { title: "Delete ISO volume", ok: "Delete", danger: true }))) return;
+  if (!(await ask("Delete this ISO's volume? The file on the share is kept, and it can be prepared again.", { title: "Delete ISO volume", ok: "Delete volume", danger: true }))) return;
   try {
     const r = await api("/api/vm/isos/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast(r.detail, "ok");
@@ -347,11 +347,11 @@ window.vmIsoRemoveFolder = async index => {
 /* Choose a folder: a share, then down through its folders. */
 window.vmIsoAddFolder = (share = "", path = "") => {
   const shares = STATE.data.isoLibrary?.shares || [];
-  if (!shares.length) return toast("Make a Network Share first", "bad");
+  if (!shares.length) return toast("Create a network share first", "bad");
   share = share || shares[0].name;
   childModal("Add an ISO folder", `<div class="ui-stack"><div class="f"><label>Share</label>
       <select id="iso_share" onchange="vmIsoAddFolderGo(this.value, '')">${shares.map(s => vhOpt(s.name, s.name, share)).join("")}</select></div>
-    <div id="iso_browse"><div class="empty small"><span class="spin2"></span> reading the share…</div></div></div>`);
+    <div id="iso_browse"><div class="empty small"><span class="spin2"></span> Reading the share…</div></div></div>`);
   vmIsoAddFolderGo(share, path);
 };
 

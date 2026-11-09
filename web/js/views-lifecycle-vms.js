@@ -3,10 +3,10 @@
 window.vmMove = (ns, name) => {
   const nodes = STATE.data.nodes || [];
   modal("Move to another host · " + name, `
-    <p class="muted small">KubeVirt live-migrates the VM — memory is copied while it keeps running,
+    <p class="muted small">KubeVirt moves the VM while it runs. Its memory is copied while it keeps running,
     so there is no downtime.</p>
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="vm_target">
-      <option value="">let KubeVirt choose</option>
+      <option value="">Let KubeVirt choose</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></div>
     ${UI.actions(`<button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Move to another host</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
@@ -15,7 +15,7 @@ window.doVmMove = async (ns, name) => {
   try {
     const r = await api("/api/vm/migrate", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, target: $("#vm_target").value || null }) });
-    toast(`Migration ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
+    toast(`Move ${r.migration} started`, "ok"); closeModal(); setTimeout(() => refresh(true), 2000);
   } catch (e) { toast(e.message, "bad"); }
 };
 /* ---------------- a VM's own address ----------------
@@ -33,10 +33,10 @@ function vmLanNetworks(opts, forVm = false) {
 function vmNetworkNote(opts, forVm = false) {
   if (vmLanNetworks(opts, forVm).length) return "";
   const other = forVm && vmLanNetworks(opts).length;
-  return `<div class="note" style="margin-top:8px"><b>${other ? "No LAN network a VM can join yet." : "No LAN network yet."}</b>
-    ${other ? "The ones there use macvlan, which carries containers only; a VM needs a macvtap network or one on a host bridge."
-      : `A LAN network puts ${opts.harvester ? "VMs and containers" : "VMs or containers"} on your LAN, untagged like the hosts or on a VLAN.`}
-    <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Make one</button></div>`;
+  return `<div class="note" style="margin-top:8px"><b>${other ? "There is no LAN network that a VM can join yet." : "There is no LAN network yet."}</b>
+    ${other ? "The existing networks use macvlan, which carries only apps. A VM needs a macvtap network or a network on a host bridge."
+      : `A LAN network puts ${opts.harvester ? "VMs and apps" : "VMs or apps"} on the LAN, either untagged like the hosts or on a VLAN.`}
+    <button class="btn sm pri" data-need="admin" style="margin-top:6px" onclick="vmNetworkAdd()">＋ Create LAN network</button></div>`;
 }
 
 /* A VM network, made here: the same object Harvester's dashboard makes under
@@ -49,13 +49,13 @@ window.vmNetworkAdd = async (reopen = null) => {
   const open = window.childModal && !$("#modal").classList.contains("hidden") ? childModal : modal;
   // Unread options are not "Multus is needed first" (#620).
   if (opts.unread) {
-    open("New LAN network", UI.callout("bad", "Could not read the network options", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
+    open("New LAN network", UI.callout("bad", "The network options could not be read", esc(opts.unread)) + UI.actions(UI.cancel("Close")));
     return;
   }
   if (!o.harvester && !o.multus) {
-    open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
-        which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
-      <p class="small">${esc(o.multus_help || "Install Multus, then come back here.")}</p>
+    open("New LAN network", `<div class="note"><b>Multus is needed first.</b> An app or VM joins the LAN through a second network,
+        which Kubernetes provides through Multus. k3s and RKE2 do not include it by default.</div>
+      <p class="small">${esc(o.multus_help || "Install Multus, then return here.")}</p>
       ${UI.actions(`${STATE.platform?.helm_controller && ["k3s", "rke2"].includes(STATE.platform?.distribution)
         ? `<button class="btn pri" data-need="admin" onclick="closeModal(); addonInstall('multus')">Install Multus</button>` : ""}
         <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`);
@@ -64,27 +64,27 @@ window.vmNetworkAdd = async (reopen = null) => {
   }
   const clusters = o.cluster_networks?.length ? o.cluster_networks : ["mgmt"];
   const ifaces = o.interfaces || [];
-  const ifaceWord = i => `${i.name} · ${i.kind === "bridge" ? "bridge - VMs and containers" : `${i.kind}${i.master ? ` in ${i.master}` : ""}`}${i.everywhere ? "" : ` · only on ${i.nodes.join(", ")}`}`;
+  const ifaceWord = i => `${i.name} · ${i.kind === "bridge" ? "bridge · VMs and apps" : `${i.kind}${i.master ? ` in ${i.master}` : ""}`}${i.everywhere ? "" : ` · only on ${i.nodes.join(", ")}`}`;
   const carrier = o.harvester
-    ? `<div class="f"><label>Cluster network ${tip("Which of Harvester's cluster networks it rides on. mgmt is the hosts' own network - the usual choice.")}</label>
+    ? `<div class="f"><label>Cluster network ${tip("The Harvester cluster network that carries it. mgmt is the hosts' own network and the usual choice.")}</label>
         <select id="vn_cluster">${clusters.map(c => `<option ${c === "mgmt" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>`
-    : `<div class="f"><label>Host interface ${tip("The interface on each host that your LAN is on. A bridge (br0) carries VMs and containers. On a plain NIC (eth0), a network carries VMs (macvtap) or containers (macvlan), not both. Every host needs one of the same name.")}</label>
+    : `<div class="f"><label>Host interface ${tip("The network interface on each host that connects to the LAN. A bridge (br0) carries VMs and apps. On a plain network card (eth0), a network carries either VMs (macvtap) or apps (macvlan), not both. Every host needs an interface with the same name.")}</label>
         ${ifaces.length ? `<select id="vn_iface" onchange="vmNetworkForChanged()">${ifaces.map(i => `<option value="${esc(i.name)}" data-kind="${esc(i.kind)}">${esc(ifaceWord(i))}</option>`).join("")}</select>`
           : `<input id="vn_iface" class="mono" placeholder="eth0 or br0" oninput="vmNetworkForChanged()">`}</div>`;
   const forVms = back === "vm" || back === "k3s";
-  const usedBy = o.harvester ? "" : `<div class="f" id="vn_for_row"><label>For ${tip("A plain NIC can carry VMs, through macvtap, or containers, through macvlan - each with an address of its own on your LAN. Make one network of each to have both. Through macvtap a VM cannot be reached from its own host; other machines on the LAN reach it.")}</label>
+  const usedBy = o.harvester ? "" : `<div class="f" id="vn_for_row"><label>For ${tip("A plain network card can carry VMs through macvtap, or apps through macvlan, each with its own address on the LAN. Create one network of each to have both. Through macvtap, a VM cannot be reached from its own host, but other machines on the LAN can reach it.")}</label>
       <select id="vn_for" onchange="vmNetworkForChanged()"><option value="vms" ${forVms ? "selected" : ""}>Virtual machines (macvtap)</option>
-        <option value="containers" ${forVms ? "" : "selected"}>Containers (macvlan)</option></select>
+        <option value="containers" ${forVms ? "" : "selected"}>Apps (macvlan)</option></select>
       <div id="vn_for_note"></div></div>`;
   open("New LAN network", `
-    <p class="small" style="margin-top:0">VMs and containers on it are on your LAN, with addresses from your router's DHCP or ones of their own.</p>
-    <div class="f2"><div class="f"><label>Name ${tip("How it is listed wherever a network is chosen, like lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
+    <p class="small" style="margin-top:0">VMs and apps on this network are on the LAN, with addresses from the router's DHCP or their own fixed addresses.</p>
+    <div class="f2"><div class="f"><label>Name ${tip("The name shown wherever a network is chosen, such as lan or vlan20.")}</label><input id="vn_name" value="lan"></div>
       ${carrier}</div>
-    ${!o.harvester && !ifaces.length ? '<div class="dim xs">The node probe has not reported the hosts\' interfaces, so type the name - <span class="mono">ip link</span> on a host lists them.</div>' : ""}
+    ${!o.harvester && !ifaces.length ? '<div class="dim xs">The node probe has not reported the hosts\' interfaces, so enter the name. <span class="mono">ip link</span> on a host lists them.</div>' : ""}
     ${usedBy}
-    <div class="f"><label>VLAN ${tip("Empty: untagged - the same LAN the hosts are on. A number: that VLAN, which your switch must carry to the hosts.")}</label>
-      <input id="vn_vlan" type="number" min="1" max="4094" placeholder="empty - untagged, the hosts' own LAN"></div>
-    ${UI.actions(`<button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
+    <div class="f"><label>VLAN ${tip("Leave empty for untagged traffic on the same LAN as the hosts. Enter a number for that VLAN, which the switch must carry to the hosts.")}</label>
+      <input id="vn_vlan" type="number" min="1" max="4094" placeholder="Empty for untagged, the hosts' own LAN"></div>
+    ${UI.actions(`<button class="btn pri" onclick="vmNetworkAddGo()">Create network</button>
       <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
   window.__vmNetworkReopen = back;
   window.__vmNetworkOptions = o;
@@ -99,7 +99,7 @@ window.vmNetworkForChanged = () => {
   row.hidden = bridge;
   const vms = $("#vn_for").value === "vms";
   $("#vn_for_note").innerHTML = !bridge && vms && !o.macvtap
-    ? `<div class="note small" style="margin-top:6px"><b>macvtap is not installed yet.</b> It is one of Homestead's required components where VMs run.
+    ? `<div class="note small" style="margin-top:6px"><b>macvtap is not installed yet.</b> It is one of Homestead's required components on clusters that run VMs.
         <button class="btn sm pri" data-need="admin" onclick="baselineInstall()">Install components</button></div>` : "";
 };
 window.vmNetworkAddGo = async () => {
@@ -123,17 +123,17 @@ function vmAddressFields(p, opts, count = 1) {
   const subnets = opts.subnets || [];
   const first = subnets[0];
   return `<div class="f2">
-      <div class="f"><label>Subnet ${tip("From Networking › IP addresses: the addresses offered are free there, outside the DHCP range and the VIP pools.")}</label>
+      <div class="f"><label>Subnet ${tip("From Networking › IP addresses. The addresses offered are free, and outside the DHCP range and the virtual IP pools.")}</label>
         <select id="${p}_subnet" onchange="vmSubnetPicked(${jsq(p)}, ${count})">${subnets.map(s => `<option value="${esc(s.cidr)}">${esc(s.cidr)}${s.name ? ` · ${esc(s.name)}` : ""} · ${s.free.length} free</option>`).join("")}
-          <option value="">another - type it in</option></select></div>
+          <option value="">Another subnet (enter it)</option></select></div>
       <div class="f"><label>${count > 1 ? "Addresses, one per host" : "Address"}</label>
         <input id="${p}_ip" class="mono" placeholder="${count > 1 ? "192.0.2.60, 192.0.2.61" : "192.0.2.60"}" list="${p}_free" data-ipam="${count > 1 ? "multi" : ""}">
         <datalist id="${p}_free"></datalist></div></div>
     <div class="f2">
       <div class="f"><label>Prefix length</label><input id="${p}_prefix" type="number" min="8" max="30" value="${first ? esc(first.cidr.split("/")[1]) : 24}"></div>
       <div class="f"><label>Gateway</label><input id="${p}_gw" class="mono" value="${esc(first?.gateway || "")}" placeholder="192.0.2.1"></div></div>
-    <div class="f"><label>DNS servers ${tip("Comma-separated. Left empty, the gateway answers DNS.")}</label><input id="${p}_dns" class="mono" placeholder="${esc(first?.gateway || "192.0.2.1")}"></div>
-    ${subnets.length ? "" : '<div class="dim xs">IP addresses knows no subnet yet: add yours under Networking › IP addresses to be offered free addresses and have these recorded.</div>'}`;
+    <div class="f"><label>DNS servers ${tip("Separate addresses with commas. If left empty, the gateway is used for DNS.")}</label><input id="${p}_dns" class="mono" placeholder="${esc(first?.gateway || "192.0.2.1")}"></div>
+    ${subnets.length ? "" : '<div class="dim xs">No subnet has been added yet. Add one under Networking › IP addresses to be offered free addresses and to have the chosen addresses recorded.</div>'}`;
 }
 window.vmSubnetPicked = (p, count = 1) => {
   const opts = window.__vmCreateOptions || {};
@@ -168,7 +168,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   // choices (other namespaces, imported disks when none was chosen) is named
   // on the form instead.
   const missed = [];
-  const partly = (path, what, fallback) => api(path).catch(e => { missed.push(`Could not read ${what}: ${e.message}`); return fallback; });
+  const partly = (path, what, fallback) => api(path).catch(e => { missed.push(`${what[0].toUpperCase()}${what.slice(1)} could not be read. ${e.message}`); return fallback; });
   let opts, disks, vipOptions, devices, namespaces;
   try {
     let network;
@@ -195,7 +195,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   const vmMachine = `
     <div class="f2">
       <div class="f"><label>Name</label><input type="text" id="v_name" placeholder="ubuntu-test"></div>
-      <div class="f"><label for="v_ns">Namespace ${tip("Where the VM, its disk and its cloud-init Secret are made. An imported disk sets it to its own; ISOs are in " + defaultNamespace() + ".")}</label>
+      <div class="f"><label for="v_ns">Namespace ${tip("The namespace for the VM, its disk and its cloud-init Secret. An imported disk sets its own namespace. ISOs are in " + defaultNamespace() + ".")}</label>
         <select id="v_ns" onchange="vmNamespaceChanged()">${[...new Set([defaultNamespace(), ...namespaces])].map(n => `<option ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
         <div class="dim xs" id="v_ns_note" style="margin-top:4px" hidden></div></div>
     </div>
@@ -205,7 +205,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     </div>
     <div class="f2">
       <div class="f"><label>Disk (GiB)</label><input type="number" id="v_disk" value="20" min="5"></div>
-      <div class="f"><label>Root password ${tip("Required when Homestead provisions a new disk. Optional for an imported disk that already has login access configured.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
+      <div class="f"><label>Root password ${tip("Required when Homestead creates a new disk. Optional for an imported disk that already has sign-in set up.")}</label><input type="password" id="v_pass" autocomplete="new-password" placeholder="Set an initial password"></div>
     </div>
 `;
   const vmDisk = `
@@ -213,59 +213,59 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       ? "Attach a completed import as it is, start from one of Harvester's images, or download an image while the VM is created."
       : "Attach a completed import as it is, or download an image while the VM is created.")}</label>
       <select id="v_boot" onchange="vmBootChanged()">
-        <option value="">blank disk</option>
+        <option value="">Blank disk</option>
         ${readyDisks.map(d => `<option value="disk:${esc(d.namespace)}/${esc(d.name)}" ${selected === `disk:${d.namespace}/${d.name}` ? "selected" : ""}>Imported · ${esc(d.namespace)}/${esc(d.name)} (${esc(d.capacity || "size unknown")})</option>`).join("")}
         ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" data-size="${i.size_gb}" ${window.__vmPreset === `image:${i.namespace}/${i.name}` ? "selected" : ""}>Harvester image · ${esc(i.display)} (${i.size_gb}G)</option>`).join("")}
-        ${(opts.store || []).length ? `<optgroup label="Image store - the publisher's newest build">${opts.store.map(s => `<option value="store:${esc(s.id)}" data-size="${s.min_gb}"
+        ${(opts.store || []).length ? `<optgroup label="Image store · the publisher's newest build">${opts.store.map(s => `<option value="store:${esc(s.id)}" data-size="${s.min_gb}"
           ${window.__vmPreset === `store:${s.id}` ? "selected" : ""}>${esc(s.name)} · ${esc(s.variant)}${opts.harvester ? (s.kept ? (s.ready ? " · kept" : " · downloading") : " · downloads now") : ""}</option>`).join("")}</optgroup>` : ""}
         ${opts.cdi || opts.harvester ? `<option value="url">${opts.harvester ? "Download from a URL (as a Harvester image)" : "Download from HTTP(S) URL"}</option>` : ""}
-        ${(opts.isos || []).length ? `<optgroup label="Install from an ISO - a blank disk, the ISO in its CD-ROM drive">${opts.isos.map(i => `<option value="iso:${esc(i.name)}">${esc(i.file)}</option>`).join("")}</optgroup>` : ""}
+        ${(opts.isos || []).length ? `<optgroup label="Install from an ISO · a blank disk, with the ISO in its CD-ROM drive">${opts.isos.map(i => `<option value="iso:${esc(i.name)}">${esc(i.file)}</option>`).join("")}</optgroup>` : ""}
       </select>
-      <div class="dim xs" style="margin-top:6px">Installing from an ISO? Make one ready in the <a class="linkish" onclick="vmIsoLibrary()">ISO library</a> first.</div></div>
-    <div class="f" id="v_drivers_row" hidden><label>Drivers CD ${tip("A second CD-ROM for the installer's drivers. Windows setup sees no disk until it loads the VirtIO storage driver: attach virtio-win.iso here, and in setup choose Load driver, then vioscsi or viostor for your Windows version.")}</label>
-      <select id="v_drivers"><option value="">none</option>${(opts.isos || []).map(i => `<option value="${esc(i.name)}" ${/virtio/i.test(i.file) ? "selected" : ""}>${esc(i.file)}</option>`).join("")}</select>
-      <div class="dim xs" style="margin-top:4px">${(opts.isos || []).some(i => /virtio/i.test(i.file)) ? "" : "For Windows, make virtio-win.iso (from the Fedora project) ready in the ISO library."}</div></div>
+      <div class="dim xs" style="margin-top:6px">To install from an ISO, prepare it in the <a class="linkish" onclick="vmIsoLibrary()">ISO library</a> first.</div></div>
+    <div class="f" id="v_drivers_row" hidden><label>Drivers CD ${tip("A second CD-ROM drive for the installer's drivers. Windows setup finds no disk until it loads the VirtIO storage driver. Attach virtio-win.iso here, then in setup choose Load driver, and vioscsi or viostor for the Windows version.")}</label>
+      <select id="v_drivers"><option value="">None</option>${(opts.isos || []).map(i => `<option value="${esc(i.name)}" ${/virtio/i.test(i.file) ? "selected" : ""}>${esc(i.file)}</option>`).join("")}</select>
+      <div class="dim xs" style="margin-top:4px">${(opts.isos || []).some(i => /virtio/i.test(i.file)) ? "" : "For Windows, prepare virtio-win.iso (from the Fedora project) in the ISO library."}</div></div>
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
 `;
   // A step of its own, as Edit has a Hardware tab: the guest type first, then
   // the fields it fills in.
   const vmHardware = `
-    <div class="f"><label>Guest type ${tip("Firmware, TPM, clock and devices for the kind of guest, as Proxmox's OS type sets them. Adjust them below, now or later in Edit.")}</label>
+    <div class="f"><label>Guest type ${tip("Sets the firmware, TPM, clock and devices for the kind of guest, like the OS type in Proxmox. They can be changed below, or later in Edit.")}</label>
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
-      <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
+      <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and a serial console</div></div>
     ${opts.hardware_base ? vmHardwareFields(opts.hardware_base, opts, false, true, true) : ""}
 `;
   const vmNetwork = `
     <label class="check"><input id="v_isolated" type="checkbox" onchange="vmNetChanged()"> Isolated VM</label>
-    <p class="dim small">No virtual network cards, including the automatic pod-network card. Clear this option before adding a card. PCI or USB passthrough can still provide a physical network device.</p>
+    <p class="dim small">The VM has no virtual network cards, not even the automatic one on the cluster network. Clear this option before adding a card. A physical network device can still be passed through over PCI or USB.</p>
     <div id="v_network_controls">
-    <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
-      <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
+    <div class="f"><label>Network ${tip("On the cluster network, the VM is reached through a service, like an app. On a LAN network, it is a machine on the LAN like any other, with an address from DHCP or its own fixed address.")}</label>
+      <select id="v_net" onchange="vmNetChanged()"><option value="pod">Cluster network · reached through a service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
       ${vmNetworkNote(opts, true)}</div>
-    <div class="f"><label>Network card ${tip("The virtual card the guest sees. VirtIO is fastest but needs its driver: Linux has it, Windows needs the guest tools from virtio-win.iso. An Intel e1000e works in Windows with no extra drivers, which is what the Windows guest types choose.")}</label>
+    <div class="f"><label>Network card ${tip("The virtual network card the guest sees. VirtIO is the fastest but needs its driver. Linux includes it, and Windows needs the guest tools from virtio-win.iso. An Intel e1000e works in Windows without extra drivers, so the Windows guest types choose it.")}</label>
       <select id="v_nic_model"><option value="virtio">VirtIO</option><option value="e1000e">Intel e1000e</option><option value="e1000">Intel e1000</option><option value="rtl8139">Realtek RTL8139</option></select></div>
-    <div id="v_service_wrap"><div class="f"><label>Service VIP</label><select id="v_service" onchange="vmNetChanged()"><option value="">Cluster only / configure later</option>${nodeAddressesOnly() ? "" : `${vipOptions.shared ? `<option value="shared">Default workload VIP · ${esc(vipOptions.shared)}</option>` : ""}<option value="manual">Selected VIP</option>`}</select></div>
-      ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses host addresses, not movable VIPs. Install kube-vip or MetalLB before choosing a Service VIP.</p>' : ""}
-      <div id="v_service_pick" class="f" hidden><label>Selected VIP</label>${vipPicker("vsvc", "", vipOptions)}</div>
-      <p class="dim small">Two steps: create the VM, then review its VIP and port mappings before publishing them. If VIP setup is cancelled or fails, the VM remains created and can be configured from Edit → Network.</p></div>
+    <div id="v_service_wrap"><div class="f"><label>Virtual IP</label><select id="v_service" onchange="vmNetChanged()"><option value="">Cluster only, or set up later</option>${nodeAddressesOnly() ? "" : `${vipOptions.shared ? `<option value="shared">Default virtual IP · ${esc(vipOptions.shared)}</option>` : ""}<option value="manual">Specific virtual IP</option>`}</select></div>
+      ${nodeAddressesOnly() ? '<p class="note small">ServiceLB uses the hosts\' own addresses, not virtual IPs that can move. Install kube-vip or MetalLB before choosing a virtual IP.</p>' : ""}
+      <div id="v_service_pick" class="f" hidden><label>Specific virtual IP</label>${vipPicker("vsvc", "", vipOptions)}</div>
+      <p class="dim small">The VM is created first. Its virtual IP and ports are then reviewed before they are made available. If that step is cancelled or fails, the VM is kept and its network can be set up under Edit → Network.</p></div>
     <div id="v_addr_wrap" hidden>
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
-        <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
+        <option value="dhcp">From the network's DHCP</option><option value="static">A fixed address</option></select></div>
       <div id="v_static" hidden>${vmAddressFields("v", opts)}</div></div>
     </div>
 `;
   const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
-      ? "The storage class for a blank or downloaded disk. A disk from a Harvester image always uses that image's own class."
-      : "The storage class for the disk. The cluster's default class is chosen for you.")}</label>
+      ? "The storage class for a blank or downloaded disk. A disk from a Harvester image always uses that image's storage class."
+      : "The storage class for the disk. The cluster's default class is selected.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
-    ${UI.more("How the disk is made", `<p>${opts.harvester
-      ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."
-      : opts.cdi ? `New disks are CDI DataVolumes on the class above, with the access mode that class supports.
-        A VM on a disk only one host can reach stays on that host.`
-      : `<b>CDI is not installed</b>, so a VM here starts from a blank disk that KubeVirt formats itself.
+    ${UI.more("How the disk is created", `<p>${opts.harvester
+      ? "New disks are created the way Harvester creates them, as shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image and kept in its image list for the next VM."
+      : opts.cdi ? `New disks are CDI DataVolumes in the storage class above, with the access mode that class supports.
+        A VM on a disk that only one host can use stays on that host.`
+      : `<b>CDI is not installed</b>, so a VM on this cluster starts from a blank disk that KubeVirt formats.
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
   modal("New virtual machine", UI.notices(missed.map(text => ["warn", text]), "Parts of this form could not be read") + stepper("v_steps", [
@@ -282,7 +282,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
 window.vmBootChanged = () => {
   const boot = $("#v_boot")?.value || "";
   // An installer asks for its own password; cloud-init is for cloud images.
-  if ($("#v_pass")) $("#v_pass").placeholder = boot.startsWith("iso:") ? "Not used: the installer asks" : "Set an initial password";
+  if ($("#v_pass")) $("#v_pass").placeholder = boot.startsWith("iso:") ? "Not used. The installer asks for it." : "Set an initial password";
   if ($("#v_url_row")) $("#v_url_row").hidden = boot !== "url";
   if ($("#v_drivers_row")) $("#v_drivers_row").hidden = !boot.startsWith("iso:");
   // An import brings its own disk; a Harvester image brings its own class.
@@ -325,14 +325,14 @@ window.doVmCreate = async () => {
   if (body.isolated) { delete body.network; delete body.nic_model; }
   if (!body.isolated && body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
-    if (!body.static_ip.address) return toast("Give the VM its address", "bad");
+    if (!body.static_ip.address) return toast("Enter the VM's address", "bad");
   }
   if (!body.name) return toast("Name is required", "bad");
   if (body.install_iso && body.namespace !== defaultNamespace())
-    return toast(`ISOs are in ${defaultNamespace()}: choose that namespace to install from one`, "bad");
+    return toast(`ISOs are in ${defaultNamespace()}. Choose that namespace to install from an ISO.`, "bad");
   const serviceMode = body.network === "pod" ? $("#v_service")?.value || "" : "";
   const selectedVip = serviceMode === "manual" ? $("#vsvc_lb_ip").value.trim() : "";
-  if (serviceMode === "manual" && !selectedVip) return toast("Choose the VM's Service VIP", "bad");
+  if (serviceMode === "manual" && !selectedVip) return toast("Choose the VM's virtual IP", "bad");
   // Only what differs from a plain VM: the guest type's settings and any changed by hand.
   const base = window.__vmCreateOptions?.hardware_base;
   const hardware = base && $("#vh") ? vmHardwareChanges(base) : vmPresetSettings($("#v_preset")?.value || "");
@@ -347,30 +347,30 @@ window.doVmCreate = async () => {
   if (boot === "url" && !/^https?:\/\/[^/\s]+/i.test(body.image_url)) {
     // A file name here is usually a Harvester image, which is picked from the list instead.
     const image = (window.__vmCreateOptions?.images || []).find(i => i.display === body.image_url || i.name === body.image_url);
-    return toast(image ? `${image.display} is a Harvester image: choose it under Boot disk instead of a URL`
-      : "the image URL must start with http:// or https://", "bad");
+    return toast(image ? `${image.display} is a Harvester image. Choose it under Boot disk instead of entering a URL.`
+      : "The image URL must start with http:// or https://", "bad");
   }
   return vmCreateReview(body, {serviceMode, selectedVip});
 };
 /* Review, then create a VM (#909), on the shared review flow: it keeps the sequence, the busy flag and the
-   one-shot send. This view keeps its words and the Service VIP set up after the create. */
+   one-shot send. This view keeps its words and the Service virtual IP set up after the create. */
 const VM_CREATE = UI.reviewFlow({
   preview: async ({ frozen, network }) => {
     const review = await api("/api/vm/create/preview", {method:"POST", headers:{"Content-Type":"application/json"},body:JSON.stringify(frozen)});
     if (!(review.config?.isolated === true || review.config?.mac) || !review.capacity_token || typeof review.capacity?.blocked !== "boolean")
-      throw new Error("VM creation review unavailable. Nothing was created; refresh before continuing.");
+      throw new Error("The VM review is not available. Nothing was created. Refresh before continuing.");
     return {...review, network:{...network}};
   },
   render: review => {
     const cfg = review.config;
     const ip = cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : "";
     const objects = UI.facts([
-      ["VM", `${esc(cfg.cores || 2)} vCPUs · ${esc(cfg.memory || "2Gi")} memory · ${cfg.start === false ? "created stopped" : "starts once its disks are ready"}`],
-      ["Network", cfg.isolated ? "Isolated: no virtual network cards" : `${esc(cfg.network || "pod")} · MAC <span class="mono">${esc(cfg.mac)}</span>${ip}`],
+      ["VM", `${esc(cfg.cores || 2)} vCPUs · ${esc(cfg.memory || "2Gi")} memory · ${cfg.start === false ? "created stopped" : "starts when its disks are ready"}`],
+      ["Network", cfg.isolated ? "Isolated, with no virtual network cards" : `${esc(cfg.network || "pod")} · MAC <span class="mono">${esc(cfg.mac)}</span>${ip}`],
       ["Disks", review.volumes?.length ? review.volumes.map(v => `<span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)}`).join("<br>") : "none"],
       cfg.host_devices?.add?.length ? ["Passthrough", cfg.host_devices.add.map(d => `${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}`).join("<br>")] : null]);
     const details = `${review.volumes?.length ? `<ul class="ui-list">${review.volumes.map(v => `<li><span class="mono">${esc(v.name)}</span>: ${esc(v.access_mode)} · ${esc(v.volume_mode)}</li>`).join("")}</ul>` : ""}
-      <p class="ui-help">Guest login settings are part of this review but are not shown.</p>`;
+      <p class="ui-help">The guest sign-in settings are part of this review but are not shown.</p>`;
     childModal(`Create VM · ${cfg.name}`, startReview(review.capacity, { what: "Creates", kind: "VM", name: cfg.name, where: cfg.namespace || "", objects, details,
         ackId: "vmCreateApprove", onAck: "vmCreateReviewReady()",
         actions: { dismiss: { label: "Back to configuration", onclick: "vmCreateReviewBack()" },
@@ -382,7 +382,7 @@ const VM_CREATE = UI.reviewFlow({
   blocked: review => review.capacity.blocked, ack: "vmCreateApprove", button: "vmCreateApply",
   apply: async review => {
     const cfg = review.config, button = $("#vmCreateApply");
-    button.disabled = true; button.textContent = "Preparing disk and creating VM…";
+    button.disabled = true; button.textContent = "Preparing the disk and creating the VM…";
     try {
       const result = await api("/api/vm/create", {method:"POST",headers:{"Content-Type":"application/json"},
         body:JSON.stringify({...cfg, capacity_token:review.capacity_token,confirm_capacity:true})});
@@ -391,12 +391,12 @@ const VM_CREATE = UI.reviewFlow({
       closeModal(); go("vms");
       if (!cfg.isolated && review.network.serviceMode) {
         try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
-        catch(error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`,"bad"); }
+        catch(error) { toast(`The VM was created, but its virtual IP could not be set up. ${String(error.message).replace(/\.$/, "")}. Use Edit → Network to set it up.`,"bad"); }
       }
     } catch(error) {
       if($("#vmCreateApply") === button) {
-        button.textContent = "Inspect before creating again";
-        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. The request was not repeated. Images, disks, login settings or the VM itself may already exist. Inspect Virtual machines and Volumes before a new review; retained disks are not deleted automatically.`)}`);
+        button.textContent = "Check before creating again";
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. The request was not sent again. Images, disks, sign-in settings or the VM itself may already exist. Check Virtual machines and Volumes before starting a new review. Disks that were kept are not deleted automatically.`)}`);
       }
       toast(error.message,"bad");
     }
@@ -407,7 +407,7 @@ window.vmCreateReview = (body, network = {}) => VM_CREATE.open({ frozen: JSON.pa
 window.vmCreateReviewBack = () => { if (VM_CREATE.back()) modalBack(); };
 window.vmCreateReviewReady = () => VM_CREATE.ready();
 window.vmCreateReviewedApply = async () => {
-  if (!vmCreateReviewReady()) return toast("Review the VM and acknowledge its warnings first", "bad");
+  if (!vmCreateReviewReady()) return toast("First review the VM and accept its warnings", "bad");
   await VM_CREATE.apply();
 };
 

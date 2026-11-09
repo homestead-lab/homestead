@@ -153,7 +153,7 @@ class RequestsTests(unittest.TestCase):
         apps = [{"id": a["id"], "changes": a["changes"]} for a in plan["apps"] if a["chosen"]]
         body = {"apps": apps, "review_token": plan["review_token"], "restart": True}
         with mock.patch.object(reserve, "operations", jobs):
-            with self.assertRaisesRegex(ValueError, "confirm the restarts"):
+            with self.assertRaisesRegex(ValueError, "Confirm the restarts"):
                 reserve.start({**body, "restart": False}, "operator")
             self.running = [{"kind": reserve.KIND, "status": "running"}]
             with self.assertRaisesRegex(ValueError, "already being set"):
@@ -223,7 +223,7 @@ class RequestsTests(unittest.TestCase):
         item = self.job(["lab/paperless"])
         self.node_memory = "256Mi"
         message = reserve.status(item)[2]
-        self.assertIn("no host it may run on has room for its new reservation (480 MiB", message)
+        self.assertIn("no host it can run on has room for its new reservation of 480 MiB", message)
         self.assertEqual([], self.sent)
 
     def test_an_app_deleted_mid_job_is_skipped_and_the_rest_go_on(self):
@@ -253,7 +253,7 @@ class RequestsTests(unittest.TestCase):
         item["ref"]["started"] -= 601
         state, _, message = reserve.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("the rest were not changed", message)
+        self.assertIn("The rest were not changed", message)
         self.assertIn("It reserved app: CPU 50m, memory 128Mi before", message)
         self.assertEqual(1, len(self.sent))
 
@@ -275,7 +275,7 @@ class RequestsTests(unittest.TestCase):
         self.nodes(self.node("small", "256Mi", {"kubernetes.io/hostname": "small"}),
                    self.node("big", "64Gi", {"kubernetes.io/hostname": "big"}))
         message = reserve.status(self.job(["lab/paperless"]))[2]
-        self.assertIn("no host it may run on has room", message)
+        self.assertIn("no host it can run on has room", message)
         self.assertEqual([], self.sent)
 
     def test_a_host_whose_taint_the_app_does_not_tolerate_gives_it_no_room(self):
@@ -360,7 +360,7 @@ class RequestsTests(unittest.TestCase):
         reserve.bind(self.kget, lambda *a, **k: self.sent.append((a, k)), usage, managed,
                      ("homestead", "homestead"), {"kube-system"}, lambda: True)
         self.node_memory = "600Mi"     # 200 free; 400 with its own pod back - short of 480
-        self.assertIn("no host it may run on has room", reserve.status(self.job(["lab/paperless"]))[2])
+        self.assertIn("no host it can run on has room", reserve.status(self.job(["lab/paperless"]))[2])
 
     def test_a_container_reserving_through_its_limit_is_shown_with_it(self):
         found = {"days": 7, "hours": 168, "samples": 2016, "cpu_p95_m": 40, "mem_p95_mi": 380, "mem_max_mi": 500,

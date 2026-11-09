@@ -183,7 +183,7 @@ class ClusterCopyTests(unittest.TestCase):
     def test_copy_can_replace_or_clear_source_vbios(self):
         self.hardware_vm()
         replacement = b"\x55\xaa" + b"\x11" * 1022
-        for namespace, rom in (("replacement", base64.b64encode(replacement).decode()), ("default-rom", "")):
+        for namespace, rom in (("replacing it", base64.b64encode(replacement).decode()), ("default-rom", "")):
             move = PLAN.start("shed", "vm", "desktop", namespace, transfer_mode="copy",
                                 host_devices={"display": {"resource": "example.test/destination-gpu", "rom": rom}})
             self.assertEqual("succeeded", self.settle(move["id"])["status"])
@@ -423,7 +423,7 @@ class ClusterCopyTests(unittest.TestCase):
     def test_old_source_ignoring_requested_namespace_is_blocked_before_quiesce(self):
         self.seed_vm()
         with mock.patch.object(source, "in_namespace", side_effect=lambda ns, call, *args, **kwargs: call(*args, **kwargs)):
-            with self.assertRaisesRegex(ValueError, "selected source namespace"):
+            with self.assertRaisesRegex(ValueError, "chosen source namespace"):
                 PLAN.start("shed", "vm", "desktop", "copied", transfer_mode="copy", source_namespace="guests")
         self.assertNotIn("/api/move/source", self.remote_calls)
 

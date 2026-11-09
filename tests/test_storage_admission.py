@@ -148,7 +148,7 @@ class StorageAdmissionTests(unittest.TestCase):
             numa={"guestMappingPassthrough": {}}, dedicatedCpuPlacement=True)
         result = self.plan()
         self.assertTrue(result["blocked"], result)
-        self.assertIn("verified local CPU", " ".join(result["blockers"]))
+        self.assertIn("confirmed local CPU", " ".join(result["blockers"]))
 
     def test_two_individually_fitting_workloads_cannot_double_book_capacity(self):
         self.controller("Deployment", "one", "5Gi"); self.controller("Deployment", "two", "5Gi")
@@ -197,7 +197,7 @@ class StorageAdmissionTests(unittest.TestCase):
     def test_statefulset_auto_delete_retention_is_not_silently_accepted(self):
         self.controller("StatefulSet", "database")
         self.proposals[0]["object"]["spec"]["persistentVolumeClaimRetentionPolicy"] = {"whenScaled": "Delete"}
-        with self.assertRaisesRegex(ValueError, "delete its claims"): self.plan()
+        with self.assertRaisesRegex(ValueError, "delete its volumes"): self.plan()
 
     def test_cronjob_models_parallelism_and_warns_about_future_executions(self):
         self.controller("CronJob", "backup", "3Gi", count=3)

@@ -180,10 +180,10 @@ class ForecastTests(unittest.TestCase):
         pods = [pod("postgres", "a", mem="6Gi", kind="StatefulSet"), pod("x-db", "a", mem="4Gi", kind="StatefulSet")]
         f = run("a", [node("a"), node("b")], pods, self.sets(postgres="moves", x_db="waits"))
         self.assertEqual("If a fails, b would have 6 of 15 GiB of memory reserved. It fits. "
-                         "1 app waits until its pod is deleted; If this host goes down says why.", f["sentence"])
+                         "1 app waits until its pod is deleted. If this host goes down says why.", f["sentence"])
         two = run("a", [node("a"), node("b")], [], self.sets(postgres="waits", x_db="waits", x_cache="unknown"))
         self.assertEqual("If a fails, nothing on it needs room on another host. 2 apps wait until their pod is deleted "
-                         "and 1 app couldn't be checked; If this host goes down says why.", two["sentence"])
+                         "and 1 app could not be checked. If this host goes down says why.", two["sentence"])
         self.assertEqual((2, "fits"), (two["waiting_for_deletion"], two["verdict"]))
 
     def test_a_set_waiting_for_its_host_gets_no_room(self):
@@ -215,10 +215,10 @@ class ForecastTests(unittest.TestCase):
         f = run("a", [node("a"), node("b")], [pod("web", "a", mem="1Gi"), pod("postgres", "a", mem="6Gi", kind="StatefulSet")],
                 {**preview("web", to=("b",)), "unread": ["StatefulSets"]})
         self.assertEqual("If a fails, b would have 1 of 15 GiB of memory reserved. It fits. "
-                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+                         "StatefulSets could not be read, so they are not counted.", f["sentence"])
         f = run("a", [node("a"), node("b")], [], {"apps": [], "unread": ["StatefulSets"]})
         self.assertEqual("If a fails, nothing on it needs room on another host. "
-                         "StatefulSets couldn't be read, so they aren't counted.", f["sentence"])
+                         "StatefulSets could not be read, so they are not counted.", f["sentence"])
 
     def test_with_no_statefulset_waiting_the_sentence_is_unchanged(self):
         f = run("a", [node("a"), node("b")], [pod("web", "b")], preview())

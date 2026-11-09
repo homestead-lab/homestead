@@ -24,7 +24,7 @@
   function note(kind, detail = {}) {
     if (!active || stopped || !window.can?.("admin")) return;
     if (total >= 10000 || queue.length >= 500) {
-      trouble = "Recording limit reached. Stop to save the captured events.";
+      trouble = "The recording limit was reached. Stop recording to save the captured events.";
       stopped = true; banner(); return;
     }
     total++;
@@ -37,8 +37,8 @@
     sending = post("events", { id: recording.id, batch: number, events }).then(result => {
       if (active !== recording) return;
       queue.splice(0, events.length); batch = result.batch; trouble = "";
-      if (result.truncated || result.status === "interrupted") { stopped = true; trouble = "Recording limit reached. Review the captured events."; }
-    }).catch(error => { trouble = "Events are waiting to save. " + error.message; throw error; })
+      if (result.truncated || result.status === "interrupted") { stopped = true; trouble = "The recording limit was reached. Review the captured events."; }
+    }).catch(error => { trouble = "Some events are waiting to be saved. " + error.message; throw error; })
       .finally(() => { sending = null; banner(); });
     return sending;
   }
@@ -46,7 +46,7 @@
     const host = $("#diagnosticRecorder"); if (!host) return;
     host.classList.toggle("hidden", !active && !interrupted);
     if (interrupted) {
-      host.innerHTML = `<div><b>Recording interrupted</b><span>Saved events are available. Events not yet sent may be missing.</span></div><button class="btn sm" onclick="bugRecover()">Review</button>`;
+      host.innerHTML = `<div><b>Recording interrupted</b><span>The saved events are available. Events that were not yet sent may be missing.</span></div><button class="btn sm" onclick="bugRecover()">Review</button>`;
     } else if (active) {
       const elapsed = Math.max(0, Math.floor((performance.now() - active.localStarted) / 1000));
       host.innerHTML = `<div><b>${stopped ? "Recording stopped" : "Recording UI actions"} · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}</b><span>${esc(trouble || `${total} events · this tab · stops after 10 minutes`)}</span></div><button class="btn sm" onclick="bugStop()">${stopped ? "Save and review" : "Stop recording"}</button>`;
@@ -131,13 +131,13 @@
     banner();
   }, 5000);
 
-  const fullWarning = () => UI.callout("warn", "Full logs may contain sensitive information", "Original names, addresses and collected log text are retained. Keep this download private. GitHub always uses an anonymised draft.");
+  const fullWarning = () => UI.callout("warn", "Full logs may contain sensitive information", "The original names, addresses and collected log text are kept. Keep this download private. GitHub issues always use an anonymised draft.");
   const choices = (id, change = "") => UI.field("Download format", `<select id="${id}" aria-label="Download format" ${change ? `onchange="${change}"` : ""}><option value="anonymised">Anonymised · recommended for sharing</option><option value="full" ${format === "full" ? "selected" : ""}>Full · keep private</option></select>`);
   const wrap = html => `<div class="ui-stack" data-diagnostic-ignore>${html}</div>`;
   const fail = error => toast(error.message, "bad");
-  window.troubleshootingCards = () => `${UI.settingsCard(`${UI.moduleHeader(`Bug reports`, `Record UI actions and diagnostics while you reproduce a problem.`, `<button class="btn sm pri" data-need="admin" onclick="bugStart()">Record a bug</button>`)}
-    ${UI.guide("What gets recorded", "Clicks, navigation, focus, scrolling, shortcuts, UI states, request results and browser errors in this tab. Form values, password input, terminal contents and screen video are excluded. Original service logs may contain sensitive data. Saved reports expire after 24 hours.")}
-    <div id="diagnosticReports">${can("admin") ? '<div class="empty small">Loading reports…</div>' : '<div class="empty small">An administrator can record bugs and download logs.</div>'}</div>`, {tab:`troubleshooting`})}
+  window.troubleshootingCards = () => `${UI.settingsCard(`${UI.moduleHeader(`Bug reports`, `Record UI actions and diagnostics while a problem is reproduced.`, `<button class="btn sm pri" data-need="admin" onclick="bugStart()">Record bug</button>`)}
+    ${UI.guide("What is recorded", "Clicks, navigation, focus, scrolling, shortcuts, UI states, request results and browser errors in this tab. Form values, passwords, terminal contents and screen video are not recorded. The original service logs may contain sensitive data. Saved reports expire after 24 hours.")}
+    <div id="diagnosticReports">${can("admin") ? '<div class="empty small">Loading reports…</div>' : '<div class="empty small">An admin can record bugs and download logs.</div>'}</div>`, {tab:`troubleshooting`})}
     ${UI.settingsCard(`${UI.moduleHeader(`Logs package`, `Download anonymised or full diagnostics without recording a bug.`, `<button class="btn sm" data-need="admin" onclick="bugPackage()">Download logs</button>`)}`, {tab:`troubleshooting`})}`;
   window.troubleshootingPaint = async () => {
     const host = $("#diagnosticReports"); if (!host || !can("admin")) return;
@@ -147,14 +147,14 @@
       host.innerHTML = UI.table([{ label: "Report" }, { label: "State" }, { label: "Actions" }], reports.map(row => [
         `<b>${esc(row.title)}</b><div class="dim xs">${esc(fmtAt(row.created))} · ${row.events} events</div>`,
         esc(row.status), actionBar([{ label: "Review", run: `bugReview(${jsq(row.id)})` }, { label: "Delete", danger: true, run: `bugDelete(${jsq(row.id)})` }], { shown: 1 }),
-      ]), { empty: "No saved reports. Record a bug or collect a logs package." });
-    } catch (error) { host.textContent = "Could not load saved reports. " + error.message; }
+      ]), { empty: "There are no saved reports. Record a bug or download a logs package." });
+    } catch (error) { host.textContent = "The saved reports could not be loaded. " + error.message; }
   };
   window.bugStart = () => {
-    if (active) return toast("A recording is already active in this tab. Use Stop recording to review it.");
+    if (active) return toast("A recording is already running in this tab. Use Stop recording to review it.");
     modal("Record a bug", wrap(UI.lead("Start recording, reproduce the problem, then stop and add a comment.") +
       UI.facts([["Scope", "This tab · this cluster"], ["Limit", "10 minutes · 10,000 events"]]) +
-      UI.more("Privacy and limits", "Records control identities and UI state, not field values or video. Private originals expire after 24 hours. Switching clusters or reloading interrupts the recording; saved events remain available.") +
+      UI.more("Privacy and limits", "Records which controls were used and the UI state, not field values or video. Private originals expire after 24 hours. Switching clusters or reloading interrupts the recording, but saved events stay available.") +
       UI.actions(UI.cancel() + UI.button("Start recording", "bugRecord(this)", { kind: "pri" }))));
   };
   window.bugRecord = async button => {
@@ -175,7 +175,7 @@
       const id = active.id; await post("stop", { id }); active = null;
       try { sessionStorage.removeItem(storeKey); } catch (_) { /* server copy remains */ }
       banner(); await bugDescribe(id); troubleshootingPaint();
-    } catch (error) { trouble = "Could not save all events. Use Save and review to retry. " + error.message; banner(); }
+    } catch (error) { trouble = "Not all events could be saved. Use Save and review to try again. " + error.message; banner(); }
     finally { stopping = false; }
   };
   window.bugRecover = async () => {
@@ -188,7 +188,7 @@
       modal("Finish bug report", wrap(UI.lead("Recording stopped. Describe what happened and what you expected.") +
         UI.fields(UI.field("Summary", `<input id="bugTitle" aria-label="Summary" maxlength="120" value="${esc(current.title)}">`, { wide: true }),
           UI.field("Comment", `<textarea id="bugComment" aria-label="Comment" maxlength="4000" rows="4">${esc(current.comment)}</textarea>`, { wide: true })) +
-        bugSources() + UI.more("Saved privately", "Your comment is saved with the report. Anonymised exports remove detected secrets and replace known identifiers. Review the exact draft before publishing anything.") +
+        bugSources() + UI.more("Saved privately", "The comment is saved with the report. Anonymised exports remove detected secrets and replace known names and addresses. Review the exact draft before publishing anything.") +
         UI.actions(UI.button("Keep draft", "bugSaveDraft(this)") + UI.button("Prepare report", "bugPrepare(this)", { kind: "pri" }))));
     } catch (error) { fail(error); }
   };
@@ -220,7 +220,7 @@
       current = record;
       if (record.status !== "ready") { await post("stop", { id }); return bugDescribe(id); }
       modal("Review bug report", wrap(UI.lead(esc(record.title)) + choices("bugFormat", "bugReviewFormat(this.value)") +
-        (format === "full" ? fullWarning() : UI.more("Anonymisation", "Detected credentials are removed and known names and addresses replaced with consistent aliases. No alias mapping is included. Automatic checks cannot identify every secret in arbitrary text; review before sharing.")) +
+        (format === "full" ? fullWarning() : UI.more("Anonymisation", "Detected credentials are removed, and known names and addresses are replaced with consistent aliases. The list of aliases is not included. Automatic checks cannot find every secret in free text, so review before sharing.")) +
         UI.facts([["Events", String(record.events.length)], ["Saved until", esc(fmtAt(record.expires))]]) +
         UI.more("Report preview", `<pre class="diagnostic-preview">${esc(record.comment + "\n\n" + record.events.slice(0, 80).map(row => JSON.stringify(row)).join("\n"))}</pre><p class="dim xs">First 80 events. Downloads include all captured events and selected sources.</p>`) +
         UI.more("Collection results", UI.table([{ label: "Source" }, { label: "State" }], record.manifest.map(row => [esc(row.source), esc(row.state)]))) +
@@ -228,16 +228,16 @@
         UI.actions(UI.cancel() + UI.button("Download log", "bugDownload(false)") + UI.button("Download package", "bugDownload(true)") + UI.button("GitHub issue…", "bugIssue()", { kind: "pri" }))));
     } catch (error) {
       if (generation !== previewGeneration) return;
-      modal("Report needs attention", wrap(UI.callout("bad", "Could not prepare this preview", esc(error.message)) +
+      modal("Report needs attention", wrap(UI.callout("bad", "This preview could not be prepared", esc(error.message)) +
         UI.actions(UI.cancel() + UI.button("Retry", `bugReview(${jsArg(id)})`) + UI.button("Review full log", `bugReview(${jsArg(id)},'full')`))));
     }
   };
   window.bugReviewFormat = selected => bugReview(current.id, selected);
   window.bugPackage = async () => {
     format = "anonymised";
-    modal("Download logs package", wrap(UI.lead("Collect diagnostics without recording a bug. Choose an anonymised or full download.") + choices("bugPackageFormat", "bugPackageWarning(this.value)") +
+    modal("Download logs package", wrap(UI.lead("Download diagnostics without recording a bug. Choose an anonymised or full download.") + choices("bugPackageFormat", "bugPackageWarning(this.value)") +
       '<div id="bugFullWarning"></div>' + UI.field("Time range", '<select id="bugRange" aria-label="Time range"><option value="900">Last 15 minutes</option><option value="3600">Last hour</option><option value="86400">Last 24 hours</option></select>') +
-      bugSources() + UI.more("Package contents", "Readable report, UI events when recorded, selected logs, platform health and a collection manifest. Missing or truncated sources are listed. All saved copies expire after 24 hours.") +
+      bugSources() + UI.more("Package contents", "A readable report, UI events if recorded, the selected logs, platform health and a list of what was collected. Missing or shortened sources are listed. All saved copies expire after 24 hours.") +
       UI.actions(UI.cancel() + UI.button("Prepare package", "bugPackagePrepare(this)", { kind: "pri" }))));
   };
   window.bugPackageWarning = value => { $("#bugFullWarning").innerHTML = value === "full" ? fullWarning() : ""; };
@@ -267,7 +267,7 @@
         UI.actions(UI.button("Back", `bugReview(${jsArg(current.id)})`, { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Continue on GitHub", `window.open(${jsArg(draft.url)},'_blank','noopener,noreferrer')`, { kind: "pri", id: "bugGitHub", attrs: "disabled" }))));
     } catch (error) { fail(error); }
   };
-  window.bugDelete = id => modal("Delete bug report", wrap(UI.lead("Deletes this saved report and its original logs from Homestead. Downloads already saved to your device are kept.") +
+  window.bugDelete = id => modal("Delete bug report", wrap(UI.lead("Deletes this saved report and its original logs from Homestead. Copies already downloaded are kept.") +
     UI.actions(UI.cancel() + UI.button("Delete report", `bugDeleteConfirm(${jsArg(id)})`, { kind: "danger" }))));
   window.bugDeleteConfirm = async id => {
     try { await post("delete", { id }); closeModal(); troubleshootingPaint(); }

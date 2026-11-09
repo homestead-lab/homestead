@@ -150,9 +150,9 @@ def rebuild_now(volume):
     rows = {row["name"]: row for row in short(_items(f"{LH}/volumes"), _items(f"{LH}/replicas"), _hosts())}
     row = rows.get(volume)
     if not row:
-        raise ValueError("This volume is not a detached volume short of copies; refresh")
+        raise ValueError("This volume is not a detached volume that is short of copies. Refresh.")
     if not row["whole"]:
-        raise ValueError("This volume has no whole copy to rebuild from; restore it from a backup instead")
+        raise ValueError("This volume has no whole copy to rebuild from. Restore it from a backup instead.")
     if setting() is not None:
         ksend("PATCH", f"{LH}/volumes/{volume}", {"spec": {"offlineRebuilding": "enabled"}},
               ctype="application/merge-patch+json")
@@ -166,7 +166,7 @@ def _hold(volume, node):
     attachment = kget(f"{LH}/volumeattachments/{volume}")
     tickets = (attachment.get("spec") or {}).get("attachmentTickets") or {}
     if tickets:
-        raise ValueError("Something else has asked for this volume; Longhorn will rebuild it while that holds it")
+        raise ValueError("Something else has asked for this volume, so Longhorn rebuilds it while that holds it")
     ksend("PATCH", f"{LH}/volumeattachments/{volume}",
           {"metadata": {"resourceVersion": attachment["metadata"]["resourceVersion"]},
            "spec": {"attachmentTickets": {TICKET: {
@@ -224,11 +224,11 @@ def alert_facts(state):
     for row in state.get("short") or []:
         repairing = state.get("enabled") or row.get("rebuilding") or row.get("offline") == "enabled"
         if not row["whole"]:
-            body = ("No whole copy of this detached volume is left. Longhorn cannot rebuild it; "
-                    "restore it from a backup if its data is still wanted")
+            body = ("No whole copy of this detached volume is left, so Longhorn cannot rebuild it. "
+                    "Restore it from a backup if its data is still wanted.")
         elif repairing:
             body = (f"{row['whole']} of {row['wanted']} copies, on {', '.join(row['hosts'])}. "
-                    "It is detached, so Longhorn rebuilds the rest offline; if that host fails first, the data goes with it")
+                    "It is detached, so Longhorn rebuilds the rest offline. If that host fails first, the data is lost with it.")
         else:
             body = (f"{row['whole']} of {row['wanted']} copies, on {', '.join(row['hosts'])}. Longhorn rebuilds copies only "
                     "while a volume is attached: rebuild it now from Volumes, or turn on offline rebuilding in Settings")

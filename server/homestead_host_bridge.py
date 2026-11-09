@@ -140,13 +140,13 @@ def problem(facts):
     if facts.get("master"):
         return f"{facts['interface']} is in {facts['master']} already: make a LAN network on {facts['master']}"
     if "BOND" in flags or "WIRELESS" in flags or "PHYSICAL" not in flags:
-        return f"{facts['interface']} is not a plain wired network interface; Homestead converts only those"
+        return f"{facts['interface']} is not a plain wired network interface, and Homestead converts only those"
     if "EXISTS" in flags:
         return f"the host has a {BRIDGE} already"
     if "ARMED" in flags:
         return "a conversion on this host is still waiting to be checked"
     if "NETPLAN" not in flags or "NETWORKD" not in flags or "NM" in flags or facts["renderer"] not in ("", "networkd"):
-        return "Homestead converts hosts whose network netplan sets up through systemd-networkd (Ubuntu Server's way); this one differs"
+        return "Homestead converts only hosts whose network netplan sets up through systemd-networkd, as Ubuntu Server does. This host is set up differently."
     if "PYYAML" not in flags or "SYSTEMDRUN" not in flags:
         return "the host lacks python3-yaml or systemd-run, which the conversion needs"
     if not facts["defined"]:
@@ -154,7 +154,7 @@ def problem(facts):
     if not facts.get("primary") or not facts["gateway"] or not facts["mac"]:
         return f"{facts['interface']} has no IPv4 address, gateway or MAC address to carry over"
     if "FLANNELIFACE" in flags:
-        return "k3s or RKE2 is set to a flannel interface by name; change flannel-iface to br0 by hand, then convert"
+        return "k3s or RKE2 is set to a flannel interface by name. Change flannel-iface to br0 manually, then convert."
     return ""
 
 
@@ -277,7 +277,7 @@ def start(node, ops, busy=None, servers_ready=None):
            "change": what, "lease": lease}
     return ops.start("host-bridge", what,
                      {"kind": "Node", "name": node}, "/nodes", ref,
-                     f"Applied; checking {node} on {BRIDGE} - it puts itself back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
+                     f"Applied. Checking {node} on {BRIDGE}, which restores its old network in {ROLLBACK_SECONDS // 60} minutes unless the change is confirmed.")
 
 
 class _Spec(NETWORK_JOB.Spec):
@@ -308,10 +308,10 @@ class _Spec(NETWORK_JOB.Spec):
                 f"back by itself. The configuration tried is kept in {ref['backup']} beside the old one")
 
     def confirming(self, ref):
-        return f"{ref['node']} is up on {BRIDGE}; confirming"
+        return f"{ref['node']} is up on {BRIDGE}. Confirming."
 
     def confirmed(self, ref, lines):
-        return f"{ref['node']} is on {BRIDGE}, with {ref['address']}; the rollback is disarmed"
+        return f"{ref['node']} is on {BRIDGE}, with {ref['address']}. The rollback is turned off."
 
     def done(self, ref):
         return f"{ref['node']} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
@@ -337,8 +337,8 @@ def convert(body):
         op = start(node, OPS, *guard)
     ROUTER.forget("network")
     if op.get("unconfirmed"):
-        return {"ok": False, "operation": op, "detail": f"{node}'s move to {BRIDGE} needs attention; see its job under Jobs"}
-    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it under Jobs"}
+        return {"ok": False, "operation": op, "detail": f"{node}'s move to {BRIDGE} needs attention. See its job under Jobs."}
+    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}. Follow it under Jobs."}
 
 
 # Its routes and who may use them (homestead_routes.py).
@@ -356,7 +356,7 @@ def cancel_plan(item):
         # Its script ran past its limit and its helper was removed: how far it
         # got, and whether a rollback was armed, is not known.
         return {"mode": "forget", "needs": "admin",
-                "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
+                "keeps": [f"Homestead cannot tell how far the change got on {node}. Check its network first.",
                           f"Other changes on {node} can start again at once"]}
     if item["ref"].get("stage") == "confirmed":
         # Its rollback is disarmed; the job alone was going to do what is left.
@@ -368,7 +368,7 @@ def cancel_plan(item):
 
 def cancel_run(item, options):
     NETWORK_JOB.let_go(hostrun, item["ref"])
-    return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
+    return f"Stopped tracking it. Other changes on {item['ref']['node']} can start again."
 
 
 

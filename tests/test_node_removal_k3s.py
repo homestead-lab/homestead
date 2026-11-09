@@ -111,7 +111,7 @@ class K3sRemovalTests(unittest.TestCase):
         self.assertFalse(any("Cluster API" in step for step in plan["steps"]), "k3s has no Cluster API machines")
 
     def test_gone_for_good_needs_the_loss_accepted(self):
-        with self.assertRaisesRegex(ValueError, "made again empty; confirm"):
+        with self.assertRaisesRegex(ValueError, "created again empty. Confirm"):
             onboard.remove_node("node-2", gone=True)
         self.assertEqual([], self.c.sent)
 
@@ -137,7 +137,7 @@ class K3sRemovalTests(unittest.TestCase):
         self.assertEqual(["node-2.node-password.k3s"], [s["name"] for s in report["passwords"]])
         self.assertEqual(["lab/paperless-data"], [f"{v['namespace']}/{v['claim']}" for v in report["pinned_volumes"]])
         self.assertEqual(["zigbee2mqtt"], [w["name"] for w in report["pinned_workloads"]])
-        with self.assertRaisesRegex(ValueError, "confirm making it again empty"):
+        with self.assertRaisesRegex(ValueError, "Confirm creating it again empty"):
             onboard.cleanup("pinned-volume", "lab/paperless-data")
         with mock.patch.object(onboard.time, "sleep", lambda s: None):
             onboard.cleanup("pinned-volume", "lab/paperless-data", force=True)

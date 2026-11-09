@@ -598,7 +598,7 @@ class ReviewedVmCreateTests(VmCreateBase):
     def test_a_vm_create_answered_with_a_5xx_keeps_everything(self):
         prepared, paths = self.made()
         self.kube.fail(VMS, 500, method="POST")
-        with self.assertRaisesRegex(ValueError, "Inspect job"):
+        with self.assertRaisesRegex(ValueError, "Check job"):
             self.dispatch(prepared)
         self.assertEqual(paths, self.left(paths))
         self.assertTrue(self.job()["ref"]["retain_resources"])
@@ -606,7 +606,7 @@ class ReviewedVmCreateTests(VmCreateBase):
     def test_a_vm_create_that_timed_out_keeps_everything(self):
         prepared, paths = self.made()
         self.kube.fail(VMS, TimeoutError("timed out"), method="POST", applied=True)
-        with self.assertRaisesRegex(ValueError, "Inspect job"):
+        with self.assertRaisesRegex(ValueError, "Check job"):
             self.dispatch(prepared)
         self.assertEqual(paths, self.left(paths))
         self.assertTrue(self.job()["ref"]["retain_resources"])
@@ -629,7 +629,7 @@ class ReviewedVmCreateTests(VmCreateBase):
     def test_a_vm_of_that_name_made_meanwhile_keeps_everything(self):
         prepared, paths = self.made()
         self.kube.fail(VMS, 409, method="POST")
-        with self.assertRaisesRegex(ValueError, "Inspect job"):
+        with self.assertRaisesRegex(ValueError, "Check job"):
             self.dispatch(prepared)
         self.assertEqual(paths, self.left(paths))
         self.assertTrue(self.job()["ref"]["retain_resources"])
@@ -637,7 +637,7 @@ class ReviewedVmCreateTests(VmCreateBase):
     def test_a_vm_create_answered_408_keeps_everything(self):
         prepared, paths = self.made()
         self.kube.fail(VMS, 408, method="POST")
-        with self.assertRaisesRegex(ValueError, "Inspect job"):
+        with self.assertRaisesRegex(ValueError, "Check job"):
             self.dispatch(prepared)
         self.assertEqual(paths, self.left(paths))
         self.assertTrue(self.job()["ref"]["retain_resources"])

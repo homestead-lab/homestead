@@ -9,7 +9,7 @@ window.volumeReclass = async x => {
   const classes = (STATE.data.storageClasses || []).filter(c => !c.internal && !c.made_for && c.name !== x.storage_class);
   if (!classes.length) return toast("There is no other storage class to move it to", "warn");
   const pick = classes.find(c => c.default) || classes[0];
-  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move; the original data is kept afterward.") +
+  modal(`Change storage class · ${x.pvc_name || x.name}`, UI.lead("Copy this volume to another storage class, keeping its name. Apps and VMs using it stop during the move, and the original data is kept afterwards.") +
     UI.fields(UI.field("From", `<input value="${esc(x.storage_class || "unknown")}" disabled>`),
       UI.field("To", `<select id="rc_to" onchange="volumeReclassPlan(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">${classes.map(c => `<option value="${esc(c.name)}" ${c.name === pick.name ? "selected" : ""}>${esc(c.name)}${c.replicas ? ` · ${esc(c.replicas)} copies` : ""}</option>`).join("")}</select>`)) +
     '<div id="rc_plan"></div>' +
@@ -31,23 +31,23 @@ const RECLASS = UI.reviewFlow({
   preview: async ({ config }) => {
     const p = await api("/api/volumes/reclass/plan", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config) });
-    if (!p.capacity_token || !Array.isArray(p.blockers) || !Array.isArray(p.warnings) || !Array.isArray(p.consumers)) throw new Error("Review is incomplete; nothing can start.");
+    if (!p.capacity_token || !Array.isArray(p.blockers) || !Array.isArray(p.warnings) || !Array.isArray(p.consumers)) throw new Error("The review is incomplete, so nothing can start.");
     return { config, plan: p };
   },
   render: (review, { host }) => {
     const p = review.plan;
   const sp = p.space || {};
-  const verb = c => c.kind === "VirtualMachine" ? (c.running ? "shut down, then started again" : "stopped already; stays stopped")
-    : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "stopped already; stays stopped";
+  const verb = c => c.kind === "VirtualMachine" ? (c.running ? "shut down, then started again" : "already stopped, and stays stopped")
+    : c.kind === "CronJob" ? "paused, then resumed" : c.running ? "stopped, then started again" : "already stopped, and stays stopped";
   const messages = [...p.blockers, ...p.warnings];
   // Only which disks hold the copies differs: they can move with it in use.
   const live = p.live && window.__reclassVolume ? UI.callout("info", "This can move with nothing stopped",
-    `<p>${esc(p.to_class)} differs from ${esc(p.from_class)} only in which disks hold the copies (${esc([...p.live.disk_tags, ...p.live.node_tags].join(", "))}). Its copies can move there while it stays in use; the volume keeps the class name ${esc(p.from_class)}.</p>
+    `<p>${esc(p.to_class)} differs from ${esc(p.from_class)} only in which disks hold the copies (${esc([...p.live.disk_tags, ...p.live.node_tags].join(", "))}). Its copies can move there while it stays in use, and the volume keeps the class name ${esc(p.from_class)}.</p>
      <div class="row">${UI.button("Move copies instead", `volumeCopyMove(window.__reclassVolume,${JSON.stringify(p.live)})`, { kind: "pri", attrs: 'data-need="operator"' })}</div>`) : "";
   host.innerHTML = live + (messages.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "This move cannot start" : "Before moving", `<ul>${messages.map(m=>`<li>${esc(m)}</li>`).join("")}</ul>`) : "") +
     UI.section("Affected apps and VMs", UI.table([{label:"App or VM"},{label:"Effect"}], p.consumers.map(c=>[`${esc(c.name)} · ${esc(c.kind)}`,esc(verb(c))]), {empty:"No apps and VMs currently reference this volume."})) +
     UI.section("Storage needed", UI.facts([["New volume",esc(sizeText(sp.size_gb))],["Replica allocation",`${esc(sizeText(sp.allocated_gb))} · ${esc(sp.replicas)} copies`],["Estimated destination room",sp.room_gb == null ? "Unknown" : esc(sizeText(sp.room_gb))]])) +
-    UI.more("What is checked", "The volume, backing disk, destination class and affected apps and VMs are checked again before starting. Missing inventory blocks the move. This is not a storage or scheduler reservation; later recovery and host-loss validation remain separate safeguards. Both copies use space until you remove the original.");
+    UI.more("What is checked", "The volume, its disk, the destination class and the affected apps and VMs are checked again before starting. Missing information stops the move. This does not reserve storage or capacity, and recovery and host failure checks are separate. Both copies use space until the original is removed.");
     RECLASS.ready();
     if (window.applyRole) applyRole();
   },
@@ -66,7 +66,7 @@ const RECLASS = UI.reviewFlow({
       if ($("#rc_plan") === host) reclassWatch(r.operation.id);
     } catch (e) {
       if ($("#rc_plan") === host) host.innerHTML = UI.callout("bad", "Start not confirmed", esc(e.message) + " Check Recent jobs before reviewing again. Nothing was retried.");
-      else toast("Move start not confirmed; check Recent jobs.", "bad");
+      else toast("The start of the move was not confirmed. Check Recent jobs.", "bad");
     }
   },
   after: () => {
@@ -114,7 +114,7 @@ window.reclassWatch = async id => {
     if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return false;
     if (ops.unread) {
       // A failed poll keeps what was last shown and says so; the next tick tries again (#620).
-      const note = `<div id="rc_unread" class="dim small" style="margin-top:8px">Could not read the job: ${esc(ops.unread)} · still trying</div>`;
+      const note = `<div id="rc_unread" class="dim small" style="margin-top:8px">The job could not be read. ${esc(ops.unread)} · Still trying.</div>`;
       if (!$("#mbody .rc-steps")) {
         // Nothing shown yet: the note, and a way out of the dialog.
         $("#mbody").innerHTML = `${note}${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`;

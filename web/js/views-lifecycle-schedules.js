@@ -26,10 +26,10 @@ function jobNext(j) {
 // Homestead's own can be run, and only those it made there edited.
 function jobOwner(j) {
   const where = j.ns ? `<div class="dim xs">${esc(j.ns)}</div>` : "";
-  if (j.owner === "longhorn") return `${where}<div class="dim xs" data-tip="Change it in Data protection or Longhorn.">Longhorn recurring job · read-only</div>`;
+  if (j.owner === "longhorn") return `${where}<div class="dim xs" data-tip="Change it in Data protection or Longhorn.">Longhorn schedule · read-only</div>`;
   if (j.owner === "flux") return `${where}<div class="dim xs" data-tip="Change it in the git repository Flux applies.">Applied by Flux · read-only</div>`;
   if (j.managed !== false) return where;
-  return `${where}<div class="dim xs" data-tip="Change it where it was made${j.runnable === false ? "" : "; Run now still works"}.">not made here · ${
+  return `${where}<div class="dim xs" data-tip="Change it where it was created${j.runnable === false ? "" : ". Run now still works"}.">Not created here · ${
     j.managed_by ? `managed by ${esc(j.managed_by)}` : "read-only"}</div>`;
 }
 /* How the last run ended, from the Jobs it started; "unknown" when they could
@@ -102,9 +102,9 @@ function schedulesPaint() {
   const byApp = { ...f, host: "" };
   // A row an alert links to (?find=) shows whatever the filter.
   const shown = rows.filter(j => window.ScheduleWeek.matches(j, byApp) || jobFind(j));
-  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} in every namespace · next runs in your time zone (${esc(yourZone())})`, `${UI.button("This week", "go('schedule-week')")} <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} in every namespace · next runs in this browser's time zone (${esc(yourZone())})`, `${UI.button("This week", "go('schedule-week')")} <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     ${unread ? `<div class="note" style="margin-bottom:14px">How each last run ended is unknown. ${esc(unread.result_reason)}</div>` : ""}
-    <div class="dim small sched-line">${esc(schedulesSummary(shown))}${schedulesPage.appsUnread ? ` · Could not read the apps list, so no job names its app: ${esc(schedulesPage.appsUnread)}` : ""}</div>
+    <div class="dim small sched-line">${esc(schedulesSummary(shown))}${schedulesPage.appsUnread ? ` · The apps list could not be read, so no job names its app. ${esc(schedulesPage.appsUnread)}` : ""}</div>
     ${window.ScheduleWeek.unseenLine(rows, byApp, "job", "jobs")}
     ${window.Timeline.filterBar({ entries: rows, counts: rows.reduce((all, r) => ({ ...all, [r.type]: (all[r.type] || 0) + 1 }), {}),
       filter: byApp, kinds: scheduleKinds(), call: "schedulesFilter", menus: [["app", "App", "All apps"]] })}

@@ -97,7 +97,7 @@ def _sources_state():
         raise
     rows = json.loads(cm.get("data", {}).get("sources.json", "[]"))
     if not isinstance(rows, list) or any(not isinstance(row, dict) or not SAFE.fullmatch(str(row.get("name", ""))) for row in rows):
-        raise ValueError("Source inventory is invalid; refusing to replace it")
+        raise ValueError("The source list is invalid, so it is not replaced")
     if len({row["name"] for row in rows}) != len(rows):
         raise ValueError("Source inventory has duplicate names")
     return cm, rows
@@ -130,7 +130,7 @@ def add_source(name, host, user, password, kind="unraid", base_path="/mnt/user/a
     with SOURCE_LOCK:
         cm, srcs = _sources_state()
         if any(row["name"] == name for row in srcs):
-            raise ValueError("That source already exists; verify it, or use a new name for a different connection")
+            raise ValueError("That source already exists. Check it, or use a new name for a different connection.")
         # Immutable credentials keep a partial save or later reuse of a source
         # name from changing credentials underneath an existing copy Job.
         secret = f"homestead-src-{name}-{secrets.token_hex(4)}"
@@ -496,25 +496,25 @@ def run_probe(tag, script, src, timeout=70, *, authenticated=True):
     receipt = ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
     uid = receipt.get("metadata", {}).get("uid")
     if not uid or receipt.get("metadata", {}).get("name") != pod:
-        raise ValueError("Probe creation was not confirmed; no retry or name-based cleanup was attempted")
+        raise ValueError("Starting the probe was not confirmed. Nothing was retried or cleaned up by name.")
     out, deadline = "", time.time() + timeout
     try:
         while time.time() < deadline:
             time.sleep(2)
             current = kget(f"/api/v1/namespaces/{NS}/pods/{pod}")
             if current.get("metadata", {}).get("uid") != uid:
-                raise ValueError("Probe identity changed; its result is not trusted")
+                raise ValueError("The probe changed, so its result is not trusted")
             st = current.get("status", {})
             if st.get("phase") in ("Succeeded", "Failed"):
                 if st["phase"] != "Succeeded":
-                    raise ValueError("SSH probe failed. Check the source key, login and SSH service; changed keys require a new fingerprint review.")
+                    raise ValueError("The SSH check failed. Check the source key, login and SSH service. A changed key needs a new fingerprint review.")
                 break
         else:
-            raise ValueError("SSH probe timed out; no result was accepted")
+            raise ValueError("The SSH check timed out, so no result was accepted")
         import urllib.request
         out = _pod_logs(pod)
         if kget(f"/api/v1/namespaces/{NS}/pods/{pod}").get("metadata", {}).get("uid") != uid:
-            raise ValueError("Probe identity changed while reading logs; its result is not trusted")
+            raise ValueError("The probe changed while its logs were read, so its result is not trusted")
     finally:
         try:
             ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod}",

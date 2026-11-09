@@ -66,7 +66,7 @@ def support():
                        and not (d.get("metadata") or {}).get("deletionTimestamp") for d in snapshotters)
     if set(CRDS) <= served and ready and not driver_ready:
         return {"ready": False, "can_install": False, "waiting": True,
-                "message": "Waiting for Longhorn's CSI snapshotter; repair its deployment if it is missing or unavailable"}
+                "message": "Waiting for Longhorn's CSI snapshotter. Repair its deployment if it is missing or unavailable."}
     if set(CRDS) <= served and ready and driver_ready:
         return {"ready": True, "can_install": False, "message": "CSI snapshots are ready"}
     if deployments:
@@ -75,7 +75,7 @@ def support():
     platform = ADDONS.platform(True)
     can_install = bool(platform.get("helm_controller") and not platform.get("harvester"))
     message = ("CSI snapshot support will be installed before restoring or stopping the source"
-               if can_install else "CSI snapshots need a snapshot controller and the v1 snapshot CRDs; install or repair them through your cluster platform")
+               if can_install else "CSI snapshots need a snapshot controller and the v1 snapshot CRDs. Install or repair them through the cluster's own tools.")
     return {"ready": False, "can_install": can_install, "message": message}
 
 
@@ -109,7 +109,7 @@ def ensure_support():
         manifests.append(re.sub(r"(registry\.k8s\.io/sig-storage/snapshot-controller:)v[\d.]+", rf"\g<1>{VERSION}", manifest))
     ADDONS._post_chart(CONTROLLER, {"targetNamespace": "kube-system",
         "chartContent": ADDONS.chart_archive(CONTROLLER, VERSION, "\n---\n".join(manifests), "")})
-    return {**checked, "message": "Installing CSI snapshot support; the source stays unchanged until it is ready"}
+    return {**checked, "message": "Installing CSI snapshot support. The source does not change until it is ready."}
 
 
 def _owned(obj):
@@ -161,7 +161,7 @@ def import_backup(namespace, name, backup, source_volume, url, volume_mode, atte
         "spec": {"source": {"volumeSnapshotContentName": snapshot_name}}})
     bound_uid = (content.get("spec", {}).get("volumeSnapshotRef") or {}).get("uid")
     if bound_uid and bound_uid != snapshot.get("metadata", {}).get("uid"):
-        raise ValueError("Restore snapshot content is bound to an earlier snapshot; start a new restore attempt")
+        raise ValueError("The restore's snapshot content is bound to an earlier snapshot. Start a new restore.")
     for obj in (content, snapshot):
         problem = ((obj.get("status") or {}).get("error") or {}).get("message")
         if problem:
@@ -194,7 +194,7 @@ def finish_resize(pvc, cfg):
         ksend("PATCH", f"/api/v1/namespaces/{meta['namespace']}/persistentvolumeclaims/{meta['name']}",
               {"metadata": {"resourceVersion": meta["resourceVersion"]},
                "spec": {"resources": {"requests": {"storage": str(target)}}}}, ctype="application/merge-patch+json")
-        return "running", 96, f"Backup restored; expanding the volume to {cfg['size_gb']} GiB"
+        return "running", 96, f"Backup restored. Growing the volume to {cfg['size_gb']} GiB."
     capacity = RESOURCES.quantity((pvc.get("status") or {}).get("capacity", {}).get("storage"), "storage")
     if capacity >= target:
         return "succeeded", 100, f"Backup restored and volume expanded to {cfg['size_gb']} GiB"
@@ -203,8 +203,8 @@ def finish_resize(pvc, cfg):
     if pending and spec.get("volumeName"):
         pv = kget(f"/api/v1/persistentvolumes/{spec['volumeName']}")
         if RESOURCES.quantity((pv.get("spec") or {}).get("capacity", {}).get("storage"), "storage") >= target:
-            return "succeeded", 100, "Backup restored and disk expanded; the filesystem grows when it is next mounted"
-    return "running", 97, "Backup restored; waiting for volume expansion"
+            return "succeeded", 100, "Backup restored and disk grown. The filesystem grows when it is next mounted."
+    return "running", 97, "Backup restored. Waiting for the volume to grow."
 
 
 def cleanup():

@@ -36,7 +36,7 @@ test("no Released volume is no row, and an unread list is said, not hidden", () 
   assert.equal(H.advice(base(facts([]))).filter(r => r.id === "released-volumes").length, 0);
   const unknown = H.advice(base({ released: { state: "unknown", error: "forbidden", volumes: [] }, iscsi: { state: "n/a", hosts: [] } }))
     .find(r => r.id === "released-volumes");
-  assert.equal(unknown.title, "Could not read Released volumes");
+  assert.equal(unknown.title, "Released volumes could not be read");
   assert.equal(unknown.detail, "forbidden");
   assert.ok(H.advice({ ...base(), leftovers: null }).some(r => r.id === "unknown:leftovers"));
 });
@@ -53,7 +53,7 @@ test("a host's stale iSCSI sessions are a row on that host, saying what fails an
 
 test("unread instance-managers are said; no probe reporting sessions is no row", () => {
   const unknown = H.advice(base({ released: { state: "ok", volumes: [] }, iscsi: { state: "unknown", error: "forbidden", hosts: [] } }));
-  assert.ok(unknown.some(r => r.id === "iscsi" && r.title === "Could not check hosts' iSCSI sessions"));
+  assert.ok(unknown.some(r => r.id === "iscsi" && r.title === "The hosts' iSCSI sessions could not be checked"));
   assert.equal(H.advice(base({ released: { state: "ok", volumes: [] }, iscsi: { state: "n/a", hosts: [] } })).filter(r => r.id.startsWith("iscsi")).length, 0);
 });
 
@@ -96,7 +96,7 @@ test("each Longhorn volume opens the reviewed delete; an old copy its removal; a
   // Asked for by its PV: the review is of that volume, never of a claim found by name.
   assert.deepEqual(JSON.parse(JSON.stringify(t.calls)), [["volumeDelete", { name: "pvc-a", pvc_name: "disk-1-scratch", namespace: "vm-imports", pv: "pvc-a" }],
     ["reclassRemoveOld", "pvc-old"]]);
-  assert.match(html, /storage's own tools/);
+  assert.match(html, /storage system's own tools/);
 });
 
 test("a volume whose claim name is in use again opens the review of that PV, and says the name is taken", async () => {

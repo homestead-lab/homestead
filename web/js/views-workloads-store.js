@@ -66,7 +66,7 @@ function storeSource(source) {
   const feed = !source ? ""
     : source.default
     ? `Listings are read on demand from the public <a href="https://github.com/Squidly271/AppFeed" target="_blank" rel="noopener">Community Applications feed</a> and cached for six hours; another feed can be set in Settings. Homestead is independent and is not endorsed by the catalogue maintainers. `
-    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed; review what each one asks for before deploying it. `;
+    : `Listings are read from <span class="mono">${esc(source.url)}</span>, set in Settings, and cached for six hours. Templates come from whoever publishes that feed, so review what each one asks for before deploying it. `;
   host.innerHTML = `${feed}Unraid® is a registered trademark of Lime Technology, Inc. This application is not affiliated with, endorsed, or sponsored by Lime Technology, Inc.`;
 }
 
@@ -146,7 +146,7 @@ function storeProfileHtml(profile) {
     .map(n => typeof n === "string" ? n : (n.message || n.reason || n.name || "")).filter(Boolean);
   const lines = [...new Set(said)].slice(0, 4);
   return UI.callout(profile.blocked ? "bad" : profile.level === "dependency" ? "warn" : "", { html: `${esc(profile.label)}.` },
-    esc(lines.join(" · ") || "Homestead reviews its storage, ports and hardware when you configure it."));
+    esc(lines.join(" · ") || "Homestead reviews its storage, ports and hardware when it is set up."));
 }
 
 /* One app, in full: what it is, who keeps it, why it was picked, what it asks for. */
@@ -157,7 +157,7 @@ window.storeDetails = async key => {
   try { app = Object.assign({}, summary, await api("/api/appstore/app?key=" + encodeURIComponent(key))); }
   catch (e) {
     $("#mbody").innerHTML = UI.error(e, { retry: `storeDetails(${jsArg(key)})`, dialog: true,
-      title: e.body?.loading ? "The catalogue is still loading" : "Couldn't read this app" });
+      title: e.body?.loading ? "The catalogue is still loading" : "This app could not be read" });
     return;
   }
   STORE_APPS.set(key, app);
@@ -204,10 +204,10 @@ function storeDetailsPaint(key, app) {
 window.wlPrimaryPort = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || { ports: [] };
   const current = (w.ports.find(p => p.primary) || {}).port || 0;
-  modal(`Main port · ${name}`, `<p class="small">The card links to this port first - usually the app's web UI.</p>
+  modal(`Main port · ${name}`, `<p class="small">The card links to this port first. It is usually the app's web interface.</p>
     <div class="primary-ports">${w.ports.map(p => `<label class="switch"><input type="radio" name="pp" value="${p.port}" ${p.port === current ? "checked" : ""}>
       <b class="mono">${p.port}</b> <span class="dim xs">${esc(p.name || "")}${p.ip ? ` · ${esc(p.ip)}` : ""}</span></label>`).join("")}
-      <label class="switch"><input type="radio" name="pp" value="0" ${current ? "" : "checked"}> <span class="dim">No preference - their own order</span></label></div>
+      <label class="switch"><input type="radio" name="pp" value="0" ${current ? "" : "checked"}> <span class="dim">No preference (their own order)</span></label></div>
     ${UI.actions(`<button class="btn pri" onclick="wlPrimaryPortSave(${jsq(ns)},${jsq(name)})">Save</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };

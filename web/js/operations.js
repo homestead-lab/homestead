@@ -63,16 +63,16 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
     ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
-      <span class="jobactions-side"><button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}</span>
+      <span class="jobactions-side"><button class="btn sm" data-tip="Every step the job has taken, and the output of the process doing the work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished job from the list. Volumes and the records needed for recovery are kept." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}</span>
       <button class="btn sm" onclick="${operation.kind === 'cluster-shutdown' ? 'clusterShutdown()' : `openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})`}">Open</button>
       ${operation.preparation_archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(operation.id)})">Archive preparation</button>` : ""}
-      ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Inspect outcome</button>` : ""}
+      ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Check outcome</button>` : ""}
       ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview(${jsq(operation.id)})">Review storage move</button>` : ""}
-      ${operation.host_gone_endable ? `<button class="btn sm" data-need="admin" data-tip="If its host was removed: review what it left, then end it so it holds nothing back" onclick="hostGoneReview(${jsq(operation.id)})">End: host removed</button>` : ""}
-      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)},${operation.kind === 'import-create' ? "'import'" : 'true'})">Inspect ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
-      ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
-      ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only || ["disk-retire", "helm"].includes(operation.kind) ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : ["disk-retire", "helm"].includes(operation.kind) ? "Says what it puts back" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
-      ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
+      ${operation.host_gone_endable ? `<button class="btn sm" data-need="admin" data-tip="For a job whose host was removed. Review what it left behind, then end it so that it no longer holds anything back." onclick="hostGoneReview(${jsq(operation.id)})">End job for removed host</button>` : ""}
+      ${operation.mutation_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)},${operation.kind === 'import-create' ? "'import'" : 'true'})">Check ${operation.kind === "k3s-cluster" ? "batch" : operation.kind === "import-create" ? "import" : "save"} outcome</button>` : ""}
+      ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the remaining steps, starting from the one where it stopped" onclick="resumeOperation(${jsq(operation.id)})">Resume job</button>` : ""}
+      ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only || ["disk-retire", "helm"].includes(operation.kind) ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review the resources that were kept and the recovery choices. Nothing is deleted." : ["disk-retire", "helm"].includes(operation.kind) ? "Shows what it restores" : "Shows what it left behind and what cleaning up removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review kept resources" : "Clean up"}</button>` : ""}
+      ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Shows what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Check outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel job"}</button>` : ""}
     </div>
   </article>`; }
 
@@ -92,7 +92,7 @@ function paintJobsDialog() {
   const expanded = [...host.querySelectorAll("details[open][data-disclosure]")].map(el => [el.dataset.disclosure, el.closest("[data-operation]")?.dataset.operation || ""]);
   const rows = items => items.map(item => ({key:item.id, title:item.title,
     tone:({succeeded:"ok",failed:"bad",cancelled:"neutral"})[item.status] || "warn", detail:`${item.status}${item.resource?.namespace ? ` · ${item.resource.namespace}` : ""}`, attention:item.status === "failed"}));
-  const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "Showing the last known status. Checking again; completion is not assumed.") : "";
+  const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "The last known status is shown. Homestead keeps checking, and does not assume the jobs have finished.") : "";
   host.innerHTML = stale + (selected ? UI.masterDetail([
     {key:"attention", title:`Needs attention · ${attention.length}`, items:rows(attention)},
     {key:"active", title:`Running · ${active.length}`, items:rows(active)},
@@ -100,7 +100,7 @@ function paintJobsDialog() {
   ], selectedJobId, operationCard(selected), {label:"Jobs", detailLabel:"Selected job", onSelect:id => `selectJob(${jsArg(id)})`}) : '<div class="empty small">No jobs.</div>');
   if (selected) {
     // A running job is never cleared; only a finished one kept back is a record.
-    if (selected.dismissible === false && !operationActive(selected)) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
+    if (selected.dismissible === false && !operationActive(selected)) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is kept until its outcome is resolved.</p>');
   }
   for (const detail of host.querySelectorAll("details[data-disclosure]")) {
     if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
@@ -293,7 +293,7 @@ window.dismissFinishedOperations = async () => {
   try {
     const result = await api("/api/operations/dismiss", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ all: true }) });
-    toast(result.detail || "finished jobs cleared", "ok");
+    toast(result.detail || "Finished jobs cleared", "ok");
   } catch (e) { toast(e.message, "bad"); }
   refreshOperations(true);
 };
@@ -307,7 +307,7 @@ window.resumeOperation = async id => {
   try {
     await api("/api/operations/resume", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
-    toast("Carrying on from where it stopped", "ok");
+    toast("Resuming from where it stopped", "ok");
     const op = (STATE.data.operations || []).find(o => o.id === id);
     refreshOperations(true);
     if (op?.kind === "reclass" && window.reclassWatch) reclassWatch(id);
@@ -341,27 +341,27 @@ const STORAGE_RECOVERY = UI.reviewFlow({
     const rollback = !!forward && p.can_rollback === true;
     const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
     const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
-      copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
-      cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
-      restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
-    const rollbackAck = "Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later";
-    const labels = {continue:"Continue move", retry:"Retry this step", finish:"Finish the move", rollback:"Roll back to the original", pause:"Pause move"};
+      copy:"Continue copying and checking the data. The apps and VMs stay stopped during the copy.",
+      cutover:"Switch to the checked copy. Restarting the apps and VMs has its own capacity review.",
+      restart:"Restart the apps and VMs on the copied volume after new capacity checks. The original data is kept."};
+    const rollbackAck = "Roll back. Restart on the original volume, and keep the copy under Volumes as an old copy to remove later.";
+    const labels = {continue:"Continue move", retry:"Retry step", finish:"Finish move", rollback:"Roll back to original", pause:"Pause move"};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
-    const lead = action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
-      action === "retry" ? "Retry the held step with fresh safety checks and a new time limit. Nothing that has no confirmed outcome is sent again." :
-      action === "finish" ? "The copy is verified. Finish the move: switch to the copied volume and start apps and VMs there, after fresh capacity checks. The original data is retained." :
-      action === "rollback" ? "This move cannot carry on as it is. Roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept." :
-      action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
-      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.";
-    host.innerHTML = UI.lead(lead + (rollback ? " Or roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept." : "")) +
-      (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
+    const lead = action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after new safety checks." :
+      action === "retry" ? "Retry the paused step with new safety checks and a new time limit. Nothing whose outcome is unknown is sent again." :
+      action === "finish" ? "The copy has been checked. Finishing the move switches to the copied volume and starts the apps and VMs on it, after new capacity checks. The original data is kept." :
+      action === "rollback" ? "This move cannot continue as it is. Rolling it back starts what it stopped again on the original volume, which was never released. The copy is kept." :
+      action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy that is already running can still finish." :
+      "This move must be checked before it can continue. Its apps, VMs and data have been left in place.";
+    host.innerHTML = UI.lead(lead + (rollback ? " It can also be rolled back, which starts what it stopped again on the original volume. That volume was never released, and the copy is kept." : "")) +
+      (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Check before continuing", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
       UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`],
         ...(p.status === "failed" && p.can_rollback === false && p.rollback?.blockers?.length ? [["Roll back",esc(p.rollback.blockers.join(" "))]] : [])]) +
       UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
-      UI.more("Apps and VMs and retained resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
-        UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
-      (action ? UI.ack("storageRecoveryAck", action === "pause" ? "Pause it; a copy already running still finishes" :
+      UI.more("Apps, VMs and kept resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
+        UI.table(["Resource","Last request","Now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
+      (action ? UI.ack("storageRecoveryAck", action === "pause" ? "Pause the move. A copy that is already running still finishes." :
         action === "rollback" ? rollbackAck : "Continue despite the warnings", {onchange:"storageRecoveryReady()"}) : "") +
       (rollback ? UI.ack("storageRecoveryRollbackAck", rollbackAck, {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
@@ -370,7 +370,7 @@ const STORAGE_RECOVERY = UI.reviewFlow({
   },
   failed: error => {
     const host = $("#storageRecoveryContent");
-    host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
+    host.innerHTML = UI.callout("bad","The review is not available",esc(error.message)) + UI.actions(UI.cancel("Close"));
   },
   // Nothing to send when no action is open; the acknowledgements and buttons are
   // set by storageRecoveryReady(), which knows roll back has its own.
@@ -414,14 +414,14 @@ window.storageRecoveryApply = async choice => {
    k3s batch. The shared review flow keeps the sequence, the busy flag and the
    one-shot send; this view keeps its four dialogs and the typed name. */
 const POWER_RECOVERY = UI.reviewFlow({
-  loading: ({mutation}) => modal(mutation === "import" ? "Inspect import" : mutation ? "Inspect VM configuration outcome" : "Inspect VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking current resources…</div>', true, "operation-review"),
+  loading: ({mutation}) => modal(mutation === "import" ? "Check import" : mutation ? "Check VM settings outcome" : "Check VM power outcome", '<div id="powerRecoveryLoading" class="empty"><span class="spin2"></span>Checking the current resources…</div>', true, "operation-review"),
   live: () => !!$("#powerRecoveryLoading"),
   preview: async ({id, mutation}) => {
     const endpoint=mutation ? "/api/operations/vm-recovery" : "/api/operations/power-recovery";
     const review = await api(endpoint + "/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
     const p = review.plan;
-    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("Recovery review is incomplete. Nothing was resolved.");
-    if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("Resource inspection is incomplete. Nothing was resolved.");
+    if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("The recovery review is incomplete. Nothing was resolved.");
+    if (mutation && !p.blocked && (!Array.isArray(p.resources) || !p.resources.length)) throw new Error("The resource check is incomplete. Nothing was resolved.");
     return {id,...review,endpoint};
   },
   render: (review, {mutation}) => {
@@ -429,16 +429,16 @@ const POWER_RECOVERY = UI.reviewFlow({
     const observed=p.observed || {}, resource=p.resource || {};
     if (mutation === "import" || p.action === "import-create") {
       review.importing = true;
-      const kindName = kind => ({PersistentVolumeClaim:"Volume",Deployment:"App",Service:"Network Service",Job:"Copy Job"})[kind] || kind;
+      const kindName = kind => ({PersistentVolumeClaim:"Volume",Deployment:"App",Service:"Network service",Job:"Copy job"})[kind] || kind;
       const writeName = value => ({accepted:"Saved",intent:"Sent; no receipt",uncertain:"Response lost",unverified:"Receipt not verified",refused:"Rejected","not dispatched":"Not sent"})[value] || value;
-      $("#mbody").innerHTML = UI.lead("Inspect what this import left behind. Resolving its record keeps all data and does not start or stop apps.") +
-        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "The import outcome is unverified",
-          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "A sent request may still finish late. Nothing will be retried, started or deleted.") +
-        UI.section("Retained resources", UI.table([{label:"Resource"},{label:"Last request"},{label:"Now"}],
+      $("#mbody").innerHTML = UI.lead("Check what this import left behind. Resolving its record keeps all data and does not start or stop apps.") +
+        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "The import outcome is not confirmed",
+          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "A request that was sent may still finish later. Nothing is retried, started or deleted.") +
+        UI.section("Kept resources", UI.table([{label:"Resource"},{label:"Last request"},{label:"Now"}],
           (p.resources || []).map(row=>[`${esc(kindName(row.resource.kind))} · ${esc(row.resource.name)}`,esc(writeName(row.last_write)),esc(row.relationship)]))) +
         UI.more("Identity checks and recovery limits", (p.warnings || []).map(w=>`<p>${esc(w)}</p>`).join("") +
           (p.resources || []).map(row=>`<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
-        (!p.blocked ? UI.ack("powerRecoveryAck", "I inspected the retained resources and accept that the old request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
+        (!p.blocked ? UI.ack("powerRecoveryAck", "The kept resources were checked, and the old request may still finish", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Resolve as unknown", "powerRecoveryResolve()", {kind:"pri",id:"powerRecoveryApply",disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop=0;
       return;
@@ -446,34 +446,34 @@ const POWER_RECOVERY = UI.reviewFlow({
     if (p.action === "k3s-cluster") {
       if ($("#mtitle")) $("#mtitle").textContent = "Review k3s batch";
       const writeName = value => ({accepted:"Saved",intent:"Sent; no receipt",uncertain:"Response lost",unverified:"Unverified",refused:"Rejected","not dispatched":"Not sent"})[value] || value;
-      $("#mbody").innerHTML = UI.lead(`Review the planned VMs and retained resources for <b>${esc(p.confirm || "this batch")}</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.`) +
-        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "Guest health is unverified",
-          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.") +
-        UI.section("Retained resources", UI.table(["Resource", "Last request", "Now"], (p.resources || []).map(row => [
+      $("#mbody").innerHTML = UI.lead(`Review the planned VMs and kept resources for <b>${esc(p.confirm || "this batch")}</b>. Stopping tracking keeps them in the cluster, and this job no longer prevents moving Homestead's data.`) +
+        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "The guests' health is not confirmed",
+          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "The guests may still be setting up. This does not retry the batch, stop its VMs, delete data or check that k3s is ready.") +
+        UI.section("Kept resources", UI.table(["Resource", "Last request", "Now"], (p.resources || []).map(row => [
           `${row.resource.kind === "VirtualMachine" ? "VM" : esc(row.resource.kind)} · ${row.resource.kind === "VirtualMachine" ? `<a onclick="vmOpen(${jsq(row.resource.namespace)},${jsq(row.resource.name)})">${esc(row.resource.name)}</a>` : esc(row.resource.name)}`,
           esc(writeName(row.last_write)), esc(row.relationship)]))) +
         UI.more("Identity checks and recovery limits", (p.warnings || []).map(w => `<p>${esc(w)}</p>`).join("") +
           (p.resources || []).map(row => `<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
         (!p.blocked ? UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" }) +
-          UI.ack("powerRecoveryAck", "I inspected the planned VMs; an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
+          UI.ack("powerRecoveryAck", "The planned VMs were checked, and an earlier request may still finish", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Stop tracking batch", "powerRecoveryResolve()", {kind:"pri", id:"powerRecoveryApply", disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
       return;
     }
     $("#mbody").innerHTML = `<div class="update-review">
-      <div class="reviewbox"><b>${mutation ? "Resolve tracking, keep resources" : "Resolve tracking, not power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
-        <p class="small">This is not a retry, rollback, cancellation or proof of success. It records an admin inspection with the original outcome still unknown.</p></div>
+      <div class="reviewbox"><b>${mutation ? "Stop tracking and keep the resources" : "Stop tracking without changing power"}</b><p class="small">${esc(resource.namespace || "")} / ${esc(resource.name || "VM job")} · requested ${esc(p.action || "VM change")} · ${esc(p.dispatch_phase || "dispatcher busy")}</p>
+        <p class="small">This does not retry, roll back or cancel anything, and it does not confirm success. It records that an admin checked, while the original outcome is still unknown.</p></div>
       ${p.blockers?.length ? `${UI.callout("bad", "", `${p.blockers.map(esc).join(" · ")}`)}` : ""}
-      ${mutation && p.resources ? `<div class="reviewbox"><b>Resource write receipts and current identities</b>${p.resources.map(row=>`<div class="small" style="margin-top:10px;overflow-wrap:anywhere"><b>${esc(row.resource.kind)} · ${esc(row.resource.namespace)}/${esc(row.resource.name)}</b><br>Last write: ${esc(row.last_write)} · ${esc(row.relationship)}<br>Recorded UID: ${esc(row.expected?.uid || "no verified receipt")}<br>Current UID: ${esc(row.current?.uid || "not found")}</div>`).join("")}</div>` : ""}
-      ${p.observed ? `<div class="reviewbox"><b>Current observations</b>
+      ${mutation && p.resources ? `<div class="reviewbox"><b>What was saved, and the current resources</b>${p.resources.map(row=>`<div class="small" style="margin-top:10px;overflow-wrap:anywhere"><b>${esc(row.resource.kind)} · ${esc(row.resource.namespace)}/${esc(row.resource.name)}</b><br>Last write: ${esc(row.last_write)} · ${esc(row.relationship)}<br>Recorded UID: ${esc(row.expected?.uid || "no verified receipt")}<br>Current UID: ${esc(row.current?.uid || "not found")}</div>`).join("")}</div>` : ""}
+      ${p.observed ? `<div class="reviewbox"><b>Current state</b>
         <p class="small">VM: ${esc(observed.vm_status)} · policy: ${esc(observed.run_strategy)}</p>
         <p class="small">Instance: ${esc(observed.instance_phase)} · Ready: ${observed.ready ? "yes" : "no"} · Paused: ${observed.paused ? "yes" : "no"}</p>
         <p class="small">Queued power changes: ${esc(observed.queued_changes)} · Original VM: ${observed.same_vm ? "same identity" : "missing or replaced"}</p>
         <p class="small" style="overflow-wrap:anywhere">Reviewed VM UID: ${esc(resource.original_uid)}<br>Current VM UID: ${esc(observed.vm?.uid || "not found")}<br>Current instance UID: ${esc(observed.instance?.uid || "not found")}</p></div>` : ""}
       ${UI.notices((p.warnings || []).map(w => ["warn", w]))}
       ${!p.blocked ? `${UI.typedConfirm({ id: "powerRecoveryName", expect: p.confirm, oninput: "powerRecoveryReady()" })}
-        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record it as unknown: I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and what it kept" : ""}</label>
-        <p class="ui-help">The old request may still take effect late. Recording it lets a new ${mutation ? "VM change" : "power action"} be reviewed.</p>` : ""}
+        <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> Record the outcome as unknown. The ${p.action === "k3s-cluster" ? "planned VMs were" : "VM was"} checked${mutation ? ", with what it kept" : ""}.</label>
+        <p class="ui-help">The old request may still take effect later. Recording it allows a new ${mutation ? "VM change" : "power action"} to be reviewed.</p>` : ""}
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   },
@@ -492,7 +492,7 @@ const POWER_RECOVERY = UI.reviewFlow({
       toast(result.detail,"ok");closeModal();
     } catch(error) {
       if ($("#powerRecoveryApply")===button) {
-        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(error.message)}. Nothing was retried. Check the job before opening a new review.`)}`);
+        $("#mbody").insertAdjacentHTML("afterbegin",`${UI.callout("bad", "", `${esc(String(error.message).replace(/\.$/, ""))}. Nothing was retried. Check the job before starting a new review.`)}`);
         if ($(".modalbox")) $(".modalbox").scrollTop=0;
       }
       toast(error.message,"bad");
@@ -514,7 +514,7 @@ window.hostGoneReview = async id => {
   if (HOST_GONE_BUSY) return;
   HOST_GONE = null;
   const sequence = ++HOST_GONE_SEQ;
-  modal("End a job whose host was removed", '<div id="hostGoneLoading" class="empty"><span class="spin2"></span>Checking the host afresh…</div>', true, "operation-review");
+  modal("End a job for a removed host", '<div id="hostGoneLoading" class="empty"><span class="spin2"></span>Checking the host again…</div>', true, "operation-review");
   try {
     const review = await api("/api/operations/host-gone/preview", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
     if (sequence !== HOST_GONE_SEQ || !$("#hostGoneLoading")) return;
@@ -522,16 +522,16 @@ window.hostGoneReview = async id => {
     if (!p || typeof p.blocked !== "boolean" || (!p.blocked && !review.capacity_token)) throw new Error("The review is incomplete. Nothing was ended.");
     HOST_GONE = {id, ...review};
     $("#mbody").innerHTML = UI.lead(p.blocked
-        ? `This job pinned <b>${esc(p.node)}</b>. Homestead checks whether that host is gone before the job can be ended.`
-        : `It pinned <b>${esc(p.node)}</b>, which is gone, so it can't finish. Ending it keeps its record and releases what it held back.`) +
+        ? `This job is tied to <b>${esc(p.node)}</b>. Homestead checks that the host has been removed before the job can be ended.`
+        : `It is tied to <b>${esc(p.node)}</b>, which has been removed, so it cannot finish. Ending it keeps its record and releases what it held back.`) +
       UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to end" : "Nothing on the host is changed",
         p.blocked ? (p.blockers || []).map(esc).join("<br>") : (p.warnings || []).map(esc).join("<br>")) +
       UI.section("What may remain on the machine", hostGoneList(p.left_on_host)) +
       ((p.left_in_cluster || []).length ? UI.section("Left in the cluster", hostGoneList(p.left_in_cluster)) : "") +
-      UI.section("No longer held back once it ends", hostGoneList(p.released)) +
+      UI.section("Released when it ends", hostGoneList(p.released)) +
       (!p.blocked ? UI.typedConfirm({ id: "hostGoneName", expect: p.confirm, oninput: "hostGoneReady()" }) +
-        UI.ack("hostGoneAck", "I checked the lists. End the job.", {onchange:"hostGoneReady()"}) : "") +
-      UI.actions(UI.cancel("Keep the job") + UI.button("End the job", "hostGoneResolve()", {kind:"danger", id:"hostGoneApply", disabled:true}));
+        UI.ack("hostGoneAck", "The lists were checked, and the job can be ended", {onchange:"hostGoneReady()"}) : "") +
+      UI.actions(UI.cancel("Keep the job") + UI.button("End job", "hostGoneResolve()", {kind:"danger", id:"hostGoneApply", disabled:true}));
     if ($(".modalbox")) $(".modalbox").scrollTop = 0;
   } catch (error) {
     if (sequence !== HOST_GONE_SEQ || !$("#hostGoneLoading")) return;
@@ -555,7 +555,7 @@ window.hostGoneResolve = async () => {
     toast(result.detail, "ok"); closeModal();
   } catch (error) {
     if ($("#hostGoneApply") === button) {
-      $("#mbody").insertAdjacentHTML("afterbegin", UI.callout("bad", "Nothing was ended", `${esc(error.message)} Review again before trying once more.`));
+      $("#mbody").insertAdjacentHTML("afterbegin", UI.callout("bad", "Nothing was ended", `${esc(error.message)} Review it again before trying once more.`));
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
     }
     toast(error.message, "bad");
@@ -567,8 +567,8 @@ window.hostGoneResolve = async () => {
    for a few jobs only the tracking stops. Nothing changes until the button
    in the dialog is pressed, and a cancel that deletes data asks for the name. */
 const CANCEL_LEAD = {
-  rollback: "Cancelling stops this job and puts back what it changed.",
-  stop: "Cancelling stops this job. What it has already done stays done.",
+  rollback: "Cancelling stops this job and undoes what it changed.",
+  stop: "Cancelling stops this job. What it has already done is kept.",
   forget: "This job cannot be stopped from Homestead. Cancelling only stops tracking it here.",
 };
 window.cancelOperation = async id => {
@@ -584,22 +584,22 @@ window.cancelOperation = async id => {
   const high = plan.severity === "high";
   const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
-    ? `${UI.callout("warn", { html: `${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}` }, `<div>${esc(plan.why_not || "")}</div>`)}
+    ? `${UI.callout("warn", { html: `${plan.copy_recovery ? "The paused copy cannot be released yet." : "It cannot be cancelled at this step."}` }, `<div>${esc(plan.why_not || "")}</div>`)}
        ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`
-    : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
-        : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
+    : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind, and the job stays in the list as failed."
+        : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all the resources it kept. Nothing is deleted or stopped in the cluster."
         : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop))}</p>
       <div class="dim xs">${esc(plan.message || "")} · ${Math.round(plan.progress || 0)}% done</div>
-      ${plan.undo.length ? `${UI.callout(high ? "warn" : "", { html: `${plan.cleanup_says_action ? "What it puts back" : cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling puts back" : "What cancelling does"}` }, `${list(plan.undo)}`, { attrs: 'style="margin-top:12px"' })}` : ""}
-      ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What carries on" : "What stays as it is"}</b>${list(plan.keeps)}</div>` : ""}
+      ${plan.undo.length ? `${UI.callout(high ? "warn" : "", { html: `${plan.cleanup_says_action ? "What it restores" : cleanup ? "What cleaning up removes" : plan.mode === "rollback" ? "What cancelling undoes" : "What cancelling does"}` }, `${list(plan.undo)}`, { attrs: 'style="margin-top:12px"' })}` : ""}
+      ${plan.keeps.length ? `<div class="note" style="margin-top:10px"><b>${plan.mode === "forget" && !plan.copy_recovery ? "What continues" : "What does not change"}</b>${list(plan.keeps)}</div>` : ""}
       ${plan.options.map(option => `<label class="switch" style="margin-top:12px"><input type="checkbox" data-cancel-option="${esc(option.id)}" onchange="cancelOperationGate()" ${option.default ? "checked" : ""}> ${esc(option.label)}</label>
         ${option.detail ? `<div class="dim xs">${esc(option.detail)}</div>` : ""}`).join("")}
       ${plan.confirm ? UI.typedConfirm({ id: "oc_confirm", expect: plan.confirm, oninput: "cancelOperationGate()" }) : ""}
       ${plan.needs === "admin" && !can("admin") ? `${UI.callout("warn", "", `Cancelling this job needs an admin.`, { attrs: 'style="margin-top:12px"' })}` : ""}
       ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
-          onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup && !plan.cleanup_says_action ? "Remove what it made" : plan.action)}</button>
-        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button>`)}`;
-  modal(`${plan.review_title || (plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel")} · ${plan.title}`, body, false, "operation-review");
+          onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup && !plan.cleanup_says_action ? "Remove what it created" : plan.action)}</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave as is" : "Keep running"}</button>`)}`;
+  modal(`${plan.review_title || (plan.copy_recovery ? "Check storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel")} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
 };
@@ -615,13 +615,13 @@ window.cancelOperationGo = async id => {
   if (plan.confirm && confirm !== plan.confirm) return toast(`Type ${plan.confirm} exactly to confirm`, "bad");
   const options = Object.fromEntries([...document.querySelectorAll("[data-cancel-option]")]
     .map(box => [box.dataset.cancelOption, box.checked]));
-  if (plan.copy_recovery && !options.ack) return toast("Check the storage and acknowledge partial data first", "bad");
+  if (plan.copy_recovery && !options.ack) return toast("First check the storage and accept that the data may be incomplete", "bad");
   const go = $("#oc_go");
-  if (go) { go.disabled = true; go.textContent = plan.copy_recovery ? "Releasing hold…" : "Cancelling…"; }
+  if (go) { go.disabled = true; go.textContent = plan.copy_recovery ? "Releasing…" : "Cancelling…"; }
   try {
     const result = await api("/api/operations/cancel", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, options, confirm }) });
-    toast(result.detail || "cancelled", "ok");
+    toast(result.detail || "Cancelled", "ok");
     closeModal();
     if (result.operation) window.noteOperation(result.operation);
     if (typeof refresh === "function") refresh(true);
@@ -641,7 +641,7 @@ window.operationLog = async id => {
   renderOperations();
   const title = (STATE.data.operations || []).find(o => o.id === id)?.title || "Job";
   const sequence = window.__logSequence = (window.__logSequence || 0) + 1;
-  modal(`Log · ${title}`, `<div class="logtools"><span id="oplogState"><span class="spin2"></span> loading</span>
+  modal(`Log · ${title}`, `<div class="logtools"><span id="oplogState"><span class="spin2"></span> Loading</span>
       <label class="switch"><input type="checkbox" id="oplogFollow" checked> Follow latest</label></div>
     <div id="oplogBody"></div>`, true);
   const stamp = t => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }); };
@@ -677,13 +677,13 @@ window.operationLog = async id => {
         ${src.note ? `<div class="dim small">${esc(src.note)}</div>` : ""}
         ${src.kind === "disk-copy" ? operationCopyProgress(src.progress, operationActive(d)) : ""}
         ${src.text ? `<pre class="logview oplog-pre${src.kind === "disk-copy" ? " oplog-copy" : ""}" data-source="${esc(JSON.stringify([src.pod || "", src.title]))}">${esc(src.text)}</pre>` : ""}`).join("")}
-      ${d.sources?.length ? "" : '<p class="dim xs" style="margin-top:12px">This kind of job runs no pod of its own; its steps above are its log.</p>'}`;
+      ${d.sources?.length ? "" : '<p class="dim xs" style="margin-top:12px">This kind of job has no process of its own, so the steps above are its log.</p>'}`;
     const steps = $("#oplogBody .oplog-steps");
     if (steps) steps.scrollTop = follow ? steps.scrollHeight : stepScroll;
     $$("#oplogBody pre").forEach(pre => { pre.scrollTop = follow ? pre.scrollHeight : (kept.get(pre.dataset.source) || 0); });
     if (box) box.scrollTop = outerScroll;
     active = operationActive(d);
-    $("#oplogState").innerHTML = active ? '<span class="ld"></span> live · refreshes every 3s' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
+    $("#oplogState").innerHTML = active ? '<span class="ld"></span> Live · refreshes every 3 seconds' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
     if (!active) return false;
   };
   await poll();
@@ -691,7 +691,7 @@ window.operationLog = async id => {
 };
 
 function operationCopyProgress(progress, active) {
-  if (!progress || !Number.isFinite(progress.percent)) return '<p class="dim small">Waiting for disk-copy progress…</p>';
+  if (!progress || !Number.isFinite(progress.percent)) return '<p class="dim small">Waiting for the disk copy\'s progress…</p>';
   const percent = Math.max(0, Math.min(100, progress.percent));
   const approximate = progress.coarse && percent < 100 ? "~" : "";
   const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
@@ -700,8 +700,8 @@ function operationCopyProgress(progress, active) {
   const remaining = progress.eta_seconds;
   const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
   const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");
-  const eta = !active ? percent >= 100 ? "Stream transferred" : "Copy stopped" : percent >= 100 ? "Stream transferred; waiting for CDI to finish"
-    : progress.coarse ? "Speed / ETA unavailable (1% progress)" : Number.isFinite(remaining) && remaining >= 0 ? `ETA ${duration}` : "ETA estimating";
+  const eta = !active ? percent >= 100 ? "Data transferred" : "Copy stopped" : percent >= 100 ? "Data transferred, waiting for CDI to finish"
+    : progress.coarse ? "Speed and time left unavailable (progress in 1% steps)" : Number.isFinite(remaining) && remaining >= 0 ? `${duration} left` : "Estimating time left";
   return `<div class="oplog-copy-progress"><b class="mono">${approximate}${percent.toFixed(1)}%</b><span>${esc([size, speed, eta].filter(Boolean).join(" · "))}</span></div>
     <div class="jobmeter"><span style="width:${percent}%"></span></div>`;
 }

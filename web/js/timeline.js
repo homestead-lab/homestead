@@ -83,18 +83,18 @@ const Timeline = (() => {
 
   const unreadLines = data => (data.unread || []).map(u => u.admin_only
     ? `<div class="dim xs">${esc(u.label)}: ${esc(u.reason)}</div>`
-    : `<div class="xs med-text">Could not read ${esc(u.label)}: ${esc(u.reason)}</div>`).join("");
+    : `<div class="xs med-text">Homestead could not read ${esc(u.label)}. ${esc(u.reason)}</div>`).join("");
   const sinceWords = data => `Since ${fmtAt(data.since)}${data.clamped ? " (as far back as the timeline reaches)" : ""}`;
   const chips = data => `<div class="tl-counts">${Object.keys(KINDS).filter(k => data.counts?.[k])
     .map(k => UI.chip(`${data.counts[k]} ${kindWords(k, data.counts[k])}`, KIND_TONE[k])).join(" ")}</div>`;
   const open = href => href ? ` onclick="openOperation(${jsq(href)})"` : " disabled";
 
   function widget() {
-    if (state.cardError && !state.card) return UI.callout("warn", "Could not read the timeline", esc(state.cardError));
+    if (state.cardError && !state.card) return UI.callout("warn", "The timeline could not be read", esc(state.cardError));
     const data = state.card;
     if (!data) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
     const entries = data.entries || [];
-    return `<div class="dim xs">${esc(sinceWords(data))}</div>${state.cardError ? `<div class="xs med-text">Could not read the timeline just now · this is the last read</div>` : ""}
+    return `<div class="dim xs">${esc(sinceWords(data))}</div>${state.cardError ? `<div class="xs med-text">The timeline could not be read just now · This is the last read.</div>` : ""}
       ${unreadLines(data)}
       ${entries.length ? chips(data) + `<div class="tl-list">${top(entries).map(e => `<button type="button" class="tl-item"${open(e.href)}>
         ${UI.chip(e.tone === "ok" ? "OK" : e.tone === "bad" ? "Failed" : e.tone === "warn" ? "Check" : "Info", e.tone, { size: "slim" })}
@@ -107,8 +107,8 @@ const Timeline = (() => {
     const rangeSeg = `<div class="seg" role="group" aria-label="Range">${Object.entries(RANGES).map(([key, [label]]) =>
       `<button type="button" class="${state.range === key ? "on" : ""}" aria-pressed="${state.range === key}" onclick="timelineRange(${jsq(key)})">${esc(label)}</button>`).join("")}</div>`;
     if (!data) {
-      paint(UI.pageHeader("Timeline", "What happened while you were away", rangeSeg) +
-        (state.error ? UI.callout("warn", "Could not read the timeline", esc(state.error)) : '<div class="empty"><span class="spin2"></span> Loading…</div>'));
+      paint(UI.pageHeader("Timeline", "What happened since the last visit", rangeSeg) +
+        (state.error ? UI.callout("warn", "The timeline could not be read", esc(state.error)) : '<div class="empty"><span class="spin2"></span> Loading…</div>'));
       return;
     }
     const entries = data.entries || [], shown = filter(entries, f);
@@ -118,8 +118,8 @@ const Timeline = (() => {
       <td data-label="What">${esc(e.text)}${e.app || e.host ? `<span class="dim xs"> · ${[e.app, e.host].filter(Boolean).map(esc).join(" · ")}</span>` : ""}</td>
       <td data-actions>${e.href ? `<button type="button" class="btn sm"${open(e.href)}>Open</button>` : ""}</td></tr>`;
     paint(`${UI.pageHeader("Timeline", `${esc(sinceWords(data))} · ${many(entries.length + (data.more || 0), "event", "events")}`, rangeSeg)}
-      ${state.error ? UI.callout("warn", "Could not read the timeline just now", `${esc(state.error)} · this is the last read.`) : ""}
-      ${(data.unread || []).filter(u => !u.admin_only).map(u => UI.callout("warn", `Could not read ${u.label}`, esc(u.reason))).join("")}
+      ${state.error ? UI.callout("warn", "The timeline could not be read just now", `${esc(state.error)} · This is the last read.`) : ""}
+      ${(data.unread || []).filter(u => !u.admin_only).map(u => UI.callout("warn", `Homestead could not read ${u.label}`, esc(u.reason))).join("")}
       ${(data.unread || []).filter(u => u.admin_only).map(u => `<div class="dim small">${esc(u.label)}: ${esc(u.reason)}.</div>`).join("")}
       ${filterBar({ entries, counts: data.counts, filter: f })}
       ${shown.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact" data-sort="timeline"><thead><tr><th>When</th><th>Kind</th><th>What</th><th data-nosort></th></tr></thead>
@@ -159,8 +159,8 @@ const Timeline = (() => {
     : `${s.every === "weekly" ? `Weekly on ${WEEKDAYS[s.day] || "?"}` : "Daily"} at ${clock(s.hour)} (${s.tz})`;
 
   function summaryCard() {
-    return UI.settingsCard(`${UI.moduleHeader("Summary push", "What the Timeline recorded, once a day or a week, on your devices",
-      UI.button("Change", "summaryEdit()", { id: "summaryChange" }))}
+    return UI.settingsCard(`${UI.moduleHeader("Summary push", "What the Timeline recorded, sent to devices once a day or once a week",
+      UI.button("Change summary", "summaryEdit()", { id: "summaryChange" }))}
       <div class="srows" id="summaryRows"><div class="empty small"><span class="spin2"></span></div></div>`, { tab: "device", id: "summaryCard" });
   }
 
@@ -175,14 +175,14 @@ const Timeline = (() => {
     if (!rows) return;
     if (state.summaryError) {
       // Unread is not Off (#620): say so, and offer nothing that would act on a guess.
-      rows.innerHTML = UI.callout("warn", "Could not read your summary setting", esc(state.summaryError)) + UI.button("Retry", "Timeline.summaryPaint()");
+      rows.innerHTML = UI.callout("warn", "The summary setting could not be read", esc(state.summaryError)) + UI.button("Try again", "Timeline.summaryPaint()");
       const change = $("#summaryChange"); if (change) change.disabled = true;
       return;
     }
     const s = state.summary || { every: "off" }, on = s.every === "daily" || s.every === "weekly";
     const change = $("#summaryChange"); if (change) change.disabled = false;
-    const help = [on && s.next ? `Next ${fmtAt(s.next)}` : on ? "Its time zone is not one Homestead knows: choose another" : "Pushes tell you when something starts; this tells you how the day or week went",
-      on && s.sent_at ? `last ${fmtAt(s.sent_at)}${s.result ? `, ${s.result}` : ""}` : ""].filter(Boolean).join(" · ");
+    const help = [on && s.next ? `Next ${fmtAt(s.next)}` : on ? "Homestead does not recognise its time zone. Choose another." : "Push notifications report when something starts. This summary reports how the day or week went.",
+      on && s.sent_at ? `Last ${fmtAt(s.sent_at)}${s.result ? `, ${s.result}` : ""}` : ""].filter(Boolean).join(" · ");
     rows.innerHTML = settingRow("Summary", esc(help), `<b id="summaryValue">${esc(summaryText(s))}</b>`);
   }
 

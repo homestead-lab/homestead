@@ -77,14 +77,14 @@ test("pinned: VM Edit's review reads the same, with and without new room on a ho
   assert.match(t.html(), /4 vCPUs · 6Gi/);
   assert.match(t.html(), /Halted → Always/);
   assert.match(t.html(), /<span class="mono">guest-disk-2<\/span> · 20Gi · fast/);
-  assert.match(t.html(), /After saving, a separate restart review checks the saved VM and host capacity; saving sends no restart\./);
+  assert.match(t.html(), /After saving, a separate restart review checks the saved VM and the room on its host\. Saving does not restart the VM\./);
   assert.match(t.html(), /id="vmEditApprove"[^>]*onchange="vmEditReviewReady\(\)"/);
   assert.match(t.html(), /<button type="button" class="btn" onclick="vmEditReviewBack\(\)" data-dialog-dismiss="true">Back to edit<\/button><\/div><div class="ui-actions-end"><button type="button" class="btn pri" id="vmEditApply" onclick="vmEditReviewedApply\(\)" disabled >Save changes<\/button>/);
   assert.equal(t.fields["#vmEditApply"].disabled, true);
   t = edit({ admission: false });
   await t.ctx.vmEditReview(change);
-  assert.match(t.html(), /<p class="ui-lead">Saves it\. It needs no new room on a host\./);
-  assert.match(t.html(), /Saving sends no restart\. Restart the VM from its power controls if a change needs it\./);
+  assert.match(t.html(), /<p class="ui-lead">Saves the changes\. No extra room is needed on a host\./);
+  assert.match(t.html(), /Saving does not restart the VM\. If a change needs a restart, restart it from its power controls\./);
   assert.match(t.html(), /High RAM/);
   assert.match(t.html(), /id="vmEditApprove"/);
   t = edit({ admission: false, warnings: [] });
@@ -117,7 +117,7 @@ test("pinned: a failed VM Edit save says what may be saved and is not repeated",
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.fields["#vmEditApply"].textContent, "Inspect VM before retrying");
-  assert.ok(seen(t.html()).startsWith("lost response. Some VM, disk or Secret changes may already be saved. No request was repeated and no Restart was sent. Close this review and inspect the VM before editing again."));
+  assert.ok(seen(t.html()).startsWith("lost response. Some changes to the VM, its disks or its Secrets may already be saved. No request was repeated, and the VM was not restarted. Close this review and check the VM before editing it again."));
   assert.deepEqual(t.toasts, [["lost response", "bad"]]);
   assert.deepEqual(t.calls, ["refreshOperations"]);
   assert.deepEqual(t.restarts, []);
@@ -131,7 +131,7 @@ test("pinned: blocked and missing VM Edit reviews send nothing", async () => {
   assert.equal(t.ctx.vmEditReviewReady(), false);
   t = edit({ missing: true });
   await t.ctx.vmEditReview(change);
-  assert.equal(seen(t.html()), "VM edit review unavailable. Nothing was saved; go back and review again. Back to edit");
+  assert.equal(seen(t.html()), "The review is not available. Nothing was saved. Go back and review again. Back to edit");
   assert.match(t.html(), /ui-callout bad[\s\S]*onclick="vmEditReviewBack\(\)">Back to edit<\/button>$/);
   await t.ctx.vmEditReviewedApply();
   assert.equal(t.sent.length, 1);
@@ -179,7 +179,7 @@ test("a 409 from VM Edit's save offers a fresh review of the same change", async
   t.fields["#vmEditApprove"].checked = true;
   await t.ctx.vmEditReviewedApply();
   assert.deepEqual(t.toasts, [["The VM changed during admission; review it again", "bad"]]);
-  assert.match(seen(t.html()), /The VM changed during admission\. Review it again\. The review was out of date\. Some VM, disk or Secret changes may already be saved; no request was repeated and no Restart was sent\. Review again to see the VM as it is now\./);
+  assert.match(seen(t.html()), /The VM changed during admission\. Review it again\. The review was out of date\. Some changes to the VM, its disks or its Secrets may already be saved\. No request was repeated, and the VM was not restarted\. Review again to see the VM as it is now\./);
   assert.match(t.html(), /onclick="vmEditReviewAgain\(\)">Review again<\/button>/);
   assert.deepEqual(t.body.focused, [".ui-actions-end .btn.pri"], "focus moves to Review again");
   assert.deepEqual(t.restarts, []);
@@ -231,7 +231,7 @@ test("pinned: New k3s cluster's review reads the same and needs the tick", async
   const t = k3s();
   await t.ctx.k3sReview();
   assert.deepEqual(t.opened.map(o => o.slice(0, 2)), [["childModal", "Create cluster · demo"]]);
-  assert.match(t.html(), /Creates 2 VMs for <b>demo<\/b>, which install k3s, Longhorn and Homestead and KubeVirt and join in 10-15 minutes\. Its own Homestead then answers at <span class="mono">https:\/\/192\.0\.2\.60<\/span>\./);
+  assert.match(t.html(), /Creates 2 VMs for <b>demo<\/b>, which install k3s, Longhorn and Homestead and KubeVirt and join within 10 to 15 minutes\. Its own Homestead is then available at <span class="mono">https:\/\/192\.0\.2\.60<\/span>\./);
   assert.match(t.html(), /52:54:00:00:00:01/);
   assert.match(t.html(), /10 GiB now → up to 18 GiB/);
   assert.match(t.html(), /Example placement: demo-server-1 → host-1/);
@@ -257,13 +257,13 @@ test("pinned: New k3s cluster's review reads the same and needs the tick", async
 test("pinned: a stopped, blocked or unusable k3s review cannot create, and a failed plan only toasts", async () => {
   let t = k3s({ ok: false, stopped: ["no address"] });
   await t.ctx.k3sReview();
-  assert.match(t.html(), /<b>demo<\/b> can't be created until what is below is resolved\./);
+  assert.match(t.html(), /<b>demo<\/b> cannot be created until the problems below are resolved\./);
   assert.match(t.html(), /demo-server-1: no address/);
   assert.doesNotMatch(t.html(), /k_capacity_confirm/);
   assert.equal(t.ctx.k3sReviewReady(), false);
   t = k3s({ blocked: true, warnings: [] });
   await t.ctx.k3sReview();
-  assert.match(t.html(), /The batch can't go ahead under the checked constraints\./);
+  assert.match(t.html(), /The cluster cannot be created with the current settings\./);
   assert.equal(t.ctx.k3sReviewReady(), false);
   t = k3s({ missing: true });
   await t.ctx.k3sReview();
@@ -276,9 +276,9 @@ test("pinned: a failed k3s create is not repeated and says what may exist", asyn
   await t.ctx.k3sReview();
   await t.ctx.k3sCreate();
   assert.deepEqual(t.toasts, [["lost response", "bad"]]);
-  assert.equal(t.fields["#k_go"].textContent, "Inspect batch before retrying");
+  assert.equal(t.fields["#k_go"].textContent, "Check the cluster before retrying");
   assert.equal(t.fields["#k_go"].disabled, true);
-  assert.ok(seen(t.html()).startsWith("lost response. Some VMs or their disks and Secrets may already exist. No request was repeated. Check Jobs and Virtual Machines before a new review."));
+  assert.ok(seen(t.html()).startsWith("lost response. Some VMs, disks or Secrets may already exist. No request was repeated. Check Jobs and Virtual machines before reviewing again."));
   assert.deepEqual(t.calls, ["refreshOperations"]);
   t.fields["#k_go"].disabled = false;
   await t.ctx.k3sCreate();
@@ -314,7 +314,7 @@ test("a 409 from k3s create offers a fresh review of the same batch", async () =
   await t.ctx.k3sReview();
   await t.ctx.k3sCreate();
   assert.deepEqual(t.toasts, [["VM batch dependencies changed; retain partial resources and review again", "bad"]]);
-  assert.match(seen(t.html()), /VM batch dependencies changed\. Retain partial resources and review again\. The review was out of date\. Some VMs or their disks and Secrets may already exist; no request was repeated\. Review again to see the batch as it is now\./);
+  assert.match(seen(t.html()), /VM batch dependencies changed\. Retain partial resources and review again\. The review was out of date\. Some VMs, disks or Secrets may already exist\. No request was repeated\. Review again to see the current state\./);
   assert.match(t.html(), /onclick="k3sReviewAgain\(\)">Review again<\/button>/);
   assert.deepEqual(t.body.focused, [".ui-actions-end .btn.pri"], "focus moves to Review again");
   assert.deepEqual(t.calls, ["refreshOperations"]);
@@ -372,10 +372,10 @@ function room(answer) {
 test("pinned: the import's room check says the class has room, or asks, or blocks", async () => {
   let t = room(() => ({ level: "ok", storage_class: "fast", needed_gb: 10, free_gb: 90, blockers: [], warnings: [] }));
   const checking = t.ctx.uvmRoom();
-  assert.equal(t.html(), '<p class="ui-help"><span class="spin2"></span>Checking the storage class has room for the disks…</p>');
+  assert.equal(t.html(), '<p class="ui-help"><span class="spin2"></span>Checking that the storage class has room for the disks…</p>');
   await checking;
   assert.deepEqual(t.sent, [{ path: "/api/vms/import-unraid/room", body: { storage_class: "fast", disks: [{ virtual: 10, size_gb: 10 }] } }]);
-  assert.equal(t.html(), '<p class="ui-help">fast has room: these disks take 10 of the 90 GiB it can still place.</p>');
+  assert.equal(t.html(), '<p class="ui-help">fast has room for these disks: 10 of 90 GiB.</p>');
   assert.equal(t.fields["#uvm_go"].disabled, false);
   t = room(() => ({ level: "tight", blockers: [], warnings: ["Tight on fast"] }));
   await t.ctx.uvmRoom();
@@ -397,7 +397,7 @@ test("pinned: the import's room check says the class has room, or asks, or block
   assert.deepEqual(t.toasts, [["Not enough room on fast", "bad"]]);
   t = room(() => { throw new Error("timed out"); });
   await t.ctx.uvmRoom();
-  assert.match(t.html(), /The room on the storage class could not be checked: timed out/);
+  assert.match(t.html(), /The room on the storage class could not be checked\. timed out/);
   assert.equal(t.fields["#uvm_go"].disabled, true, "an unchecked room is accepted first");
 });
 
@@ -407,7 +407,7 @@ test("pinned: only the newest room check is shown, none once the dialog is gone,
   const first = t.ctx.uvmRoom(), second = t.ctx.uvmRoom();
   answers[1].resolve({ storage_class: "fast", needed_gb: 15, free_gb: 90, blockers: [], warnings: [] }); await second;
   answers[0].resolve({ blockers: ["old answer"], warnings: [] }); await first;
-  assert.match(t.html(), /take 15 of the 90 GiB/);
+  assert.match(t.html(), /disks: 15 of 90 GiB/);
   assert.equal(t.ctx.uvmRoomReady(), true);
   const third = t.ctx.uvmRoom();
   delete t.fields["#uvm_room"];
@@ -440,7 +440,7 @@ function unread() {
 test("VM Edit says it could not read the VM options, and offers no form built on a guess", async () => {
   const t = unread();
   await t.ctx.vmEdit("lab", "guest");
-  assert.match(t.html(), /Could not read what this VM can use: timed out/);
+  assert.match(t.html(), /Homestead could not read what this VM can use\. timed out/);
   assert.match(t.html(), /Try again/);
   assert.match(t.html(), /onclick="vmEdit\(/);
   assert.doesNotMatch(t.html(), /ve_strategy|ve_node|Review changes/);
@@ -450,7 +450,7 @@ test("New k3s cluster says it could not read the VM options, and keeps no empty 
   const t = unread();
   t.ctx.__vmCreateOptions = undefined;
   await t.ctx.k3sCluster();
-  assert.match(t.html(), /Could not read what a new k3s cluster can use: timed out/);
+  assert.match(t.html(), /Homestead could not read what a new k3s cluster can use\. timed out/);
   assert.doesNotMatch(t.html(), /k_name|No LAN network|Review/);
   assert.equal(t.ctx.__vmCreateOptions, undefined, "a failed read is not kept as the options");
 });

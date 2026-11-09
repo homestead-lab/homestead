@@ -164,7 +164,7 @@ class AddressChangeChecksFirstTests(EditedPortsReachTheServiceTests):
         self.assertEqual([], self.sent)
 
     def test_a_node_address_refuses_and_keeps_the_internal_service(self):
-        with self.assertRaisesRegex(ValueError, "cluster node address"):
+        with self.assertRaisesRegex(ValueError, "cluster host address"):
             SVC.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.10")
         self.assertEqual([], self.sent)
 

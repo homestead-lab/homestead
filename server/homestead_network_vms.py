@@ -69,7 +69,7 @@ def vm_network_options(probes=None):
 def _vlan(cfg):
     vlan = str(cfg.get("vlan") or "").strip()
     if vlan and (not vlan.isdigit() or not 1 <= int(vlan) <= 4094):
-        raise ValueError("a VLAN ID is a number from 1 to 4094; leave it empty for the hosts' own, untagged LAN")
+        raise ValueError("A VLAN ID is a number from 1 to 4094. Leave it empty for the hosts' own, untagged LAN.")
     return vlan
 
 
@@ -79,7 +79,7 @@ def _host_network_config(cfg, options, name):
         raise ValueError(MULTUS_HELP)
     iface = str(cfg.get("interface") or "").strip()
     if not iface or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", iface):
-        raise ValueError("choose the host interface your LAN is on, like eth0 or br0")
+        raise ValueError("Choose the host interface the LAN is on, such as eth0 or br0.")
     known = {row["name"]: row for row in options.get("interfaces") or []}
     row = known.get(iface) or {"kind": "bridge" if iface.startswith(("br", "vmbr", "virbr")) else "nic"}
     vlan = _vlan(cfg)
@@ -99,7 +99,7 @@ def _host_network_config(cfg, options, name):
             raise ValueError("Install macvtap first, or use a host bridge. VMs join a LAN on a network interface through it: "
                              "it is under Settings → Cluster → Add-ons (Required components)")
         if vlan:
-            raise ValueError("a VM network on a VLAN needs a host bridge; macvtap is offered on the untagged LAN only")
+            raise ValueError("A VM network on a VLAN needs a host bridge. macvtap is offered only on the untagged LAN.")
         import homestead_macvtap as MACVTAP
         return MACVTAP.nad_config(name), iface, True, {"k8s.v1.cni.cncf.io/resourceName": MACVTAP.resource(iface)}
     master = f"{iface}.{vlan}" if vlan else iface
@@ -148,4 +148,4 @@ def create_vm_network(cfg):
                                       **({"annotations": annotations} if annotations else {})},
                          "spec": {"config": json.dumps(config)}})
     return {"ok": True, "name": f"{namespace}/{name}",
-            "detail": f"LAN network {namespace}/{name} made, on {where}; {joins} can join it now"}
+            "detail": f"LAN network {namespace}/{name} created, on {where}. {joins[:1].upper()}{joins[1:]} can join it now."}

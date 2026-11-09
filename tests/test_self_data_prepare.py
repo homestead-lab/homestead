@@ -142,7 +142,7 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(15, self.tick()[1])
         with self.assertRaises(Held) as held:
             self.tick()
-        self.assertIn("couldn't read the cluster's PriorityClasses", str(held.exception))
+        self.assertIn("could not read the cluster's PriorityClasses", str(held.exception))
 
     def test_immediate_binding_needs_no_helper_pod(self):
         self.sc["volumeBindingMode"] = "Immediate"

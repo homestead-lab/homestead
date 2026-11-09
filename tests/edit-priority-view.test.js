@@ -21,19 +21,19 @@ test("Kubernetes' own class is shown, not offered", () => {
   const html = field(load(), { priority: "system", priority_class: "system-node-critical" });
   assert.doesNotMatch(html, /id="e_priority"/);
   assert.match(html, /system-node-critical/);
-  assert.match(html, /Kubernetes' own class/);
+  assert.match(html, /A Kubernetes system class/);
 });
 
 test("a class that isn't on the cluster says its pods are refused", () => {
   const html = field(load(), { priority: "missing", priority_class: "gone" });
   assert.doesNotMatch(html, /id="e_priority"/);
-  assert.match(html, /isn't on the cluster/);
+  assert.match(html, /does not exist on the cluster/);
 });
 
 test("an app Flux applies shows where to set its tier", () => {
   const html = field(load(), { priority: "normal", priority_class: "x-normal", priority_owner: "Flux" });
   assert.doesNotMatch(html, /id="e_priority"/);
-  assert.match(html, /where Flux applies it/);
+  assert.match(html, /in Flux, which manages this app/);
 });
 
 test("Priority tiers shows what is wrong in one notice", () => {
@@ -48,5 +48,5 @@ test("Priority tiers shows what is wrong in one notice", () => {
 test("a class Homestead couldn't check is left as it is", () => {
   const html = field(load(), { priority: "unknown", priority_class: "x-normal" });
   assert.doesNotMatch(html, /id="e_priority"/);
-  assert.match(html, /couldn't read the cluster's classes/);
+  assert.match(html, /could not read the cluster's classes/);
 });

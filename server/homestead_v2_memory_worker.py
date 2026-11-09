@@ -91,12 +91,12 @@ def receipt(node_uid):
             'Memory ownership belongs to another host')
     require(type(row.get('baseline')) is int and type(row.get('target')) is int
             and 0 <= row['baseline'] <= row['target'] <= 1048576, 'Invalid memory ownership record')
-    require(row.get('policy') == policy(), 'Host memory or boot policy changed; keep its reservation')
+    require(row.get('policy') == policy(), 'The host memory or start-up policy changed. Keep its reservation.')
     return row
 
 
 def reserve(node_uid, boot, requested, v2_pages):
-    require(BOOT.read_text().strip() == boot, 'Host restarted; review preparation again')
+    require(BOOT.read_text().strip() == boot, 'The host restarted. Review the preparation again.')
     require(type(requested) is int and type(v2_pages) is int and 0 <= requested <= 1048576 and 0 <= v2_pages <= 524288,
             'Invalid memory request')
     if not requested: return
@@ -107,7 +107,7 @@ def reserve(node_uid, boot, requested, v2_pages):
         require(old.get('phase') == 'prepared' or completed, 'Finish the saved memory cleanup before preparing V2')
         expected = old['baseline'] if completed else old['target']
         require(CONFIG.read_text() == config(expected) and now['nr_hugepages'] == expected,
-                'The recorded V2 reservation changed; manual review is required')
+                'The recorded V2 reservation changed, so it needs a manual review')
         baseline = old['baseline']
     elif CONFIG.exists():
         # Old setup wrote an aggregate total without recording its previous pool.
@@ -128,9 +128,9 @@ def reserve(node_uid, boot, requested, v2_pages):
     atomic(RECEIPT, json.dumps(row)); atomic(CONFIG, config(target))
     (POOL / 'nr_hugepages').write_text(str(target))
     actual = counts()['nr_hugepages']
-    require(now['nr_hugepages'] <= actual <= target, 'Unexpected hugepage allocation; ownership is retained for manual review')
+    require(now['nr_hugepages'] <= actual <= target, 'Unexpected hugepage allocation. It is kept for a manual review.')
     row['phase'] = 'prepared'; atomic(RECEIPT, json.dumps(row))
-    if actual < target: print('V2 setup: allocation is partial; a reviewed host reboot is required')
+    if actual < target: print('V2 setup: only part of the memory was set aside. A reviewed host restart is needed.')
 
 
 def inspect(node_uid):
@@ -140,17 +140,17 @@ def inspect(node_uid):
     if not row:
         return {**base, 'reason': 'No ownership record. Existing hugepages are retained because their pre-V2 allocation is unknown.'}
     expected = row['baseline'] if row.get('phase') == 'restart-required' else row['target']
-    require(CONFIG.read_text() == config(expected), 'Managed memory policy changed; keep its reservation')
-    require(row.get('phase') in ('prepared', 'restart-required'), 'Interrupted preparation needs manual review; keep its reservation')
-    require(not policy(shared=True), 'Another host policy configures hugepages; its shared reservation is retained')
-    require(NUMA.read_text().strip() == '0', 'Multiple NUMA nodes need manual memory review; their reservations are retained')
+    require(CONFIG.read_text() == config(expected), 'The managed memory policy changed. Keep its reservation.')
+    require(row.get('phase') in ('prepared', 'restart-required'), 'An interrupted preparation needs a manual review. Keep its reservation.')
+    require(not policy(shared=True), 'Another host policy sets up hugepages, so its shared reservation is kept')
+    require(NUMA.read_text().strip() == '0', 'More than one NUMA node needs a manual memory review, so their reservations are kept')
     if row['phase'] == 'restart-required' and base['boot'] != row['cleanup_boot']:
-        require(base['pages'] == row['baseline'], 'Restarted host has a different hugepage pool; check its memory policy')
+        require(base['pages'] == row['baseline'], 'The restarted host has a different hugepage pool. Check its memory policy.')
         return {**base, 'phase': 'complete', 'baseline': row['baseline'], 'owned_pages': row['target'] - row['baseline']}
-    require(base['pages'] == row['target'], 'Live hugepage allocation changed; keep its reservation')
+    require(base['pages'] == row['target'], 'The current hugepage allocation changed. Keep its reservation.')
     return {**base, 'baseline': row['baseline'], 'owned_pages': row['target'] - row['baseline'],
             'phase': row['phase'], 'proof': hashlib.sha256(json.dumps(row, sort_keys=True).encode()).hexdigest(),
-            'reason': '' if row['target'] > row['baseline'] else 'The existing pool was not added by this preparation; it is retained.'}
+            'reason': '' if row['target'] > row['baseline'] else 'The existing pool was not added by this preparation, so it is kept.'}
 
 
 def stage(node_uid, proof, boot):
@@ -159,7 +159,7 @@ def stage(node_uid, proof, boot):
     require(view['phase'] == 'prepared' and view['proof'] == proof and view['boot'] == boot, 'Memory cleanup review changed')
     require(view['owned_pages'] > 0, 'No owned pages can be released')
     require(view['pages'] - view['free'] + view['reserved'] <= view['baseline'],
-            'Hugepages are still in use beyond the original pool; wait for V2 and other users to stop')
+            'Hugepages are still in use beyond the original pool. Wait for V2 and whatever else uses them to stop.')
     # Also catch SPDK not yet reflected in the controller's pod inventory.
     for process in PROC.iterdir():
         if not process.name.isdecimal(): continue

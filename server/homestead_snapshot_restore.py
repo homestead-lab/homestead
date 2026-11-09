@@ -19,8 +19,8 @@ import homestead_pod_exec as POD_EXEC
 import homestead_routes as ROUTER
 import homestead_snapshot_files as SNAP
 
-ENDED = "this snapshot's browsing session ended; open it again"
-IN_USE = ("{app} is running and using this volume; it sees these files change while it runs. "
+ENDED = "This snapshot's browsing session ended. Open it again."
+IN_USE = ("{app} is running and using this volume, so it sees these files change while it runs. "
           "For a database, stop it first.")
 # The browsing pod stops at its deadline, restore or not, and a file cut off
 # mid-copy is left short: a restore must fit in the time left, at a rate
@@ -71,7 +71,7 @@ def _walk(namespace, session, folder, names):
                           timeout=120)
     out, err = answer
     if getattr(answer, "cut", False):
-        raise ValueError("the list of what to restore is larger than Homestead reads at once (4 MiB); choose fewer entries")
+        raise ValueError("The list of what to restore is larger than Homestead reads at once (4 MiB). Choose fewer entries.")
     if err or not out:
         raise ValueError("the snapshot could not be read there: " + (err or "no answer")[:200])
     value = json.loads(out)
@@ -153,7 +153,7 @@ def _plan(body):
     blockers = []
     rows, truncated = _walk(namespace, session, folder, names)
     if truncated:
-        blockers.append("more than 20000 entries; restore a smaller folder")
+        blockers.append("More than 20000 entries. Restore a smaller folder.")
     live = _inspect(target_ns, pvc, target_folder, [r["path"] for r in rows if "\n" not in r["path"]])
     adds, replaces, skipped, send, held = [], [], [], [], []
     for row in rows:
@@ -191,7 +191,7 @@ def _plan(body):
     left = state["expires"] - time.time()
     if left < MIN_SECONDS_LEFT + size / SAFE_RATE:
         blockers.insert(0, f"this snapshot's browsing session ends in {max(0, int(left // 60))} minutes, "
-                           f"too soon to copy {_size(size)}; open it again to restore")
+                           f"too soon to copy {_size(size)}. Open it again to restore.")
     if not send and not truncated:
         blockers.append("nothing to restore: the live folder already has everything chosen")
     apps, modes = _users(target_ns, pvc)
@@ -223,13 +223,13 @@ def restore(body):
     key = (target_ns, pvc)
     with _LOCK:
         if key in _RUNNING:
-            return ROUTER.Reply(409, {"error": f"a restore into {pvc} is running; wait for it to finish"})
+            return ROUTER.Reply(409, {"error": f"A restore into {pvc} is running. Wait for it to finish."})
         _RUNNING[key] = "planning"
     job = None
     try:
         plan, send = _plan(body)
         if body.get("review_token") != plan["review_token"]:
-            return _refuse("what the restore would change has changed; review it again", plan, key)
+            return _refuse("What the restore would change has changed. Review it again.", plan, key)
         if not plan["ready"]:
             return _refuse(plan["blockers"][0], plan, key)
         dst_ns, dst_pod = FILES._session(target_ns, pvc)

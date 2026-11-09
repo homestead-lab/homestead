@@ -87,7 +87,7 @@ class IpamTests(unittest.TestCase):
         with mock.patch.object(IPAM, "_clean_subnet", side_effect=AssertionError("read a row")), \
                 self.assertRaises(ValueError) as caught:
             IPAM.save_subnets([{"cidr": "nonsense"}] * 150_000)
-        self.assertEqual("150000 subnets were sent; at most 64 can be documented, so remove 149936 "
+        self.assertEqual("150000 subnets were sent. At most 64 can be documented, so remove 149936 "
                          "and save again", str(caught.exception))
         self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
 

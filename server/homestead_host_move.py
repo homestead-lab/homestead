@@ -192,7 +192,7 @@ def status(item):
         _clear(ref.get("pulls") or [])
         # Keep both until the PUT lands: a failed one leaves the job to try again.
         if "proposed" not in ref:
-            return "failed", 100, f"{name} has no reviewed move left to apply; nothing was moved. Review the move again"
+            return "failed", 100, f"{name} has no reviewed move left to apply, so nothing was moved. Review the move again."
         try:
             _put_reviewed(ref["proposed"], ref.get("settled"))
         except urllib.error.HTTPError as error:
@@ -207,7 +207,7 @@ def status(item):
             if not landed:
                 ref.pop("proposed", None)
                 ref.pop("settled", None)
-                return "failed", 100, f"{name} changed while its image was being pulled, so Homestead stopped; check where it runs now, then review the move again"
+                return "failed", 100, f"{name} changed while its image was being pulled, so Homestead stopped. Check where it runs now, then review the move again."
         ref.pop("proposed", None)
         ref.pop("settled", None)
         ref["stage"] = "rolling"

@@ -220,7 +220,7 @@ def save_volume(volume, mode):
     _setting_or_refuse()
     found = next((v for v in _items(f"{LH}/volumes") if (v.get("metadata") or {}).get("name") == volume), None)
     if found is None:
-        raise ValueError(f"There is no Longhorn volume {volume}; refresh")
+        raise ValueError(f"There is no Longhorn volume {volume}. Refresh.")
     if mode == "enabled" and ((found.get("spec") or {}).get("dataEngine") or "v1") == "v2":
         raise ValueError(f"{volume} is a V2 volume: Longhorn never freezes these")
     with CHANGES.marking(mode):

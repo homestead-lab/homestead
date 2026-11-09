@@ -36,7 +36,7 @@ window.fleetAll = fleetAll;
 const fleetStillChecking = m => !m.self && !m.reachable && !!m.checking && m.answered === false;
 const fleetDot = (m, warn = true) => m.self || m.reachable ? (warn && m.compatible === false ? "warn" : "ok")
   : fleetStillChecking(m) ? "checking" : "bad";
-const fleetAnswer = m => m.self || m.reachable ? `v${m.version}` : fleetStillChecking(m) ? "still checking" : "not answering";
+const fleetAnswer = m => m.self || m.reachable ? `v${m.version}` : fleetStillChecking(m) ? "still checking" : "not responding";
 
 /* A row's cluster holds only on the page it was chosen on: after Back or a
    link to another page, requests go to this cluster, and so do the readers of
@@ -80,9 +80,9 @@ window.fleetMissingSentence = (row, what = "rows") => {
   const state = row.state || "not answering";
   const shown = row.age_s == null ? ""
     : `its ${what} shown ${what === "rows" ? "are" : "is"} from ${fleetAge(row.age_s)} ago`;
-  if (state === "waiting") return shown ? `${row.name} is slow to answer; ${shown}.` : `${row.name} has not answered yet; its ${what} ${what === "rows" ? "appear" : "appears"} when it does.`;
-  const why = state === "error" ? `${row.name} could not answer (${row.error || "unknown error"})` : `${row.name} is not answering`;
-  return shown ? `${why}; ${shown}.` : `${why}, so it is missing here.`;
+  if (state === "waiting") return shown ? `${row.name} is slow to respond, so ${shown}.` : `${row.name} has not responded yet. Its ${what} ${what === "rows" ? "appear" : "appears"} when it does.`;
+  const why = state === "error" ? `${row.name} could not respond (${row.error || "unknown error"})` : `${row.name} is not responding`;
+  return shown ? `${why}, so ${shown}.` : `${why}, so it is missing here.`;
 };
 window.fleetNoteMissing = header => {
   let rows = [];
@@ -124,7 +124,7 @@ window.clusterTag = row => {
   const c = clusterOf(row);
   if (!c) return "";
   const age = c.age_s == null ? "" : fleetAge(c.age_s);
-  const title = `On ${esc(c.name)}${age ? `; its last answer, from ${age} ago: it has not answered since` : ""}`;
+  const title = `On ${esc(c.name)}${age ? `. This is its last response, from ${age} ago. It has not responded since.` : ""}`;
   return `<span class="tag cluster-tag" title="${title}">${esc(c.name)}${age ? `<span class="cluster-age">· ${age} ago</span>` : ""}</span>`;
 };
 /* A row that lives on another cluster: this one's own records - image
@@ -153,7 +153,7 @@ window.fleetCrumb = () => {
 function fleetMenuHtml() {
   const view = FLEET.view || { members: [] };
   // A refresh that failed is said; the clusters shown are the ones last read (#620).
-  const unread = FLEET.menuUnread ? `<div class="fleet-via badtext">${FLEET.view ? "Could not read the clusters just now" : "Could not read the clusters"}: ${esc(FLEET.menuUnread)}${FLEET.view ? " · these are as last read" : ""}</div>` : "";
+  const unread = FLEET.menuUnread ? `<div class="fleet-via badtext">${FLEET.view ? "The clusters could not be read just now" : "The clusters could not be read"}. ${esc(FLEET.menuUnread)}${FLEET.view ? " · Shown as last read" : ""}</div>` : "";
   const all = fleetAll();
   const item = (checked, onclick, iconName, title, sub, extra = "") => `<button type="button" role="menuitemradio"
     aria-checked="${checked}" class="${checked ? "on" : ""}" onclick="${onclick}">${iconName}
@@ -161,10 +161,10 @@ function fleetMenuHtml() {
   const dot = m => `<span class="fleet-dot ${fleetDot(m)}" aria-hidden="true"></span>`;
   return `${unread}${view.via ? `<div class="fleet-via">Through ${esc(view.via)}</div>` : ""}
     ${item(all, "fleetShowAll()", `<span class="fleet-dot all" aria-hidden="true"></span>`, "All clusters",
-      FLEET.view ? `${view.members.length} together` : FLEET.menuUnread ? "not read" : "reading…")}
+      FLEET.view ? `${view.members.length} together` : FLEET.menuUnread ? "Not read" : "Reading…")}
     <div class="fleet-sep"></div>
     ${view.members.map(m => item(!all && m.self, `fleetSwitch(${jsq(m.id)})`, dot(m), m.name,
-      esc(m.self ? `this one · v${m.version}` : fleetAnswer(m)))).join("")}
+      esc(m.self ? `This cluster · v${m.version}` : fleetAnswer(m)))).join("")}
     <div class="fleet-sep"></div>
     <button type="button" data-need="admin" onclick="fleetMenuClose();fleetLink()">${icon("plus")}<span class="fleet-item"><b>Link a cluster</b></span></button>
     <button type="button" onclick="fleetOpenSettings()">${icon("gear")}<span class="fleet-item"><b>Manage clusters</b></span></button>`;
@@ -240,12 +240,12 @@ window.fleetManage = window.fleetOpenSettings;
 function fleetMembersHtml(view) {
   return view.members.map(m => `<li>
     <span class="fleet-dot ${fleetDot(m)}" aria-hidden="true"></span>
-    <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this one")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}${fleetPlain(m.url) ? ` <span title="Linking, and every key change, sends the clusters' key unencrypted at this address">${UI.chip("plain HTTP", "warn")}</span>` : ""}
-      <span class="fleet-sub"${m.self || m.reachable ? "" : ` title="${esc(m.error || "")}"`}><span class="mono">${esc(m.url || "no address")}</span>
+    <div class="fleet-row"><b>${esc(m.name)}</b>${m.self ? ` ${UI.chip("this cluster")}` : ""}${m.compatible === false ? ` ${UI.chip("update needed", "warn")}` : ""}${fleetPlain(m.url) ? ` <span title="Linking, and every key change, sends the clusters' key unencrypted to this address">${UI.chip("plain HTTP", "warn")}</span>` : ""}
+      <span class="fleet-sub"${m.self || m.reachable ? "" : ` title="${esc(m.error || "")}"`}><span class="mono">${esc(m.url || "No address")}</span>
         · ${esc(fleetAnswer(m))}</span></div>
     <div class="row nowrap fleet-row-acts"><span class="fleet-out" id="fout_${esc(m.id)}"></span>
-    ${m.self ? (view.linked ? UI.button("Leave", "fleetLeave()", { attrs: 'data-need="admin"' }) : "")
-      : UI.button("Unlink", `fleetUnlink(${jsArg(m.id)},${jsArg(m.name)})`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
+    ${m.self ? (view.linked ? UI.button("Leave linked clusters", "fleetLeave()", { attrs: 'data-need="admin"' }) : "")
+      : UI.button("Unlink cluster", `fleetUnlink(${jsArg(m.id)},${jsArg(m.name)})`, { attrs: 'data-need="admin"' })}</div></li>`).join("");
 }
 
 /* Migration from each cluster: workloads can move from it to another linked
@@ -264,7 +264,7 @@ function fleetMigrationButton(m, state, unread = "") {
   const label = !state ? "Migration" : on ? "Migration on" : "Migration off";
   // Unread is neither on nor off: the button says so rather than "cannot move yet" (#620).
   return `<button type="button" class="btn sm fleet-mig${on ? " on" : ""}" onclick="fleetMigration(${jsq(m.id)})"
-    title="${esc(unread ? `Could not read whether apps can move from ${m.name}: ${unread}` : on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
+    title="${esc(unread ? `Homestead could not read whether apps can move from ${m.name}. ${unread}` : on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
     <span class="fleet-dot ${on ? "ok" : ""}" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
@@ -287,11 +287,11 @@ window.fleetTransfersPaint = () => {
 window.fleetMigration = async id => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
   if (!m) return;
-  modal(`Migration · ${m.name}`, '<div class="empty"><span class="spin2"></span> Asking about its backup storage…</div>', true);
+  modal(`Migration · ${m.name}`, '<div class="empty"><span class="spin2"></span> Checking its backup storage…</div>', true);
   let state, ready = null;
   try { state = await fleetTransferCall(m); FLEET.transfers[id] = state; }
   catch (e) {
-    $("#mbody").innerHTML = UI.callout("bad", `Could not ask ${m.name}.`, esc(e.message)) + UI.actions(UI.cancel("Close"));
+    $("#mbody").innerHTML = UI.callout("bad", `${m.name} could not be reached.`, esc(e.message)) + UI.actions(UI.cancel("Close"));
     return;
   }
   let readyUnread = "";
@@ -301,59 +301,59 @@ window.fleetMigration = async id => {
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
   // An unread check is said, not left out as if there were nothing to check (#620).
-  const readyNote = readyUnread ? UI.callout("warn", "Could not check whether this cluster can reach it", esc(readyUnread)) : "";
+  const readyNote = readyUnread ? UI.callout("warn", "Homestead could not check whether this cluster can reach it", esc(readyUnread)) : "";
   if (!$("#mbody")) return;
-  const lead = UI.lead(`Move apps from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
+  const lead = UI.lead(`Apps move from ${esc(m.name)} to linked clusters. Their volumes are backed up to its S3 store and restored at the destination.`);
   const target = ready?.target || {};
   let body;
   if (state.allowed) {
     const problems = [];
-    const retryTarget = UI.button("Retry target switch", `fleetTargetRetry(${jsArg(id)})`, { attrs: 'data-need="admin"' });
+    const retryTarget = UI.button("Retry backup target change", `fleetTargetRetry(${jsArg(id)})`, { attrs: 'data-need="admin"' });
     const same = (a, b) => String(a || "").replace(/\/+$/, "") === String(b || "").replace(/\/+$/, "");
-    if (["pending", "applying"].includes(state.longhorn?.state)) problems.push(["info", "Longhorn's backup target is switching.",
+    if (["pending", "applying"].includes(state.longhorn?.state)) problems.push(["info", "Longhorn's backup target is changing.",
       `${state.longhorn.detail}. Homestead retries automatically for up to ten minutes, even with this dialog closed.`, retryTarget]);
     else if (state.longhorn?.state === "failed") problems.push(["warn", "Longhorn's backup target needs attention.", state.longhorn.detail, retryTarget]);
-    else if (!state.ready && state.volume_problem) problems.push(["bad", "Its backup storage cannot start: Longhorn has no room for its volume.",
-      `Longhorn says: ${state.volume_problem}. Disable migration, remove the backup storage under ${m.name}'s Data protection, and enable migration again with a smaller size.`, ""]);
-    else if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "Its first start downloads the S3 server; this takes a minute or two.", ""]);
+    else if (!state.ready && state.volume_problem) problems.push(["bad", "Its backup storage cannot start, because Longhorn has no room for its volume.",
+      `Longhorn reports: ${state.volume_problem}. Turn off migration, remove the backup storage under ${m.name}'s Data protection, and turn on migration again with a smaller size.`, ""]);
+    else if (!state.ready) problems.push(["warn", "Its backup storage is starting.", "The first start downloads the S3 server, which takes a minute or two.", ""]);
     else if (!state.reachable_off_cluster) problems.push(["warn", "It has no LAN address, so no other cluster can read it.", "",
-      m.self ? "" : UI.button("Give it an address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
+      m.self ? "" : UI.button("Assign address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
     else if (ready && target.configured && target.endpoint && state.endpoint && !same(target.endpoint, state.endpoint))
       problems.push(["warn", `${m.name}'s Longhorn backs up to ${target.endpoint}, not to its backup storage at ${state.endpoint}.`,
-        "Pointing Longhorn at the store sends moves' backups where this cluster can read them.",
+        "Pointing Longhorn at the store sends the backups for moves where this cluster can read them.",
         retryTarget]);
     else if (state.longhorn?.pointed === false) problems.push(["warn", "Longhorn is not writing to this backup storage.",
-      state.longhorn.endpoint ? `Current endpoint: ${state.longhorn.endpoint}` : "", retryTarget]);
+      state.longhorn.endpoint ? `Current address: ${state.longhorn.endpoint}` : "", retryTarget]);
     else if (ready && target.configured && !target.answers) problems.push(["warn", `This cluster cannot reach it at ${target.endpoint}.`,
-      "It may still be starting; otherwise the address is taken or firewalled.",
-      UI.button("Give it another address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
+      "It may still be starting. Otherwise, the address is in use or blocked by a firewall.",
+      UI.button("Assign another address", `clusterStorage(${jsArg(m.handle)},true,()=>fleetMigration(${jsArg(id)}))`)]);
     else if (ready && !target.configured) problems.push(["warn", `${m.name}'s Longhorn is not pointed at it yet.`, "",
       retryTarget]);
     body = `${lead}
       ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
-        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : readyUnread ? "not checked" : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
+        ...(m.self ? [] : [["Reachable from this cluster", ready ? (target.answers ? "Yes" : "No") : readyUnread ? "Not checked" : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
       ${readyNote}
       ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
-      ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
-      ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { id: "fm_go", attrs: 'data-need="admin"' }))}`;
+      ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn also backs up to this store.`, "Turning off migration pauses those backups until migration is turned on again.") : ""}
+      ${UI.actions(UI.cancel("Close") + UI.button("Turn off migration", `fleetMigrationSet(${jsArg(id)}, false)`, { id: "fm_go", attrs: 'data-need="admin"' }))}`;
   } else if (state.deployed) {
     body = `${lead}
-      ${UI.callout("info", "Its backup storage is stopped.", "Enabling migration starts it again as it was, with the backups on it.")}
-      ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+      ${UI.callout("info", "Its backup storage is stopped.", "Turning on migration starts it again unchanged, with its backups.")}
+      ${UI.actions(UI.cancel() + UI.button("Turn on migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
   } else {
     const shared = ready?.shared_vip;
     body = `${lead}
       ${readyNote}
       ${UI.fields(
-        UI.field("Size (GiB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
+        UI.field("Size (GiB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Stores the backups made for moves. Only changes are backed up after the first." }),
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
-            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : readyUnread ? "Its shared address (not read)" : "Its shared address"}</option>
-            <option value="__typed">An address of its own…</option></select>
+            <option value="__shared">${shared ? `Default virtual IP · ${esc(shared)}` : readyUnread ? "Default virtual IP (not read)" : "Default virtual IP"}</option>
+            <option value="__typed">Its own address…</option></select>
           <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
-          { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
+          { help: "Shared with the cluster's apps, on its own port. Choose its own address only to keep its traffic separate." }),
         UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
-          { help: "The port the store answers on. Pick another if an app there already uses 9000; the next port up is its console." }))}
-      ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
+          { help: "The port the store listens on. Choose another if an app already uses 9000. The next port up is its console." }))}
+      ${UI.actions(UI.cancel() + UI.button("Turn on migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">${body}</div>`;
   if (window.applyRole) applyRole();
@@ -372,13 +372,13 @@ window.fleetTargetRetry = async id => {
 window.fleetMigrationSet = async (id, allow) => {
   const m = (FLEET.view?.members || []).find(x => x.id === id);
   const state = FLEET.transfers[id] || {};
-  if (!allow && !(await ask(`Disable migration from ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops; its volume and the backups on it are kept.`
-      + (state.backups_here ? ` Longhorn on ${m.name} backs up there too, so those backups pause until it is enabled again.` : ""), { title: "Disable migration", ok: "Disable migration", danger: true }))) return;
+  if (!allow && !(await ask(`Turn off migration from ${m.name}?${String.fromCharCode(10, 10)}Its backup storage stops. Its volume and the backups on it are kept.`
+      + (state.backups_here ? ` Longhorn on ${m.name} also backs up there, so those backups pause until migration is turned on again.` : ""), { title: "Turn off migration", ok: "Turn off migration", danger: true }))) return;
   const pick = $("#fm_pick")?.value || "__shared";
   const address = pick === "__typed" ? ($("#fm_ip")?.value || "").trim() : "";
-  if (pick === "__typed" && !address) return toast("Type the address for its backup storage", "bad");
+  if (pick === "__typed" && !address) return toast("Enter the address for its backup storage", "bad");
   const go = $("#fm_go");
-  if (go) { go.disabled = true; go.textContent = allow ? "Enabling…" : "Disabling…"; }
+  if (go) { go.disabled = true; go.textContent = allow ? "Turning on…" : "Turning off…"; }
   try {
     const r = await fleetTransferCall(m, { allow, size_gb: +($("#fm_size")?.value || 100), lb_ip: address,
       vip_mode: pick === "__shared" ? "shared" : "", port: +($("#fm_port")?.value || 0) || undefined });
@@ -388,7 +388,7 @@ window.fleetMigrationSet = async (id, allow) => {
     fleetMigration(id);
   } catch (e) {
     toast(e.message, "bad");
-    if (go) { go.disabled = false; go.textContent = allow ? "Enable migration" : "Disable migration"; }
+    if (go) { go.disabled = false; go.textContent = allow ? "Turn on migration" : "Turn off migration"; }
   }
 };
 
@@ -396,7 +396,7 @@ window.fleetMigrationSet = async (id, allow) => {
    from it now, and its workloads. */
 function moveSourceRow(c) {
   return `<li><span class="fleet-dot" id="msd_${esc(c.name)}" aria-hidden="true"></span>
-    <div class="fleet-row"><b>${esc(c.label || c.name)}</b><span class="fleet-sub" id="mss_${esc(c.name)}">checking…</span></div>
+    <div class="fleet-row"><b>${esc(c.label || c.name)}</b><span class="fleet-sub" id="mss_${esc(c.name)}">Checking…</span></div>
     ${UI.button("Browse apps", `clusterBrowse(${jsArg(c.name)})`)}</li>`;
 }
 
@@ -410,14 +410,14 @@ async function moveSourceCheck(c) {
   if (!text) return;
   (window.__clusterReady ||= {})[c.name] = r;
   const member = (FLEET.view?.members || []).find(m => m.handle === c.name);
-  const fix = member ? ` - <a class="linkish" onclick="fleetMigration(${jsq(member.id)})">migration…</a>`
-    : ` - <a class="linkish" data-need="admin" onclick="clusterStorage(${jsq(c.name)})">set it up</a>`;
+  const fix = member ? ` · <a class="linkish" onclick="fleetMigration(${jsq(member.id)})">Migration…</a>`
+    : ` · <a class="linkish" data-need="admin" onclick="clusterStorage(${jsq(c.name)})">Set up</a>`;
   const [tone, words] = error ? ["bad", esc(error)]
-    : r.version?.compatible === false ? ["warn", esc(r.version.message || "a release too far from this one")]
-    : r.version?.state === "unreachable" ? ["bad", "not answering"]
-    : r.ready ? ["ok", "ready to move from"]
-    : r.storage?.stopped || !r.storage?.deployed ? ["", `migration from it is off${fix}`]
-    : ["warn", `its backup storage needs attention${fix}`];
+    : r.version?.compatible === false ? ["warn", esc(r.version.message || "Its release is too far from this one")]
+    : r.version?.state === "unreachable" ? ["bad", "Not responding"]
+    : r.ready ? ["ok", "Ready for moves"]
+    : r.storage?.stopped || !r.storage?.deployed ? ["", `Migration from it is off${fix}`]
+    : ["warn", `Its backup storage needs attention${fix}`];
   if (dot) dot.className = `fleet-dot ${tone}`;
   text.innerHTML = words;
   if (window.applyRole) applyRole();
@@ -429,9 +429,9 @@ function fleetLegacyHtml(rows) {
     <span class="fleet-dot" aria-hidden="true"></span>
     <div class="fleet-row"><b>${esc(r.name)}</b>
       ${!r.linked_as && fleetPlain(r.url) ? ` <span title="Each new session signs in there with the stored admin password, over plain HTTP">${UI.chip("password sent unencrypted", "warn")}</span>` : ""}
-      <span class="fleet-sub">${r.linked_as ? `linked as ${esc(r.linked_as.name)}` : `<span class="mono">${esc(r.user)}@${esc(r.url)}</span>`}</span></div>
-    <div class="row nowrap">${UI.button("Forget", `fleetForgetLegacy(${jsArg(r.name)})`, { attrs: 'data-need="admin"' })}
-      ${UI.button(r.linked_as ? "Use the link" : "Link", `fleetLinkLegacy(${jsArg(r.name)})`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
+      <span class="fleet-sub">${r.linked_as ? `Linked as ${esc(r.linked_as.name)}` : `<span class="mono">${esc(r.user)}@${esc(r.url)}</span>`}</span></div>
+    <div class="row nowrap">${UI.button("Forget cluster", `fleetForgetLegacy(${jsArg(r.name)})`, { attrs: 'data-need="admin"' })}
+      ${UI.button(r.linked_as ? "Use link" : "Link cluster", `fleetLinkLegacy(${jsArg(r.name)})`, { kind: "pri", attrs: 'data-need="admin"' })}</div></li>`).join("");
 }
 
 window.fleetSettingsPaint = async () => {
@@ -448,25 +448,25 @@ window.fleetSettingsPaint = async () => {
   const all = fleetMode() === "all";
   const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
     onclick="fleetSetMode(${jsq(value)})">${label}</button>`;
-  host.innerHTML = `${UI.moduleHeader(`Linked clusters`, `Other Homesteads managed from this one - even when only this one is reachable from outside.`, `${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}`)}
-    ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters", esc(read.unread))
+  host.innerHTML = `${UI.moduleHeader(`Linked clusters`, `Other Homesteads managed from this one, even when only this one can be reached from outside.`, `${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}`)}
+    ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "The linked clusters could not be read", esc(read.unread))
       + UI.button("Try again", "fleetSettingsPaint()")}
-    ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
+    ${view?.linked ? UI.section("Display", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters are shown">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
       <p class="ui-help">${all
-        ? "Containers, Virtual Machines, Hosts and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
-        : "The switch at the start of the top bar opens any cluster here, with your sign-in and role. Its All clusters shows them together."}</p>`) : ""}
-    ${legacyRead.unread ? UI.section("Added before linking", UI.callout("bad", "Could not read the clusters added before linking", esc(legacyRead.unread))) : ""}
-    ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
-      Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
+        ? "Containers, Virtual machines, Hosts and Volumes list every cluster, and each row is tagged with its cluster. The switch at the start of the top bar still opens a single cluster."
+        : "The switch at the start of the top bar opens any cluster listed here, with the same account and role. Its All clusters option shows them together."}</p>`) : ""}
+    ${legacyRead.unread ? UI.section("Added before linking", UI.callout("bad", "The clusters added before linking could not be read", esc(legacyRead.unread))) : ""}
+    ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on the Import page for moves, with an account stored here.
+      Link each one to manage it from here too. Its password is then deleted, and moves already made keep working.</p>
       <ul class="fleet-list">${fleetLegacyHtml(legacy)}</ul>`) : ""}
     ${!view ? "" : UI.section("Address for other clusters", UI.field("Address",
       `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
-      ${UI.button("Save", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
-      { help: "Its LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}
-    ${UI.more("How linking works", `<p>Linked Homesteads share a key that signs every request between them. Nobody's
-      password is kept: the admin account asked for when linking is used once. A person signed in to one cluster keeps
-      their role on the others, and each cluster applies its own rules to it.</p>
+      ${UI.button("Save address", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
+      { help: "This Homestead's LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}
+    ${UI.more("How linking works", `<p>Linked Homesteads share a key that signs every request between them. No password is
+      stored. The admin account requested when linking is used only once. A person signed in to one cluster keeps
+      the same role on the others, and each cluster applies its own rules to that role.</p>
       <p>Unlinking a cluster gives the rest a new key, so the one that left can no longer act for them.</p>`)}`;
   fleetTransfersPaint();
 };
@@ -485,9 +485,9 @@ window.fleetMovesPaint = async () => {
   if (!$("#fleetMovesCard")) return;
   const held = holds && (holds.error || holds.holds?.length || holds.leftovers?.length);
   host.hidden = !unread && !clustersUnread && !moves.length && !clusters.length && !held;
-  host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
+  host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Move containers and VMs to this cluster from another cluster. A cluster's <b>Migration</b> button above allows apps to move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${unread ? movesUnreadHtml(unread) : moves.length ? movesHtml(moves) : ""}</div>
-    ${clustersUnread ? UI.callout("bad", "Could not read which clusters apps can move from", esc(clustersUnread)) + UI.button("Try again", "fleetMovesPaint()") : ""}
+    ${clustersUnread ? UI.callout("bad", "The clusters that apps can move from could not be read", esc(clustersUnread)) + UI.button("Try again", "fleetMovesPaint()") : ""}
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}
     ${held ? `<div id="moveHolds">${moveHoldsHtml(holds)}</div>` : ""}`;
   if (window.applyRole) applyRole();
@@ -513,7 +513,7 @@ async function fleetRefreshAfter() {
 window.fleetLinkLegacy = async name => {
   const row = (FLEET.legacy || []).find(r => r.name === name);
   // Using a link already made sends no password; only a new link does.
-  if (row && !row.linked_as && fleetPlain(row.url) && !(await ask(`${name} is at a plain http:// address.${String.fromCharCode(10, 10)}Linking sends its admin password and then the clusters' shared key there unencrypted: anyone on that network path could read them. Link it at an https:// address if it has one.`,
+  if (row && !row.linked_as && fleetPlain(row.url) && !(await ask(`${name} uses a plain http:// address.${String.fromCharCode(10, 10)}Linking sends its admin password and then the clusters' shared key there unencrypted, so anyone on that network path could read them. Link it at an https:// address if it has one.`,
     { title: "Link over plain HTTP", ok: "Send them unencrypted", danger: true }))) return;
   try {
     const result = await api("/api/fleet/link-legacy", { method: "POST", headers: { "Content-Type": "application/json" },
@@ -524,7 +524,7 @@ window.fleetLinkLegacy = async name => {
 };
 
 window.fleetForgetLegacy = async name => {
-  if (!(await ask(`Forget ${name}?${String.fromCharCode(10, 10)}Its stored account is deleted. Nothing on that cluster is touched.`, { title: "Forget cluster", ok: "Forget", danger: true }))) return;
+  if (!(await ask(`Forget ${name}?${String.fromCharCode(10, 10)}Its stored account is deleted. Nothing on that cluster changes.`, { title: "Forget cluster", ok: "Forget cluster", danger: true }))) return;
   try {
     await api("/api/move/clusters/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
@@ -537,17 +537,17 @@ window.fleetLink = () => {
   const suggested = FLEET.view?.address || FLEET.view?.suggested_address || "";
   const open = $("#modal") && !$("#modal").classList.contains("hidden");
   (open ? childModal : modal)("Link a cluster", `<div class="ui-stack">
-    ${UI.lead("Links another Homestead to this one and to every cluster already linked here. It must not be linked to others yet.")}
+    ${UI.lead("Links another Homestead to this one and to every cluster already linked here. It must not be linked to other clusters yet.")}
     ${UI.fields(
       UI.field("Its address", '<input id="fl_url" placeholder="http://192.0.2.250:8088" autocomplete="off" oninput="fleetPlainShow()">', { wide: true,
-        help: "What you open it at in a browser on your LAN, with the port." }),
+        help: "The address used to open it in a browser on the LAN, including the port." }),
       UI.field("Admin username there", '<input id="fl_user" placeholder="admin" autocomplete="off">'),
       UI.field("Password there", '<input id="fl_pass" type="password" autocomplete="new-password">'),
       UI.field("This Homestead's address", `<input id="fl_own" value="${esc(suggested)}" autocomplete="off" oninput="fleetPlainShow()">`, { wide: true,
         help: "How that cluster reaches this one." }))}
-    <label class="switch" id="fl_plain_row" hidden><input type="checkbox" id="fl_plain"> <span>Send the admin password and the cluster key unencrypted: an address here is plain http://, so anyone on that network path could read them</span></label>
-    ${UI.more("What is kept", "<p>The password signs in once to exchange a shared key, and is not stored. From then on the clusters sign their requests to each other with that key.</p>")}
-    ${UI.actions((open ? UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Link", "fleetLinkSave()", { kind: "pri", id: "fl_go" }))}
+    <label class="switch" id="fl_plain_row" hidden><input type="checkbox" id="fl_plain"> <span>Send the admin password and the cluster key unencrypted. An address here is plain http://, so anyone on that network path could read them.</span></label>
+    ${UI.more("What is stored", "<p>The password is used once to sign in and exchange a shared key, and is not stored. After that, the clusters sign their requests to each other with that key.</p>")}
+    ${UI.actions((open ? UI.button("Back", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) : UI.cancel()) + UI.button("Link cluster", "fleetLinkSave()", { kind: "pri", id: "fl_go" }))}
   </div>`);
   setTimeout(() => { fleetPlainShow(); $("#fl_url")?.focus(); }, 30);
 };
@@ -559,10 +559,10 @@ window.fleetPlainShow = () => { const row = $("#fl_plain_row"); if (row) row.hid
 window.fleetLinkSave = async () => {
   const body = { url: $("#fl_url").value.trim(), username: $("#fl_user").value.trim(),
     password: $("#fl_pass").value, own_url: $("#fl_own").value.trim(), plain_ok: false };
-  if (!body.url || !body.username || !body.password) return toast("Its address, and an admin username and password there", "bad");
+  if (!body.url || !body.username || !body.password) return toast("Enter its address, and an admin username and password for it", "bad");
   if (fleetLinkPlain() && !$("#fl_plain")?.checked) {
     fleetPlainShow();
-    return toast("An address is plain http://: tick that the password and key may be sent unencrypted, or use https://", "bad");
+    return toast("An address uses plain http://. Tick the box to send the password and key unencrypted, or use https://.", "bad");
   }
   body.plain_ok = fleetLinkPlain();
   const go = $("#fl_go");
@@ -570,28 +570,28 @@ window.fleetLinkSave = async () => {
   try {
     const result = await api("/api/fleet/join", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body) });
-    toast(`${result.member?.name || "The cluster"} is linked${result.missed?.length ? `; ${plural(result.missed.length, "other cluster")} will catch up when they answer` : ""}`, "ok");
+    toast(`${result.member?.name || "The cluster"} is linked${result.missed?.length ? `. ${plural(result.missed.length, "other cluster")} are updated when they respond.` : ""}`, "ok");
     closeModal();
     await fleetRefreshAfter();
   } catch (e) {
     toast(e.message, "bad");
-    if (go) { go.disabled = false; go.textContent = "Link"; }
+    if (go) { go.disabled = false; go.textContent = "Link cluster"; }
   }
 };
 
 // Who gets a new key at a plain http:// address, said before Unlink or Leave sends it.
 function fleetPlainKeyNote(leaving) {
   const plain = (FLEET.view?.members || []).filter(m => !m.self && m.id !== leaving && fleetPlain(m.url));
-  return plain.length ? `${String.fromCharCode(10, 10)}The new key is sent unencrypted to ${plain.map(m => `${m.name} (${m.url})`).join(", ")}: a plain http:// address, so anyone on that network path could read it.` : "";
+  return plain.length ? `${String.fromCharCode(10, 10)}The new key is sent unencrypted to ${plain.map(m => `${m.name} (${m.url})`).join(", ")}, which uses plain http://, so anyone on that network path could read it.` : "";
 }
 
 window.fleetUnlink = async (id, name) => {
   const plain = fleetPlainKeyNote(id);
-  if (!(await ask(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.${plain}`, { title: "Unlink cluster", ok: "Unlink", danger: true }))) return;
+  if (!(await ask(`Unlink ${name}?${String.fromCharCode(10, 10)}It keeps running as it is. The linked clusters get a new key, so ${name} can no longer act for them.${plain}`, { title: "Unlink cluster", ok: "Unlink cluster", danger: true }))) return;
   try {
     const result = await api("/api/fleet/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, plain_ok: !!plain }) });
-    toast(result.told ? `${name} is unlinked` : `${name} is unlinked here; it did not answer, so it still lists the others until it does`, result.told ? "ok" : "warn");
+    toast(result.told ? `${name} is unlinked` : `${name} is unlinked here. It did not respond, so it still lists the other clusters until it does.`, result.told ? "ok" : "warn");
     await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -602,7 +602,7 @@ window.fleetLeave = async () => {
   try {
     await api("/api/fleet/leave", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plain_ok: !!plain }) });
     setFleetMode("one");
-    toast("This Homestead stands alone again", "ok");
+    toast("This Homestead is no longer linked", "ok");
     await fleetRefreshAfter();
   } catch (e) { toast(e.message, "bad"); }
 };
@@ -611,7 +611,7 @@ window.fleetSaveAddress = async () => {
   try {
     const result = await api("/api/fleet/address", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url: $("#fleetAddress").value.trim() }) });
-    toast(result.missed?.length ? `Saved; ${plural(result.missed.length, "cluster")} will hear when they answer` : "Saved", "ok");
+    toast(result.missed?.length ? `Saved. ${plural(result.missed.length, "cluster")} are updated when they respond.` : "Saved", "ok");
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -626,7 +626,7 @@ window.moveToCluster = (kind, name, sourceHandle = "", transferMode = "move", so
   if (!choices.length) return fleetLink();
   const verb = transferMode === "copy" ? "Copy" : "Move";
   modal(`${verb} to cluster · ${name}`, `<div class="ui-stack">
-    ${UI.lead(`Choose the destination, then review the ${verb.toLowerCase()} there. Nothing stops until you confirm.`)}
+    ${UI.lead(`Choose the destination, then review the ${verb.toLowerCase()} there. Nothing stops until it is confirmed.`)}
     <div class="fleet-pick">${choices.map(m => `<button type="button" class="btn" ${m.reachable ? "" : "disabled"}
       onclick="moveToClusterGo(${jsq(m.id)},${jsq(from)},${jsq(kind)},${jsq(name)},${jsq(transferMode)},${jsq(sourceNamespace)})">
       <span class="fleet-dot ${fleetDot(m, false)}"></span><b>${esc(m.name)}</b>
@@ -639,7 +639,7 @@ window.moveToClusterGo = async (id, from, kind, name, transferMode = "move", sou
     if (transferMode === "copy") {
       const hello = await api("/api/move/hello", { headers: { "X-Homestead-Cluster": id } });
       if (!hello.capabilities?.includes("copy-destination")) {
-        return toast("Update Homestead on the destination before copying. It only supports moves.", "bad");
+        return toast("Update Homestead on the destination before copying. Its version supports only moves.", "bad");
       }
     }
     setFleetMode("one");

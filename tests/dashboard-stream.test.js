@@ -106,7 +106,7 @@ test("a timed out history request retains existing charts and shows an error",as
   vm.createContext(ctx);const code=fs.readFileSync("web/js/views-stats.js","utf8");
   vm.runInContext(between(code,"let historyRequest","window.historyPaint"),ctx);
   const pending=ctx.historyPaint();timeout();await pending;
-  assert.equal(ctx.STATE.data.historyHtml,"saved charts");assert.match(host.note.textContent,/could not refresh/);
+  assert.equal(ctx.STATE.data.historyHtml,"saved charts");assert.match(host.note.textContent,/could not be refreshed/);
   assert.equal(cleared,true);
 });
 

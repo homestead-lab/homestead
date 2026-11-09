@@ -3,17 +3,17 @@
    start it again - so it is said plainly, with restart offered instead. */
 window.wlStopSelf = (ns, name) => {
   modal("Stop · Homestead", `
-    ${UI.callout("bad", "This takes Homestead down, and this page with it", `<p>Nothing here can start it again. It stays down until someone runs
+    ${UI.callout("bad", "This stops Homestead, and this page with it", `<p>It cannot be started again from here. It stays stopped until this command is run
       <code>kubectl -n ${esc(ns)} scale deployment/${esc(name)} --replicas=1</code> on the cluster.</p>
-      <p>Your apps keep running. Jobs in the tray, alerts and moves pause until it is back.</p>`)}
-    <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
+      <p>The apps keep running. Jobs, alerts and moves pause until it is back.</p>`)}
+    <p class="small">If it needs a fresh start, <b>Restart</b> brings it back immediately.</p>
     <label class="switch"><input type="checkbox" id="ss_ok"> Stop it anyway</label>
     ${UI.actions(`<button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
       <button class="btn danger" onclick="wlStopSelfGo(${jsq(ns)},${jsq(name)})">Stop Homestead</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.wlStopSelfGo = async (ns, name) => {
-  if (!$("#ss_ok").checked) return toast("Tick the box to confirm", "bad");
+  if (!$("#ss_ok").checked) return toast("Tick Stop it anyway to confirm", "bad");
   try {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, replicas: 0, confirm_self: true }) });
@@ -37,11 +37,11 @@ window.wlFailover = async () => {
     ? `${String(lh.unread).replace(/\.$/, "")}. Longhorn may not be installed on this cluster.` : lh.unread);
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
-    ${lh?.unread ? UI.callout("warn", "Could not read whether apps with storage can move off a failed host", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Apps with storage cannot move", moving
+    <p class="small" style="margin-top:0">Choose whether each container moves, waits, or uses the Kubernetes default of moving after five minutes when its host fails. Saving a changed setting restarts that container.</p>
+    ${lh?.unread ? UI.callout("warn", "Homestead could not read whether apps with storage can move off a failed host", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Apps with storage cannot move", moving
       ? "If a host fails, Longhorn releases its storage, so apps set to move restart on another host with their storage."
       : "If a host fails, Longhorn keeps its storage attached to it, so apps that use it stay stopped until the host is back.", moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Allow them to move</button>` })}` : ""}
-    ${rows.unread ? `${UI.callout("warn", "Could not read the containers", esc(rows.unread))}
+    ${rows.unread ? `${UI.callout("warn", "The containers could not be read", esc(rows.unread))}
     ${UI.actions(`<button class="btn" onclick="wlFailover()">Try again</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}` : `
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
@@ -49,7 +49,7 @@ window.wlFailover = async () => {
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its host fails</th></tr></thead><tbody>
       ${rows.map(w => `<tr><td><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}${w.group ? ` · ${esc(w.group)}` : ""}</span>
           ${(w.hardware || []).length ? UI.chip(w.hardware.join(", "), "hw", { tip: "Tied to hardware on its host" }) : ""}</td>
-        <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
+        <td data-label="If its host fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`, `If ${w.name}'s host fails`)}</td></tr>`).join("")}
     </tbody></table>
     ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`}`;
@@ -60,7 +60,7 @@ window.wlFailoverSave = async () => {
     .map(s => ({ ns: s.dataset.ns, name: s.dataset.name, mode: s.value }));
   if (!items.length) return closeModal();
   if (items.some(i => (STATE.data.wl || []).some(w => w.self && w.ns === i.ns && w.name === i.name))
-      && !(await ask("Homestead itself is among them: it restarts, and this page reconnects when it is back.", { title: "Homestead restarts", ok: "Save and restart" }))) return;
+      && !(await ask("Homestead is one of them, so it restarts, and this page reconnects when it is back.", { title: "Homestead restarts", ok: "Save and restart" }))) return;
   try {
     const r = await api("/api/workloads/failover", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }) });
@@ -68,7 +68,7 @@ window.wlFailoverSave = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.wlFailoverPolicy = async () => {
-  if (!(await ask("If a host fails, Longhorn will delete its pods and release their storage, so apps set to move can restart on another host.\n\nRisk: if the host has only lost its network connection and is still running, its copy of an app may keep running, and any data that copy writes after the switch-over is lost.", { title: "Allow apps with storage to move", ok: "Allow" }))) return;
+  if (!(await ask("If a host fails, Longhorn deletes its pods and releases their storage, so that apps set to move can restart on another host.\n\nRisk: if the host has only lost its network connection and is still running, its copy of an app may keep running, and any data that copy writes after the switch-over is lost.", { title: "Allow apps with storage to move", ok: "Allow apps to move" }))) return;
   try {
     await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node_down: "delete-both-statefulset-and-deployment-pod" }) });
@@ -84,15 +84,15 @@ async function containerLanFields(p, current) {
   let opts = window.__vmCreateOptions;
   if (!opts) {
     try { opts = await api("/api/vm/create-options"); }
-    catch (e) { return UI.callout("warn", "Could not read the networks", esc(e.message)); }
+    catch (e) { return UI.callout("warn", "The networks could not be read", esc(e.message)); }
     window.__vmCreateOptions = opts;
   }
   const lan = vmLanNetworks(opts);
   if (!lan.length) return vmNetworkNote(opts);
-  return `<div class="f"><label>LAN network ${tip("Its bridge and VLAN; the container joins it as a second interface, lan0, and keeps the pod network for everything else.")}</label>
+  return `<div class="f"><label>LAN network ${tip("Its bridge and VLAN. The container joins it as a second interface, lan0, and keeps the cluster network for everything else.")}</label>
       <select id="${p}_net">${lan.map(n => `<option value="${esc(n.name)}" ${current?.network === n.name ? "selected" : ""}>${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("")}</select></div>
     ${vmAddressFields(p, opts)}
-    <div class="dim xs">It answers on this address directly - no Service or VIP - and it is recorded under the container's name in IP addresses.</div>`;
+    <div class="dim xs">It is reached at this address directly, without a service or virtual IP, and the address is recorded under the container's name in IP addresses.</div>`;
 }
 function containerLanRead(p) {
   return Object.assign(vmReadAddress(p), { network: $(`#${p}_net`)?.value || "", address: ($(`#${p}_ip`)?.value || "").trim() });
@@ -115,7 +115,7 @@ window.deployLanChanged = async () => {
 };
 
 window.wlRestart = async (ns, name) => {
-  if (!(await ask(`Restart ${name}? Its pods are replaced with fresh ones; what it serves may be away for a moment.`, { title: "Restart", ok: "Restart" }))) return;
+  if (!(await ask(`Restart ${name}? Every copy restarts, and what it serves may be unavailable for a moment.`, { title: "Restart app", ok: "Restart app" }))) return;
   try {
     await api("/api/restart", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name }) });
@@ -140,10 +140,10 @@ window.wlDelete = async (ns, name) => {
     .flatMap(ip => (row.ports || []).map(port => `${ip}:${port.port}/${port.protocol}`)));
   const claims = vols.error ? [] : (vols || []).filter(vol => (vol.attached || []).includes(name));
   $("#mbody").innerHTML = `
-    ${UI.callout("bad", { html: `This removes the app, not its data.` }, `The Deployment and every Service pointing at it are deleted. Persistent volumes are kept and can be
-      removed afterwards from Volumes.`)}
+    ${UI.callout("bad", { html: `This removes the app, not its data.` }, `The app and every service pointing at it are deleted. Its volumes are kept, and can be
+      removed afterwards on the Volumes page.`)}
     <div class="dependency-list" style="margin-top:12px">
-      <div class="dependency-row"><span>Deployment</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
+      <div class="dependency-row"><span>App</span><b class="mono">${esc(ns)}/${esc(name)}</b></div>
       <div class="dependency-row"><span>Containers</span><b>${(workload.images || []).length || 1}</b></div>
       <div class="dependency-row ${services.length ? "stranded" : ""}"><span>Services removed</span>
         <b>${network.error ? unread(network) : services.length ? services.map(row => esc(row.name)).join(", ") : "none"}</b></div>
@@ -152,8 +152,8 @@ window.wlDelete = async (ns, name) => {
       <div class="dependency-row"><span>Volumes kept</span>
         <b>${vols.error ? unread(vols) : claims.length ? claims.map(vol => esc(vol.pvc_name || vol.name)).join(", ") : "none attached"}</b></div>
     </div>
-    ${failed ? `<div class="note" style="margin-top:12px">Deleting is offered once Homestead can read which Services it removes and which volumes it keeps. Try again in a moment.</div>
-    ${UI.actions(`<button class="btn" onclick="wlDelete(${jsq(ns)},${jsq(name)})">Retry</button>
+    ${failed ? `<div class="note" style="margin-top:12px">Deleting is available once Homestead can read which services it removes and which volumes it keeps. Try again in a moment.</div>
+    ${UI.actions(`<button class="btn" onclick="wlDelete(${jsq(ns)},${jsq(name)})">Try again</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`
     : `${UI.typedConfirm({ id: "wd_confirm", expect: name, button: "wd_go" })}
     ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled

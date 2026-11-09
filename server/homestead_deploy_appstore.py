@@ -500,7 +500,7 @@ def fetch_appstore(wait=None):
             return _feed["apps"]
         if _feed["source"] == source and _feed["error"] is not None and _feed["done"] is None:
             raise FeedUnavailable(_feed["error"])
-    raise FeedLoading("the App Store catalogue is still loading; try again in a few seconds")
+    raise FeedLoading("The App Store catalogue is still loading. Try again in a few seconds.")
 
 
 def appdata_folders(vols):

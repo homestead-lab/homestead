@@ -116,7 +116,7 @@ def _auth_realm(request_url, realm, credential):
             allowed.add("auth.docker.io")
         allowed.update(x.strip().lower() for x in os.environ.get("REGISTRY_AUTH_HOSTS", "").split(",") if x.strip())
         if target.netloc.lower() not in allowed:
-            raise PermissionError("registry authentication realm is not trusted; configure REGISTRY_AUTH_HOSTS for a separate auth server")
+            raise PermissionError("The registry's sign-in server is not trusted. Set REGISTRY_AUTH_HOSTS for a separate sign-in server.")
     return realm
 def _open(req, credential=None, timeout=12):
     ctx = ssl.create_default_context()
@@ -277,7 +277,7 @@ def channel_newest(current, tags, channel):
     """This channel's newest release in the installed major version."""
     installed = re.fullmatch(RELEASE, current or "")
     if not installed:
-        raise ValueError("No release version is known for Homestead; redeploy it from a numbered release tag")
+        raise ValueError("No release version is known for Homestead. Deploy it again from a numbered release tag.")
     major = int(installed[1])
     releases = [(release_key(tag), tag) for tag in tags if re.fullmatch(RELEASE, tag)
                 and (channel == "dev") == ("-dev." in tag) and release_key(tag)[0] == major]

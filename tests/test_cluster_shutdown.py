@@ -218,7 +218,7 @@ class ShutdownTests(unittest.TestCase):
 
     def test_legacy_configmap_is_never_migrated_into_power_authority(self):
         self.f.configmap = {"data": {"state": S.encode({"phase": "released"})}}
-        with self.assertRaisesRegex(ValueError, "Legacy shutdown ConfigMap"):
+        with self.assertRaisesRegex(ValueError, "older shutdown ConfigMap"):
             self.f.start()
         self.assertFalse(self.f.calls)
         self.assertIsNone(self.f.journal)
@@ -228,7 +228,7 @@ class ShutdownTests(unittest.TestCase):
         original = copy.deepcopy(self.f.journal)
         state = self.f.s.state()
         changed = copy.deepcopy(original)
-        changed["metadata"]["uid"] = "replacement"
+        changed["metadata"]["uid"] = "replacing it"
         mistyped = copy.deepcopy(original)
         mistyped["type"] = "Opaque"
         for journal in (None, changed, mistyped):
@@ -374,7 +374,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.detach = False
         c.execute()
         self.assertNotIn("commit", self.f.journal["data"])
-        self.assertIn("did not detach", self.f.s.state()["message"])
+        self.assertIn("were not released", self.f.s.state()["message"])
 
     def test_a_detached_volume_is_not_an_unknown_one(self):
         # Longhorn reports no live health for a detached volume: "unknown".
@@ -433,7 +433,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.detach = False
         c.execute()
         self.assertNotIn("commit", self.f.journal["data"])
-        self.assertIn("inventory changed", self.f.s.state()["message"])
+        self.assertIn("list of Longhorn volumes changed", self.f.s.state()["message"])
 
     def test_unrelated_cordon_is_not_removed_when_helpers_fail(self):
         self.f.auto_ready = False
@@ -553,7 +553,7 @@ class ShutdownTests(unittest.TestCase):
         status, percent, message = self.f.s.progress({"ref":{"run":self.f.s.state()["run"]}})
         self.assertEqual(status, "failed")
         self.assertLess(percent, 100)
-        self.assertIn("physical", message)
+        self.assertIn("whether the hosts are off", message)
 
     def test_cancel_before_coordinator_starts_finishes_without_cordoning(self):
         c = self.f.start()
@@ -567,7 +567,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.s.cancel()
         c.execute()
         self.f.now += 2000
-        with self.assertRaisesRegex(ValueError, "helpers have not all terminated"):
+        with self.assertRaisesRegex(ValueError, "Not every shutdown helper has ended"):
             self.f.s.recover(self.f.s.state()["run"])
 
     def test_a_lost_commit_receipt_never_restores_scheduling(self):
@@ -615,7 +615,7 @@ class ShutdownTests(unittest.TestCase):
         backend["spec"]["volumes"] = [{"persistentVolumeClaim":{"claimName":"data"}}]
         self.f.pods.append(backend)
         self.f.webhooks = [{"webhooks":[{"clientConfig":{"service":{"namespace":"cattle-system","name":"webhook"}}}]}]
-        self.assertIn("separate shutdown plan", " ".join(self.f.s.review()["blockers"]))
+        self.assertIn("its own shutdown plan", " ".join(self.f.s.review()["blockers"]))
 
     def test_read_only_routes_and_mutations_are_admin_only(self):
         import homestead_route_policy as policy
@@ -630,7 +630,7 @@ class ShutdownTests(unittest.TestCase):
         for phase in ("preparing", "draining", "stopping-homestead", "handoff"):
             with mock.patch.object(server.CLUSTER_SHUTDOWN.Shutdown, "state", return_value={"phase":phase}), \
                  mock.patch.object(server.urllib.request, "urlopen") as send:
-                with self.assertRaisesRegex(ValueError, "shutdown is active"):
+                with self.assertRaisesRegex(ValueError, "shutdown is running"):
                     server.KUBE_HELPERS._ksend("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app", {})
                 send.assert_not_called()
 
@@ -834,7 +834,7 @@ class RestoreRaceTests(unittest.TestCase):
                     kube.add(dict(self.node("node-a"), metadata={"name": "node-a", "uid": "other-uid",
                                                                   "annotations": {S.ANNOTATION: self.RUN}}))
             kube.react("PATCH", "/api/v1/nodes/node-a", replaced)
-            with self.assertRaisesRegex(ValueError, "Host identity changed"):
+            with self.assertRaisesRegex(ValueError, "The host changed"):
                 self.shutdown().restore(self.plan("node-a", "node-b"), self.RUN)
             self.assertTrue(kube.object("/api/v1/nodes/node-b")["spec"]["unschedulable"])
 

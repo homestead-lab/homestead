@@ -399,7 +399,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         with mock.patch.object(server.VM_REVIEW, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
             result, writes = self.call("/api/vm/power", {**self.body, "action": "stop"})
         self.assertEqual(200, result[0], result)
-        self.assertIn("Boot retries stopped", result[1]["detail"])
+        self.assertIn("Start retries stopped", result[1]["detail"])
         writes.assert_called_once()
         self.assertEqual("PATCH", writes.call_args.args[0])
         self.assertEqual("Halted", writes.call_args.args[2][-1]["value"])

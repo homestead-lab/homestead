@@ -226,7 +226,7 @@ PORTS_UNREAD = "its Services couldn't be read, so where to ask it is not known"
 def target(w):
     """Where and how to ask one app, or None with the reason it is not checked."""
     if w.get("platform") or w.get("self") or w.get("homestead") or w.get("site"):
-        return None, "not an app of yours"
+        return None, "not an app that Homestead can check"
     chosen = setting(w.get("answer_check"))
     if chosen["mode"] == "off":
         return None, "checks are off for this app"

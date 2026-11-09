@@ -194,7 +194,7 @@ def removed_note(item, task, now=None):
     now = time.time() if now is None else now
     if not kept or (item or {}).get("status") not in OPS.TERMINAL or ended is None or now - ended <= kept:
         return None
-    return f"removed automatically {_span(kept)} after it finished; the steps above are the record"
+    return f"removed automatically {_span(kept)} after it finished. The steps above are the record"
 
 
 def _span(seconds):

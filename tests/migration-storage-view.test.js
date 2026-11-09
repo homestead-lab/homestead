@@ -116,7 +116,7 @@ test("a destination without copy support cannot enable Start copy", async () => 
   t.replies.shift()({ok:true,will_run:true,claims:[]});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(t.fields["#mv_go"].disabled,true);
-  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead here before copying/);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead on this cluster before copying/);
 });
 
 test("copy activity has cleanup actions and never offers source removal", () => {
@@ -124,7 +124,7 @@ test("copy activity has cleanup actions and never offers source removal", () => 
   const html=t.ctx.movesHtml([{id:"copy-job",name:"desktop",cluster:"source",kind:"vm",namespace:"lab",
     transfer_mode:"copy",status:"succeeded",phases:["releasing-source","starting","done"],phase_index:2,
     progress:100,source_stopped:false,created_at:new Date().toISOString()}]);
-  assert.match(html,/Resume source/); assert.match(html,/Keep copy stopped/);
+  assert.match(html,/Restart the original/); assert.match(html,/Leave the copy stopped/);
   assert.match(html,/Remove copy/); assert.doesNotMatch(html,/moveFinish\(|Put back|keeps its stopped copy/);
 });
 

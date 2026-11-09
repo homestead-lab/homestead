@@ -42,7 +42,7 @@ def validate_receipt(receipt, job, *, now=None):
             or receipt["limitation"] != LIMITATION):
         raise Held("The copy admission receipt does not match this data move")
     if now is not None and not 0 <= now - receipt["checked_at"] <= COPY_CHECK_LIFE:
-        raise Held("The copy check expired before Homestead was stopped, so this move can't stop it now. "
+        raise Held("The copy check expired before Homestead was stopped, so this move cannot stop it now. "
                    "Go back to the original volume, which changes nothing, then start a new move")
 
 
@@ -60,7 +60,7 @@ class Preflight:
         try:
             return self.send("POST", path, copy.deepcopy(body))
         except urllib.error.HTTPError as error:
-            raise Held(f"{kind} admission preflight was rejected (HTTP {error.code}). Nothing was created; review cluster policy and permissions before continuing") from None
+            raise Held(f"{kind} admission preflight was rejected (HTTP {error.code}). Nothing was created. Review the cluster policy and permissions before continuing.") from None
         except Exception:
             raise Held(f"{kind} admission preflight is unavailable. No live request or retry was attempted") from None
 
@@ -109,5 +109,5 @@ class Preflight:
     def _receipt(self, started, facts):
         now = self.clock()
         if not 0 <= now - started <= 60:
-            raise Held("Admission preflight took too long; obtain a fresh check before continuing")
+            raise Held("The check before admission took too long. Get a new check before continuing.")
         return {"checked_at": int(now), **facts, "limitation": LIMITATION}

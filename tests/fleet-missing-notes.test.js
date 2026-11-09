@@ -18,7 +18,7 @@ test("a Homestead that has not answered yet is said so, quietly, once", () => {
   note([{id: "office", name: "Office", state: "waiting"}]);
   note([{id: "office", name: "Office", state: "waiting"}]);
   assert.equal(toasts.length, 1);
-  assert.match(toasts[0][0], /Office has not answered yet/);
+  assert.match(toasts[0][0], /Office has not responded yet/);
   assert.notEqual(toasts[0][1], "warn");
 });
 
@@ -27,7 +27,7 @@ test("one that keeps missing is then said not to be answering", () => {
   note([{id: "office", name: "Office", state: "waiting"}]);
   note([{id: "office", name: "Office", state: "not answering", age_s: 95}]);
   assert.equal(toasts.length, 2);
-  assert.match(toasts[1][0], /Office is not answering/);
+  assert.match(toasts[1][0], /Office is not responding/);
   assert.match(toasts[1][0], /from 1 min ago/);
   assert.equal(toasts[1][1], "warn");
 });
@@ -35,13 +35,13 @@ test("one that keeps missing is then said not to be answering", () => {
 test("an old Homestead without states is still named as not answering", () => {
   const {note, toasts} = fleet();
   note([{id: "office", name: "Office", error: "timed out"}]);
-  assert.match(toasts[0][0], /Office is not answering/);
+  assert.match(toasts[0][0], /Office is not responding/);
 });
 
 test("one that is slow but has rows shown says how old they are, without contradicting itself", () => {
   const {note, toasts} = fleet();
   note([{id: "office", name: "Office", state: "waiting", age_s: 15}]);
-  assert.match(toasts[0][0], /Office is slow to answer; its rows shown are from 15 s ago/);
+  assert.match(toasts[0][0], /Office is slow to respond, so its rows shown are from 15 s ago/);
   assert.doesNotMatch(toasts[0][0], /appear when it does/);
 });
 
@@ -49,7 +49,7 @@ test("an error is said once, with the member named once", () => {
   const {note, toasts} = fleet();
   note([{id: "office", name: "Office", state: "error", error: "it did not answer"}]);
   assert.equal(toasts[0][0].match(/Office/g).length, 1);
-  assert.match(toasts[0][0], /Office could not answer \(it did not answer\)/);
+  assert.match(toasts[0][0], /Office could not respond \(it did not answer\)/);
 });
 
 function architecture() {
@@ -69,10 +69,10 @@ test("the Architecture page uses the same states and does not call a drawn graph
   const drawn = ctx.archMissingCallout([{id: "office", name: "Office", state: "waiting", age_s: 95}]);
   assert.doesNotMatch(drawn, /could not be loaded/);
   assert.match(drawn, /may be out of date/);
-  assert.match(drawn, /Office is slow to answer; its graph shown is from 1 min ago/);
+  assert.match(drawn, /Office is slow to respond, so its graph shown is from 1 min ago/);
   const gone = ctx.archMissingCallout([{id: "office", name: "Office", state: "not answering"}]);
   assert.match(gone, /Architecture is incomplete/);
-  assert.match(gone, /Office is not answering, so it is missing here/);
+  assert.match(gone, /Office is not responding, so it is missing here/);
   assert.equal(ctx.archMissingCallout([]), "");
 });
 
@@ -92,7 +92,7 @@ function tags() {
 test("a row kept from a slow cluster's last answer says how old it is on its tag", () => {
   const tag = tags().clusterTag({name: "app", site: {id: "office", name: "Office", self: false, age_s: 95}});
   assert.match(tag, />Office<span class="cluster-age">· 1 min ago<\/span></);
-  assert.match(tag, /title="On Office; its last answer, from 1 min ago: it has not answered since"/);
+  assert.match(tag, /title="On Office\. This is its last response, from 1 min ago\. It has not responded since\."/);
   assert.match(tag, /class="tag cluster-tag"/);
 });
 

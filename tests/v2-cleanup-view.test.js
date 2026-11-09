@@ -14,7 +14,7 @@ function setup(){
 test('cleanup review distinguishes owned and retained memory and requires confirmation',async()=>{
   const t=setup();await t.c.lhV2CleanupOpen();const html=t.fields['#v2Cleanup'].innerHTML;
   assert.match(html,/2048 MiB/);assert.match(html,/512 MiB kept/);assert.match(html,/Legacy pool &lt;unknown&gt;/);
-  assert.match(html,/cordoned/);assert.match(html,/restarts separately/);assert.equal(t.fields['#v2CleanupStart'].disabled,true);
+  assert.match(html,/cordoned/);assert.match(html,/reviewed separately/);assert.equal(t.fields['#v2CleanupStart'].disabled,true);
   await t.c.lhV2CleanupStart();assert.equal(t.sent.length,0);
   t.fields['#v2CleanupAck'].checked=true;const pending=t.c.lhV2CleanupStart();await t.c.lhV2CleanupStart();
   assert.equal(t.sent.length,1);assert.equal(t.sent[0].capacity_token,'token');t.close();t.resolve();await pending;

@@ -35,13 +35,13 @@ function fitAfter(node, wl) {
 const HOST_MOVE = UI.reviewFlow({
   preview: async config => {
     const review = await api("/api/move/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config) });
-    if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("Move review unavailable; refresh before moving.");
+    if (!review.capacity || !review.capacity_token || !review.capacity.move) throw new Error("The move review is not available. Refresh before moving.");
     return { config, ...review };
   },
   render: review => {
     const config = review.config;
     childModal("Review move · " + config.name, `${gitopsNote(review.managed)}<p>Destination: <b>${esc(review.capacity.move.node || "scheduler chooses")}</b> · ${esc(review.capacity.move.mode)}.</p>
-      ${UI.callout("warn", "", `This saves a Recreate strategy: all containers in this app restart after the old pods stop. Clearing a preference can also restart them. Volumes must detach and reattach; this is not live migration.`)}
+      ${UI.callout("warn", "", `This saves a Recreate strategy, so all containers in this app restart after the old copies stop. Clearing a preference can also restart them. Volumes are released and attached again, so the app does not keep running during the move.`)}
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Move it despite the warnings</label>` : ""}
@@ -55,7 +55,7 @@ const HOST_MOVE = UI.reviewFlow({
     try {
       await api("/api/move", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...review.config, capacity_token: review.capacity_token, confirm_capacity: true }) });
-      toast(`${review.config.name}: placement saved; watch rollout progress in Recent jobs`, "ok");
+      toast(`${review.config.name}: placement saved. Progress is shown in Recent jobs.`, "ok");
       closeModal();
       setTimeout(() => refresh(true), 1500);
     } catch (e) {
@@ -81,7 +81,7 @@ window.moveWorkload = async (name, ns) => {
     if (sequence !== HOST_MOVE_PICKER) return;
     // An answer with no hosts in it is an error to show, not a spinner to leave running.
     if (!Array.isArray(plan?.candidates)) throw new Error("the plan came back without any hosts to compare");
-  } catch (e) { if (sequence === HOST_MOVE_PICKER) $("#mbody").innerHTML = `<div class="empty"><b>Could not build a placement plan</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  } catch (e) { if (sequence === HOST_MOVE_PICKER) $("#mbody").innerHTML = `<div class="empty"><b>A placement plan could not be worked out</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   const here = plan.current || wl.node || (wl.nodes && wl.nodes[0]) || "";
   const req = plan.requirements || { devices: [], resources: {}, labels: {} };
   const viable = (plan.candidates || []).filter(n => n.ok && !n.current);
@@ -104,7 +104,7 @@ window.moveWorkload = async (name, ns) => {
             <div class="row" style="gap:9px">
               <div class="av n2">${esc(n.name.replace(/[^0-9a-z]/gi, "").slice(-2).toUpperCase())}</div>
               <div><div style="font-weight:670">${esc(n.name)}</div>
-                <div class="dim xs">${n.pods_wl} of your pods · score ${n.score}</div></div>
+                <div class="dim xs">${n.pods_wl} app copies · score ${n.score}</div></div>
             </div>
             ${cur ? UI.chip("current", "neutral")
               : blocked ? UI.chip("blocked", "bad")
@@ -221,7 +221,7 @@ window.evacuateNode = async node => {
   modal("Evacuate · " + node, '<div class="empty"><span class="spin2"></span>checking app dependencies…</div>', true);
   let impact;
   try { await loadHardwareFeatures(); impact = await api(`/api/node/impact?node=${encodeURIComponent(node)}`); }
-  catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not check dependencies</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>The dependencies could not be checked</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   window.__nodeImpact = impact;
   const wls = impact.workloads || [];
   modal("Evacuate · " + node, `
@@ -229,7 +229,7 @@ window.evacuateNode = async node => {
     The host is cordoned first so nothing lands back on it.</p>
     ${wls.length ? `<div class="dependency-list" style="margin-top:14px">${impactRows(impact)}</div>`
       : '<div class="empty">Nothing of yours is running here.</div>'}
-    ${impact.stranded.length ? `${UI.callout("bad", { html: `${impact.stranded.length} app${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.` }, `Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.`, { attrs: 'style="margin-top:14px"' })}
+    ${impact.stranded.length ? `${UI.callout("bad", { html: `${impact.stranded.length} app${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.` }, `Moving them off stops their current copies, and Kubernetes leaves them waiting until a host with all the hardware they need returns.`, { attrs: 'style="margin-top:14px"' })}
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> Leave ${impact.stranded.map(w => esc(w.name)).join(", ")} down for now</label>` : ""}
     ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${plural(wls.length, "app")}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}

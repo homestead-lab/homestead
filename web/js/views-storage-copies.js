@@ -6,7 +6,7 @@
 let COPY_MOVE = null;
 window.volumeCopyMove = async (x, preset) => {
   COPY_MOVE = { volume: x.name, claim: x.pvc_name || x.name, plan: null, disk: new Set(preset?.disk_tags || []), node: new Set(preset?.node_tags || []) };
-  modal(`Move copies · ${COPY_MOVE.claim}`, UI.lead("Move this volume's copies to disks with other tags - onto an NVMe, say. Each copy is rebuilt on a chosen disk before the old one is removed, so what uses it keeps running.") +
+  modal(`Move copies · ${COPY_MOVE.claim}`, UI.lead("Move this volume's copies to disks with other tags, for example onto an NVMe drive. Each copy is rebuilt on a chosen disk before the old one is removed, so whatever uses the volume keeps running.") +
     '<div id="cm_body"><div class="empty"><span class="spin2"></span> reading where its copies are</div></div>' +
     UI.actions(UI.cancel() + UI.button("Move copies", "volumeCopyMoveStart()", { kind: "pri", id: "cm_go", disabled: true })), false, "operation-review");
   volumeCopyMovePlan();
@@ -38,7 +38,7 @@ const COPY_PLAN = UI.reviewFlow({
       p.targets.map(t => [esc(t.host), `<span class="mono xs">${esc(t.path)}</span>`, t.fits ? `${esc(sizeText(t.room_gb))}` : UI.chip("no room", "bad")]))) : "") +
     UI.facts([["Size", `${esc(sizeText(p.size_gb))} · ${esc(sizeText(p.used_gb))} written`], ["State", esc(p.state === "attached" ? `in use on ${p.attached_to}` : p.state)],
       ["To move", ready ? `${ready} of ${p.copies.length} cop${p.copies.length === 1 ? "y" : "ies"}, one at a time` : "nothing yet"]]) +
-    UI.more("What happens", "The volume's disk and host tags are set, so Longhorn builds each new copy on a chosen disk. One copy more is asked for while each is built, and the old copy is removed once the new one is whole - the volume never has fewer whole copies than it asks for. Its storage class name stays as it is: a claim's class cannot change, only where its copies live. Copies Longhorn rebuilds later follow the new tags. Stopping the job puts the old tags back; copies already moved stay.");
+    UI.more("What happens", "The volume's disk and host tags are set, so Longhorn builds each new copy on a chosen disk. One extra copy is requested while each one is built, and the old copy is removed once the new one is complete, so the volume never has fewer complete copies than it needs. Its storage class name does not change, because a volume's class cannot change, only where its copies are stored. Copies that Longhorn rebuilds later follow the new tags. Stopping the job restores the old tags, and copies already moved stay where they are.");
     COPY_PLAN.ready();
     if (window.applyRole) applyRole();
   },
@@ -51,7 +51,7 @@ const COPY_PLAN = UI.reviewFlow({
       const r = await api("/api/longhorn/copies/move", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ volume: review.volume, disk_tags: plan.disk_tags, node_tags: plan.node_tags, review_token: plan.review_token }) });
       if (typeof noteOperation === "function") noteOperation(r.operation);
-      toast(`Moving the copies of ${review.claim}; follow it in Jobs`, "ok");
+      toast(`Moving the copies of ${review.claim}. Progress is shown in Jobs.`, "ok");
       closeModal(); refresh(true);
     } catch (e) {
       toast(e.message, "bad");

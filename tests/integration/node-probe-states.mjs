@@ -33,9 +33,9 @@ try {
     const card = name => page.locator(".node-compact-host", {has: page.getByRole("button", {name, exact: true})});
     assert.match(await card("node-a").innerText(), /CPU temp\s*waiting for the probe/);
     assert.match(await card("node-b").innerText(), /44°C · max 95°C, CPU package · last reading 45 s ago/);
-    assert.match(await card("node-c").innerText(), /Probe not answering/);
+    assert.match(await card("node-c").innerText(), /Probe not responding/);
     assert.match(await card("node-c").locator(".node-compact-warning").innerText(),
-      /The probe on node-c hasn't answered the last 3 times; its last reading is 10 min old/);
+      /The probe on node-c has not responded the last 3 times. Its last reading is 10 min old./);
     assert.match(await card("node-c").innerText(), /51°C · max 96°C, CPU package · last reading 10 min ago/, "the last values stay, with their age");
     // The probe's warning is not a drive warning.
     assert.equal(await page.evaluate(() => nodeStorageLine(window.__probeNodes[2], 1, 0)), "1 drive");
@@ -43,7 +43,7 @@ try {
     await page.evaluate(() => HealthInsights.open("health"));
     await page.waitForFunction(() => document.querySelector("#clusterHealth")?.textContent.includes("node-b: maximum 95°C"));
     assert.doesNotMatch(await page.locator("#clusterHealth").textContent(), /node-c: maximum/);
-    assert.match(await page.locator("#clusterHealth").textContent(), /Max observed temperature 95°C \(node-b/, "not node-c's old 96°C");
+    assert.match(await page.locator("#clusterHealth").textContent(), /Highest temperature 95°C \(node-b/, "not node-c's old 96°C");
     await page.evaluate(() => closeModal());
 
     // Hosts as cards: the temperature line waits, and a PROBE line gives the age.

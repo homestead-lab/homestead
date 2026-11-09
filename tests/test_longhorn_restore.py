@@ -43,7 +43,7 @@ class RestoreClassTests(unittest.TestCase):
         self.assertIn("once an app mounts it", plan["refused_classes"]["longhorn-late"])
 
     def test_a_restore_onto_it_is_refused_before_anything_is_made(self):
-        with self.assertRaisesRegex(ValueError, "longhorn-late.*once an app mounts it.*choose another storage class"):
+        with self.assertRaisesRegex(ValueError, "longhorn-late.*once an app mounts it.*Choose another storage class"):
             RESTORE.restore_backup({"backup": self.BACKUP, "namespace": "lab", "name": "restored-data",
                                     "storage_class": "longhorn-late"})
         self.assertEqual([], self.kube.writes)

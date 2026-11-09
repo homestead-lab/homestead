@@ -29,7 +29,7 @@ def observe(vm, spec, read, nodes, pods, intents=(), exclude_vmi_uid=None):
     if not wanted:
         return result
     if pods is None:
-        result["blockers"].append("Passthrough device use could not be checked; no start is allowed")
+        result["blockers"].append("Homestead could not check which VMs use the passthrough devices, so it cannot start")
         return result
     try:
         inventory = read("/apis/kubevirt.io/v1/virtualmachineinstances")
@@ -37,7 +37,7 @@ def observe(vm, spec, read, nodes, pods, intents=(), exclude_vmi_uid=None):
             raise ValueError("Incomplete instance inventory")
         instances = inventory["items"]
     except Exception:
-        result["blockers"].append("Passthrough device use could not be checked; refresh permissions/connectivity before starting")
+        result["blockers"].append("Homestead could not check which VMs use the passthrough devices. Check permissions and connections before starting.")
         return result
     result["pods"] = list(pods)
     active = [i for i in instances if (i.get("status") or {}).get("phase") not in TERMINAL]
@@ -127,7 +127,7 @@ def conflicts(usage, candidates, nodes):
         capacity = sum(R.quantity(by_name[n].get("allocatable", {}).get(resource), resource) for n in eligible)
         used = sum(h["requests"].get(resource, 0) for h in usage["holders"] if h["node"] in eligible)
         if eligible and pending and used + sum(h["requests"][resource] for h in pending) + count > capacity:
-            reasons.append(f"Device {resource} is reserved by {', '.join(sorted({h['label'] for h in pending}))}; wait for or stop that VM before starting this VM")
+            reasons.append(f"Device {resource} is reserved by {', '.join(sorted({h['label'] for h in pending}))}. Wait for that VM or stop it before starting this one.")
             for candidate in candidates:
                 if candidate["eligible"]:
                     candidate["eligible"] = False

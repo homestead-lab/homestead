@@ -65,7 +65,7 @@ test("the groups are listed with their tiers", () => {
 test("a row whose group tier is unknown has its select disabled, says why, and is not ticked", () => {
   const html = load().priorityHtml(plan([row("lab/fr", { group: "Home", follows: true, wanted: null, source: "group", status: "unknown_group" })]));
   assert.match(html, /<select[^>]*disabled/);
-  assert.match(html, /Group tiers couldn&#39;t be read|Group tiers couldn't be read/);
+  assert.match(html, /The group tiers could not be read/);
   assert.doesNotMatch(html, /was normal/);
 });
 
@@ -73,13 +73,13 @@ const field = (c, w) => c.appFormPlacement("e", { apart: [], together: [] }, { f
 
 test("Edit offers its group's tier first, for an app in a group", () => {
   const html = field(load(), { priority: "group", priority_group: "Home", priority_group_tier: "critical" });
-  assert.match(html, /<option value="group" selected>From its group: critical, from Home<\/option>/);
-  assert.match(html, /takes Home's tier/);
+  assert.match(html, /<option value="group" selected>From its group: critical, set on Home<\/option>/);
+  assert.match(html, /uses Home's tier/);
 });
 
 test("a group with no tier is offered as normal", () => {
   const html = field(load(), { priority: "low", priority_group: "Home", priority_group_tier: "" });
-  assert.match(html, /value="group"\s*>From its group: normal, Home has no tier/);
+  assert.match(html, /value="group"\s*>From its group: normal, because Home has no tier/);
   assert.match(html, /<option value="low" selected>/);
 });
 
@@ -111,7 +111,7 @@ test("the Tier… dialog says what a tier would do before it is saved", () => {
     "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers… 1 is applied by Flux or Argo CD: change it in git.");
   assert.equal(c.groupTierLine(p, "Home", "none"), "2 apps follow Home; 1 would need a restart. Nothing restarts now. Start it from Priority tiers…");
   assert.equal(c.groupTierLine(plan([row("lab/db", { group: "Home" })]), "Home", "low"), "No app follows Home: each has a tier of its own.");
-  assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead couldn't read the apps just now; the tier can still be saved.");
+  assert.equal(c.groupTierLine(null, "Home", "low"), "Homestead could not read the apps just now, but the tier can still be saved.");
 });
 
 test("Set tiers sends back whether each app keeps following its group, as reviewed", async () => {
@@ -140,7 +140,7 @@ test("the Tier… dialog preselects nothing, and waits for a choice, when the gr
   await c.window.groupTier(0);
   assert.doesNotMatch(d.html(), /<option value="(critical|normal|low|none)" selected/);
   assert.match(d.html(), /<button[^>]*id="gtGo"[^>]*disabled|<button[^>]*disabled[^>]*id="gtGo"/);
-  assert.match(d.html(), /couldn(&#39;|')t read Home(&#39;|')s tier/);
+  assert.match(d.html(), /could not read Home(&#39;|')s tier/);
   assert.equal(d.els["#gtGo"].disabled, true, "Save stays off until a tier is chosen");
   const sent = []; c.api = async (path, init) => { sent.push(init.body); return {}; };
   await c.window.groupTierSave();
@@ -155,6 +155,6 @@ test("the Tier… dialog preselects the group's tier, or None, when it is known"
     const c = load(), d = tierDialog(c, known);
     await c.window.groupTier(0);
     assert.match(d.html(), new RegExp(`<option value="${picked}" selected`));
-    assert.doesNotMatch(d.html(), /couldn(&#39;|')t read/);
+    assert.doesNotMatch(d.html(), /could not read/);
   }
 });

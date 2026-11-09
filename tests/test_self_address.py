@@ -168,7 +168,7 @@ class ChangeVipTests(unittest.TestCase):
         self.assertEqual(("Homestead and apps", True, "192.0.2.200"), (rows[0]["label"], rows[0]["default"], rows[0]["previous"]))
 
     def test_a_new_address_in_use_or_a_node_address_is_refused(self):
-        for new, words in (("192.0.2.21", "node's own"), ("192.0.2.201", "already used by a Service")):
+        for new, words in (("192.0.2.21", "host's own"), ("192.0.2.201", "already used by a Service")):
             with self.subTest(words=words), self.assertRaisesRegex(ValueError, words):
                 REG.change_vip("192.0.2.200", new)
 
