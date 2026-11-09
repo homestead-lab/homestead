@@ -119,13 +119,13 @@ class SetRestartReadTests(unittest.TestCase):
         self.objects[f"{LH}/replicas"]["items"].append(None)
         with self.assertRaises(sr.Unread) as ctx:
             sr.read_state("lab", "web", "host-1")
-        self.assertIn("can't read", str(ctx.exception))
+        self.assertIn("cannot read", str(ctx.exception))
 
     def unreadable(self, kind, item):
         self.objects[f"{LH}/{kind}"]["items"].append(item)
         with self.assertRaises(sr.Unread) as ctx:
             sr.read_state("lab", "web", "host-1")
-        self.assertIn("can't read", str(ctx.exception))
+        self.assertIn("cannot read", str(ctx.exception))
 
 
     def test_unscheduled_replica_is_skipped(self):
@@ -145,7 +145,7 @@ class SetRestartReadTests(unittest.TestCase):
         self.assertEqual({"pv-a": [{"node": "host-1", "state": "running"}]}, sr.read_state("lab", "web", "host-1")["engines"])
 
     def test_reviewed_engine_without_node_id_not_stopped_blocks(self):
-        # Without a host and not stopped, Longhorn can't say it isn't running on the down host.
+        # Without a host and not stopped, Longhorn cannot say it isn't running on the down host.
         for state in ("running", "unknown", None):
             with self.subTest(state=state):
                 self.setUp()
@@ -155,7 +155,7 @@ class SetRestartReadTests(unittest.TestCase):
                     {"metadata": {"name": "pv-a-e-1"}, "spec": {"volumeName": "pv-a", "nodeID": ""}, "status": status})
                 st = sr.read_state("lab", "web", "host-1")
                 self.assertIn({"node": None, "state": state}, st["engines"]["pv-a"])
-                self.assertIn(f"data-web-0: Longhorn can't say where the engine of pv-a runs (state: {state}).",
+                self.assertIn(f"data-web-0: Longhorn cannot say where the engine of pv-a runs (state: {state}).",
                               sr.plan(st, NOW)["blockers"])
 
     def test_other_volumes_are_ignored_even_when_malformed(self):
@@ -248,8 +248,8 @@ class SetRestartReadTests(unittest.TestCase):
         st = sr.read_state("lab", "web", "host-1")
         self.assertEqual([{"name": "logs", "type": "hostPath"}, {"name": "nfs", "type": "csi"}], st["pods"][0]["unchecked"])
         blockers = sr.plan(st, NOW)["blockers"]
-        self.assertIn("web-0: volume logs is hostPath, which Homestead can't check", blockers)
-        self.assertIn("web-0: volume nfs is csi, which Homestead can't check", blockers)
+        self.assertIn("web-0: volume logs is hostPath, which Homestead cannot check", blockers)
+        self.assertIn("web-0: volume nfs is csi, which Homestead cannot check", blockers)
 
     def test_generic_ephemeral_volume_is_checked_as_its_claim(self):
         self.pod_volumes({"name": "scratch", "ephemeral": {"volumeClaimTemplate": {"spec": {}}}})
@@ -431,7 +431,7 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_engine_without_host_blocks_unless_stopped(self):
         st = good_state(); st["engines"]["pv-a"].append({"node": None, "state": "running"})
-        self.refused(st, "data-web-0: Longhorn can't say where the engine of pv-a runs (state: running)")
+        self.refused(st, "data-web-0: Longhorn cannot say where the engine of pv-a runs (state: running)")
 
     def test_engine_must_be_stopped(self):
         for state in ("running", "error", None, "starting"):
@@ -460,17 +460,17 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_fresh_lease_blocks(self):
         st = good_state(); st["node"]["lease"] = "2026-10-17T09:55:00.000000Z"
-        self.refused(st, "heard from")
+        self.refused(st, "last reported")
 
     def test_missing_lease_blocks(self):
         st = good_state(); st["node"]["lease"] = None
-        self.refused(st, "last heard")
+        self.refused(st, "last reported")
 
     def test_malformed_timestamps_block_not_raise(self):
         st = good_state(); st["node"]["since"] = "garbage"
         self.refused(st, "went down")
         st = good_state(); st["node"]["lease"] = "garbage"
-        self.refused(st, "last heard")
+        self.refused(st, "last reported")
 
     def test_set_without_claims_is_allowed(self):
         # Nothing on the host holds data Homestead must protect: no blocker for it.
@@ -481,7 +481,7 @@ class SetRestartPlanTests(unittest.TestCase):
 
     def test_unchecked_volume_blocks(self):
         st = good_state(); st["pods"][0]["unchecked"] = [{"name": "logs", "type": "hostPath"}]
-        self.refused(st, "web-0: volume logs is hostPath, which Homestead can't check")
+        self.refused(st, "web-0: volume logs is hostPath, which Homestead cannot check")
 
     def test_wait_mode_carried(self):
         st = good_state(); st["set"]["wait_mode"] = True
@@ -706,7 +706,7 @@ class SetRestartRouteTests(unittest.TestCase):
     def test_run_refuses_changed_review(self):
         r = self.run_req(review_token="stale")
         self.assertEqual(409, r.code)
-        self.assertIn("review the plan again", r.body["error"])
+        self.assertIn("Review the plan again", r.body["error"])
         self.assertIn("plan", r.body)
         self.assertEqual([], self.sent)
 
@@ -767,7 +767,7 @@ class SetRestartRouteTests(unittest.TestCase):
         self.assertEqual(["web-1"], [x["name"] for x in r.body["not_deleted"]])
         item = OPS.stored()[0]
         self.assertEqual(["web-0"], [p["name"] for p in item["ref"]["pods"]])
-        self.assertEqual("Deleted web-0; could not delete web-1: HTTP Error 500: boom; nothing was changed for it; "
+        self.assertEqual("Deleted web-0; could not delete web-1: HTTP Error 500: boom, so nothing was changed for it; "
                          "waiting for a replacement on another host", item["message"])
         self.now = NOW + 60
         self.objects["/api/v1/namespaces/lab/pods/web-0"] = self.new_pod("host-2", True)
@@ -784,7 +784,7 @@ class SetRestartRouteTests(unittest.TestCase):
 
     def test_start_refused_after_a_delete_says_pods_were_deleted(self):
         self.two_pods(); self.errs = {"web-1": 500}
-        with mock.patch.object(OPS, "start", side_effect=ValueError("already active")), \
+        with mock.patch.object(OPS, "start", side_effect=ValueError("already running")), \
                 mock.patch.object(sr, "_active", side_effect=["", "op-other"]):
             r = self.run_req()
         self.assertEqual(409, r.code)
@@ -855,12 +855,12 @@ class SetRestartRouteTests(unittest.TestCase):
         item = self.item()
         note = "Kubernetes can take about 6 minutes to release the volume from host-1"
         _, _, message = sr.status(item)
-        self.assertEqual(f"web-0: deleted; {note}", message)
+        self.assertEqual(f"web-0: deleted. {note}", message)
         pod = self.new_pod("host-2", False)
         self.objects["/api/v1/namespaces/lab/pods/web-0"] = pod
         self.assertNotIn("6 minutes", sr.status(item)[2])
         pod["status"]["containerStatuses"] = [{"state": {"waiting": {"reason": "ContainerCreating"}}}]
-        self.assertEqual(f"web-0: attaching volume; {note}", sr.status(item)[2])
+        self.assertEqual(f"web-0: attaching volume. {note}", sr.status(item)[2])
 
     def test_status_read_error_keeps_running_until_limit(self):
         item = self.item()
@@ -881,7 +881,7 @@ class SetRestartRouteTests(unittest.TestCase):
         status, _, message = sr.status(item)
         self.assertEqual("failed", status)
         self.assertIn("within 15 minutes", message)
-        self.assertIn("Ready on another host", message)
+        self.assertIn("ready on another host", message)
         self.assertIn("scheduled on host-2", message)
 
     def test_routes_roles(self):

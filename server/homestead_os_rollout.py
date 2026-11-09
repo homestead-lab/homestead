@@ -181,7 +181,7 @@ def _nodes():
     return {n["metadata"]["name"]: n for n in (kget("/api/v1/nodes") or {}).get("items", [])}
 
 
-RUNNING = "An OS update is running already; it has to end first"
+RUNNING = "An OS update is already running. It must end first."
 # Jobs across the cluster that a smaller run waits for, as they restart or stop hosts.
 CLUSTER_JOBS = ("cluster-shutdown", "platform-upgrade", "harvester-upgrade", "k3s-cluster")
 
@@ -202,8 +202,8 @@ def _busy_cluster():
     unreadable job list raises: it is no proof that nothing runs."""
     for item in OPS.stored():
         if item.get("kind") in CLUSTER_JOBS and item.get("status") not in OPS.TERMINAL:
-            return f"{item.get('title') or item.get('kind')} is running; it has to end first"
-    return "Containers are being rebalanced; it has to end first" if _rebalancing() else ""
+            return f"{item.get('title') or item.get('kind')} is running. It must end first."
+    return "Containers are being rebalanced. That must end first." if _rebalancing() else ""
 
 
 def _in_rows(rows, name):
@@ -232,7 +232,7 @@ def start(reason="asked", now=None, only=None, restart=None):
     saved goes back, and as the lock is held all the while nothing has moved."""
     p = platform(True) or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
-        raise ValueError("Homestead updates hosts' OS on k3s and RKE2; Harvester updates its own")
+        raise ValueError("Homestead updates the OS of k3s and RKE2 hosts. Harvester updates its own.")
     if restart not in (None, "when-needed", "never"):
         raise ValueError("restart is when-needed or never")
     with _lock:
@@ -475,25 +475,25 @@ def step(state, now=None):
             host_os.upgrade_done(name, node)
         if state_now["running"]:
             if now - node.get("since", now) > INSTALL_LIMIT:
-                _result(rollout, False, f"updates did not finish in two hours; see {host_os.LOG} there")
+                _result(rollout, False, f"updates did not finish within two hours. See {host_os.LOG} there")
                 rollout["stop"] = True
             elif node.get("unconfirmed") and not state_now.get("active"):
                 # The log's last line may be an earlier install's.
                 rollout["message"] = (f"{name} needs attention: the update launch did not finish within "
                                       f"{node['unconfirmed']:g} seconds, so Homestead cannot tell whether it started. "
-                                      f"{name} stays held while Homestead looks for its result; with none within two "
-                                      f"hours the rollout stops. Check {host_os.LOG} on {name}")
+                                      f"{name} stays held while Homestead looks for its result. If there is none within two "
+                                      f"hours, the rollout stops. Check {host_os.LOG} on {name}.")
             else:
                 rollout["message"] = f"{name}: {state_now.get('last') or 'installing updates'}"[:200]
             return True
         if state_now.get("code") not in ("0", 0):
-            _result(rollout, False, f"the package manager stopped with code {state_now.get('code')}; "
-                                    f"its output is in {host_os.LOG} there")
+            _result(rollout, False, f"the package manager stopped with code {state_now.get('code')}. "
+                                    f"Its output is in {host_os.LOG} there")
             rollout["stop"], rollout["failed"] = True, True
             return True
         facts = host_os.read(name)
         if facts.get("reboot") and config["reboot"] == "when-needed":
-            rollout["phase"], rollout["message"] = "restart", f"{name}: updates installed; restarting it"
+            rollout["phase"], rollout["message"] = "restart", f"{name}: updates installed. Restarting it."
         else:
             _result(rollout, True, "updates installed" + ("; needs a restart" if facts.get("reboot") else ""))
         return True
@@ -528,7 +528,7 @@ def step(state, now=None):
                     return _stopped_waiting(rollout, wait_why)
                 node["attempts"] -= 1
                 node["waiting"], node["wait_why"] = True, wait_why
-                rollout["message"] = f"{name}: the Kubernetes API is busy ({str(error)[:60]}); trying again"
+                rollout["message"] = f"{name}: the Kubernetes API is busy ({str(error)[:60]}). Trying again."
                 return True
             copies = "only healthy copy" in str(error)
             if isinstance(error, DRAIN_BLOCKERS.MayClear) and now - node.setdefault("copies_since", now) < COPIES_WAIT:
@@ -545,7 +545,7 @@ def step(state, now=None):
             # Refused by the review, or stopped before power was sent: the
             # host keeps its updates and waits for someone.
             _uncordon(rollout)
-            _result(rollout, True, f"updates installed; restart not done: {str(error)[:NOTE_LIMIT]}", restart_needed=True)
+            _result(rollout, True, f"updates installed, but the restart was not done: {str(error)[:NOTE_LIMIT]}", restart_needed=True)
             return True
         node.pop("waiting", None)
         node.pop("wait_why", None)
@@ -562,7 +562,9 @@ def step(state, now=None):
             return True
         if status in ("failed", "cancelled") or not item:
             message = item.get("message") or "its restart job is gone"
-            if "power was not sent" in message.lower() or "stopped before power was sent" in message.lower():
+            # The power job's words for "nothing reached the host", old and new.
+            if any(words in message.lower() for words in ("nothing was sent", "stopped before the restart or shutdown was sent",
+                                                          "power was not sent", "stopped before power was sent")):
                 if node.get("attempts", 0) < 2:
                     # Homestead itself was likely drained off it mid-way.
                     rollout["phase"], rollout["message"] = "restart", f"{name}: restarting again ({message[:80]})"
@@ -571,7 +573,7 @@ def step(state, now=None):
             rollout["stop"], rollout["failed"] = True, True
             return True
         if now - node.get("since", now) > RESTART_LIMIT:
-            _result(rollout, False, "restart not confirmed in 45 minutes; it is left cordoned")
+            _result(rollout, False, "the restart was not confirmed within 45 minutes. It is left cordoned")
             rollout["stop"], rollout["failed"] = True, True
             return True
         rollout["message"] = f"{name}: {item.get('message') or 'restarting'}"[:200]
@@ -584,7 +586,7 @@ def _stopped_waiting(rollout, why):
     and waits for a person, and the run ends without restarting it."""
     _uncordon(rollout)
     rollout["stopped_waiting"] = True
-    _result(rollout, True, f"updates installed; restart not done: Stopped while waiting: {why}", restart_needed=True)
+    _result(rollout, True, f"updates installed, but the restart was not done. It stopped while waiting: {why}", restart_needed=True)
     return True
 
 
@@ -606,7 +608,9 @@ def _finish(state, rollout, now):
     if waiting:
         # Why the first was not restarted - the review's reason - so the job
         # says what to fix, not only who waits.
-        why = waiting[0]["note"].split("restart not done: ", 1)[-1]
+        note = waiting[0]["note"]
+        why = next((note.split(marker, 1)[1] for marker in ("restart was not done: ", "restart was not done. ", "restart not done: ")
+                    if marker in note), note)
         words.append("needing a restart: " + ", ".join(r["node"] for r in waiting) + f" ({waiting[0]['node']}: {why})")
     failed = [r for r in results if not r["ok"]]
     if failed:
@@ -640,8 +644,8 @@ def _failing(state, error, now=None):
     if now - since <= limit or rollout.get("status") != "running":
         rollout["message"] = f"waiting: {text}"
         return False
-    left = ("; its updates may still be installing" if phase == "installing" else
-            "; it is left cordoned" if phase in ("restart", "restarting") else "")
+    left = (". Its updates may still be installing" if phase == "installing" else
+            ". It is left cordoned" if phase in ("restart", "restarting") else "")
     _result(rollout, False, f"no answer for {limit // 60} min: {text}{left}")
     rollout["stop"], rollout["failed"] = True, True
     rollout.pop("error_since", None)
@@ -799,7 +803,7 @@ def stop_asked():
     rollout = stop()
     node = rollout.get("node") or {}
     return {"ok": True, "rollout": rollout,
-            "detail": (f"Stopping now: {node.get('name')} will not restart by itself; it keeps its updates and waits for you"
+            "detail": (f"Stopping now. {node.get('name')} does not restart by itself. It keeps its updates and waits to be restarted."
                        if node.get("waiting") else "Stopping once the host being updated is done")}
 
 
@@ -820,7 +824,7 @@ def preview(names):
     names = _chosen(names)
     p = platform(30) or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
-        raise ValueError("Homestead updates hosts' OS on k3s and RKE2; Harvester updates its own")
+        raise ValueError("Homestead updates the OS of k3s and RKE2 hosts. Harvester updates its own.")
     state = _load()
     config = settings(state)
     nodes, own = _nodes(), own_node()
@@ -859,17 +863,17 @@ def start_asked(body=None):
     if "nodes" not in body:
         rollout = start("asked", restart=body.get("restart"))
         return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-                "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it under Jobs"}
+                "detail": f"Updating {len(rollout['nodes'])} hosts one at a time. Follow it under Jobs."}
     names = _chosen(body["nodes"])
     review = preview(names)
     if review["blocked"]:
         raise ValueError(review["blocked"])
     if body.get("review_token") != review["review_token"]:
-        return ROUTER.Reply(409, {"error": "Something changed since this was reviewed; review it again", "preview": review})
+        return ROUTER.Reply(409, {"error": "Something changed since this was reviewed. Review it again.", "preview": review})
     rollout = start("asked-hosts", only=names, restart=body.get("restart"))
     which = rollout["nodes"][0] if len(rollout["nodes"]) == 1 else f"{len(rollout['nodes'])} hosts"
     return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-            "detail": f"Updating {which}; follow it under Jobs"}
+            "detail": f"Updating {which}. Follow it under Jobs."}
 
 
 # Its routes and who may use them (homestead_routes.py).

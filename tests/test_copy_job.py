@@ -241,7 +241,7 @@ class CopyJobTests(unittest.TestCase):
         self.start()
         other = copy.deepcopy(ops.stored()[0]["ref"])
         other.update(name="other-app", review_digest="b" * 64, moves=[{"from": "different", "to": "new"}])
-        with self.assertRaisesRegex(ValueError, "still active or needs recovery"):
+        with self.assertRaisesRegex(ValueError, "still running or needs recovery"):
             ops.start(flow.KIND, "Other copy", {}, "/containers", other)
         self.assertEqual({}, self.jobs)
 
@@ -305,7 +305,7 @@ class CopyJobTests(unittest.TestCase):
 
     def test_replaced_pv_with_same_name_is_not_original_data(self):
         self.start(); self.poll(); self.complete()
-        self.pvs["pv-old"]["metadata"]["uid"] = "replacement"
+        self.pvs["pv-old"]["metadata"]["uid"] = "replacing it"
         self.assertEqual("failed", self.poll()["status"])
         self.assertEqual(0, self.dep["spec"]["replicas"])
 
@@ -380,7 +380,7 @@ class CopyJobTests(unittest.TestCase):
         def partial():
             self.apply()
             raise TimeoutError("private details")
-        with self.assertRaisesRegex(ValueError, "No automatic rollback"):
+        with self.assertRaisesRegex(ValueError, "Nothing was rolled back"):
             self.start(apply=partial)
         self.assertEqual("failed", self.poll()["status"])
         self.assertEqual(["PUT"], [row[0] for row in self.sent])
@@ -389,7 +389,7 @@ class CopyJobTests(unittest.TestCase):
     def test_unrelated_claim_source_rejected_before_any_edit(self):
         self.body["containers"][0]["volumes"][0]["copy_from"]["claim"] = "unrelated"
         self.body["capacity_token"] = review.issue(self.body, self.context)
-        with self.assertRaisesRegex(ValueError, "Copy source"):
+        with self.assertRaisesRegex(ValueError, "copy source"):
             self.start()
         self.assertEqual([], self.sent)
 
@@ -615,7 +615,7 @@ class CopyDeadlineTests(unittest.TestCase):
         record["data"]["earlier"] = base64.b64encode(text.encode()).decode()
         self.kube.add(record)
         self.finish(job, "Failed", "BackoffLimitExceeded")
-        self.assert_kept_stopped(self.poll(), "edit it back")
+        self.assert_kept_stopped(self.poll(), "Edit it back")
 
     def resume_after_crash(self, applied):
         job = self.started()

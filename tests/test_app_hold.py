@@ -411,7 +411,7 @@ class AppHoldTest(unittest.TestCase):
         result = HOLD.restart(record, "node-power", "j1", wait_seconds=0)
         self.assertIsInstance(result, HOLD.KeptStopped)
         self.assertNotIn("taken away", result.reason)
-        self.assertIn("isn't held by this job", result.reason)
+        self.assertIn("is not held by this job", result.reason)
         self.assertIn("5 rather than 3", result.reason)
         self.assertEqual(kube.object(WEB)["spec"]["replicas"], 5)
 
@@ -603,7 +603,7 @@ class AppHoldTest(unittest.TestCase):
         self.assertEqual(HOLD.how_to(record("Deployment", {"replicas": 3})), "Containers → x → Start with 3 replicas")
         self.assertEqual(HOLD.how_to(record("StatefulSet", {"replicas": 1})), "Containers → x → Start with 1 replica")
         self.assertEqual(HOLD.how_to(record("VirtualMachine", {"runStrategy": "Always"})), "Virtual machines → x → Start")
-        self.assertEqual(HOLD.how_to(record("CronJob", {"suspend": False})), ("Scheduled jobs shows x as paused; resume it by setting its spec.suspend back to false "
+        self.assertEqual(HOLD.how_to(record("CronJob", {"suspend": False})), ("Scheduled jobs shows x as paused. Resume it by setting its spec.suspend back to false "
                           "(kubectl, or the Git source it comes from)"))
 
 

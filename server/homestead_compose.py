@@ -272,8 +272,8 @@ def _env(value, variables, report, line, emptied=()):
             elif key in variables:
                 env[key] = variables[key]
             else:
-                report.warn(f"{key} takes its value from the shell running Compose; give it one "
-                            f"under Variables or it is left out", where)
+                report.warn(f"{key} takes its value from the shell running Compose. Give it one "
+                            f"under Variables, or it is left out.", where)
             continue
         if isinstance(val, (dict, list)):
             report.error(f"Environment value for {key} must be a scalar", line)
@@ -309,8 +309,8 @@ def _split_volume(item):
 
 
 _DROPPED_BINDS = {
-    "/etc/localtime": "the node's clock zone does not travel into a pod; set TZ in environment instead",
-    "/etc/timezone": "the node's clock zone does not travel into a pod; set TZ in environment instead",
+    "/etc/localtime": "the host's time zone does not carry into a pod. Set TZ in environment instead.",
+    "/etc/timezone": "the host's time zone does not carry into a pod. Set TZ in environment instead.",
 }
 _RUNTIME_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock")
 
@@ -371,33 +371,33 @@ def _service(key, svc, ctx, variables):
     if ignored:
         report.note("Docker-only settings left out: " + ", ".join(ignored), line)
     if svc.get("container_name") and dns_name(svc["container_name"]) != name:
-        report.note(f"container_name {svc['container_name']} is not used; the workload is called {name}",
+        report.note(f"container_name {svc['container_name']} is not used. The app is called {name}.",
                     at("container_name"))
     if str(svc.get("restart", "")).strip("'\"") == "no":
-        report.warn("restart: \"no\" has no equivalent; Kubernetes restarts a container that exits", at("restart"))
+        report.warn("restart: \"no\" has no equivalent, because Kubernetes restarts a container that exits", at("restart"))
     if "healthcheck" in svc:
-        report.note("the healthcheck is not carried over; Kubernetes watches the container itself",
+        report.note("the healthcheck is not carried over. Kubernetes watches the container itself.",
                     at("healthcheck"))
 
     image = svc.get("image")
     if "build" in svc and not image:
         report.error("has build: but no image:. Homestead runs images from a registry and does not build "
-                     "them; push the image and set image:", at("build"))
+                     "them. Push the image and set image:", at("build"))
     elif "build" in svc:
-        report.note("build: is ignored; the image is pulled from its registry", at("build"))
+        report.note("build: is ignored. The image is downloaded from its registry.", at("build"))
     elif not image:
         report.error("has no image:", line)
     if "extends" in svc:
-        report.error("extends: is not supported; copy the settings into this service", at("extends"))
+        report.error("extends: is not supported. Copy the settings into this service.", at("extends"))
     for field in ("secrets", "configs"):
         if svc.get(field):
-            report.error(f"{field}: are files Compose mounts from this host; they are not carried over. "
+            report.error(f"{field}: are files Compose mounts from this host, and they are not carried over. "
                          f"Put the values in environment or on a volume", at(field))
     if svc.get("env_file"):
-        report.warn("env_file is a file on the Compose host and is not read; paste it under Variables "
-                    "and list what the container needs under environment", at("env_file"))
+        report.warn("env_file is a file on the Compose host and is not read. Paste it under Variables "
+                    "and list what the container needs under environment.", at("env_file"))
     if svc.get("gpus") or _nested(svc, "deploy", "resources", "reservations", "devices"):
-        report.warn("GPU reservations are not read; choose a hardware feature for this workload instead",
+        report.warn("GPU reservations are not read. Choose a hardware feature for this app instead.",
                     at("gpus") if "gpus" in svc else at("deploy"))
 
     cfg = {
@@ -436,7 +436,7 @@ def _service(key, svc, ctx, variables):
             if match.group(2):
                 cfg["run_as_group"] = int(match.group(2))
         else:
-            report.warn(f"user {user} is a name; only numeric users carry over, such as 1000:1000", at("user"))
+            report.warn(f"user {user} is a name. Only numeric users carry over, such as 1000:1000.", at("user"))
     if svc.get("privileged"):
         cfg["privileged"] = True
         report.note("runs privileged, as the file asks", at("privileged"))
@@ -446,14 +446,14 @@ def _service(key, svc, ctx, variables):
     network = str(svc.get("network_mode") or "")
     if network == "host":
         cfg["network_mode"] = "host"
-        report.note("uses the node's network, as network_mode: host asks; ports are not published separately",
+        report.note("uses the host's network, as network_mode: host asks. Ports are not published separately.",
                     at("network_mode"))
     elif network.startswith(("service:", "container:")):
         report.error(f"network_mode {network} shares another container's network, which Homestead does not "
-                     f"build from Compose; add it as a container in that workload from the Deploy page",
+                     f"build from Compose. Add it as a container in that app from the Deploy page.",
                      at("network_mode"))
     elif network == "none":
-        report.warn("network_mode: none is not carried over; the workload gets the cluster network",
+        report.warn("network_mode: none is not carried over. The app gets the cluster network.",
                     at("network_mode"))
 
     # Requests guide scheduling; a Compose memory limit becomes a real
@@ -475,10 +475,10 @@ def _service(key, svc, ctx, variables):
                 # The editor's default 128Mi request must not exceed an
                 # imported smaller limit. This remains editable before apply.
                 cfg["memory"] = cfg["memory_limit"]
-            report.note("memory limit becomes the container's enforced maximum; review it against normal usage",
+            report.note("the memory limit becomes the container's hard maximum. Compare it with normal use.",
                         at("deploy") if limits.get("memory") else at("mem_limit"))
         if limits.get("cpus") or svc.get("cpus"):
-            report.note("CPU limits are not enforced; Homestead imports CPU reservations only",
+            report.note("CPU limits are not enforced. Homestead imports only CPU reservations.",
                         at("deploy") if limits.get("cpus") else at("cpus"))
         replicas = _nested(svc, "deploy", "replicas")
         if replicas is None:
@@ -577,9 +577,9 @@ def _service(key, svc, ctx, variables):
             claim = dns_name(f"{name}-{posixpath.basename(clean.rstrip('/')) or 'root'}")
             if _looks_like_file(clean) and _looks_like_file(target):
                 report.warn(f"{source} looks like a single file. It becomes a folder on a new volume, so the "
-                            f"app will not find its file until you put it on the volume", where)
+                            f"app does not find its file until the file is put on the volume", where)
             cfg["volumes"].append(_claim_row(claim, target, read_only, ctx, name, template_source=source))
-            report.note(f"{source} becomes new volume {claim}; its current contents are not copied. "
+            report.note(f"{source} becomes the new volume {claim}. Its current contents are not copied. "
                         f"Import › Container source can bring them across", where)
             continue
         # A named volume.
@@ -589,7 +589,7 @@ def _service(key, svc, ctx, variables):
         claim = dns_name(declared.get("name") or (external.get("name") if isinstance(external, dict) else "")
                          or source)
         if source not in (ctx.top_volumes or {}):
-            report.warn(f"volume {source} is not declared under the top-level volumes:; it is created anyway",
+            report.warn(f"volume {source} is not declared under the top-level volumes:, but it is created anyway",
                         where)
         if external:
             if claim not in ctx.existing_claims:
@@ -642,8 +642,8 @@ def _service(key, svc, ctx, variables):
     row.update({"image": cfg["image"], "after": [dns_name(x) for x in after]})
     if isinstance(depends, dict) and any(isinstance(v, dict) and v.get("condition") not in (None, "service_started")
                                          for v in depends.values()):
-        report.note("depends_on conditions are not waited for; each workload starts as soon as it can, "
-                    "and retries until what it needs is up", at("depends_on"))
+        report.note("depends_on conditions are not waited for. Each app starts as soon as it can, "
+                    "and retries until what it needs is running.", at("depends_on"))
     return row, report, cfg
 
 
@@ -690,7 +690,7 @@ def convert(source, variables_text="", namespace="lab", existing_workloads=(), e
     result["errors"].extend(errors)
     for item in missing:
         result["warnings"].append({"line": item["line"], "message":
-                                   f"${{{item['name']}}} has no value, so it is empty; set it under Variables"})
+                                   f"${{{item['name']}}} has no value, so it is empty. Set it under Variables."})
     try:
         doc, untabbed = YAML.loads_untabbed(text)
     except YAML.YamlError as error:
@@ -701,7 +701,7 @@ def convert(source, variables_text="", namespace="lab", existing_workloads=(), e
         result["untab"] = {"width": width, "lines": len(changed)}
         result["notes"].append({"line": changed[0], "message":
                                 f"{len(changed)} line{'' if len(changed) == 1 else 's'} indented with tabs, "
-                                f"read as {width} spaces each - YAML itself wants spaces"})
+                                f"read as {width} spaces each. YAML expects spaces."})
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict) or not doc["services"]:
         result["errors"].append({"line": getattr(doc, "line", 1) or 1,
                                  "message": "a Compose file needs a services: mapping with at least one service"})
@@ -713,8 +713,8 @@ def convert(source, variables_text="", namespace="lab", existing_workloads=(), e
                                        f"top-level {key}: are not carried over"})
     if doc.get("networks"):
         result["warnings"].append({"line": YAML.line_of(doc, "networks"), "message":
-                                   "networks: are not carried over; every workload in a namespace can reach "
-                                   "the others by name"})
+                                   "networks: are not carried over. Every app in a namespace can reach "
+                                   "the others by name."})
 
     ctx = _Context(doc, namespace, existing_workloads, existing_claims, features, vip_mode)
     ctx.emptied = {item["line"] for item in missing}

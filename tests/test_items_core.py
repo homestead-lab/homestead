@@ -53,7 +53,7 @@ class ReclassTests(unittest.TestCase):
     def test_an_incomplete_list_is_an_error_in_its_own_words(self):
         for answer in ({}, {"items": None}, CUT_SHORT, [], {"items": [ROW, "x"]}):
             with self.subTest(answer=answer):
-                with self.assertRaisesRegex(ValueError, "^Volume inventory"):
+                with self.assertRaisesRegex(ValueError, "^The volume list"):
                     self.listing({PODS: answer})
 
     def test_a_failed_read_raises(self):

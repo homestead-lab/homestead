@@ -250,7 +250,7 @@ class JobTests(Case):
         self.assertEqual("failed", item["status"])
         self.assertIsNone(HISTORY.declared_for("node-a"))
         self.assertNotIn("power", item["message"].lower())
-        self.assertIn("aintenance was not opened", item["message"])
+        self.assertIn("aintenance was not started", item["message"])
         self.assertIn("HTTP 429", item["message"])
         self.assertTrue(self.cordoned(), "left cordoned, as a refused reboot's drain is")
 
@@ -317,7 +317,7 @@ class JobTests(Case):
     def test_a_failure_starts_again_what_it_stopped(self):
         pick = {i["id"]: "wait" for i in self.plan()["hold"]}
         self.stops_for_real()
-        with mock.patch.object(POWER, "recheck_after_drain", side_effect=ValueError("Host remains cordoned; power was not sent")):
+        with mock.patch.object(POWER, "recheck_after_drain", side_effect=ValueError("The host stays cordoned; power was not sent")):
             item = self.job(self.send(choices=pick))
         self.assertEqual("failed", item["status"])
         self.assertEqual(1, self.kube.object("/apis/apps/v1/namespaces/apps/deployments/web")["spec"]["replicas"])

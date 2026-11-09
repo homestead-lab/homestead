@@ -55,7 +55,7 @@ class VipTests(unittest.TestCase):
                               {"192.0.2.203": {"name": "printer", "category": "printer"}})
         self.assertEqual(["192.0.2.199", "192.0.2.200", "192.0.2.202"], result["added"])
         self.assertEqual(2, len(result["skipped"]))
-        self.assertTrue(any("node's own address" in s for s in result["skipped"]))
+        self.assertTrue(any("host's own address" in s for s in result["skipped"]))
         self.assertTrue(any("printer" in s for s in result["skipped"]))
         stored = json.loads(kube.object(MAP)["data"]["vips.json"])
         self.assertEqual({"Media"}, {row["label"] for row in stored})
@@ -89,7 +89,7 @@ class VipTests(unittest.TestCase):
 
     def test_local_nfs_cannot_share_an_independently_routed_smb_address(self):
         cluster(self, services=[service("192.0.2.245", "homestead-smb", 445)])
-        with self.assertRaisesRegex(ValueError, "independently placed pods"):
+        with self.assertRaisesRegex(ValueError, "separately placed pods"):
             SVC.service_plan({"namespace": "lab", "name": "homestead-nfs", "vip_mode": "manual",
                               "vip": "192.0.2.245", "exclusive_vip": True,
                               "ports": [{"port": 2049, "target_port": 2049}]}, require_workload=False)
@@ -98,7 +98,7 @@ class VipTests(unittest.TestCase):
         nfs = service("192.0.2.245", "homestead-nfs", 2049)
         nfs["spec"]["externalTrafficPolicy"] = "Local"
         cluster(self, services=[nfs])
-        with self.assertRaisesRegex(ValueError, "independently placed pods"):
+        with self.assertRaisesRegex(ValueError, "separately placed pods"):
             SVC.service_plan({"namespace": "lab", "name": "homestead-smb", "vip_mode": "manual",
                               "vip": "192.0.2.245", "ports": [{"port": 445, "target_port": 445}]},
                              require_workload=False)

@@ -410,7 +410,7 @@ def _plan_revert(args, ctx):
     plan = call("GET", "/api/lh/snapshot/revert/plan", {"volume": volume, "snapshot": snapshot}, **_as(ctx))
     if plan.get("blockers"):
         raise ToolError("it cannot be reverted: " + "; ".join(plan["blockers"]))
-    return ({"action": f"Roll {volume} back to the snapshot {snapshot}; what was written since is lost",
+    return ({"action": f"Roll {volume} back to the snapshot {snapshot}. What was written since is lost.",
              "plan": plan}, {"volume": volume, "snapshot": snapshot, "review_token": plan.get("review_token")})
 
 
@@ -421,7 +421,7 @@ def _plan_delete_backup(args, ctx):
     found = [b for b in (call("GET", "/api/lh/backups", **_as(ctx)) or []) if isinstance(b, dict) and b.get("name") == name]
     if not found:
         raise ToolError(f"there is no backup named {name}")
-    return {"action": f"Delete the backup {name}; it cannot be restored afterwards", "backup": found[0]}, {"name": name}
+    return {"action": f"Delete the backup {name}. It cannot be restored afterwards.", "backup": found[0]}, {"name": name}
 
 
 def _plan_restore(args, ctx):
@@ -443,8 +443,8 @@ def _plan_reclass(args, ctx):
     plan = call("POST", "/api/volumes/reclass/plan", body=body, **_as(ctx))
     if not plan.get("ok", True) or plan.get("blockers"):
         raise ToolError("it cannot move now: " + "; ".join(plan.get("blockers") or ["see the plan in the app"]))
-    return ({"action": f"Move {body['namespace']}/{body['claim']} to the storage class {body['target']}; "
-                       "what uses it stops while the data is copied", "plan": plan},
+    return ({"action": f"Move {body['namespace']}/{body['claim']} to the storage class {body['target']}. "
+                       "What uses it stops while the data is copied.", "plan": plan},
             {**body, "capacity_token": plan.get("capacity_token"), "confirm_capacity": True})
 
 

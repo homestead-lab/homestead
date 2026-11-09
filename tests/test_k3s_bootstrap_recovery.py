@@ -80,7 +80,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
                 raise RuntimeError(self.cfg["password"] + " " + self.token)
             return self.create(cfg)
         with mock.patch.object(cluster, "remove") as remove:
-            with self.assertRaisesRegex(ValueError, "Resources are retained") as error:
+            with self.assertRaisesRegex(ValueError, "The resources are kept") as error:
                 cluster.commit(self.prepared, ops, create_one=create)
             remove.assert_not_called()
         item = ops.stored()[-1]
@@ -123,14 +123,14 @@ class BootstrapRecoveryTests(unittest.TestCase):
                 raise OSError("full disk")
             return record(*args, **kwargs)
         with mock.patch.object(ops, "record_phase", side_effect=phase):
-            with self.assertRaisesRegex(ValueError, "Resources are retained"):
+            with self.assertRaisesRegex(ValueError, "The resources are kept"):
                 cluster.commit(self.prepared, ops, create_one=self.create)
         self.assertEqual(1, len(self.created))
         self.assertEqual("test-server-1", ops.stored()[-1]["ref"]["attempted"])
 
     def test_active_batch_deduplicates_before_second_dispatch(self):
         cluster.commit(self.prepared, ops, create_one=self.create)
-        with self.assertRaisesRegex(ValueError, "already active"):
+        with self.assertRaisesRegex(ValueError, "already running"):
             cluster.commit(self.prepared, ops, create_one=self.create)
         self.assertEqual(2, len(self.created))
 
@@ -166,7 +166,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
     def test_readiness_never_accepts_replacement_vm_by_name(self):
         cluster.commit(self.prepared, ops, create_one=self.create)
         item = ops.stored()[-1]
-        with mock.patch.object(cluster, "kget", return_value={"metadata": {"uid": "replacement"}}):
+        with mock.patch.object(cluster, "kget", return_value={"metadata": {"uid": "replacing it"}}):
             status, _, message = cluster.status(item)
         self.assertEqual("failed", status)
         self.assertIn("replaced", message)

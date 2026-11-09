@@ -82,7 +82,7 @@ def read_state(ns, name, node):
     except Unread:
         raise
     except (KeyError, TypeError, AttributeError, IndexError, ValueError) as e:
-        raise Unread("Kubernetes or Longhorn answered in a form Homestead can't read, so Homestead cannot tell "
+        raise Unread("Kubernetes or Longhorn answered in a form Homestead cannot read, so Homestead cannot tell "
                      "whether starting the pod elsewhere is safe.") from e
 
 
@@ -94,7 +94,7 @@ def _named(item):
 def _each(items, kind, parse):
     """parse(item) for every item; a malformed one raises Unread naming its kind and name."""
     if not isinstance(items, list):
-        raise Unread(f"The list of {kind}s is in a form Homestead can't read.")
+        raise Unread(f"The list of {kind}s is in a form Homestead cannot read.")
     out = []
     for item in items:
         try:
@@ -102,7 +102,7 @@ def _each(items, kind, parse):
         except Unread:
             raise
         except (KeyError, TypeError, AttributeError, IndexError, ValueError) as e:
-            raise Unread(f"{kind[0].upper()}{kind[1:]} {_named(item)} is in a form Homestead can't read, "
+            raise Unread(f"{kind[0].upper()}{kind[1:]} {_named(item)} is in a form Homestead cannot read, "
                          "so Homestead cannot tell whether starting the pod elsewhere is safe.") from e
     return out
 
@@ -112,9 +112,9 @@ def _lh_spec(item, kind):
     can't tell which volume the item belongs to, so it can't be skipped."""
     spec = item.get("spec") if isinstance(item, dict) else None
     if not isinstance(spec, dict):
-        raise Unread(f"Longhorn {kind} {_named(item)} has no spec, so Homestead can't read which volume it belongs to.")
+        raise Unread(f"Longhorn {kind} {_named(item)} has no spec, so Homestead cannot read which volume it belongs to.")
     if not spec.get("volumeName"):
-        raise Unread(f"Longhorn {kind} {_named(item)} has no spec.volumeName, so Homestead can't read which volume it belongs to.")
+        raise Unread(f"Longhorn {kind} {_named(item)} has no spec.volumeName, so Homestead cannot read which volume it belongs to.")
     return spec, spec["volumeName"]
 
 
@@ -266,7 +266,7 @@ def plan(state, now):
     blockers, volumes = [], []
     down_seconds = None
     if state["harvester"]:
-        blockers.append("This cluster runs Harvester, which manages its own hosts and volumes; starting a pod elsewhere is not supported here.")
+        blockers.append("This cluster runs Harvester, which manages its own hosts and volumes. Starting a pod on another host is not supported here.")
     if st["ready"]:
         blockers.append("The host is Ready, so its pod is not stuck on a down host.")
     elif st.get("status") != "Unknown":
@@ -274,16 +274,16 @@ def plan(state, now):
     since = _epoch(st["since"]) if st["since"] else None
     if not st["ready"]:
         if since is None:
-            blockers.append("Homestead can't read when the host went down.")
+            blockers.append("Homestead cannot read when the host went down.")
         else:
             down_seconds = int(now - since)
             if down_seconds < MIN_DOWN:
-                blockers.append(f"The host has been down for {down_seconds // 60} minutes; it must be down for at least 10 minutes first.")
+                blockers.append(f"The host has been down for {down_seconds // 60} minutes. It must be down for at least 10 minutes first.")
         heard = _epoch(st["lease"]) if st["lease"] else None
         if heard is None:
-            blockers.append("Homestead can't tell when the host was last heard from.")
+            blockers.append("Homestead cannot tell when the host last reported.")
         elif now - heard < MIN_DOWN:
-            blockers.append("The host was heard from less than 10 minutes ago.")
+            blockers.append("The host last reported less than 10 minutes ago.")
     if not pods:
         blockers.append("There is no pod of this StatefulSet on the host.")
     else:
@@ -296,7 +296,7 @@ def plan(state, now):
     relied_on, seen = [], set()
     for pod in pods:
         for v in pod["unchecked"]:
-            blockers.append(f"{pod['name']}: volume {v['name']} is {v['type']}, which Homestead can't check")
+            blockers.append(f"{pod['name']}: volume {v['name']} is {v['type']}, which Homestead cannot check")
         for pvc in pod["claims"]:
             if pvc in seen:
                 continue
@@ -316,12 +316,12 @@ def plan(state, now):
             engines = state["engines"].get(vol) or []
             for e in engines:
                 if e["node"] is None:
-                    blockers.append(f"{pvc}: Longhorn can't say where the engine of {vol} runs (state: {e['state']}).")
+                    blockers.append(f"{pvc}: Longhorn cannot say where the engine of {vol} runs (state: {e['state']}).")
                     break
                 if e["node"] == node and e["state"] == "unknown" and down_ok:
                     relied_on.append(f"Longhorn reports the engine of {vol} on {node} as unknown, as it does for a host that is down.")
                 elif e["node"] == node and e["state"] != "stopped":
-                    blockers.append(f"{pvc}: Longhorn can't confirm its engine has stopped. It is {vol} on {node} (state: {e['state']}).")
+                    blockers.append(f"{pvc}: Longhorn cannot confirm that its engine has stopped. It is {vol} on {node} (state: {e['state']}).")
                     break
             rob = state["robustness"].get(vol)
             if rob == "unknown" and down_ok and engines and all(e["node"] == node for e in engines):
@@ -381,7 +381,7 @@ def _run(request):
         raise ValueError("confirmation must repeat the StatefulSet name")
     running = _active(ns, name)
     if running:
-        return ROUTER.Reply(409, {"error": "A restart for this StatefulSet is still running; follow it instead of sending another",
+        return ROUTER.Reply(409, {"error": "A restart of this StatefulSet is still running. Follow it instead of sending another.",
                                   "operation": {"id": running}})
     try:
         now = clock()
@@ -391,7 +391,7 @@ def _run(request):
     if not reviewed["ready"]:
         return ROUTER.Reply(409, {"error": "; ".join(reviewed["blockers"]), "plan": reviewed})
     if b.get("review_token") != reviewed["review_token"]:
-        return ROUTER.Reply(409, {"error": "what the host holds changed; review the plan again", "plan": reviewed})
+        return ROUTER.Reply(409, {"error": "What the host holds changed. Review the plan again.", "plan": reviewed})
     deleted, replaced, failed = [], [], []
     for pod in reviewed["pods"]:
         try:
@@ -415,7 +415,7 @@ def _run(request):
     names = lambda rows: ", ".join(p["name"] for p in rows)  # noqa: E731
     parts = ([f"Deleted {names(deleted)}"] if deleted else []) + [
         f"{names(replaced)} {'was' if len(replaced) == 1 else 'were'} already replaced"] * bool(replaced)
-    parts += [f"could not delete {f['name']}: {f['error']}; nothing was changed for it" for f in failed]
+    parts += [f"could not delete {f['name']}: {f['error']}, so nothing was changed for it" for f in failed]
     if not deleted:
         parts.append("nothing was deleted")
     parts.append("waiting for a replacement on another host" if deleted else
@@ -477,13 +477,13 @@ def status(item):
             back = [f"{r[0]} is Ready on {r[3]}, which came back" for r in rows if r[3] == ref["node"]]
             return "succeeded", 100, "; ".join((["Ready on another host: " + ", ".join(moved)] if moved else []) + back)
     if waited > LIMIT:
-        return "failed", 100, (f"No replacement was Ready on another host within 15 minutes; "
-                               f"the last stage reached was {ref.get('stage') or STAGES[0]}")
+        return "failed", 100, (f"No replacement was ready on another host within 15 minutes. "
+                               f"The last stage reached was {ref.get('stage') or STAGES[0]}.")
     if unread:
-        return "running", item.get("progress") or 10, f"Waiting to read the pods again ({unread}); last stage: {ref.get('stage')}"
+        return "running", item.get("progress") or 10, f"Waiting to read the pods again ({unread}). Last stage: {ref.get('stage')}"
     rank = min(r[1] for r in rows) if rows else 0
     names = ", ".join(r[0] for r in rows if r[1] == rank)
-    note = (f"; Kubernetes can take about 6 minutes to release the volume from {ref['node']}"
+    note = (f". Kubernetes can take about 6 minutes to release the volume from {ref['node']}"
             if ref["stage"] in ("deleted", "attaching volume") else "")
     return "running", (10, 40, 70)[rank], f"{names}: {ref['stage']}{note}"
 

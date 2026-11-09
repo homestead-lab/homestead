@@ -562,14 +562,14 @@ class JobTests(unittest.TestCase):
         out = P.plan()
         changes = [a for a in out["apps"] if a["tier"] != a["current"]]
         self.cluster.write_map(json.dumps({"Home": "low"}))
-        with self.assertRaisesRegex(ValueError, "review again"):
+        with self.assertRaisesRegex(ValueError, "Review it again"):
             P.reviewed(changes, out["review_token"])
 
     def test_a_follow_the_server_doesnt_see_is_refused(self):
         self.cluster = Cluster(self, [app("ha", group="Home", follows=True)], {"Home": "critical"})
         use(self, self.cluster)
         changes = [dict(a, follow=False) for a in P.plan()["apps"] if a["tier"] != a["current"]]
-        with self.assertRaisesRegex(ValueError, "review again"):
+        with self.assertRaisesRegex(ValueError, "Review it again"):
             P.reviewed(changes, P.review_token(changes))
 
     def turn(self, apps):
@@ -621,7 +621,7 @@ class JobTests(unittest.TestCase):
         _, began = self.started([app("ha", group="Home", follows=True), app("db")], {"Home": "critical"}, {"lab/ha", "lab/db"})
         ref = began[0][4]
         self.assertEqual(["lab/db"], [a["id"] for a in ref["apps"]])
-        self.assertEqual(["lab/ha: its group's tier couldn't be read, so it was left alone"], ref["skipped"])
+        self.assertEqual(["lab/ha: its group's tier could not be read, so it was left as it was"], ref["skipped"])
 
     def test_a_follower_whose_group_tier_cant_be_read_is_not_patched(self):
         _, began = self.started([app("ha", group="Home", follows=True), app("db")], {"Home": "critical"}, {"lab/ha", "lab/db"})
@@ -629,7 +629,7 @@ class JobTests(unittest.TestCase):
         self.assertEqual([], [m for m, *_ in self.cluster.sent if m == "PATCH"])
 
     def test_a_run_of_only_unreadable_followers_is_refused_plainly(self):
-        with self.assertRaisesRegex(ValueError, "couldn't be read"):
+        with self.assertRaisesRegex(ValueError, "could not be read"):
             self.started([app("ha", group="Home", follows=True)], {"Home": "critical"}, {"lab/ha"})
 
 
@@ -683,7 +683,7 @@ class EditTests(unittest.TestCase):
 
     def test_from_its_group_waits_while_the_tiers_cant_be_read(self):
         self.cluster.unreadable(http(500, MAP))
-        with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
+        with self.assertRaisesRegex(ValueError, "could not read the group tiers"):
             WORKLOAD_EDIT._apply_tier(app("ha", group="Home"), "group")
 
     def test_an_app_already_following_is_left_as_it_is_while_the_tiers_cant_be_read(self):
@@ -795,7 +795,7 @@ class EditRouteTests(unittest.TestCase):
         self.assertEqual(dep["metadata"]["annotations"], saved["metadata"]["annotations"])
 
     def test_a_non_follower_choosing_its_group_is_told_why_and_nothing_is_written(self):
-        with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
+        with self.assertRaisesRegex(ValueError, "could not read the group tiers"):
             self.run_edit(app("ha", group="Home"), {"priority": "group"}, unreadable=True)
         self.assertEqual([], self.events)
 

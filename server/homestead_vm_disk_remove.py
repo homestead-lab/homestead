@@ -199,7 +199,7 @@ def _left(ref):
 
 def _left_words(left):
     if left is None:
-        return "Homestead couldn't read what is left: check under Import > Disk images and Volumes"
+        return "Homestead could not read what is left. Check under Import > Disk images and Volumes."
     deleting, staying = left
     if not deleting and not staying:
         return "Nothing of the disk is left"

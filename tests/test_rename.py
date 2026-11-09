@@ -232,7 +232,7 @@ class RenameTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertEqual({"name": "old", "replicas": count}, job["ref"]["restored"])
         self.assertIn(f"old was put back to {count} replica", job["message"])
-        self.assertNotIn("No automatic rollback", job["message"])
+        self.assertNotIn("Nothing was rolled back", job["message"])
         self.assertTrue(job["ref"]["retain_resources"], "the stopped replacement is still there")
         self.assertTrue(ops.list_operations()[0]["cleanable"])
 
@@ -321,7 +321,7 @@ class RenameTests(unittest.TestCase):
         self.during_the_stop(lambda: self.unreadable.add(self.NEW_PATH))
         with self.assertRaisesRegex(ValueError, "did not finish stopping.*old was not put back"):
             self.dispatch()
-        self.assert_not_put_back("could not be checked", says=("could not read new: inspect before starting anything",))
+        self.assert_not_put_back("could not be checked", says=("could not read new, so check before starting anything",))
 
     def test_late_autoscaler_on_the_replacement_keeps_the_original_stopped(self):
         self.old_pods_outlast_the_wait()
@@ -485,7 +485,7 @@ class RenameTests(unittest.TestCase):
                 self.sent.append((method, path, copy.deepcopy(payload)))
                 raise urllib.error.HTTPError(path, 422, "Unprocessable Entity", {}, None)
             return self.send(method, path, payload, **kwargs)
-        with self.assertRaisesRegex(ValueError, "old was not put back to 1 replica: the API server refused the write twice; nothing was written"):
+        with self.assertRaisesRegex(ValueError, "old was not put back to 1 replica: the API server refused the write twice, so nothing was written"):
             self.dispatch(send=refuse_restores)
         self.assert_not_put_back("refused the write twice", both_stopped=True, writes=("POST", "PATCH", "PATCH", "PATCH"))
         self.assertEqual(["refused", "refused"], [row["phase"] for row in ops.stored()[0]["ref"]["writes"][-2:]])
@@ -536,13 +536,13 @@ class RenameTests(unittest.TestCase):
     def test_changed_review_or_same_name_replacement_never_writes(self):
         self.prepare()
         self.source["metadata"]["uid"] = "foreign"
-        with self.assertRaisesRegex(ValueError, "changed after review"):
+        with self.assertRaisesRegex(ValueError, "changed after the review"):
             self.dispatch()
         self.assertEqual([], self.sent)
 
     def test_target_automatically_started_by_external_actor_does_not_stop_source(self):
         self.after_send = lambda method, name, obj: obj["spec"].update(replicas=1) if method == "POST" else None
-        with self.assertRaisesRegex(ValueError, "not confirmed stopped"):
+        with self.assertRaisesRegex(ValueError, "not confirmed as stopped"):
             self.dispatch()
         self.assertEqual(["POST"], [row[0] for row in self.sent])
         self.assertEqual(1, self.source["spec"]["replicas"])
@@ -559,7 +559,7 @@ class RenameTests(unittest.TestCase):
     def test_unknown_pod_ownership_fails_closed_before_stopping_source(self):
         self.pods = [{"metadata": {"namespace": "lab", "ownerReferences": [
             {"kind": "ReplicaSet", "uid": "missing", "controller": True}]}, "status": {"phase": "Running"}}]
-        with self.assertRaisesRegex(ValueError, "not confirmed stopped"):
+        with self.assertRaisesRegex(ValueError, "not confirmed as stopped"):
             self.dispatch()
         self.assertEqual(["POST"], [row[0] for row in self.sent])
 
@@ -651,7 +651,7 @@ class RenameTests(unittest.TestCase):
             if method == "PATCH" and name == "old":
                 obj["spec"]["template"]["spec"]["hostNetwork"] = True
         self.after_send = mutate
-        with self.assertRaisesRegex(ValueError, "more than the replica count"):
+        with self.assertRaisesRegex(ValueError, "more than the number of replicas"):
             self.dispatch()
         self.assertEqual(["POST", "PATCH"], [row[0] for row in self.sent])
         self.admission.assert_not_called()
@@ -695,7 +695,7 @@ class RenameTests(unittest.TestCase):
                 self.dispatch()
         job = ops.list_operations()[0]
         self.assertEqual("running", job["status"])
-        self.assertIn("no longer active", job["message"])
+        self.assertIn("no longer running", job["message"])
         self.assertTrue(job["rename_recovery"])
         self.assertEqual([], self.sent)
 
@@ -706,7 +706,7 @@ class RenameTests(unittest.TestCase):
         self.body["workload_name"] = "another"
         self.prepare()
         before = len(self.sent)
-        with self.assertRaisesRegex(ValueError, "still active or needs recovery"):
+        with self.assertRaisesRegex(ValueError, "still running or needs recovery"):
             self.dispatch()
         self.assertEqual(before, len(self.sent))
 

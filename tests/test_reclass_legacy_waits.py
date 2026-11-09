@@ -153,7 +153,7 @@ class LegacyMoveTests(unittest.TestCase):
     def test_a_review_that_cannot_be_read_gets_its_time_then_ends(self):
         self.running()
         ident = self.start("stop", review_fences={"x": "y"}, consumers=[{"kind": "Deployment", "name": "app", "replicas": 2}])
-        with mock.patch.object(RC, "plan", side_effect=ValueError("Volume inventory is incomplete")):
+        with mock.patch.object(RC, "plan", side_effect=ValueError("Volume list is incomplete")):
             self.assertEqual("running", self.look(ident)["status"], "this can pass")
             self.now += LIMIT
             job = self.look(ident)
@@ -175,7 +175,7 @@ class LegacyMoveTests(unittest.TestCase):
         job = self.lost_review(ident)
         self.assertEqual("running", job["status"], "nothing holds that app if this job ends")
         self.assertIn("app looks stopped", job["message"])
-        self.assertIn("This move waits for you. Nothing was started or retried.", job["message"])
+        self.assertIn("This move is waiting for a decision. Nothing was started or retried.", job["message"])
         self.assertIn("Cancel", job["message"])
         self.assertNotIn("Every app is as reviewed", job["message"])
         self.assertEqual(0, self.replicas(), "and nothing was started by itself")
@@ -362,7 +362,7 @@ class LegacyMoveTests(unittest.TestCase):
             job = self.look(ident)
         self.assertEqual("running", job["status"])
         self.assertIn("waiting to check", job["message"])
-        self.assertNotIn("waits for you", job["message"])
+        self.assertNotIn("waits for Cancel", job["message"])
         self.now += RECHECK
         with mock.patch.object(RC, "plan", return_value={"ok": True, "_fences": fences}):
             job = self.look(ident)
@@ -535,7 +535,7 @@ class LegacyMoveTests(unittest.TestCase):
         ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
         with mock.patch.object(RC, "plan", side_effect=ValueError("inventory")):
             first = self.look(ident)["message"]
-            self.assertIn("waiting to check", first)
+            self.assertIn("Waiting to check", first)
             self.assertNotIn("othing was stopped", first)
             self.now += LIMIT
             for wait in (0, RECHECK, RECHECK):
@@ -959,7 +959,7 @@ class LegacyMoveTests(unittest.TestCase):
         ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
         job = self.lost_review(ident)
         self.assertEqual("failed", job["status"])
-        self.assertIn("app is gone", job["message"])
+        self.assertIn("app has been removed", job["message"])
         self.assertNotIn("Every app", job["message"])
 
     def test_a_deleted_app_with_a_stopped_note_is_not_held_for(self):
@@ -994,14 +994,14 @@ class LegacyMoveTests(unittest.TestCase):
         self.look(ident)
         self.now += LIMIT
         message = self.look(ident)["message"]
-        self.assertIn("it was at 2 replicas", message)
+        self.assertIn("It was at 2 replicas", message)
         self.assertNotIn("Nothing changed", message)
 
     def test_the_cancel_review_gives_the_count_of_an_app_it_leaves(self):
         self.wired()
         self.held_by_another_job()
         ident = self.start("stop", review_fences={"x": "y"}, consumers=REVIEWED)
-        self.assertIn("it was at 2 replicas", " ".join(OPS.cancel_plan(ident)["undo"]))
+        self.assertIn("It was at 2 replicas", " ".join(OPS.cancel_plan(ident)["undo"]))
 
     def test_the_cancel_review_does_not_start_what_was_off_at_the_review(self):
         self.wired()

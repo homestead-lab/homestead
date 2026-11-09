@@ -211,7 +211,7 @@ class GoingBackTests(Base):
         self.hold()
         self.kube.discard(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/source")
         for action in ("resume", "return-original"):
-            with self.assertRaisesRegex(Held, "(?s)The original volume.*no longer exists.*won't do"):
+            with self.assertRaisesRegex(Held, "(?s)The original volume.*no longer exists.*does not work"):
                 self.preview(action)
 
     def test_a_failed_read_of_a_volume_is_not_called_gone(self):

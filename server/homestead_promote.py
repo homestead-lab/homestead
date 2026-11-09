@@ -114,13 +114,13 @@ def promote_script(version, server, args):
     joined etcd never protects quorum, and with one member before it would
     lose it."""
     if unprintable([version, server, *args]):
-        raise ValueError("A setting read from the cluster has a control character in it; nothing was changed")
+        raise ValueError("A setting read from the cluster has a control character in it, so nothing was changed")
     return "\n".join([
         "set -eu",
         f"trap 'rm -f {TOKEN}' EXIT",
         f"curl -sfL https://get.k3s.io -o {INSTALLER} || exit 20",
         "/usr/local/bin/k3s-agent-uninstall.sh",
-        f"[ -s {NODE_PASSWORD} ] || {{ echo 'The node password went with the agent; not joining as a new node'; exit 10; }}",
+        f"[ -s {NODE_PASSWORD} ] || {{ echo 'The host password was removed with the agent, so the host does not join as a new one'; exit 10; }}",
         f"INSTALL_K3S_VERSION={shlex.quote(version)} K3S_TOKEN=\"$(cat {TOKEN})\" "
         f"sh {INSTALLER} server --server {shlex.quote(f'https://{server}:6443')}" + "".join(f" {a}" for a in args),
         "",
@@ -130,7 +130,7 @@ def promote_script(version, server, args):
 def check_token(token):
     """The token as k3s writes it, or ValueError - which never repeats it."""
     if not TOKEN_SHAPE.match(token or ""):
-        raise ValueError("The server token read from the cluster is not in the shape k3s writes; nothing was changed")
+        raise ValueError("The server token from the cluster is not in k3s's format, so nothing was changed")
     return token
 
 
@@ -253,7 +253,7 @@ def plan(node):
     if _server(host):
         blockers.append(f"{node} is a server already")
     elif ROLES.is_tiebreaker(host):
-        blockers.append(f"{node} is marked as a tiebreaker; app hosts only")
+        blockers.append(f"{node} is marked as a tiebreaker, so only app hosts can be promoted")
     if not _ready(host):
         blockers.append(f"{node} is not Ready")
     if own_node() == node:
@@ -291,8 +291,8 @@ def plan(node):
             blockers.append(f"{node} has no /usr/local/bin/k3s-agent-uninstall.sh: was k3s installed another way?")
     host_settings, dropped = node_flags(host)
     if unprintable([version, (p.get("control_plane") or [""])[0], *shared, *host_settings]):
-        blockers.append("A setting in the nodes' k3s.io/node-args has a control character in it; "
-                        "check the servers' and this host's k3s arguments")
+        blockers.append("A setting in the hosts' k3s.io/node-args has a control character in it. "
+                        "Check the k3s arguments of the servers and this host.")
     for flag in (f for f in dropped if f in RENAMING_FLAGS):
         blockers.append(f"{node} was started with {flag}: as a server it would register under another name")
     if dropped:
@@ -350,7 +350,7 @@ def read_token(nodes, exclude):
         token = out.strip()
         if token:
             return token
-    raise ValueError("No server's token could be read; nothing was changed on the host")
+    raise ValueError("No server's token could be read, so nothing was changed on the host")
 
 
 def _longhorn_scheduling(node):
@@ -366,7 +366,7 @@ def start(node, review_token):
     if now["blockers"]:
         raise ValueError(now["blockers"][0])
     if now["review_token"] != review_token:
-        raise ValueError("The cluster changed since this was reviewed; review it again")
+        raise ValueError("The cluster changed since this was reviewed. Review it again.")
     host = kget(f"/api/v1/nodes/{node}")
     facts = now["facts"]
     ref = {"node": node, "uid": facts["uid"], "labels": own_labels(host), "longhorn_scheduling": _longhorn_scheduling(node),
@@ -395,8 +395,10 @@ class _Stopped(Exception):
 def _drain_text(text):
     """The drain's words, without its reboot job's: nothing is powered here,
     and the host is uncordoned when a promotion stops before the reinstall."""
-    for words in ("; power has not been sent", "Power was not sent; ", "Host remains cordoned; "):
-        text = text.replace(words, "")
+    for old, new in ((". Nothing has been sent to the host yet", ""), ("The host stays cordoned, and nothing was sent: ", "The drain stopped: "),
+                     ("The host stays cordoned. ", ""), ("Nothing was sent: ", "The drain stopped: "), ("Nothing was sent. ", ""),
+                     (", so nothing was sent", ""), (" before the restart or shutdown", "")):
+        text = text.replace(old, new)
     return text
 
 
@@ -450,8 +452,8 @@ def _prepare(op_id, ref):
         try:
             if launching:
                 # It may have started: the host's marker and status file decide.
-                record("launching", 45, f"Could not confirm the reinstall on {node} started ({str(error)[:160]}); "
-                                        "following the host", running_since=time.time())
+                record("launching", 45, f"Homestead could not confirm that the reinstall on {node} started ({str(error)[:160]}). "
+                                        "Watching the host.", running_since=time.time())
             else:
                 NODE_ACTIONS.set_cordon(node, False)
                 record("failed", 100, f"{node} was not changed: {_drain_text(str(error))}"[:400])
@@ -509,7 +511,7 @@ def status(item, now=None):
         since = ref.get("running_since", now)
         if now - since < SETTLE or now - ref.get("probed_at", 0) < PROBE_EVERY:
             if now - since > RUN_LIMIT:
-                return "failed", 100, f"No result from {node} after {RUN_LIMIT // 60} minutes; see {LOG} there"
+                return "failed", 100, f"No result from {node} after {RUN_LIMIT // 60} minutes. See {LOG} there."
             return "running", item.get("progress") or 50, item.get("message") or f"Reinstalling k3s on {node}"
         ref["probed_at"] = now
         try:
@@ -522,7 +524,7 @@ def status(item, now=None):
             return "failed", 100, f"{node} was not changed: the reinstall did not start there"
         if state is None or state["code"] is None:
             if now - since > RUN_LIMIT:
-                return "failed", 100, f"No result from {node} after {RUN_LIMIT // 60} minutes; see {LOG} there"
+                return "failed", 100, f"No result from {node} after {RUN_LIMIT // 60} minutes. See {LOG} there."
             ref["phase"] = "running"
             return "running", 55, f"Reinstalling k3s on {node}" + (f": {state['last']}" if state and state["last"] else "")
         if state["code"] == "20":
@@ -540,8 +542,8 @@ def status(item, now=None):
                 joined = None
             if joined is None:
                 return "failed", 100, (f"The reinstall on {node} stopped with code {state['code']}: {state['last']}. "
-                                       f"The agent is gone and k3s is as the installer left it; see {LOG} there. Check "
-                                       f"Cluster for {node} among the etcd members; to bring it back as an app host, run "
+                                       f"The agent has been removed, and k3s is as the installer left it. See {LOG} there. Check "
+                                       f"Cluster for {node} among the etcd members. To bring it back as an app host, run this "
                                        f"there: {_rejoin()}")
         ref.update(phase="joining", joining_since=now)
         return "running", 75, f"{node} is joining etcd"
@@ -552,7 +554,7 @@ def status(item, now=None):
             return "failed", 100, str(error)
         if host is None:
             if now - ref.get("joining_since", now) > JOIN_LIMIT:
-                return "failed", 100, f"{node} has not come back as an etcd member after {JOIN_LIMIT // 60} minutes; see {LOG} there"
+                return "failed", 100, f"{node} has not come back as an etcd member after {JOIN_LIMIT // 60} minutes. See {LOG} there."
             return "running", 85, f"Waiting for {node} to come back as an etcd member"
         NODE_ACTIONS.set_cordon(node, False)
         ref["phase"] = "done"
@@ -566,7 +568,7 @@ def status(item, now=None):
                 notes.append(f"Longhorn has no node record for {node} now: check its disks in Longhorn")
             elif now_scheduling != ref["longhorn_scheduling"]:
                 notes.append(f"Longhorn scheduling on {node} changed: check it in Longhorn")
-        return "succeeded", 100, (f"{node} is a server; the cluster has {members} etcd members"
+        return "succeeded", 100, (f"{node} is a server. The cluster has {members} etcd members"
                                   + "".join(f". {n}" for n in notes))
     return "succeeded", 100, f"{node} is a server"
 
@@ -577,7 +579,7 @@ def cancel_plan(item):
                 "undo": [f"{item['ref']['node']} is uncordoned"], "keeps": ["Apps already moved stay where they are"],
                 "needs": "admin"}
     return {"mode": "forget", "can": False,
-            "why_not": "k3s is being reinstalled on the host; stopping now would leave it half done"}
+            "why_not": "k3s is being reinstalled on the host, and stopping now would leave it half done"}
 
 
 def cancel_run(item, options):
@@ -590,7 +592,7 @@ def _start_route(body):
     if not node:
         raise ValueError("which host?")
     return {"ok": True, "operation": start(node, str(body.get("review_token") or "")),
-            "detail": f"Making {node} a server; follow it under Jobs"}
+            "detail": f"Making {node} a server. Follow it under Jobs."}
 
 # The job's own, registered when homestead_routes loads this module at start
 # (server.py builds the route table before any job is looked at).

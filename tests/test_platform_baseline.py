@@ -189,7 +189,7 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
                     state, progress, message = C.status(self.item)
                 self.assertEqual(("succeeded", 100), (state, progress))
                 self.assertIn(f"chart {self.target}", message)
-                self.assertIn("all 3 scheduled nodes", message)
+                self.assertIn("all 3 hosts", message)
 
     def test_requested_version_and_unchanged_multus_image_do_not_prove_chart_revision(self):
         self.seed()

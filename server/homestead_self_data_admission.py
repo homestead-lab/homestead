@@ -130,7 +130,7 @@ def _nodes(read, pinned, now, *, boots=True, members=True):
         pin = expected[meta["name"]]
         if (meta["uid"] != pin["uid"] or boots and status.get("nodeInfo", {}).get("bootID") != pin["boot_id"]
                 or meta.get("deletionTimestamp")):
-            raise Held("A reviewed capacity host was replaced, rebooted or removed")
+            raise Held("A reviewed host was replaced, restarted or removed")
         alloc = status.get("allocatable", {})
         if any(RESOURCES.quantity(alloc.get(key), key) <= 0 for key in ("memory", "cpu", "pods")):
             raise Held("Node allocatable resources are unavailable; capacity cannot be verified")

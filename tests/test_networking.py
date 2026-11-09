@@ -61,7 +61,7 @@ class NetworkingTests(unittest.TestCase):
 
     def test_vip_edit_rejects_stale_identity_and_foreign_workload(self):
         cfg = self.edit_service_config()
-        for change in ({"uid": "replacement"}, {"resource_version": "6"}, {"workload": "pihole"}):
+        for change in ({"uid": "replacing it"}, {"resource_version": "6"}, {"workload": "pihole"}):
             with self.assertRaises(ValueError):
                 SVC.service_plan({**cfg, **change})
         self.assertFalse(self.sent)
@@ -69,7 +69,7 @@ class NetworkingTests(unittest.TestCase):
     def test_vip_edit_never_recreates_to_change_class(self):
         cfg = self.edit_service_config()
         with patch.object(PLATFORM, "vip_spec", return_value={"loadBalancerClass": "new-class"}):
-            with self.assertRaisesRegex(ValueError, "replacement"):
+            with self.assertRaisesRegex(ValueError, "replacing it"):
                 SVC.create_service(cfg)
         self.assertFalse(self.sent)
 

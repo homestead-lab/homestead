@@ -354,7 +354,7 @@ class VMEditAdmissionTests(unittest.TestCase):
         for changes in ({"cores": 3}, {"memory": "6Gi"}):
             result, writes = self.call("/api/vm/edit/preview", {**self.body, **changes})
             self.assertEqual(400, result[0], result)
-            self.assertIn("controlled by", result[1]["error"])
+            self.assertIn("set by", result[1]["error"])
             self.assertEqual([], self.expansions)
             writes.assert_not_called()
 

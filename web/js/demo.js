@@ -928,7 +928,7 @@
     },
     "/api/os-updates/preview": url => {
       const own = "harvester-node1", names = url.searchParams.getAll("node").sort((a, b) => (a === own) - (b === own) || a.localeCompare(b));
-      return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is running already; it has to end first" : "", review_token: "demo",
+      return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is already running. It must end first." : "", review_token: "demo",
         hosts: names.map(node => { const updates = DEMO_OS_WAITING[node] || []; return { node, ready: true, updates, security: updates.filter(u => u.security).length,
           reboot: node === "harvester-node2", reboot_for: node === "harvester-node2" ? "linux-image-6.8.0-90-generic" : "", at: Math.floor(Date.now() / 1000) - 15660,
           homestead_here: node === own, restart_refusal: node === own ? "some workloads have no other host to run on" : "", restart_unread: "", busy: "" }; }) };
@@ -1504,7 +1504,7 @@ ssh_pwauth: true
       if (!["start","restart","unpause"].includes(body.action)) return {ok:true,detail:`${body.name}: ${body.action} requested`};
       const operation={id:`demo-power-${Date.now()}`,kind:"vm-power",title:`${body.action} VM ${body.name}`,
         resource:{kind:"VirtualMachine",namespace:body.ns,name:body.name},href:"/vms",status:"running",progress:25,
-        message:"KubeVirt accepted the request; waiting for the expected VM instance to become ready",
+        message:"KubeVirt accepted the request. Waiting for the VM instance to become ready.",
         started_at:new Date().toISOString(),cancellable:true,dismissible:false};
       (window.__demoOps ??=[]).unshift(operation);
       return {ok:true,detail:`Power request accepted for ${body.name}; follow its job for readiness`,operation};
@@ -1978,8 +1978,8 @@ ssh_pwauth: true
         : op.id !== body.id));
       const gone = before - window.__demoOps.length;
       return { ok: true, dismissed: gone, remaining: window.__demoOps.length,
-        detail: gone ? `cleared ${gone} finished job${gone === 1 ? "" : "s"}; 1 still running`
-          : "nothing finished to clear" };
+        detail: gone ? `Cleared ${gone} finished job${gone === 1 ? "" : "s"}. 1 still running.`
+          : "Nothing finished to clear." };
     },
     "/api/cluster/shutdown/plan": () => ({ready: !window.__demoShutdownBlocked, blockers: window.__demoShutdownBlocked ? ['Gracefully stop these VMs first: default/home-assistant-os', 'lab/paperless: disruption budget permits no verified eviction'] : [],
       confirm:'SHUT DOWN CLUSTER', review_token:'demo-shutdown', nodes: nodes.map(n => ({name:n.name, cordoned:false})), pods:12, volumes:8, homestead_node:nodes[0].name, local_storage:[]}),
@@ -2044,20 +2044,20 @@ ssh_pwauth: true
         return { operation: op, steps: [], background: true };
       }
       const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
-        progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
+        progress: 5, message: "Cordoning the host. Nothing has been sent to the host yet", started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
         power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage),
           holds: !body.force && Object.values(body.choices || {}).length > 0, held: Object.values(body.choices || {}).filter(c => c === "wait").length } };
       const phases = op.power.direct
-        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
-        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11; power has not been sent"]] : []),
-           ["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
-           ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
-           ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
+        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Starting the power helper. Its outcome is watched."], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to shut down"]]
+        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11. Nothing has been sent to the host yet"]] : []),
+           ["draining", 10, "Evicting app and system pods: 9 left"], ["draining", 12, "Evicting app and system pods: 3 left"],
+           ["verifying", 15, "Drain finished. Checking quorum, VMs, pods and volume copies again before the restart or shutdown"],
+           ["sending", 20, "Starting the power helper. Its outcome is watched."], ["observing", 60, reboot ? "The host is ready. Waiting for 2 volumes to become available." : "The host is not ready. Waiting to confirm that it shut down or returned."]];
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
       phases.forEach(([phase, progress, message], i) => setTimeout(() => Object.assign(op, { progress, message, power: { ...op.power, phase } }), (i + 1) * 2500));
       setTimeout(() => Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(),
-        message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
+        message: reboot ? "The host restarted and its volumes are available. The host stays cordoned." : "The host is off." }), (phases.length + 1) * 2500);
       return { operation: op, steps: [], background: true };
     },
     // Starting a StatefulSet's stuck pod elsewhere (#441): a ready review, then a job that walks the real stages.

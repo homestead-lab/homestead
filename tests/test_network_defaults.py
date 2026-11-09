@@ -60,7 +60,7 @@ class DefaultsTests(unittest.TestCase):
         svc = self.objects["/api/v1/services"]["items"][0]
         svc["metadata"]["annotations"]["kube-vip.io/loadbalancerIPs"] = self.ip
         svc["status"]["loadBalancer"]["ingress"] = [{"ip": self.ip}]
-        with self.assertRaisesRegex(ValueError, "common kube-vip lease"):
+        with self.assertRaisesRegex(ValueError, "shared kube-vip lease"):
             self.plan()
         svc["metadata"]["annotations"].update(PLATFORM.vip_annotations(self.ip))
         self.assertEqual(self.ip, self.plan()["vip"])

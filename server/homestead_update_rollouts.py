@@ -67,7 +67,7 @@ def _review_pods(dep):
         return []
     owned, known = ROLLOUT.owned_pods(dep, inventory["items"], U.kget, dep["metadata"]["namespace"])
     if not known:
-        raise ValueError("pod ownership is unknown; refresh before reviewing image recovery")
+        raise ValueError("Homestead cannot tell what owns the pod. Refresh before reviewing the image recovery.")
     return owned
 def _previous_image(dep, container, pods, fallback_digest=""):
     """Pin recovery from this container's observation, never another container."""
@@ -88,12 +88,12 @@ def _previous_image(dep, container, pods, fallback_digest=""):
                     if match:
                         observed.add(match.group(1))
         if len(observed) > 1:
-            raise ValueError(f"{name} has multiple running digests; no single immutable rollback target is known")
+            raise ValueError(f"{name} runs more than one digest, so there is no single fixed image to roll back to")
         digest = next(iter(observed), "") or fallback_digest
         if not digest and int(dep["spec"].get("replicas", 1) or 0) == 0:
             digest = REGISTRY.manifest_info(ref, REGISTRY._secret_credentials(dep["metadata"]["namespace"], dep), True)["digest"]
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""):
-        raise ValueError(f"immutable recovery image is unavailable for {name}; no image change was applied")
+        raise ValueError(f"No fixed recovery image is available for {name}, so the image was not changed")
     return _immutable(ref, digest)
 def _named_release(dep, pods, version):
     """Homestead's own containers on a release an admin names, for when its
@@ -166,7 +166,7 @@ def prepare_update(ns, name, version=None):
         if not matches:
             continue
         if len({(item["candidate"], item["remote_digest"]) for item in matches}) > 1:
-            raise ValueError(f"init container {init['name']} matches conflicting image updates; update its mapping explicitly")
+            raise ValueError(f"Init container {init['name']} matches conflicting image updates. Set its mapping manually.")
         update = matches[0]
         before[init["name"]] = _previous_image(current, init, pods)
         tracked[init["name"]] = update["candidate"]
@@ -179,7 +179,7 @@ def prepare_update(ns, name, version=None):
         if container.get("image") != original.get("image"):
             old = before[container["name"]]
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(old).get("digest", "")):
-                raise ValueError(f"immutable rollback image is unavailable for {container['name']}; no update was applied")
+                raise ValueError(f"No fixed rollback image is available for {container['name']}, so nothing was updated")
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(container["image"]).get("digest", ""))                     and not (version and container["image"] == next(iter(chosen.values()))["candidate"]):
                 raise ValueError("registry returned an invalid image digest")
     # Init rollback references were resolved after the initial app mapping.
@@ -212,7 +212,7 @@ def prepare_rollback(ns, name):
             changed = True
             if container.get("image") != restore[container["name"]] and not re.fullmatch(
                     r"sha256:[0-9a-f]{64}", parse_image(restore[container["name"]]).get("digest", "")):
-                raise ValueError(f"saved rollback image for {container['name']} is mutable; review and pin an exact digest first")
+                raise ValueError(f"The saved rollback image for {container['name']} can change. Review it and pin an exact digest first.")
             if pods is None:
                 pods = _review_pods(original)
             current[container["name"]] = _previous_image(original, container, pods)
@@ -293,21 +293,21 @@ STUCK_AFTER = 180
 # request: Head ...: <the cause>" - and the cause is the part that was cut
 # off when only the start was kept.
 PULL_CAUSES = (
-    ("toomanyrequests", "Docker Hub's pull limit for this address is used up; it resets within a few hours"),
+    ("toomanyrequests", "Docker Hub's download limit for this address is used up, and it resets within a few hours"),
     ("pull access denied", "the registry refused it: the image does not exist under that name, or is private and needs credentials"),
     ("not found", "the registry has no such image or tag"),
     ("unauthorized", "the registry wants credentials for it"),
-    ("no such host", "the node cannot look up the registry's name: its DNS is not answering for it"),
-    ("server misbehaving", "the node cannot look up the registry's name: its DNS server is failing"),
-    ("lookup ", "the node cannot look up the registry's name (DNS)"),
-    ("network is unreachable", "the node has no route to the registry - often an IPv6 address with no IPv6 route"),
-    ("no route to host", "the node has no route to the registry"),
-    ("connection refused", "the registry refused the connection - a proxy or firewall in the way"),
-    ("i/o timeout", "the node could not reach the registry in time - no internet from the node, or a firewall"),
-    ("TLS handshake timeout", "the node could not reach the registry in time - no internet from the node, or a firewall"),
+    ("no such host", "the host cannot look up the registry's name, because its DNS is not answering for it"),
+    ("server misbehaving", "the host cannot look up the registry's name, because its DNS server is failing"),
+    ("lookup ", "the host cannot look up the registry's name (DNS)"),
+    ("network is unreachable", "the host has no route to the registry, often because of an IPv6 address with no IPv6 route"),
+    ("no route to host", "the host has no route to the registry"),
+    ("connection refused", "the registry refused the connection, usually because of a proxy or firewall"),
+    ("i/o timeout", "the host could not reach the registry in time, because it has no internet access or a firewall is blocking it"),
+    ("TLS handshake timeout", "the host could not reach the registry in time, because it has no internet access or a firewall is blocking it"),
     ("context deadline exceeded", "the registry did not answer in time"),
-    ("x509", "the registry's certificate is not trusted - a proxy intercepting HTTPS"),
-    ("no space left", "the node's disk is full, so the image cannot be unpacked"),
+    ("x509", "the registry's certificate is not trusted, usually because a proxy is intercepting HTTPS"),
+    ("no space left", "the host's disk is full, so the image cannot be unpacked"),
 )
 def explain_pull(message):
     """A pull failure in a sentence, cause first; empty when it is not one."""
@@ -326,16 +326,16 @@ def explain_unplaced(message, own_service_ports=()):
     if "free ports" in text:
         if own_service_ports:
             ports = ", ".join(str(p) for p in own_service_ports)
-            return (f"port {ports} is taken on the node - by k3s's ServiceLB, publishing this app's own Service. "
-                    "An app on the host network answers on the node itself and needs no Service: remove it under "
-                    "Networking (or Edit → Network → Host network, and save)")
-        return "a port it needs on the host is taken on every node that could run it - by another host-network app, or a Service ServiceLB publishes"
+            return (f"port {ports} is taken on the host by k3s's ServiceLB, which publishes this app's own Service. "
+                    "An app on the host network answers on the host itself and needs no Service. Remove it under "
+                    "Networking, or under Edit → Network → Host network, and save")
+        return "a port it needs is taken on every host that could run it, by another host-network app or a Service that ServiceLB publishes"
     if "Insufficient memory" in text:
-        return "no node has enough free memory for what it asks: lower its memory under Edit, or free some up"
+        return "no host has enough free memory for what it asks. Lower its memory under Edit, or free some up."
     if "Insufficient cpu" in text:
-        return "no node has enough free CPU for what it asks: lower its CPU under Edit, or free some up"
+        return "no host has enough free CPU for what it asks. Lower its CPU under Edit, or free some up."
     if "didn't match Pod's node affinity/selector" in text or "node(s) didn't match" in text:
-        return "it may only run on a host - pinned, or needing hardware - that cannot take it now"
+        return "it can only run on certain hosts, because it is pinned or needs hardware, and none of them can take it now"
     if "unbound immediate PersistentVolumeClaims" in text or "persistentvolumeclaim" in text.lower():
         return "its volume is not ready yet"
     if "untolerated taint" in text or "had taint" in text:
@@ -366,9 +366,9 @@ def _why_waiting(ns, pod):
         # A node Ready before Longhorn has started on it: it clears itself
         # within minutes of a join, and never does if Longhorn fails there.
         node = (pod.get("spec") or {}).get("nodeName") or "its node"
-        found["message"] = (f"Longhorn is not running on {node} yet, so its volume cannot attach there. A node "
-                            "that has just joined gets it within a few minutes and this clears by itself; if not, "
-                            "see why in longhorn-system on that node, or delete this pod so it starts on another")
+        found["message"] = (f"Longhorn is not running on {node} yet, so its volume cannot attach there. A host "
+                            "that has just joined gets it within a few minutes, and this clears by itself. If not, "
+                            "check longhorn-system on that host, or delete this pod so it starts on another")
         # Not a failure while the node may still be joining: only after ten minutes.
         found["stuck"] = age >= 600
     if "invalid controller count" in message:

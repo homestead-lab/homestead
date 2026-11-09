@@ -597,7 +597,7 @@ class DeployTierTests(unittest.TestCase):
         with mock.patch.object(server.PRIORITY, "ladder", return_value=self.FALLBACK):
             self.assertEqual("homestead-critical", self.pod_spec(self.cfg(priority="critical")).get("priorityClassName"))
             sent, run = self.run_patched(self.cfg(priority="critical"))
-            with self.assertRaisesRegex(ValueError, "couldn't read the cluster's priority classes"):
+            with self.assertRaisesRegex(ValueError, "could not read the cluster's priority classes"):
                 run()
         self.assertEqual([], sent)
 

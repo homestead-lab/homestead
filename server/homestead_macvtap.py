@@ -247,7 +247,7 @@ def install(cfg=None):
         if not (binding_registered() and nad_lookup()):
             register_binding()
             return {"ok": True, "name": CHART, "detail": "KubeVirt's macvtap binding is registered"}
-        raise ValueError("macvtap is installed already")
+        raise ValueError("macvtap is already installed")
     content = addons.chart_archive("macvtap", version, manifests(p.get("distribution", ""), version), "")
     # Its DaemonSet runs at system-node-critical: on a full node it would
     # preempt the Longhorn instance manager serving the volumes there.

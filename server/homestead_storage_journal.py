@@ -298,7 +298,7 @@ class Journal:
             if not same or (moved and not (moved == ["resourceVersion"] and method in ("PUT", "PATCH") and not own
                                            and isinstance(expected.get("resourceVersion"), str)
                                            and isinstance(expected.get("settled"), str))):
-                raise Held("Storage resource changed after review; no request was sent")
+                raise Held("A storage resource changed after the review, so no request was sent")
             if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
                                and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
                 raise Held("Homestead did not create this resource for this operation; it will not be released as a helper")

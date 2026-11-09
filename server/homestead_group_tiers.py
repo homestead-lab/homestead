@@ -370,7 +370,7 @@ def edit_tier(dep, choice, get=None):
         raise ValueError(f"{_meta(dep).get('name', 'it')} isn't in a group; choose a tier")
     tiers = stored(get)
     if tiers is None:
-        raise ValueError("Homestead couldn't read the group tiers just now; try again, or choose a tier")
+        raise ValueError("Homestead could not read the group tiers just now. Try again, or choose a tier.")
     return tiers.get(group) or "normal"
 
 

@@ -108,7 +108,7 @@ class LegacyJournalTests(unittest.TestCase):
                 self.assertEqual(2, len(gets), "asked again after LEGACY_RECHECK")
                 kube.add({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": CS.NAME, "namespace": "lab"}})
                 clock[0] += CS.LEGACY_RECHECK
-                with self.assertRaisesRegex(ValueError, "Legacy shutdown ConfigMap"):
+                with self.assertRaisesRegex(ValueError, "older shutdown ConfigMap"):
                     CS.Shutdown(K.kget, K.ksend, "lab", "pod-a", "").state()
 
 

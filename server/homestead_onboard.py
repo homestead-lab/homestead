@@ -48,16 +48,16 @@ DISK_JOBS = {"disk-v2-convert": "V2 disk preparation", "disk-allocation": "stora
 # (retire_step reads it); a V2 cleanup's next round refuses on changed hosts and
 # lets go of the hosts it cordoned, but a RAM release it staged on a host keeps it
 # running until that host restarts, and only then does it fail. (singular, plural)
-UNTIL = {"end": ("until you end it from Jobs once the host is removed",
-                 "until you end them from Jobs once the host is removed"),
-         "disk-retire": ("until it stops; it fails by itself once Longhorn's record of the host is deleted",
-                         "until they stop; they fail by themselves once Longhorn's record of the host is deleted"),
-         "longhorn-v2-cleanup": ("until it ends: its next round refuses once the cluster's hosts change and lets go of "
-                                 "the hosts it cordoned; if it staged a RAM release on another host, it waits for that "
-                                 "host's restart before it fails",
-                                 "until they end: their next rounds refuse once the cluster's hosts change and let go of "
-                                 "the hosts they cordoned; one that staged a RAM release on another host waits for that "
-                                 "host's restart before it fails")}
+UNTIL = {"end": ("until it is ended from Jobs once the host is removed",
+                 "until they are ended from Jobs once the host is removed"),
+         "disk-retire": ("until it stops. It fails by itself once Longhorn's record of the host is deleted",
+                         "until they stop. They fail by themselves once Longhorn's record of the host is deleted"),
+         "longhorn-v2-cleanup": ("until it ends. Its next round refuses once the cluster's hosts change, and uncordons "
+                                 "the hosts it cordoned. If it prepared a RAM release on another host, it waits for that "
+                                 "host to restart before it fails",
+                                 "until they end. Their next rounds refuse once the cluster's hosts change, and uncordon "
+                                 "the hosts they cordoned. One that prepared a RAM release on another host waits for that "
+                                 "host to restart before it fails")}
 
 
 def _until(kind):
@@ -112,7 +112,7 @@ def _disk_jobs(name):
                      if kind == "disk-retire" and ref.get("phase") not in ("remove", "cleanup") else "Open that job first")
             found.append({"id": item.get("id", ""), "kind": kind, "title": item.get("title", ""),
                           "text": f"{name} has a saved {DISK_JOBS[kind]} job ({item.get('title') or item.get('id')}). "
-                                  f"{first}; removing the host would leave it with nothing to finish on."})
+                                  f"{first}. Removing the host would leave it with nothing to finish on."})
     return found
 
 
@@ -253,11 +253,11 @@ def _replicas_by_node(strict=False):
         replicas = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas").get("items", [])
     except urllib.error.HTTPError as error:
         if strict and error.code != 404:
-            raise ValueError("Longhorn's replicas could not be read, so what the node holds is unknown; try again") from error
+            raise ValueError("Longhorn's volume copies could not be read, so what the host holds is unknown. Try again.") from error
         return {}, {}
     except Exception as error:
         if strict:
-            raise ValueError("Longhorn's replicas could not be read, so what the node holds is unknown; try again") from error
+            raise ValueError("Longhorn's volume copies could not be read, so what the host holds is unknown. Try again.") from error
         return {}, {}
     by_volume, by_node = {}, {}
     for r in replicas:
@@ -484,20 +484,20 @@ def removal_plan(name):
         down = _age(since)
         if down is not None and down < 600:
             warnings.append(f"{name} stopped reporting {_plural(max(1, int(down // 60)), 'minute')} ago. "
-                            f"It may only be rebooting; give it a few minutes.")
+                            f"It may only be restarting, so give it a few minutes.")
     distribution = _distribution(node)
     workloads = _workloads()
     if "etcd" in roles or {"control-plane", "master"} & set(roles):
         others_ready = sum(1 for n in etcd if n["metadata"]["name"] != name and _ready(n))
         remaining = len(etcd) - 1
         if len([n for n in control if n["metadata"]["name"] != name]) == 0:
-            blockers.append(f"{name} is the only control-plane node; removing it ends the cluster.")
+            blockers.append(f"{name} is the only control-plane host, so removing it ends the cluster.")
         elif remaining and others_ready < remaining // 2 + 1:
             blockers.append(f"Only {others_ready} of the other {remaining} etcd members are ready. "
                             f"The cluster would not have quorum without {name}: bring them back first.")
         elif remaining < 3:
-            warnings.append(f"The cluster keeps {_plural(remaining, 'etcd member')}; "
-                            f"one more failure would stop it. Add a node soon.")
+            warnings.append(f"The cluster keeps {_plural(remaining, 'etcd member')}, and "
+                            f"one more failure would stop it. Add a host soon.")
         elif distribution == "harvester":
             warnings.append("Harvester promotes a worker to take its control-plane place, when one is available.")
         if distribution == "kubernetes" and "etcd" in roles:
@@ -592,10 +592,10 @@ def remove_node(name, accept_loss=False, gone=False, accept_jobs=()):
     if plan["blockers"]:
         raise ValueError(plan["blockers"][0])
     if plan["lost_volumes"] and not accept_loss:
-        raise ValueError(f"{_plural(len(plan['lost_volumes']), 'volume')} would lose the only copy; confirm that first")
+        raise ValueError(f"{_plural(len(plan['lost_volumes']), 'volume')} would lose the only copy. Confirm that first.")
     if gone and plan["pinned_volumes"] and not accept_loss:
-        raise ValueError(f"{_plural(len(plan['pinned_volumes']), 'volume')} kept on {name} would be made again empty; "
-                         f"confirm that first")
+        raise ValueError(f"{_plural(len(plan['pinned_volumes']), 'volume')} kept on {name} would be created again empty. "
+                         f"Confirm that first.")
     # The job lock is held from the recheck until the node DELETE is sent. Disk
     # jobs that check the host when they start (allocation, V2 cleanup) do so
     # under this lock, so none can be saved in between; afterwards the host is
@@ -645,7 +645,7 @@ def remove_node(name, accept_loss=False, gone=False, accept_jobs=()):
         dropped = sum(_force_delete(f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas/"
                                     f"{r['metadata']['name']}") for r in replicas)
         if dropped:
-            log.append(f"Deleted {_plural(dropped, 'replica record')}; Longhorn rebuilds them from the remaining copies")
+            log.append(f"Deleted {_plural(dropped, 'volume copy record')}. Longhorn rebuilds them from the remaining copies.")
     try:
         ksend("DELETE", lh)
         log.append(f"Deleted Longhorn's record of {name}")
@@ -766,21 +766,21 @@ def cleanup(kind, name, force=False):
         if not row:
             raise ValueError("that volume is not kept on a host that is gone")
         if not force:
-            raise ValueError(f"{name}'s data was on {row['node']}; confirm making it again empty")
+            raise ValueError(f"{name}'s data was on {row['node']}. Confirm creating it again empty.")
         for pod in _list(f"/api/v1/namespaces/{row['namespace']}/pods"):
             volumes = (pod.get("spec") or {}).get("volumes") or []
             if any((v.get("persistentVolumeClaim") or {}).get("claimName") == row["claim"] for v in volumes):
                 _force_delete(f"/api/v1/namespaces/{row['namespace']}/pods/{pod['metadata']['name']}")
         _recreate_empty(row)
-        return {"ok": True, "message": f"Made {name} again, empty; its app can start on another host"}
+        return {"ok": True, "message": f"Created {name} again, empty. Its app can start on another host."}
     if kind == "machine":
         stale = {m["name"]: m for m in cleanup_report()["stale_machines"]}
         if name not in stale:
-            raise ValueError("that machine is not a leftover; it still has a node")
+            raise ValueError("That machine is not left over. It is still a host in the cluster.")
         if stale[name]["stuck"]:
             if not force:
-                raise ValueError(f"{name} is already being deleted and is waiting on its host; "
-                                 f"if that host is gone for good, force it")
+                raise ValueError(f"{name} is already being deleted and is waiting for its host. "
+                                 f"If that host is gone for good, force it.")
             _unstick_machine(name)
             return {"ok": True, "message": f"Cleared the finalizers holding machine {name}"}
         ksend("DELETE", f"/apis/cluster.x-k8s.io/v1beta1/namespaces/fleet-local/machines/{name}")
@@ -794,8 +794,8 @@ def cleanup(kind, name, force=False):
         path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/{name}"
         if stale[name]["replicas"]:
             if not force:
-                raise ValueError(f"Longhorn still lists {_plural(stale[name]['replicas'], 'replica')} on {name}; "
-                                 f"let them rebuild elsewhere, or force it if the host is gone for good")
+                raise ValueError(f"Longhorn still lists {stale[name]['replicas']} volume cop{'y' if stale[name]['replicas'] == 1 else 'ies'} on {name}. "
+                                 f"Let them rebuild on other hosts, or force it if the host is gone for good.")
             for replica in _list("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"):
                 if (replica.get("spec") or {}).get("nodeID") == name:
                     _force_delete(f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas/"

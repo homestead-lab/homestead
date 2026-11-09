@@ -75,7 +75,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         # A resumed drain finds some reviewed pods already gone; none may be new.
         changed = not set(now) <= set(reviewed) if resumed else now != reviewed
         if changed or any(not row[2] for row in reviewed):
-            raise ValueError("Host pods changed after review; power was not sent. Review the host again")
+            raise ValueError("The host's pods changed after the review, so nothing was sent. Review the host again.")
     evicted, skipped, targets = [], [], {}
     for p in pods:
         if p["spec"].get("nodeName") != node:
@@ -146,8 +146,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             before = {(row[0], row[1]) for row in frozen}
             which = ", ".join(f"{ns}/{name} {'changed' if (ns, name) in before else 'arrived'}"
                               for ns, name, *_ in changed[:4])
-            raise ValueError(f"Host remains cordoned; pods changed during drain ({which}). "
-                             "Power was not sent; review the host again")
+            raise ValueError(f"The host stays cordoned. Pods changed during the drain ({which}). "
+                             "Nothing was sent. Review the host again.")
         remaining = {p["metadata"]["namespace"] + "/" + p["metadata"]["name"]: p for p in live
                      if MAINTENANCE.drainable(p)}
         targets = {name: remaining[name] for name in targets if name in remaining}
@@ -170,9 +170,9 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             stale = state is not None and not state[0] and state[1]
             stale_since = (stale_since if stale_since is not None else now) if stale else None
             if stale and now >= stale_since + BLOCKERS.STALE_GRACE:
-                raise ValueError(f"Host remains cordoned; Longhorn still prevents eviction: {', '.join(sorted(storage)[:6])}, "
+                raise ValueError(f"The host stays cordoned. Longhorn still prevents eviction: {', '.join(sorted(storage)[:6])}, "
                                  f"and only engines that no longer run on {node} keep it. "
-                                 f"Power was not sent; {BLOCKERS.say(node, state[1])}")
+                                 f"Nothing was sent. {BLOCKERS.say(node, state[1])[:1].upper()}{BLOCKERS.say(node, state[1])[1:]}")
         for name in held:
             budgets[name][0] = now if budgets[name][0] is None else budgets[name][0]
         # Each has its own deadline, and the first one passed ends the
@@ -191,8 +191,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         names = ", ".join(sorted(late)[:6])
         if now >= deadline:
             stall = BLOCKERS.stall_reason(node, read=L.kget) or BLOCKERS.GENERAL_ADVICE
-            raise ValueError(f"Host remains cordoned; drain timed out after {limit // 60} minutes. {reason}: {names}. "
-                             f"Power was not sent; {stall}")
+            raise ValueError(f"The host stays cordoned. The drain timed out after {limit // 60} minutes. {reason}: {names}. "
+                             f"Nothing was sent. {stall[:1].upper()}{stall[1:]}")
         if progress:
             if held:
                 said = "Waiting for " + "; ".join(budgets[name][1]["why"] for name in sorted(held)[:3]) + ": "
@@ -201,7 +201,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
                 said = "Waiting for Longhorn to allow storage pod eviction: "
             else:
                 said = "Waiting for drained pods to leave: "
-            progress("draining", 10, said + names + "; power has not been sent")
+            progress("draining", 10, said + names + ". Nothing has been sent to the host yet")
         time.sleep(2)
     L._bust("wl", "ov", "nodes", "flow", "impact:")
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
@@ -223,7 +223,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
     if before_send is None or (not force and not planned_outage and (reviewed_pods is None or not drain_first)):
-        raise ValueError("A reviewed drain and fresh pre-power check are required; power was not sent")
+        raise ValueError("Nothing was sent. A reviewed drain and a new check are needed first.")
     report = progress or (lambda *args, **kwargs: None)
     steps = []
     if planned_outage:
@@ -277,27 +277,27 @@ def _prepare_host(node, action, drain_first, reviewed_pods, report, hold, resume
     if not ok:
         raise PermissionError(why)
 
-    report("cordoning", 5, "Cordoning host; power has not been sent")
+    report("cordoning", 5, "Cordoning the host. Nothing has been sent to the host yet")
     set_cordon(node, True)
     steps.append("cordoned")
     held = bool(hold and hold())
     if held:
         steps.append("stopped what waits for the host and moved its VMs")
     if drain_first:
-        report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
+        report("draining", 10, "Evicting app and system pods within their disruption budgets. Nothing has been sent to the host yet")
         # What was stopped or moved has gone from the reviewed pods; nothing may be new.
         d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed or held)
-        steps.append(f"drained {len(d['evicted'])} pod(s)")
+        steps.append(f"drained {len(d['evicted'])} pod{'' if len(d['evicted']) == 1 else 's'}")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
-            raise ValueError("Host remains cordoned; drain was refused for " + ", ".join(refused[:6]) +
-                             ". Power was not sent; resolve the pod or disruption budget before retrying power control")
+            raise ValueError("The host stays cordoned. The drain was refused for " + ", ".join(refused[:6]) +
+                             ". Nothing was sent. Resolve the pod or disruption budget before trying again.")
 
     # A long drain can outlive the reviewed quorum, VM and replica state.
-    report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")
+    report("verifying", 15, "Drain finished. Checking quorum, VMs, pods and volume copies again before the restart or shutdown")
     ok, why, rep = node_action_check(node, action)
     if not ok:
-        raise PermissionError("Host remains cordoned; power was not sent: " + why)
+        raise PermissionError("The host stays cordoned, and nothing was sent: " + why)
     return rep
 
 
@@ -323,13 +323,13 @@ def _send_power(node, action, steps, rep, report):
     }
     # Persist the helper identity BEFORE submitting. A restart observes it;
     # it never guesses whether POST succeeded and sends a second command.
-    report("sending", 20, "Submitting power helper; command outcome must be observed",
+    report("sending", 20, "Starting the power helper. Its outcome is watched.",
            helper_pod=pod_name, helper_namespace="lab", started_epoch=time.time())
     receipt = L.ksend("POST", "/api/v1/namespaces/lab/pods", body)
     meta = (receipt or {}).get("metadata") or {}
     if not meta.get("uid") or meta.get("name") != pod_name or meta.get("namespace") != "lab":
-        raise ValueError("Power helper creation was not confirmed; inspect the recorded helper before retrying")
-    report("observing", 20, "Power helper submitted; observing host transition", helper_uid=meta["uid"])
+        raise ValueError("Starting the power helper was not confirmed. Check the recorded helper before trying again.")
+    report("observing", 20, "Power helper started. Waiting for the host to restart or shut down.", helper_uid=meta["uid"])
     steps.append(f"scheduled {action} helper ({pod_name})")
     L._bust()
     return {"ok": True, "node": node, "action": action, "steps": steps,

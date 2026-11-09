@@ -381,7 +381,7 @@ class RegionTests(unittest.TestCase):
 
     def test_free_space_that_moved_is_not_written(self):
         SETUP.bind(Host(regions(f"sda 209717248 {200 * G}")))
-        with self.assertRaisesRegex(ValueError, "not there any more"):
+        with self.assertRaisesRegex(ValueError, "no longer there"):
             SETUP.use_region("k3s", "sda", 1234, 100, "v1", "/dev/sda")
 
 

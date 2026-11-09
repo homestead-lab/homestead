@@ -41,7 +41,7 @@ def _get(path, optional=False):
     try:
         obj = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
     except urllib.error.HTTPError as error:
-        raise ValueError(f'The disk list for preparation is unavailable (HTTP {error.code}), so nothing is assumed to be empty') from error
+        raise ValueError(f'The disk list for preparation is unavailable (HTTP {error.code}). Nothing is assumed to be empty.') from error
     if obj is KUBE.GONE:
         return None
     if not isinstance(obj, dict):

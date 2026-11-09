@@ -264,7 +264,7 @@ class AttachTests(unittest.TestCase):
         self.assertEqual([], prepared["to_create"], "the ISO's volume is shared, not made again")
 
     def test_a_library_iso_is_attached_not_refused_as_an_existing_new_disk(self):
-        # "New disk iso-virtio-win-0-1-285-bf0e959b already exists; it cannot be adopted by this edit"
+        # "New disk iso-virtio-win-0-1-285-bf0e959b already exists; it cannot take it over by this edit"
         vm = lambda claims: {"metadata": {"uid": "u", "resourceVersion": "1"}, "spec": {"template": {"spec": {
             "volumes": [{"name": f"v{i}", "persistentVolumeClaim": {"claimName": c}} for i, c in enumerate(claims)]}}}}
         prepared = {"namespace": "lab", "name": "w11", "identity": {"uid": "u", "resourceVersion": "1"}, "effects": [], "resize": [],
@@ -275,7 +275,7 @@ class AttachTests(unittest.TestCase):
                 mock.patch.object(vms.KUBE, "get_optional", lambda path, read=None: found.get(path.rsplit("/", 1)[-1])):
             VM_EDIT._recheck_edit(prepared)
             found["iso-virtio"] = {"metadata": {"labels": {}}}
-            with self.assertRaisesRegex(ValueError, "cannot be adopted"):
+            with self.assertRaisesRegex(ValueError, "cannot take it over"):
                 VM_EDIT._recheck_edit(prepared)
 
     def test_an_iso_not_ready_is_refused(self):

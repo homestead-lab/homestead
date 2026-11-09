@@ -708,7 +708,7 @@ class EngineTests(unittest.TestCase):
         client.remote = remote
         planned = PLAN.plan("shed", "container", "frigate", "moved", "automatic")
 
-        self.assertTrue(any("only reachable inside" in b for b in planned["blockers"]))
+        self.assertTrue(any("can only be reached inside" in b for b in planned["blockers"]))
         self.assertTrue(any("backup target changes for this transfer" in w for w in planned["warnings"]))
 
     def test_a_move_runs_every_phase_and_lands_running(self):

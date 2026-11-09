@@ -239,9 +239,9 @@ class ResumedDrainTests(unittest.TestCase):
     def test_pods_already_gone_are_fine_but_new_ones_are_not(self):
         reviewed = [list(row) for row in MAINTENANCE.pod_snapshot([self.pod("a"), self.pod("b")])]
         self.drain([self.pod("b")], reviewed, resumed=True)
-        with self.assertRaisesRegex(ValueError, "changed after review"):
+        with self.assertRaisesRegex(ValueError, "changed after the review"):
             self.drain([self.pod("b"), self.pod("new")], reviewed, resumed=True)
-        with self.assertRaisesRegex(ValueError, "changed after review"):
+        with self.assertRaisesRegex(ValueError, "changed after the review"):
             self.drain([self.pod("b")], reviewed, resumed=False)
 
 

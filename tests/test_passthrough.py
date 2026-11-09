@@ -333,7 +333,7 @@ class CaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Stop VM busy"):
             self.capture()
         PASS.kget.side_effect = OSError("unavailable")
-        with self.assertRaisesRegex(ValueError, "could not be checked"):
+        with self.assertRaisesRegex(ValueError, "could not check which VMs"):
             self.capture()
         self.host.run.assert_not_called()
 
@@ -414,7 +414,7 @@ class VmTests(unittest.TestCase):
         self.assertTrue(PASS.edit_vm(vm, "lab", {"add": [{"resource": "homestead.io/pci-10de-1e87"}]}, effects))
         self.assertEqual([{"name": "hostdev-0", "deviceName": "homestead.io/pci-10de-1e87"}],
                          vm["spec"]["template"]["spec"]["domain"]["devices"]["hostDevices"])
-        with self.assertRaisesRegex(ValueError, "hand it over from its host"):
+        with self.assertRaisesRegex(ValueError, "Give it to VMs from its host"):
             PASS.edit_vm(self.vm(), "lab", {"add": [{"resource": "homestead.io/pci-dead-beef"}]}, [])
 
     def test_a_rom_rides_in_a_hook_script_of_the_vms_own(self):
@@ -487,7 +487,7 @@ class VmTests(unittest.TestCase):
     def test_combined_rom_limit_is_checked_before_a_configmap_is_written(self):
         rom = base64.b64encode(b"\x55\xaa" + b"\x00" * (400 * 1024)).decode()
         resource = "homestead.io/pci-10de-1e87"
-        with self.assertRaisesRegex(ValueError, "combined vBIOS"):
+        with self.assertRaisesRegex(ValueError, "vBIOS files together"):
             PASS.edit_vm(self.vm(), "lab", {"add": [{"resource": resource}, {"resource": resource}],
                 "roms": {"hostdev-0": rom, "hostdev-1": rom}}, [])
 

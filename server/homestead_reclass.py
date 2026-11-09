@@ -66,7 +66,7 @@ def _items(path, optional_group=None):
     try:
         return KUBE.items(path, optional_group, read=kget)
     except KUBE.Incomplete as error:
-        raise ValueError("Volume inventory is incomplete; refresh before moving data") from error
+        raise ValueError("The volume list is incomplete. Refresh before moving data.") from error
 
 
 def _vm_strategy(spec):
@@ -78,7 +78,7 @@ def _pin(fences, path, obj):
         return
     meta = (obj or {}).get("metadata") or {}
     if not meta.get("uid") or not meta.get("resourceVersion") or meta.get("deletionTimestamp"):
-        raise ValueError("A reviewed resource has no verified identity/version or is deleting; refresh before moving data")
+        raise ValueError("A reviewed resource could not be confirmed or is being deleted. Refresh before moving data.")
     fences[path] = {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
@@ -121,7 +121,7 @@ def consumers(ns, claim, fences=None):
                 if claim not in _claims_in(spec_of(obj)) and not templated:
                     continue
             except (KeyError, TypeError):
-                raise ValueError("Workload inventory is incomplete; volume use cannot be checked") from None
+                raise ValueError("The app list is incomplete, so what uses the volume cannot be checked") from None
             row = {"kind": kind, "name": obj["metadata"]["name"]}
             _pin(fences, path + "/" + row["name"], obj)
             if kind in ("Deployment", "StatefulSet"):
@@ -138,7 +138,7 @@ def consumers(ns, claim, fences=None):
     for vm in _items(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines", optional_group="kubevirt.io"):
         tspec = ((vm.get("spec") or {}).get("template") or {}).get("spec")
         if not isinstance(tspec, dict):
-            raise ValueError("VM inventory is incomplete; volume use cannot be checked")
+            raise ValueError("The VM list is incomplete, so what uses the volume cannot be checked")
         vols = tspec.get("volumes") or []
         via = next(("pvc" if (v.get("persistentVolumeClaim") or {}).get("claimName") == claim else "dv"
                     for v in vols if (v.get("persistentVolumeClaim") or {}).get("claimName") == claim
@@ -271,7 +271,7 @@ def plan(ns, claim, target, *, capture=False):
         _pin(fences, f"/apis/storage.k8s.io/v1/storageclasses/{target}", target_obj)
         if (target_obj.get("provisioner") != row.get("provisioner") or
                 target_obj.get("parameters", {}) != row.get("parameters", {})):
-            raise ValueError("Destination storage class changed during the review; refresh it")
+            raise ValueError("The destination storage class changed during the review. Refresh it.")
         if spec.get("volumeName"):
             pv_path = f"/api/v1/persistentvolumes/{spec['volumeName']}"
             pv = kget(pv_path)
@@ -295,7 +295,7 @@ def plan(ns, claim, target, *, capture=False):
         blockers.append("The volume's logical capacity is unknown")
     if "ReadWriteMany" in modes and mode == "Filesystem" and row.get("migratable"):
         blockers.append(f"{target} makes live-migratable VM disks, which Longhorn cannot mount as a shared "
-                        "folder; a ReadWriteMany volume needs a class without migratable=true")
+                        "volume. A ReadWriteMany volume needs a class without migratable=true.")
     if mode == "Block" and row.get("provisioner") == "rancher.io/local-path":
         blockers.append(f"{target} (local-path) cannot hold a raw disk")
     used = consumers(ns, claim, fences)
@@ -303,9 +303,9 @@ def plan(ns, claim, target, *, capture=False):
         if c["kind"] == "DaemonSet":
             blockers.append(f"DaemonSet {c['name']} runs on every node and cannot be stopped for the copy")
         if c["kind"] == "Deployment" and ns == OWN_NS and c["name"] == NAMES.BRAND:
-            blockers.append("this is Homestead's own data; move it from Settings › Redundancy instead")
+            blockers.append("This is Homestead's own data. Move it from Settings › Redundancy instead.")
         if c.get("deletes_claims_on_scale_down"):
-            blockers.append(f"StatefulSet {c['name']} can delete its volumes when stopped; change its scale-down retention policy to Retain before moving storage")
+            blockers.append(f"StatefulSet {c['name']} can delete its volumes when stopped. Change its scale-down retention policy to Retain before moving storage.")
     known = {(c["kind"], c["name"]) for c in used}
     claim_pods = [p for p in _items(f"/api/v1/namespaces/{ns}/pods") if claim in _claims_in(p.get("spec"))]
     for pod in claim_pods:
@@ -318,14 +318,14 @@ def plan(ns, claim, target, *, capture=False):
         if not owners:
             blockers.append(f"pod {pod['metadata']['name']} uses it and belongs to nothing Homestead can stop")
         elif owners[0].get("kind") == "Job" and not any(k == "CronJob" for k, _ in known):
-            blockers.append(f"job {owners[0].get('name')} is using it; let it finish first")
+            blockers.append(f"Job {owners[0].get('name')} is using it. Let it finish first.")
     for c in used:
         if c["kind"] == "StatefulSet" and re.fullmatch(rf".+-{re.escape(c['name'])}-\d+", claim):
             blockers.append(f"{claim} was made by StatefulSet {c['name']}'s template, which would make it again")
     annotations = (pvc.get("metadata") or {}).get("annotations") or {}
     if annotations.get("harvesterhci.io/imageId"):
         warnings.append(f"it was made from the image {annotations['harvesterhci.io/imageId']}; the copy is "
-                        "a disk of its own, no longer tied to that image")
+                        "a separate disk that is no longer tied to that image")
     if any(c.get("via") == "dv" for c in used):
         warnings.append("the VM's DataVolume is turned into a plain volume, as a moved VM's is")
         if capture:
@@ -350,13 +350,13 @@ def plan(ns, claim, target, *, capture=False):
             space["room_gb"] = room
             if room is not None and room < space["size_gb"]:
                 blockers.append(f"{target} has room for a {room} GiB volume, and this one is {space['size_gb']} GiB. "
-                                f"That is with {replicas} cop{'y' if replicas == 1 else 'ies'}; free some space or add a disk first")
+                                f"That is with {replicas} cop{'y' if replicas == 1 else 'ies'}. Free some space or add a disk first.")
         except Exception:
-            warnings.append("Destination storage capacity could not be checked; free space is unknown")
+            warnings.append("The destination storage capacity could not be checked, so the free space is unknown")
         if space["room_gb"] is None and not any("free space is unknown" in w for w in warnings):
-            warnings.append("Destination storage capacity is unavailable; free space is unknown")
+            warnings.append("The destination storage capacity is unavailable, so the free space is unknown")
     elif space["longhorn"]:
-        warnings.append("Destination storage capacity is unavailable; free space is unknown")
+        warnings.append("The destination storage capacity is unavailable, so the free space is unknown")
     elif not space["longhorn"]:
         warnings.append(f"{target} is not Longhorn, so Homestead cannot check it has room for {space['size_gb']} GiB")
     moving = space["used_gb"] if space["used_gb"] is not None else space["size_gb"]
@@ -382,7 +382,7 @@ def start(ns, claim, target, ops, *, expected=None, handoff_review=None):
     if not review["ok"]:
         raise ValueError("; ".join(review["blockers"]))
     if expected is not None and _binding(review) != _binding(expected):
-        raise ValueError("Volume or workload details changed; review the move again")
+        raise ValueError("The volume or app changed. Review the move again.")
     for other in ops.snapshot():
         ref_claim = (other.get("resource") or {}).get("name")
         if other.get("kind") == "reclass" and (other.get("status") in ("running", "cancelling") or other.get("resumable")) and ref_claim == claim \
@@ -393,7 +393,7 @@ def start(ns, claim, target, ops, *, expected=None, handoff_review=None):
         current = {}
         _pin(current, f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", pvc)
         if any(expected["_fences"].get(path) != value for path, value in current.items()):
-            raise ValueError("Volume changed while preparing the move; review again")
+            raise ValueError("The volume changed while the move was being prepared. Review it again.")
     ref = {"namespace": ns, "claim": claim, "target": target, "phase": "stop",
            "consumers": review["consumers"], "mode": review["volume_mode"],
            "old_pv": pvc["spec"]["volumeName"], "from_class": review["from_class"],
@@ -562,11 +562,11 @@ def journaled_stop(item, checkpoint, *, journal_factory=JOURNAL.Journal):
         if consumer["kind"] == "StatefulSet":
             obj = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/statefulsets/{consumer['name']}")
             if obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
-                raise JOURNAL.Held("A StatefulSet can delete its claims when stopped; change its retention policy and review again")
+                raise JOURNAL.Held("A StatefulSet can delete its volumes when stopped. Change its retention policy and review again.")
     def send(method, path, body=None, **kw):
         expected = ref.get("review_fences", {}).get(path)
         if not expected:
-            raise JOURNAL.Held("A stop dependency was not included in the review; no request was sent")
+            raise JOURNAL.Held("Something that must stop first was not in the review, so no request was sent")
         if method in ("PATCH", "PUT") and any(part in path for part in ("/deployments/", "/statefulsets/", "/virtualmachines/")):
             body = copy.deepcopy(body)
             annotations = body.setdefault("metadata", {}).setdefault("annotations", {})
@@ -836,7 +836,7 @@ def resolve(item):
         what = _missing(error)
         ref["misses"] = int(ref.get("misses", 0) or 0) + 1
         if ref["misses"] < MISS_LIMIT:
-            return "running", item.get("progress", 0), f"Kubernetes did not find {what}; trying again"
+            return "running", item.get("progress", 0), f"Kubernetes did not find {what}. Trying again."
         ref.pop("misses", None)
         if ref.get("phase", "stop") in BEFORE_SWAP:
             return _rollback(ref["namespace"], ref, f"Kubernetes kept answering that {what} does not exist.", item)
@@ -849,7 +849,7 @@ def resumable(item):
     """Why a stopped move cannot carry on, or "" when it can."""
     phase = (item.get("ref") or {}).get("phase", "stop")
     if phase == "stop" and item.get("ref", {}).get("review_fences") and not item["ref"].get("stop_attempted"):
-        return "the initial review expired or changed; create a fresh review instead"
+        return "the first review expired or changed, so start a new review instead"
     if phase in ("rolled-back", "done"):
         return "it finished: everything was put back or completed"
     return ""
@@ -917,7 +917,7 @@ def _was(c):
 
 
 def _stays_stopped(c, job):
-    return f"{c['name']} ({job}) stays stopped because another job holds it; {_was(c)}."
+    return f"{c['name']} ({job}) stays stopped because another job holds it. {_was(c)[:1].upper() + _was(c)[1:]}."
 
 
 def _off_at_review(c):
@@ -931,9 +931,9 @@ def cancel_starts(ref):
         held = _held_elsewhere(ref["namespace"], ref)
     except Exception:
         held = {}
-        words = ["Leaves stopped any app another job holds; that could not be read just now"]
+        words = ["Leaves stopped any app that another job holds. That could not be read just now."]
     else:
-        words = [f"Leaves {c['name']} stopped: another job holds it ({held[(c['kind'], c['name'])]}); {_was(c)}"
+        words = [f"Leaves {c['name']} stopped: another job holds it ({held[(c['kind'], c['name'])]}). {_was(c)[:1].upper() + _was(c)[1:]}"
                  for c in ref.get("consumers") or [] if (c["kind"], c["name"]) in held]
     starts = []
     for c in ref.get("consumers") or []:
@@ -983,14 +983,14 @@ def _review_lost(item, ns, ref, why):
         stopped, held, gone = _looks_stopped(ns, ref)
     except Exception:
         return "running", progress, (f"{why} Whether its apps were stopped could not be checked, so this move is waiting to "
-                                     "check. Nothing was started or retried; Cancel starts them again on the original.")
+                                     "check. Nothing was started or retried. Cancel starts them again on the original.")
     if held or stopped:
         said = [why]
         if stopped:
             said.append(f"An app looks stopped ({', '.join(stopped)}), perhaps by an earlier try of this move.")
         if held:
             said.append(f"Another job holds {_named(held)}.")
-        said.append("This move waits for you. Nothing was started or retried.")
+        said.append("This move is waiting for a decision. Nothing was started or retried.")
         if stopped:
             said.append("Cancel starts it again on the original." if not held else
                         f"Cancel starts {', '.join(stopped)} again on the original.")
@@ -998,7 +998,7 @@ def _review_lost(item, ns, ref, why):
             said.append("Cancel leaves what another job holds stopped.")
         return "running", progress, " ".join(said)
     ref["phase"] = "rolled-back"
-    seen = f"{', '.join(gone)} is gone; every other app is as reviewed" if gone else "Every app is as reviewed"
+    seen = f"{', '.join(gone)} has been removed. Every other app is as reviewed" if gone else "Every app is as reviewed"
     return "failed", 0, f"{why} {seen}. Review again."
 
 
@@ -1013,7 +1013,7 @@ def _resolve(item):
     if phase == "stop":
         if ref.get("review_fences"):
             if ref.get("stop_attempted"):
-                raise ValueError("Stopping workloads was interrupted; inspect their state and this job before recovery. Nothing was retried.")
+                raise ValueError("Stopping the apps was interrupted. Check them and this job before recovering. Nothing was retried.")
             if _clock() < ref.get("review_recheck", 0):
                 return "running", item.get("progress", 0), item.get("message", "")
             try:
@@ -1026,7 +1026,7 @@ def _resolve(item):
                 now = _clock()
                 if now - ref.setdefault("review_since", now) >= START_LIMIT:
                     return _review_lost(item, ns, ref, f"The initial review could not be verified for {START_LIMIT // 60} minutes.")
-                raise ValueError("The initial review could not be verified; waiting to check. Nothing was started or retried.") from error
+                raise ValueError("The first review could not be confirmed. Waiting to check. Nothing was started or retried.") from error
             if not current["ok"] or current["_fences"] != ref["review_fences"]:
                 return _review_lost(item, ns, ref, "Volume use or identity changed before stopping workloads.")
         _steps(item, "stop")
@@ -1044,7 +1044,7 @@ def _resolve(item):
         except Exception as error:
             if ref.get("review_fences"):
                 ref["retain_resources"] = True
-                raise ValueError("Stopping workloads was interrupted; inspect this job and the workloads before recovery. Nothing was restarted automatically.") from error
+                raise ValueError("Stopping the apps was interrupted. Check this job and the apps before recovering. Nothing was restarted automatically.") from error
             raise
         ref["phase"] = "stopping"
         return "running", 5, "Stopping " + ", ".join(c["name"] for c in ref["consumers"]) if ref["consumers"] else "Nothing uses it"
@@ -1137,9 +1137,9 @@ def _resolve(item):
         _steps(item, "done")
         ref["phase"] = "done"
         item["old_pv"] = ref["old_pv"]
-        tail = (f" {', '.join(waiting)} has not come up yet - see its page." if waiting else "")
+        tail = (f" {', '.join(waiting)} has not started yet. See its page." if waiting else "")
         return ("succeeded", 100, f"{claim} is on {ref['target']} now. The old copy is kept as {ref['old_pv']} "
-                "until you remove it from Volumes." + tail)
+                "until it is removed on the Volumes page." + tail)
     return item.get("status", "succeeded"), item.get("progress", 100), item.get("message", "")
 
 
@@ -1220,8 +1220,8 @@ def _held(ns, ref, claim_obj):
             again.append(c["name"])
     if again:
         _stop(ns, ref)
-        return (f"{', '.join(again)} had started again and was holding the original {claim}; "
-                "stopped it again")
+        return (f"{', '.join(again)} had started again and was holding the original {claim}, "
+                "so it was stopped again")
     closed = _close_helpers(ns, claim)
     if closed:
         return f"Closed the file browser that was holding the original {claim}"
@@ -1283,7 +1283,7 @@ def _remove_old_copy(pv):
     if (obj.get("status") or {}).get("phase") != "Released":
         raise ValueError(f"{pv} is in use again, so it is not removed")
     if obj.get("metadata", {}).get("deletionTimestamp"):
-        raise ValueError(f"{pv} is already deleting; inspect its progress")
+        raise ValueError(f"{pv} is already being deleted. Check its progress.")
     # Deleted the way its class deletes volumes: the provisioner removes the
     # data along with it.
     ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"metadata": JOURNAL.identity(obj), "spec": {"persistentVolumeReclaimPolicy": "Delete"}},

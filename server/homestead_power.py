@@ -210,7 +210,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                     if maintain else
                     "DaemonSets and static pods stay on the host, so their services stop during the outage. The capacity of the other hosts and storage outside the cluster are not fully checked.")
     if storage_unknown:
-        warnings.append("The list of Longhorn volume copies is unavailable, so the safety of the volumes cannot be confirmed")
+        warnings.append("The list of Longhorn volume copies is unavailable. The safety of the volumes cannot be confirmed.")
     if place.get("stranded"):
         waits = {(i["ns"], i["name"]) for i in hold if i["options"] == ["wait"]}
         loose = [w for w in place["stranded"] if (w.get("ns"), w.get("name")) not in waits]
@@ -278,7 +278,7 @@ def recheck_forced(original):
     identity, rebooted, or grew a new hard stop since it was reviewed."""
     fresh = plan(original["node"], original["action"], force=True)
     if not fresh["ready"]:
-        raise ValueError("Power was not sent: " + "; ".join(fresh["blockers"]))
+        raise ValueError("Nothing was sent: " + "; ".join(fresh["blockers"]))
     if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("The host changed since the review, so nothing was sent")
 

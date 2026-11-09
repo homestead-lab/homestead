@@ -124,7 +124,7 @@ class ActivityTrayMessageTests(unittest.TestCase):
     def test_a_pulled_image_moves_on_to_starting(self):
         self.state["pull"] = {"state": "pulled", "took": "1m24.5s"}
 
-        self.assertEqual("Image pulled in 1m24.5s; starting container", self._message())
+        self.assertEqual("Image downloaded in 1m24.5s. Starting the container.", self._message())
 
     def test_without_a_pull_the_replica_count_still_speaks(self):
         self.assertEqual("0/1 replicas ready", self._message())

@@ -182,7 +182,7 @@ class ImportDeadlineTests(unittest.TestCase):
 
     def test_a_copy_that_completes_between_the_read_and_the_delete_is_not_deleted(self):
         self.start()
-        with self.assertRaisesRegex(ValueError, "finished already"):
+        with self.assertRaisesRegex(ValueError, "already finished"):
             self.run_cancel(self.bumping("Complete"))
         self.assertIsNotNone(self.kube.object(JOB))
 
@@ -195,7 +195,7 @@ class ImportDeadlineTests(unittest.TestCase):
         self.start()
         with self.assertRaises(ValueError) as caught:
             self.run_cancel(self.bumping(times=9))
-        self.assertEqual("The copy changed while it was being stopped; try again", str(caught.exception))
+        self.assertEqual("The copy changed while it was being stopped. Try again.", str(caught.exception))
         self.assertIsNotNone(self.kube.object(JOB))
 
     def test_setup_before_the_copy_job_exists_still_cannot_be_cancelled(self):

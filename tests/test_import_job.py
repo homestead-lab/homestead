@@ -177,7 +177,7 @@ class ImportJobTests(unittest.TestCase):
 
     def test_approval_and_borrowed_identity_checked_before_record_or_write(self):
         self.borrowed()
-        self.objects[self.pvc_path]["metadata"]["uid"] = "replacement"
+        self.objects[self.pvc_path]["metadata"]["uid"] = "replacing it"
         with self.assertRaisesRegex(ValueError, "Borrowed volume"):
             self.start()
         self.assertEqual([], ops.stored())
@@ -192,9 +192,9 @@ class ImportJobTests(unittest.TestCase):
                 def replace(method, path, obj):
                     if path == self.dep_path:
                         if borrowed:
-                            self.objects["/api/v1/persistentvolumes/pv-data"]["metadata"]["uid"] = "replacement"
+                            self.objects["/api/v1/persistentvolumes/pv-data"]["metadata"]["uid"] = "replacing it"
                         else:
-                            self.objects[self.pvc_path]["metadata"]["uid"] = "replacement"
+                            self.objects[self.pvc_path]["metadata"]["uid"] = "replacing it"
                 self.after_send = replace
                 with self.assertRaises(ValueError):
                     self.start()
@@ -226,7 +226,7 @@ class ImportJobTests(unittest.TestCase):
 
     def test_replaced_or_modified_job_is_not_trusted(self):
         self.start(); self.complete()
-        self.objects[self.job_path]["metadata"]["uid"] = "replacement"
+        self.objects[self.job_path]["metadata"]["uid"] = "replacing it"
         self.assertEqual("failed", self.poll()["status"])
         self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
         self.assertTrue(self.recovery_body()[0]["plan"]["blocked"])
@@ -273,7 +273,7 @@ class ImportJobTests(unittest.TestCase):
 
     def test_shared_claim_reservation_blocks_other_copy_before_pods_exist(self):
         self.start()
-        with self.assertRaisesRegex(ValueError, "still active or needs recovery"):
+        with self.assertRaisesRegex(ValueError, "still running or needs recovery"):
             ops.start("workload-copy", "Other", {}, "/containers", {"namespace": "lab", "name": "other", "moves": [{"from": "data", "to": "other"}], "retain_resources": True})
 
     def test_no_copy_has_durable_record_without_helper_or_start(self):
@@ -290,7 +290,7 @@ class ImportJobTests(unittest.TestCase):
         before = copy.deepcopy(self.objects[self.pvc_path])
         self.assertTrue(CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")["journalled"])
         result = CONTAINER_IMPORT.delete_import("homestead-import-app")
-        self.assertIn("all volumes retained", result["message"])
+        self.assertIn("all volumes are kept", result["message"])
         self.assertEqual(before, self.objects[self.pvc_path])
         deletes = [row for row in self.sent if row[0] == "DELETE"]
         self.assertEqual(1, len(deletes))
@@ -325,7 +325,7 @@ class ImportJobTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.start()
         _, body = self.recovery_body()
-        self.objects[self.pvc_path]["metadata"]["uid"] = "replacement"
+        self.objects[self.pvc_path]["metadata"]["uid"] = "replacing it"
         with self.assertRaises(ValueError):
             recovery.resolve(body, ops, self.read, "admin")
 
@@ -364,7 +364,7 @@ class ImportJobTests(unittest.TestCase):
 
     def test_cleanup_plan_race_cannot_delete_new_journalled_import_resources(self):
         response, cleanup = self.cleanup_api({"namespace": "lab", "workload": "app", "volumes": [{"name": "data", "created": True}]},
-            {"ok": True, "journalled": True, "message": "Workload and all volumes retained"})
+            {"ok": True, "journalled": True, "message": "Workload and all volumes are kept"})
         self.assertEqual(200, response[0])
         cleanup.assert_called_once()
         self.assertEqual([], response[1]["removed"])

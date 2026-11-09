@@ -87,11 +87,11 @@ class OperationTests(unittest.TestCase):
         self.assertEqual("request", stored[0]["ref"]["phase"])
         self.assertFalse(operations._plan_for(stored[0])["can"])
         for kind in ("snapshot-delete", "snapshot-revert"):
-            with self.assertRaisesRegex(ValueError, "already active"):
+            with self.assertRaisesRegex(ValueError, "already running"):
                 operations.start(kind, "second", {}, "/", {"volume": "vol"})
 
     def test_orphan_deletion_does_not_wait_on_a_recreated_same_name_claim(self):
-        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/old"] = {"metadata": {"uid": "replacement"}}
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/old"] = {"metadata": {"uid": "replacing it"}}
         result = operations._volume_delete({"ref": {"orphan": True, "namespace": "lab", "name": "old",
             "action": "delete_data", "pv": "gone-pv", "volume": "gone-volume"}})
         self.assertEqual("succeeded", result[0])
@@ -162,7 +162,7 @@ class OperationTests(unittest.TestCase):
         result = operations.dismiss_finished()
 
         self.assertEqual(0, result["dismissed"])
-        self.assertIn("nothing finished", result["detail"])
+        self.assertIn("Nothing finished", result["detail"])
 
     def test_clearing_an_empty_tray_is_not_an_error(self):
         result = operations.dismiss_finished()
@@ -284,7 +284,7 @@ class OperationTests(unittest.TestCase):
                          "pv": "pv-scratch", "volume": "lh-scratch"})
         complete = operations.list_operations()[0]
         self.assertEqual("succeeded", complete["status"])
-        self.assertIn("retained", complete["message"])
+        self.assertIn("kept", complete["message"])
 
     def test_volume_restore_tracks_longhorn_engine_progress_until_healthy(self):
         operations.start(
@@ -434,7 +434,7 @@ class OperationTests(unittest.TestCase):
             "conditions": {"ready": True}}]}]}
         running = operations.list_operations()[0]
         self.assertEqual("running", running["status"])
-        self.assertIn("waiting for kube-vip", running["message"])
+        self.assertIn("Waiting for kube-vip", running["message"])
         self.objects[service_path]["status"]["loadBalancer"]["ingress"] = [
             {"ip": "192.0.2.243"}]
         complete = operations.list_operations()[0]

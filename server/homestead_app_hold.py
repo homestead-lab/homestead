@@ -264,8 +264,8 @@ def _keep_template(obj, holder):
             raise Refused(f"a Secret named {name} is already there and is not {meta['name']}'s") from None
         other = _notes(kept).get(HELD_BY) or "an earlier job"
         if other != holder:
-            raise Refused(f"{meta['name']} already has a template kept by {other}; "
-                          f"Homestead never takes another job's, so this hold waits until it is gone") from None
+            raise Refused(f"{meta['name']} already has a template kept by {other}. "
+                          f"Homestead never takes another job's, so this hold waits until it has been removed") from None
     return name
 
 
@@ -278,13 +278,13 @@ def hold(obj, job_kind, job_id, keep_template=False):
     if kind not in FIELD:
         raise Refused(f"a {kind or 'object'} can't be held")
     if not all(meta.get(key) for key in ("name", "namespace", "uid", "resourceVersion")) or meta.get("deletionTimestamp"):
-        raise Refused(f"{meta.get('name') or 'it'} is being removed, or isn't fully there")
+        raise Refused(f"{meta.get('name') or 'It'} is being removed or is incomplete")
     field, mark = FIELD[kind], _notes(obj).get(HELD_BY)
     if mark and not _ours(mark, job_kind, job_id):
         raise Refused(f"{meta['name']} is held by {mark}")
     earlier = {field: _from_text(field, _notes(obj).get(HELD_AS)) if mark else _state(obj)}
     if earlier[field] is None:
-        raise Refused(f"{meta['name']} is held by this job, but how it ran before isn't recorded")
+        raise Refused(f"{meta['name']} is held by this job, but how it ran before is not recorded")
     if earlier[field] == MANUAL and not mark:
         # Only a Manual VM that is running is stopped, and started again.
         try:
@@ -314,7 +314,7 @@ def stop(record, job_kind, job_id):
     if _stopped_by(current, record, job_kind, job_id):
         return
     if current is None or _meta(current).get("resourceVersion") != record.resource_version:
-        raise Refused(f"{record.name} changed since it was recorded; hold it again")
+        raise Refused(f"{record.name} changed since it was recorded. Hold it again.")
     marks = {HELD_BY: f"{job_kind}:{job_id}", HELD_AS: _as_text(field, record.earlier[field])}
     if _meta(current).get("annotations") is None:
         ops = [{"op": "add", "path": "/metadata/annotations", "value": marks}]
@@ -330,7 +330,7 @@ def stop(record, job_kind, job_id):
         if error.code not in (409, 422):
             raise
         if not _stopped_by(_read(record), record, job_kind, job_id):
-            raise Refused(f"{record.name} changed since it was recorded; hold it again") from None
+            raise Refused(f"{record.name} changed since it was recorded. Hold it again.") from None
 
 
 def _no_room(name, check):
@@ -339,7 +339,7 @@ def _no_room(name, check):
         for why in row.get("reasons") or []:
             if str(why) not in reasons:
                 reasons.append(str(why))
-    return f"{name} doesn't fit on the hosts yet" + (f" ({'; '.join(reasons[:2])})" if reasons else "")
+    return f"{name} does not fit on the hosts yet" + (f" ({'; '.join(reasons[:2])})" if reasons else "")
 
 
 def _claim_use(ns, claim):
@@ -409,7 +409,7 @@ def _unmark(record, job_kind, job_id):
     try:
         current = _read(record)
     except Exception as error:
-        return Wait(f"{name} was started; Homestead could not read it to finish ({_why(error)})")
+        return Wait(f"{name} was started, but Homestead could not read it to finish ({_why(error)})")
     if current is None or _meta(current).get("uid") != record.uid:
         return Started(MANUAL)  # started; what is there now is not this job's
     notes = _notes(current)
@@ -420,7 +420,7 @@ def _unmark(record, job_kind, job_id):
     try:
         KUBE.ksend("PATCH", _path(record.kind, record.namespace, name), ops, ctype=JSON_PATCH)
     except Exception as error:
-        return Wait(f"{name} was started; Homestead could not take its hold off yet ({_why(error)})")
+        return Wait(f"{name} was started, but Homestead could not remove its hold yet ({_why(error)})")
     return Started(MANUAL)
 
 
@@ -463,9 +463,9 @@ def _drop_template(record, job_kind, job_id):
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return ""
-        return f"{record.name} started; its kept template could not be removed yet ({_why(error)}); it tries again"
+        return f"{record.name} started, but its kept template could not be removed yet ({_why(error)}). Homestead tries again."
     except Exception as error:
-        return f"{record.name} started; its kept template could not be removed yet ({_why(error)}); it tries again"
+        return f"{record.name} started, but its kept template could not be removed yet ({_why(error)}). Homestead tries again."
     return ""
 
 
@@ -516,12 +516,12 @@ def _restart(record, job_kind, job_id, wait_seconds, claims, guard):
     mark, now = _notes(current).get(HELD_BY), _state(current)
     if not mark:
         if now != earlier:
-            return kept(f"{name} isn't held by this job and was changed since it was recorded: "
+            return kept(f"{name} is not held by this job and was changed since it was recorded: "
                         f"{_as_text(field, now)} rather than {_as_text(field, earlier)}")
         if manual:
             try:
                 if not _vm_running(record.namespace, name):
-                    return kept(f"{name} isn't held by this job any more, and isn't running")
+                    return kept(f"{name} is no longer held by this job, and it is not running")
             except Exception as error:
                 return Wait(f"Homestead could not tell whether {name} is running ({_why(error)})")
         # Running as before: a start whose reply was lost went through, or a
@@ -579,17 +579,17 @@ def _restart(record, job_kind, job_id, wait_seconds, claims, guard):
             if error.code == 404:
                 return kept(f"{name} is gone")
             if error.code in (409, 422):
-                return Wait(f"{name} changed while Homestead was starting it; it reads it again")
+                return Wait(f"{name} changed while Homestead was starting it. It reads it again.")
             return Wait(f"Homestead could not start {name} ({_why(error)})")
         except Exception as error:
             # The answer was lost: the next round reads whether it went through.
-            return Wait(f"Homestead could not tell whether {name} started ({_why(error)}); it reads it again")
+            return Wait(f"Homestead could not tell whether {name} started ({_why(error)}). It reads it again.")
         if not manual:
             return Started(_started_as(field, earlier))
     try:
         KUBE.ksend("PUT", f"{SUB}/namespaces/{_q(record.namespace)}/virtualmachines/{_q(name)}/start", {})
     except Exception as error:
-        return Wait(f"Homestead could not start {name} ({_why(error)}); it tries again")
+        return Wait(f"Homestead could not start {name} ({_why(error)}). It tries again.")
     return _unmark(record, job_kind, job_id)
 
 
@@ -599,7 +599,7 @@ def how_to(record):
         return f"Virtual machines → {record.name} → Start"
     if record.kind == "CronJob":
         # Homestead shows a paused schedule but has no control to resume one.
-        return (f"Scheduled jobs shows {record.name} as paused; resume it by setting its spec.suspend back to false "
+        return (f"Scheduled jobs shows {record.name} as paused. Resume it by setting its spec.suspend back to false "
                 f"(kubectl, or the Git source it comes from)")
     n = record.earlier.get("replicas", 1)
     return f"Containers → {record.name} → Start with {n} replica" + ("" if n == 1 else "s")

@@ -39,7 +39,7 @@ def source_copy(spec, ns, job, read):
     as soon as the copy has finished."""
     original = read(f"/api/v1/namespaces/{spec['namespace']}/secrets/{spec['name']}")
     if not (original.get("data") or {}).get("password"):
-        raise ValueError("The source's password is unavailable; check the source before importing")
+        raise ValueError("The source's password is unavailable. Check the source before importing.")
     return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": spec["copy"], "namespace": ns,
                          "labels": {"homestead.io/import-source-copy": job["metadata"]["name"]},
@@ -57,7 +57,7 @@ def pin(ns, names, read):
 def verify_claims(ns, expected, read):
     now = pin(ns, expected, read)
     if any(not COPY.same_claim(before, now[name]) for name, before in expected.items()):
-        raise ValueError("An import volume was replaced or rebound; inspect before continuing")
+        raise ValueError("An import volume was replaced or bound again. Check it before continuing.")
     return now
 
 
@@ -84,12 +84,12 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0])}
     op = ops.start(KIND, f"Import {name}", {"kind": "Deployment", "namespace": ns, "name": name}, "/import", ref,
-                   "Import intent recorded; no Kubernetes resource has been created")
+                   "Import recorded. No Kubernetes resource has been created yet.")
     ident, dep, job = op["id"], None, None
     with LOCKS.worker_lock(ident, ops):
         writer = WRITE.ResourceWriter(send, WRITE.operation_recorder(ops, ident))
         try:
-            ops.record_phase(ident, "writing", 5, "Creating reviewed import resources; each request is recorded before sending")
+            ops.record_phase(ident, "writing", 5, "Creating the reviewed import resources. Each request is recorded before it is sent.")
             verify_claims(ns, initial, read)
             if prepared["job"]:
                 consumers(ns, ref["claims"], read)
@@ -103,7 +103,7 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                 raise ValueError("Created volume was replaced during setup")
             if any(not COPY.same_claim(before, pinned[n]) for n, before in initial.items()):
                 raise ValueError("Borrowed volume changed during setup")
-            ops.record_phase(ident, "writing", 20, "Volume identities recorded; preparing the workload", claims=pinned)
+            ops.record_phase(ident, "writing", 20, "Volumes recorded. Preparing the app.", claims=pinned)
             if prepared["deployment"]:
                 obj = prepared["deployment"]
                 if prepared["job"]:
@@ -158,16 +158,16 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                 item = next(i for i in items if i["id"] == ident)
                 item["ref"].update(phase="copying" if job else "saved", retain_resources=bool(job))
                 ops._finish(item, "running" if job else "succeeded", 35 if job else 100,
-                    "Copy Job created; application stays stopped until a fresh Start review" if job else
-                    "Import resources saved; application readiness has not been verified")
+                    "Copy Job created. The app stays stopped until a new Start review." if job else
+                    "Import resources saved. Whether the app is ready has not been checked.")
                 t.save(items)
                 return {**prepared["result"], "operation": ops._public(item)}
         except Exception:
             try:
-                ops.record_phase(ident, "failed", 20, "Import setup stopped or its response is uncertain. Inspect retained resources; nothing was retried or deleted.")
+                ops.record_phase(ident, "failed", 20, "The import setup stopped, or its response is uncertain. Check the kept resources. Nothing was retried or deleted.")
             except Exception:
                 pass
-            raise ValueError(f"Import setup needs inspection in Recent jobs ({ident}). Resources were retained; no retry, rollback or deletion was performed.") from None
+            raise ValueError(f"The import setup needs to be checked in Recent jobs ({ident}). The resources were kept. Nothing was retried, rolled back or deleted.") from None
 
 
 def status(item, read):
@@ -185,14 +185,14 @@ def status(item, read):
             app = (f" {ref['name']} was created stopped for this import and stays stopped, since its data is incomplete."
                    if any(t.get("kind") == "Deployment" for t in ref.get("planned", [])) else "")
             return "failed", item.get("progress", 0), (
-                f"{why}.{app} Its volumes and the copy Job were kept; remove the import and run it again.")
+                f"{why}.{app} Its volumes and the copy Job were kept. Remove the import and run it again.")
         if complete:
             ref.update(phase="done", retain_resources=False)
-            return "succeeded", 100, "Copy completed; review capacity and start the application when ready"
-        return "running", 50, "Copying files; inspect the copy log for per-folder progress. Application remains stopped."
+            return "succeeded", 100, "Copy finished. Review the capacity and start the app when ready."
+        return "running", 50, "Copying files. The copy log shows the progress of each folder. The app stays stopped."
     except Exception:
         ref.update(phase="failed", retain_resources=True)
-        return "failed", item.get("progress", 0), "Import copy failed or its resource identity cannot be verified. Inspect retained resources; application start remains guarded."
+        return "failed", item.get("progress", 0), "The import copy failed, or its resources cannot be confirmed. Check the kept resources. The app is not started until that is done."
 
 
 def recovery_blockers(item, read):
@@ -202,11 +202,11 @@ def recovery_blockers(item, read):
         return []  # dispatcher lock fences unsent future Job creation
     receipt = entries[-1]
     if receipt.get("phase") != "accepted":
-        return ["Copy Job creation is uncertain. Inspect it in Kubernetes; this UI cannot adopt a same-name Job or release its volume reservation."]
+        return ["Whether the copy Job was created is uncertain. Check it in Kubernetes. Homestead cannot take over a Job with the same name or release its volume reservation."]
     target, uid = receipt["resource"], receipt["identity"]["uid"]
     job = read(f"/apis/batch/v1/namespaces/{target['namespace']}/jobs/{target['name']}")
     if IDENT.identity(job)["uid"] != uid:
-        return ["Copy Job was replaced. Its identity must be inspected manually; it is not adopted."]
+        return ["The copy Job was replaced. Check it manually. Homestead does not take it over."]
     terminal = any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True" for c in job.get("status", {}).get("conditions", []))
     live = any(p.get("metadata", {}).get("namespace") == target["namespace"] and
                ROLLOUT.controller(p).get("kind") == "Job" and ROLLOUT.controller(p).get("uid") == uid and
@@ -220,12 +220,12 @@ def cancel_plan(item):
     ref = item.get("ref") or {}
     if ref.get("phase") != "copying" or not ref.get("job") or not ref.get("job_uid"):
         return {"mode": "forget", "can": False, "needs": "admin",
-                "why_not": "Inspect the import outcome instead; its setup is not at a step that can be stopped, and partial writes cannot safely be forgotten",
+                "why_not": "Check the import outcome instead. Its setup is not at a step that can be stopped, and incomplete writes cannot safely be ignored.",
                 "keeps": ["All imported data, resources and write receipts"]}
     return {"mode": "stop", "action": "Stop the copy", "needs": "admin",
             "undo": ["The copy Job is deleted, which ends its pod and the source password copy it owns",
                      "The copy's log goes with the Job"],
-            "keeps": ["The new volumes keep whatever was copied so far; it is incomplete",
+            "keeps": ["The new volumes keep whatever was copied so far, which is incomplete",
                       "The imported application stays stopped: Start refuses it, since its copy did not finish"]}
 
 
@@ -247,10 +247,10 @@ def cancel_run(item, options, read=None, send=None):
                 raise
             break
         if IDENT.identity(job)["uid"] != uid:
-            raise ValueError("The copy Job was replaced; it is not ours to delete. Inspect it in Kubernetes")
+            raise ValueError("The copy Job was replaced, so Homestead does not delete it. Check it in Kubernetes.")
         if any(c.get("type") in ("Complete", "Failed") and c.get("status") == "True"
                for c in job.get("status", {}).get("conditions", [])):
-            raise ValueError("The copy has finished already; wait for the import to report its outcome")
+            raise ValueError("The copy has already finished. Wait for the import to report its outcome.")
         try:
             send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions",
                                   "preconditions": {"uid": uid, "resourceVersion": job["metadata"]["resourceVersion"]},
@@ -264,11 +264,11 @@ def cancel_run(item, options, read=None, send=None):
             # The Job changed since the read: look again, so a copy that has
             # just finished is not deleted and a status update is not a refusal.
     else:
-        raise ValueError("The copy changed while it was being stopped; try again")
+        raise ValueError("The copy changed while it was being stopped. Try again.")
     ref.update(phase="failed", retain_resources=True)
     app = (f" {ref['name']} was created stopped for this import and stays stopped, since its data is incomplete."
            if any(t.get("kind") == "Deployment" for t in ref.get("planned", [])) else "")
-    return ("Copy stopped; the Job was deleted and its pod is ending." + app +
+    return ("Copy stopped. The Job was deleted and its pod is stopping." + app +
             f" Its volumes were kept, with whatever was copied so far. To import again, delete {ref['name']} and its volumes, then import again.")
 
 
@@ -285,15 +285,15 @@ def remove_completed_job(ns, name, job, read, send, ops):
     """Remove only a confirmed, successfully finished helper, never its data."""
     ident = job.get("metadata", {}).get("annotations", {}).get(GUARD.DISPATCH)
     if not ident:
-        raise ValueError("Import Job identity is missing or replaced; inspect Recent jobs. Nothing was deleted.")
+        raise ValueError("The import Job is missing or was replaced. Check Recent jobs. Nothing was deleted.")
     with LOCKS.worker_lock(ident, ops, timeout=0), ops.transaction() as t:
         items = t.items
         item = next((i for i in items if i["id"] == ident and i["kind"] == KIND), None)
         if not item or item.get("status") != "succeeded" or item["ref"].get("retain_resources"):
-            raise ValueError("Wait for a verified successful import before removing its Job. Inspect incomplete imports in Recent jobs; all data is retained.")
+            raise ValueError("Wait for a confirmed successful import before removing its Job. Check unfinished imports in Recent jobs. All data is kept.")
         ref = item["ref"]
         if (ns, name) != (ref["namespace"], ref.get("job")) or job["metadata"].get("uid") != ref.get("job_uid"):
-            raise ValueError("Import Job identity changed; nothing was deleted")
+            raise ValueError("The import Job changed, so nothing was deleted")
         complete, failed = COPY.copy_finished(ref, read)
         if not complete or failed:
             raise ValueError("Import completion and pod termination could not be verified")
@@ -310,11 +310,11 @@ def remove_completed_job(ns, name, job, read, send, ops):
                     continue
                 raise
             if IDENT.identity(dep)["uid"] != owner.get("uid"):
-                raise ValueError("Import workload was replaced; nothing was deleted")
+                raise ValueError("The imported app was replaced, so nothing was deleted")
             annotations = dep["metadata"].setdefault("annotations", {})
             if annotations.get(GUARD.JOB) == name:
                 if annotations.get(GUARD.JOB_UID) != ref["job_uid"] or annotations.get(GUARD.DISPATCH):
-                    raise ValueError("Import completion receipt changed; nothing was deleted")
+                    raise ValueError("The import's completion record changed, so nothing was deleted")
                 annotations.pop(GUARD.JOB)
                 annotations.pop(GUARD.JOB_UID)
                 annotations["homestead.io/import-completed-job"] = ref["job_uid"]
@@ -324,7 +324,7 @@ def remove_completed_job(ns, name, job, read, send, ops):
         ref["helper_removed"] = True
         t.save(items)
     return {"ok": True, "journalled": True, "name": name, "pods_removed": [], "prepulls_removed": [],
-            "message": "Completed import Job removed; workload and all volumes retained"}
+            "message": "Finished import Job removed. The app and all volumes are kept."}
 
 
 def register(ops):

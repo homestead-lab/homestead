@@ -874,7 +874,7 @@ class Uninstall(unittest.TestCase):
         state["no_kubevirt"] = False
         state["workloads"] = [
             {"kind": "Deployment", "ns": "lab", "name": "parked", "replicas": 0, "schedule": "2"},
-            {"kind": "Deployment", "ns": "lab", "name": "restructuring", "replicas": 0, "restructure": "2"},
+            {"kind": "Deployment", "ns": "lab", "name": "being reorganised", "replicas": 0, "restructure": "2"},
             {"kind": "CronJob", "ns": "lab", "name": "nightly", "suspend": "true", "held": "false"},
             {"kind": "CronJob", "ns": "lab", "name": "their-cron", "suspend": "true"},
             {"kind": "CronJob", "ns": "lab", "name": "cron-up", "suspend": "false"},

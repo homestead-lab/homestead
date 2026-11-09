@@ -336,7 +336,7 @@ class HostRebootTests(MoveTest):
     def test_the_capacity_check_still_compares_boot_ids_at_the_review_before_the_stop(self):
         m = self.m
         m.rebooted("node-b")
-        with self.assertRaisesRegex(Held, "rebooted"):
+        with self.assertRaisesRegex(Held, "restarted"):
             D.review(m.read, NS, "copy", COPY.job(NS, "homestead-data-copy-" + OP, "source", "target", IMAGE, OP, "node-a"),
                      m.pins, 88, clock=lambda: m.now)
 
@@ -346,9 +346,9 @@ class HostRebootTests(MoveTest):
         run.tick(); m.copy_running()
         self.assertNotEqual("held", run.tick()["status"])
         m.rebooted("node-a")
-        self.assertIn("rebooted", run.tick()["message"])
+        self.assertIn("restarted", run.tick()["message"])
         anchor = A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
-        with self.assertRaisesRegex(Held, "rebooted"):
+        with self.assertRaisesRegex(Held, "restarted"):
             R.review(anchor, m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
 
     def test_a_reboot_during_the_copy_can_go_back_once_the_dead_copy_pod_is_removed(self):
@@ -389,7 +389,7 @@ class HostRebootTests(MoveTest):
         m.rebooted("node-a")
         self.assertEqual("held", run.tick()["status"])
         load = lambda: A.Anchor(m.read, m.send, NS, "homestead").load(**m.handle)
-        with self.assertRaisesRegex(Held, "rebooted"):
+        with self.assertRaisesRegex(Held, "restarted"):
             R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
         m.stopped()
         for action in ("resume", "return-original"):
@@ -1357,7 +1357,7 @@ class PartitionedWriterTests(unittest.TestCase):
     def test_a_copy_pod_on_a_host_with_a_stale_heartbeat_holds(self):
         self.copying()
         self.stale()
-        self.assertIn("heartbeat is stale", self.run_.tick()["message"])
+        self.assertIn("has not reported recently", self.run_.tick()["message"])
         self.assertEqual("held", self.m.state()["runtime"]["state"])
 
     def terminating_old_pod(self):
@@ -1374,7 +1374,7 @@ class PartitionedWriterTests(unittest.TestCase):
     def test_an_old_homestead_pod_terminating_on_a_host_with_a_stale_heartbeat_holds(self):
         self.terminating_old_pod()
         self.stale()
-        self.assertIn("heartbeat is stale", self.run_.tick()["message"])
+        self.assertIn("has not reported recently", self.run_.tick()["message"])
 
 
 class HeldBeforeTheStopTests(MoveTest):
@@ -1451,7 +1451,7 @@ class HeldBeforeTheStopTests(MoveTest):
         view = run.tick()
         self.assertNotEqual("held", view["status"])
         self.assertIn("node-a", view["message"])
-        self.assertNotIn("carries on", view["message"])
+        self.assertNotIn("continues", view["message"])
         self.assertIn("minute", view["message"])
         m.pass_time(1)
         view = run.tick()
@@ -1578,7 +1578,7 @@ class VolumePinnedToAHostTests(unittest.TestCase):
         m = self.m
         self.tick(); m.stopped(); self.tick(); self.tick(); m.copy_running(); self.tick()
         m.rebooted("node-a")
-        self.assertIn("rebooted", self.tick()["message"])
+        self.assertIn("restarted", self.tick()["message"])
 
     def test_a_homestead_pod_listed_on_it_is_still_measured(self):
         m = self.m
@@ -1608,7 +1608,7 @@ class VolumePinnedToAHostTests(unittest.TestCase):
                 R.review(load(), m.read, lambda _: m.logs_text, action, clock=lambda: m.now)
             self.assertIn("needs node-a, which is down", str(refused.exception))
             self.assertIn("Bring it back", str(refused.exception))
-            self.assertNotIn("carries on", str(refused.exception), "a held move does not carry on by itself")
+            self.assertNotIn("continues", str(refused.exception), "a held move does not carry on by itself")
         m.rebooted("node-a")
         self.assertEqual("resume", R.review(load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)["action"])
 
@@ -1976,7 +1976,7 @@ class LostPodTests(MoveTest):
                        "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "source"}}]}})
         view = self.replaced().tick()
         self.assertEqual("held", view["status"])
-        self.assertIn("unreviewed consumer", view["message"])
+        self.assertIn("not reviewed uses a data volume", view["message"])
         self.assertNotIn("was not stopped", view["message"])
 
     def test_a_hold_before_the_stop_still_says_homestead_was_not_stopped(self):

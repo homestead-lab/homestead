@@ -116,7 +116,7 @@ def add_vips(cfg, ipam_records=None):
             if ip in have:
                 skipped.append(f"{ip} is already on the list")
             elif ip in nodes:
-                skipped.append(f"{ip} is a node's own address")
+                skipped.append(f"{ip} is a host's own address")
             elif ip in state["platform_addresses"]:
                 skipped.append(f"{ip} is the cluster's own address ({state['platform_addresses'][ip]})")
             elif ip in state["foreign_addresses"]:

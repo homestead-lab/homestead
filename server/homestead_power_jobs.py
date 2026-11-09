@@ -128,8 +128,8 @@ def _run_power_job(operation_id, power_plan, force=False, resumed=False):
         raise  # another replica owns the job; nothing to record or send here
     except Exception as e:
         uncertain = phase_state["phase"] in ("sending", "observing")
-        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                   "Power was not sent. Inspect the host's cordon state: " + str(e))
+        message = ("Whether the restart or shutdown was sent is uncertain. Check the existing job and helper before trying again." if uncertain else
+                   "Nothing was sent. Check whether the host is still cordoned: " + str(e))
         if uncertain:
             power_progress("observing", 20, message)
         else:
@@ -157,13 +157,14 @@ def _start_what_was_held(operation_id, message):
             message += (". Started again: " + ", ".join(started)) if started else ""
             message += (". Left as they are: " + ", ".join(left)) if left else ""
         except Exception as error:
-            message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
+            message += f". What was stopped could not be started again ({str(error)[:120]}). Start it manually"
     return message, restored
 
 
 # The words of the steps it shares with a reboot, for a job that sends no power.
-_POWER_WORDS = (("; power has not been sent", ""), (" before power", ""), ("Power was not sent", "Maintenance was not opened"),
-                ("power was not sent", "maintenance was not opened"), ("before retrying power control", "before retrying"))
+_POWER_WORDS = ((". Nothing has been sent to the host yet", ""), ("Nothing was sent", "Maintenance was not started"),
+                ("nothing was sent", "maintenance was not started"),
+                (" before the restart or shutdown", ""))
 
 
 def _maintenance_words(text):
@@ -208,7 +209,7 @@ def _run_maintenance(operation_id, power_plan, resumed=False):
             progress("failed", 100, message)
             raise PowerNotSent(message, {"id": operation_id}) from e
         message, restored = _start_what_was_held(
-            operation_id, "Maintenance was not opened. Inspect the host's cordon state: " + _maintenance_words(str(e)))
+            operation_id, "Maintenance was not started. Check whether the host is still cordoned: " + _maintenance_words(str(e)))
         progress("failed", 10, message, **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
 
@@ -248,7 +249,7 @@ def _open_maintenance(operation_id, power_plan, declared, planned_outage):
         raise
     except Exception as error:
         raise ValueError(f"The host is cordoned, but its maintenance could not be recorded ({str(error)[:120]}). "
-                         "Uncordon it by hand when you are done") from error
+                         "Uncordon it manually when the work is done.") from error
 
 
 def send_handoff(operation_id, power_plan, steps, rep, report):
@@ -265,7 +266,7 @@ def send_handoff(operation_id, power_plan, steps, rep, report):
         claim, _ = homestead_running_on()
         replicas = int((kget(path).get("spec") or {}).get("replicas", 1) or 1)
     except Exception as error:
-        report("verifying", 15, f"Homestead cannot hand the last step to the host ({str(error)[:160]}); sending the {action} directly")
+        report("verifying", 15, f"Homestead cannot hand the last step to the host ({str(error)[:160]}). Sending the {action} directly.")
         return NODE_ACTIONS._send_power(node, action, steps, rep, report)
     spec = own.get("spec") or {}
     pod_name = f"homestead-handoff-{action}-{int(time.time()) % 100000}"
@@ -282,19 +283,19 @@ def send_handoff(operation_id, power_plan, steps, rep, report):
                                      "securityContext": {"privileged": True, "runAsUser": 0, "runAsGroup": 0},
                                      "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}}}]}}
     # The helper's identity is on the job before it exists, as for any power helper.
-    report("sending", 20, "Handing the last step to a helper on the host; power has not been sent",
+    report("sending", 20, "Handing the last step to a helper on the host. Nothing has been sent to the host yet",
            helper_pod=pod_name, helper_namespace=SELF.NS, handoff=True, started_epoch=time.time())
     receipt = ksend("POST", f"/api/v1/namespaces/{SELF.NS}/pods", body)
     meta = (receipt or {}).get("metadata") or {}
     if not meta.get("uid") or meta.get("name") != pod_name:
-        raise ValueError("The host helper was not confirmed; inspect it before retrying")
-    report("observing", 20, f"Homestead is stopping so its data volume detaches; the helper on the host then sends the {action}. "
-           "This page is offline until the host is back", helper_uid=meta["uid"])
+        raise ValueError("The host helper was not confirmed. Check it before trying again.")
+    report("observing", 20, f"Homestead is stopping so that its data volume is released. The helper on the host then sends the {action}. "
+           "This page is offline until the host is back.", helper_uid=meta["uid"])
     # Homestead stops last, marked like anything else held for the host, so
     # the helper starts it again - and only while that mark is the job's.
     ksend("PATCH", path, {"metadata": {"annotations": {HOLD.HELD_BY: operation_id, HOLD.HELD_AS: str(replicas)}},
                           "spec": {"replicas": 0}}, ctype="application/merge-patch+json")
-    steps.append(f"handed the {action} to {pod_name}; Homestead stopped so its data volume detaches")
+    steps.append(f"handed the {action} to {pod_name}, and Homestead stopped so that its data volume is released")
     return {"ok": True, "node": node, "action": action, "steps": steps, "helper_pod": pod_name, "quorum": rep}
 
 
@@ -309,9 +310,9 @@ def hold_for_power(operation_id, power_plan, progress):
     if not waiting and not moving:
         return False
     progress("holding", 8, f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
-             + (f", moving {len(moving)} VM(s)" if moving else "") + "; power has not been sent")
+             + (f", moving {len(moving)} VM{'' if len(moving) == 1 else 's'}" if moving else "") + ". Nothing has been sent to the host yet")
     held = [HOLD.stop(item, operation_id) for item in waiting]
-    progress("holding", 8, "Waiting for them to stop; power has not been sent", held=held)
+    progress("holding", 8, "Waiting for them to stop. Nothing has been sent to the host yet", held=held)
     if moving:
         # A resumed job finds some already moved: only what is still here moves.
         here = {((v.get("metadata") or {}).get("namespace"), (v.get("metadata") or {}).get("name"))
@@ -331,7 +332,7 @@ def hold_for_power(operation_id, power_plan, progress):
         if time.monotonic() >= deadline:
             raise ValueError("These did not stop or move within 10 minutes: " + ", ".join(pending[:6])
                              + ". What was stopped stays stopped until this job is released or the host is back")
-        progress("holding", 8, "Waiting to stop or move: " + ", ".join(pending[:6]) + "; power has not been sent")
+        progress("holding", 8, "Waiting to stop or move: " + ", ".join(pending[:6]) + ". Nothing has been sent to the host yet")
         time.sleep(3)
 
 
@@ -423,9 +424,9 @@ def send_reviewed_power(power_plan, force=False, background=False):
          # What a resumed job needs: the reviewed plan, and which replica runs it.
          "plan": power_plan, "worker": POD_NAME, "worker_restarts": own_restarts(),
          "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
-        "Planned whole-cluster outage; recording it without cordon or drain" if planned_outage and action == "maintenance" else
-        "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
-        "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
+        "Planned whole-cluster outage. Recording it without a cordon or drain." if planned_outage and action == "maintenance" else
+        "Planned whole-cluster outage. Sending without a cordon or drain." if planned_outage else
+        "Forced by an admin. Sending without a cordon or drain." if force else "Effect on the host reviewed. Preparing the cordon and drain.")
     if not background:
         result = run_power_job(operation["id"], power_plan, force)
         result["operation"] = operation
@@ -499,7 +500,7 @@ def resume_power_job(item):
     def claim_then_run():
         try:
             OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
-                             "Homestead restarted or moved while preparing this host; carrying on", worker=POD_NAME,
+                             "Homestead restarted or moved while preparing this host. Continuing.", worker=POD_NAME,
                              worker_restarts=own_restarts(), expect_worker=ref.get("worker"), expect_phase=POWER.BEFORE_SEND)
         except Exception:
             with _POWER_RESUME_LOCK:
@@ -575,7 +576,7 @@ def _unattended_plan(node, allow_single_copy):
         stays.append("some workloads have no other host to run on")
     hold = power_plan.get("hold") or []
     if any(i["kind"] == "VirtualMachine" for i in hold):
-        stays.append("Running VMs are on this host; migrate or stop them and review again")
+        stays.append("Running VMs are on this host. Migrate or stop them and review again.")
     waits = [f"{i['ns']}/{i['name']}" for i in hold if i["default"] != "move"]
     if waits:
         stays.append("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
@@ -642,7 +643,7 @@ def _declared_request(body):
     if not 1 <= len(reason) <= 120 or not reason.isprintable():
         raise ValueError("Give a reason of 1 to 120 printable characters")
     if reason.casefold() in {word.casefold() for word in HISTORY.RESERVED_REASONS}:
-        raise ValueError(f"\"{reason}\" is what Homestead calls its own maintenance; give another reason")
+        raise ValueError(f"\"{reason}\" is the name Homestead uses for its own maintenance. Give another reason.")
     return {"reason": reason, "hours": declared_hours(body.get("hours"))}
 
 
@@ -660,15 +661,15 @@ def _send_power(request):
         declared = _declared_request(b)
     running = active_power_job(b.get("node"))
     if running:
-        return ROUTER.Reply(409, {"error": "A power job for this host is still running; follow it instead of sending another",
+        return ROUTER.Reply(409, {"error": "A restart or shutdown of this host is still running. Follow it instead of sending another.",
                                   "operation": running})
     power_plan = POWER.plan(b["node"], b["action"], force=force)
     if not power_plan["ready"]:
         return ROUTER.Reply(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
     if b.get("review_token") != power_plan["review_token"]:
-        return ROUTER.Reply(409, {"error": "host impact changed; review the plan again", "plan": power_plan})
+        return ROUTER.Reply(409, {"error": "The effect on the host changed. Review the plan again.", "plan": power_plan})
     if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
-        return ROUTER.Reply(409, {"error": "acknowledge the whole-cluster outage before host power control",
+        return ROUTER.Reply(409, {"error": "Confirm the whole-cluster outage before restarting or shutting down the host",
                                   "plan": power_plan})
     power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], b.get("choices") or {})
     stranded = {(w["ns"], w["name"]) for w in power_plan["stranded"]}
@@ -676,12 +677,12 @@ def _send_power(request):
            for i in power_plan.get("hold") or []) and not b.get("allow_stranded"):
         return ROUTER.Reply(409, {"error": "some workloads have no eligible failover host", "plan": power_plan})
     if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
-        return ROUTER.Reply(409, {"error": "acknowledge the volume risk before host power control", "plan": power_plan})
+        return ROUTER.Reply(409, {"error": "Confirm the volume risk before restarting or shutting down the host", "plan": power_plan})
     # Each drain blocker the review named, acknowledged by its id: no more, no fewer.
     given = b.get("allow_drain_blockers") or []
     if (not isinstance(given, list) or
             set(map(str, given)) != {row["id"] for row in power_plan.get("drain_blockers") or []}):
-        return ROUTER.Reply(409, {"error": "acknowledge each drain blocker (or remove the orphan records) before host power control",
+        return ROUTER.Reply(409, {"error": "Confirm each drain blocker, or remove the orphaned records, before restarting or shutting down the host",
                                   "plan": power_plan})
     if declared:
         power_plan["declared"] = declared

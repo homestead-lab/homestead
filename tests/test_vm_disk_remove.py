@@ -226,7 +226,7 @@ class ReviewTests(Base):
     def test_a_claim_someone_else_owns_blocks_it(self):
         self.disk()
         self.claim(DISK, owned_by("DataVolume", "other", "other-uid"))
-        self.assertIn("ownership changed", " ".join(REMOVE.plan(NS, DISK)["blocking"]))
+        self.assertIn("owner of the import", " ".join(REMOVE.plan(NS, DISK)["blocking"]))
 
     def test_an_active_import_says_what_can_be_done_with_it(self):
         self.finished_disk()
@@ -323,7 +323,7 @@ class ReviewTests(Base):
         self.assertNotIn("Create VM", REMOVE.plan(NS, DISK)["note"])
 
     def test_the_vm_check_cleanup_makes_is_the_shared_one(self):
-        """cleanup's refusal is unchanged now it goes through vm_users."""
+        """cleanup's refusal is not changed now it goes through vm_users."""
         uid, _ = self.finished_disk()
         self.vm({"persistentVolumeClaim": {"claimName": DISK}})
         work = CDI_CLEANUP.receipt([DISK])
@@ -484,9 +484,9 @@ class RemovalTests(Base):
     def test_an_import_under_that_name_is_refused_while_it_runs(self):
         uid, _ = self.finished_disk()
         self.start(uid)
-        with self.assertRaisesRegex(ValueError, "still active or cleaning up"):
+        with self.assertRaisesRegex(ValueError, "still running or cleaning up"):
             JOBS.start("vm-disk-import", "Import", {}, "/", {"namespace": NS, "name": DISK})
-        with self.assertRaisesRegex(ValueError, "still active or cleaning up"):
+        with self.assertRaisesRegex(ValueError, "still running or cleaning up"):
             JOBS.start("unraid-vm-import", "Import", {}, "/", {"namespace": NS, "disks": [{"dv": DISK}]})
 
     def test_an_import_under_that_name_is_allowed_once_it_ends(self):
@@ -624,7 +624,7 @@ class RemovalTests(Base):
         _, prime = self.populator_disk()
         self.pod("reader", [], (prime + "-scratch",), labels={})
         work = REMOVE._receipt(self.kube.object(DV + DISK))
-        with self.assertRaisesRegex(ValueError, "Another pod uses import work space .reader."):
+        with self.assertRaisesRegex(ValueError, "Another pod uses the import's work space .reader."):
             CDI_CLEANUP.observe(K.kget, NS, work)
             CDI_CLEANUP.cleanup(K.kget, K.ksend, NS, work, keep_disks=False)
         self.assertEqual([], self.kube.writes)
@@ -647,7 +647,7 @@ class RemovalTests(Base):
         self.kube.add(worker)
         job = self.look(ident)
         self.assertEqual("running", job["status"], job["message"])
-        self.assertIn("ownership changed", job["message"])
+        self.assertIn("owner of the import", job["message"])
         self.assertEqual([], self.kube.writes, "no DELETE of the disk, or anything")
 
     def test_a_failed_import_with_a_worker_someone_took_over_keeps_the_disk(self):
@@ -657,7 +657,7 @@ class RemovalTests(Base):
         worker = self.kube.object(PODS + "worker")
         worker["metadata"]["ownerReferences"] = owned_by("Deployment", "someone", "someone-uid")
         self.kube.add(worker)
-        with self.assertRaisesRegex(ValueError, "ownership changed"):
+        with self.assertRaisesRegex(ValueError, "owner of the import"):
             CDI_CLEANUP.cleanup(K.kget, K.ksend, NS, work, keep_disks=False)
         self.assertEqual([], self.kube.writes)
 
@@ -812,7 +812,7 @@ class RemovalTests(Base):
         self.kube.fail(DV + DISK, 500, times=9)
         result = JOBS.cancel(ident)
         self.assertEqual(writes, self.kube.writes)
-        self.assertIn("couldn't read", result["detail"])
+        self.assertIn("could not read", result["detail"])
 
     def test_a_viewer_or_operator_cant_stop_following_it(self):
         ident = self.stuck()

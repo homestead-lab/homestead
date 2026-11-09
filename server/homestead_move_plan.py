@@ -83,7 +83,7 @@ def _state_storage_problem():
             if not KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(explicit, safe='')}",
                                      read=STATE.kget):
                 return (f"KubeVirt here keeps VM firmware and TPM state on storage class {explicit}, which does not "
-                        "exist; the VM cannot start until it does")
+                        "exist. The VM cannot start until it does.")
             return ""
         classes = (STATE.kget("/apis/storage.k8s.io/v1/storageclasses") or {}).get("items") or []
     except Exception:
@@ -111,7 +111,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     if kind not in STATE.KINDS:
         raise ValueError("kind must be container, vm or volume")
     if transfer_mode not in ("move", "copy") or transfer_mode == "copy" and kind == "volume":
-        raise ValueError("Choose move or copy; copy supports containers and VMs")
+        raise ValueError("Choose move or copy. Copy works for containers and VMs.")
     if address_mode not in ("shared", "automatic", "manual"):
         raise ValueError("address must be shared, automatic or manual")
     versions = STATE.CLIENT.check_cluster(cluster)
@@ -122,7 +122,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         warnings.append(versions["message"])
     if transfer_mode == "copy" and not {"copy-source-lease", "copy-source-fence"}.issubset(versions.get("capabilities", [])):
         return {"ok": False, "transfer_mode": "copy", "blockers": [
-            "Update Homestead on the source cluster before copying workloads; this version cannot protect and release a copy's source"],
+            "Update Homestead on the source cluster before copying apps. This version cannot protect and release a copy's source."],
             "warnings": [], "claims": [], "versions": versions}
     try:
         definition = STATE._definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
@@ -137,12 +137,12 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
 
     here = STATE.LH.backup_target()
     if source_namespace and definition.get("namespace") != source_namespace:
-        blockers.append("Update Homestead on the source cluster; it did not return the selected source namespace")
+        blockers.append("Update Homestead on the source cluster. It did not return the chosen source namespace.")
     if transfer_mode == "copy" and (definition.get("held") or definition.get("transfer_owner")):
-        blockers.append("The source is held by another transfer; finish or put back that transfer first. "
+        blockers.append("The source is held by another transfer. Finish or undo that transfer first. "
                         f"If no cluster lists it any more, release it on {cluster} in Settings, Linked clusters, under Held here for transfers")
     if transfer_mode == "copy" and (not definition.get("source_uid") or not definition.get("source_version")):
-        blockers.append("Could not verify the source workload identity; refresh before copying")
+        blockers.append("Homestead could not confirm the source app. Refresh before copying.")
     if kind == "vm":
         device_rows = PASSTHROUGH.vm_devices(definition["object"])
         try:
@@ -151,9 +151,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             _, effects, _, device_hosts = VM_DEVICES.prepare(definition, namespace, host_devices)
             for effect in effects:
                 if effect["kind"] == "configmap" and effect["body"] and KUBE.get_optional(effect["path"], read=STATE.kget):
-                    blockers.append("The destination vBIOS ConfigMap already exists; choose another namespace")
+                    blockers.append("The destination vBIOS ConfigMap already exists. Choose another namespace.")
             if device_rows:
-                warnings.append("Review GPU compatibility before starting the destination VM. Its devices use the selected destination hardware; the source hostname selector is removed and other placement rules are retained")
+                warnings.append("Check that the GPU works before starting the destination VM. Its devices use the chosen destination hardware. The source host selector is removed, and the other placement rules are kept.")
         except ValueError as error:
             blockers.append(str(error))
         # A halted copy still needs the VM API; discovering this after backup
@@ -163,14 +163,14 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         can_live = transfer_mode == "copy" and "copy-live-vm" in versions.get("capabilities", [])
         live = can_live and not stop_source
         if transfer_mode == "copy" and not can_live and definition.get("vm_running") is not False:
-            warnings.append(f"{cluster} pauses {name} while its disks are backed up; update Homestead there to copy it while it runs")
+            warnings.append(f"{cluster} pauses {name} while its disks are backed up. Update Homestead there to copy it while it runs.")
         elif transfer_mode == "copy" and not live and definition.get("vm_running"):
             warnings.append(f"{name} stops while its disks are backed up, then starts again on {cluster}")
         if transfer_mode == "copy":
             warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
             vm = (definition.get("object") or {}).get("spec") or {}
             if vm.get("instancetype") or vm.get("preference"):
-                blockers.append("This VM uses an external instance type or preference; expand those settings into the VM before copying")
+                blockers.append("This VM uses an external instance type or preference. Copy those settings into the VM before copying it.")
             if (definition.get("origin") or {}).get("runStrategy") == "Once":
                 blockers.append("A VM with the Once run strategy cannot safely resume after copying. Change its run strategy before copying")
             template = vm.get("template") or {}
@@ -179,9 +179,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                 portable = ("persistentVolumeClaim", "cloudInitNoCloud", "cloudInitConfigDrive", "containerDisk",
                             "emptyDisk", "downwardMetrics")
                 if not any(key in volume for key in portable):
-                    blockers.append(f"Disk {volume.get('name', '?')} has an external source that cannot be copied; use a Longhorn PVC")
+                    blockers.append(f"Disk {volume.get('name', '?')} has an external source that cannot be copied. Use a Longhorn volume.")
             if vm_spec.get("accessCredentials"):
-                blockers.append("VM access credentials use additional Secrets; copy those dependencies separately before using this transfer")
+                blockers.append("The VM's access credentials use other Secrets. Copy those separately before using this transfer.")
         vm_spec = ((((definition.get("object") or {}).get("spec") or {}).get("template") or {}).get("spec")) or {}
         state = _persistent_state(vm_spec)
         if state:
@@ -202,17 +202,17 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                 "the guest repairs its filesystems on first boot, and a database inside may need recovery"))
         for secret in definition.get("secrets", []):
             if KUBE.get_optional(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}", read=STATE.kget):
-                blockers.append(f"Secret {secret['metadata']['name']} already exists in {namespace}; choose another destination namespace")
+                blockers.append(f"Secret {secret['metadata']['name']} already exists in {namespace}. Choose another destination namespace.")
     joined = bool(STATE._same_target(here, there))
     if not joined:
         if not there.get("reachable_off_cluster"):
-            blockers.append(f"backup storage on {cluster} is only reachable inside that cluster; "
-                            "give its object store a LAN address first")
+            blockers.append(f"The backup storage on {cluster} can only be reached inside that cluster. "
+                            "Give its object store a LAN address first.")
             fixes.append({"kind": "source-address", "cluster": cluster})
         if here.get("configured"):
-            warnings.append("this cluster's Longhorn backup target changes for this transfer. "
-                            f"It moves from {here.get('url')} to {there.get('url')}, then returns to its previous setting; "
-                            "backups already written to the old one stay there")
+            warnings.append("This cluster's Longhorn backup target changes for this transfer. "
+                            f"It moves from {here.get('url')} to {there.get('url')}, then returns to its previous setting. "
+                            "Backups already written to the old one stay there.")
 
     if not KUBE.get_optional(f"/api/v1/namespaces/{namespace}", read=STATE.kget):
         warnings.append(f"namespace {namespace} does not exist here and will be created")
@@ -228,8 +228,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         if not base:
             blockers.append(f"{where}storage class {klass} does not exist here")
         elif longhorn and base.get("provisioner") != "driver.longhorn.io":
-            blockers.append(f"{where}storage class {klass} is not Longhorn; a moved volume is restored "
-                            "from a Longhorn backup, so it needs a Longhorn class (or make it blank)")
+            blockers.append(f"{where}storage class {klass} is not Longhorn. A moved volume is restored "
+                            "from a Longhorn backup, so it needs a Longhorn class, or leave it blank.")
         elif any((base.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")):
             blockers.append(f"{where}choose a regular storage class, not an existing restore or image class")
 
@@ -246,7 +246,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         if pick["action"] == "skip":
             if not exists:
                 blockers.append(f"volume {claim['claim']} is skipped, but no volume of that name is in "
-                                f"{namespace} here; create it first, or make it blank")
+                                f"{namespace} here. Create it first, or leave it blank.")
             continue
         if exists:
             blockers.append(f"volume {claim['claim']} already exists in {namespace} here")
@@ -264,7 +264,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             warnings.append(f"disk {claim['claim']} is built on the {claim['backing_image']} image, "
                             "which will be restored from its backup first")
         if pick["action"] == "blank":
-            warnings.append(f"volume {claim['claim']} starts empty here; its data stays on {cluster}")
+            warnings.append(f"Volume {claim['claim']} starts empty here. Its data stays on {cluster}.")
 
     selector = dict(definition.get("node_selector") or {})
     if device_rows:
@@ -287,8 +287,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         net_ns, _, net_name = network.rpartition("/")
         if not KUBE.get_optional(f"/apis/k8s.cni.cncf.io/v1/namespaces/{net_ns or namespace}/"
                     f"network-attachment-definitions/{net_name}", read=STATE.kget):
-            warnings.append(f"network {network} does not exist here; the VM will not start "
-                            "until it does")
+            warnings.append(f"Network {network} does not exist here. The VM does not start "
+                            "until it does.")
 
     addresses = []
     chosen = None
@@ -370,7 +370,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
             STATE._store(move)
         _add_operation(move)
         if not move["op"]:
-            move["message"] = "Queued; Activity was busy, so this move appears there shortly"
+            move["message"] = "Queued. Activity was busy, so this move appears there shortly."
         with STATE.recording(f"The move of {name} is recorded and will run", "its Activity item",
                              "Activity may list it twice." if move["op"] else ""):
             STATE._store(move)

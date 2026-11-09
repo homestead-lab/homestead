@@ -376,7 +376,7 @@ class Helm(Base):
         self.assertEqual("1.0.0", self.kube.object(path)["spec"]["version"])
         self.leader_round()
         message = self.finished(op)
-        self.assertNotIn("carries on", message)
+        self.assertNotIn("continues", message)
         self.assertIn("settings from before the upgrade", message)
 
 
@@ -635,12 +635,12 @@ class SecondReviewRound(Base):
         self.kube.fail(paths[1], 500, method="DELETE")
         OPS.cancel(op, by="alice")
         message = self.finished(op)
-        self.assertIn("homestead-pull-a and homestead-pull-b could not be stopped: delete them", message)
+        self.assertIn("homestead-pull-a and homestead-pull-b could not be stopped. Delete them", message)
         self.kube.discard(paths[0])
         op2, paths2 = self.pulls()
         self.kube.fail(paths2[0], 500, method="DELETE")
         OPS.cancel(op2, by="alice")
-        self.assertIn("homestead-pull-a could not be stopped: delete it", self.finished(op2))
+        self.assertIn("homestead-pull-a could not be stopped. Delete it", self.finished(op2))
 
     def test_a_read_that_fails_some_other_way_after_the_deletes_still_ends(self):
         self.kube.add(service())
@@ -887,7 +887,7 @@ class ABusyWorkerLockWaits(Base):
         self.hold_for_ever(op)
         with self.assertRaises(ValueError) as refused:
             OPS.cancel(op, {"ack": True}, confirm="web")
-        self.assertIn("waits for you", str(refused.exception))
+        self.assertIn("waits for Cancel", str(refused.exception))
 
     def test_it_says_so_once_it_has_waited_long(self):
         op = self.rename()

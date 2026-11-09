@@ -31,7 +31,7 @@ def items(path):
 
 def inventory(*, cleaning=False):
     if KUBE.get_optional(CAP.HARVESTER_V2, read=SETUP.kget) is not None:
-        raise ValueError('Harvester manages host memory; use its V2 settings and maintenance workflow')
+        raise ValueError('Harvester manages host memory. Use its V2 settings and maintenance tools.')
     setting = SETUP.kget(CAP.LH + '/settings/v2-data-engine')
     require = setting.get('metadata') or {}
     if not require.get('uid') or not require.get('resourceVersion') or setting.get('value') not in ('true', 'false'):
@@ -80,7 +80,7 @@ def review():
     rows = []
     for row in node_rows(nodes):
         try:
-            if not row['ready']: raise ValueError('Host is unavailable; its reservation is retained')
+            if not row['ready']: raise ValueError('The host is unavailable, so its reservation is kept')
             memory = host(row)
             if memory['boot'] != row['boot']: raise ValueError('Host restarted during review')
             rows.append({**row, **memory})
@@ -108,10 +108,10 @@ def start(body):
             return public(existing)
         plan = review()
         cfg = {'request_id': body.get('request_id'), 'capacity_token': body.get('capacity_token')}
-        if not REVIEW.valid(cfg, _context(plan)): raise ValueError('Host memory ownership changed or review expired; review again')
+        if not REVIEW.valid(cfg, _context(plan)): raise ValueError('The host memory changed, or the review expired. Review it again.')
         op = SETUP.ops.start(KIND, 'Turn off V2 and release its resources', {'kind': 'Cluster', 'name': 'longhorn'},
                             '/settings?tab=hardware', {**_context(plan), 'nodes': plan['nodes'], 'managers': plan['managers'],
-                            'approval': body['capacity_token'], 'phase': 'stopping'}, 'Waiting for V2 to stop; host memory is unchanged')
+                            'approval': body['capacity_token'], 'phase': 'stopping'}, 'Waiting for V2 to stop. Host memory is not changed.')
         return status(op['id'])
 
 
@@ -233,7 +233,7 @@ def _staged_note(row, obj, memory):
     pool = obj.get('status', {}).get('capacity', {}).get('hugepages-2Mi') or '0'
     return (row['node'] + ': restarted, but kubelet reports a different hugepage pool (' + pool + ') than reviewed ('
             + str(memory['baseline'] * 2) + 'Mi). Check the host\'s memory policy, restart it again, '
-            'or allow scheduling on it yourself')
+            'or uncordon it manually')
 
 
 def _end_refused(item):
@@ -249,7 +249,7 @@ def _end_refused(item):
         if row.get('phase') not in STAGED: continue
         obj = nodes.get(row['node'])
         if obj is None:
-            row.update(phase='complete', cordoned=False, left='no longer in the cluster; nothing to release')
+            row.update(phase='complete', cordoned=False, left='no longer in the cluster, so there is nothing to release')
             continue
         if _restart_awaited(row, obj.get('status', {}).get('nodeInfo', {}).get('bootID')): continue
         try:
@@ -272,7 +272,7 @@ def _end_refused(item):
         message = reason + '. Cleanup stopped'
         if staged: message += '. RAM release waits for a restart of ' + ', '.join(staged) + ', which stays cordoned until then'
         if notes: message += '. ' + '. '.join(n for n in notes if n)
-        if retried: message += '. Allowing scheduling again is retried on ' + '; '.join(retried)
+        if retried: message += '. Uncordoning is retried on ' + '; '.join(retried)
         return 'running', item.get('progress', 0), message
     ref['phase'] = 'complete'; SETUP.ops.checkpoint(item)
     left = [r['node'] + ' (' + r['left'] + ')' for r in ref['nodes'] if r.get('left')]
@@ -282,30 +282,30 @@ def _end_refused(item):
 
 def _progress(item, setting, nodes, pods, active):
     ref = item['ref']
-    if setting['metadata']['uid'] != ref['setting_uid']: raise Refusal('V2 setting identity changed')
+    if setting['metadata']['uid'] != ref['setting_uid']: raise Refusal('The V2 setting changed')
     if {(r['node'],r['uid']) for r in node_rows(nodes)} != {(r['node'],r['uid']) for r in ref['nodes']}:
-        raise Refusal('Cluster hosts changed; cleanup requires a new inspection')
+        raise Refusal('The cluster hosts changed, so cleanup needs a new check')
     if setting['value'] == 'true':
-        if ref['phase'] != 'stopping': raise Refusal('V2 was re-enabled; host cleanup is stopped')
+        if ref['phase'] != 'stopping': raise Refusal('V2 was turned on again')
         ref['phase'] = 'waiting'; SETUP.ops.checkpoint(item)
         CAP.ksend('PATCH', CAP.LH + '/settings/v2-data-engine', [
             {'op': 'test', 'path': '/metadata/uid', 'value': setting['metadata']['uid']},
             {'op': 'test', 'path': '/metadata/resourceVersion', 'value': setting['metadata']['resourceVersion']},
             {'op': 'replace', 'path': '/value', 'value': 'false'}], ctype='application/json-patch+json')
         homestead_routes.forget('lhcap')
-        return 'running', 10, 'V2 disabled; waiting for its instance managers to stop'
+        return 'running', 10, 'V2 turned off. Waiting for its instance managers to stop.'
     live_pods = {p['metadata']['name'] for p in pods if p['metadata'].get('namespace') == 'longhorn-system'}
     if active or live_pods.intersection(ref['managers']):
-        return 'running', 15, 'Waiting for V2 instance managers to stop; CPU and memory release is not yet verified'
+        return 'running', 15, 'Waiting for the V2 instance managers to stop. The release of CPU and memory is not confirmed yet.'
     if any(not r['ready'] for r in node_rows(nodes)):
-        return 'running', 20, 'Waiting for hosts to return; resource release on an unavailable host is not assumed'
+        return 'running', 20, 'Waiting for the hosts to return. Homestead does not assume an unavailable host released anything.'
     ref['phase'] = 'cleanup'
     current = {r['node']: r for r in node_rows(nodes)}
     waiting = False
     for row in ref['nodes']:
         if row.get('phase') in ('retained', 'complete') or not row.get('owned_pages'): continue
         node = current.get(row['node'])
-        if not node or node['uid'] != row['uid']: raise Refusal('Host identity changed; memory is retained')
+        if not node or node['uid'] != row['uid']: raise Refusal('The host changed, so its memory is kept')
         if not node['ready']:
             waiting = True; continue
         if _restart_awaited(row, node['boot']):
@@ -320,11 +320,11 @@ def _progress(item, setting, nodes, pods, active):
         if memory['phase'] == 'restart-required':
             row.update(memory); waiting = True; continue
         if memory.get('proof') != row.get('proof') or memory['boot'] != row['boot']:
-            raise Refusal('Host memory changed since review; reservation is retained')
+            raise Refusal('The host memory changed since the review, so the reservation is kept')
         requested = sum(RESOURCES.pod_request(p.get('spec', {}), 'hugepages-2Mi') for p in pods
                         if p.get('spec', {}).get('nodeName') == row['node'] and p.get('status', {}).get('phase') not in ('Succeeded', 'Failed'))
         if requested > row['baseline'] * 2097152:
-            raise Refusal('Other workloads request this host’s hugepages; its reservation is retained')
+            raise Refusal('Other apps request this host’s hugepages, so its reservation is kept')
         obj = next(n for n in nodes if n['metadata']['name'] == row['node'])
         # Prevent new placements while kubelet still advertises the old pool.
         if not obj.get('spec', {}).get('unschedulable'):
@@ -340,7 +340,7 @@ def _progress(item, setting, nodes, pods, active):
         fresh = items('/api/v1/pods')
         if sum(RESOURCES.pod_request(p.get('spec', {}), 'hugepages-2Mi') for p in fresh
                if p.get('spec', {}).get('nodeName') == row['node'] and p.get('status', {}).get('phase') not in ('Succeeded', 'Failed')) > row['baseline'] * 2097152:
-            raise Refusal('A workload claimed hugepages during review; memory is unchanged')
+            raise Refusal('An app claimed hugepages during the review, so the memory is not changed')
         # An error from the stage run is no proof that nothing was staged.
         row['phase'] = 'staging'; SETUP.ops.checkpoint(item)
         row.update(host(row, 'stage', proof=row['proof'], boot=row['boot'])); waiting = True
@@ -348,12 +348,12 @@ def _progress(item, setting, nodes, pods, active):
         break
     if waiting:
         ref['phase'] = 'restart-required'; SETUP.ops.checkpoint(item)
-        return 'running', 60, 'V2 stopped. Review a restart for each prepared host to release RAM; hosts remain cordoned until you allow scheduling'
+        return 'running', 60, 'V2 stopped. Review a restart of each prepared host to release RAM. The hosts stay cordoned until they are uncordoned.'
     ref['phase'] = 'complete'; SETUP.ops.checkpoint(item)
     for row in ref['nodes']:
         if row.get('cordoned'): _unmark(item, row)
     retained = any(r.get('phase') == 'retained' or not r.get('owned_pages') for r in ref['nodes'])
-    return 'succeeded', 100, 'V2 stopped; owned RAM released' + ('; unowned reservations retained (see host details)' if retained else '')
+    return 'succeeded', 100, 'V2 stopped. Its RAM was released' + ('. Reservations it did not make are kept (see the host details)' if retained else '')
 
 
 def register(ops):

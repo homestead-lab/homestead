@@ -159,7 +159,7 @@ class FrameworkTests(Store):
         plan = OPS.cancel_plan(op)
         self.assertEqual(("forget", "Stop tracking it"), (plan["mode"], plan["action"]))
         OPS.cancel(op)
-        self.assertIn("carries on", self.stored(op)["message"])
+        self.assertIn("continues", self.stored(op)["message"])
 
     def test_every_kind_of_job_homestead_starts_says_what_cancelling_does(self):
         CANCEL.register(OPS)
@@ -327,7 +327,7 @@ class K3sClusterTests(Store):
         keep_bound(self, K3SC)
         K3SC.bind(lambda path: {}, create, lambda ip: "", lambda ns, node: removed.append(node["name"]))
         try:
-            with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation receipt"):
+            with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation record"):
                 K3SC.start({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
                             "addresses": ["192.0.2.60", "192.0.2.61"], "password": "a-long-password"}, OPS)
         finally:

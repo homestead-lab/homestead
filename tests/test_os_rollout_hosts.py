@@ -104,7 +104,7 @@ class UnattendedRestartTests(FakeCluster):
         with mock.patch.object(BLOCKERS, "for_host", side_effect=KeyError("status")):
             with self.assertRaises(ValueError) as refused:
                 POWER_JOBS.rollout_reboot("node-a")
-        self.assertIn("couldn't check", str(refused.exception))
+        self.assertIn("could not check", str(refused.exception))
         self.assertEqual([], self.sent)
 
     def test_the_settings_accepting_an_only_copy_do_not_accept_a_blocker(self):
@@ -240,7 +240,7 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-b"])
         with self.assertRaises(ValueError) as refused:
             ROLLOUT.start()
-        self.assertIn("An OS update is running", str(refused.exception))
+        self.assertIn("An OS update is already running", str(refused.exception))
         self.run_it()
         with self.assertRaises(ValueError) as refused:
             ROLLOUT.stop()
@@ -507,7 +507,7 @@ class PreviewTests(Runs):
     def test_a_run_going_blocks_it(self):
         ROLLOUT.start("asked-hosts", only=["node-c"])
         answer = self.preview("node-b")
-        self.assertIn("An OS update is running", answer["blocked"])
+        self.assertIn("An OS update is already running", answer["blocked"])
         with self.assertRaises(ValueError):
             self.post(nodes=["node-b"], review_token=answer["review_token"])
         self.assertEqual(["node-c"], ROLLOUT._load()["rollout"]["nodes"])
@@ -827,7 +827,7 @@ class ClearsByItselfTests(Runs):
 
     def test_a_drain_check_read_that_keeps_failing_waits_then_refuses_naming_it(self):
         self.kube.fail(BLOCKERS.ORPHANS, 503, times=100000)
-        self.assert_waits_then_refuses("couldn't check")
+        self.assert_waits_then_refuses("could not check")
 
     def test_a_drain_check_read_that_recovers_restarts_the_host(self):
         self.kube.fail(BLOCKERS.ORPHANS, 500, times=100000)
@@ -1191,7 +1191,7 @@ class StopDuringAWaitTests(Waiting):
         row = ended["results"][0]
         self.assertEqual("node-a", row["node"])
         self.assertTrue(row["restart_needed"], "its row offers Restart…")
-        self.assertIn("Stopped while waiting", row["note"])
+        self.assertIn("It stopped while waiting", row["note"])
         self.assertIn("needing a restart: node-a", ended["message"])
         self.assertIn("node-a", self.hosts.began, "it stays installed")
         return ended
@@ -1294,7 +1294,7 @@ class StopDuringAWaitTests(Waiting):
         ROLLOUT.power_job = lambda name, since: "op-adopted"
         ROLLOUT.stop()
         ROLLOUT.tick(now=1020)
-        self.assertNotIn("Stopped while waiting", str(ROLLOUT._load()["rollout"]["results"]))
+        self.assertNotIn("It stopped while waiting", str(ROLLOUT._load()["rollout"]["results"]))
 
 
 class StopDuringAWaitInMaintenanceTests(Waiting):
@@ -1316,7 +1316,7 @@ class StopDuringAWaitInMaintenanceTests(Waiting):
         ROLLOUT.tick(now=1020)
         ended = ROLLOUT._load()["rollout"]
         self.assertEqual("stopped", ended["status"], ended["message"])
-        self.assertIn("Stopped while waiting", ended["results"][0]["note"])
+        self.assertIn("It stopped while waiting", ended["results"][0]["note"])
         self.assertEqual([], self.sent)
         self.assertNotIn(("node-a", False), self.cordons, "the maintenance's cordon stays")
 
@@ -1580,7 +1580,7 @@ class StopSaysWhatHappensTests(Waiting):
         self.waiting()
         said = self.stop_route()
         self.assertIn("node-a", said)
-        self.assertIn("will not restart", said)
+        self.assertIn("does not restart", said)
         self.assertNotIn("once the host being updated is done", said)
 
     def test_stopping_with_no_wait_says_what_it_did(self):

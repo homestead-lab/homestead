@@ -153,7 +153,7 @@ def status():
         multus["repairable"] = False
     if multus["repairable"]:
         multus.update(state="configuration-error", installing=False,
-                      detail="Multus needs its network-attachment API and correct CNI directory; repair the managed installation")
+                      detail="Multus needs its network-attachment API and the correct CNI folder. Repair the installation.")
     multus["diagnostic_command"] = diagnostic_command(p.get("distribution", ""), CHARTS["multus"])
     return {
         "distribution": p.get("distribution", ""),
@@ -182,7 +182,7 @@ def _can_install(what):
         raise ValueError(f"Harvester includes {what} already")
     if not p.get("helm_controller"):
         raise ValueError(f"this cluster has no Helm controller, so Homestead cannot install {what}. "
-                         "k3s and RKE2 have one; elsewhere, install it with its own instructions")
+                         "k3s and RKE2 have one. Elsewhere, install it with its own instructions.")
     return p
 
 
@@ -263,7 +263,7 @@ def _post_chart(name, spec):
             "metadata": {"name": name, "namespace": CONTROLLER_NS, "labels": {NAMES.key("managed"): "true"}},
             "spec": spec}
     if name in _helmcharts():
-        raise ValueError(f"{name} is already being installed; follow it under Jobs or on the Helm page")
+        raise ValueError(f"{name} is already being installed. Follow it under Jobs or on the Helm page.")
     preemption_hold(name)
     ksend("POST", f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts", body)
 
@@ -293,7 +293,7 @@ def install_longhorn(cfg=None):
     to three - one node can hold only one."""
     p = _can_install("Longhorn")
     if p.get("longhorn"):
-        raise ValueError("Longhorn is installed already")
+        raise ValueError("Longhorn is already installed")
     try:
         nodes = len(kget("/api/v1/nodes").get("items", []))
     except Exception:
@@ -358,7 +358,7 @@ def _ensure_multus_crd():
 def repair_multus(cfg=None):
     p = _can_install("Multus")
     chart = _helmcharts().get(CHARTS["multus"])
-    refusal = "Only the original Homestead k3s Multus configuration can be repaired here; review custom values on the Helm page"
+    refusal = "Only the original Homestead k3s Multus settings can be repaired here. Review custom values on the Helm page."
     if not _repairable_multus(chart, p):
         raise ValueError(refusal)
     def still_ours(found):
@@ -374,14 +374,14 @@ def repair_multus(cfg=None):
         versions = [m.group(1) for v in volumes
                     if (m := re.fullmatch(r"multus-(v?\d+\.\d+\.\d+)-config", v.get("configMap", {}).get("name", "")))]
         if len(set(versions)) != 1:
-            raise ValueError("Cannot identify the installed Multus chart version safely; pin it on the Helm page before repair")
+            raise ValueError("The installed Multus chart version cannot be identified safely. Pin it on the Helm page before repairing.")
         chart["spec"]["version"] = versions[0]
     _ensure_multus_crd()
     chart["spec"]["valuesContent"] = K3S_MULTUS_VALUES
     chart.get("metadata", {}).pop("managedFields", None)
     KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts/multus", chart, kget, ksend, still_ours)
     return {"ok": True, "name": "multus", "job": "helm-install-multus",
-            "detail": "Multus CNI directory corrected; waiting for its node agents to become available"}
+            "detail": "Multus CNI folder corrected. Waiting for its agents on the hosts to become available."}
 
 
 def multus_progress(item):
@@ -395,7 +395,7 @@ def multus_progress(item):
             job = kget(f"/apis/batch/v1/namespaces/{CONTROLLER_NS}/jobs/helm-install-{name}")
             conditions = (job.get("status") or {}).get("conditions") or []
             if any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions):
-                return "failed", 100, f"{name} Helm job failed; open Settings > Cluster > Add-ons for diagnostics"
+                return "failed", 100, f"{name} Helm job failed. Open Settings > Cluster > Add-ons for diagnostics."
     except Exception:
         pass
     try:
@@ -414,10 +414,10 @@ def install_multus(cfg=None):
     needs - from the chart RKE2 uses for it, set up for this distribution."""
     p = _can_install("Multus")
     if _multus():
-        raise ValueError("Multus is installed already; use Repair configuration or inspect its node diagnostics")
+        raise ValueError("Multus is already installed. Use Repair configuration, or check its diagnostics on the hosts.")
     distribution = p.get("distribution", "")
     if distribution not in ("k3s", "rke2"):
-        raise ValueError("Homestead installs Multus on k3s and RKE2; elsewhere install it with its own instructions")
+        raise ValueError("Homestead installs Multus on k3s and RKE2. Elsewhere, install it with its own instructions.")
     version = str((cfg or {}).get("version") or MULTUS_VERSION)
     if not VERSION_WORD.fullmatch(version):
         raise ValueError(f"{version} is not a Multus chart version")
@@ -426,8 +426,8 @@ def install_multus(cfg=None):
                                    "version": version,
                                    "valuesContent": K3S_MULTUS_VALUES if distribution == "k3s" else RKE2_MULTUS_VALUES})
     return {"ok": True, "name": CHARTS["multus"], "job": f"helm-install-{CHARTS['multus']}",
-            "detail": "Multus is being installed on every node; pods already running are left as they are. "
-                      "LAN networks can be made once it is up"}
+            "detail": "Multus is being installed on every host. Pods already running are left as they are. "
+                      "LAN networks can be created once it is running."}
 
 
 # ------------------------------------------------------------------ kube-vip
@@ -490,7 +490,7 @@ def install_kube_vip(cfg=None):
     if p.get("load_balancer") in ("kube-vip", "metallb"):
         raise ValueError(f"this cluster has {'kube-vip' if p['load_balancer'] == 'kube-vip' else 'MetalLB'} already")
     if p.get("distribution") not in ("k3s", "rke2"):
-        raise ValueError("Homestead installs kube-vip on k3s and RKE2; elsewhere install it with its own instructions")
+        raise ValueError("Homestead installs kube-vip on k3s and RKE2. Elsewhere, install it with its own instructions.")
     interface = str(cfg.get("interface") or vip_interface() or "").strip()
     if interface and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", interface):
         raise ValueError(f"{interface} is not a network interface name")
@@ -598,7 +598,7 @@ def install_kubevirt(cfg=None):
     cfg = cfg or {}
     p = _can_install("KubeVirt")
     if p.get("kubevirt"):
-        raise ValueError("KubeVirt is installed already")
+        raise ValueError("KubeVirt is already installed")
     known = status()
     # A missing probe is uncertainty, not proof that every node exposes KVM.
     # Software fallback removes KubeVirt's hard KVM scheduling resource while
@@ -619,7 +619,7 @@ def install_kubevirt(cfg=None):
     return {"ok": True, "name": CHARTS["kubevirt"], "job": f"helm-install-{CHARTS['kubevirt']}",
             "kubevirt": kubevirt, "cdi": cdi, "emulation": emulation,
             "detail": f"KubeVirt {kubevirt} and CDI {cdi} are being installed"
-                      + ("; software fallback is allowed where /dev/kvm is unavailable" if emulation else "")}
+                      + (". Software virtualisation is allowed where /dev/kvm is unavailable" if emulation else "")}
 
 
 def set_kubevirt_emulation(on):
@@ -634,8 +634,8 @@ def set_kubevirt_emulation(on):
           {"spec": {"configuration": {"developerConfiguration": {"useEmulation": enabled}}}},
           ctype="application/merge-patch+json")
     return {"ok": True, "emulation": enabled,
-            "detail": ("Software virtualisation fallback is enabled; VMs can run on nodes without /dev/kvm"
-                       if enabled else "KVM is now required; VMs can run only on hardware-virtualisation nodes")}
+            "detail": ("Software virtualisation is turned on as a fallback, so VMs can run on hosts without /dev/kvm."
+                       if enabled else "KVM is now required, so VMs run only on hosts with hardware virtualisation.")}
 
 
 def _install(what, repair=False):

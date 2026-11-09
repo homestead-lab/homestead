@@ -122,6 +122,12 @@ def _unsettled(state):
     return any(e["state"] != "accepted" for e in state["journal"]["ref"]["storage_writes"])
 
 
+def _ended(text):
+    """A message ready for another sentence after it."""
+    text = str(text).rstrip()
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
 def recovery_help(namespace, state):
     if _unsettled(state):
         return (" Recovery needs every request's outcome, so settle this one by hand first: "
@@ -185,7 +191,7 @@ def progress(anchor, now):
                "Returning Homestead to its original volume; waiting for mount release and verified startup." if recovering else DESCRIPTIONS[phase])
     help_fields = {}
     if held and not preparing and state.get("plan", {}).get("worker"):
-        message += recovery_help(anchor.namespace, state)
+        message = _ended(message) + recovery_help(anchor.namespace, state)
         help_fields.update(recovery_fields(anchor.namespace, state))
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
@@ -244,7 +250,7 @@ class Runner:
                 view.update(status="held", message=self.hold, requires_review=True)
                 if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
                     view.pop("recovery_command", None)
-                    view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
+                    view.update(message=_ended(self.hold) + recovery_help(self.namespace, anchor.state),
                                 **recovery_fields(self.namespace, anchor.state))
             elif self.retry_reason and view["status"] not in ("done", "cancelled", "held"):
                 view.update(message=f"This coordinator has not taken over yet and is retrying: {self.retry_reason}. " + view["message"])

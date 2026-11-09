@@ -228,7 +228,7 @@ class K3sTests(unittest.TestCase):
         self.assertEqual("rancher/k3s-upgrade", plans[0]["spec"]["upgrade"]["image"])
         self.assertEqual(["prepare", "homestead-server"], plans[1]["spec"]["prepare"]["args"])
         self.assertEqual(("running", "nodes"), (status, item["ref"]["phase"]))
-        self.assertIn("0 of 2 nodes", message)
+        self.assertIn("0 of 2 hosts", message)
         for name in ("node-1", "node-2"):
             self.c.kube.add(node(name, "v1.32.8+k3s1"))
         self.assertEqual("succeeded", C.status(item)[0])
@@ -770,7 +770,7 @@ class UpgradeCheckWiringTests(unittest.TestCase):
                          [(p["title"], p["status"]) for p in report["pairs"]])
 
     def test_a_blocked_upgrade_needs_the_tick(self):
-        with self.assertRaisesRegex(ValueError, "tick"):
+        with self.assertRaisesRegex(ValueError, "confirm that what it breaks"):
             C.upgrade("cluster", "v1.37.1+k3s1")
         self.assertEqual([], self.c.sent, "nothing was written")
         self.assertEqual("v1.37.1+k3s1", C.upgrade("cluster", "v1.37.1+k3s1", {"accept_check": True})["to"])
