@@ -181,7 +181,7 @@ def https_check(url, fetch=None):
     except ValueError:
         body = None      # a login page, a parked domain, someone else's site
     if not isinstance(body, dict) or not body.get("ok"):
-        raise ValueError(f"{url} did not return a Homestead health response. If Cloudflare Access protects this address, open it in your browser, sign in and reopen the setup guide there.")
+        raise ValueError(f"{url} did not return a Homestead health response. If Cloudflare Access protects this address, open it in a browser, sign in, and open the setup guide there again.")
     note("https_url", url)
     return {"ok": True, "url": url, "at": int(time.time())}
 

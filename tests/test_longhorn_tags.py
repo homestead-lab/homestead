@@ -100,11 +100,11 @@ class StorageClassTagTests(unittest.TestCase):
                                               "node_tags": "rack-a"})
         params = self.sent[-1]["parameters"]
         self.assertEqual(("ssd", "rack-a"), (params["diskSelector"], params["nodeSelector"]))
-        self.assertIn("only node1", result["message"])
+        self.assertIn("Only node1", result["message"])
 
     def test_a_class_no_disk_fits_says_so(self):
         result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-nvme", "disk_tags": ["nvme"]})
-        self.assertIn("will not schedule", result["message"])
+        self.assertIn("are not placed", result["message"])
 
     def test_a_class_without_tags_has_no_selectors(self):
         result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-any"})

@@ -186,7 +186,7 @@ class CleanupTests(unittest.TestCase):
                 self.setUp()
                 self.observe()
                 row = self.api.objects[DV + "/guest-disk"] if resource == "dv" else self.target
-                row["metadata"]["uid"] = "replacement"
+                row["metadata"]["uid"] = "replacing it"
                 with self.assertRaisesRegex(ValueError, "replaced|ownership changed"):
                     self.observe()
                 self.assertEqual([], self.api.writes)
@@ -198,7 +198,7 @@ class CleanupTests(unittest.TestCase):
                 self.promote()
                 path = NS + "/pods/upload" if resource == "worker" else NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch"
                 self.api.objects[path]["metadata"]["ownerReferences"] = [{"kind": "Pod", "uid": "foreign", "controller": True}]
-                with self.assertRaisesRegex(ValueError, "ownership changed"):
+                with self.assertRaisesRegex(ValueError, "owner of the import"):
                     self.clean()
                 self.assertEqual([], self.api.writes)
 
@@ -223,7 +223,7 @@ class CleanupTests(unittest.TestCase):
                     pv["spec"]["claimRef"]["uid"] = "other"
                 else:
                     pv["spec"]["csi"]["volumeHandle"] = "other"
-                with self.assertRaisesRegex(ValueError, "replaced|rebound"):
+                with self.assertRaisesRegex(ValueError, "replaced|bound again"):
                     self.clean()
                 self.assertEqual("Retain", pv["spec"]["persistentVolumeReclaimPolicy"])
                 self.api.objects[PV + "/pv-scratch"] = saved
@@ -318,7 +318,7 @@ class CleanupTests(unittest.TestCase):
         state, pct, message = cleanup.finish(item, self.api.read, self.api.send,
                                             lambda row: checkpoints.append(copy.deepcopy(row)))
         self.assertEqual(("running", 99), (state, pct))
-        self.assertIn("cleanup pending", message)
+        self.assertIn("Cleanup is waiting", message)
         self.assertTrue(item["ref"]["retain_resources"])
         self.assertEqual(1, len(checkpoints))
 
@@ -381,7 +381,7 @@ class JournalTests(unittest.TestCase):
         operations.start("vm-disk-import", "Import disk", {}, "/import", ref)
         for kind, other in (("vm-disk-import", {"namespace": "lab", "name": "guest-disk"}),
                             ("unraid-vm-import", {"namespace": "lab", "disks": [{"dv": "guest-disk"}]})):
-            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "still active or cleaning up"):
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, "still running or cleaning up"):
                 operations.start(kind, "Retry", {}, "/import", other)
 
     def test_external_disk_deletion_enters_cleanup_instead_of_ending_tracking(self):
@@ -391,7 +391,7 @@ class JournalTests(unittest.TestCase):
                          {"namespace": "lab", "name": "guest-disk", "phase": "import", "cdi_cleanup": work})
         result = operations.list_operations()[0]
         self.assertEqual("failed", result["status"])
-        self.assertIn("temporary import storage cleared", result["message"])
+        self.assertIn("temporary storage was cleared", result["message"])
 
     def test_missing_inventory_keeps_tracking_for_later_cleanup(self):
         work = cleanup.receipt(["guest-disk"])

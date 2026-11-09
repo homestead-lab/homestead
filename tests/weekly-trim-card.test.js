@@ -51,8 +51,8 @@ test("a failed volume is named with Longhorn's message, and escaped", () => {
 
 test("off, never run, running, and a trim job of the user's each say so", () => {
   const ctx = view();
-  assert.match(ctx.weeklyTrimCard({ enabled: false, next: "", last: null, running: false, theirs: "" }), /Off · Run now still trims/);
-  assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "" }), /Not run yet/);
+  assert.match(ctx.weeklyTrimCard({ enabled: false, next: "", last: null, running: false, theirs: "" }), /Off\. Run now still trims/);
+  assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "" }), /It has not run yet/);
   const running = ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: true, theirs: "" });
   assert.match(running, /trimming now/);
   assert.doesNotMatch(running, /weeklyTrimRun\(\)/, "no second Run now while one runs");
@@ -62,7 +62,7 @@ test("off, never run, running, and a trim job of the user's each say so", () => 
     "moving a trim that does not run would change nothing");
   // #927: a job an older Housekeeping plan made is the usual one; the card says how to hand the trim back.
   assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "weekly-trim" }),
-    /Delete it under Recurring jobs to let Homestead trim attached volumes instead/);
+    /Delete that schedule to let Homestead trim attached volumes instead/);
 });
 
 // #927: the trim's weekday and hour (UTC) can be moved.

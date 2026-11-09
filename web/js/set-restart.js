@@ -29,13 +29,13 @@ function setRestartBody(plan, node) {
     ...(plan.relied_on || []).map(r => ["Relied on", esc(r)]),
   ]);
   const podList = UI.table([{ label: "Pod to remove" }, { label: "State" }], pods.map(p => [`<span class="mono">${esc(p.name)}</span>`,
-    p.terminating ? "being deleted; made final" : "stuck on the host"]));
+    p.terminating ? "being deleted, now forced" : "stuck on the host"]));
   return `<div class="ui-stack">
     ${UI.lead(esc(`${set.ns}/${set.name} has a pod on ${node}, which has stopped answering.`))}
-    ${set.wait_mode ? UI.callout("warn", "This app is set to wait for its host to come back; this overrides that once") : ""}
+    ${set.wait_mode ? UI.callout("warn", "This app is set to wait for its host to come back. This overrides that setting once.") : ""}
     ${UI.section("What Homestead checked", facts)}
-    ${UI.section("What will happen", `<ul class="ui-list"><li>The stuck pod is removed; the StatefulSet starts it again on another host.</li>
-      <li>Its volume is reattached there. That can take about 6 minutes; a slow start is not a failure.</li></ul>`)}
+    ${UI.section("What will happen", `<ul class="ui-list"><li>The stuck copy is removed, and the StatefulSet starts it again on another host.</li>
+      <li>Its volume is attached there. That can take about 6 minutes, so a slow start is not a failure.</li></ul>`)}
     ${UI.section("Pods", podList)}
     <p class="ui-help">Homestead cannot tell a host that is off from one only cut off from the network.</p>
     ${UI.typedConfirm({ id: "sr_confirm", expect: set.name, button: "sr_run" })}
@@ -47,8 +47,8 @@ window.setRestartReview = async (ns, name, node) => {
   SET_RESTART_PLAN = null;
   let plan;
   try { plan = await api(`/api/statefulset/restart-elsewhere/plan?${new URLSearchParams({ ns, name, node })}`); }
-  catch (e) { return toast(`Could not check this: ${e.message}`, "bad"); }
-  if (plan.ready && (!plan.review_token || !plan.set)) return toast("The review is incomplete; try again", "bad");
+  catch (e) { return toast(`This could not be checked. ${e.message}`, "bad"); }
+  if (plan.ready && (!plan.review_token || !plan.set)) return toast("The review is incomplete. Try again.", "bad");
   if (plan.ready) SET_RESTART_PLAN = { ...plan, set: { ...plan.set, ns, name } };
   modal(`Start on another host · ${name}`, setRestartBody(plan.ready ? SET_RESTART_PLAN : plan, node), true);
   window.applyRole?.();
@@ -98,7 +98,7 @@ window.setRestartFollow = async (id, name) => {
     const done = last?.status === "succeeded", stopped = last?.status === "failed" || last?.status === "cancelled";
     if (last) $("#srProgress").innerHTML = UI.progress(done ? 100 : last.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
       + (last.message ? UI.lead(esc(last.message)) : "")
-      + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now; this view carries on by itself.") : "")
+      + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. This view continues automatically.") : "")
       + UI.actions(UI.cancel("Close"));
     else if (!offline) { $("#srProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs.") + UI.actions(UI.cancel("Close")); return; }
     if (done || stopped) { window.refreshOperations?.(true); return; }

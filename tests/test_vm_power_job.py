@@ -62,8 +62,8 @@ class VMPowerJobTests(unittest.TestCase):
         job = ops.list_operations()[0]
         self.assertEqual("succeeded", job["status"])
         self.assertFalse(job["dismissible"])
-        self.assertIn("guest application health is not verified", job["message"])
-        with self.assertRaisesRegex(ValueError, "receipt"):
+        self.assertIn("health of the guest\'s apps is not checked", job["message"])
+        with self.assertRaisesRegex(ValueError, "power record"):
             ops.dismiss(job["id"])
         self.assertEqual(0, ops.dismiss_finished()["dismissed"])
         with mock.patch.object(ops, "MAX_OPERATIONS", 0):
@@ -101,8 +101,8 @@ class VMPowerJobTests(unittest.TestCase):
         self.dispatch()
         self.vmi = None
         self.assertEqual("running", ops.list_operations()[0]["status"])
-        self.vm["metadata"]["uid"] = "replacement"
-        self.assertIn("identity changed", ops.list_operations()[0]["message"])
+        self.vm["metadata"]["uid"] = "replacing it"
+        self.assertIn("changed or is being deleted", ops.list_operations()[0]["message"])
 
     def test_lost_response_never_auto_resolves_even_if_guest_looks_ready(self):
         send = mock.Mock(side_effect=TimeoutError("private details"))
@@ -138,7 +138,7 @@ class VMPowerJobTests(unittest.TestCase):
             return original(ident, phase, *args, **kwargs)
         send = mock.Mock(return_value={"ok": True})
         with mock.patch.object(ops, "record_phase", side_effect=record):
-            with self.assertRaisesRegex(ValueError, "accepted power but its receipt"):
+            with self.assertRaisesRegex(ValueError, "accepted the power request, but its record"):
                 self.dispatch(send=send)
         self.assertEqual("dispatching", ops.stored()[0]["ref"]["phase"])
         with self.assertRaisesRegex(ValueError, "already has job"):

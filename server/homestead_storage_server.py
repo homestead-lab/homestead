@@ -196,8 +196,8 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
         if time.time() - float(since) > 15 * 60:
             last_error = (item.get(JOB_ERRORS.KEY) or {}).get("error")    # the job's last look, if it raised
             return _restore_refused(item, cfg, (
-                f"The restore could not start within 15 minutes ({last_error}); resume once it has cleared" if last_error
-                else "CSI snapshot setup did not become ready; repair snapshot support, then resume this restore"))
+                f"The restore could not start within 15 minutes ({last_error}). Resume it once that has cleared." if last_error
+                else "CSI snapshot setup did not become ready. Repair snapshot support, then resume this restore."))
         existing = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
         if existing:
             annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
@@ -235,7 +235,7 @@ def storage_runtime_check():
     except STORAGE_WORKFLOW.JOURNAL.Held:
         raise
     except Exception:
-        raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
+        raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead could not confirm that its copies are compatible. Restore access to the cluster and the shared data before moving storage.") from None
 
 
 def _storage_runtime_loop():
@@ -269,7 +269,7 @@ def storage_volume_action(volume, action):
 
 def storage_legacy_cancel(item, options):
     if "storage_protocol" in item.get("ref", {}):
-        raise ValueError("Use the storage move recovery review; legacy rollback is not supported for this job")
+        raise ValueError("Use the storage move recovery review. The older rollback is not supported for this job.")
     with OPS.transaction(), STORAGE_GUARD.dispatching(item):
         return CANCEL.reclass_cancel(item, options)
 
@@ -623,11 +623,11 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
     except Exception:
         users = None
     if users is None:
-        raise ValueError(f"a volume named {name} already exists in {ns}. Homestead could not check what uses it; "
-                         "try again, give this app's volume another name, or choose the existing one to share it")
+        raise ValueError(f"a volume named {name} already exists in {ns}. Homestead could not check what uses it. "
+                         "Try again, give this app's volume another name, or choose the existing one to share it.")
     if users:
-        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it; "
-                         "give this app's volume another name, or choose the existing one to share it")
+        raise ValueError(f"a volume named {name} already exists in {ns} and {', '.join(users)} uses it. "
+                         "Give this app's volume another name, or choose the existing one to share it.")
     return name
 
 

@@ -38,9 +38,9 @@ try {
     await page.evaluate(() => clusterRemovePick());
     await page.waitForFunction(() => !document.querySelector("#mbody .spin2"));
     const hosts = await page.locator("#mbody").innerText();
-    assert.match(hosts, /Could not read the hosts/);
+    assert.match(hosts, /The hosts could not be read/);
     assert.match(hosts, /timed out/);
-    assert.doesNotMatch(hosts, /Every host is Ready/);
+    assert.doesNotMatch(hosts, /Every host is ready/);
     await page.evaluate(() => closeModal());
 
     // Data protection: unread backup storage is unknown, and "Set up" is not offered.
@@ -49,7 +49,7 @@ try {
     await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Data protection"));
     const protect = await page.locator("body").innerText();
     assert.match(protect, /Backup storage\s*unknown/i);
-    assert.equal(await page.getByRole("button", {name: "Set up storage"}).count(), 0, "Set up is not offered on a guess");
+    assert.equal(await page.getByRole("button", {name: "Set up backup storage"}).count(), 0, "Set up is not offered on a guess");
     assert.doesNotMatch(protect, /No backup storage/);
 
     // Volumes: a part that could not be read is named, not silently left out.
@@ -73,7 +73,7 @@ try {
     await settled(page);
     const owner = await page.locator("#mbody").innerText();
     assert.match(owner, /Could not read what uses this volume[\s\S]*timed out/);
-    assert.doesNotMatch(owner, /Nothing here declares a user/);
+    assert.doesNotMatch(owner, /No app here sets a user/);
     await page.evaluate(() => closeModal());
 
     // New storage class: unread disks are not "no disk has a tag yet".
@@ -103,28 +103,28 @@ try {
     await page.evaluate(failing, "/api/vm/create-options");
     await page.evaluate(() => vmNetworkAdd());
     await settled(page);
-    assert.match(await body(), /Could not read the network options[\s\S]*timed out/);
+    assert.match(await body(), /The network options could not be read[\s\S]*timed out/);
     assert.doesNotMatch(await body(), /Multus is needed first/);
     await close();
 
     // New VM: no form built on invented options.
     await page.evaluate(() => vmNew());
     await settled(page);
-    assert.match(await body(), /Could not read what a new VM can use[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read what a new VM can use[\s\S]*timed out/);
     assert.equal(await page.locator("#v_steps").count(), 0);
     await close();
 
     // Edit VM: no hosts, images or networks made up when its options are unread.
     await page.evaluate(() => vmEdit("default", "home-assistant-os"));
     await settled(page);
-    assert.match(await body(), /Could not read what this VM can use[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read what this VM can use[\s\S]*timed out/);
     assert.equal(await page.locator("#ve_strategy, #ve_node").count(), 0);
     await close();
 
     // New k3s cluster: the same, and the failed read is not kept as the options.
     await page.evaluate(() => k3sCluster());
     await settled(page);
-    assert.match(await body(), /Could not read what a new k3s cluster can use[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read what a new k3s cluster can use[\s\S]*timed out/);
     assert.equal(await page.locator("#k_name").count(), 0);
     assert.equal(await page.evaluate(() => window.__vmCreateOptions), undefined);
     await close();
@@ -133,7 +133,7 @@ try {
     await page.evaluate(failing, "/api/imports/cleanup-plan");
     await page.evaluate(() => importRemove("media-server", "succeeded"));
     await settled(page);
-    assert.match(await body(), /Could not check what this import created[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not check what this import created[\s\S]*timed out/);
     assert.equal(await page.locator("#imr_workload, .imr-volume").count(), 0);
     await close();
 
@@ -167,14 +167,14 @@ try {
       return uvmImport("unraid", "v1");
     });
     await settled(page);
-    assert.match(await body(), /Could not read what this import needs[\s\S]*timed out/);
+    assert.match(await body(), /The import settings could not be read[\s\S]*timed out/);
     await close();
 
     // The import wizard's storage step: no form when the storage options are unread.
     await page.evaluate(failing, "/api/deploy/options");
     await page.evaluate(() => importSetup("unraid", "media-server"));
     await settled(page);
-    assert.match(await body(), /Could not read the storage options[\s\S]*timed out/);
+    assert.match(await body(), /The storage options could not be read[\s\S]*timed out/);
     assert.equal(await page.locator("#im_steps").count(), 0);
     await close();
 
@@ -187,7 +187,7 @@ try {
       // In one step, so a refresh cannot refill the list of apps in between.
       await page.evaluate(() => { STATE.data.wl = null; wlEdit("lab", "frigate", true); });
       await settled(page);
-      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.match(await body(), new RegExp(`(Homestead could not read ${what}|${what[0].toUpperCase()}${what.slice(1)} could not be read)[\\s\\S]*timed out`));
       assert.equal(await page.locator("#e_steps").count(), 0, `no edit form without ${what}`);
       await close();
     }
@@ -198,16 +198,16 @@ try {
       await page.evaluate(() => { window.api = window.__realApi; });
       await page.evaluate(failing, path);
       await page.evaluate(() => go("deploy"));
-      await page.waitForFunction(() => /Could not read|Basics/.test(document.querySelector("#views")?.innerText || ""));
+      await page.waitForFunction(() => /could not read|Basics/.test(document.querySelector("#views")?.innerText || ""));
       const deploy = await page.locator("#views").innerText();
-      assert.match(deploy, new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.match(deploy, new RegExp(`(Homestead could not read ${what}|${what[0].toUpperCase()}${what.slice(1)} could not be read)[\\s\\S]*timed out`));
       assert.equal(await page.locator("#d_target_mode").count(), 0, `no deploy form without ${what}`);
     }
     // Retry after a failed read opens the template that was asked for, not an empty form.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(failing, "/api/namespaces");
     await page.evaluate(() => { window.__deployPrefill = { name: "from-template" }; go("deploy"); });
-    await page.waitForFunction(() => /Could not read the namespaces/.test(document.querySelector("#views")?.innerText || ""));
+    await page.waitForFunction(() => /Homestead could not read the namespaces/.test(document.querySelector("#views")?.innerText || ""));
     await page.evaluate(() => { window.api = window.__realApi; go("deploy"); });
     await page.waitForSelector("#d_target_mode");
     assert.equal(await page.evaluate(() => DCFG.workload_name), "from-template");
@@ -218,7 +218,7 @@ try {
       await page.evaluate(failing, path);
       await page.evaluate(() => composeImport());
       await settled(page);
-      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.match(await body(), new RegExp(`(Homestead could not read ${what}|${what[0].toUpperCase()}${what.slice(1)} could not be read)[\\s\\S]*timed out`));
       assert.equal(await page.locator("#composeNs").count(), 0, `no Compose form without ${what}`);
       await close();
     }
@@ -231,7 +231,7 @@ try {
       await page.evaluate(failing, path);
       await page.evaluate(disk => vmNew(disk, disk ? "lab" : ""), disk);
       await settled(page);
-      assert.match(await body(), new RegExp(`Could not read ${what}[\\s\\S]*timed out`));
+      assert.match(await body(), new RegExp(`(Homestead could not read ${what}|${what[0].toUpperCase()}${what.slice(1)} could not be read)[\\s\\S]*timed out`));
       assert.equal(await page.locator("#v_steps").count(), refuses ? 0 : 1, `${path} ${disk ? "with" : "without"} a chosen disk`);
       await close();
     }
@@ -245,7 +245,7 @@ try {
     const before = await page.evaluate(() => { deployAddContainer(); collect(); return JSON.stringify(DCFG); });
     await page.evaluate(failing, "/api/deploy/options");
     await page.evaluate(() => deployRemovePrimary());
-    await page.waitForFunction(() => /Could not read the storage options/.test(document.querySelector("#toast")?.innerText || ""));
+    await page.waitForFunction(() => /The storage options could not be read|Homestead could not read the storage options/.test(document.querySelector("#toast")?.innerText || ""));
     assert.equal(await page.evaluate(() => JSON.stringify(DCFG)), before, "the form's settings are unchanged");
 
     // Addresses: an unread network is not "no addresses to choose from".
@@ -256,7 +256,7 @@ try {
     await noNetwork();
     await page.evaluate(() => importSetup("unraid", "media-server"));
     await settled(page);
-    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read the network[\s\S]*timed out/);
     assert.equal(await page.locator("#im_steps").count(), 0, "no import wizard without the network");
     await close();
 
@@ -274,7 +274,7 @@ try {
     await page.evaluate(() => { STATE.platform = { ...(STATE.platform || {}), load_balancer: "kube-vip" };
       STATE.data.sambaInstalled = false; return sambaSet(true); });
     await settled(page);
-    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read the network[\s\S]*timed out/);
     assert.equal(await page.locator("#mbody").getByRole("button", {name: "Install", exact: true}).count(), 0, "no Install for Samba");
     await close();
 
@@ -282,7 +282,7 @@ try {
     await page.evaluate(() => { STATE.platform = { ...(STATE.platform || {}), load_balancer: "kube-vip" };
       STATE.data.nfs = { installed: false, exports: [{ name: "media" }] }; return nfsSet(true); });
     await settled(page);
-    assert.match(await body(), /Could not read the network[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read the network[\s\S]*timed out/);
     assert.equal(await page.locator("#mbody").getByRole("button", {name: "Install NFS server"}).count(), 0);
     await close();
 
@@ -295,7 +295,7 @@ try {
       return newShare();
     });
     await page.waitForFunction(() => document.querySelector("#sh_smb") && !document.querySelector("#sh_smb .spin2"));
-    assert.match(await page.locator("#sh_smb").innerText(), /Could not read the network[\s\S]*timed out/);
+    assert.match(await page.locator("#sh_smb").innerText(), /Homestead could not read the network[\s\S]*timed out/);
     await close();
     await page.evaluate(platform => { STATE.platform = JSON.parse(platform); }, platform);
     await page.evaluate(() => { window.api = window.__realApi; });
@@ -365,18 +365,18 @@ try {
         && new RegExp(source).test(document.querySelector("#views")?.innerText || ""), expected.source);
       return page.locator("#views").innerText();
     };
-    const metrics = await dashAfter("/api/history", /Could not read the recorded metrics/);
-    assert.match(metrics, /Could not read the recorded metrics[\s\S]*timed out/);
+    const metrics = await dashAfter("/api/history", /The recorded metrics could not be read/);
+    assert.match(metrics, /The recorded metrics could not be read[\s\S]*timed out/);
     assert.doesNotMatch(metrics, /Waiting for recorded metrics/);
-    const storage = await dashAfter("/api/storage", /Could not read storage/);
-    assert.match(storage, /Could not read storage[\s\S]*timed out/);
+    const storage = await dashAfter("/api/storage", /Storage could not be read/);
+    assert.match(storage, /Storage could not be read[\s\S]*timed out/);
     assert.doesNotMatch(storage, /Storage figures aren.t available yet/);
-    const limits = await dashAfter("/api/longhorn/capacity", /Could not read Longhorn.s allocation limits/);
-    assert.match(limits, /Could not read Longhorn.s allocation limits[\s\S]*timed out/);
+    const limits = await dashAfter("/api/longhorn/capacity", /Longhorn.s allocation limits could not be read/);
+    assert.match(limits, /Longhorn.s allocation limits could not be read[\s\S]*timed out/);
     // Where it is not known that Longhorn is there, its limits are not reported unread.
     const knownPlatform = await page.evaluate(() => { const was = STATE.platform; STATE.platform = null; return was; });
     const unknown = await dashAfter("/api/longhorn/capacity", /Compute[\s\S]*Storage/);
-    assert.doesNotMatch(unknown, /Could not read Longhorn.s allocation limits/);
+    assert.doesNotMatch(unknown, /Longhorn.s allocation limits could not be read/);
     await page.evaluate(was => { STATE.platform = was; }, knownPlatform);
 
     // Hosts: one failed uptime read keeps the last good strips and says so,
@@ -385,9 +385,9 @@ try {
     await page.waitForFunction(() => document.querySelector(".node-upstrip .uptime-strip i[class^='uptime-']"));
     await page.evaluate(failing, "/api/nodes/uptime");
     await page.evaluate(() => viewNodes());
-    await page.waitForFunction(() => /Could not read uptime/.test(document.querySelector("#views")?.innerText || ""));
+    await page.waitForFunction(() => /The uptime could not be read/.test(document.querySelector("#views")?.innerText || ""));
     assert.ok(await page.locator(".node-upstrip .uptime-strip i[class^='uptime-']").count(), "the last good strips stay");
-    assert.match(await page.locator(".node-upstrip").first().innerText(), /Could not read uptime[\s\S]*timed out/);
+    assert.match(await page.locator(".node-upstrip").first().innerText(), /The uptime could not be read[\s\S]*timed out/);
 
     // Hosts: unread uptime is not "no samples yet", on the list and on a host's page.
     await page.evaluate(failing, "/api/nodes/uptime");
@@ -396,16 +396,16 @@ try {
     const tips = await page.evaluate(() => [...document.querySelectorAll(".node-upstrip")].map(x => x.dataset.tip));
     assert.ok(tips.length, "the host list shows uptime strips");
     for (const tip of tips) {
-      assert.match(tip, /Could not read uptime: timed out/);
-      assert.doesNotMatch(tip, /No samples yet/);
+      assert.match(tip, /The uptime could not be read. timed out/);
+      assert.doesNotMatch(tip, /No measurements yet/);
     }
     await page.evaluate(async () => {
       document.querySelector("#views").insertAdjacentHTML("beforeend", '<div id="nodeUptime"></div>');
       await nodeUptimePaint({ name: "harvester-node1", status: "Ready" });
     });
     const hostUptime = await page.locator("#nodeUptime").innerText();
-    assert.match(hostUptime, /Could not read uptime[\s\S]*timed out/);
-    assert.doesNotMatch(hostUptime, /No samples yet/);
+    assert.match(hostUptime, /The uptime could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(hostUptime, /No measurements yet/);
 
     // Hardware feature editor: unread hosts are named, not an empty host list
     // with "no probe data"; the paths can still be typed in.
@@ -413,8 +413,8 @@ try {
     await page.evaluate(() => { STATE.data.nodes = null; STATE.data.ov = null; return hardwareFeatureEdit(""); });
     await page.waitForSelector("#hf_id");
     const hardware = await page.locator("#mbody").innerText();
-    assert.match(hardware, /Could not read the hosts[\s\S]*timed out/);
-    assert.doesNotMatch(hardware, /No probe data from this host yet/);
+    assert.match(hardware, /The hosts could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(hardware, /The probe has not reported from this host yet/);
     assert.equal(await page.locator("#hf_browse_node").count(), 0, "no host list built on nothing");
     assert.equal(await page.locator("#hf_host").count(), 1, "the path can still be typed");
     await page.evaluate(() => { window.api = window.__realApi; closeModal(); });
@@ -423,9 +423,9 @@ try {
     await page.evaluate(failing, "/api/lh/backupvolumes");
     await page.evaluate(() => viewProtect());
     await page.waitForFunction(() => !document.querySelector("#views.refreshing")
-      && /Could not read the backups/.test(document.querySelector("#views")?.innerText || ""));
+      && /The backups could not be read/.test(document.querySelector("#views")?.innerText || ""));
     const backups = await page.locator("#views").innerText();
-    assert.match(backups, /Could not read the backups[\s\S]*timed out/);
+    assert.match(backups, /The backups could not be read[\s\S]*timed out/);
     assert.doesNotMatch(backups, /No backups on the target yet|No backup target, so no backups/);
 
     // A volume's snapshots: its unread backups are not "no backups".
@@ -433,7 +433,7 @@ try {
     await page.evaluate(() => lhSnaps("pvc-demo-frigate", "frigate"));
     await settled(page);
     const snaps = await page.locator("#mbody").innerText();
-    assert.match(snaps, /Could not read this volume's backups[\s\S]*timed out/);
+    assert.match(snaps, /This volume's backups could not be read[\s\S]*timed out/);
     assert.doesNotMatch(snaps, /no backups — needs a backup target/);
     await page.evaluate(() => closeModal());
 
@@ -463,8 +463,8 @@ try {
     await page.waitForFunction(() => !document.querySelector("#views.refreshing")
       && document.querySelector(".phead")?.innerText.includes("Network shares"));
     const shares = await page.locator("#views").innerText();
-    assert.match(shares, /Could not read the SMB users[\s\S]*timed out/);
-    assert.doesNotMatch(shares, /No SMB users yet/);
+    assert.match(shares, /The SMB users could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(shares, /There are no SMB users yet/);
 
     // Longhorn settings: the detached-volume rebuild setting, unread, is named, not left out.
     await page.evaluate(failing, "/api/longhorn/offline-rebuilding");
@@ -472,7 +472,7 @@ try {
       document.querySelector("#views").insertAdjacentHTML("beforeend", '<div id="lhSettingsCard"></div>');
       await lhSettingsPaint();
     });
-    assert.match(await page.locator("#lhSettingsCard").innerText(), /Could not read whether Longhorn rebuilds copies of detached volumes[\s\S]*timed out/);
+    assert.match(await page.locator("#lhSettingsCard").innerText(), /Homestead could not read whether Longhorn rebuilds copies of detached volumes[\s\S]*timed out/);
 
     // Disk and node tags: the editor opens, and says the tags in use could not be read.
     await page.evaluate(failing, "/api/disks");
@@ -480,15 +480,15 @@ try {
       await page.evaluate(() => { STATE.data.disks = null; });
       await page.evaluate(open);
       await page.waitForSelector("#tg_text");
-      assert.match(await page.locator("#mbody").innerText(), /Could not read the tags already in use[\s\S]*timed out/);
+      assert.match(await page.locator("#mbody").innerText(), /The tags already in use could not be read[\s\S]*timed out/);
       await page.evaluate(() => closeModal());
     }
 
     // Changing a storage class: a poll that fails says so and keeps trying.
     await page.evaluate(failing, "/api/operations");
     await page.evaluate(() => reclassWatch("op1"));
-    await page.waitForFunction(() => /Could not read the job/.test(document.querySelector("#mbody")?.innerText || ""));
-    assert.match(await page.locator("#mbody").innerText(), /Could not read the job[\s\S]*timed out[\s\S]*still trying/);
+    await page.waitForFunction(() => /The job could not be read/.test(document.querySelector("#mbody")?.innerText || ""));
+    assert.match(await page.locator("#mbody").innerText(), /The job could not be read[\s\S]*timed out[\s\S]*Still trying/);
     // Nothing was shown yet, so the dialog offers a way out.
     assert.equal(await page.locator("#mbody").getByRole("button", {name: "Close"}).count(), 1, "a first failed read can be closed");
     await page.evaluate(() => { clearInterval(window.__reclassTimer); window.api = window.__realApi; closeModal(); });
@@ -499,7 +499,7 @@ try {
     await page.evaluate(failing, "/api/operations");
     await page.waitForSelector("#rc_unread", {timeout: 10000});
     assert.ok(await page.locator("#mbody .rc-steps").count(), "the last view stays");
-    assert.match(await page.locator("#rc_unread").innerText(), /Could not read the job[\s\S]*timed out[\s\S]*still trying/);
+    assert.match(await page.locator("#rc_unread").innerText(), /The job could not be read[\s\S]*timed out[\s\S]*Still trying/);
     // The next good poll takes the note away.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.waitForFunction(() => !document.querySelector("#rc_unread"), null, {timeout: 10000});
@@ -509,8 +509,8 @@ try {
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(failing, "/api/images/vm");
     await page.evaluate(() => viewImages());
-    await page.waitForFunction(() => /Could not read the VM images/.test(document.body.innerText), null, {timeout: 10000});
-    assert.match(await page.locator("body").innerText(), /Could not read the VM images[\s\S]*timed out/);
+    await page.waitForFunction(() => /The VM images could not be read/.test(document.body.innerText), null, {timeout: 10000});
+    assert.match(await page.locator("body").innerText(), /The VM images could not be read[\s\S]*timed out/);
 
     // Import: unread hosts and storage class details are named with the rest.
     for (const [setup, arg, what] of [[failing, "/api/nodes", "hosts"],
@@ -535,14 +535,14 @@ try {
       return found;
     });
     assert.deepEqual(left, {pvcs: 0, options: 0}, "another namespace's volumes are not offered");
-    await page.waitForFunction(() => /Could not read the volumes in other/.test(document.body.innerText), null, {timeout: 5000});
+    await page.waitForFunction(() => /The volumes in other[\s\S]*could not be read/.test(document.body.innerText), null, {timeout: 5000});
 
     // The import wizard: hosts not read just now are said; the hardware shown is from earlier.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(failing, "/api/nodes");
     await page.evaluate(() => importSetup("unraid", "media-server"));
     await settled(page);
-    assert.match(await body(), /Could not read the hosts just now[\s\S]*timed out/);
+    assert.match(await body(), /The hosts could not be read[\s\S]*timed out/);
     await close();
 
     // If a host fails: Longhorn's policy unread is said, not left out.
@@ -550,7 +550,7 @@ try {
     await page.evaluate(failing, "/api/longhorn/capacity");
     await page.evaluate(() => wlFailover());
     await settled(page);
-    assert.match(await body(), /Could not read whether apps with storage can move off a failed host[\s\S]*timed out/);
+    assert.match(await body(), /Homestead could not read whether apps with storage can move off a failed host[\s\S]*timed out/);
     await close();
 
     // If a host fails: an unread container list is said, and nothing is saved against an old one.
@@ -558,12 +558,12 @@ try {
     await page.evaluate(failing, "/api/workloads");
     await page.evaluate(() => wlFailover());
     await settled(page);
-    assert.match(await body(), /Could not read the containers[\s\S]*timed out/);
+    assert.match(await body(), /The containers could not be read[\s\S]*timed out/);
     assert.equal(await page.locator("#mbody select[data-fo]").count(), 0, "no policy is offered against an old list");
     assert.equal(await page.locator("#mbody button", {hasText: "Save changes"}).count(), 0, "Save is not offered");
     await close();
 
-    // A container's LAN address: unread networks are not "No LAN network yet", and the failure is not kept.
+    // A container's LAN address: unread networks are not "There is no LAN network yet", and the failure is not kept.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(failing, "/api/vm/create-options");
     const lan = await page.evaluate(async () => {
@@ -573,7 +573,7 @@ try {
       window.__vmCreateOptions = kept;
       return {html, cached};
     });
-    assert.match(lan.html, /Could not read the networks[\s\S]*timed out/);
+    assert.match(lan.html, /The networks could not be read[\s\S]*timed out/);
     assert.doesNotMatch(lan.html, /No LAN network/);
     assert.equal(lan.cached, false, "a failed read is not kept as the answer");
 
@@ -599,7 +599,7 @@ try {
       document.querySelector("#rm_left").remove();
       return text;
     });
-    assert.match(leftovers, /Could not read what is left over[\s\S]*timed out/);
+    assert.match(leftovers, /The leftovers could not be read[\s\S]*timed out/);
     assert.doesNotMatch(leftovers, /Nothing is left over/);
 
     // The Cluster page's cleanup card: unread is said, and the last card read is not drawn again as current.
@@ -611,7 +611,7 @@ try {
       document.querySelector("#clusterCleanup").remove();
       return {text, kept: STATE.data.cleanupHtml || ""};
     });
-    assert.match(cleanup.text, /Could not read what hosts left behind[\s\S]*timed out/);
+    assert.match(cleanup.text, /What removed hosts left behind could not be read[\s\S]*timed out/);
     assert.equal(cleanup.kept, "", "neither the old card nor the error is drawn first next time");
 
     // Adding a host: unread hosts are not "Waiting for a new host".
@@ -623,7 +623,7 @@ try {
       clearTimeout(ONBOARD.timer);
       return document.querySelector("#guideWatch").innerText;
     });
-    assert.match(watching, /Could not read the hosts[\s\S]*timed out/);
+    assert.match(watching, /The hosts could not be read[\s\S]*timed out/);
     assert.doesNotMatch(watching, /Waiting for a new host/);
     await close();
 
@@ -632,10 +632,10 @@ try {
     await page.evaluate(failing, "/api/volumes");
     await page.evaluate(() => { fileManager("lab", "frigate-config"); });
     await page.waitForSelector("#fm_pane0 select");
-    await page.waitForFunction(() => /Could not read the other volumes/.test(document.querySelector("#fm_pane0 select")?.innerHTML || ""),
+    await page.waitForFunction(() => /The other volumes could not be read/.test(document.querySelector("#fm_pane0 select")?.innerHTML || ""),
       null, {timeout: 10000});
     const picker = await page.locator("#fm_pane0 select").innerHTML();
-    assert.match(picker, /Could not read the other volumes[\s\S]*timed out/);
+    assert.match(picker, /The other volumes could not be read[\s\S]*timed out/);
     assert.doesNotMatch(picker, /an-old-volume/);
     await page.evaluate(() => fmClose());
 
@@ -663,7 +663,7 @@ try {
     await page.evaluate(failing, "/api/workloads");
     await page.evaluate(() => portalEdit());
     await settled(page);
-    assert.match(await body(), /Could not read the containers[\s\S]*timed out/);
+    assert.match(await body(), /The containers could not be read[\s\S]*timed out/);
     await close();
 
     // Schedule: an unread last run is said, not left out (it may have been refused).
@@ -672,14 +672,14 @@ try {
     await page.evaluate(failing, "/api/power-schedules");
     await page.evaluate(() => vmSchedule("lab", "k3s-demo-server-1"));
     await page.waitForFunction(() => (document.querySelector("#sc_last")?.innerText || "").length, null, {timeout: 5000});
-    assert.match(await page.locator("#sc_last").innerText(), /Could not read how the last stop or start went[\s\S]*timed out/);
+    assert.match(await page.locator("#sc_last").innerText(), /The result of the last stop or start could not be read[\s\S]*timed out/);
     await close();
 
     // Schedule opened where the VMs were not read: its schedule is read, never the defaults offered in its place.
     await page.evaluate(() => { STATE.data.vms = null; });
     await page.evaluate(() => vmSchedule("lab", "k3s-demo-server-1"));
     await settled(page);
-    assert.match(await body(), /Could not read this schedule[\s\S]*timed out/);
+    assert.match(await body(), /This schedule could not be read[\s\S]*timed out/);
     assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 0, "nothing is saved over a schedule not read");
     await close();
     await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = null; });
@@ -714,7 +714,7 @@ try {
     await page.evaluate(failing, "/api/resources/events");
     await page.evaluate(() => { const r = STATE.data.resList.rows[0]; return resOpen(r.namespace, r.name); });
     await page.waitForFunction(() => document.querySelector("#res_events")?.textContent !== "loading", null, {timeout: 5000});
-    assert.match(await page.evaluate(() => document.querySelector("#res_events").textContent), /Could not read the events[\s\S]*timed out/);
+    assert.match(await page.evaluate(() => document.querySelector("#res_events").textContent), /The events could not be read[\s\S]*timed out/);
     await close();
 
     // Resources: an unread list is not "None."
@@ -723,62 +723,62 @@ try {
     await page.evaluate(() => viewResources());
     await page.waitForFunction(() => /timed out/.test(document.querySelector(".res-main")?.textContent || ""));
     assert.doesNotMatch(await page.locator(".res-main").innerText(), /None\./);
-    assert.match(await page.locator(".res-main").innerText(), /Could not read them/);
+    assert.match(await page.locator(".res-main").innerText(), /They could not be read/);
 
     // Resources: unread namespaces are said, not kept as none, and Create does not offer an empty choice.
     await page.evaluate(() => { window.api = window.__realApi; STATE.data.namespacesAll = undefined; });
     await page.evaluate(failingExact, "/api/resources/list?group=&version=v1&resource=namespaces");
     await page.evaluate(() => viewResources());
     await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Resources"));
-    assert.match(await page.locator(".res-main").textContent(), /Could not read the namespaces/);
+    assert.match(await page.locator(".res-main").textContent(), /The namespaces could not be read/);
     await page.evaluate(() => resCreate());
-    assert.match(await body(), /Could not read the namespaces[\s\S]*timed out/);
+    assert.match(await body(), /The namespaces could not be read[\s\S]*timed out/);
     assert.equal(await page.locator("#rc_ns").evaluate(e => e.tagName), "INPUT", "the namespace is typed, not picked from an unread list");
     await close();
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(() => viewResources());
     assert.ok(await page.evaluate(() => (STATE.data.namespacesAll || []).length > 0), "the failure is not kept: the next visit reads them");
 
-    // Monitoring: unread checks are said, not "First checks under way".
+    // Monitoring: unread checks are said, not "First checks in progress".
     await page.evaluate(() => { window.api = window.__realApi; STATE.data.uptime = undefined; });
     await page.evaluate(failing, "/api/uptime");
     await page.evaluate(() => viewMonitoring());
     await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Monitoring"));
     const monitor = await page.locator("body").innerText();
-    assert.match(monitor, /Could not read the checks[\s\S]*timed out/);
-    assert.doesNotMatch(monitor, /First checks under way/);
+    assert.match(monitor, /The checks could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(monitor, /First checks in progress/);
     assert.doesNotMatch(await page.locator(".phead").innerText(), /\b0 up\b/, "no count of checks not read");
-    assert.match(await page.evaluate(() => monitorWidget()), /Could not read the checks/, "the widget does not spin for ever");
+    assert.match(await page.evaluate(() => monitorWidget()), /The checks could not be read/, "the widget does not spin for ever");
     await page.evaluate(() => wlMonitoring("lab", "paperless"));
-    assert.match(await body(), /Could not read the checks[\s\S]*timed out/);
-    assert.doesNotMatch(await body(), /First checks under way/);
+    assert.match(await body(), /The checks could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(await body(), /First checks in progress/);
     await close();
     // Checks read before are kept, and said to be from before.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(() => loadUptime());
     await page.evaluate(failing, "/api/uptime");
     await page.evaluate(() => viewMonitoring());
-    await page.waitForFunction(() => /Could not read the checks just now/.test(document.body.innerText), null, {timeout: 5000});
-    assert.match(await page.locator("body").innerText(), /Could not read the checks just now[\s\S]*timed out/);
+    await page.waitForFunction(() => /The checks could not be read just now/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /The checks could not be read just now[\s\S]*timed out/);
     // The Containers page says so too: its Down and Slow marks are from the last read.
     await page.evaluate(() => viewWorkloads());
-    await page.waitForFunction(() => /Could not read the checks just now/.test(document.querySelector(".containers-page")?.innerText || ""), null, {timeout: 5000});
+    await page.waitForFunction(() => /The checks could not be read just now/.test(document.querySelector(".containers-page")?.innerText || ""), null, {timeout: 5000});
 
     // Monitoring: unread VMs are said, not left out.
     await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = undefined; });
     await page.evaluate(failing, "/api/vms");
     await page.evaluate(() => viewMonitoring());
-    await page.waitForFunction(() => /Could not read the VMs/.test(document.body.innerText), null, {timeout: 5000});
-    assert.match(await page.locator("body").innerText(), /Could not read the VMs[\s\S]*timed out/);
+    await page.waitForFunction(() => /The VMs could not be read/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /The VMs could not be read[\s\S]*timed out/);
     // The dashboard's widget reads them the same way: unread VMs are not stored as none.
     await page.evaluate(() => { STATE.data.vms = undefined; });
     // The widget is optional and off in the demo's layout, so its read is checked by its source and run directly.
     assert.doesNotMatch(await page.evaluate(() => Dashboard.loadMonitoring.toString()), /\.catch\(\(\) => \[\]\)/);
     await page.evaluate(() => loadMonitorLists());
     assert.equal(await page.evaluate(() => Array.isArray(STATE.data.vms)), false, "the dashboard keeps no empty list for unread VMs");
-    assert.match(await page.evaluate(() => monitorWidget()), /Could not read the VMs/);
+    assert.match(await page.evaluate(() => monitorWidget()), /The VMs could not be read/);
     await page.evaluate(() => vmMonitoring("lab", "k3s-demo-server-1"));
-    assert.match(await body(), /Could not read k3s-demo-server-1's settings/);
+    assert.match(await body(), /k3s-demo-server-1's settings could not be read/);
     await close();
 
     // Monitoring: the apps' refresh failing marks the list as the one last read.
@@ -787,14 +787,14 @@ try {
     await page.evaluate(failing, "/api/workloads");
     // The refresh repaints only the Monitoring page, so the app is told it is there.
     await page.evaluate(() => { window.__view = STATE.view; STATE.view = "monitoring"; return viewMonitoring(); });
-    await page.waitForFunction(() => /Could not read the apps just now/.test(document.body.innerText), null, {timeout: 5000});
-    assert.match(await page.locator("body").innerText(), /Could not read the apps just now[\s\S]*timed out/);
+    await page.waitForFunction(() => /The apps could not be read just now/.test(document.body.innerText), null, {timeout: 5000});
+    assert.match(await page.locator("body").innerText(), /The apps could not be read just now[\s\S]*timed out/);
     await page.evaluate(() => { STATE.view = window.__view; });
 
     // A monitoring dialog for one not in a read list: nothing is saved over settings not read.
     await page.evaluate(() => { window.api = window.__realApi; STATE.data.vms = null; });
     await page.evaluate(() => vmMonitoring("lab", "k3s-demo-server-1"));
-    assert.match(await body(), /Could not read k3s-demo-server-1's settings/);
+    assert.match(await body(), /k3s-demo-server-1's settings could not be read/);
     assert.equal(await page.locator("#mbody").getByRole("button", {name: "Save"}).count(), 0);
     await close();
     // In a list that was read but lacks it, it is not found; still no Save.
@@ -820,7 +820,7 @@ try {
       startAlertChecks(); await PWA_ALERTS.request;
       return text;
     });
-    assert.match(alerts, /Could not read the alerts just now[\s\S]*timed out/);
+    assert.match(alerts, /The alerts could not be read just now[\s\S]*timed out/);
 
     // Platform pages, on a cluster that is not Harvester.
     await page.goto(`${base}/?demo=1&platform=k3s`);
@@ -830,10 +830,10 @@ try {
     // Network overview: unread required components are said, not left out.
     await page.evaluate(failing, "/api/platform/baseline");
     await page.evaluate(() => { history.replaceState(null, "", "?demo=1&platform=k3s&tab=overview"); viewNetworking(); });
-    await page.waitForFunction(() => /Could not check the required components/.test(document.body.innerText), null, {timeout: 10000});
-    assert.match(await page.locator("body").innerText(), /Could not check the required components[\s\S]*timed out/);
+    await page.waitForFunction(() => /The required components could not be checked/.test(document.body.innerText), null, {timeout: 10000});
+    assert.match(await page.locator("body").innerText(), /The required components could not be checked[\s\S]*timed out/);
 
-    // LAN networks: unread is not "No LAN networks yet"; a list read before is kept, and said to be from before.
+    // LAN networks: unread is not "There are no LAN networks yet"; a list read before is kept, and said to be from before.
     await page.evaluate(() => { window.api = window.__realApi; });
     await page.evaluate(failing, "/api/vm/create-options");
     const nets = await page.evaluate(async () => {
@@ -849,9 +849,9 @@ try {
       window.__vmCreateOptions = kept;
       return {none, old};
     });
-    assert.match(nets.none, /Could not read the LAN networks[\s\S]*timed out/);
-    assert.doesNotMatch(nets.none, /No LAN networks yet/);
-    assert.match(nets.old, /lan-old[\s\S]*Could not read the LAN networks just now[\s\S]*timed out/);
+    assert.match(nets.none, /The LAN networks could not be read[\s\S]*timed out/);
+    assert.doesNotMatch(nets.none, /There are no LAN networks yet/);
+    assert.match(nets.old, /lan-old[\s\S]*The LAN networks could not be read[\s\S]*timed out/);
 
     // Add-ons (Settings › Cluster): each part that could not be read is said.
     const addons = async (path, words) => {
@@ -868,12 +868,12 @@ try {
       assert.match(text, new RegExp(`${words}[\\s\\S]*timed out`), path);
       return text;
     };
-    await addons("/api/addons", "Could not read the add-ons");
-    const health = await addons("/api/self/health", "Could not read the node probe and the SMB server");
+    await addons("/api/addons", "The add-ons could not be read");
+    const health = await addons("/api/self/health", "The node probe and the SMB server could not be read");
     assert.doesNotMatch(health, /Install node probe/, "nothing is installed on a guess");
     assert.doesNotMatch(health, /0 configured|address not assigned/, "the SMB server's shares and address are not read as none");
-    await addons("/api/platform/baseline", "Could not check the required components");
-    await addons("/api/host-console", "Could not read the host console");
+    await addons("/api/platform/baseline", "The required components could not be checked");
+    await addons("/api/host-console", "The host console could not be read");
 
     // On Harvester, known from the add-ons answer, no required components are checked for.
     await page.evaluate(() => { window.api = window.__realApi; });
@@ -889,7 +889,7 @@ try {
       window.api = real; STATE.platform = platform;
       return text;
     });
-    assert.doesNotMatch(harvester, /Could not check the required components/);
+    assert.doesNotMatch(harvester, /The required components could not be checked/);
 
     // Homestead's own address (Network overview): unread is said; what was read before is marked as such.
     await page.evaluate(() => { window.api = window.__realApi; });
@@ -912,8 +912,8 @@ try {
     assert.match(self.old, /Could not read where Homestead answers just now[\s\S]*timed out/);
 
     // Installing KubeVirt or kube-vip: an unread host check is said in the question, not taken as "fine".
-    for (const [key, words] of [["kubevirt", "Could not check whether the hosts have hardware virtualisation"],
-      ["kube-vip", "Could not read which network interface the hosts use"]]) {
+    for (const [key, words] of [["kubevirt", "Homestead could not check whether the hosts have hardware virtualisation"],
+      ["kube-vip", "Homestead could not read which network interface the hosts use"]]) {
       await page.evaluate(() => { window.api = window.__realApi; });
       await page.evaluate(failing, "/api/addons");
       await page.evaluate(k => { addonInstall(k); }, key);
@@ -943,23 +943,23 @@ try {
     await page.evaluate(() => { window.__ov = STATE.data.ov; STATE.data.ov = null; STATE.data.nodes = null; });
     await settingsWith("/api/overview");
     const hardwareCard = await settingsCardText("Hardware features");
-    assert.match(hardwareCard, /Could not read the hosts[\s\S]*timed out/);
+    assert.match(hardwareCard, /The hosts could not be read[\s\S]*timed out/);
     assert.doesNotMatch(hardwareCard, /no host detected/);
     assert.match(await settingsCardText("Hosts ready"), /Hosts ready\s*not read/);
     await page.evaluate(() => { STATE.data.ov = { nodes: [{ name: "host-old", hardware: Object.fromEntries((STATE.data.hardwareFeatures || []).map(f => [f.id, true])) }] }; });
     await settingsWith("/api/overview");
-    assert.match(await settingsCardText("Hardware features"), /Could not read the hosts just now[\s\S]*timed out[\s\S]*from the last read/);
+    assert.match(await settingsCardText("Hardware features"), /The hosts could not be read[\s\S]*timed out[\s\S]*from the last reading/);
     await page.evaluate(() => { STATE.data.ov = window.__ov; });
 
     // Settings › Users and roles: unread users are said, not an empty table.
     await settingsWith("/api/auth/users");
-    assert.match(await settingsCardText("Users and roles"), /Could not read the users[\s\S]*timed out/);
+    assert.match(await settingsCardText("Users and roles"), /The users could not be read[\s\S]*timed out/);
 
     // Settings › How hosts share the work: unread hosts are said, not "No hosts reported" or "Every app reserves something".
     await settingsWith("/api/placement");
-    assert.match(await page.evaluate(() => document.querySelector("#set_standby_row").textContent), /Could not read the hosts[\s\S]*timed out/);
+    assert.match(await page.evaluate(() => document.querySelector("#set_standby_row").textContent), /The hosts could not be read[\s\S]*timed out/);
     const spread = await page.evaluate(() => placeModeText("spread", STATE.data.placement));
-    assert.match(spread, /Could not read what the apps reserve[\s\S]*timed out/);
+    assert.match(spread, /What the apps reserve could not be read[\s\S]*timed out/);
     assert.doesNotMatch(spread, /Every app reserves something/);
 
     // Settings › UniFi: unread is not "not connected" with Connect offered; an older read is marked.
@@ -967,18 +967,18 @@ try {
     await settingsWith("/api/ipam");
     // Its section reads it when shown (#757); read it here whichever section is open.
     await page.evaluate(() => unifiCardLoad());
-    await page.waitForFunction(() => /Could not read/.test(document.querySelector("#unifiCard")?.textContent || ""));
+    await page.waitForFunction(() => /could not be read/.test(document.querySelector("#unifiCard")?.textContent || ""));
     const unifi = await page.evaluate(() => document.querySelector("#unifiCard").textContent);
-    assert.match(unifi, /Could not read the UniFi connection[\s\S]*timed out/);
+    assert.match(unifi, /The UniFi connection could not be read[\s\S]*timed out/);
     assert.doesNotMatch(unifi, /not connected|Connect UniFi/);
     await page.evaluate(() => { STATE.data.ipam = { unifi: { configured: true, url: "https://192.0.2.1", last_sync: Date.now() / 1000 } }; return unifiCardLoad(); });
-    assert.match(await page.evaluate(() => document.querySelector("#unifiCard").textContent), /Could not read the UniFi connection just now[\s\S]*timed out[\s\S]*last read/);
+    assert.match(await page.evaluate(() => document.querySelector("#unifiCard").textContent), /The UniFi connection could not be read just now[\s\S]*timed out[\s\S]*last read/);
 
     // The UniFi dialog: nothing is saved over a connection that was not read.
     await page.evaluate(() => { STATE.data.ipam = undefined; return ipamUnifi(); });
     await settled(page);
     const unifiDialog = await page.locator("#mbody").innerText();
-    assert.match(unifiDialog, /Could not read the UniFi connection[\s\S]*timed out/);
+    assert.match(unifiDialog, /The UniFi connection could not be read[\s\S]*timed out/);
     assert.equal(await page.locator("#mbody").getByRole("button", {name: /^Save/}).count(), 0, "no Save over an unread connection");
     await page.evaluate(() => { closeModal(); STATE.data.ipam = window.__ipam; });
 
@@ -994,7 +994,7 @@ try {
       document.querySelector("#replicaCard").remove();
       return text;
     });
-    assert.match(copies, /Could not read how many copies of Homestead run[\s\S]*timed out/);
+    assert.match(copies, /The number of Homestead copies could not be read[\s\S]*timed out/);
     assert.doesNotMatch(copies, /old copies/);
 
     // Settings › AI agents: unread requests are not "none waiting".
@@ -1008,7 +1008,7 @@ try {
       document.querySelector("#mcpCard").remove();
       return text;
     });
-    assert.match(agents, /Could not read how many are waiting[\s\S]*timed out/);
+    assert.match(agents, /The number waiting could not be read[\s\S]*timed out/);
 
     // Linked clusters: unread is said, with its error, and the address is not offered for saving over.
     const fleetCard = async path => {
@@ -1026,11 +1026,11 @@ try {
       });
     };
     const fleet = await fleetCard("/api/fleet");
-    assert.match(fleet.card, /Could not read the linked clusters[\s\S]*timed out/);
+    assert.match(fleet.card, /The linked clusters could not be read[\s\S]*timed out/);
     assert.equal(fleet.address, false, "no address to save over one not read");
-    assert.match((await fleetCard("/api/fleet/legacy")).card, /Could not read the clusters added before linking[\s\S]*timed out/);
+    assert.match((await fleetCard("/api/fleet/legacy")).card, /The clusters added before linking could not be read[\s\S]*timed out/);
     const sources = await fleetCard("/api/move/clusters");
-    assert.match(sources.moves, /Could not read which clusters apps can move from[\s\S]*timed out/);
+    assert.match(sources.moves, /The clusters that apps can move from could not be read[\s\S]*timed out/);
     assert.equal(sources.movesHidden, false);
 
     // The cluster switcher with nothing read yet: "reading…" while the read is on its way, "not read" once it fails.
@@ -1049,9 +1049,9 @@ try {
       fleetMenuClose(); button.remove(); window.api = read; FLEET.view = window.__fleetView;
       return {waiting, failed};
     });
-    assert.match(first.waiting, /All clusters\s*reading…/);
+    assert.match(first.waiting, /All clusters\s*Reading…/);
     assert.doesNotMatch(first.waiting, /not read/);
-    assert.match(first.failed, /Could not read the clusters: timed out[\s\S]*All clusters\s*not read/);
+    assert.match(first.failed, /The clusters could not be read. timed out[\s\S]*All clusters\s*Not read/);
 
     // The cluster switcher: an older list is marked when the refresh fails.
     await real();
@@ -1066,7 +1066,7 @@ try {
       fleetMenuClose(); button.remove(); FLEET.view = window.__fleetView;
       return text;
     });
-    assert.match(menu, /Could not read the clusters just now[\s\S]*timed out/);
+    assert.match(menu, /The clusters could not be read just now[\s\S]*timed out/);
 
     // Migration from a linked cluster: an unread reach check is said, not left out.
     await real();
@@ -1078,8 +1078,8 @@ try {
       await fleetMigration("x2");
     });
     const migration = await page.locator("#mbody").innerText();
-    assert.match(migration, /Could not check whether this cluster can reach it[\s\S]*timed out/);
-    assert.match(migration, /Reachable from here\s*not checked/);
+    assert.match(migration, /Homestead could not check whether this cluster can reach it[\s\S]*timed out/);
+    assert.match(migration, /Reachable from this cluster\s*Not checked/);
     await page.evaluate(() => { closeModal(); FLEET.view = window.__fleetView; window.fleetTransferCall = window.__transferCall; });
 
     // Search: a part that could not be searched is said, and is not kept as none.
@@ -1092,7 +1092,7 @@ try {
       searchClose?.(); STATE.q = "";
       return { text, kept: STATE.data.vms };
     });
-    assert.match(search.text, /Could not search the VMs[\s\S]*timed out/);
+    assert.match(search.text, /These could not be searched: the VMs[\s\S]*timed out/);
     assert.equal(search.kept, null, "unread VMs are not stored as none");
 
     // Dashboard › Portal: links not checked are not shown with an old answer.
@@ -1150,7 +1150,7 @@ try {
     });
     assert.match(signIn, /could not be read[\s\S]*502/);
 
-    // Files: a helper that could not be asked to stop is said, not counted as stopping.
+    // Files: a helper that could not be told to stop is said, not counted as stopping.
     await real();
     await page.evaluate(failing, "/api/files/close");
     const closing = await page.evaluate(async () => {
@@ -1158,7 +1158,7 @@ try {
       await fmRelease();
       return [...document.querySelectorAll("#toast .tst")].map(t => t.textContent).join(" | ");
     });
-    assert.match(closing, /could not be asked to stop[\s\S]*timed out/);
+    assert.match(closing, /could not be told to stop[\s\S]*timed out/);
 
     // Files opened again within one slow volumes read: the earlier opening's answer does not land in the new one.
     await real();
@@ -1190,14 +1190,14 @@ try {
       document.querySelector("#ifDownRoom").remove();
       return text;
     });
-    assert.match(room, /Could not work out the room on the other hosts[\s\S]*timed out/);
+    assert.match(room, /The room on the other hosts could not be worked out[\s\S]*timed out/);
 
     // Helm › Install a chart: unread namespaces are said, so the one filled in is not taken for one that exists.
     await real();
     await page.evaluate(failing, "/api/namespaces");
     await page.evaluate(() => helmInstall());
     await page.waitForSelector("#hi_ns", {state: "attached"});
-    assert.match(await page.evaluate(() => document.querySelector("#mbody").textContent), /Could not read the namespaces[\s\S]*timed out/);
+    assert.match(await page.evaluate(() => document.querySelector("#mbody").textContent), /The namespaces could not be read[\s\S]*timed out/);
     assert.equal(await page.evaluate(() => document.querySelector("#hi_ns").value), "", "no namespace is filled in on a guess");
     await page.evaluate(() => closeModal());
 
@@ -1222,7 +1222,7 @@ try {
       paintBell();
       return { pop: document.querySelector("#bellPop").textContent, label: document.querySelector("#bell summary, .bell summary")?.getAttribute("aria-label") || "" };
     });
-    assert.match(bell.pop, /Could not read the alerts just now[\s\S]*timed out/);
+    assert.match(bell.pop, /The alerts could not be read just now[\s\S]*timed out/);
     assert.match(bell.label, /alerts not read/);
     await real();
     await page.evaluate(() => refreshPwaAlerts(true));

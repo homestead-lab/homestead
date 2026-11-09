@@ -428,7 +428,7 @@ class ImageUpdateTests(unittest.TestCase):
         self.homestead_on("2.8.333-dev.4")
         with self.assertRaisesRegex(ValueError, "name a Homestead release"):
             ROLLOUTS.prepare_update("lab", "demo", "latest")
-        with mock.patch.object(updates, "PART", lambda ns, name: ""),                 self.assertRaisesRegex(ValueError, "only Homestead itself"):
+        with mock.patch.object(updates, "PART", lambda ns, name: ""),                 self.assertRaisesRegex(ValueError, "Only Homestead itself"):
             ROLLOUTS.prepare_update("lab", "demo", "2.8.334")
 
     def test_a_digest_with_no_recorded_tag_says_so_rather_than_up_to_date(self):

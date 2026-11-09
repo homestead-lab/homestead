@@ -8,7 +8,7 @@ function setup(review) {
     "#mbody": { insertAdjacentHTML(_where,body) { html += body; } } };
   const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {}, getElementById: id => fields['#' + id] || null },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
-    childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
+    childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {}, tip: () => "",
     api: async (path, options) => {
       if (path === "/api/edit/preview") return review;
       if (path.startsWith("/api/node/power/plan")) return review;
@@ -64,16 +64,16 @@ test("An uncertain edit requires fresh saved state instead of replaying addition
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 1);
   assert.equal(scrolled, true);
-  assert.equal(t.fields["#editGo"].textContent, "Inspect before saving again");
+  assert.equal(t.fields["#editGo"].textContent, "Check before saving again");
   assert.equal(t.fields["#editGo"].disabled, true);
   assert.equal(t.fields["#editGo"].onclick, null);
   assert.match(t.html(), /Some changes may already be saved/);
-  assert.match(t.html(), /Reload saved app/);
-  assert.match(t.html(), /does not need a new name/);
+  assert.match(t.html(), /Reload saved settings/);
+  assert.match(t.html(), /discards the unsaved changes in this form/);
   await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
   await t.c.window.editSave("lab","demo");
   assert.equal(t.sent.length,1);
-  assert.match(t.notices.at(-1),/Reload the saved app/);
+  assert.match(t.notices.at(-1),/Reload the app/);
 });
 
 test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
@@ -81,7 +81,7 @@ test("Rename review explains a name-only outage and requires a separate acknowle
   await t.c.window.editReview({ ns: "lab", name: "old", workload_name: "new" });
   assert.match(t.html(), /&lt;old&gt;/);
   assert.match(t.html(), /Only the app name changes/);
-  assert.match(t.html(), /Save other edits separately/);
+  assert.match(t.html(), /Save other changes separately/);
   assert.match(t.html(), /short outage/);
   assert.match(t.html(), /Rename app/);
   await t.c.window.confirmEdit();
@@ -97,8 +97,8 @@ test("Host review names budgets and local data with escaped content", async () =
       local_storage: [{ pod: "lab/app", kind: "host-local path", source: "/<files>" }] } });
   await t.c.window.nodePowerReview("host1", "reboot");
   assert.match(t.html(), /Disruption budgets/);
-  assert.match(t.html(), /0 disruptions allowed/);
-  assert.match(t.html(), /Drain deletes emptyDir data/);
+  assert.match(t.html(), /0 interruptions allowed/);
+  assert.match(t.html(), /Draining deletes temporary \(emptyDir\) data/);
   assert.match(t.html(), /&lt;files&gt;/);
   assert.doesNotMatch(t.html(), /id="pw_execute"/);
 });
@@ -108,7 +108,7 @@ test('Longhorn protection explains the bounded drain wait and allows reviewed ma
   const t = setup({...hostReview, warnings: ['Wait up to 2 minutes; power will not be sent if Longhorn keeps it protected'],
     maintenance: {budgets: [{pod: 'longhorn-system/<manager>', budget: 'longhorn-system/manager', allowed: 0, wait_for_drain: true}]}});
   await t.c.window.nodePowerReview('host1', 'reboot');
-  assert.match(t.html(), /0 disruptions allowed · waits for Longhorn during drain/);
+  assert.match(t.html(), /0 interruptions allowed · waits for Longhorn during drain/);
   assert.match(t.html(), /Wait up to 2 minutes/);
   assert.match(t.html(), /power will not be sent/);
   assert.match(t.html(), /&lt;manager&gt;/);
@@ -130,7 +130,7 @@ test('host power consumes approval once and records the job',async()=>{
   await t.c.window.nodePowerReview('host1','reboot');
   await Promise.all([t.c.window.nodePower('host1','reboot'),t.c.window.nodePower('host1','reboot')]);
   assert.equal(t.sent.length,1);assert.equal(jobs[0].id,'power-job');assert.equal(refreshed,1);
-  assert.match(t.html(),/Scheduling is allowed again when it is back/);
+  assert.match(t.html(),/It is uncordoned when it is back/);
 });
 test('lost power response cannot offer a blind retry',async()=>{
   const t=setup(hostReview);hostFields(t);t.fail();
@@ -139,7 +139,7 @@ test('lost power response cannot offer a blind retry',async()=>{
   await t.c.window.nodePower('host1','reboot');
   assert.equal(t.sent.length,1);
   assert.equal(t.fields['#pw_execute'].textContent,'Review host again');
-  assert.match(t.notices.join(' '),/inspect Recent jobs/);
+  assert.match(t.notices.join(' '),/Check Recent jobs and the host/);
   await t.fields['#pw_execute'].onclick();
   assert.equal(t.sent.length,1);
 });
@@ -168,8 +168,8 @@ test("Storage move has one plain-language review with escaped paths and both pla
   assert.match(t.html(), /&lt;main&gt;/);
   assert.match(t.html(), /data-label="From">old/);
   assert.match(t.html(), /new\/&lt;folder&gt;/);
-  assert.match(t.html(), /Existing destination files may be overwritten/);
-  assert.match(t.html(), /no automatic rollback or retry/);
+  assert.match(t.html(), /Files that already exist at the destination may be overwritten/);
+  assert.match(t.html(), /Nothing is retried or undone automatically/);
   assert.match(t.html(), /Temporary copy helper/);
   assert.match(t.html(), /Start data move/);
   await t.c.window.confirmEdit();
@@ -185,9 +185,9 @@ test("uncertain rename directs inspection of both names and never offers stale r
   await t.c.window.editReview({ns:'lab',name:'old',workload_name:'new'});
   t.fail();t.fields['#editCapacityConfirm'].checked=true;
   await t.c.window.confirmEdit();
-  assert.match(t.html(),/Inspect both app names/);
-  assert.match(t.html(),/Inspect apps/);
-  assert.doesNotMatch(t.html(),/Reload saved app/);
+  assert.match(t.html(),/Check both app names/);
+  assert.match(t.html(),/Check apps/);
+  assert.doesNotMatch(t.html(),/Reload saved settings/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
 
@@ -200,10 +200,10 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     t.fields['#pw_outage']={checked:false};
     await t.c.window.nodePowerReview('host1',action);
     assert.match(t.html(), /the whole cluster goes down/);
-    assert.match(t.html(), /without evicting pods/);
+    assert.match(t.html(), /stops the apps and VMs below cleanly/);
     assert.match(t.html(), /id="pw_outage"/);
     assert.doesNotMatch(t.html(), /Override these checks|id="pw_allow"|waits for Longhorn during drain|host stays cordoned/);
-    if(action==='poweroff') assert.match(t.html(), /powered on by hand/);
+    if(action==='poweroff') assert.match(t.html(), /turned on manually/);
     await t.c.window.nodePower('host1',action);
     assert.equal(t.sent.length,0);
     t.fields['#pw_outage'].checked=true;
@@ -212,7 +212,7 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     assert.equal(t.sent[0].body.force,false);
     assert.equal(t.sent[0].body.allow_cluster_outage,true);
     assert.equal(t.sent[0].body.allow_stranded,true);
-    assert.match(t.html(), /Scheduling was left unchanged/);
+    assert.match(t.html(), /The host was not cordoned/);
     assert.doesNotMatch(t.html(), /host stays cordoned/);
   }
 });
@@ -233,9 +233,9 @@ test('host actions exposes normal reviews even when quorum cannot lose a member'
   t.c.api=async path=>path==='/api/quorum'?{members:['host1'],can_lose:0,total:1,ready:['host1'],quorum_needs:1}:
     {workloads:[],stranded:[]};
   await t.c.window.nodeActions('host1');
-  assert.match(t.html(), /nodePowerReview\("host1",'reboot'\)[^]*Reboot…/);
-  assert.match(t.html(), /nodePowerReview\("host1",'poweroff'\)[^]*Shut down…/);
-  assert.match(t.html(), /planned whole-cluster outage/);
+  assert.match(t.html(), /nodePowerReview\("host1",'reboot'\)[^]*Restart host…/);
+  assert.match(t.html(), /nodePowerReview\("host1",'poweroff'\)[^]*Shut down host…/);
+  assert.match(t.html(), /This is the only host, so the whole cluster goes down/);
   assert.doesNotMatch(t.html(), /Override - reboot or shut down anyway|Review forced/);
 });
 
@@ -251,7 +251,7 @@ test('a host power job shows its steps, the current one, and how it ended', () =
   assert.match(markup('draining', 'failed'), /Check the host before making another request/);
   // An outage or forced job skips cordon and drain.
   assert.deepEqual(states(markup('sending', 'running', true)), ['ok', 'run', 'todo']);
-  assert.match(markup('draining', 'running', false, true), /Stop new work on the host/);
+  assert.match(markup('draining', 'running', false, true), /Stop new apps starting on the host/);
 });
 
 test('a stopped host power job marks the step it stopped at, and says why once', () => {
@@ -270,15 +270,15 @@ test('single-host disconnect pauses the display without inventing power progress
   const html = t.c.nodePowerProgressMarkup(op, true);
   assert.match(html, /Waiting for Homestead to reconnect/);
   assert.match(html, /Last confirmed progress/);
-  assert.match(html, /before the restart was requested/);
-  assert.doesNotMatch(html, /<li class="run">|8%|In progress|host helper was created/);
+  assert.match(html, /before the request was sent/);
+  assert.doesNotMatch(html, /<li class="run">|8%|In progress|A helper on the host finishes/);
   assert.equal(op.power.phase, 'holding');
   const helper = t.c.nodePowerProgressMarkup({...op,power:{...op.power,handoff:true,phase:'observing'}},true);
-  assert.match(helper, /host helper was created/);
+  assert.match(helper, /A helper on the host finishes/);
   assert.doesNotMatch(helper, /<li class="run">|8%/);
   const prolonged = t.c.nodePowerProgressMarkup(op,true,16*60*1000);
   assert.match(prolonged, /Still waiting for Homestead|disconnected for 16 min/);
-  assert.match(prolonged, /Check the host console or network/);
+  assert.match(prolonged, /check its console or the network/);
 });
 
 test('shutdown and unexpected loss have distinct offline guidance', () => {
@@ -305,7 +305,7 @@ test('power follow reconnects to the same job and displays its confirmed result'
     t.c.setTimeout=resolve=>resolve();
     await t.c.window.nodePowerFollow('power-1','',initial);
     assert.match(seen[0],/Waiting for Homestead to reconnect/);
-    assert.match(seen.at(-1),status==='succeeded'?/Finished/:status==='failed'?/Stopped/:/Job not found/);
+    assert.match(seen.at(-1),status==='succeeded'?/Finished/:status==='failed'?/Stopped/:/The job was not found/);
     assert.doesNotMatch(seen.at(-1),/Waiting for Homestead to reconnect/);
     assert.deepEqual(paths,['/api/operations','/api/operations']);
   }

@@ -341,7 +341,7 @@ class RolesTests(Served):
                      "/api/fleet/leave", "/api/fleet/address", "/api/fleet/link-legacy"):
             for method in ("GET", "POST"):
                 with self.subTest(method=method, path=path):
-                    self.assertEqual((403, {"error": "your role (viewer) cannot do this — admin required",
+                    self.assertEqual((403, {"error": "This needs the admin role, and the viewer role cannot do it",
                                             "role": "viewer", "needed": "admin"}), self.ask(method, path, {} if method == "POST" else None)[::2])
 
     def test_a_relayed_viewer_may_not_link_either(self):

@@ -87,7 +87,7 @@ test("backups that could not be read say so in their section", async () => {
   answer("/api/lh/overview"); await settle();
   fail("/api/lh/backupvolumes", "timed out"); answer("/api/objectstore");
   await done;
-  assert.match(fills.find(([id]) => id === "protect-backups")[1], /Could not read the backups[^]*timed out/);
+  assert.match(fills.find(([id]) => id === "protect-backups")[1], /The backups could not be read[^]*timed out/);
 });
 
 test("a refresh keeps the last backups on screen until they are read again", async () => {

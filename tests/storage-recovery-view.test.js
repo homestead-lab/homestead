@@ -70,7 +70,7 @@ function held({forward=true}={}) {
 test('a held move offers retry and roll back, each sent with its own token',async()=>{
   const t=held();await t.ctx.storageRecoveryReview('job');
   const html=t.fields['#storageRecoveryContent'].innerHTML;
-  assert.match(html,/Retry this step/);assert.match(html,/Roll back to the original/);
+  assert.match(html,/Retry step/);assert.match(html,/Roll back to original/);
   assert.equal((html.match(/type="checkbox"/g)||[]).length,2);assert.match(html,/old copy/);
   t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply('rollback');
   assert.equal(t.calls.length,1);   // the retry acknowledgement does not cover a rollback
@@ -84,7 +84,7 @@ test('a held move offers retry and roll back, each sent with its own token',asyn
 test('when the move cannot go forward, roll back is the action and the reason is shown',async()=>{
   const t=held({forward:false});await t.ctx.storageRecoveryReview('job');
   const html=t.fields['#storageRecoveryContent'].innerHTML;
-  assert.match(html,/changed after review/);assert.match(html,/Roll back to the original/);assert.doesNotMatch(html,/Retry this step/);
+  assert.match(html,/changed after review/);assert.match(html,/Roll back to original/);assert.doesNotMatch(html,/Retry step/);
   assert.match(html,/old copy/);assert.doesNotMatch(html,/Continue despite/);
   t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply();
   assert.equal(t.calls.at(-1).body.action,'rollback');

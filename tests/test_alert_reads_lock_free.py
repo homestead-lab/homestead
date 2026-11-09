@@ -373,14 +373,14 @@ class GetRequestsAndTheMoveBarrier(unittest.TestCase):
             handle.write('{"ok": 1}')
         with mock.patch.object(server, "_self_data_fence", fence), \
              mock.patch.object(server, "_self_data_barrier", F.WriteBarrier(self.directory, server.require_self_data_write)):
-            with self.assertRaisesRegex(F.MoveHeld, "being moved; the coordinator owns progress"):
+            with self.assertRaisesRegex(F.MoveHeld, "being moved. The coordinator runs the move"):
                 server.require_self_data_write()
             read = lambda handler, *_a: handler._send(200, S.read_json(page, {})) or True
             self.assertEqual((200, {"ok": 1}), self.get("/api/alerts", read))
             status, body = self.get("/api/alerts", lambda *_a: S.write_json(target, {"written": True}))
         self.assertEqual(503, status)
         self.assertTrue(body["data_handoff"])
-        self.assertIn("being moved; the coordinator owns progress", body["error"])
+        self.assertIn("being moved. The coordinator runs the move", body["error"])
         self.assertFalse(os.path.exists(target))
 
 

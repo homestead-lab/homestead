@@ -179,7 +179,7 @@ def create(name, scopes, ttl_seconds, networks, owner, mcp=False):
     for kid in [k for k, rec in keys.items() if rec.get("expires", 0) + KEEP_EXPIRED < now]:
         keys.pop(kid)
     if len(keys) >= MAX_KEYS:
-        raise ValueError(f"at most {MAX_KEYS} keys; revoke one first")
+        raise ValueError(f"At most {MAX_KEYS} keys are allowed. Revoke one first.")
     if any(rec.get("name") == name for rec in keys.values()):
         raise ValueError(f"there is already a key named {name}")
     kid = secrets.token_hex(6)
@@ -303,7 +303,7 @@ def verify(token, addr, now=None, force=False):
 
     def refuse(message):
         if not AUTH._rate_ok(rate_key, FAILURES_ALLOWED):
-            message = "too many wrong API keys from this address; wait a few minutes"
+            message = "too many wrong API keys from this address. Wait a few minutes."
         AUTH._rate_hit(rate_key)
         raise PermissionError(message)
 

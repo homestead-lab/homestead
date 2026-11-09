@@ -281,7 +281,7 @@ async function refresh(force) {
   if (pageLoading(page)) { if (force) STATE.refreshAfterLoad = page; return false; }
   STATE.busy = true; STATE.busyFor = page;
   try { await fn(); return true; }
-  catch (e) { if (force) toast(e.message || "Could not refresh this page", "bad"); return false; }
+  catch (e) { if (force) toast(e.message || "This page could not be refreshed", "bad"); return false; }
   finally { if (STATE.busyFor === page) STATE.busy = false; }
 }
 window.refresh = refresh;
@@ -378,7 +378,7 @@ async function globalSearch(q) {
       ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : `<span class="smark">${icon(SEARCH_ICONS[x.kind] || "search")}</span>`}
       <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></div>`).join("")
       : `<div class="searchloading" role="presentation">Nothing matches “${esc(q)}”.</div>`;
-    if (unread.length) out.insertAdjacentHTML("beforeend", `<div class="searchloading" role="presentation">Could not search ${esc(unread.join("; "))}</div>`);
+    if (unread.length) out.insertAdjacentHTML("beforeend", `<div class="searchloading" role="presentation">These could not be searched: ${esc(unread.join("; "))}</div>`);
     searchActive = -1;
     $$(".sresult", out).forEach(option => {
       option.addEventListener("mousedown", e => e.preventDefault()); // keep focus in the search box

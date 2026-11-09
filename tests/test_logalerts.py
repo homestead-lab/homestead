@@ -100,7 +100,7 @@ class Rules(Base):
             self.rule(apps=["lab/elsewhere"])
 
     def test_bad_queries_are_refused_as_search_refuses_them(self):
-        with self.assertRaisesRegex(ValueError, "take ages"):
+        with self.assertRaisesRegex(ValueError, "a very long time"):
             self.rule(query="(a+)+", regex=True)
         with self.assertRaisesRegex(ValueError, "not a valid regular expression"):
             self.rule(query="(", regex=True)
@@ -763,7 +763,7 @@ class Matching(unittest.TestCase):
 class Preview(Base):
     def test_preview_shares_the_log_search_lock(self):
         with LOGSEARCH.exclusive():
-            with self.assertRaisesRegex(ValueError, "another log search is running"):
+            with self.assertRaisesRegex(ValueError, "Another log search is running"):
                 LA.preview({"name": "x", "apps": ["lab/app-x"], "query": "ERROR", "threshold": 1, "window": 1})
 
     def test_preview_counts_per_minute_and_minutes_over(self):

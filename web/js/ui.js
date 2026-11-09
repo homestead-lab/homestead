@@ -351,7 +351,7 @@ const UI = (() => {
   };
   /* A failed load: what went wrong and Try again, never an empty list. In a
      dialog it brings its footer, so Close still works (#507). */
-  const error = (err, { retry = "", title = "Couldn't load this", dialog = false } = {}) => {
+  const error = (err, { retry = "", title = "This could not be loaded", dialog = false } = {}) => {
     const again = retry ? button("Try again", retry, { icon: "refresh", kind: dialog ? "pri" : "" }) : "";
     const box = callout("bad", title, `<p>${text(err?.message || err || "Something went wrong.")}</p>`);
     if (dialog) return box + actions(cancel("Close") + again);
@@ -432,13 +432,13 @@ const UI = (() => {
     const text = String(raw ?? "").trim();
     if (!text) return { value: "", mib: null, said: "" };
     const match = text.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z]*)$/);
-    if (!match) return { error: "Write a number, like 390 or 1.5" };
+    if (!match) return { error: "Enter a number, such as 390 or 1.5" };
     const number = Number(match[1]), suffix = match[2];
-    if (suffix === "m") return { error: "A small m means thousandths of a byte in Kubernetes; for megabytes choose MiB" };
+    if (suffix === "m") return { error: "A lowercase m means thousandths of a byte in Kubernetes. For megabytes, choose MiB." };
     const found = suffix ? Object.keys(MEMORY_UNITS).find(key => MEMORY_UNITS[key].includes(suffix.toLowerCase())) : unit;
-    if (!found) return { error: `${suffix} is not a memory unit; choose MiB or GiB` };
+    if (!found) return { error: `${suffix} is not a memory unit. Choose MiB or GiB.` };
     const mib = number * MIB[found];
-    if (mib <= 0) return { error: "Give more than zero" };
+    if (mib <= 0) return { error: "Enter more than zero" };
     const whole = Number.isInteger(mib / 1024) && mib >= 1024;
     const value = whole ? `${mib / 1024}Gi` : `${Math.max(1, Math.round(mib))}Mi`;
     const said = whole ? `= ${mib / 1024} GiB` : mib >= 1024 ? `= ${+(mib / 1024).toFixed(2)} GiB (${Math.round(mib)} MiB)` : `= ${Math.round(mib)} MiB`;
@@ -448,11 +448,11 @@ const UI = (() => {
     const text = String(raw ?? "").trim();
     if (!text) return { value: "", millicores: null, said: "" };
     const match = text.match(/^(\d+(?:\.\d+)?)\s*(%|m|cores?|cpus?)?$/i);
-    if (!match) return { error: "Write a number: a percentage of one core, or cores" };
+    if (!match) return { error: "Enter a number, as a percentage of one core or as cores" };
     const number = Number(match[1]), suffix = (match[2] || "").toLowerCase();
     const how = suffix === "%" ? "%" : suffix === "m" ? "m" : suffix ? "cores" : unit;
     const millicores = Math.round(how === "%" ? number * 10 : how === "m" ? number : number * 1000);
-    if (millicores < 1) return { error: "Give at least 1m (0.1% of a core)" };
+    if (millicores < 1) return { error: "Enter at least 1m (0.1% of a core)" };
     const share = millicores >= 1000 ? `${+(millicores / 1000).toFixed(2)} core${millicores === 1000 ? "" : "s"}` : `${+(millicores / 10).toFixed(1)}% of one core`;
     return { value: `${millicores}m`, millicores, said: `= ${share} (${millicores}m)` };
   };
@@ -494,7 +494,7 @@ const UI = (() => {
     let warn = parsed.error || "";
     if (!warn && kind === "memory" && box.dataset.reserved && parsed.mib) {
       const floor = parseMemory(document.getElementById(box.dataset.reserved)?.value || "", "Mi").mib;
-      if (floor && parsed.mib < floor) warn = "Below Memory reserved: Kubernetes refuses a maximum under the reservation";
+      if (floor && parsed.mib < floor) warn = "Below Memory reserved. Kubernetes refuses a maximum lower than the reservation.";
     }
     box.classList.toggle("bad", !!warn);
     if (hidden) {
@@ -653,7 +653,7 @@ const UI = (() => {
   }
   function stopPolls() { [...polls].forEach(p => p.stop()); }
   function timedOut(after) {
-    const message = `No answer in ${Math.round(after / 1000)} s`;
+    const message = `No response in ${Math.round(after / 1000)} s`;
     if (typeof DOMException === "function") return new DOMException(message, "TimeoutError");
     return Object.assign(new Error(message), { name: "TimeoutError" });
   }
@@ -720,7 +720,7 @@ const UI = (() => {
     const issues = (spec.issues || []).filter(([, said]) => said);
     const blocked = issues.some(([t]) => t === "bad");
     const warned = issues.some(([t]) => t === "warn");
-    const title = spec.issuesTitle || (blocked ? ({ review: "Can't go ahead", confirm: "Can't go ahead" }[shape] || "Something is wrong") : warned ? "Check first" : "");
+    const title = spec.issuesTitle || (blocked ? ({ review: "This cannot go ahead", confirm: "This cannot go ahead" }[shape] || "Something is wrong") : warned ? "Check first" : "");
     const act = spec.actions || {};
     const dismissed = act.dismiss === undefined ? DISMISS[shape] : act.dismiss;
     const dismissButton = !dismissed ? "" : typeof dismissed === "string" ? cancel(dismissed)

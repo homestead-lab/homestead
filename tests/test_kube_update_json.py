@@ -138,7 +138,7 @@ class UpdateJsonTests(unittest.TestCase):
         with api.patched(), self.assertRaises(RuntimeError) as caught:
             K.update_json(STORE, "state.json", always_beaten, attempts=3)
         self.assertIn("store kept changing", str(caught.exception))
-        self.assertIn("try again", str(caught.exception))
+        self.assertIn("Try again", str(caught.exception))
         self.assertEqual([m for m, _ in api.writes], ["PUT"] * 3)
         self.assertNotEqual(api.stored(), {"n": -1})
 

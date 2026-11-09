@@ -359,7 +359,7 @@ class MoveGivesUpTests(unittest.TestCase):
             ACT.abandon(move["id"])
         move = STATE._find(move["id"])
         self.assertEqual("failed", move["status"])
-        self.assertIn("frigate stays stopped on shed until it is gone", move["message"])
+        self.assertIn("frigate stays stopped on shed until it has been removed", move["message"])
         self.assertEqual(0, self.kube.object(SOURCE)["spec"]["replicas"])
         self.assertTrue(STATE._source_held(move))
 

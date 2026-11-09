@@ -140,7 +140,7 @@ class VmStoreWriteTests(unittest.TestCase):
     def test_an_empty_record_is_refused_before_anything_is_downloaded(self):
         with Kube(store_map(text="")) as kube:
             self.bind()
-            with self.assertRaisesRegex(ValueError, "not one Homestead wrote"):
+            with self.assertRaisesRegex(ValueError, "not written by Homestead"):
                 STORE.keep("ubuntu-24.04")
             self.assertEqual("", kube.object(MAP)["data"]["store.json"])
             self.assertEqual([], self.downloads)

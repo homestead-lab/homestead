@@ -240,7 +240,7 @@ class BrowserTests(unittest.TestCase):
         self.start()
         S.close('lab', self.name)
         self.objects[self.paths[2]]['spec']['dataSource']['name'] = 'important'
-        with self.assertRaisesRegex(ValueError, 'identity'):
+        with self.assertRaisesRegex(ValueError, 'changed, so cleanup stopped'):
             S.close('lab', self.name)
         self.assertIn(self.paths[2], self.objects)
 

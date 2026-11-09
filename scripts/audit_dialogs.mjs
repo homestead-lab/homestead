@@ -298,7 +298,7 @@ const DIALOGS = [
   ["vm-edit-hardware", "vms", "vmEdit('default','home-assistant-os')", "text:Hardware"],
   ["vm-edit-passthrough", "vms", "vmEdit('default','home-assistant-os')", "text:Passthrough", "vmAddHostDevice()"],
   ["vm-iso-library", "vms", "vmIsoLibrary()"],
-  ["vm-iso-folder", "vms", "vmIsoLibrary()", "text:＋ Folder"],
+  ["vm-iso-folder", "vms", "vmIsoLibrary()", "text:＋ Add folder"],
   ["vm-delete", "vms", "vmDelete('default','home-assistant-os')"],
   ["k3s-cluster", "vms", "k3sCluster()"],
   ["image-updates", "workloads", "imageUpdateCenter()"],

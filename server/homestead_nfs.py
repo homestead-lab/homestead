@@ -165,7 +165,7 @@ def recovery_report(nodes, volumes, replicas, platform, node_down, errors=(), po
                 and all(labels(node).get(key) == value for key, value in selectors.items())):
             hosts.append(node["metadata"]["name"])
     if len(hosts) < 2:
-        blockers.append(f"Only {len(hosts)} Ready, schedulable host(s) have verified NFS server support; two are needed for a replacement host.")
+        blockers.append(f"Only {len(hosts)} Ready, schedulable host(s) have confirmed NFS server support. Two are needed for a replacement host.")
     controls = [n for n in nodes if any(key in labels(n) for key in (
         "node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
     if len([n for n in controls if ready(n)]) < 2:
@@ -178,9 +178,9 @@ def recovery_report(nodes, volumes, replicas, platform, node_down, errors=(), po
     if platform.get("load_balancer") not in ("kube-vip", "metallb"):
         blockers.append("NFS needs a load balancer that moves its VIP to a node with a Ready local endpoint.")
     elif platform.get("load_balancer") == "kube-vip" and platform.get("vip_service_election") is not True:
-        warnings.append("kube-vip per-Service election is not verified; Local traffic requires it for VIP failover.")
+        warnings.append("kube-vip's per-Service election is not confirmed. Local traffic needs it for virtual IP failover.")
     if node_down not in ("delete-deployment-pod", "delete-both-statefulset-and-deployment-pod"):
-        warnings.append("Longhorn automatic deletion of pods on failed nodes is not enabled or not verified; recovery may wait for intervention.")
+        warnings.append("Longhorn does not delete pods on failed hosts automatically, or it is not confirmed. Recovery may wait for someone to step in.")
     storage = []
     ready_nodes = {node["metadata"]["name"] for node in nodes if ready(node)}
     for item in volumes:
@@ -199,8 +199,8 @@ def recovery_report(nodes, volumes, replicas, platform, node_down, errors=(), po
         if replicas is None:
             warnings.append(f"{item['pvc']}: actual replica health is unavailable.")
         elif len(healthy) < 2:
-            blockers.append(f"{item['pvc']}: healthy replicas are on {len(healthy)} host(s); losing the only copy makes the export unavailable.")
+            blockers.append(f"{item['pvc']}: healthy replicas are on {len(healthy)} host(s). Losing the only copy makes the export unavailable.")
     warnings.append("Longhorn RWX re-exports do not support NFS file locks/delegations or normal lock recovery. Use this gateway for ordinary files, not VM disks or databases requiring locks.")
     return {"level": "blocked" if blockers else "limited", "blockers": blockers, "warnings": warnings,
             "eligible_hosts": sorted(hosts), "volumes": storage, "lock_recovery": False,
-            "detail": "Automatic recovery has blockers" if blockers else "Reconnect recovery prerequisites checked; lock recovery is unsupported"}
+            "detail": "Automatic recovery has blockers" if blockers else "What reconnect recovery needs was checked. Lock recovery is not supported."}

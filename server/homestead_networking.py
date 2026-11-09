@@ -96,13 +96,13 @@ def _change_vip_route(request):
         if any(s["name"].startswith(OBJECTS.NAME) and s["namespace"] == OBJECTS.NS for s in result["services"]):
             try:
                 pointed = OBJECTS.request_target()
-                result["detail"] += "; " + pointed["detail"]
+                result["detail"] += ". " + pointed["detail"]
             except Exception as error:
-                result["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
+                result["detail"] += f". Longhorn's backup target was not changed: {str(error)[:120]}"
         # Linked clusters reach this one at its new VIP, where it was on the old.
         try:
             if FLEET.follow_address((f"http://{str(b.get('old') or '').strip()}:{SELF_ADDRESS.WEB_PORT}",)):
-                result["detail"] += "; linked clusters were told the new address"
+                result["detail"] += ". Linked clusters were told the new address"
         except Exception:
             pass
     return result

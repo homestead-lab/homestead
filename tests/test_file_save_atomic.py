@@ -79,7 +79,7 @@ class AtomicSaveTests(unittest.TestCase):
     def test_concurrent_writer_cannot_remove_someone_elses_lock(self):
         lock = self.root / "config.txt.homestead-lock"
         lock.mkdir()
-        with self.assertRaisesRegex(ValueError, "another save"):
+        with self.assertRaisesRegex(ValueError, "Another save"):
             files.write_file("lab", "data", "config.txt", "new", self.revision)
         self.assertTrue(lock.exists())
         self.assertEqual(b"original", self.target.read_bytes())

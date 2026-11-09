@@ -232,9 +232,9 @@ class OneAtATimeTests(unittest.TestCase):
         # A log alert's preview reads an hour of logs too: it takes this
         # limit, so it cannot be used to get round it.
         with LS.exclusive():
-            with self.assertRaisesRegex(ValueError, "another log search is running"):
+            with self.assertRaisesRegex(ValueError, "Another log search is running"):
                 LS.search(WORKLOADS, "error", reader())
-            with self.assertRaisesRegex(ValueError, "another log search is running"):
+            with self.assertRaisesRegex(ValueError, "Another log search is running"):
                 with LS.exclusive():
                     pass
         with LS.exclusive():

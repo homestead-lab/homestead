@@ -20,7 +20,7 @@ test("a matching bucket on the wrong endpoint offers repair", () => {
     longhorn: { pointed: false, endpoint: "http://old:9000" } }, { url: "s3://backups@r/" });
   assert.match(html, /not pointed here/);
   assert.match(html, /http:\/\/old:9000/);
-  assert.match(html, /Point Longhorn at it/);
+  assert.match(html, /Use it for backups/);
   assert.match(html, /Storage settings/);
 });
 
@@ -29,9 +29,9 @@ test("pending and failed switches explain progress and offer a retry with escape
   for (const state of ["pending", "applying", "failed"]) {
     const html = ctx.objectStoreCard({ deployed: true, ready: true,
       longhorn: { pointed: false, state, detail: "<script>bad endpoint</script>" } }, {});
-    assert.match(html, /Retry target switch/);
+    assert.match(html, /Retry switching the backup target/);
     assert.ok(!html.includes("<script>"));
-    assert.equal(html.includes("retries automatically"), state !== "failed");
+    assert.equal(html.includes("keeps trying for up to ten minutes"), state !== "failed");
   }
 });
 

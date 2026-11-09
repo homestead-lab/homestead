@@ -41,7 +41,7 @@ class ResolverTests(unittest.TestCase):
     def test_a_job_whose_replica_was_evicted_is_carried_on(self):
         (state, _, message), resume = self.status(job(), gone=True)
         self.assertEqual("running", state)
-        self.assertIn("carrying on", message)
+        self.assertIn("Continuing", message)
         resume.assert_called_once()
 
     def test_a_live_worker_may_wait_on_longhorn_for_longer_than_four_minutes(self):
@@ -239,9 +239,9 @@ class ResumedDrainTests(unittest.TestCase):
     def test_pods_already_gone_are_fine_but_new_ones_are_not(self):
         reviewed = [list(row) for row in MAINTENANCE.pod_snapshot([self.pod("a"), self.pod("b")])]
         self.drain([self.pod("b")], reviewed, resumed=True)
-        with self.assertRaisesRegex(ValueError, "changed after review"):
+        with self.assertRaisesRegex(ValueError, "changed after the review"):
             self.drain([self.pod("b"), self.pod("new")], reviewed, resumed=True)
-        with self.assertRaisesRegex(ValueError, "changed after review"):
+        with self.assertRaisesRegex(ValueError, "changed after the review"):
             self.drain([self.pod("b")], reviewed, resumed=False)
 
 

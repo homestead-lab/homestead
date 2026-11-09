@@ -25,6 +25,27 @@ import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
 
 
+RUNTIME_SOCKETS = ("/var/run/docker.sock", "/run/docker.sock", "/run/containerd/containerd.sock",
+                   "/var/run/containerd/containerd.sock", "/var/run/crio/crio.sock", "/run/k3s/containerd/containerd.sock")
+
+
+def runtime_socket(cfg):
+    """The first storage row, in any container of the config, that gives a
+    container the host's container runtime socket: by the path inside the
+    container, or by the host path behind it (#1294). None when there is none.
+    Read from the config as submitted, so a row removed in Deploy is gone."""
+    rows = list(cfg.get("volumes") or [])
+    for extra in cfg.get("additional_containers") or []:
+        rows += list(extra.get("volumes") or [])
+    for item in rows:
+        path = str(item.get("path") or "").rstrip("/")
+        host = (item.get("type") == "host" or item.get("kind") == "host")
+        source = str(item.get("source") or "").rstrip("/") if host else ""
+        if path in RUNTIME_SOCKETS or source in RUNTIME_SOCKETS:
+            return item
+    return None
+
+
 def analyze_deploy_intent(cfg):
     """Derive portable Kubernetes guidance from template semantics, never app names."""
     updated = dict(cfg)
@@ -49,7 +70,7 @@ def analyze_deploy_intent(cfg):
             port["description"] = "Optional: expose only when this workload provides DHCP"
             if "network" not in intents:
                 intents.append("network")
-            notes.append("DHCP port 67 stays disabled unless you explicitly expose it.")
+            notes.append("DHCP port 67 stays off unless it is exposed on purpose.")
 
     volumes = updated.get("volumes") or []
 
@@ -86,11 +107,11 @@ def analyze_deploy_intent(cfg):
     if data_paths:
         if "storage" not in intents:
             intents.append("storage")
-        notes.append("Persistent data paths start as editable Longhorn claims; choose RWX when multiple replicas or workloads must attach: " + ", ".join(filter(None, data_paths)) + ".")
+        notes.append("Persistent data paths start as editable Longhorn volumes. Choose RWX when more than one replica or app must use them: " + ", ".join(filter(None, data_paths)) + ".")
     if any(item.get("access_mode") == "ReadWriteMany" for item in volumes):
         if "storage" not in intents:
             intents.append("storage")
-        notes.append("Template wording indicates shared storage; review the proposed RWX claim and size.")
+        notes.append("The template suggests shared storage. Review the proposed shared (RWX) volume and its size.")
 
     generated = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("generate")]
     if generated:
@@ -108,24 +129,26 @@ def analyze_deploy_intent(cfg):
         dependencies.append({"kind": "cache", "name": "External cache endpoint",
                              "required": True, "managed": False})
 
-    runtime_socket = next((item for item in volumes
-                           if item.get("path") in ("/var/run/docker.sock", "/run/containerd/containerd.sock")), None)
-    blocked = bool(runtime_socket)
+    socket = runtime_socket(updated)
+    blocked = bool(socket)
     if blocked:
         intents.append("safety")
         dependencies.append({"kind": "runtime", "name": "Host container-runtime control",
                              "required": True, "managed": False})
-        notes.append("This template requests a host container-runtime socket and can create or control other containers; it needs a Kubernetes-specific deployment design.")
+        where = socket.get("source") or socket.get("path") or "the host's runtime socket"
+        notes.append(f"This template mounts the host's container runtime socket ({where}), which lets it create and control "
+                     "other containers. Homestead does not deploy that. Remove the socket under Storage to deploy without "
+                     "it: features that need the socket then do not work.")
     if dependencies:
         intents.append("dependency")
         notes.append("Review the external services listed below before deployment.")
     if updated.get("template_devices"):
         intents.append("hardware")
-        notes.append("Imported device paths are matched to reusable hardware features; verify eligible hosts before deploying.")
+        notes.append("Imported device paths are matched to hardware features. Check which hosts can run it before deploying.")
     network = str(updated.get("template_network") or "bridge").lower()
     if network == "host":
         intents.append("network")
-        notes.append("The source requests host networking; review node port collisions and failover, or switch to a Service VIP.")
+        notes.append("The source uses host networking. Check for port conflicts on the hosts and how it fails over, or switch to a virtual IP.")
     elif network not in ("bridge", "default", "") and not dns:
         intents.append("network")
         notes.append("The source custom network is represented by a dedicated Kubernetes VIP.")
@@ -138,7 +161,7 @@ def analyze_deploy_intent(cfg):
              "Dedicated VIP" if dns else "Storage review" if "storage" in intents else "Template review")
     updated["app_profile"] = {"intent": intents[0], "intents": intents, "level": level,
                               "label": label, "notes": notes, "dependencies": dependencies,
-                              "blocked": blocked}
+                              "blocked": blocked, "blocked_path": (socket or {}).get("path") or ""}
     return updated
 
 

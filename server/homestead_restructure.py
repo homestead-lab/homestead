@@ -95,12 +95,12 @@ def copies(cfg):
         for j, other in enumerate(out):
             if i != j and move["to"] == other["to"] and (
                     _inside(move["to_folder"], other["to_folder"]) or _inside(other["to_folder"], move["to_folder"])):
-                raise ValueError("copy destinations overlap; move these paths in separate edits")
+                raise ValueError("The copy destinations overlap. Move these paths in separate edits.")
             if move["to"] == other["from"] and (
                     _inside(move["to_folder"], other["from_folder"]) or _inside(other["from_folder"], move["to_folder"])):
                 if i == j and _inside(move["to_folder"], move["from_folder"]):
                     continue  # the script explicitly excludes this destination subtree
-                raise ValueError("a copy destination overlaps source data; use a separate volume or staged edits")
+                raise ValueError("A copy destination overlaps the source data. Use a separate volume, or make the edits one at a time.")
     return out
 
 

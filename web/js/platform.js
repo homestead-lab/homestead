@@ -3,10 +3,10 @@
    failing, and the sidebar only offers what can work. */
 
 const PLATFORM_NEEDS = {
-  longhorn: { name: "Longhorn", why: "volumes, snapshots and backups are Longhorn's",
-    fix: "Homestead can install it here, as it can under Settings → Hardware and storage. Each host needs open-iscsi and an NFS client (nfs-common) first." },
-  kubevirt: { name: "KubeVirt", why: "virtual machines run on KubeVirt",
-    fix: "Homestead can install it with CDI, which fills VM disks from images - here or under Settings → Hardware and storage. The machines need hardware virtualisation to run VMs at full speed." },
+  longhorn: { name: "Longhorn", why: "Longhorn provides volumes, snapshots and backups",
+    fix: "Homestead can install it here or under Settings → Hardware and storage. Each host needs open-iscsi and an NFS client (nfs-common) first." },
+  kubevirt: { name: "KubeVirt", why: "KubeVirt runs virtual machines",
+    fix: "Homestead can install it here or under Settings → Hardware and storage, together with CDI, which fills VM disks from images. The hosts need hardware virtualisation to run VMs at full speed." },
 };
 
 async function loadPlatform(force = false) {
@@ -19,14 +19,14 @@ async function loadPlatform(force = false) {
 window.loadPlatform = loadPlatform;
 
 /* k3s's ServiceLB puts every Service on every node's own address: there is
-   no VIP to choose, so the forms offer that one choice and say so. */
+   no virtual IP to choose, so the forms offer that one choice and say so. */
 const nodeAddressesOnly = () => STATE.platform?.load_balancer === "servicelb";
-const NODE_ADDRESS_TIP = "k3s's ServiceLB puts every Service on every host's own address, at the LAN port you give it - so each needs a port no other Service uses (Traefik has 80 and 443).";
+const NODE_ADDRESS_TIP = "k3s's ServiceLB makes every service available on every host's own address, at the chosen LAN port. Each service therefore needs a port that no other service uses. Traefik uses 80 and 443.";
 function nodeAddressOption() {
   return `<option value="shared" selected>Every host's own address · k3s ServiceLB</option>`;
 }
 /* With kube-vip beside it, ServiceLB still puts a Service on the nodes' own
-   addresses: offered as well as a VIP of its own. */
+   addresses: offered as well as a virtual IP of its own. */
 const nodeAddressBeside = () => !!STATE.platform?.servicelb && STATE.platform?.load_balancer === "kube-vip";
 function nodeAddressChoice(selected = false) {
   return nodeAddressBeside() ? `<option value="nodes" ${selected ? "selected" : ""}>Every host's own address · ServiceLB</option>` : "";
@@ -57,34 +57,34 @@ window.platformName = platformName;
    Installed through the Helm controller k3s and RKE2 run, so they are
    ordinary HelmCharts afterwards. Harvester brings both. */
 const ADDONS = {
-  longhorn: { name: "Longhorn", what: "Replicated volumes, snapshots and backups - the Volumes and Data protection pages",
-    needs: "Each host needs open-iscsi and an NFS client (nfs-common) installed and iscsid running; the k3s script does that. Volumes keep one copy per host, up to three." },
-  "kube-vip": { name: "kube-vip", what: "VIPs for apps: a container can have a LAN address of its own, handed out from Networking > Your VIPs, as on Harvester",
-    needs: "Announces each VIP from one host with ARP. Beside k3s's ServiceLB it takes only the Services given a VIP; the rest stay on the hosts' own addresses." },
-  multus: { name: "Multus", what: "Second networks for pods - what LAN networks need, so a container or VM can have an address of its own on your LAN",
-    needs: "Installed on every host from the chart RKE2 uses for it; apps already running are left as they are." },
-  kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images",
-    needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed where a host has hardware virtualisation (/dev/kvm); without it KubeVirt emulates, many times slower." },
+  longhorn: { name: "Longhorn", what: "Volumes with copies on several hosts, snapshots and backups. Needed for the Volumes and Data protection pages.",
+    needs: "Each host needs open-iscsi and an NFS client (nfs-common) installed, and iscsid running. The k3s install script sets these up. Volumes keep one copy per host, up to three." },
+  "kube-vip": { name: "kube-vip", what: "Virtual IPs for apps. An app can have its own LAN address, chosen from the addresses under Networking > Virtual IPs, as on Harvester.",
+    needs: "It announces each virtual IP from one host using ARP. Alongside k3s's ServiceLB, it handles only the services that have a virtual IP. The other services stay on the hosts' own addresses." },
+  multus: { name: "Multus", what: "Second networks for apps and VMs. LAN networks need it, so that an app or VM can have its own address on the LAN.",
+    needs: "It is installed on every host from the chart that RKE2 uses. Running apps are not changed." },
+  kubevirt: { name: "KubeVirt", what: "Virtual machines, with CDI to fill their disks from images.",
+    needs: "The newest KubeVirt and CDI releases are installed. VMs run at full speed on hosts with hardware virtualisation (/dev/kvm). Without it, KubeVirt emulates the hardware, which is many times slower." },
 };
 
-/* What Homestead needs under it on k3s and RKE2 - kube-vip for VIPs, Multus
+/* What Homestead needs under it on k3s and RKE2 - kube-vip for virtual IPs, Multus
    for a VM's or container's own LAN address - and one button for whatever is
    missing. A new installation gets them by itself; an older one is asked
    here, on Add-ons and on Networking. Empty when nothing is missing. */
 function baselineHtml(r, where = "addons", harvester = STATE.platform?.harvester) {
   // Unread is said, not taken as "nothing missing"; Harvester needs none of them (#620).
-  if (r?.unread) return harvester ? "" : `<div class="baseline-note" style="margin-bottom:12px">${UI.callout("warn", "Could not check the required components", esc(r.unread))}</div>`;
+  if (r?.unread) return harvester ? "" : `<div class="baseline-note" style="margin-bottom:12px">${UI.callout("warn", "The required components could not be checked", esc(r.unread))}</div>`;
   if (!r?.applies || !(r.missing || []).length) return "";
   const missing = r.parts.filter(p => p.missing);
-  return `${UI.callout("warn", { html: `Required components not installed` }, `<ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
-    <div class="dim xs">Installed with the ${esc(platformName({ distribution: r.distribution }))} Helm controller at tested versions. Upgrades are available under System → Cluster → Platform versions.
-      ${where === "network" ? "Until installed, applications are published on host addresses only." : ""}</div>
+  return `${UI.callout("warn", { html: `Required components are not installed` }, `<ul class="baseline-list">${missing.map(p => `<li><b>${esc(p.name)}</b> · ${esc(p.why)}</li>`).join("")}</ul>
+    <div class="dim xs">Installed with the ${esc(platformName({ distribution: r.distribution }))} Helm controller, at versions Homestead has tested. Upgrades are available under System → Cluster → Platform versions.
+      ${where === "network" ? "Until they are installed, apps are available on the hosts' own addresses only." : ""}</div>
     ${can("admin") ? `<div class="row" style="margin-top:8px"><button class="btn sm pri" onclick="baselineInstall()">Install components</button></div>` : '<div class="dim xs">Installation requires the admin role.</div>'}`, { className: "baseline-note", attrs: 'style="margin-bottom:12px"' })}`;
 }
 window.baselineHtml = baselineHtml;
 
 const BASELINE_WORDS = {
-  multus: "Added to the CNI configuration on every host. Running pods are not affected.",
+  multus: "Added to the network configuration on every host. Running apps are not affected.",
   macvtap: "Runs on every host and lets VMs join the LAN through the host's network interface. The hosts' own network is not changed.",
   "kube-vip": "Runs on every host and announces each virtual IP from one host. Existing services are not changed.",
 };
@@ -97,13 +97,13 @@ window.baselineInstall = async () => {
   const r = await api("/api/platform/baseline").catch(e => ({ error: e.message }));
   const missing = (r?.parts || []).filter(p => p.missing);
   if (r?.error || !missing.length) {
-    $("#mbody").innerHTML = (r?.error ? UI.callout("bad", "Could not check the components.", esc(r.error)) : UI.callout("ok", "All required components are installed.", ""))
+    $("#mbody").innerHTML = (r?.error ? UI.callout("bad", "The components could not be checked.", esc(r.error)) : UI.callout("ok", "All required components are installed.", ""))
       + UI.actions(UI.cancel("Close"));
     return;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">
     <ul class="ui-list">${missing.map(p => `<li><b>${esc(p.name)}</b> - ${esc(BASELINE_WORDS[p.id] || p.why)}</li>`).join("")}</ul>
-    <p class="dim xs">Installed through the Helm controller at the versions Homestead has tested; follow each under Jobs.</p>
+    <p class="dim xs">Installed through the Helm controller, at versions Homestead has tested. Progress is shown under Jobs.</p>
     <div id="bl_result"></div>
     ${UI.actions(UI.cancel() + UI.button("Install", "baselineInstallGo()", { kind: "pri", id: "bl_go", attrs: 'data-need="admin"' }))}</div>`;
   window.__baselineMissing = missing.map(p => p.id);
@@ -131,10 +131,10 @@ window.baselineInstallGo = async () => {
 // The chip says lock recovery is off when the state line doesn't already.
 window.nfsRecovery = (state, expanded = false, lead = "") => {
   const recovery = state?.recovery;
-  if (!recovery) return `<div class="dim xs" style="margin-top:8px">Node-failure recovery has not been checked.</div>${lead ? UI.more("How the NFS server works", lead) : ""}`;
+  if (!recovery) return `<div class="dim xs" style="margin-top:8px">Recovery from a host failure has not been checked.</div>${lead ? UI.more("How the NFS server works", lead) : ""}`;
   const issues = [...(recovery.blockers || []), ...(recovery.warnings || [])];
   return `<div class="row small" style="margin-top:8px;gap:6px;flex-wrap:wrap"><span>Recovery: ${esc(recovery.detail || "not checked")}</span>${recovery.lock_recovery === false && !/lock recovery/i.test(recovery.detail || "") ? UI.chip("No lock recovery", "warn") : ""}</div>
-    ${UI.more("How the NFS server works", `${lead}<p>${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : " · enable NFS server support on the hosts and update the node probe"}. Access pauses while the server, VIP and storage recover.</p>
+    ${UI.more("How the NFS server works", `${lead}<p>${(recovery.eligible_hosts || []).length} eligible NFS hosts${recovery.eligible_hosts?.length ? ` · ${esc(recovery.eligible_hosts.join(", "))}` : ". Turn on NFS server support on the hosts and update the node probe."}. Access pauses while the server, virtual IP and storage recover.</p>
     ${issues.length ? `<ul>${issues.map(issue => `<li>${esc(issue)}</li>`).join("")}</ul>` : ""}`, expanded)}`;
 };
 
@@ -148,7 +148,7 @@ window.addonsPaint = async () => {
   catch (e) {
     // Unread add-ons are said, not a card that disappears (#620).
     card.hidden = false;
-    card.innerHTML = `${UI.moduleHeader("Add-ons", "")}${UI.callout("warn", "Could not read the add-ons", esc(e.message))}
+    card.innerHTML = `${UI.moduleHeader("Add-ons", "")}${UI.callout("warn", "The add-ons could not be read", esc(e.message))}
       <div class="row" style="margin-top:8px"><button class="btn sm" onclick="addonsPaint()">Try again</button></div>`;
     return;
   }
@@ -156,10 +156,10 @@ window.addonsPaint = async () => {
   // An unread health report is said, and nothing is installed or switched on a guess (#620).
   const probe = health.probe || {}, smb = health.samba || {}, unknown = UI.chip("status unavailable", "bad");
   if (!health.unread) STATE.data.sambaInstalled = !!smb.installed;
-  const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not said whether the hosts have hardware virtualisation.</span>'
+  const kvmLine = !s.kvm_known ? '<span class="dim">The node probe has not yet reported whether the hosts have hardware virtualisation.</span>'
     : s.kvm_everywhere ? "Every host has hardware virtualisation."
-    : s.kvm_nowhere ? '<b>No host has hardware virtualisation</b>: KubeVirt will emulate, and VMs run slowly.'
-    : `Only ${Object.entries(s.kvm).filter(([, on]) => on).map(([n]) => esc(n)).join(", ")} ha${Object.values(s.kvm).filter(Boolean).length === 1 ? "s" : "ve"} hardware virtualisation; VMs run there.`;
+    : s.kvm_nowhere ? '<b>No host has hardware virtualisation.</b> KubeVirt emulates the hardware, so VMs run slowly.'
+    : `Only ${Object.entries(s.kvm).filter(([, on]) => on).map(([n]) => esc(n)).join(", ")} ha${Object.values(s.kvm).filter(Boolean).length === 1 ? "s" : "ve"} hardware virtualisation, so VMs run there.`;
   const row = (key, state) => {
     const a = ADDONS[key];
     const runtime = key === "multus" && state.state;
@@ -167,16 +167,16 @@ window.addonsPaint = async () => {
       : state.installing ? UI.chip("installing", "neutral") : UI.chip("not installed", "neutral");
     const button = state.repairable ? '<button class="btn sm pri" data-need="admin" onclick="multusRepair()">Repair configuration</button>' : state.installed || state.installing ? ""
       : s.helm_controller ? `<button class="btn sm pri" data-need="admin" onclick="addonInstall(${jsq(key)})">Install ${esc(a.name)}</button>`
-      : '<span class="dim xs">needs the Helm controller k3s and RKE2 run</span>';
+      : '<span class="dim xs">Needs the Helm controller that k3s and RKE2 provide</span>';
     const diagnostic = key === "multus" && !state.ready && state.diagnostic_command
-      ? `${UI.callout("warn", { html: `${esc(state.detail || "Multus is not ready")}` }, `${esc((state.issues || []).join("; "))} SSH to a server host to gather Helm, node-agent status and logs:`, { className: "addon-diagnostic" })}
+      ? `${UI.callout("warn", { html: `${esc(state.detail || "Multus is not ready")}` }, `${esc((state.issues || []).join("; "))} To collect the Helm status, the agent status and the logs, run this on a server host over SSH:`, { className: "addon-diagnostic" })}
          ${guideCopy(state.diagnostic_command)}` : "";
     const emulation = key === "kubevirt" && state.installed && state.emulation != null
       ? `<div class="dim xs" style="margin-top:4px">${state.emulation
-          ? "Software fallback is allowed when /dev/kvm is missing."
+          ? "VMs can use software emulation on hosts without /dev/kvm."
           : "Hardware virtualisation (/dev/kvm) is required."}</div>` : "";
     const emulationButton = key === "kubevirt" && state.installed && !state.emulation && !s.kvm_everywhere && can("admin")
-      ? '<button class="btn sm" onclick="kubevirtEmulation(true)">Allow software fallback</button>' : "";
+      ? '<button class="btn sm" onclick="kubevirtEmulation(true)">Allow software emulation</button>' : "";
     return `<div class="addon-row"><div><b>${esc(a.name)}</b> ${pill}<div class="dim small">${esc(a.what)}</div>
         ${state.installed ? "" : `<div class="dim xs" style="margin-top:4px">${esc(a.needs)}</div>`}
         ${key === "kubevirt" ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>${emulation}` : ""}
@@ -191,16 +191,16 @@ window.addonsPaint = async () => {
     ? '<button class="btn sm pri" onclick="probeInstallConfirm()">Install node probe</button>'
     : '<button class="btn sm" onclick="allocationProbeSettings()">VM placement checks</button><button class="btn sm" onclick="probeRemove()">Remove</button>';
   const probeRow = `<div class="addon-row"><div><b>Node probe</b> ${probePill}
-      <div class="dim small">Host hardware, /dev/kvm, temperatures, physical disks, SMART health and per-disk throughput</div>
-      <div class="dim xs" style="margin-top:4px">A lightweight read-only probe runs on every host; SMART tests use its separate privileged sidecar.</div></div>
+      <div class="dim small">Reports host hardware, /dev/kvm, temperatures, physical disks, SMART health and the throughput of each disk.</div>
+      <div class="dim xs" style="margin-top:4px">A small read-only probe runs on every host. SMART tests use a separate privileged container next to it.</div></div>
     <div class="row">${probeButton}</div></div>`;
   const smbPill = health.unread ? unknown : !smb.installed ? UI.chip("not installed", "neutral")
     : !smb.enabled ? UI.chip("off", "warn")
     : smb.ready < smb.desired ? UI.chip("starting", "neutral")
-    : smb.partial ? UI.chip("partial service", "warn") : UI.chip("serving", "ok");
+    : smb.partial ? UI.chip("partly serving", "warn") : UI.chip("serving", "ok");
   const smbRow = `<div class="addon-row"><div><b>SMB network shares</b> ${smbPill}
-      <div class="dim small">Windows, macOS and Linux file shares from the saved Network Shares inventory</div>
-      <div class="dim xs" style="margin-top:4px">${health.unread ? "shares and address not read" : `${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "address not assigned"}`} · stopping or removing SMB keeps all PVCs and share settings</div></div>
+      <div class="dim small">File shares for Windows, macOS and Linux, from the list on the Network shares page.</div>
+      <div class="dim xs" style="margin-top:4px">${health.unread ? "Shares and address not read" : `${smb.shares || 0} configured · ${smb.address ? esc(smb.address) : "no address assigned"}`} · Stopping or removing the SMB server keeps all volumes and share settings.</div></div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Shares</button>
       ${can("admin") && !health.unread ? actionBar([{ label: smb.enabled ? "Disable" : "Enable", run: `sambaSet(${!smb.enabled})` },
         smb.installed && { label: "Remove server", run: "sambaRemove()", danger: true }].filter(Boolean), { shown: 1, label: "SMB server" }) : ""}</div></div>`;
@@ -209,15 +209,15 @@ window.addonsPaint = async () => {
     : !nfs.enabled ? UI.chip("off", "warn")
     : nfs.ready < nfs.desired ? UI.chip("starting", "neutral") : UI.chip("serving", "ok");
   const nfsRow = `<div class="addon-row"><div><b>NFSv4 network shares</b> ${nfsPill}
-      <div class="dim small">A separate, opt-in NFS container serving selected RWX shares to allowed client networks</div>
-      <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "address not assigned"} · removing the server keeps the shares and volumes</div>${nfsRecovery(nfs)}</div>
+      <div class="dim small">An optional, separate NFS server. It serves chosen shared volumes to the allowed client networks.</div>
+      <div class="dim xs" style="margin-top:4px">${(nfs.exports || []).length} exports · ${nfs.address ? esc(nfs.address) : "no address assigned"} · Removing the server keeps the shares and volumes.</div>${nfsRecovery(nfs)}</div>
     <div class="row"><button class="btn sm" onclick="go('shares')">Exports</button>
       ${can("admin") && !nfs.error ? actionBar([{ label: nfs.enabled ? "Disable" : "Enable", run: `nfsSet(${!nfs.enabled})` },
         nfs.installed && { label: "Remove server", run: "nfsRemove()", danger: true }].filter(Boolean), { shown: 1, label: "NFS server" }) : ""}</div></div>`;
   const clusterRows = s.harvester ? "" : `${hostConsoleRow(consoles)}${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
-  card.innerHTML = `${UI.moduleHeader(`Add-ons`, `${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
+  card.innerHTML = `${UI.moduleHeader(`Add-ons`, `${s.harvester ? "Optional Homestead services. Harvester already provides the storage, VM and network add-ons."
         : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}`, ``)}
-    ${baselineHtml(baseline, "addons", s.harvester)}${health.unread ? UI.callout("warn", "Could not read the node probe and the SMB server", esc(health.unread)) : ""}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
+    ${baselineHtml(baseline, "addons", s.harvester)}${health.unread ? UI.callout("warn", "The node probe and the SMB server could not be read", esc(health.unread)) : ""}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
 };
 
@@ -229,7 +229,7 @@ function hostConsoleRow(c) {
   if (!c || c.harvester) return "";
   // Unread is said, not a row left out; nothing is switched on a guess (#620).
   if (c.unread) return `<div class="addon-row"><div><b>Host console</b> ${UI.chip("status unavailable", "bad")}
-      ${UI.callout("warn", "Could not read the host console", esc(c.unread))}</div></div>`;
+      ${UI.callout("warn", "The host console could not be read", esc(c.unread))}</div></div>`;
   const hosts = c.nodes.filter(n => !n.native);
   const pill = c.enabled === null ? UI.chip("not checked yet", "neutral")
     : !c.enabled ? (c.installed ? UI.chip(`removing · ${c.installed} left`, "neutral") : UI.chip("off", "neutral"))
@@ -241,9 +241,9 @@ function hostConsoleRow(c) {
   const lines = hosts.map(n => `<div class="xs between" style="gap:8px"><span><b>${esc(n.name)}</b> <span class="dim">${esc(n.detail || (n.ready ? "not checked yet" : "not Ready"))}</span></span>
     ${behind(n) && can("admin") ? `<button class="btn sm" onclick="hostConsoleNow(${jsq(n.name)},this)">Update now</button>` : ""}</div>`).join("");
   return `<div class="addon-row"><div><b>Host console</b> ${pill}
-      <div class="dim small">Each host's local screen: CPU, memory, disks, addresses and the cluster's health, before the login prompt</div>
-      <div class="dim xs" style="margin-top:4px">Bundled with Homestead v${esc(c.version)}; installed on new hosts and updated with Homestead, a couple of hosts every ten minutes.
-        A host shows the new one at once, or after a logout if someone is signed in on its screen. Harvester keeps its own console.</div>
+      <div class="dim small">Each host's local screen shows CPU, memory, disks, addresses and the cluster's health above the login prompt.</div>
+      <div class="dim xs" style="margin-top:4px">Included with Homestead v${esc(c.version)}. It is installed on new hosts and updated with Homestead, two hosts every ten minutes.
+        A host shows the new version at once, or after sign-out if someone is signed in on its screen. Harvester keeps its own console.</div>
       <details class="small" style="margin-top:6px"><summary>${hosts.length} host${hosts.length === 1 ? "" : "s"}</summary>${lines}</details></div>
     <div class="row">${can("admin") ? actionBar([{ label: c.enabled ? "Disable" : "Enable", run: `hostConsoleSet(${!c.enabled})` }], { label: "Host console" }) : ""}</div></div>`;
 }
@@ -252,12 +252,12 @@ window.hostConsoleNow = async (node, button) => {
   button.disabled = true; button.textContent = "Updating…";
   try {
     await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node, action: "enable" }) });
-    toast(`Updating the console on ${node}: follow it in the bell`, "ok");
+    toast(`Updating the console on ${node}. Progress is shown under the bell.`, "ok");
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Update now"; }
 };
 
 window.hostConsoleSet = async on => {
-  if (!on && !(await ask("Remove the host console from every host? Each goes back to the plain login prompt after its console logs out or it restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) return;
+  if (!on && !(await ask("Remove the host console from every host? Each host shows the plain login prompt again after its console signs out or the host restarts.", { title: "Remove the host console", ok: "Remove", danger: true }))) return;
   try {
     const r = await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(r.detail, "ok");
@@ -266,7 +266,7 @@ window.hostConsoleSet = async on => {
 };
 
 window.kubevirtEmulation = async enabled => {
-  if (enabled && !(await ask("Allow KubeVirt's software fallback? VMs can then start on hosts without /dev/kvm, but run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
+  if (enabled && !(await ask("Allow KubeVirt to use software emulation? VMs can then start on hosts without /dev/kvm, but they run much more slowly there. Running VMs are not restarted.", { title: "Allow software emulation", ok: "Allow" }))) return;
   try {
     const result = await api("/api/addons/kubevirt/emulation", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ enabled }) });
@@ -276,7 +276,7 @@ window.kubevirtEmulation = async enabled => {
 };
 
 window.multusRepair = async () => {
-  if (!(await ask("Correct Multus's k3s CNI directory? This rolls its node agents. Existing apps and VMs are not restarted; new pod networking may briefly pause during the rollout.", { title: "Correct Multus's CNI directory", ok: "Correct it" }))) return;
+  if (!(await ask("Correct the k3s network configuration folder that Multus uses? Its agent restarts on each host. Running apps and VMs are not restarted, but networking for newly started apps may pause briefly.", { title: "Correct the Multus configuration", ok: "Correct configuration" }))) return;
   try {
     const r = await api("/api/addons/multus/repair", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } });
     toast(r.detail, "ok");
@@ -290,14 +290,14 @@ window.addonInstall = async key => {
   if (key === "kubevirt") {
     // An unread host check is asked about, not taken as "every host has KVM" (#620).
     const s = await api("/api/addons").catch(e => ({ unread: e.message }));
-    if (s.unread && !(await ask(`Could not check whether the hosts have hardware virtualisation (/dev/kvm): ${s.unread}. Without it KubeVirt emulates: VMs work, but many times slower. Install anyway?`, { title: "Install KubeVirt", ok: "Install anyway" }))) return;
-    if (s.kvm_nowhere && !(await ask("No host has hardware virtualisation (/dev/kvm), so KubeVirt will emulate: VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
+    if (s.unread && !(await ask(`Homestead could not check whether the hosts have hardware virtualisation (/dev/kvm). ${s.unread}. Without it, KubeVirt emulates the hardware. VMs work, but many times slower. Install anyway?`, { title: "Install KubeVirt", ok: "Install anyway" }))) return;
+    if (s.kvm_nowhere && !(await ask("No host has hardware virtualisation (/dev/kvm), so KubeVirt emulates the hardware. VMs work, but many times slower. Install anyway?", { title: "Install KubeVirt without KVM", ok: "Install anyway" }))) return;
     body = {};
   } else if (key === "kube-vip") {
     const s = await api("/api/addons").catch(e => ({ unread: e.message }));
-    const where = s.unread ? `Could not read which network interface the hosts use (${s.unread}), so kube-vip finds it itself.`
-      : s.kube_vip?.interface ? `It announces VIPs on ${s.kube_vip.interface}, the interface each host's default route uses.`
-      : "The hosts did not agree on one network interface (or the node probe has not said), so kube-vip finds it itself.";
+    const where = s.unread ? `Homestead could not read which network interface the hosts use (${s.unread}), so kube-vip detects it.`
+      : s.kube_vip?.interface ? `It announces virtual IPs on ${s.kube_vip.interface}, the interface each host's default route uses.`
+      : "The hosts do not all use the same network interface, or the node probe has not reported it, so kube-vip detects it.";
     if (!(await ask(`Install kube-vip? ${a.needs} ${where}`, { title: "Install kube-vip", ok: "Install" }))) return;
   } else if (!(await ask(`Install ${a.name}? ${a.needs}`, { title: `Install ${a.name}`, ok: "Install" }))) return;
   try {
@@ -311,8 +311,8 @@ window.addonInstall = async key => {
     const watch = UI.poll(async () => {
       await loadPlatform(true);
       if (key === "kube-vip" ? STATE.platform?.load_balancer === "kube-vip" : STATE.platform?.[key]) {
-        toast(key === "multus" ? "Multus is ready - LAN networks can be made now"
-          : key === "kube-vip" ? "kube-vip is ready - apps can be given VIPs now" : `${a.name} is ready - its pages are in the sidebar`, "ok");
+        toast(key === "multus" ? "Multus is ready. LAN networks can now be created."
+          : key === "kube-vip" ? "kube-vip is ready. Apps can now be given virtual IPs." : `${a.name} is ready. Its pages are in the sidebar.`, "ok");
         addonsPaint();
         return false;
       }
@@ -327,8 +327,8 @@ window.addonInstall = async key => {
 /* What each role does, and its command (homestead_platform.join_guide). */
 const JOIN_ROLES = [
   ["app", "App host", "Runs apps and holds storage."],
-  ["control-plane", "App host + control plane", "Also an etcd vote: three keep the cluster up if one is lost."],
-  ["tiebreaker", "Tiebreaker (votes only)", "Only an etcd vote: no apps, no storage. A Raspberry Pi will do."],
+  ["control-plane", "App host + control plane", "Also votes on the cluster state. Three voting hosts survive one failure."],
+  ["tiebreaker", "Tiebreaker (votes only)", "Only votes. It runs no apps and stores no data, so a Raspberry Pi is enough."],
 ];
 const INSTALLER = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh";
 function joinCommandHtml(g, role) {
@@ -339,29 +339,29 @@ function joinCommandHtml(g, role) {
     const storage = role !== "tiebreaker" && g.storage_supported
       && ["/mnt/longhorn-os", "/var/lib/longhorn"].includes(g.storage_path)
       ? ` HS_LONGHORN_DATA_PATH=${g.storage_path}` : "";
-    return `<p class="dim xs">On RKE2 the installer joins a ${role === "tiebreaker" ? "tiebreaker" : "server"}: it asks for this cluster's address and token, checks the machine, and writes the role's settings.</p>`
+    return `<p class="dim xs">On RKE2 the installer joins a ${role === "tiebreaker" ? "tiebreaker" : "server"}. It asks for this cluster's address and token, checks the machine, and writes the settings for the role.</p>`
       + guideCopy(`curl -sfL ${g.installer_url || INSTALLER} | sudo HS_DIST=rke2 HS_ROLE=${role === "tiebreaker" ? "tiebreaker" : "server"}${storage} sh`);
   }
   const cmd = k3s && role === "tiebreaker" ? g.tiebreaker : k3s && role === "control-plane" ? g.server_join : g.agent;
   const shared = role !== "app" && k3s && !g.settings_known
-    ? `<p class="dim xs">Homestead could not read the other servers' settings. Copy these from the first server's <span class="mono">/etc/rancher/k3s/config.yaml</span> or its service file, if it sets them: <span class="mono">${esc((g.shared_flags || []).join(" "))}</span>.</p>` : "";
+    ? `<p class="dim xs">Homestead could not read the other servers' settings. If the first server sets them, copy these from its <span class="mono">/etc/rancher/k3s/config.yaml</span> or its service file: <span class="mono">${esc((g.shared_flags || []).join(" "))}</span>.</p>` : "";
   const check = role !== "app" && g.check
-    ? `<p class="dim xs">First check the machine can hold a vote:</p>${guideCopy(role === "tiebreaker" ? g.check : g.check.replace("HS_ROLE=tiebreaker", "HS_ROLE=server"))}` : "";
-  return check + guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">with <span class="mono">/etc/rancher/rke2/config.yaml</span> saying:</p>${guideCopy(g.config || "")}`) + shared;
+    ? `<p class="dim xs">First check that the machine can vote:</p>${guideCopy(role === "tiebreaker" ? g.check : g.check.replace("HS_ROLE=tiebreaker", "HS_ROLE=server"))}` : "";
+  return check + guideCopy(cmd) + (k3s ? "" : `<p class="dim xs">Then create <span class="mono">/etc/rancher/rke2/config.yaml</span> with:</p>${guideCopy(g.config || "")}`) + shared;
 }
 window.joinCommandHtml = joinCommandHtml;
 /* Longhorn attaches a volume over iSCSI on the host running the app, so every
    host that runs apps needs its packages; a tiebreaker runs none (#833). */
 function joinLonghornHtml(g, role) {
-  if (role === "tiebreaker") return `<p class="dim small">Not needed: a tiebreaker runs no apps and holds no storage.</p>`;
+  if (role === "tiebreaker") return `<p class="dim small">Not needed. A tiebreaker runs no apps and stores no data.</p>`;
   const wiki = `https://github.com/homestead-lab/homestead/wiki/Installing-on-${g.distribution === "rke2" ? "RKE2" : "k3s"}#if-something-is-stuck`;
   const storage = `<details><summary>Storage setting for the installer</summary>`
-    + (g.storage_path ? `<p class="dim small">This cluster keeps Longhorn data in this folder. If the installer asks for one, give it exactly this.</p>${guideCopy(g.storage_path)}`
-      + (g.storage_supported ? "" : `<p class="dim small">The installer cannot prepare a custom folder: set it up by hand.</p>`)
-      : `<p class="dim small">The storage folder could not be read. If the installer asks, read it from an existing server; don't guess.</p>`)
+    + (g.storage_path ? `<p class="dim small">The installer may ask for this cluster's Longhorn data folder. Enter exactly this one.</p>${guideCopy(g.storage_path)}`
+      + (g.storage_supported ? "" : `<p class="dim small">The installer cannot prepare a custom folder, so set it up manually.</p>`)
+      : `<p class="dim small">The storage folder could not be read. If the installer asks for it, check it on an existing server rather than guessing.</p>`)
     + `</details>`;
   return guideCopy(g.longhorn)
-    + `<p class="dim xs">Every host that runs apps needs these, even one that holds no copies. Longhorn's pods keep restarting? See the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;
+    + `<p class="dim xs">Every host that runs apps needs these, even one that stores no volume copies. If Longhorn's pods keep restarting, see the wiki's <a class="linkish" href="${wiki}" target="_blank" rel="noopener">If something is stuck</a>.</p>` + storage;
 }
 window.joinLonghornHtml = joinLonghornHtml;
 window.platformJoinRole = role => {
@@ -370,7 +370,7 @@ window.platformJoinRole = role => {
   if (g && $("#joinCmd")) $("#joinCmd").innerHTML = joinCommandHtml(g, role);
 };
 window.platformJoinGuide = async (role = "app") => {
-  modal("Add a host", '<div class="empty"><span class="spin2"></span>reading the cluster</div>', true);
+  modal("Add a host", '<div class="empty"><span class="spin2"></span>Reading the cluster</div>', true);
   // The role radios choose what the guide shows; nothing here is saved, so
   // closing it never asks about unsaved changes.
   window.__modalGuard = () => "";
@@ -379,19 +379,19 @@ window.platformJoinGuide = async (role = "app") => {
   STATE.data.joinGuide = g;
   const k3s = g.distribution === "k3s";
   if (!["k3s", "rke2"].includes(g.distribution)) {
-    $("#mbody").innerHTML = `<p class="muted small">This cluster's distribution could not be told from its hosts, so Homestead cannot give its join steps. Use the installer that set the cluster up.</p>`;
+    $("#mbody").innerHTML = `<p class="muted small">Homestead could not identify this cluster's distribution from its hosts, so it cannot show the steps to join. Use the installer that set up the cluster.</p>`;
     return;
   }
   $("#mbody").innerHTML = `<p class="muted small">Run these as root on the new machine. It joins with this cluster's release, <b>${k3s ? "k3s" : "RKE2"} v${esc(g.version)}</b>.</p>
     <section class="guide-step"><h4><span>1</span>Read the join token</h4>
-      <p>It is on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}.</p>
+      <p>It is stored on the server${g.server ? ` at <span class="mono">${esc(g.server)}</span>` : ""}.</p>
       ${guideCopy(`sudo cat ${g.token_file}`)}
-      <p class="dim xs">Keep it private: anyone with it can join a machine.</p></section>
-    <section class="guide-step"><h4><span>2</span>Choose what it does</h4>
+      <p class="dim xs">Keep it private, because it lets any machine join the cluster.</p></section>
+    <section class="guide-step"><h4><span>2</span>Role</h4>
       <div class="answer-modes">${JOIN_ROLES.map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="joinRole" value="${value}"${value === role ? " checked" : ""}
         onchange="platformJoinRole(this.value)"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`).join("")}</div></section>
     <section class="guide-step"><h4><span>3</span>Install Longhorn's host packages</h4><div id="joinLonghorn">${joinLonghornHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>4</span>Join it</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
-    <section class="guide-step"><h4><span>5</span>Watch it join</h4><p class="dim small">It shows on Hosts within a minute or two, and turns Ready once its network is up.</p>
+    <section class="guide-step"><h4><span>4</span>Join the cluster</h4><div id="joinCmd">${joinCommandHtml(g, role)}</div></section>
+    <section class="guide-step"><h4><span>5</span>Check that it joined</h4><p class="dim small">It appears under Hosts within two minutes, and is ready once its network is up.</p>
       <div>${UI.button("View hosts", "closeModal();go('nodes')", { kind: "pri" })}</div></section>`;
 };

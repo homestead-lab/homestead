@@ -171,7 +171,7 @@ def read_packet(recv):
     else:
         raise ConnectionError("the broker sent a malformed packet")
     if length > PACKET_MAX:
-        raise PacketTooLarge(f"the broker sent a {length}-byte packet; Homestead takes at most 64 KiB")
+        raise PacketTooLarge(f"the broker sent a {length}-byte packet, and Homestead takes at most 64 KiB")
     return first, exactly(length) if length else b""
 
 
@@ -381,7 +381,7 @@ def _readable():
         if raw is not None and not isinstance(json.loads(raw), dict):
             raise ValueError
     except (TypeError, ValueError):
-        raise ValueError("The MQTT settings could not be read (mqtt.json is not an object of JSON); nothing was changed") from None
+        raise ValueError("The MQTT settings could not be read (mqtt.json is not a JSON object). Nothing was changed.") from None
 
 
 def _update(change):
@@ -391,7 +391,7 @@ def _update(change):
     Settings that cannot be read stop the change rather than be saved over."""
     def apply(stored):
         if stored is not None and not isinstance(stored, dict):
-            raise ValueError("The MQTT settings could not be read (mqtt.json is not an object); nothing was changed")
+            raise ValueError("The MQTT settings could not be read (mqtt.json is not an object), so nothing was changed")
         current = {**DEFAULTS, **{k: v for k, v in (stored or {}).items() if k in DEFAULTS or k == "has_password"}}
         return change(current)
     return KUBE.update_json(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{_map()}", "mqtt.json", apply,
@@ -875,7 +875,7 @@ def run():
             snap = snapshot()
             if snap:
                 count, unread = publish_round(cfg, client, snap, announced)
-                note = "".join(f"; could not read the {PLURAL[kind]}, so theirs are as last published" for kind in unread)
+                note = "".join(f". Homestead could not read the {PLURAL[kind]}, so theirs are as last published" for kind in unread)
                 with _lock:
                     STATUS.update(state="publishing", error="", last_publish=int(time.time()),
                                   published=STATUS["published"] + count,

@@ -185,10 +185,10 @@ def ownership_hint(namespace, pvc):
                         "known": True}
             return {"uid": None, "gid": None, "workload": workload, "image": image,
                     "known": False,
-                    "source": f"{workload} does not declare a user; check what {image or 'its image'} "
+                    "source": f"{workload} does not declare a user. Check what {image or 'its image'} "
                               "runs as - mosquitto uses 1883, linuxserver images use PUID"}
     return {"uid": None, "gid": None, "known": False, "workload": "", "image": "",
-            "source": "nothing mounts this volume, so its files can be owned by anyone you choose"}
+            "source": "nothing mounts this volume, so its files can be owned by any user"}
 
 
 def chown_claim(namespace, pvc, uid, gid):
@@ -204,8 +204,8 @@ def chown_claim(namespace, pvc, uid, gid):
     if existing:
         # Only this volume's last chown is replaced, never another volume's.
         if NAMES.label_of(existing.get("metadata") or {}, "app") != pvc:
-            raise ValueError(f"the chown Job {job} belongs to another volume; try again once it is gone "
-                             "(a finished one is removed within 10 minutes)")
+            raise ValueError(f"The chown Job {job} belongs to another volume. Try again once it has been removed "
+                             "(a finished one is removed within 10 minutes).")
         I.ksend("DELETE", f"/apis/batch/v1/namespaces/{namespace}/jobs/{job}"
                         "?propagationPolicy=Background")
         time.sleep(1)
@@ -373,7 +373,7 @@ def import_mappings(cfg, volumes=None):
         if any(claim == other and (not folder or not target or folder == target or
                folder.startswith(target + "/") or target.startswith(folder + "/"))
                for other, target in destinations[index + 1:]):
-            raise ValueError("copy destinations overlap; choose separate folders")
+            raise ValueError("The copy destinations overlap. Choose separate folders.")
     return rows
 
 
@@ -650,7 +650,7 @@ def commit_import(prepared):
         created = I.ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", prepared["deployment"])
         uid = (created.get("metadata") or {}).get("uid")
         if prepared["job"] and not uid:
-            raise ValueError("Created workload identity is unavailable; copy was not started. Keep its volumes and inspect the workload before retrying.")
+            raise ValueError("The new app could not be confirmed, so the copy was not started. Keep its volumes and check the app before trying again.")
         if prepared["job"] and uid:
             prepared["job"]["metadata"]["ownerReferences"] = [{"apiVersion": "apps/v1", "kind": "Deployment",
                 "name": created["metadata"]["name"], "uid": uid}]
@@ -673,7 +673,7 @@ def import_inventory(prepared, read):
     def identified(path):
         obj = read(path)
         if not isinstance(obj, dict) or not (obj.get("metadata") or {}).get("uid"):
-            raise ValueError("Import inventory is incomplete; refresh before importing")
+            raise ValueError("The import information is incomplete. Refresh before importing.")
         return obj
 
     def optional(path):
@@ -685,7 +685,7 @@ def import_inventory(prepared, read):
             prefix = "/apis/apps/v1" if kind == "deployment" else "/apis/batch/v1" if kind == "job" else "/api/v1"
             name = obj["metadata"]["name"]
             if optional(f"{prefix}/namespaces/{ns}/{resource}/{name}") is not None:
-                raise ValueError(f"{kind} {name} already exists. Review or clean up that import first; it will not be replaced.")
+                raise ValueError(f"{kind} {name} already exists. Review or clean up that import first. It is not replaced.")
     claims = {}
     for volume in prepared["volumes"]:
         name = volume["name"]
@@ -704,7 +704,7 @@ def import_inventory(prepared, read):
             claims[name] = {"uid": obj["metadata"]["uid"], "spec": obj.get("spec")}
     pods = read("/api/v1/pods")
     if not isinstance(pods.get("items"), list) or (pods.get("metadata") or {}).get("continue"):
-        raise ValueError("Pod inventory is incomplete; volume consumers cannot be verified")
+        raise ValueError("The pod list is incomplete, so what uses the volume cannot be checked")
     if prepared["job"]:
         for pod in pods["items"]:
             if (pod.get("metadata") or {}).get("namespace") != ns or (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
@@ -892,7 +892,7 @@ def delete_import(name, ns=None, uid=""):
         if dep is None:
             continue
         if dep["metadata"].get("uid") != owner.get("uid"):
-            raise ValueError("Import workload identity changed; review cleanup again")
+            raise ValueError("The imported app changed. Review the cleanup again.")
         annotations = dep["metadata"].get("annotations") or {}
         if annotations.get("homestead.io/import-job") == name:
             annotations.pop("homestead.io/import-job")

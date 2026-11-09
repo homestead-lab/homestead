@@ -45,7 +45,7 @@ test("an app, a scheduled job and a VM link to the page that lists them", () => 
 test("the tooltip carries where it is and the server's sentence", () => {
   const { ctx } = load();
   assert.match(ctx.imageKeeper(row("Job", "Job paused", "migrate", { detail: "A suspended Job starts from it when it is resumed." })),
-    /lab · migrate · c - A suspended Job starts from it when it is resumed\./);
+    /lab · migrate · c · A suspended Job starts from it when it is resumed\./);
 });
 
 test("a server that sends no label still shows the coarse reason", () => {

@@ -327,7 +327,7 @@ class DiskV2Tests(unittest.TestCase):
         self.c.put(self.c.job_path(), envFrom, [{'secretRef': {'name': 'other'}}])
         self.assertEqual(self.c.tick()['status'], 'failed')
         ref = self.c.ops.items[0]['ref']; self.c.put(self.c.job_path(), envFrom, GONE); self.c.put(self.c.job_path(), ('metadata', 'uid'), 'foreign')
-        with self.assertRaisesRegex(ValueError, 'identity'): V._job(ref)
+        with self.assertRaisesRegex(ValueError, 'helper or its settings changed'): V._job(ref)
         V._cleanup(ref); self.assertEqual(len(self.c.jobs), 1)
     def test_lost_dispatch_response_adopts_owned_helper_despite_later_health_change(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
@@ -397,7 +397,7 @@ class DiskV2Tests(unittest.TestCase):
         patches = sum(method == 'PATCH' for method, _, _ in self.c.writes)
         OPS.list_operations()
         self.assertEqual(patches, sum(method == 'PATCH' for method, _, _ in self.c.writes))
-        self.assertIn('Host identity changed', OPS.stored()[0]['message'])
+        self.assertIn('The host changed', OPS.stored()[0]['message'])
     def test_cancellation_after_erase_approval_is_refused(self):
         self.c.awaiting(); self.c.prepare()
         with self.assertRaisesRegex(ValueError, 'approved'): V.cancel_run(self.c.ops.items[0], {})
@@ -444,7 +444,7 @@ class DiskV2Tests(unittest.TestCase):
         self.assertFalse(reached)
     def test_json_patch_protects_unreviewed_disk_changes(self):
         self.c.start(); self.c.put(LHN('node-1'), ('spec', 'disks', 'data', 'tags'), ['changed'])
-        self.assertIn('configuration changed', self.c.tick()['message']); self.assertFalse(self.c.writes)
+        self.assertIn('settings changed', self.c.tick()['message']); self.assertFalse(self.c.writes)
     def test_persisted_phases_survive_process_restart_without_repeated_erase(self):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         with patch.object(OPS, 'DATA_DIR', directory.name), patch.object(OPS, 'WRITE_GUARD', None), patch.dict(OPS.RESOLVERS, {V.KIND: V.progress}):

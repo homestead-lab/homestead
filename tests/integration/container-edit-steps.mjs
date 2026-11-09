@@ -75,7 +75,7 @@ try {
       await page.locator('.edit-container[data-section="environment"][data-index="1"] > summary').click();
       await page.locator("#e_env_1 .ev").fill("changed-sidecar");
     }
-    assert.equal(await page.locator("#e_env_0").evaluate(el => el.previousElementSibling.textContent.includes("not exposed")), true);
+    assert.equal(await page.locator("#e_env_0").evaluate(el => el.previousElementSibling.textContent.includes("does not show")), true);
     await page.evaluate(() => stepGo("e_steps", 3));
     await page.locator("#e_vols_0 .vro").check();
     for (let index = 0; index < titles.length; index++) {

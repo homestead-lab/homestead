@@ -68,8 +68,8 @@ test("the installer command carries the verified storage setting, except for a t
   assert.match(ctx.joinCommandHtml(g, "control-plane"), /pinned\/install.sh[^]*HS_DIST=rke2 HS_ROLE=server HS_LONGHORN_DATA_PATH=\/var\/lib\/longhorn/);
   assert.doesNotMatch(ctx.joinCommandHtml(g, "tiebreaker"), /HS_LONGHORN_DATA_PATH/);
   assert.doesNotMatch(ctx.joinCommandHtml({ ...g, storage_path: "/custom/$(id)" }, "control-plane"), /HS_LONGHORN_DATA_PATH/);
-  assert.match(ctx.joinLonghornHtml(g, "app"), /give it exactly this[^]*\/var\/lib\/longhorn/);
-  assert.match(ctx.joinLonghornHtml({ ...g, storage_path: null }, "app"), /could not be read[^]*don.t guess/);
+  assert.match(ctx.joinLonghornHtml(g, "app"), /Enter exactly this one[^]*\/var\/lib\/longhorn/);
+  assert.match(ctx.joinLonghornHtml({ ...g, storage_path: null }, "app"), /could not be read[^]*rather than guessing/);
 });
 
 test("a server or tiebreaker is checked before it joins", () => {
@@ -84,8 +84,8 @@ const headings = html => [...html.matchAll(/<h4><span>(\d)<\/span>([^<]*)<\/h4>/
 test("the role is chosen before the Longhorn step, and the join command comes after it", async () => {
   const t = setup();
   await t.ctx.platformJoinGuide();
-  assert.deepEqual(headings(t.fields["#mbody"].innerHTML), ["1 Read the join token", "2 Choose what it does",
-    "3 Install Longhorn's host packages", "4 Join it", "5 Watch it join"]);
+  assert.deepEqual(headings(t.fields["#mbody"].innerHTML), ["1 Read the join token", "2 Role",
+    "3 Install Longhorn's host packages", "4 Join the cluster", "5 Check that it joined"]);
 });
 
 test("an app host is told to install Longhorn's packages, why, and where to look if it sticks", async () => {
@@ -95,7 +95,7 @@ test("an app host is told to install Longhorn's packages, why, and where to look
     const step = t.fields["#mbody"].innerHTML.split("<h4><span>3</span>")[1].split("<h4><span>4</span>")[0];
     assert.match(step, /LONGHORN-CMD/);
     assert.match(step, /Every host that runs apps needs these/);
-    assert.match(step, /Longhorn.s pods keep restarting\? See the wiki/);
+    assert.match(step, /If Longhorn.s pods keep restarting, see the wiki/);
     assert.match(step, /<a class="linkish" href="https:\/\/github\.com\/homestead-lab\/homestead\/wiki\/Installing-on-k3s#if-something-is-stuck"/);
   }
 });
@@ -110,7 +110,7 @@ test("a tiebreaker is told it needs no Longhorn packages, straight away", async 
   const t = setup();
   await t.ctx.platformJoinGuide("tiebreaker");
   const html = t.fields["#mbody"].innerHTML;
-  assert.match(html, /Not needed: a tiebreaker runs no apps and holds no storage\./);
+  assert.match(html, /Not needed\. A tiebreaker runs no apps and stores no data\./);
   assert.doesNotMatch(html, /LONGHORN-CMD/);
 });
 

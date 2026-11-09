@@ -65,7 +65,7 @@ test("a source that could not be read is said, not left out", async () => {
   const T = vm.runInContext("Timeline", ctx);
   await T.load();
   const html = T.widget({ width: 6 });
-  assert.match(html, /Could not read App restarts/);
+  assert.match(html, /Homestead could not read App restarts/);
   assert.match(html, /restarts\.json &lt;b>/, "the reason is escaped");
   assert.match(html, /Audit log: shown to admins only/);
 });
@@ -74,7 +74,7 @@ test("a timeline that could not be read says so, with the reason", async () => {
   const { ctx } = setup(DATA, { fail: "Homestead is not answering" });
   const T = vm.runInContext("Timeline", ctx);
   await T.load();
-  assert.match(T.widget({}), /Could not read the timeline/);
+  assert.match(T.widget({}), /The timeline could not be read/);
   assert.match(T.widget({}), /Homestead is not answering/);
 });
 
@@ -95,7 +95,7 @@ test("the page filters by kind, app and host", async () => {
   assert.equal((out.html.match(/<tr class="tl-row/g) || []).length, 7);
   ctx.timelineFilter("app", "apps/game");
   assert.equal((out.html.match(/<tr class="tl-row/g) || []).length, 3);
-  assert.match(out.html, /Could not read App restarts/);
+  assert.match(out.html, /Homestead could not read App restarts/);
 });
 
 test("the page's range asks for that window; since you were last here asks for none", async () => {
@@ -122,13 +122,13 @@ test("the admins-only note comes from the server's flag, not its words", async (
   const { ctx } = setup({ ...DATA, unread: [{ source: "audit", label: "Audit log", reason: "nur für Admins", admin_only: true }] });
   const T = vm.runInContext("Timeline", ctx);
   await T.load();
-  assert.doesNotMatch(T.widget({}), /Could not read Audit log/);
+  assert.doesNotMatch(T.widget({}), /could not read Audit log/);
 });
 
 test("labels are escaped once", async () => {
   const { ctx, out } = setup({ ...DATA, unread: [{ source: "x", label: "Apps & VMs", reason: "r" }] });
   await ctx.viewTimeline();
-  assert.match(out.html, /Could not read Apps &amp; VMs/);
+  assert.match(out.html, /Homestead could not read Apps &amp; VMs/);
   assert.doesNotMatch(out.html, /&amp;amp;/);
 });
 

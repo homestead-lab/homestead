@@ -214,7 +214,7 @@ class DrainBlockerTests(unittest.TestCase):
         self.assertEqual(["engines-elsewhere", "stuck-pod", "unread"], self.kinds(rows))
         unread = [row for row in rows if row["kind"] == "unread"]
         self.assertEqual(1, len(unread))
-        self.assertIn("couldn't check Longhorn orphan records", unread[0]["what"])
+        self.assertIn("could not check Longhorn orphan records", unread[0]["what"])
         self.assertEqual("unread:orphans", unread[0]["id"])
         self.assertFalse(unread[0]["can_remove"])
 
@@ -293,7 +293,7 @@ class DrainBlockerTests(unittest.TestCase):
                 rows = BLOCKERS.for_host("node-a", now=NOW)
                 stuck = [row for row in rows if row["kind"] == "stuck-pod"]
                 self.assertEqual(1, len(stuck))
-                self.assertIn("its volumes couldn't be checked", stuck[0]["what"])
+                self.assertIn("its volumes could not be checked", stuck[0]["what"])
 
     def test_a_clean_host_has_no_rows(self):
         with Kube(instance_manager("node-a", engines=[]), engine("vol", "node-a"),

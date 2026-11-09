@@ -65,7 +65,7 @@ class RemoveTests(unittest.TestCase):
         self.assertEqual(["removing-orphans"], [row["kind"] for row in rows])
         self.assertFalse(rows[0]["can_remove"])
         self.assertEqual([], again["removed"])
-        self.assertEqual("it is being removed already", again["refused"][0]["why"])
+        self.assertEqual("it is already being removed", again["refused"][0]["why"])
         self.assertEqual(1, len(deletes), "no second DELETE")
 
     def test_removal_refuses_a_record_on_another_host(self):

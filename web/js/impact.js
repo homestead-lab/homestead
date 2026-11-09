@@ -17,7 +17,7 @@ function impactApp(r, node = "") {
   // Harvester does it itself, so the button isn't offered there.
   const hostDown = node && STATE.data?.nodes?.find(n => n.name === node)?.status === "NotReady";
   const restart = r.kind !== "set" || r.outcome !== "waits" || !hostDown ? ""
-    : STATE.platform?.harvester ? '<span class="dim xs">Harvester restarts these itself; see its VM force reset policy.</span>'
+    : STATE.platform?.harvester ? '<span class="dim xs">Harvester restarts these itself. See its VM force reset policy.</span>'
     : `<span>${UI.button("Start on another host…", `setRestartReview(${jsArg(r.ns)},${jsArg(r.name)},${jsArg(node)})`, { attrs: 'data-need="admin"' })}</span>`;
   return `<div class="impact-row">${avatar}<div class="impact-text"><b>${esc(r.name)}</b>${r.kind === "set" ? ` ${UI.chip("StatefulSet", "neutral")}` : ""}
       <span class="dim xs">${esc(r.ns + kind)}${r.keeps_answering ? " · keeps answering from its other copies" : ""}</span>
@@ -55,7 +55,7 @@ window.nodeIfDown = async (node, back = null) => {
       + p.fewer_copies.map(v => `<div class="impact-row"><div class="impact-text"><b>${esc(v.name)}</b><span class="dim xs">${esc(v.namespace)}</span>
         <span class="small">Carries on with ${v.left} of ${v.wanted} cop${v.wanted === 1 ? "y" : "ies"} until Longhorn rebuilds one.</span></div>${UI.chip("fewer copies", "warn", { size: "slim" })}</div>`).join(""))}
     ${section("Addresses", p.addresses, p.addresses.map(a => `<div class="impact-row"><div class="impact-text"><b class="mono">${esc(a.ip)}</b>
-        <span class="small">Moves to another host within seconds${a.services?.length ? `; used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div></div>`).join(""))}
+        <span class="small">Moves to another host within seconds${a.services?.length ? `. Used by ${esc(a.services.slice(0, 3).join(", "))}` : ""}.</span></div></div>`).join(""))}
     <div id="ifDownRoom" data-node="${esc(node)}"></div>
     ${UI.more("How this is worked out", "<p>Where each app could go comes from the same checks as moving it: the hardware and devices it uses, its placement rules, and a copy of each of its Longhorn volumes on another host. When it goes comes from its failover setting. A StatefulSet's pod is never started elsewhere while the old one might still run: it waits until it is deleted, by hand or by Longhorn's Pods on a failed host setting. A VM with a device passed through stays with it. It is a forecast: Kubernetes decides at the time, with what is free then.</p>")}
     ${UI.actions(ifDownClose())}</div>`;
@@ -94,7 +94,7 @@ async function ifDownRoom(node) {
   } catch (e) {
     // The rest of the preview stands, and this part says it could not be worked out (#620).
     const now = $("#ifDownRoom");
-    if (now && now.dataset.node === node) now.innerHTML = UI.section("Room on the other hosts", UI.callout("warn", "Could not work out the room on the other hosts", esc(e.message)));
+    if (now && now.dataset.node === node) now.innerHTML = UI.section("Room on the other hosts", UI.callout("warn", "The room on the other hosts could not be worked out", esc(e.message)));
   }
 }
 window.capacityRoomHtml = capacityRoomHtml;

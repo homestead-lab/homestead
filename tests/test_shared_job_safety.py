@@ -24,7 +24,7 @@ def compete_for_job(directory, ready, start, result):
         operations.start("k3s-cluster", "Test batch", {}, "/vms", {"namespace": "test", "name": "batch"})
         result.put("started")
     except ValueError as error:
-        result.put("duplicate" if "already active" in str(error) else str(error))
+        result.put("duplicate" if "already running" in str(error) else str(error))
     except Exception as error:
         result.put(type(error).__name__)
 
@@ -97,14 +97,14 @@ class SharedJobSafetyTests(unittest.TestCase):
         row = {"id": "same", "ref": {}, "status": "queued"}
         for value in ("{broken-private-data", "null", "{}", "[null]", '[{"id":"missing-state"}]', json.dumps([row, row])):
             target.write_text(value, encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "Job history") as caught:
+            with self.assertRaisesRegex(ValueError, "job history") as caught:
                 operations.start("k3s-cluster", "New", {}, "/vms", {"name": "new"})
             self.assertNotIn("private-data", str(caught.exception))
             self.assertEqual(value, target.read_text(encoding="utf-8"))
 
     def test_unreadable_store_is_not_empty_history(self):
         with mock.patch("builtins.open", side_effect=PermissionError("private-path")), mock.patch.object(operations, "_initialized", return_value=True):
-            with self.assertRaisesRegex(ValueError, "could not be read safely") as caught:
+            with self.assertRaisesRegex(ValueError, "could not read the job history safely") as caught:
                 operations._read()
         self.assertNotIn("private-path", str(caught.exception))
 
@@ -114,7 +114,7 @@ class SharedJobSafetyTests(unittest.TestCase):
         before = target.read_bytes()
         for value in ("bad-private-data", "null", '{"version":99}'):
             (Path(self.tmp.name) / operations.STORE_MARKER).write_text(value)
-            with self.assertRaisesRegex(ValueError, "initialization"):
+            with self.assertRaisesRegex(ValueError, "job history start"):
                 operations.start("k3s-cluster", "Second", {}, "/vms", {"name": "two"})
             self.assertEqual(before, target.read_bytes())
 
@@ -123,7 +123,7 @@ class SharedJobSafetyTests(unittest.TestCase):
         job = operations.start("k3s-cluster", "New", {}, "/vms", {"name": "new"})
         self.assertEqual(job["id"], operations._read()[0]["id"])
         (Path(self.tmp.name) / operations.STORE).unlink()
-        with self.assertRaisesRegex(ValueError, "initialized job history is missing"):
+        with self.assertRaisesRegex(ValueError, "job history that existed before is missing"):
             operations.start("k3s-cluster", "New", {}, "/vms", {"name": "new"})
         self.assertFalse((Path(self.tmp.name) / operations.STORE).exists())
 
@@ -149,7 +149,7 @@ class SharedJobSafetyTests(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "marker unavailable"):
                 operations.start("k3s-cluster", "First", {}, "/vms", {"namespace": "test", "name": "batch"})
         self.assertEqual(1, len(operations._read()))
-        with self.assertRaisesRegex(ValueError, "already active"):
+        with self.assertRaisesRegex(ValueError, "already running"):
             operations.start("k3s-cluster", "Retry", {}, "/vms", {"namespace": "test", "name": "batch"})
 
     @unittest.skipUnless(os.name == "posix", "directory fsync is a Linux deployment guarantee")
@@ -164,8 +164,8 @@ class SharedJobSafetyTests(unittest.TestCase):
             original(fd)
         with mock.patch.object(shared.os, "fsync", side_effect=sync):
             with self.assertRaisesRegex(OSError, "directory sync failed"):
-                shared.write_json(target, {"intent": "retained"}, durable=True)
-        self.assertEqual({"intent": "retained"}, json.loads(Path(target).read_text()))
+                shared.write_json(target, {"intent": "kept"}, durable=True)
+        self.assertEqual({"intent": "kept"}, json.loads(Path(target).read_text()))
 
     def test_two_processes_cannot_both_start_same_batch(self):
         context = multiprocessing.get_context("spawn")

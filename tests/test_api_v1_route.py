@@ -118,7 +118,7 @@ class ApiV1RouteTests(unittest.TestCase):
         self.assertEqual(1, self.handle.call_count)
 
     def test_a_viewer_session_may_read_but_not_act(self):
-        self.assertEqual((403, {"error": "your role (viewer) cannot do this — operator required",
+        self.assertEqual((403, {"error": "This needs the operator role, and the viewer role cannot do it",
                                 "role": "viewer", "needed": "operator"}, []),
                          self.ask("POST", "/api/v1/containers/lab/web/restart"))
         self.handle.assert_not_called()

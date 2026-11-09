@@ -277,7 +277,7 @@ def _save(data):
         if e.code == 409:
             with _store_reads:
                 _store_cache.update(at=0, data=None, as_of=max(time.time(), _store_cache.get("as_of", 0)))
-            raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
+            raise StoreConflict("The accounts were changed elsewhere at the same moment. Try again.") from None
         raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
     with _store_reads:
@@ -310,7 +310,7 @@ def review_signing_key():
     """
     key = _load().get("signing_key")
     if not key:
-        raise StoreUnavailable("The deployment review key is unavailable; sign in again before reviewing.")
+        raise StoreUnavailable("The deployment review key is unavailable. Sign in again before reviewing.")
     return hmac.new(key.encode(), b"homestead-capacity-review-v1", hashlib.sha256).digest()
 
 
@@ -380,7 +380,7 @@ def dashboard_preferences(username):
     data = _load(force=True, allow_stale=False)
     user = data["users"].get(username)
     if user is None:
-        raise PermissionError("Account no longer exists; sign in again")
+        raise PermissionError("This account no longer exists. Sign in again.")
     return copy.deepcopy(user.get("dashboard", {"revision": None, "layout": None}))
 
 
@@ -395,10 +395,10 @@ def save_dashboard_preferences(username, body):
         data = copy.deepcopy(_load(force=True, allow_stale=False))
         user = data["users"].get(username)
         if user is None:
-            raise PermissionError("Account no longer exists; sign in again")
+            raise PermissionError("This account no longer exists. Sign in again.")
         current = user.get("dashboard", {"revision": None, "layout": None})
         if current["revision"] != revision:
-            raise StoreConflict("Your dashboard changed in another session. Cancel and reopen the editor to load the latest layout.")
+            raise StoreConflict("The dashboard changed in another session. Cancel and open the editor again to load the latest layout.")
         saved = {"revision": secrets.token_hex(16), "layout": layout}
         user["dashboard"] = saved
         try:
@@ -423,7 +423,7 @@ def set_role(username, role, acting_as):
     if not u:
         raise ValueError("no such user")
     if username == acting_as and role != "admin":
-        raise PermissionError("you cannot remove your own admin role")
+        raise PermissionError("An admin cannot remove their own admin role")
     admins = [n for n, v in data["users"].items() if v.get("role", "admin") == "admin"]
     if admins == [username] and role != "admin":
         raise PermissionError("cannot demote the only administrator")
@@ -445,7 +445,7 @@ def create_user(username, password, first_only=False, role="operator"):
     if not username or not username.isascii() or len(username) < 3 or len(username) > 32:
         raise ValueError("username must be 3-32 ASCII characters")
     if username in RESERVED_USERNAMES:
-        raise ValueError("Homestead uses that username for power schedules; choose another")
+        raise ValueError("Homestead uses that username for power schedules. Choose another.")
     if ":" in username:
         raise ValueError("a username cannot contain ':'")
     if not password or len(password) < 10:
@@ -491,7 +491,7 @@ def delete_user(username, acting_as):
     if len(data["users"]) == 1:
         raise PermissionError("cannot delete the only account")
     if username == acting_as:
-        raise PermissionError("cannot delete the account you are signed in as")
+        raise PermissionError("The account that is signed in cannot delete itself")
     admins = [n for n, v in data["users"].items() if v.get("role", "admin") == "admin"]
     if admins == [username]:
         raise PermissionError("cannot delete the only administrator")
@@ -577,7 +577,7 @@ def _shared_attempt(keys, stamp, reserve):
             return
         except StoreConflict:
             continue
-    raise PermissionError("too many attempts — account store is busy; try again")
+    raise PermissionError("too many attempts at once, and the account store is busy. Try again.")
 
 
 def _release_attempt(reservation):
@@ -638,7 +638,7 @@ def issue_token(username, remember=False, started=None, identity=None):
     data = _load()
     u = data["users"][username]
     if identity is not None and identity != (_account_id(data, username, u), u.get("ver", 1)):
-        raise PermissionError("the account changed during sign-in; sign in again")
+        raise PermissionError("The account changed during sign-in. Sign in again.")
     now = int(time.time())
     payload = {"u": username, "v": u.get("ver", 1), "account": _account_id(data, username, u),
                "format": 2, "r": u.get("role", "admin"),
@@ -694,7 +694,7 @@ def login(username, password, addr, remember=False):
     data = copy.deepcopy(_load(force=True, allow_stale=False))
     u = data.get("users", {}).get(username)
     if not u or identity != (_account_id(data, username, u), u.get("ver", 1)):
-        raise PermissionError("the account changed during sign-in; sign in again")
+        raise PermissionError("The account changed during sign-in. Sign in again.")
     u["last_login"] = time.strftime("%Y-%m-%d %H:%M")
     _save(data)
     return issue_token(username, remember=remember, identity=identity)

@@ -49,7 +49,7 @@ def dispatch(read, send, ops, kind, title, resource, href, ref, bodies, next_pha
                 operation = ops.record_phase(operation["id"], "creating", 1, "Making its disks", cdi_cleanup=work)
         except Exception:
             return ops.record_phase(operation["id"], "cleanup", 1,
-                                    "Could not create the import disks; cleaning up", cdi_cleanup=work,
+                                    "Homestead could not create the import disks. Cleaning up.", cdi_cleanup=work,
                                     cleanup_outcome="failed", cleanup_detail="Could not create the import disks")
         return ops.record_phase(operation["id"], next_phase, 2, "Waiting for CDI", cdi_cleanup=work)
 
@@ -87,18 +87,18 @@ def observe(read, ns, work):
             meta = _identity(dv)
             if (meta.get("annotations") or {}).get(STAMP) != work["id"] or (
                     disk.get("dv_uid") and disk["dv_uid"] != meta["uid"]):
-                raise ValueError("Import disk was replaced; its resources were preserved")
+                raise ValueError("The import disk was replaced, so its resources were kept")
             disk["dv_uid"] = meta["uid"]
         if not disk.get("dv_uid"):
             continue  # A journaled creation may never have reached Kubernetes.
         target = next((row for row in claims if row["metadata"].get("name") == name), None)
         if target:
             if not owner(target, "DataVolume", disk["dv_uid"]):
-                raise ValueError("Import claim ownership changed; its resources were preserved")
+                raise ValueError("The owner of the import's volume claim changed, so its resources were kept")
             meta = _identity(target)
             old = disk.get("target_uid")
             if old and old != meta["uid"]:
-                raise ValueError("Import claim was replaced; its resources were preserved")
+                raise ValueError("The import's volume claim was replaced, so its resources were kept")
             disk["target_uid"] = meta["uid"]
             disk["claims"][meta["uid"]] = {"name": name, "role": "target"}
         target_uid = disk.get("target_uid")
@@ -107,7 +107,7 @@ def observe(read, ns, work):
             meta = claim["metadata"]
             if prime_name and meta.get("name") == prime_name:
                 if not owner(claim, "PersistentVolumeClaim", target_uid):
-                    raise ValueError("CDI staging claim ownership changed; it was preserved")
+                    raise ValueError("The owner of CDI's staging volume changed, so it was kept")
                 meta = _identity(claim)
                 disk["claims"][meta["uid"]] = {"name": meta["name"], "role": "prime"}
         for pod in pods:
@@ -129,7 +129,7 @@ def observe(read, ns, work):
         for claim in claims:
             known = disk["claims"].get(claim["metadata"].get("uid"))
             if known and not _claim_owned(disk, known, claim):
-                raise ValueError("Import work claim ownership changed; it was preserved")
+                raise ValueError("The owner of the import's work volume changed, so it was kept")
         for pv in pvs:
             spec = pv.get("spec") or {}
             claim = spec.get("claimRef") or {}
@@ -147,7 +147,7 @@ def observe(read, ns, work):
             if not known and not retired:
                 continue
             if known and known["name"] != claim.get("name"):
-                raise ValueError("Import volume claim identity changed; it was preserved")
+                raise ValueError("The import's volume claim changed, so it was kept")
             if retired:
                 known = {"name": claim["name"], "role": "scratch" if claim["name"].endswith("-scratch") else "prime"}
                 disk["claims"][claim["uid"]] = known
@@ -156,7 +156,7 @@ def observe(read, ns, work):
                      "role": known["role"], "csi": spec.get("csi") or {}}
             old = disk["pvs"].get(meta["name"])
             if old and (old["uid"] != meta["uid"] or old["csi"] != entry["csi"]):
-                raise ValueError("Import backing volume was replaced; it was preserved")
+                raise ValueError("The volume behind the import was replaced, so it was kept")
             disk["pvs"][meta["name"]] = entry
 
 
@@ -202,25 +202,25 @@ def cleanup(read, send, ns, work, keep_disks=True):
         for claim in claims:
             known = disk["claims"].get(claim["metadata"].get("uid"))
             if known and not _claim_owned(disk, known, claim):
-                raise ValueError("Import work claim ownership changed; cleanup stopped")
+                raise ValueError("The owner of the import's work volume changed, so cleanup stopped")
     disposable = {row["name"] for disk in work["disks"].values() for row in disk["claims"].values()
                   if row["role"] != "target" or not keep_disks}
     if not keep_disks:
         disposable.update(name for name, disk in work["disks"].items() if disk.get("dv_uid"))
     others = other_pods(pods, work, disposable)
     if any(ended for _, ended in others):
-        raise ValueError("; ".join(ended_pod_words(name) for name, ended in others if ended) + "; its storage was preserved")
+        raise ValueError(". ".join(ended_pod_words(name) for name, ended in others if ended) + ", so its storage was left in place")
     if others:
-        raise ValueError(f"Another pod uses import work space ({', '.join(name for name, _ in others)}); its storage was preserved")
+        raise ValueError(f"Another pod uses the import's work space ({', '.join(name for name, _ in others)}), so its storage was left in place")
     if vm_users(read, ns, disposable):
-        raise ValueError("A VM now uses an import disk; its storage was preserved")
+        raise ValueError("A VM now uses an import disk, so its storage was left in place")
     for row in work.get("aux", []):
         obj = RESOURCES.optional(read, row["path"])
         if obj:
             meta = _identity(obj)
             if (meta.get("annotations") or {}).get(STAMP) != work["id"] or (
                     row.get("uid") and meta["uid"] != row["uid"]):
-                raise ValueError("Import copy resource was replaced; cleanup stopped")
+                raise ValueError("The import's copy resource was replaced, so cleanup stopped")
             pending |= not RESOURCES.delete(read, send, row["path"], obj)
     # Before anything of a disk is asked to go: a worker with a new owner has been taken
     # over, and may still use the disk.
@@ -228,13 +228,13 @@ def cleanup(read, send, ns, work, keep_disks=True):
         for pod in pods:
             if pod["metadata"].get("uid") in disk["pods"] and not any(
                     owner(pod, "PersistentVolumeClaim", claim_uid) for claim_uid in disk["claims"]):
-                raise ValueError("Import worker ownership changed; cleanup stopped")
+                raise ValueError("The owner of the import worker changed, so cleanup stopped")
     for name, disk in work["disks"].items():
         if disk.get("not_created") or disk.get("not_dispatched"):
             continue
         target = next((c for c in claims if c["metadata"].get("uid") == disk.get("target_uid")), None)
         if keep_disks and (not target or (target.get("status") or {}).get("phase") != "Bound"):
-            raise ValueError("Completed disk claim is not bound; its storage was preserved")
+            raise ValueError("The finished disk's volume claim is not bound, so its storage was left in place")
         protected_pv = (target.get("spec") or {}).get("volumeName") if target and keep_disks else None
         if not keep_disks:
             # First: while its claim isn't being deleted CDI remakes a worker that has gone,
@@ -244,14 +244,14 @@ def cleanup(read, send, ns, work, keep_disks=True):
             if dv:
                 if dv["metadata"].get("uid") != disk.get("dv_uid") or (
                         dv["metadata"].get("annotations") or {}).get(STAMP) != work["id"]:
-                    raise ValueError("Import disk was replaced; cleanup stopped")
+                    raise ValueError("The import disk was replaced, so cleanup stopped")
                 pending |= not RESOURCES.delete(read, send, dv_path, dv)
         for uid, pod_name in disk["pods"].items():
             path = f"/api/v1/namespaces/{ns}/pods/{pod_name}"
             pod = RESOURCES.optional(read, path)
             if pod and pod["metadata"].get("uid") == uid:
                 if not any(owner(pod, "PersistentVolumeClaim", claim_uid) for claim_uid in disk["claims"]):
-                    raise ValueError("Import worker ownership changed; cleanup stopped")
+                    raise ValueError("The owner of the import worker changed, so cleanup stopped")
                 pending |= not RESOURCES.delete(read, send, path, pod)
         # Re-read after requesting worker deletion. Even a terminating pod can
         # hold a mount; do not change the storage policy until it has disappeared.
@@ -272,7 +272,7 @@ def cleanup(read, send, ns, work, keep_disks=True):
                 if row["role"] == "scratch" and current == row:
                     continue  # CDI recreated scratch during THIS import attempt.
                 # A retry's claim cannot be used to reclaim this attempt's PV.
-                raise ValueError("Import work claim was replaced; cleanup stopped")
+                raise ValueError("The import's work volume was replaced, so cleanup stopped")
             # Clearing everything, a worker's mount doesn't stop the request: claim protection
             # holds the claim until it has gone, and a claim being deleted stops CDI remaking it.
             if any(_mounts(pod, {row["name"]}) for pod in pods if keep_disks or pod["metadata"].get("uid") not in disk["pods"]):
@@ -300,12 +300,12 @@ def cleanup(read, send, ns, work, keep_disks=True):
             spec = pv.get("spec") or {}
             claim = spec.get("claimRef") or {}
             if meta["uid"] != row["uid"] or (spec.get("csi") or {}) != row["csi"]:
-                raise ValueError("Import backing volume was replaced; cleanup stopped")
+                raise ValueError("The volume behind the import was replaced, so cleanup stopped")
             if keep_disks and claim.get("uid") == disk.get("target_uid"):
                 continue  # Prime PV has been promoted to the completed disk.
             if (claim.get("uid"), claim.get("namespace"), claim.get("name")) != (
                     row["claim_uid"], ns, row["claim_name"]):
-                raise ValueError("Import backing volume was rebound; cleanup stopped")
+                raise ValueError("The volume behind the import was bound again, so cleanup stopped")
             if any((c.get("spec") or {}).get("volumeName") == pv_name or
                    c["metadata"].get("uid") == row["claim_uid"] for c in claims):
                 pending = True
@@ -342,12 +342,12 @@ def finish(item, read, send, checkpoint):
         # Kubernetes errors may contain a source URL. Show safe validation text
         # only; the job keeps its receipts and retries transient API failures.
         reason = str(error) if isinstance(error, ValueError) else "Kubernetes could not confirm cleanup"
-        return "running", 99, ref.get("cleanup_detail", "Import ended") + "; cleanup pending: " + reason
+        return "running", 99, _detail(ref) + ". Cleanup is waiting: " + reason
     ref["retain_resources"] = not complete
     if not complete:
-        return "running", 99, ref.get("cleanup_detail", "Import ended") + "; removing temporary import storage"
+        return "running", 99, _detail(ref) + ". Removing its temporary storage."
     ref["phase"] = "done" if outcome == "succeeded" else "failed"
-    ref["detail"] = ref.get("cleanup_detail", "Import ended") + "; temporary import storage cleared"
+    ref["detail"] = _detail(ref) + ". Its temporary storage was cleared."
     return outcome, 100, ref["detail"]
 
 
@@ -356,7 +356,7 @@ def leave(item, read, send):
     own copy Job and Secret go, and only when they still carry its stamp. A later
     round picks this up where it left off, so nothing is decided again."""
     ref = item["ref"]
-    detail, stamp = ref.get("cleanup_detail", "Import ended"), ref["cdi_cleanup"]["id"]
+    detail, stamp = _detail(ref), ref["cdi_cleanup"]["id"]
     pending = False
     try:
         for row in ref["cdi_cleanup"].get("aux", []):
@@ -369,8 +369,8 @@ def leave(item, read, send):
     if pending:
         return "running", 99, detail + ". Still removing its copy Job"
     ref["phase"] = "failed"
-    ref["detail"] = detail
-    return "failed", 100, detail
+    ref["detail"] = ref.get("cleanup_detail") or "Import ended"
+    return "failed", 100, ref["detail"]
 
 
 def claims_bound(read, ns, work):
@@ -380,7 +380,12 @@ def claims_bound(read, ns, work):
     return all(disk.get("target_uid") in bound for disk in work["disks"].values())
 
 
-NOT_CLEARED = "; temporary storage not all cleared"
+NOT_CLEARED = ". Some temporary storage was not cleared"
+
+
+def _detail(ref):
+    """What the import said when it ended, ready for a sentence to follow it."""
+    return str(ref.get("cleanup_detail") or "Import ended").rstrip().rstrip(".")
 
 
 def clear_finished(item, read, send, checkpoint, overdue=False):
@@ -390,12 +395,12 @@ def clear_finished(item, read, send, checkpoint, overdue=False):
     stays for the person, and the import ends as leave() ends it. A failed call to
     Kubernetes is only retried."""
     ref = item["ref"]
-    detail, ns, work = ref.get("cleanup_detail", "Import ended"), ref["namespace"], ref["cdi_cleanup"]
+    detail, ns, work = _detail(ref), ref["namespace"], ref["cdi_cleanup"]
     stop, complete = overdue, False
 
     def unconfirmed():
         ref["retain_resources"] = True
-        return "running", 99, detail + "; cleanup pending: Kubernetes could not confirm cleanup"
+        return "running", 99, detail + ". Cleanup is waiting, because Kubernetes could not confirm it."
     if not stop:
         try:
             observe(read, ns, work)
@@ -416,9 +421,9 @@ def clear_finished(item, read, send, checkpoint, overdue=False):
         return leave(item, read, send)
     ref["retain_resources"] = not complete
     if not complete:
-        return "running", 99, detail + "; removing temporary import storage"
+        return "running", 99, detail + ". Removing its temporary storage."
     ref["phase"] = "failed"
-    ref["detail"] = detail + "; temporary storage cleared"
+    ref["detail"] = detail + ". Its temporary storage was cleared."
     return "failed", 100, ref["detail"]
 
 

@@ -221,7 +221,7 @@ def delete_group(name):
     either unread it raises and changes nothing, rather than taking the group
     out of every job while its volumes keep its label."""
     if name == "default":
-        raise ValueError("default is Longhorn's own group; every volume without another comes back to it")
+        raise ValueError("default is Longhorn's own group, and every volume without another group returns to it")
     if not LH.SAFE.match(str(name or "")):
         raise ValueError("unknown group")
     key = LH.GROUP_LABEL + name
@@ -248,7 +248,7 @@ def delete_group(name):
 def snapshots(volume=None):
     listing = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/snapshots")
     if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
-        raise ValueError("snapshot inventory is incomplete; refresh before changing recovery points")
+        raise ValueError("The snapshot list is incomplete. Refresh before changing recovery points.")
     items = listing["items"]
     out = []
     for s in items:

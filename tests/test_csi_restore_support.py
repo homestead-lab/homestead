@@ -121,7 +121,7 @@ class SnapshotSupportTests(unittest.TestCase):
 
     def test_platform_managed_or_older_cluster_is_not_modified(self):
         self.platform.return_value = {"harvester": True, "helm_controller": True}
-        with self.assertRaisesRegex(ValueError, "cluster platform"):
+        with self.assertRaisesRegex(ValueError, "cluster's own tools"):
             CSI.ensure_support()
         self.platform.return_value = {"helm_controller": True}
         self.objects["/api/v1/nodes"]["items"][0]["status"]["nodeInfo"]["kubeletVersion"] = "v1.24.9"

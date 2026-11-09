@@ -184,7 +184,7 @@ class HostMoveTests(unittest.TestCase):
         state, _, message = MOVE.status(item)
         self.assertEqual("failed", state)
         self.assertIn("changed while its image was being pulled", message)
-        self.assertIn("check where it runs now", message, "the reviewed move may have landed before the edit")
+        self.assertIn("Check where it runs now", message, "the reviewed move may have landed before the edit")
         self.assertNotIn("nothing was moved", message)
         self.assertNotIn("proposed", item["ref"])
 

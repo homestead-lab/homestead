@@ -43,9 +43,9 @@ NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-p
 # the mark on the setting keeps a later choice, do-nothing included, as it is.
 NODE_DOWN_RELEASE = "delete-both-statefulset-and-deployment-pod"
 NODE_DOWN_MARK = "homestead.io/node-down-set"
-# Shared folders (SMB and NFS shares on ReadWriteMany volumes) are served by a
+# Network shares (SMB and NFS shares on ReadWriteMany volumes) are served by a
 # share-manager pod on one host. Without fast failover, a share whose host
-# fails comes back only after Kubernetes gives up on the host - several
+# fails comes back only after Kubernetes stops waiting for the host - several
 # minutes; with it, Longhorn notices through a lease and moves it in about a
 # minute.
 RWX_FAST = "rwx-volume-fast-failover"
@@ -353,7 +353,7 @@ def save(cfg, *, allow_v2_enable=False):
         done.append("pods on a failed node: " + cfg["node_down"])
     if "rwx_fast_failover" in cfg and bool(cfg["rwx_fast_failover"]) != current["rwx_fast_failover"]:
         _patch_marked(RWX_FAST, "true" if cfg["rwx_fast_failover"] else "false", RWX_FAST_MARK)
-        done.append("fast restart of shared folders " + ("on" if cfg["rwx_fast_failover"] else "off"))
+        done.append("fast restart of network shares " + ("on" if cfg["rwx_fast_failover"] else "off"))
     if "replenish_wait" in cfg and cfg["replenish_wait"] not in (None, ""):
         wait = _int(cfg["replenish_wait"], -1)
         if wait not in REPLENISH_CHOICES:

@@ -178,7 +178,7 @@ def host(node, probe, saved=None, context=None, now=None):
     rows = _ports(probe)
     if rows is None:
         return {"node": node, "available": False, "ports": [], "conditions": [],
-                "reason": "The node probe on this host is older than port status; it updates with Homestead."
+                "reason": "The host probe on this host is older than port status. It updates with Homestead."
                 if probe else "No node probe answers on this host."}
     saved, context = saved or {}, context or {}
     samples = saved.get("samples") or []

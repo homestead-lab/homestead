@@ -36,12 +36,12 @@ class PlannedVMClaimsTests(unittest.TestCase):
 
     def test_profile_mode_matches_explicit_volume_mode(self):
         self.vm["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"]="Filesystem"
-        with self.assertRaisesRegex(ValueError,"unresolved"):
+        with self.assertRaisesRegex(ValueError,"no known access mode"):
             claims.plans(self.vm,self.read)
 
     def test_unknown_profile_modes_are_not_guessed(self):
         self.profile={}
-        with self.assertRaisesRegex(ValueError,"unresolved"):
+        with self.assertRaisesRegex(ValueError,"no known access mode"):
             claims.plans(self.vm,self.read)
 
     def test_storage_class_must_have_identity_and_not_be_deleting(self):

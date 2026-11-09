@@ -80,24 +80,24 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(self.writes)
 
     def test_unknown_legacy_reservations_disable_cpu_without_cordon_or_memory_writes(self):
-        self.memory.update(phase='retained',owned_pages=0,reason='No ownership record')
+        self.memory.update(phase='kept',owned_pages=0,reason='No ownership record')
         self.start();item=self.saved[0];C.progress(item)
         result=C.progress(item)
-        self.assertEqual('succeeded',result[0]);self.assertIn('retained',result[2]);self.assertFalse(self.host_writes)
+        self.assertEqual('succeeded',result[0]);self.assertIn('kept',result[2]);self.assertFalse(self.host_writes)
         self.assertNotIn('unschedulable',self.node['spec'])
 
     def test_other_hugepage_workloads_or_reenabled_engine_prevent_host_write(self):
         self.start();item=self.saved[0];C.progress(item)
         self.rows['/api/v1/pods']=[{'metadata':{'name':'other','namespace':'apps'},'spec':{'nodeName':'host-1','containers':[{'resources':{'requests':{'hugepages-2Mi':'2Gi'}}}]}}]
         state,_,message=C.progress(item)
-        self.assertEqual('failed',state);self.assertIn('Other workloads',message)
+        self.assertEqual('failed',state);self.assertIn('Other apps',message)
         self.assertFalse(self.host_writes);self.assertNotIn('unschedulable',self.node['spec'])
         self.assertEqual('failed',C.progress(item)[0])   # a refused job keeps its first reason
         self.rows['/api/v1/pods']=[];self.setting['value']='true'
         self.saved.clear();self.start();item=self.saved[0];C.progress(item)   # a new job disables V2
         self.setting['value']='true'
         state,_,message=C.progress(item)
-        self.assertEqual('failed',state);self.assertIn('re-enabled',message)
+        self.assertEqual('failed',state);self.assertIn('turned on again',message)
 
     def test_recovery_blocks_new_preparation_and_allows_only_reviewed_reboot(self):
         self.start();item=self.saved[0];C.progress(item);C.progress(item)
@@ -109,7 +109,7 @@ class CleanupTests(unittest.TestCase):
     def test_new_node_identity_and_partial_inventory_refuse(self):
         self.start();item=self.saved[0];C.progress(item);self.node['metadata']['uid']='replaced'
         state,_,message=C.progress(item)
-        self.assertEqual('failed',state);self.assertIn('Cluster hosts changed',message)
+        self.assertEqual('failed',state);self.assertIn('cluster hosts changed',message)
         self.assertFalse(self.host_writes)
         self.saved.clear()
         with patch.object(C,'items',side_effect=ValueError('Incomplete inventory')),self.assertRaises(ValueError):C.review()
@@ -122,7 +122,7 @@ class CleanupTests(unittest.TestCase):
         self.assertFalse(self.writes)
 
     def test_offline_host_never_counts_as_resource_release(self):
-        self.memory.update(phase='retained',owned_pages=0)
+        self.memory.update(phase='kept',owned_pages=0)
         self.start();item=self.saved[0];C.progress(item)
         self.node['status']['conditions'][0]['status']='False'
         result=C.progress(item)
@@ -386,7 +386,7 @@ class RefusalEndsTests(unittest.TestCase):
         item=self.start_and_stop_v2()
         self.kube.add(self.hugepage_pod('node-a'))   # someone else's hugepage workload on the host cordoned beforehand
         state,_,message=C.progress(item)
-        self.assertEqual('failed',state); self.assertIn('Other workloads',message)
+        self.assertEqual('failed',state); self.assertIn('Other apps',message)
         self.assertTrue(self.cordoned('node-a')); self.assertFalse(self.cordoned('node-b'))
         self.assertFalse([w for w in self.kube.writes if w[1]==path])
 
@@ -431,7 +431,7 @@ class RefusalEndsTests(unittest.TestCase):
         refusal=self.kube.object(C.CAP.LH+'/settings/v2-data-engine'); refusal['value']='true'; self.kube.add(refusal)
         self.inspect_error=OSError('host unreachable')
         state,_,message=C.progress(item)
-        self.assertEqual('running',state); self.assertIn('re-enabled',message); self.assertIn('node-a: host unreachable',message)
+        self.assertEqual('running',state); self.assertIn('turned on again',message); self.assertIn('node-a: host unreachable',message)
         self.assertTrue(self.cordoned('node-a')); self.assertIsNotNone(C.pending())
         self.inspect_error=None
         self.assertEqual('running',C.progress(item)[0])   # the receipt says restart-required
@@ -446,7 +446,7 @@ class RefusalEndsTests(unittest.TestCase):
         self.stage_error=None; self.memory['node-a']['phase']='prepared'   # the stage never reached the host
         refusal=self.kube.object(C.CAP.LH+'/settings/v2-data-engine'); refusal['value']='true'; self.kube.add(refusal)
         state,_,message=C.progress(item)
-        self.assertEqual('failed',state); self.assertIn('re-enabled',message)
+        self.assertEqual('failed',state); self.assertIn('turned on again',message)
         self.assertFalse(self.cordoned('node-a')); self.assertIsNone(C.pending())
 
     def test_a_failed_job_is_not_resolved_again(self):

@@ -50,7 +50,7 @@ test("env is shown by name only", () => {
   assert.match(html, /New default setting.*<code>AUTH<\/code>/s);
   assert.match(html, /Default setting removed.*<code>LEGACY<\/code>/s);
   assert.match(html, /Default changed.*<code>DB<\/code> <code>TZ<\/code>.*value changed/s);
-  assert.match(html, /Your app sets <code>TZ<\/code> itself, so its own values still apply/);
+  assert.match(html, /The app sets <code>TZ<\/code> itself, so its own values still apply/);
   assert.doesNotMatch(html, /<code>[A-Z]+=/);
 });
 
@@ -60,7 +60,7 @@ test("ports, volumes and a change of user", () => {
     volumes: {added: ["/media"], removed: []}, user: {was: "root", now: "1000"}, build_env_changed: 3}})]);
   assert.match(html, /New port.*8971\/tcp/s);
   assert.match(html, /Port no longer exposed.*81\/tcp/s);
-  assert.match(html, /New volume.*\/media.*not kept unless you add storage for it/s);
+  assert.match(html, /New volume.*\/media.*not kept unless storage is added for it/s);
   assert.match(html, /Runs as.*root.*1000.*may need new owners/s);
   assert.match(html, /3 build details changed too/);
 });
@@ -68,7 +68,7 @@ test("ports, volumes and a change of user", () => {
 test("the app's own user wins, and the page says so", () => {
   const {ctx} = setup();
   const html = render(ctx, [image({changes: {...none, none: false, user: {was: "root", now: "1000", overridden_by: "568"}}})]);
-  assert.match(html, /your app runs it as <code>568<\/code>, so this does not apply/);
+  assert.match(html, /the app runs it as <code>568<\/code>, so this does not apply/);
   assert.doesNotMatch(html, /may need new owners/);
 });
 

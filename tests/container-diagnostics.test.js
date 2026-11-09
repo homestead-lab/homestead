@@ -88,7 +88,7 @@ test("the restart record says how often and why, newest first, with each log tai
 test("no restarts kept says since when, not that all is fine forever", () => {
   const { c } = context();
   assert.match(c.diagnosticMarkup({ ...report, restart_history: { since: 1790000000, records: [] } }), /No restarts kept since/);
-  assert.match(c.diagnosticMarkup({ ...report, restart_history: { since: null, records: [] } }), /not looked yet/);
+  assert.match(c.diagnosticMarkup({ ...report, restart_history: { since: null, records: [] } }), /not checked yet/);
 });
 
 test("a restart record that could not be read says so", () => {

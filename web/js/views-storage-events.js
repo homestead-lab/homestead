@@ -100,7 +100,7 @@ function eventsRender() {
   if (clear) clear.hidden = !filtered;
   if (body) body.innerHTML = rows.map(eventRowHtml).join("")
     || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet."
-      : STATE.data.eventError ? `Could not read the cluster's events: ${esc(STATE.data.eventError)}` : "No events."}</td></tr>`;
+      : STATE.data.eventError ? `The cluster's events could not be read. ${esc(STATE.data.eventError)}` : "No events."}</td></tr>`;
 }
 
 window.eventFilterSet = (key, value) => { eventFilter()[key] = value; eventsRender(); };

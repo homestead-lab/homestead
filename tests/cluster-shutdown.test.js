@@ -43,7 +43,7 @@ test('lost submission never restores a reusable approval', async()=>{
 
 test('connection loss retains the last progress and explicitly leaves power unverified',async()=>{
   const t=setup(); t.c.clusterShutdownProgress(t.state); t.lose(); await t.poll();
-  assert.match(t.fields['#shutdownLive'].innerHTML,/Connection lost · power state unverified/);
+  assert.match(t.fields['#shutdownLive'].innerHTML,/Connection lost · power state not confirmed/);
   assert.match(t.fields['#shutdownLive'].innerHTML,/35%/);
   assert.doesNotMatch(t.fields['#shutdownLive'].innerHTML,/100%|Shutdown complete/);
 });

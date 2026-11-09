@@ -154,8 +154,8 @@ window.portalEdit = async (pick = false) => {
     PORTAL_WORKLOADS = Array.isArray(wl) ? wl : [];
     PORTAL_EDIT = (data.links || []).map(link => ({ ...link }));
     PORTAL_VERSION = data.version || "";
-    $("#mbody").innerHTML = `<p class="muted small">Organize portal links or add links from containers. All signed-in users can see these addresses; do not include passwords.</p>
-      ${wl?.unread ? UI.callout("warn", "Could not read the containers", `${esc(wl.unread)} · their logos are not offered as icons`) : ""}
+    $("#mbody").innerHTML = `<p class="muted small">Organise portal links, or add links from containers. Every signed-in user can see these addresses, so do not include passwords.</p>
+      ${wl?.unread ? UI.callout("warn", "The containers could not be read", `${esc(wl.unread)} · Their logos are not offered as icons.`) : ""}
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
       <div id="pe_rows">${portalEditRows()}</div>

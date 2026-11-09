@@ -74,7 +74,7 @@ test("going back invalidates approval",async()=>{
 test("profile resources render read-only, escaped and explicitly unknown on failure",()=>{
   const t=setup();
   let html=t.ctx.vmEditResourceFields({cores:3,memory:"6Gi",resource_profile:{name:"medium<profile>"}});
-  assert.match(html,/managed by instance type medium&lt;profile>/);
+  assert.match(html,/set by the instance type medium&lt;profile>/);
   assert.match(html,/>3</);assert.match(html,/>6Gi</);
   assert.doesNotMatch(html,/id="ve_cores"|id="ve_mem"/);
   html=t.ctx.vmEditResourceFields({cores:null,memory:"",profile_error:"Profile resources unavailable"});

@@ -14,7 +14,7 @@ function setup({ answers = {}, uptime = null, nodes = [] } = {}) {
     esc: v => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"), plural: (n, w) => `${n} ${w}`,
     toast: (text, tone) => shown.toasts.push([text, tone]), can: () => true,
     modal: (title, html) => shown.modal.push([title, html]), childModal: (title, html) => shown.modal.push([title, html]),
-    closeModal() {}, modalBack() {}, noteNodeUptime() {}, remoteRow: () => null, fmtDay: t => `day${t}`, fmtAt: t => `at${t}`,
+    closeModal() {}, modalBack() {}, noteNodeUptime() {}, tip: () => "", remoteRow: () => null, fmtDay: t => `day${t}`, fmtAt: t => `at${t}`,
     fmtUp: s => `${s}s`, fmtAgo: s => `${s}s ago`,
     api: async (url, options) => {
       const path = String(url).split("?")[0];
@@ -40,7 +40,7 @@ test("the review shows what a reboot's does, with a reason and a duration", asyn
   await t.c.hostMaintenanceReview("node1");
   const [title, html] = t.shown.modal.at(-1);
   assert.match(title, /Maintenance · node1/);
-  for (const word of ["Check this", "lab/web", "lab/data", 'id="mm_reason"', 'id="mm_hours"', "Until I end it", 'id="mm_confirm"', "Power is up to you"]) assert.ok(html.includes(word), word);
+  for (const word of ["Check this", "lab/web", "lab/data", 'id="mm_reason"', 'id="mm_hours"', "Until it is ended", 'id="mm_confirm"', "The host is restarted or shut down separately"]) assert.ok(html.includes(word), word);
 });
 
 test("the send button stays disabled until the name is typed, a reason is given and blockers are ticked", async () => {
@@ -259,10 +259,10 @@ test("Host actions offers Maintenance from a read of none", async () => {
 test("Uncordon says it doesn't end a maintenance", async () => {
   const on = hostActions({ schedulable: false, maintenance: { reason: "Drive swap", until: NOW() + 600, state: "open" } });
   await on.c.nodeActions("node1");
-  assert.match(on.shown.modal.at(-1)[1], /Uncordoning doesn't end its maintenance/);
+  assert.match(on.shown.modal.at(-1)[1], /Uncordoning does not end its maintenance/);
   const off = hostActions({ schedulable: false, maintenance: null });
   await off.c.nodeActions("node1");
-  assert.doesNotMatch(off.shown.modal.at(-1)[1], /doesn't end its maintenance/);
+  assert.doesNotMatch(off.shown.modal.at(-1)[1], /does not end its maintenance/);
 });
 
 test("a failed read leaves Host actions as it is", () => {

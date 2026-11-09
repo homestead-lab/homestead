@@ -41,13 +41,13 @@ function fmWhen(seconds) {
 function filesInUseQuestion(pvc, attached, modes = []) {
   if (!attached || modes.includes("ReadWriteMany")) return null;
   if (modes.includes("ReadWriteOncePod")) return { title: "Browse files in use", ok: "Try anyway",
-    message: `${pvc} can be mounted by one pod only, and an app has it.\n\nStop the app first, or the file browser will not start.` };
+    message: `${pvc} can be used by only one app copy at a time, and an app is using it.\n\nStop the app first, or the file browser cannot start.` };
   return { title: "Browse files in use", ok: "Open files",
-    message: `An app is using ${pvc}. You can browse it while the app runs; edits change its live files.` };
+    message: `An app is using ${pvc}. It can be browsed while the app runs, and changes affect its live files.` };
 }
 window.fileManager = async (namespace, pvc, attached, modes = []) => {
   await fileManagerDismiss();
-  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>opening ${esc(pvc)}</div>`, true, "volume-files");
+  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>Opening ${esc(pvc)}</div>`, true, "volume-files");
   const question = filesInUseQuestion(pvc, attached, modes);
   if (question && !(await ask(question.message, { title: question.title, ok: question.ok }))) {
     closeModal();
@@ -62,7 +62,7 @@ window.fileManager = async (namespace, pvc, attached, modes = []) => {
 window.fileManagerSnapshot = async state => {
   await fileManagerDismiss();
   const source = state.source || {};
-  modal(`Files · ${source.claim} · snapshot`, `<div class="empty"><span class="spin2"></span>opening ${esc(source.snapshot)}</div>`, true, "volume-files");
+  modal(`Files · ${source.claim} · snapshot`, `<div class="empty"><span class="spin2"></span>Opening ${esc(source.snapshot)}</div>`, true, "volume-files");
   const snapshot = { session: state.session, namespace: state.namespace, name: source.snapshot, taken: source.created, endsAt: state.expires };
   await fmStart([fmPane(state.namespace, source.claim, { snapshot }), fmPane(state.namespace, source.claim)]);
 };
@@ -96,7 +96,7 @@ function fmShellHtml() {
     <div class="fm-panes">${[0, 1].map(i => `<section class="fm-pane" id="fm_pane${i}" onpointerdown="fmFocus(${i}, true)"></section>`).join("")}</div>
     <div class="fm-panel" id="fm_panel" hidden></div>
     <div class="fm-actions" id="fm_actions"></div>
-    <div class="fm-foot"><span class="dim xs" id="fm_status">A small helper opens each volume; it stops a minute after you finish.</span>
+    <div class="fm-foot"><span class="dim xs" id="fm_status">A small helper opens each volume, and stops a minute after the last action.</span>
       <button class="btn" data-dialog-dismiss="true" onclick="fmClose()">Close</button></div>`;
 }
 
@@ -130,7 +130,7 @@ function fmPaint() {
 function fmVolumeOptions(pane) {
   const known = FM.volumes.some(v => v.namespace === pane.namespace && v.pvc === pane.pvc)
     ? FM.volumes : [{ namespace: pane.namespace, pvc: pane.pvc }, ...FM.volumes];
-  const unread = FM.volumesUnread ? `<option disabled>Could not read the other volumes: ${esc(FM.volumesUnread)}</option>` : "";
+  const unread = FM.volumesUnread ? `<option disabled>The other volumes could not be read. ${esc(FM.volumesUnread)}</option>` : "";
   return unread + known.map(v => `<option value="${esc(v.namespace + "/" + v.pvc)}" ${v.namespace === pane.namespace && v.pvc === pane.pvc ? "selected" : ""}>${esc(v.pvc)}${v.namespace !== "lab" ? ` · ${esc(v.namespace)}` : ""}${v.attached ? " · in use" : ""}</option>`).join("");
 }
 
@@ -173,7 +173,7 @@ function fmPaintPane(index) {
       ${snap
         ? `<span class="fm-snaptitle"><b>${esc(fmSnapshotTitle(snap))}</b> <span class="dim xs">read-only${snap.endsAt ? ` · open until ${esc(fmtAt(snap.endsAt))}` : ""}</span></span>`
         : `<select aria-label="Volume in this pane" onchange="fmVolume(${index}, this.value)">${fmVolumeOptions(pane)}</select>`}
-      <span class="fm-state ${pane.state}">${pane.state === "ready" ? "" : pane.state === "error" ? "" : pane.state === "stopped" ? "helper stopped · it starts again when you act" : "working…"}</span>
+      <span class="fm-state ${pane.state}">${pane.state === "ready" ? "" : pane.state === "error" ? "" : pane.state === "stopped" ? "helper stopped · it starts again at the next action" : "working…"}</span>
       <div class="fm-tools">
         ${snap ? "" : `<button type="button" class="iconbtn" title="New folder" aria-label="New folder" data-need="admin" onclick="fmNewFolder(${index})">${icon("plus")}</button>
         <label class="iconbtn" title="Upload files" aria-label="Upload files" data-need="admin">${icon("import")}<input type="file" multiple hidden onchange="fmUpload(${index}, this)"></label>`}
@@ -183,7 +183,7 @@ function fmPaintPane(index) {
 }
 
 function fmSnapshotTitle(snap) {
-  return `Snapshot · ${snap.name} · ${snap.taken ? fmtAt(snap.taken) : "time unknown"}`;
+  return `Snapshot · ${snap.name} · ${snap.taken ? fmtAt(snap.taken) : "Time unknown"}`;
 }
 
 function fmSelected(index = FM.active) {
@@ -292,7 +292,7 @@ window.fmDelete = async () => {
   const picked = fmSelected();
   const what = picked.length === 1 ? picked[0].name : `${picked.length} entries`;
   const folders = picked.filter(e => e.kind === "dir").length;
-  if (!(await ask(`Delete ${what}${folders ? `, with everything in ${folders === 1 ? "that folder" : "those folders"}` : ""}? This cannot be undone.`, { title: "Delete", ok: "Delete", danger: true }))) return;
+  if (!(await ask(`Delete ${what}${folders ? `, with everything in ${folders === 1 ? "that folder" : "those folders"}` : ""}? This cannot be undone.`, { title: "Delete files", ok: "Delete files", danger: true }))) return;
   const paths = fmPaths();
   fmDo(`Deleting ${what}…`, async () => {
     await fmPost("/api/files/delete", { ...fmTarget(), paths });
@@ -312,7 +312,7 @@ window.fmPermissions = () => {
         <div class="f"><label>As a number</label><input id="fm_mode" class="mono" value="${mode}" inputmode="numeric" maxlength="4" oninput="fmBoxesFromMode()"></div>`)}
       ${UI.section("Owner", `<div class="f2"><div class="f"><label>User (UID)</label><input id="fm_uid" type="number" min="0" value="${first.uid ?? ""}"></div>
           <div class="f"><label>Group (GID)</label><input id="fm_gid" type="number" min="0" value="${first.gid ?? ""}"></div></div>
-        <div class="dim xs">Now ${esc(first.user)}:${esc(first.group)}. Containers usually run as a numbered user; Fix ownership on the volume finds the one its app uses.</div>`)}</div>
+        <div class="dim xs">Now ${esc(first.user)}:${esc(first.group)}. Containers usually run as a numbered user. Fix ownership, on the volume, finds the user its app runs as.</div>`)}</div>
     ${folders ? `<label class="switch"><input type="checkbox" id="fm_recursive"> <span>Also everything inside the folders</span></label>` : ""}
     ${UI.actions(`${UI.button("Apply", "fmPanelGo()", { kind: "pri" })}${UI.button("Cancel", "fmPanel()", { attrs: 'data-dialog-dismiss="true"' })}`)}`, async () => {
     const recursive = !!$("#fm_recursive")?.checked, paths = fmPaths();
@@ -362,7 +362,7 @@ window.fmDownload = () => {
   if (cluster) query.set("hs_cluster", cluster);
   const link = Object.assign(document.createElement("a"), { href: `${snap ? "/api/snapshot-files/download" : "/api/files/download"}?${query}`, download: "" });
   document.body.appendChild(link); link.click(); link.remove();
-  toast("Download started; a folder is zipped as it downloads", "ok");
+  toast("Download started. A folder is zipped as it downloads.", "ok");
 };
 
 /* Upload: each file in pieces, in order; it appears only once whole. */
@@ -374,7 +374,7 @@ window.fmUpload = async (index, input) => {
   const pane = FM.panes[index], target = { namespace: pane.namespace, pvc: pane.pvc }, folder = pane.path;
   const taken = new Set((pane.listing?.entries || []).map(e => e.name));
   const clashes = files.filter(f => taken.has(f.name)).map(f => f.name);
-  if (clashes.length && !(await ask(`${clashes.join(", ")} ${clashes.length === 1 ? "is" : "are"} already here. Replace ${clashes.length === 1 ? "it" : "them"}?`, { title: "Replace files", ok: "Replace" }))) return;
+  if (clashes.length && !(await ask(`${clashes.join(", ")} ${clashes.length === 1 ? "is" : "are"} already here. Replace ${clashes.length === 1 ? "it" : "them"}?`, { title: "Replace files", ok: "Replace files" }))) return;
   const total = files.reduce((sum, f) => sum + f.size, 0);
   let sent = 0;
   fmDo("Uploading…", async () => {
@@ -404,7 +404,7 @@ window.fmTransfer = async move => {
   const from = { ...fmTarget(), path: FM.panes[FM.active].path }, other = fmOther();
   const to = { namespace: other.namespace, pvc: other.pvc, path: other.path };
   const paths = fmPaths(), what = paths.length === 1 ? paths[0].split("/").pop() : `${paths.length} entries`;
-  if (move && !(await ask(`Move ${what} to ${to.pvc}/${to.path}? ${fmSameVolume(from, to) ? "" : "It is copied there first; the originals are removed only once the copy is complete."}`, { title: "Move", ok: "Move" }))) return;
+  if (move && !(await ask(`Move ${what} to ${to.pvc}/${to.path}? ${fmSameVolume(from, to) ? "" : "It is copied there first, and the originals are removed only once the copy is complete."}`, { title: "Move files", ok: "Move files" }))) return;
   fmDo(`${move ? "Moving" : "Copying"} ${what}…`, async () => {
     const answer = await fmPost("/api/files/transfer", { from, to, paths, move });
     if (answer.done) return;
@@ -440,7 +440,7 @@ function fmRestoreHtml(plan, body, notice = "") {
   const to = `${body.target.pvc}/${body.target.folder}`.replace(/\/$/, "");
   const count = plan.adds.length + plan.replaces.length;
   const blockers = plan.blockers.length
-    ? UI.callout("bad", "This restore can't run yet", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : "";
+    ? UI.callout("bad", "This restore cannot run yet", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`) : "";
   const lists = fmRestoreList("Replaces", plan.replaces, r => `<span class="mono">${esc(r.path)}</span> <span class="dim xs">now ${esc(fileSize(r.live.size))}, ${esc(fmWhen(r.live.modified))} → snapshot ${esc(fileSize(r.snapshot.size))}, ${esc(fmWhen(r.snapshot.modified))}</span>`)
     + fmRestoreList("Adds", plan.adds, path => `<span class="mono">${esc(path)}</span>`)
     + fmRestoreList("Skipped", plan.skipped, s => `<span class="mono">${esc(s.path)}</span> <span class="dim xs">${esc(s.why)}</span>`);
@@ -451,7 +451,7 @@ function fmRestoreHtml(plan, body, notice = "") {
       ["Adds", esc(plan.adds.length)], ["Replaces", esc(plan.replaces.length)], ["Skipped", esc(plan.skipped.length)],
       ["Snapshot open until", esc(fmtAt(plan.session_ends_at))]])}
     ${plan.warning ? UI.callout("warn", "In use", `<p>${esc(plan.warning)}</p>`) : ""}${blockers}${lists}
-    <p class="dim xs">Nothing in ${esc(to)} is deleted: folders merge, and files that are not in the snapshot stay as they are.</p>`)}
+    <p class="dim xs">Nothing in ${esc(to)} is deleted. Folders are merged, and files that are not in the snapshot are not changed.</p>`)}
     ${UI.actions(`${UI.button("Cancel", "fmPanel()", { attrs: 'data-dialog-dismiss="true"' })}${run}`)}`;
 }
 window.fmRestoreReview = async () => {
@@ -532,7 +532,7 @@ window.fmSave = async (ignoreSyntax = false) => {
     const result = await fmPost("/api/files/write", { namespace: pane.namespace, pvc: pane.pvc, path: editing.path, content, revision: editing.revision, ignore_syntax: ignoreSyntax });
     Object.assign(editing, { revision: result.revision, dirty: false });
     const state = $("#fm_editstate"); if (state) state.textContent = `saved ${fmtClock(Date.now())}`;
-    toast(result.message || "saved", "ok");
+    toast(result.message || "Saved", "ok");
   } catch (e) {
     if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`, { title: "Save anyway?", ok: "Save anyway" }))) return fmSave(true);
     toast(e.message, "bad");
@@ -589,13 +589,13 @@ async function fmRelease(keepalive = false) {
   if (!keepalive) {
     const left = results.filter(stopped => !stopped).length - unasked.length;
     // One that could not be asked is said as such: it stops on its own a minute after its last use.
-    toast(unasked.length ? `Files closed; ${unasked.length === 1 ? "a helper" : `${unasked.length} helpers`} could not be asked to stop (${unasked[0]}) and will stop on ${unasked.length === 1 ? "its" : "their"} own within a minute`
-      : left ? `Files closed; ${left === 1 ? "a helper is" : `${left} helpers are`} still stopping and will be gone within a minute` : "Files closed; the volume is free for its app or VM", left || unasked.length ? "warn" : "ok");
+    toast(unasked.length ? `Files closed. ${unasked.length === 1 ? "A helper" : `${unasked.length} helpers`} could not be told to stop (${unasked[0]}), and ${unasked.length === 1 ? "it stops" : "they stop"} automatically within a minute.`
+      : left ? `Files closed. ${left === 1 ? "A helper is" : `${left} helpers are`} still stopping, and ${left === 1 ? "it is" : "they are"} removed within a minute.` : "Files closed. The volume is free for its app or VM.", left || unasked.length ? "warn" : "ok");
   }
 }
 window.fmClose = async () => {
   // The server keeps the snapshot and the helper until a restore ends.
-  if (FM.restoring && !(await ask("A restore is still running. It finishes on its own, and the snapshot closes once it has; you just won't see when here.", { title: "Restore running", ok: "Close anyway" }))) return;
+  if (FM.restoring && !(await ask("A restore is still running. It finishes automatically, and the snapshot closes when it is done, but this page does not show when that happens.", { title: "Restore running", ok: "Close anyway" }))) return;
   if (FM.editing?.dirty && !(await ask("Discard unsaved changes?", { title: "Unsaved changes", ok: "Discard changes", danger: true }))) return;
   const closing = fmRelease();
   closeModal();

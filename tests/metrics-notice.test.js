@@ -52,7 +52,7 @@ test("figures still being read after a start say so quietly (#928)", () => {
   const html = notice([row({ state: "waiting" })]);
   assert.doesNotMatch(html, /warn/);
   assert.match(html, /class="dim"/);
-  assert.match(html, /reading CPU and memory…/);
+  assert.match(html, /Reading CPU and memory…/);
   assert.match(html, /Homestead has just started/);
 });
 

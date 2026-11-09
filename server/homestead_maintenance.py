@@ -76,27 +76,27 @@ def helper_blocker(pod):
     labels = (pod.get("metadata") or {}).get("labels") or {}
     task = NAMES.label_of(pod.get("metadata"), "task")
     guidance = {
-        "host-run": "host command may still be changing this host; wait for it to finish or inspect its interrupted operation",
-        "node-shell": "host shell may still be running commands; close its sessions and inspect the helper first",
-        "files": "file-browser session may be changing files; close the volume browser first",
-        "probe": "source probe is active; wait for the source inspection to finish",
-        "image-cleanup": "image removal is active; wait for cleanup to finish",
-        "import": "import/copy is active; finish or cancel it through its operation before maintenance",
-        "chown": "volume ownership changes are active; wait for them to finish",
-        "reclass": "volume migration is active; finish or recover it before maintenance",
-        "restructure": "workload data restructuring is active; finish or recover it before maintenance",
-        "iso-copy": "ISO copy is active; wait for it to finish before maintenance",
-        "vm-import": "VM import is active; finish or cancel it through its operation before maintenance",
-        "node-power": "an earlier power helper is active; inspect it before retrying",
-        "cluster-shutdown": "cluster shutdown is active; inspect its saved progress before another power action",
+        "host-run": "a host command may still be changing this host. Wait for it to finish, or check its interrupted job.",
+        "node-shell": "a host shell may still be running commands. Close its sessions and check the helper first.",
+        "files": "a file browser session may be changing files. Close the volume browser first.",
+        "probe": "a source check is running. Wait for it to finish.",
+        "image-cleanup": "images are being removed. Wait for the cleanup to finish.",
+        "import": "an import or copy is running. Finish or cancel its job before maintenance.",
+        "chown": "volume owners are being changed. Wait for that to finish.",
+        "reclass": "a volume is moving to another storage class. Finish or recover the move before maintenance.",
+        "restructure": "an app's data is being reorganised. Finish or recover it before maintenance.",
+        "iso-copy": "an ISO is being copied. Wait for it to finish before maintenance.",
+        "vm-import": "a VM import is running. Finish or cancel its job before maintenance.",
+        "node-power": "an earlier power helper is running. Check it before trying again.",
+        "cluster-shutdown": "a cluster shutdown is running. Check its saved progress before another restart or shutdown.",
     }
     for key in ("self-data-copy", "data-preparation", "handoff-worker", "self-data-handoff"):
         if labels.get(NAMES.key(key)):
-            return "Homestead data handoff is active; finish or recover the data move before maintenance"
+            return "Homestead's data handover is running. Finish or recover the data move before maintenance."
     if labels.get(NAMES.key("longhorn-v2-setup")):
-        return "Longhorn host preparation is active; wait for it to finish before maintenance"
+        return "Longhorn host preparation is running. Wait for it to finish before maintenance."
     if labels.get(NAMES.key("snapshot-files")):
-        return "snapshot browser or clone is active; close it and release its temporary mounts first"
+        return "a snapshot browser or clone is open. Close it and release its temporary volumes first."
     return guidance.get(task, "")
 
 
@@ -113,15 +113,15 @@ def inventory(get, pods, namespace=None, draining=True):
         temporary = observer(pod, namespace)
         busy = "" if temporary else helper_blocker(pod)
         if temporary and draining:
-            waiting.append(identity + ": temporary " + temporary + " will be evicted; only its report is lost")
+            waiting.append(identity + ": temporary " + temporary + " will be evicted, and only its report is lost")
         if busy:
             blockers.append(identity + ": " + busy)
         elif not owner and not temporary:
-            blockers.append(identity + ": unmanaged pod has no controller to recreate it; handle it explicitly first")
+            blockers.append(identity + ": this pod has no controller to create it again. Deal with it manually first.")
         matching = [b for b in budgets if (b.get("metadata") or {}).get("namespace") == ns and
                     selected((b.get("spec") or {}).get("selector"), meta.get("labels") or {})]
         if draining and len(matching) > 1:
-            blockers.append(identity + ": multiple disruption budgets match; eviction cannot be verified")
+            blockers.append(identity + ": more than one disruption budget matches, so the eviction cannot be checked")
         for budget in matching:
             bm, bs, policy = budget.get("metadata") or {}, budget.get("status") or {}, budget.get("spec") or {}
             ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions") or [])
@@ -159,7 +159,7 @@ def inventory(get, pods, namespace=None, draining=True):
                 pvc = get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
                 pv_name = (pvc.get("spec") or {}).get("volumeName")
                 if not pv_name:
-                    blockers.append(identity + ": PVC " + str(claim) + " is not bound; storage impact unknown")
+                    blockers.append(identity + ": PVC " + str(claim) + " is not bound, so the effect on storage is unknown")
                     continue
                 pv = get(f"/api/v1/persistentvolumes/{pv_name}")
                 pv_spec = pv.get("spec") or {}

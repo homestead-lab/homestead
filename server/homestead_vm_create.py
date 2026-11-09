@@ -57,7 +57,7 @@ def vm_disk_import_plan(namespace, name):
     return {"namespace": namespace, "name": name, "ready": not conflicts,
             "conflicts": conflicts,
             "message": ("Ready to create a new CDI DataVolume and PVC" if not conflicts else
-                        f"{namespace}/{name} already exists; choose a new disk name")}
+                        f"{namespace}/{name} already exists. Choose a new disk name.")}
 
 
 def _http_disk_source(cfg):
@@ -146,7 +146,7 @@ def _disk_consumers():
     try:
         vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=I.kget)
     except Exception as error:
-        raise ValueError(f"Couldn't check whether another VM uses this disk; try again in a moment ({str(error)[:120]})") from error
+        raise ValueError(f"Homestead could not check whether another VM uses this disk. Try again in a moment ({str(error)[:120]}).") from error
     for vm in vms:
         meta = vm.get("metadata", {}) or {}
         ns, vm_name = meta.get("namespace", ""), meta.get("name", "")
@@ -312,8 +312,8 @@ def delete_vm_image(namespace, name, confirm=""):
         raise ValueError(f"there is no VM image {namespace}/{name}")
     if row["disks"]:
         raise PermissionError(f"{row['display']} is what {', '.join(row['disks'][:3])}"
-                              f"{' and more' if len(row['disks']) > 3 else ''} started from; delete "
-                              f"{'that disk' if len(row['disks']) == 1 else 'those disks'} first")
+                              f"{' and more' if len(row['disks']) > 3 else ''} started from. Delete "
+                              f"{'that disk' if len(row['disks']) == 1 else 'those disks'} first.")
     if str(confirm or "").strip() != row["display"]:
         raise ValueError(f"type {row['display']} to confirm")
     I.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{namespace}/virtualmachineimages/{name}")
@@ -437,10 +437,10 @@ def prepare_vm(cfg, platform=None, default_class=""):
     if image_url:
         parsed = urllib.parse.urlparse(image_url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"{image_url} is not a download address; give the full http(s):// URL"
+            raise ValueError(f"{image_url} is not a download address. Give the full http(s):// URL"
                              + (", or pick the Harvester image from the list" if harvester else ""))
     if image_ref and not harvester:
-        raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
+        raise ValueError("Images from the image list belong to Harvester. Use an image URL on this cluster.")
     # On Harvester a URL becomes one of its images, which needs no CDI.
     if (imported_dv or (image_url and not harvester)) and not cdi:
         raise ValueError("CDI is not installed, so disk images cannot be downloaded or imported. "
@@ -592,7 +592,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
             # Windows setup sees no disk on the virtio bus until it loads the
             # VirtIO drivers: their ISO in a second drive, as on Proxmox.
             if drivers_iso == install_iso:
-                raise ValueError("the drivers ISO is the installer itself; choose the VirtIO drivers ISO")
+                raise ValueError("The drivers ISO is the installer itself. Choose the VirtIO drivers ISO.")
             I.iso_ready(ns, drivers_iso)
             disks.append({"name": "drivers", "cdrom": {"bus": "sata"}})
             volumes.append({"name": "drivers", "persistentVolumeClaim": {"claimName": drivers_iso}})
@@ -692,7 +692,7 @@ def _recheck_vm_creation(prepared):
         targets.append(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
     for path in targets:
         if _get_or_none(path) is not None:
-            raise ValueError("A VM or planned dependency already exists; inspect it and review creation again")
+            raise ValueError("A VM or something it needs already exists. Check it and review the creation again.")
 
 
 def commit_vm(prepared, before_save=None, send=None):

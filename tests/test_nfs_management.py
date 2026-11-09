@@ -149,7 +149,7 @@ class NfsLifecycleTests(unittest.TestCase):
         pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "servicelb"}):
-            with self.assertRaisesRegex(ValueError, "dedicated VIP"):
+            with self.assertRaisesRegex(ValueError, "its own virtual IP"):
                 SERVERS._nfs_deployment(rows, "")
 
 

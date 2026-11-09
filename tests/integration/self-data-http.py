@@ -84,7 +84,7 @@ for attempt in range(2):
     cfg = {"operation": operation, "storage_class": "fixture-target" if attempt == 0 else "local-path", "node": "release-test"}
     # After a move Homestead finishes its handoff read-only for a moment.
     preview = until("preparation review", 120, lambda: request("/api/self/data/prepare/preview", cfg),
-                    retry_refusal=() if attempt == 0 else ("earlier data move record exists", "only reports progress"))
+                    retry_refusal=() if attempt == 0 else ("earlier data move record exists", "record of an earlier data move exists", "only reports progress"))
     prepared = request("/api/self/data/prepare", {**cfg, "capacity_token": preview["capacity_token"], "confirm_capacity": True})
     log("PREPARATION", attempt + 1, prepared["destination"])
 
@@ -99,7 +99,7 @@ for attempt in range(2):
 
     move = {"operation": operation, "destination": prepared["destination"], "worker_node": "release-test", "copy_node": "release-test"}
     preview = until("move review", 120, lambda: request("/api/self/data/move/preview", move),
-                    retry_refusal="report current data-move support")
+                    retry_refusal=("report current data-move support", "report that it supports data moves"))
     request("/api/self/data/move", {**move, "capacity_token": preview["capacity_token"], "confirm_capacity": True, "confirm_move": True})
     log("MOVE CONFIRMED", attempt + 1)
 

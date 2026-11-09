@@ -33,7 +33,7 @@ test("numbers a minute or more old are flagged, and say why", () => {
   const html = age({ age_s: 300 });
   assert.match(html, /ui-chip warn/);
   assert.match(html, /updated 5m ago/);
-  assert.match(html, /last numbers Homestead read/);
+  assert.match(html, /last figures Homestead read/);
 });
 
 test("the Dashboard's subtitle carries the age", () => {

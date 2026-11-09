@@ -39,7 +39,7 @@ LABEL = "homestead.io/k3s-cluster"
 ROLE = "homestead.io/k3s-role"
 LOG = "/var/log/homestead-k3s.log"
 SETUPS = {
-    "homestead": "k3s, Longhorn and Homestead - what a new install gets",
+    "homestead": "k3s, Longhorn and Homestead, the same as a new install",
     "local": "k3s and Homestead, on k3s's own local-path storage",
     "k3s": "k3s alone",
 }
@@ -91,7 +91,7 @@ def plan(cfg):
     count = servers + agents
     if len(addresses) != count:
         raise ValueError(f"{count} node{'s' if count != 1 else ''} need{'' if count != 1 else 's'} "
-                         f"{count} address{'es' if count != 1 else ''}; {len(addresses)} given")
+                         f"{count} address{'es' if count != 1 else ''}, but {len(addresses)} {'was' if len(addresses) == 1 else 'were'} given")
     if len(set(addresses)) != count:
         raise ValueError("each node needs an address of its own")
     for address in addresses:
@@ -117,7 +117,7 @@ def plan(cfg):
         raise ValueError("what it runs is one of: " + ", ".join(SETUPS))
     kubevirt = bool(cfg.get("kubevirt"))
     if kubevirt and setup == "k3s":
-        raise ValueError("KubeVirt comes with the setups that install Homestead; k3s alone installs nothing more")
+        raise ValueError("KubeVirt comes with the setups that install Homestead. k3s alone installs nothing more.")
     nodes = [{"name": f"{prefix}-server-{i + 1}", "role": "server", "address": addresses[i]} for i in range(servers)]
     nodes += [{"name": f"{prefix}-agent-{i + 1}", "role": "agent", "address": addresses[servers + i]}
               for i in range(agents)]
@@ -223,7 +223,7 @@ def commit(prepared, ops, *, create_one=None, before_node=None, review=None, sen
     if (not built["nodes"] or len(built["nodes"]) != len(prepared["configs"]) or
             any(node["name"] != cfg.get("name") or cfg.get("namespace") != ns
                 for node, cfg in zip(built["nodes"], prepared["configs"]))):
-        raise ValueError("Prepared VM batch is incomplete or inconsistent; nothing was created")
+        raise ValueError("The prepared batch of VMs is incomplete or inconsistent, so nothing was created")
     create_one = create_one or create
     journal = {}
     if review is not None:
@@ -259,7 +259,7 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
             # Persist the possible target before dispatch. A lost response is
             # not proof that this VM, its claims or its Secret were not made.
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
-                             f"Creating {node['name']}; awaiting Kubernetes receipt", attempted=node["name"])
+                             f"Creating {node['name']}. Waiting for Kubernetes to confirm it.", attempted=node["name"])
             result = create_one(copy.deepcopy(vm), send=writer) if writer else create_one(copy.deepcopy(vm))
             if writer:
                 writer.check()  # ownership warnings cannot hide uncertain writes
@@ -277,12 +277,12 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
                         raise ValueError("VM result does not match its verified creation receipt")
             made.append({"name": node["name"], "identity": identity})
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
-                             f"Created {node['name']}; retaining its resources", created=copy.deepcopy(made), attempted="")
+                             f"Created {node['name']}. Its resources are kept.", created=copy.deepcopy(made), attempted="")
         except Exception as error:
             # Exception bodies can include a rejected Secret or cloud-init.
             # Persist safe diagnostics only, never the raw request/error body.
-            message = (f"Stopped at {node['name']}. {len(made)} creation receipt(s) recorded. "
-                       "Resources are retained, including any uncertain creation; inspect the job and VMs before retrying.")
+            message = (f"Stopped at {node['name']}. {len(made)} creation record{'' if len(made) == 1 else 's'} saved. "
+                       "The resources are kept, including any that may not have been created. Check the job and VMs before trying again.")
             try:
                 ops.record_phase(operation["id"], "failed", int(10 * len(made) / len(built["nodes"])),
                                  message, created=copy.deepcopy(made), failure_type=type(error).__name__)
@@ -291,7 +291,7 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
                 pass
             raise ValueError(f"{message} Job {operation['id']}.") from None
     return ops.record_phase(operation["id"], "awaiting-ready", 10,
-                            f"Created {len(made)} VMs; waiting for guest startup", created=made, attempted="")
+                            f"Created {len(made)} VMs. Waiting for them to start.", created=made, attempted="")
 
 
 def status(item):
@@ -301,10 +301,10 @@ def status(item):
     names = [n["name"] for n in ref["nodes"]]
     if ref.get("phase") == "provisioning":
         if waited > START_LIMIT:
-            return "failed", item.get("progress", 0), "VM provisioning was not confirmed complete. Partial VMs, disks and Secrets are retained; inspect them before a new review. Nothing was replayed."
-        return "running", item.get("progress", 0), item.get("message") or "VM provisioning is in progress; partial resources are retained"
+            return "failed", item.get("progress", 0), "Creating the VMs was not confirmed as finished. Any VMs, disks and Secrets already created are kept. Check them before a new review. Nothing was repeated."
+        return "running", item.get("progress", 0), item.get("message") or "The VMs are being created. Anything already created is kept."
     if ref.get("phase") == "failed":
-        return "failed", item.get("progress", 0), item.get("message") or "VM provisioning stopped; inspect retained resources"
+        return "failed", item.get("progress", 0), item.get("message") or "Creating the VMs stopped. Check the kept resources."
     if ref.get("dispatch_protocol") == 2 and ref.get("guest_health"):
         return HEALTH.status(item, kget, limit=START_LIMIT)
     running = 0
@@ -313,10 +313,10 @@ def status(item):
             if ref.get("retain_resources"):
                 receipt = next((row for row in ref.get("created") or [] if row["name"] == name), None)
                 if not receipt:
-                    return "failed", item.get("progress", 0), f"No creation receipt for {name}; inspect retained resources"
+                    return "failed", item.get("progress", 0), f"There is no creation record for {name}. Check the kept resources."
                 vm = kget(f"/apis/kubevirt.io/v1/namespaces/{ref['namespace']}/virtualmachines/{urllib.parse.quote(name)}")
                 if (vm.get("metadata") or {}).get("uid") != receipt["identity"]["uid"]:
-                    return "failed", item.get("progress", 0), f"{name} was replaced; the original batch is not confirmed ready"
+                    return "failed", item.get("progress", 0), f"{name} was replaced, so the original batch is not confirmed ready"
             vmi = kget(f"/apis/kubevirt.io/v1/namespaces/{ref['namespace']}/virtualmachineinstances/"
                        f"{urllib.parse.quote(name)}")
             if ref.get("retain_resources"):
@@ -331,23 +331,23 @@ def status(item):
     first = ref["first"]
     if waited > START_LIMIT:
         return "failed", item.get("progress", 0), (
-            f"After {int(waited // 60)} minutes the cluster is not up. Open {names[0]}'s console and read {LOG}; "
-            "most often the VMs cannot reach the internet from the LAN network, or an address clashes.")
+            f"After {int(waited // 60)} minutes the cluster is not up. Open {names[0]}'s console and read {LOG}. "
+            "The usual causes are that the VMs cannot reach the internet from the LAN network, or that an address is already in use.")
     if running < len(names):
         return "running", 10 + int(40 * running / len(names)), f"{running} of {len(names)} VMs running"
     if not _answers(first, 6443):
-        return "running", 60, f"VMs running; installing k3s on {names[0]} ({first}) - a few minutes"
+        return "running", 60, f"VMs running. Installing k3s on {names[0]} ({first}), which takes a few minutes."
     if ref.get("dispatch_protocol") == 2:
         # A listener is not authenticated guest-cluster readiness. Retain the
         # journal for explicit inspection until authenticated checks exist.
-        return "running", 80, "VMs are running and the API port answers; guest-cluster identity, readiness and quorum are not verified. Inspect the batch outcome; nothing is replayed."
+        return "running", 80, "The VMs are running and the API port answers. The new cluster's identity, readiness and quorum are not checked. Check the batch outcome. Nothing is repeated."
     if ref.get("setup") == "k3s":
         return "succeeded", 100, (f"k3s answers at https://{first}:6443. The kubeconfig is "
-                                  f"/etc/rancher/k3s/k3s.yaml on {names[0]}; the login is ubuntu with your password")
+                                  f"/etc/rancher/k3s/k3s.yaml on {names[0]}. The login is ubuntu with the password set when the cluster was created.")
     if not _answers(first, 8088):
-        return "running", 80, f"k3s is up; installing {'Longhorn and ' if ref.get('setup') == 'homestead' else ''}Homestead inside it"
-    return "succeeded", 100, (f"The cluster is up: its Homestead answers at http://{first}:8088 - open it and "
-                              "create the first account there. The nodes' login is ubuntu with your password")
+        return "running", 80, f"k3s is up. Installing {'Longhorn and ' if ref.get('setup') == 'homestead' else ''}Homestead inside it."
+    return "succeeded", 100, (f"The cluster is up, and its Homestead answers at http://{first}:8088. Open it and "
+                              "create the first account there. The VMs' login is ubuntu with the password set when the cluster was created.")
 
 
 def register(ops):

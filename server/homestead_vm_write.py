@@ -64,7 +64,7 @@ def operation_recorder(ops, ident):
             target = event["resource"]
             message = f"Write {event['sequence']}: {event['method']} {target['kind']} {target['namespace']}/{target['name']} — {phase}"
             if failed:
-                message += "; inspect retained resources; nothing was retried"
+                message += ". Check the kept resources. Nothing was retried"
             # These are workflow milestones, not download or guest-health %.
             progress = int(item.get("progress") or 0)
             if item["kind"] != "k3s-cluster":
@@ -87,13 +87,13 @@ def _identity(meta):
 def _target(method, path, body):
     match = PATH.fullmatch(path) if isinstance(path, str) else None
     if method not in ("POST", "PUT", "PATCH") or not match or not isinstance(body, dict):
-        raise WriteFailure("Unsupported VM resource write; nothing was sent")
+        raise WriteFailure("Unsupported VM resource write, so nothing was sent")
     core, grouped, namespace, plural, path_name = match.groups()
     version = core or grouped
     kind = RESOURCES.get((version, plural))
     meta = body.get("metadata") or {}
     if not isinstance(meta, dict):
-        raise WriteFailure("VM resource metadata is malformed; nothing was sent")
+        raise WriteFailure("The VM resource details are malformed, so nothing was sent")
     name = meta.get("name") if method == "POST" else path_name
     if (not kind or not isinstance(name, str) or len(name) > 253 or not NAME.fullmatch(name)
             or len(namespace) > 63 or not NAME.fullmatch(namespace)
@@ -102,7 +102,7 @@ def _target(method, path, body):
             or (meta.get("name") is not None and meta["name"] != name)
             or (body.get("kind") is not None and body["kind"] != kind)
             or (body.get("apiVersion") is not None and body["apiVersion"] != version)):
-        raise WriteFailure("VM resource target is inconsistent; nothing was sent")
+        raise WriteFailure("The VM resource target is inconsistent, so nothing was sent")
     target = {"apiVersion": version, "kind": kind, "namespace": namespace, "name": name}
     before = _identity(meta) if method != "POST" else None
     return target, before
@@ -116,14 +116,14 @@ class ResourceWriter:
 
     def check(self):
         if self.failed:
-            raise WriteFailure("A VM resource write failed or is uncertain. Inspect its job; nothing was retried")
+            raise WriteFailure("A VM resource write failed or is uncertain. Check its job. Nothing was retried.")
 
     def _record(self, event):
         try:
             self.record(copy.deepcopy(event))
         except Exception:
             self.failed = True
-            raise WriteFailure("VM write progress could not be recorded. Inspect the retained intent; nothing was retried") from None
+            raise WriteFailure("The VM write progress could not be recorded. Check the kept request. Nothing was retried.") from None
 
     def __call__(self, method, path, body=None, **kwargs):
         self.check()
@@ -145,8 +145,8 @@ class ResourceWriter:
             if isinstance(error, urllib.error.HTTPError):
                 outcome["http_status"] = int(error.code)
             self._record(outcome)
-            raise WriteFailure("The VM resource request was refused; earlier resources remain" if refused else
-                               "The VM resource response is uncertain; inspect retained resources before a new review") from None
+            raise WriteFailure("The VM resource request was refused. Earlier resources stay." if refused else
+                               "The VM resource answer is uncertain. Check the kept resources before a new review.") from None
         try:
             meta = result.get("metadata") if isinstance(result, dict) else None
             if not isinstance(meta, dict) or (meta.get("namespace"), meta.get("name")) != (target["namespace"], target["name"]):
@@ -159,6 +159,6 @@ class ResourceWriter:
         except Exception:
             self.failed = True
             self._record({**event, "phase": "unverified"})
-            raise WriteFailure("VM write response identity could not be verified. The request may have applied; nothing was retried") from None
+            raise WriteFailure("The answer to the VM write could not be confirmed. The request may have been applied. Nothing was retried.") from None
         self._record({**event, "phase": "accepted", "identity": identity})
         return result

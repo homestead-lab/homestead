@@ -33,30 +33,30 @@ def reference_conflict(items, kind, ref, resource):
     RESUMABLE, POWER_RECEIPTS, _vm_targets = OPS.RESUMABLE, OPS.POWER_RECEIPTS, OPS._vm_targets
     if kind == "node-power" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                     i.get("ref", {}).get("node") == ref.get("node") for i in items):
-        return "Host maintenance is already active; inspect its job before retrying"
+        return "Host maintenance is already running. Check its job before trying again."
     if kind == "set-restart" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                      (i.get("ref", {}).get("ns"), i.get("ref", {}).get("name")) ==
                                      (ref.get("ns"), ref.get("name")) for i in items):
-        return "A restart for this StatefulSet is already active; inspect its job before retrying"
+        return "A restart of this StatefulSet is already running. Check its job before trying again."
     if kind == "k3s-cluster" and any(i.get("kind") == kind and i.get("status") not in TERMINAL and
                                     (i.get("ref", {}).get("namespace"), i.get("ref", {}).get("name")) ==
                                     (ref.get("namespace"), ref.get("name")) for i in items):
-        return "This k3s VM batch is already active; inspect its job before retrying"
+        return "This batch of k3s VMs is already running. Check its job before trying again."
     if kind in ("snapshot-delete", "snapshot-revert") and any(
             i.get("kind") in ("snapshot-delete", "snapshot-revert") and i.get("status") not in TERMINAL
             and i.get("ref", {}).get("volume") == ref.get("volume") for i in items):
-        return "A snapshot operation is already active on this volume; inspect its job first"
+        return "A snapshot task is already running on this volume. Check its job first."
     if kind == "reclass" and any(i.get("kind") == "reclass" and
             i.get("resource", {}).get("name") == resource.get("name") and
             i.get("resource", {}).get("namespace") == resource.get("namespace") and
             (i.get("status") not in TERMINAL or (i.get("status") == "failed" and not RESUMABLE["reclass"](i)))
             for i in items):
-        return "This volume already has a storage-class move; inspect its job first"
+        return "This volume is already moving to another storage class. Check its job first."
     if kind == "reclass" and any(
             _vm_targets(kind, ref) & _vm_targets(i.get("kind"), i.get("ref") or {}) and
             (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
             for i in items if i.get("kind") in POWER_RECEIPTS.KINDS | {"k3s-cluster"}):
-        return "An affected workload or volume has another job or recovery hold; inspect it before moving storage"
+        return "An affected app or volume has another job or recovery hold. Check it before moving storage."
     return ""
 
 
@@ -130,7 +130,7 @@ class SameAnswerTests(unittest.TestCase):
                  {"id": "b", "kind": "workload-copy", "status": "running", "ref": dict(ONE), "resource": {}}]
         self.assertEqual(reference_conflict(items, "reclass", ONE, RESOURCES[0]),
                          conflict(items, "reclass", ONE, RESOURCES[0]))
-        self.assertIn("storage-class move", conflict(items, "reclass", ONE, RESOURCES[0]))
+        self.assertIn("moving to another storage class", conflict(items, "reclass", ONE, RESOURCES[0]))
 
 
 class StartTests(unittest.TestCase):

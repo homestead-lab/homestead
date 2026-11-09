@@ -127,7 +127,7 @@ def policy(node, configz):
 
 def inspect(node, read, *, transport=None, now=None):
     read = getattr(read, "fresh", read)
-    result = {"verified": False, "reason": "VM allocation checks are unavailable; check the node probe",
+    result = {"verified": False, "reason": "VM allocation checks are unavailable. Check the host probe.",
               "dependencies": {}, "host": None, "physical": None, "allocation": None, "policy": None}
     try:
         physical = PHYSICAL.inspect(node, read, now=now)
@@ -141,9 +141,9 @@ def inspect(node, read, *, transport=None, now=None):
         policy_path = node_path + "/proxy/configz"
         pod, ds, host = read(pod_path), read(ds_path), read(node_path)
         if host["metadata"]["uid"] != node["uid"] or host["metadata"].get("deletionTimestamp") or host["status"]["nodeInfo"]["bootID"] != node["boot_id"]:
-            raise ValueError("Host identity changed; refresh the review")
+            raise ValueError("The host changed. Refresh the review.")
         if PHYSICAL._identity(pod) != physical["dependencies"][pod_path] or PHYSICAL._identity(ds) != physical["dependencies"][ds_path]:
-            raise ValueError("Node probe changed; refresh the review")
+            raise ValueError("The host probe changed. Refresh the review.")
         template = ds["spec"]["template"]
         annotations = template.get("metadata", {}).get("annotations") or {}
         PROBE.socket_directory(annotations.get(PROBE.ANNOTATION))
@@ -183,7 +183,7 @@ def inspect(node, read, *, transport=None, now=None):
             raise ValueError("Allocation policy or probe changed during the check")
         # Sample details stay internal: public diagnostics expose counts, not
         # every Pod name or allocation. Admission validates memory accounting.
-        result.update(verified=True, reason="Current host allocation and policy verified; placement still needs checking",
+        result.update(verified=True, reason="The host's current allocation and policy are confirmed. The placement still needs checking.",
                       dependencies={**physical["dependencies"], secret_path: identity}, host=physical["host"],
                       physical=physical["sample"], allocation=data, policy=config)
     except ValueError as error:

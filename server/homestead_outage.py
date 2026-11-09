@@ -616,7 +616,7 @@ def _drop_secret(kind, ns, name, refs, keep=None):
                 SECRET.remove(kind, ns, ref, _bound["kget"], _bound["ksend"], owner)
         except Exception as error:
             print(f"outage actions: Secret {ns}/{ref} not deleted ({type(error).__name__}); "
-                  "nothing names it now, so delete it by hand", flush=True)
+                  "nothing names it now, so delete it manually", flush=True)
 
 
 def forget(kind, ns, obj):
@@ -726,7 +726,7 @@ def _send_later(url, body, actions=None):
             if not real and (stored(annotations, NAMES) or {}).get("webhook"):
                 raise OSError("its address could not be read from its Secret: save the webhook again")
             if not real or hide(real) != url:
-                raise OSError("its webhook changed meanwhile; the next call uses the new one")
+                raise OSError("its webhook changed in the meantime, and the next call uses the new one")
             post(real, body, fmt, bool(now.get("lan")))
             result = {"at": round(time.time()), "ok": True, "event": body.get("event")}
         except Exception as error:
@@ -767,7 +767,7 @@ def alert_facts(scheduled_report=None):
         # Its alerts kept as they were, and one saying no outage action runs.
         return [{"unknown_prefix": "outage:"},
                 {"key": "outage-actions:unreadable", "category": "outage", "severity": "critical",
-                 "title": f"Outage actions are not running: {FILE} can't be read",
+                 "title": f"Outage actions are not running because {FILE} cannot be read",
                  "body": f"{error}. No app or VM is restarted, and no down or up webhook is sent, until it can be read.",
                  "resolved": "Outage actions are running again", "href": "/settings?tab=about"}]
     for key, s in sorted(data.items()):
@@ -870,7 +870,7 @@ def test_webhook(b):
     before = _stored_actions(kind, ns, name) if HIDDEN in url else {}
     url = webhook_url(restore(url, before.get("webhook")))
     if not _allow_test():
-        return ROUTER.Reply(429, {"error": f"at most {TEST_LIMIT} tests a minute; wait a little and send it again"})
+        return ROUTER.Reply(429, {"error": f"At most {TEST_LIMIT} tests a minute. Wait a little and send it again."})
     item = {"kind": kind, "ns": ns, "name": name}
     what = {"ntfy": "ntfy", "gotify": "Gotify"}.get(fmt, "The webhook")
     try:

@@ -21,15 +21,15 @@ test("the settings page offers Automatically, as value auto", () => {
 test("the automatic choice says what it does under each placement mode", () => {
   const c = load();
   const spread = c.rebalanceModeText("auto", MAINTENANCE, { mode: "spread", unreserved: 0 });
-  assert.match(spread, /steady for 15 minutes with no Longhorn copy left to rebuild/);
+  assert.match(spread, /stable for 15 minutes and no volume copy is left to rebuild/);
   assert.match(spread, /one at a time/);
   assert.match(spread, /Critical apps wait for the update window \(every day 02:00\)/);
-  assert.match(spread, /Apps Flux applies move by restarting; the scheduler picks the host/);
-  assert.match(spread, /Apps Argo CD applies stay where they are/);
-  assert.match(spread, /host preference[^.]*stays where it is[^.]*about half/, "how far a restart can reach");
+  assert.match(spread, /Apps managed by Flux move by restarting, and Kubernetes chooses the host/);
+  assert.match(spread, /Apps managed by Argo CD stay where they are/);
+  assert.match(spread, /host preference[^.]*stays where it is[^]*about half of the apps/, "how far a restart can reach");
   for (const mode of ["default", "standby", ""]) {
     const other = c.rebalanceModeText("auto", MAINTENANCE, { mode, unreserved: 5 });
-    assert.match(other, /Apps Flux or Argo CD apply stay where they are/, mode);
+    assert.match(other, /Apps managed by Flux or Argo CD stay where they are/, mode);
     assert.doesNotMatch(other, /move by restarting/, mode);
     assert.doesNotMatch(other, /reserve nothing/, mode);
   }
@@ -37,9 +37,9 @@ test("the automatic choice says what it does under each placement mode", () => {
 
 test("the other choices read as they did", () => {
   const c = load();
-  assert.match(c.rebalanceModeText("suggest", MAINTENANCE), /nothing moves until someone reviews it/);
+  assert.match(c.rebalanceModeText("suggest", MAINTENANCE), /Nothing moves until the moves are reviewed/);
   assert.match(c.rebalanceModeText("window", MAINTENANCE), /in the update window \(every day 02:00\)/);
-  assert.match(c.rebalanceModeText("off", MAINTENANCE), /Nothing moves back on its own/);
+  assert.match(c.rebalanceModeText("off", MAINTENANCE), /Nothing moves back automatically/);
 });
 
 test("reservations are offered when many apps reserve nothing", () => {

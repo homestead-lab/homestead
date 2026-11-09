@@ -43,7 +43,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
     cutover = action == "resume" and (switched or start_requested)
     untouched = state["phase"] == "prepare" and not writes
     if start_requested and action != "resume":
-        raise Held("Cutover has been requested; Homestead can only resume onto its new volume, never return to the original")
+        raise Held("The switch-over has been requested. Homestead can only continue on its new volume and never returns to the original.")
     if action == "resume" and (state.get("copy_receipt", {}).get("state") == "uncertain"
                                or state.get("recovery", {}).get("action") == "return-original"):
         raise Held("An uncertain copy or original-volume recovery cannot resume the move")
@@ -68,7 +68,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
                            worker_uid=state["plan"]["worker"]["uid"], clock=clock)
     engine.going_back = action == "return-original"
     if action == "resume" and A.stop_check_expired(state, clock()):
-        raise Held("The copy check expired before Homestead was stopped, so resuming can't get past it: going back is the only "
+        raise Held("The copy check expired before Homestead was stopped, so resuming cannot get past it. Going back is the only "
                    "way. It changes nothing, as Homestead was not stopped. Preview --action return-original, then start a new move")
     target = A.worker_target(state)
     # Forward from the switch on, nothing more is placed against the review, so resuming
@@ -106,7 +106,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
         elif not engine._quiet(dep): raise Held(_still_there(engine))
     elif untouched:
         if dep["spec"].get("replicas") != state["replicas"]:
-            raise Held("Homestead's replica count changed after review; inspect it before recovery")
+            raise Held("The number of Homestead copies changed after the review. Check it before recovering.")
     elif restarting:
         if action != "return-original": raise Held("Original-volume restart is already committed")
         engine._ready(dep, original=True)  # also detects unexpected data consumers
@@ -116,9 +116,9 @@ def review(anchor, read, logs, action, *, clock=time.time):
         if state.get("copy_receipt", {}).get("state") != "verified":
             raise Held("Resuming onto the new volume needs a verified copy receipt")
         if not released or engine.writer.observe(released) is not None:
-            raise Held("The verified copy Job has no completed release; inspect it before recovery")
+            raise Held("The checked copy Job has not finished releasing its volumes. Check it before recovering.")
     elif switched and not released:
-        raise Held("The verified copy Job has no completed release; inspect it before recovery")
+        raise Held("The checked copy Job has not finished releasing its volumes. Check it before recovering.")
     elif known and not released:
         job = engine.writer.observe(known)
         if action == "resume":
@@ -138,7 +138,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
                           state["plan"]["admission"]["threshold"], clock=clock, boots=False, members=False)
         result["restart"], result["warnings"] = report["receipt"], report["warnings"]
     if not 0 <= clock() - started <= 30:
-        raise Held("Recovery inspection took too long; obtain a fresh review")
+        raise Held("The recovery check took too long. Get a new review.")
     result["fingerprint"] = digest({"review": result, "observations": observations})
     return result
 
@@ -146,7 +146,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
 def confirm(anchor, read, logs, action, fingerprint, *, clock=time.time):
     result = review(anchor, read, logs, action, clock=clock)
     if result["fingerprint"] != fingerprint:
-        raise Held("Recovery facts changed; review the current proposal before confirming")
+        raise Held("The recovery details changed. Review the current proposal before confirming.")
     anchor.recover(result, max(int(clock()), anchor.state["runtime"]["checked_at"]))
     return result
 
@@ -170,7 +170,7 @@ def main(argv=None):
     except Held as error:
         print(str(error)); return 1
     except Exception:
-        print("Recovery could not be verified; inspect the retained record. No request was retried.")
+        print("Recovery could not be confirmed. Check the kept record. No request was retried.")
         return 1
 
 

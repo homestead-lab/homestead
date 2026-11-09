@@ -296,7 +296,7 @@ pods have terminated (see below). Data-copy edits review both the temporary help
 and the final workload, then check placement afresh before each starts. The app
 stays held at zero replicas until the confirmed copy Job completes and its pods
 exit. Changed workload, PVC, backing PV or helper identities stop the handoff.
-**Recent jobs → Inspect outcome** lets an admin release a verified inactive copy's
+**Recent jobs → Check outcome** lets an admin release a verified inactive copy's
 hold after typing the workload name and acknowledging partial data. This does not
 start anything, undo mappings or delete volumes or Jobs. Unknown creation receipts
 require Kubernetes inspection; they are never adopted by name or replayed.
@@ -335,7 +335,7 @@ and persists across restarts. If a step fails, times out, or its response is
 lost, Homestead stops making changes. It does **not** automatically restart the
 old workload, delete the replacement, or claim that rollback succeeded. Check
 both names before starting either: the replacement may already be running.
-An admin can **Inspect outcome / Review retained resources**, type the original
+An admin can **Check outcome / Review kept resources**, type the original
 name and acknowledge possible late effects to stop tracking. This changes no
 cluster resources and does not make the old approval reusable. A live dispatcher
 cannot be dismissed through recovery; restarting Homestead does not replay it.
@@ -1172,7 +1172,7 @@ it cannot bypass admission through the generic cancellation endpoint.
 A container can have an address of its own on the LAN, beside its pod
 network - for an app that wants to be found there (discovery, broadcasts), or
 simply to be reached on an address that is only its. In Deploy choose
-**Access mode → Its own LAN address (bridged)**, or in a container's editor
+**How clients connect → Its own LAN address (bridged)**, or in a container's editor
 choose *Its own LAN address* in the *Address* step; pick the VM network and one
 of the free addresses [IP addresses](Networking#ip-addresses) knows of.
 

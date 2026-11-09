@@ -338,7 +338,7 @@ it: stopping a server that joined etcd would cost a vote, not save one. The
 job shows the last lines of `/var/log/homestead-promote.log`, and how to bring
 the host back as an app host.
 
-Don't use **Remove…** for this: removing a host discards its volume copies,
+Don't use **Remove host…** for this: removing a host discards its volume copies,
 and with them any volume that has a single copy there.
 
 ### Volume copies as the cluster grows

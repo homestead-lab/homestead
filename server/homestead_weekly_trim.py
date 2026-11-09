@@ -309,7 +309,7 @@ def _retire(jobs, state):
         return removed, True
     if ours is not None:
         state.update(retired=True, enabled=False)
-        return f"Longhorn trim job {LH_JOBS.TRIM_JOB} was changed, so it is kept as yours; Homestead's own trim is off", False
+        return f"Longhorn trim job {LH_JOBS.TRIM_JOB} was changed, so it is kept as it is. Homestead's own trim is off.", False
     state.update(retired=True, enabled=False if state.get("created") else state.get("enabled", True))
     return "", False
 
@@ -387,7 +387,7 @@ def leave_out(body, user=""):
     homestead_routes.forget("lhov")     # This week and the clashes (#978)
     name = pvc or volume
     return {"ok": True, "volume": volume, "left_out": leave,
-            "detail": f"{name} is left out of the weekly trim; Trim now still trims it" if leave
+            "detail": f"{name} is left out of the weekly trim. Trim now still trims it." if leave
             else f"{name} is trimmed weekly again"}
 
 
@@ -418,7 +418,7 @@ def view():
 def run_now():
     """Trim every attached volume now; one run at a time."""
     if _running():
-        raise ValueError("a weekly trim is already running; one runs at a time")
+        raise ValueError("A weekly trim is already running. Only one runs at a time.")
     return {"ok": True, "operation": start("Run now")}
 
 
@@ -449,7 +449,7 @@ def settings(body):
     weekday, hour = slot_of(state)
     return {"ok": True, "enabled": enabled, "weekday": weekday, "hour": hour,
             "detail": f"Attached volumes are trimmed every {slot_words(state)}" if enabled
-            else "The weekly trim is off; Run now still trims every attached volume"}
+            else "The weekly trim is off. Run now still trims every attached volume."}
 
 
 def switch(enabled):
@@ -527,7 +527,7 @@ def trim_reason(message):
 def weekly_trim_reason(message, day):
     """The summary first, the way out, then the full error (design.md, Notices)."""
     summary, full = trim_reason(message)
-    return (f"Weekly trim failed: {summary}. It is tried again next {day}; Trim now on its snapshot panel tries it now."
+    return (f"Weekly trim failed: {summary}. It is tried again next {day}, or Trim now on its snapshot panel tries it now."
             + (f" Longhorn said: {full}" if full and full != summary else ""))
 
 

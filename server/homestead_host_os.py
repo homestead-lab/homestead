@@ -255,7 +255,7 @@ def read(node, refresh=False, now=None):
         raise ValueError(f"could not read {node}'s operating system: the check stopped part-way"
                          + (f", after {last}" if last else "")
                          + (f": {err.strip()[-160:]}" if (err or "").strip() else
-                            "; the host's kernel log (dmesg) says whether it ran out of memory"))
+                            ". The host's kernel log (dmesg) says whether it ran out of memory"))
     facts["at"] = int(now or time.time())
     # The boot this read saw: a later restart makes its "restart needed" old news.
     try:
@@ -536,8 +536,8 @@ def _unconfirmed(ref):
     node, manager = ref["node"], ref.get("manager") or "the package manager"
     return (f"Installing updates on {node} needs attention: the launch did not finish within {ref['unconfirmed']:g} "
             f"seconds, so Homestead cannot tell whether {manager} started. {node} stays held while Homestead looks for "
-            f"its result; with none within two hours the job fails and lets go. Check {LOG} on {node}, or cancel this "
-            f"job to let go of {node}")
+            f"its result. If there is none within two hours, the job fails and releases it. Check {LOG} on {node}, or cancel this "
+            f"job to release {node}.")
 
 
 def status(item, now=None):
@@ -567,7 +567,7 @@ def _step(item, now=None):
     code = now_state["code"]
     if code is None:
         if now - ref.get("since", now) > 7200:
-            return "failed", 100, f"No result from {node}'s update after two hours; see {LOG} there"
+            return "failed", 100, f"No result from {node}'s update after two hours. See {LOG} there."
         if ref.get("unconfirmed") and not now_state.get("active"):
             return "running", 50, _unconfirmed(ref)
         last = now_state["last"]
@@ -577,8 +577,8 @@ def _step(item, now=None):
     except Exception:
         facts = {}
     if code != "0":
-        return "failed", 100, f"The package manager on {node} stopped with code {code}; its output is in {LOG} there"
-    return "succeeded", 100, (f"{node} is up to date; it needs a restart to finish - use Host actions"
+        return "failed", 100, f"The package manager on {node} stopped with code {code}. Its output is in {LOG} there."
+    return "succeeded", 100, (f"{node} is up to date. It needs a restart to finish, from Host actions."
                               if facts.get("reboot") else f"{node} is up to date")
 
 
@@ -636,7 +636,7 @@ def check_now(body):
 def upgrade_now(body):
     node = _host(body)
     return {"ok": True, "operation": upgrade_start(node, OPS),
-            "detail": f"Installing updates on {node}; follow it under Jobs"}
+            "detail": f"Installing updates on {node}. Follow it under Jobs."}
 
 
 # Its routes and who may use them (homestead_routes.py).
@@ -657,16 +657,16 @@ def cancel_plan(item):
     node = item["ref"]["node"]
     if item["ref"].get("unconfirmed"):
         return {"mode": "forget", "needs": "admin",
-                "keeps": [f"Homestead cannot tell whether the updates started on {node}; check {LOG} there first",
-                          f"Other changes on {node} no longer wait: start one there only once you know no install is running"]}
+                "keeps": [f"Homestead cannot tell whether the updates started on {node}. Check {LOG} there first.",
+                          f"Other changes on {node} no longer wait. Start one there only once it is certain that no install is running."]}
     return {"mode": "forget", "needs": "admin",
-            "keeps": [f"The updates keep installing on {node}; Homestead only stops following them",
+            "keeps": [f"The updates keep installing on {node}. Homestead only stops following them.",
                       f"Other changes on {node} no longer wait for them: start one there only once the install has ended"]}
 
 
 def cancel_run(item, options):
     upgrade_done(item["ref"]["node"], item["ref"])
-    return f"Stopped following the updates on {item['ref']['node']}; they carry on there"
+    return f"Stopped following the updates on {item['ref']['node']}. They continue there."
 
 
 

@@ -614,8 +614,8 @@ def _set_transfers(allow, size_gb=100, lb_ip="", vip_mode="", port=0):
         ksend("PATCH", path, {"spec": {"replicas": 0}}, ctype="application/merge-patch+json")
     state = transfers()
     return {**state, "allowed": False,
-            "detail": "moves out are off: backup storage is stopped, its volume kept"
-                      + ("; Longhorn backs up here, so its backups pause until it starts again" if state["backups_here"] else "")}
+            "detail": "Moves out are off. Backup storage is stopped, and its volume is kept"
+                      + (". Longhorn backs up here, so its backups pause until it starts again" if state["backups_here"] else "")}
 
 
 def _target_request(deployment):
@@ -662,13 +662,13 @@ def request_target(replace=False):
         if actual["url"] and actual["url"].rstrip("/") != backup_url().rstrip("/") and not replace:
             return {"kept_target": actual["url"], "detail": f"Longhorn still backs up to {actual['url']}"}
         if (deployment.get("spec") or {}).get("replicas", 1) == 0:
-            raise ValueError("backup storage is stopped; enable moves out before pointing Longhorn at it")
+            raise ValueError("Backup storage is stopped. Turn on moves out before pointing Longhorn at it.")
         where = endpoint()
         if not where:
-            raise ValueError("the backup storage Service is missing; open Storage settings to restore it")
+            raise ValueError("The backup storage Service is missing. Open Storage settings to restore it.")
         request = {"state": "pending", "endpoint": where, "replace": replace,
                    "previous": actual, "since": time.time(),
-                   "detail": "Waiting for backup storage; Homestead will point Longhorn at it when ready"}
+                   "detail": "Waiting for backup storage. Homestead points Longhorn at it when it is ready."}
         _save_target_request(deployment, request)
         return {"pending": True, "endpoint": request["endpoint"], "secret": LONGHORN_SECRET,
                 "detail": request["detail"]}
@@ -683,9 +683,9 @@ def reconcile_target():
         if request.get("state") not in ("pending", "applying"):
             return
         if (deployment.get("spec") or {}).get("replicas", 1) == 0:
-            request.update(state="failed", detail="Backup storage was stopped; enable it and retry the target switch")
+            request.update(state="failed", detail="Backup storage was stopped. Turn it on and retry the switch.")
         elif request["endpoint"] != endpoint():
-            request.update(state="failed", detail="The store's address changed; review its current address and retry")
+            request.update(state="failed", detail="The store's address changed. Review its current address and try again.")
         else:
             try:
                 actual = _target_location()
@@ -693,16 +693,16 @@ def reconcile_target():
                 if pointed:
                     request.update(state="complete", detail=f"Longhorn backs up to {request['endpoint']}")
                 elif actual != request["previous"]:
-                    request.update(state="failed", detail="Longhorn's target changed after this request; review it and retry")
+                    request.update(state="failed", detail="Longhorn's target changed after this request. Review it and try again.")
                 elif time.time() - request["since"] > 600:
-                    request.update(state="failed", detail="The target switch did not finish within ten minutes. " + request.get("detail", "") + "; resolve the problem and retry")
+                    request.update(state="failed", detail="The target switch did not finish within ten minutes. " + request.get("detail", "").rstrip(".") + ". Fix the problem and try again.")
                 else:
                     point_longhorn(replace=request["replace"])
                     request.update(state="applying", detail="Waiting for Longhorn to confirm the backup storage endpoint")
             except (ValueError, OSError) as error:
                 request.update(detail=str(error)[:1400])
                 if time.time() - request["since"] > 600:
-                    request.update(state="failed", detail=request["detail"] + "; resolve the problem and retry")
+                    request.update(state="failed", detail=request["detail"].rstrip(".") + ". Fix the problem and try again.")
         # Compare-and-swap prevents an old worker from erasing a newer request.
         _save_target_request(deployment, request)
 
@@ -729,14 +729,14 @@ def point_longhorn(replace=False):
         # fail with 422, leaving Longhorn on its previous endpoint.
         deployment = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}") or {}
         if not int((deployment.get("status") or {}).get("readyReplicas") or 0):
-            raise ValueError("backup storage is still starting; waiting for it to become ready")
+            raise ValueError("Backup storage is still starting. Waiting for it to become ready.")
         try:
             ready = ensure_bucket(base=where, refresh=True)
         except (OSError, urllib.error.URLError) as error:
-            raise ValueError(f"backup storage at {where} is not reachable yet; check its address and port") from error
+            raise ValueError(f"Backup storage at {where} cannot be reached yet. Check its address and port.") from error
         if not ready:
-            raise ValueError(f"the backup bucket at {where} is not ready; check the store's credentials "
-                             "and bucket permissions")
+            raise ValueError(f"The backup bucket at {where} is not ready. Check the store's credentials "
+                             "and bucket permissions.")
     _apply(f"/api/v1/namespaces/{LHNS}/secrets", LONGHORN_SECRET,
            _secret_body(LONGHORN_SECRET, LHNS, {
                "AWS_ACCESS_KEY_ID": keys["access_key"],
@@ -754,7 +754,7 @@ def point_longhorn(replace=False):
     # Backups work either way; only the far cluster cares which address this is.
     return {"url": backup_url(), "secret": LONGHORN_SECRET, "endpoint": where, "kept_target": kept,
             "reachable_off_cluster": ".svc:" not in where,
-            "detail": (f"Longhorn still backs up to {kept}; point it here from Data protection to change that" if kept
+            "detail": (f"Longhorn still backs up to {kept}. Point it here from Data protection to change that." if kept
                        else "Longhorn will back up here" + ("" if ".svc:" not in where else
                        ", but only this cluster can read it until the store has a LAN address"))}
 

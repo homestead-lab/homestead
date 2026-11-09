@@ -16,7 +16,7 @@ function load(files) {
 test("the members are listed with a tiebreaker badge", () => {
   const ctx = load(["web/js/views-cluster.js"]);
   const html = ctx.etcdMembersHtml({ etcd_total: 3, members: [{ name: "one", ready: true, role: "server" }, { name: "pi", ready: true, role: "tiebreaker" }] }, true);
-  assert.match(html, /pi[^]*tiebreaker[^]*votes only/);
+  assert.match(html, /pi[^]*tiebreaker[^]*Votes only/);
 });
 
 test("two members offer a tiebreaker to an admin", () => {

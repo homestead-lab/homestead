@@ -128,5 +128,5 @@ test("a port is offered only when there is a choice", () => {
   assert.match(html, /Its main port/);
   assert.equal((html.match(/value="9090"/g) || []).length, 1, "each port number once");
   assert.match(html, /value="9090" selected/);
-  assert.match(run(`monitorPortSelect("p", ${JSON.stringify(one)}, "7000")`), /Port 7000 · no longer published/);
+  assert.match(run(`monitorPortSelect("p", ${JSON.stringify(one)}, "7000")`), /Port 7000 · no longer available/);
 });

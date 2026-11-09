@@ -115,7 +115,7 @@ Secret, and never sent back to the browser.
 The Network Shares page shows the server's own address and whether its live
 mappings match the saved share list. If a Kubernetes update is rejected, the
 saved settings are restored so a failed share cannot reappear on the next edit.
-The **Repair mapping** button reapplies the saved shares, and Homestead also
+The **Repair SMB server** button reapplies the saved shares, and Homestead also
 checks for drift in the background.
 
 ## Recycle bin
@@ -146,10 +146,10 @@ their own modified date, not the date they were deleted.
 ### After a host failure
 
 Each shared volume is served from one host by Longhorn's share manager. With
-**Restart shared folders quickly after a host failure** on (under
+**Restart network shares quickly after a host failure** on (under
 **Settings → Hardware and storage**, and on by default), Longhorn moves it to
-another host within about a minute; off, only after Kubernetes gives up on the
-host, which takes several minutes. The SMB server itself restarts on another
+another host within about a minute. When it is off, the share moves only after
+Kubernetes stops waiting for the host, which takes several minutes. The SMB server itself restarts on another
 host about 15 seconds after its host stops responding. A volume that is
 rebuilding a copy stays readable and writable, so shares keep working during a
 rebuild.
@@ -175,7 +175,7 @@ When Longhorn reports recoverable storage on a Ready node for at least two minut
 the shares are re-added automatically. Removing or re-adding mounts **restarts SMB
 and briefly interrupts all client connections**. If restoring a share fails the
 rollout check while SMB was serving, the working subset is restored and automatic
-retries stop. Resolve the storage/mount problem, then use **Repair / retry recovery**.
+retries stop. Resolve the storage/mount problem, then use **Repair SMB server**.
 This starts a new stability check instead of bypassing it. Polling is normally once
 a minute, so these are minimum stability windows, not outage-time guarantees.
 

@@ -25,7 +25,7 @@ const wlRestart = slice("web/js/views-workloads.js", "window.wlRestart = async",
 test("shutting down a VM asks first, and no sends nothing", async () => {
   let t = run(vmPower, false);
   await t.vmPower("lab", "win11", "stop");
-  assert.deepEqual(t.asked.map(a => a.slice(1)), [["Shut down", "Shut down"]]);
+  assert.deepEqual(t.asked.map(a => a.slice(1)), [["Shut down VM", "Shut down VM"]]);
   assert.deepEqual(t.sent, []);
   t = run(vmPower, true);
   await t.vmPower("lab", "win11", "stop");
@@ -39,14 +39,14 @@ test("shutting down a VM asks first, and no sends nothing", async () => {
 test("stopping or restarting a container asks first", async () => {
   let t = run(wlScale, false);
   await t.wlScale("lab", "frigate", 0);
-  assert.deepEqual(t.asked.map(a => a[1]), ["Stop"]);
+  assert.deepEqual(t.asked.map(a => a[1]), ["Stop app"]);
   assert.deepEqual(t.sent, []);
   t = run(wlScale, true);
   await t.wlScale("lab", "frigate", 0);
   assert.deepEqual(t.sent, [["/api/scale", { ns: "lab", name: "frigate", replicas: 0, confirm_capacity: false }]]);
   t = run(wlRestart, false);
   await t.wlRestart("lab", "frigate");
-  assert.deepEqual([t.asked.map(a => a[1]), t.sent], [["Restart"], []]);
+  assert.deepEqual([t.asked.map(a => a[1]), t.sent], [["Restart app"], []]);
   t = run(wlRestart, true);
   await t.wlRestart("lab", "frigate");
   assert.deepEqual(t.sent, [["/api/restart", { ns: "lab", name: "frigate" }]]);

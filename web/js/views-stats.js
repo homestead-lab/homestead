@@ -19,31 +19,31 @@ function mqttCardHtml(m, now = Date.now() / 1000) {
   const facts = set ? UI.facts([
     ["Broker", `<span class="mono">${esc(m.host)}:${esc(m.port)}</span> <span class="dim xs">· ${m.tls ? "TLS" : "no TLS"}${m.username ? ` · as ${esc(m.username)}` : " · no sign-in"}</span>`],
     ["Topics", `<span class="mono">${esc(m.base)}/…</span> <span class="dim xs">· discovery under ${esc(m.discovery)}</span>`],
-    ["Last publish", s.last_publish ? `${now - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(now - s.last_publish))} <span class="dim xs">· every ${esc(m.interval)}s · ${esc(sensors)}</span>` : "not yet"]]) : "";
+    ["Last publish", s.last_publish ? `${now - s.last_publish < 60 ? "Under a minute ago" : esc(fmtAgo(now - s.last_publish))} <span class="dim xs">· every ${esc(m.interval)}s · ${esc(sensors)}</span>` : "Not yet"]]) : "";
   const count = (m.controlled || []).length;
   const control = set ? serviceRow("Power control from Home Assistant",
     m.control ? UI.chip(`on · ${count}`, "ok") : UI.chip("off", "neutral"),
-    m.control ? `${count === 1 ? "One container or VM" : `${count} containers and VMs`} with a Power switch and Restart; VMs also Force off and Reset`
-      : "Optional: start, stop and restart the containers and VMs you pick from Home Assistant",
-    actionBar([{ label: m.control ? "Choose" : "Turn on", run: "mqttControl()", need: "admin", pri: !m.control },
+    m.control ? `${count === 1 ? "One container or VM" : `${count} containers and VMs`} with a Power switch and Restart. VMs also have Force off and Reset.`
+      : "Optional. Start, stop and restart chosen containers and VMs from Home Assistant.",
+    actionBar([{ label: m.control ? "Choose apps" : "Turn on", run: "mqttControl()", need: "admin", pri: !m.control },
       m.control ? { label: "Turn off", run: "mqttControlOff()", need: "admin" } : null])) : "";
-  return `${UI.moduleHeader(`MQTT and Home Assistant`, `Cluster and host stats to an MQTT broker, with Home Assistant discovery, and power control if you turn it on`, ``)}
+  return `${UI.moduleHeader(`MQTT and Home Assistant`, `Sends cluster and host statistics to an MQTT broker, with Home Assistant discovery, and optional power control`, ``)}
     ${serviceRow(set ? "MQTT broker" : "No broker", UI.chip(state[1], state[0]),
-      set ? (m.enabled ? esc(s.state === "publishing" ? "" : s.detail || "starting") : "Publishing is switched off") : `Optional: ${esc(sensors)}, for Home Assistant or anything else on MQTT`,
-      actionBar([{ label: set ? "Edit" : "Connect MQTT", run: "mqttConfigure()", need: "admin", pri: !set },
+      set ? (m.enabled ? esc(s.state === "publishing" ? "" : s.detail || "Starting") : "Publishing is turned off") : `Optional. ${esc(sensors)}, for Home Assistant or anything else on MQTT.`,
+      actionBar([{ label: set ? "Edit settings" : "Connect MQTT", run: "mqttConfigure()", need: "admin", pri: !set },
         set ? { label: "What is published", run: "mqttPreview()" } : null]))}
     ${facts}
     ${s.error ? UI.callout("bad", "Publishing is failing", esc(s.error)) : ""}
     ${control}
-    ${m.control && !(m.tls && m.username) ? UI.callout("warn", "Anyone who can publish to this broker can switch these",
-      `Give the broker ${m.username ? "" : "a username and password, "}${m.tls ? "" : "TLS, "}and an ACL so only Home Assistant may publish to <span class="mono">${esc(m.base)}/control/#</span>.`) : ""}
+    ${m.control && !(m.tls && m.username) ? UI.callout("warn", "Anyone who can publish to this broker can control these",
+      `Set up ${m.username ? "" : "a username and password, "}${m.tls ? "" : "TLS, "}and an ACL on the broker, so that only Home Assistant may publish to <span class="mono">${esc(m.base)}/control/#</span>.`) : ""}
     <pre class="mono helm-values" id="mqttPreview" hidden></pre>`;
 }
 window.mqttCardHtml = mqttCardHtml;
 /* Its fields, in a dialog: broker, sign-in, topics, how often. */
 window.mqttConfigure = () => {
   const m = STATE.data.mqtt || {};
-  modal("MQTT and Home Assistant", UI.lead(`Publishes cluster and host stats to an MQTT broker, with Home Assistant discovery: ${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each host.`) + `
+  modal("MQTT and Home Assistant", UI.lead(`Publishes cluster and host statistics to an MQTT broker, with Home Assistant discovery: ${m.sensors?.cluster ?? 0} cluster sensors and ${m.sensors?.node ?? 0} for each host.`) + `
     <label class="switch"><input type="checkbox" id="mq_on" ${m.enabled ? "checked" : ""}> Publish stats to MQTT</label>
     <div class="mqtt-grid">
       <div class="f"><label>Broker</label><input id="mq_host" class="mono" value="${esc(m.host || "")}" placeholder="192.0.2.177"></div>
@@ -51,7 +51,7 @@ window.mqttConfigure = () => {
       <div class="f"><label>Username</label><input id="mq_user" value="${esc(m.username || "")}" placeholder="none" autocomplete="off"></div>
       <div class="f"><label>Password</label><input id="mq_pass" type="password" autocomplete="new-password" placeholder="${m.has_password ? "saved · blank keeps it" : "none"}"></div>
       <div class="f"><label>Base topic ${tip("States go to <base>/cluster/state and <base>/node/<host>/state.")}</label><input id="mq_base" class="mono" value="${esc(m.base || "")}"></div>
-      <div class="f"><label>Discovery prefix ${tip("Home Assistant listens for discovery under homeassistant unless it has been changed.")}</label><input id="mq_disc" class="mono" value="${esc(m.discovery || "")}"></div>
+      <div class="f"><label>Discovery prefix ${tip("Home Assistant listens for discovery under homeassistant, unless that has been changed.")}</label><input id="mq_disc" class="mono" value="${esc(m.discovery || "")}"></div>
       <div class="f"><label>Every (seconds)</label><input id="mq_every" type="number" min="10" max="3600" value="${m.interval || 60}"></div>
       <div class="f"><label>Device name</label><input id="mq_name" value="${esc(m.device_name || "")}"></div>
     </div>
@@ -91,17 +91,17 @@ function mqttControlList(items, picked) {
       <input type="checkbox" value="${esc(i.id)}" ${picked.has(i.id) && !i.refused ? "checked" : ""} ${i.refused ? "disabled" : ""}>
       <span class="mono">${esc(i.ns)}/${esc(i.name)}</span>${i.refused ? ` <span class="dim xs">· ${esc(i.refused)}</span>` : ""}</label>`).join("")}</div>` : "";
   };
-  return group("vm", "Virtual machines") + group("app", "Containers") || '<div class="empty small">No containers or VMs yet.</div>';
+  return group("vm", "Virtual machines") + group("app", "Containers") || '<div class="empty small">There are no containers or VMs yet.</div>';
 }
 window.mqttControlList = mqttControlList;
 window.mqttControl = async () => {
   let c;
   try { c = await api("/api/mqtt/control"); } catch (e) { toast(e.message, "bad"); return; }
   STATE.data.mqttControl = c;
-  modal("Power control from Home Assistant", UI.lead("Each one you pick becomes a device in Home Assistant with a Power switch and a Restart button; a VM also gets Force off and Reset. A command is made as an operator would make it, through the same checks, and listed under AI agents' recent calls as Home Assistant's.")
+  modal("Power control from Home Assistant", UI.lead("Each chosen container or VM becomes a device in Home Assistant with a Power switch and a Restart button. A VM also gets Force off and Reset. A command goes through the same checks as an operator's, and is listed under AI agents' recent calls as Home Assistant's.")
     + `<input id="mqc_q" class="mqtt-pick-filter" placeholder="Filter" aria-label="Filter containers and VMs" oninput="mqttControlFilter(this.value)">
     <div class="mqtt-pick-list" id="mqc_list">${mqttControlList(c.items || [], new Set(c.controlled || []))}</div>`
-    + UI.actions(UI.cancel() + UI.button(c.control ? "Save" : "Turn on power control", "mqttControlSave()", { kind: "pri" })));
+    + UI.actions(UI.cancel() + UI.button(c.control ? "Save choices" : "Turn on power control", "mqttControlSave()", { kind: "pri" })));
 };
 window.mqttControlFilter = q => {
   q = String(q || "").trim().toLowerCase();
@@ -110,11 +110,11 @@ window.mqttControlFilter = q => {
 const mqttControlPost = body => mqttPost("/api/mqtt/control", body);
 window.mqttControlSave = async () => {
   const ids = [...document.querySelectorAll("#mqc_list input:checked")].map(i => i.value);
-  if (!ids.length) { toast("Pick at least one container or VM", "bad"); return; }
+  if (!ids.length) { toast("Choose at least one container or VM", "bad"); return; }
   const m = STATE.data.mqtt || {};
   if (!STATE.data.mqttControl?.control && !(await ask(
-    `Home Assistant, and anything else that can publish to ${m.host || "the broker"}, can then start, stop and restart ${ids.length === 1 ? "it" : `these ${ids.length}`}. Homestead's own containers never can be.`,
-    { title: "Turn on power control", ok: "Turn on" }))) return;
+    `Home Assistant, and anything else that can publish to ${m.host || "the broker"}, can then start, stop and restart ${ids.length === 1 ? "it" : `these ${ids.length}`}. Homestead's own containers can never be controlled this way.`,
+    { title: "Turn on power control", ok: "Turn on power control" }))) return;
   try {
     await mqttControlPost({ control: true, controlled: ids });
     toast(`Power control covers ${ids.length === 1 ? "one container or VM" : `${ids.length} containers and VMs`}`, "ok");
@@ -124,8 +124,8 @@ window.mqttControlSave = async () => {
 };
 window.mqttControlOff = async () => {
   const m = STATE.data.mqtt || {};
-  if (!(await ask("Home Assistant's Power switches and buttons for them are removed, and commands are no longer listened for. What is picked is kept for next time.",
-    { title: "Turn off power control", ok: "Turn off", danger: true }))) return;
+  if (!(await ask("Turn off power control? The Power switches and buttons in Home Assistant are removed, and commands are no longer accepted. The choices are kept for next time.",
+    { title: "Turn off power control", ok: "Turn off power control", danger: true }))) return;
   try { await mqttControlPost({ control: false, controlled: m.controlled || [] }); toast("Power control is off", "ok"); }
   catch (e) { toast(e.message, "bad"); }
   setTimeout(mqttPaint, 800);
@@ -140,7 +140,7 @@ async function alertHookPaint() {
   const host = $("#alertHookCard");
   if (!host) return;
   let h;
-  try { h = await api("/api/alerts/webhook"); } catch (e) { host.innerHTML = UI.callout("bad", "Could not read the alert webhook", esc(e.message)); return; }
+  try { h = await api("/api/alerts/webhook"); } catch (e) { host.innerHTML = UI.callout("bad", "The alert webhook could not be read", esc(e.message)); return; }
   STATE.data.alertHook = h;
   host.innerHTML = alertHookCardHtml(h);
 }
@@ -150,28 +150,28 @@ function alertHookCardHtml(h, now = Date.now() / 1000) {
   const set = !!h.webhook, last = h.last;
   const format = (OUTAGE_FORMATS.find(([v]) => v === h.format) || OUTAGE_FORMATS[0])[1];
   const least = (ALERT_HOOK_LEAST.find(([v]) => v === h.min_severity) || ALERT_HOOK_LEAST[1])[1];
-  const lastText = !last ? "" : last.ok ? `Last call ${esc(fmtAgo(now - last.at))}: taken`
-    : `Last call ${esc(fmtAgo(now - last.at))}: failed - ${esc(last.error || "")}`;
-  return `${UI.moduleHeader("Alert webhook", "Alerts to ntfy, Gotify or any webhook, as push sends them to devices", "")}
+  const lastText = !last ? "" : last.ok ? `Last call ${esc(fmtAgo(now - last.at))}: accepted`
+    : `Last call ${esc(fmtAgo(now - last.at))}: failed. ${esc(last.error || "")}`;
+  return `${UI.moduleHeader("Alert webhook", "Sends alerts to ntfy, Gotify or any webhook, as push notifications send them to devices", "")}
     ${serviceRow(set ? "Alert webhook" : "No alert webhook", UI.chip(set ? "on" : "off", set ? "ok" : "neutral"),
       set ? `${esc(format)} · <span class="mono">${esc(h.webhook)}</span> · ${esc(least)}${lastText ? `<br><span class="dim xs">${lastText}</span>` : ""}`
-        : "Optional: each alert once as it is raised, worsens or clears",
-      actionBar([{ label: set ? "Edit" : "Set up", run: "alertHookConfigure()", need: "admin", pri: !set }]))}`;
+        : "Optional. Sends each alert once when it is raised, gets worse or clears.",
+      actionBar([{ label: set ? "Edit settings" : "Set up", run: "alertHookConfigure()", need: "admin", pri: !set }]))}`;
 }
 window.alertHookCardHtml = alertHookCardHtml;
 
 window.alertHookConfigure = () => {
   const h = STATE.data.alertHook || {};
-  modal("Alert webhook", UI.lead("Sends each alert once as it is raised, worsens or clears, from the alerts at or above the level chosen.") +
+  modal("Alert webhook", UI.lead("Sends each alert once when it is raised, gets worse or clears, for alerts at or above the chosen level.") +
     UI.fields(UI.field("Format", webhookFormatSelect("ah_format", h.format)),
       UI.field("Send", `<select id="ah_least" aria-label="Alerts to send">${ALERT_HOOK_LEAST.map(([v, label]) =>
         `<option value="${v}"${(h.min_severity || "degraded") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`)) + `
     <div class="outage-url"><input id="ah_url" type="url" inputmode="url" placeholder="https://ntfy.example.com/homestead" value="${esc(h.webhook || "")}" aria-label="Webhook address">
-      ${UI.button("Send a test", "alertHookTest()")}</div>
-    <label class="switch"><input type="checkbox" id="ah_lan"${h.lan ? " checked" : ""}> Allow a LAN address (a self-hosted ntfy or Gotify, say)</label>
-    ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries the alert's fields and a sentence as text, content and message; ntfy gets the alert's title, priority and a tag, Gotify its title, message and priority. Once saved, the address shows only up to its host. It never reaches this host, link-local or metadata addresses, and a LAN address only when allowed here.</p>`, false)}` +
-    UI.actions(UI.cancel() + UI.button("Save", "alertHookSave()", { kind: "pri" }),
-      h.webhook ? UI.button("Turn off", "alertHookOff()", { kind: "danger" }) : ""));
+      ${UI.button("Send test", "alertHookTest()")}</div>
+    <label class="switch"><input type="checkbox" id="ah_lan"${h.lan ? " checked" : ""}> Allow a LAN address (for example, a self-hosted ntfy or Gotify)</label>
+    ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries the alert's fields and a sentence as text, content and message. ntfy gets the alert's title, priority and a tag, and Gotify its title, message and priority. Once saved, the address is shown only up to its host. It never calls this host, link-local or metadata addresses, and calls a LAN address only when allowed here.</p>`, false)}` +
+    UI.actions(UI.cancel() + UI.button("Save webhook", "alertHookSave()", { kind: "pri" }),
+      h.webhook ? UI.button("Turn off webhook", "alertHookOff()", { kind: "danger" }) : ""));
 };
 
 const alertHookInit = body => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -181,14 +181,14 @@ const alertHookSend = async body => {
 };
 window.alertHookSave = () => {
   const webhook = ($("#ah_url")?.value || "").trim();
-  if (!webhook) return toast("Type the webhook address, or Turn off", "bad");
+  if (!webhook) return toast("Enter the webhook address, or turn the webhook off", "bad");
   return alertHookSend({ webhook, format: $("#ah_format")?.value || "generic", min_severity: $("#ah_least")?.value || "degraded",
     lan: !!$("#ah_lan")?.checked });
 };
 window.alertHookOff = () => alertHookSend({ webhook: "" });
 window.alertHookTest = async () => {
   const webhook = ($("#ah_url")?.value || "").trim();
-  if (!webhook) return toast("Type the webhook address first", "bad");
+  if (!webhook) return toast("Enter the webhook address first", "bad");
   try {
     const r = await api("/api/alerts/webhook/test", alertHookInit({ webhook, format: $("#ah_format")?.value || "generic" }));
     toast(r.detail, r.ok ? "ok" : "bad");
@@ -247,7 +247,7 @@ async function historyLoad(host, range, request, abort) {
     }
     let note = host.querySelector(".history-error");
     if (!note) { note = document.createElement("div"); note.className = "csub history-error"; note.setAttribute?.("role", "status"); host.appendChild(note); }
-    note.textContent = "Saved history could not refresh; these charts are from before. Retrying on the next dashboard refresh.";
+    note.textContent = "The saved history could not be refreshed, so these charts are from earlier. It is tried again at the next dashboard refresh.";
     return;
   } finally {
     clearTimeout(timeout);
@@ -257,7 +257,7 @@ async function historyLoad(host, range, request, abort) {
   historyLoaded = { range, at: Date.now() };
   const since = h.since ? fmtDay(h.since) : "";
   STATE.data.historyHtml = `<div class="between"><div><div class="ctitle">Over time</div>
-      <div class="csub">${h.samples ? `Recorded every ${h.step === 300 ? "5 minutes" : "hour"} by Homestead, open or not${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes; the first appears shortly."}</div></div>
+      <div class="csub">${h.samples ? `Recorded by Homestead every ${h.step === 300 ? "5 minutes" : "hour"}, whether or not it is open${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes. The first one appears shortly."}</div></div>
       <div class="seg">${["24h", "7d", "30d", "90d"].map(r => `<button class="${r === range ? "on" : ""}" onclick="historyRange(${jsq(r)})">${r}</button>`).join("")}</div></div>
     ${h.samples > 0 ? `<div class="hist-grid">
       ${historyStat("Cluster CPU", h.cpu, "%", h.cpu_max, h.t, range)}
@@ -265,7 +265,7 @@ async function historyLoad(host, range, request, abort) {
       <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mb/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>
       ${historyStat("Your pods", h.pods, "", undefined, h.t, range)}</div>
       <div class="hist-nodes">${h.nodes.map(n => `<div class="hist-node"><b>${esc(n.name)}</b>
-        ${UI.chip(`${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up`, n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "warn" : "bad", { size: "slim", tip: "Share of samples in which the host was Ready" })}
+        ${UI.chip(`${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up`, n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "warn" : "bad", { size: "slim", tip: "Share of samples in which the host was ready" })}
         <span class="dim xs">cpu ${n.cpu}% · ram ${n.mem}%</span></div>`).join("")}</div>
       ${h.vol_bad.some(v => v > 0) ? `<div class="note" style="margin-top:8px">Volumes were degraded or faulted for part of this period (peak ${Math.max(...h.vol_bad)}).</div>` : ""}` : ""}`;
   const next = document.createElement("section");

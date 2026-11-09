@@ -131,7 +131,7 @@ def ladder(items=None, now=None):
         value = min(d + STEP, SYSTEM_VALUE - 1)   # 1e9 itself is the platform's (Longhorn's)
         critical = _made("critical", value, rows) if value > d else None
         if critical is None:
-            warnings.append(f"Critical can't rank above the cluster default. There is no room above "
+            warnings.append(f"Critical cannot rank above the cluster default. There is no room above "
                             f"{default['name'] or 'none'} ({d}), or its name is taken")
     below = sorted((r for r in rows if not r["system"] and r["value"] < d and ours_for(r, "low")),
                    key=lambda r: (r["preempts"], -r["value"], not r["homestead"], r["name"]))
@@ -259,7 +259,7 @@ def _ensure_by_name(tiers):
             found = kget(f"/apis/scheduling.k8s.io/v1/priorityclasses/{spec['name']}")
             if (found.get("value"), found.get("preemptionPolicy", "PreemptLowerPriority")) != (spec["value"], spec["preemptionPolicy"]):
                 notes.append(f"{spec['name']} exists with value {found.get('value')} and "
-                             f"{found.get('preemptionPolicy', 'PreemptLowerPriority')}; it is kept")
+                             f"{found.get('preemptionPolicy', 'PreemptLowerPriority')}. It is kept.")
             continue
         except urllib.error.HTTPError as error:
             if error.code == 403:
@@ -288,7 +288,7 @@ def ensure(tiers=("critical", "low"), lad=None):
     lad = lad if lad is not None else ladder()
     if lad.get("fallback"):
         if not lad.get("forbidden"):
-            raise ValueError("Homestead couldn't read the cluster's priority classes just now; nothing was made. Try again")
+            raise ValueError("Homestead could not read the cluster's priority classes just now, so nothing was created. Try again.")
         return _ensure_by_name(tiers)
     notes = []
     for tier in tiers:
@@ -304,8 +304,8 @@ def ensure(tiers=("critical", "low"), lad=None):
                                                                "homestead.io/task": "priority"}},
                 "value": step["value"], "preemptionPolicy": TIERS[tier]["preemptionPolicy"], "globalDefault": False,
                 "description": (f"Homestead's {tier} tier: {'above' if tier == 'critical' else 'below'} the cluster default "
-                                f"{lad['default']['name'] or '(none)'} ({lad['default']['value']}). Made by Homestead; "
-                                "apps name it through their tier.")})
+                                f"{lad['default']['name'] or '(none)'} ({lad['default']['value']}). Created by Homestead. "
+                                "Apps use it through their tier.")})
             notes.append(f"made {step['name']} ({step['value']})")
         except urllib.error.HTTPError as error:
             if error.code == 403:
@@ -406,10 +406,10 @@ def plan(chosen=None, role=None):
             skipped.append({"id": app_id, "why": "Homestead's own tier is critical once any app's is, so none can evict it"})
             continue
         if current == "unknown":
-            skipped.append({"id": app_id, "class": cls, "why": f"it names {cls}, which Homestead couldn't check just now; it is left alone"})
+            skipped.append({"id": app_id, "class": cls, "why": f"it names {cls}, which Homestead could not check just now, so it is left as it is"})
             continue
         if current in ("system", "missing"):
-            skipped.append({"id": app_id, "class": cls, "why": (f"it names {cls}, which isn't a class here: its new pods are refused"
+            skipped.append({"id": app_id, "class": cls, "why": (f"it names {cls}, which is not a class here, so its new pods are refused"
                                                                 if current == "missing" else f"it uses Kubernetes' own class {cls}")})
             continue
         try:
@@ -422,8 +422,8 @@ def plan(chosen=None, role=None):
                "managed": owner.get("by", ""), "class": cls}
         if owner:
             where = f" ({owner['source']})" if owner.get("source") else ""
-            row["note"] = (f"{owner['by']} applies it{where}; set priorityClassName there" if owner.get("detected")
-                           else f"marked as updated by {owner['by']}; set priorityClassName there")
+            row["note"] = (f"{owner['by']} applies it{where}. Set priorityClassName there." if owner.get("detected")
+                           else f"Marked as updated by {owner['by']}. Set priorityClassName there.")
         found = GROUPS.resolve(dep, tiers, lad, kind=kind, managed=bool(owner))
         row.update(group=group, follows=kind == "app" and not owner and GROUPS.follows(dep),
                    wanted=found["tier"], source=found["source"],
@@ -454,10 +454,10 @@ def plan(chosen=None, role=None):
             app["tier"] = app["current"]
         changes = changes[:MAX_APPS]
     warnings = list(lad["warnings"])
-    missing = sorted((s["class"], s["id"]) for s in skipped if "isn't a class here" in s["why"])
+    missing = sorted((s["class"], s["id"]) for s in skipped if "is not a class here" in s["why"] or "isn't a class here" in s["why"])
     for cls_name in sorted({c for c, _ in missing}):
         ids = [i for c, i in missing if c == cls_name]
-        warnings.append(f"{', '.join(ids[:6])} name {cls_name}, which isn't a class on the cluster: their new pods are refused")
+        warnings.append(f"{', '.join(ids[:6])} name {cls_name}, which is not a class on the cluster, so their new pods are refused")
     used = {}
     for a in apps:
         named = OURS.fullmatch(a.get("class") or "")
@@ -465,8 +465,8 @@ def plan(chosen=None, role=None):
             used.setdefault(a["class"], []).append(a["id"])
     for cls_name, ids in sorted(used.items()):
         value = next((r["value"] for r in lad["classes"] if r["name"] == cls_name), None)
-        warnings.append(f"{cls_name} ({value}) no longer ranks as its name says; {', '.join(ids[:6])} still use it "
-                        "and rank by its value until their tier is set again")
+        warnings.append(f"{cls_name} ({value}) no longer ranks as its name says. {', '.join(ids[:6])} still use it "
+                        "and rank by its value until their tier is set again.")
     # Homestead below an app, on a class a person gave it (protect() leaves that alone).
     if own_seen and own_seen[0] and not own_seen[1] and own_seen[2] is not None:
         above = sorted((v, i) for v, i in values if v is not None and v > own_seen[2] and v < SYSTEM_VALUE)
@@ -493,7 +493,7 @@ def reviewed(changes, token, role=None):
            or c.get("current") not in TIERS or c.get("tier") not in TIERS or c["current"] == c["tier"] for c in changes):
         raise ValueError("Review the tiers again")
     if review_token(changes) != token:
-        raise ValueError("The tiers differ from the review; review again")
+        raise ValueError("The tiers differ from the review. Review them again.")
     tiers = GROUPS.stored(kget)
     out = []
     for c in changes:
@@ -502,7 +502,7 @@ def reviewed(changes, token, role=None):
         following = _following(kind, ns, name, c["tier"], tiers)
         # Whether it keeps following its group is part of what was reviewed.
         if not following.get("unreadable") and bool(following.get("follow")) != bool(c.get("follow")):
-            raise ValueError(f"{c['id']}'s group tier changed since the review; review again")
+            raise ValueError(f"{c['id']}'s group tier changed since the review. Review it again.")
         out.append({"id": c["id"], "kind": kind, "ns": ns, "name": name, "current": c["current"], "tier": c["tier"],
                     **following})
     return out
@@ -647,7 +647,7 @@ def status(item):
                         f"{app['name']} takes {app['tier']} when its pods are next restarted")
             limit = PER_POD * max(1, _replicas(sts))   # it restarts its pods in turn
         ref.update(stage="rolling", started=now, limit=limit)
-        return "running", progress, f"Setting {app['id']} to {app['tier']} ({i + 1} of {len(apps)}); it restarts"
+        return "running", progress, f"Setting {app['id']} to {app['tier']} ({i + 1} of {len(apps)}). It restarts."
     if stage == "rolling":
         if _settled(app["ns"], app["name"], app.get("kind", "app")):
             ref.update(index=i + 1, stage="apply", done=done + 1)
@@ -656,17 +656,17 @@ def status(item):
             return "running", int(100 * (i + 1) / len(apps)), f"{app['id']} runs as {app['tier']}"
         limit = ref.get("limit", PER_POD)
         if now - ref.get("started", now) > limit:
-            return "failed", progress, (f"{app['id']} did not come back within {limit // 60} minutes; the rest were not changed. "
-                                        f"Set {done} before it. Check its events in Containers")
+            return "failed", progress, (f"{app['id']} did not come back within {limit // 60} minutes. The rest were not changed. "
+                                        f"Set {done} before it. Check its events in Containers.")
         return "running", progress, f"Waiting for {app['id']} to restart ({i + 1} of {len(apps)})"
-    return "failed", progress, "Unknown step; the rest were not changed"
+    return "failed", progress, "Unknown step. The rest were not changed."
 
 
 def cancel_plan(item):
     return {"mode": "stop", "action": "Stop setting tiers",
             "undo": ["No more apps are changed"],
             "keeps": ["An app already restarting finishes in its new tier",
-                      "Apps already changed keep their new tier; the classes stay"], "needs": "operator"}
+                      "Apps already changed keep their new tier, and the classes stay"], "needs": "operator"}
 
 
 def cancel_run(work, chosen):
@@ -690,16 +690,16 @@ def start(body, role=None):
     running = next((i for i in operations.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in operations.TERMINAL), None)
     if running:
-        raise ValueError("Tiers are already being set; follow it in Jobs")
+        raise ValueError("Tiers are already being set. Follow it in Jobs.")
     if (body or {}).get("restart") is not True:
-        raise ValueError("A new tier restarts each app; confirm the restarts")
+        raise ValueError("A new tier restarts each app. Confirm the restarts.")
     apps = reviewed(body.get("changes"), body.get("review_token"), role)
     # An app whose group's tier can't be read is never acted on: it is left
     # out and said so, and the rest of the run goes ahead.
-    left = [f"{a['id']}: its group's tier couldn't be read, so it was left alone" for a in apps if a.get("unreadable")]
+    left = [f"{a['id']}: its group's tier could not be read, so it was left as it was" for a in apps if a.get("unreadable")]
     apps = [a for a in apps if not a.get("unreadable")]
     if not apps:
-        raise ValueError("The group tiers couldn't be read just now, so no app was changed; try again shortly")
+        raise ValueError("The group tiers could not be read just now, so no app was changed. Try again shortly.")
     sets = sum(1 for a in apps if a.get("kind") == "sts")
     return {"operation": operations.start(KIND, f"Set the priority tier of {_named(len(apps) - sets, sets)}",
                                           {"kind": "Deployment", "name": "priority"}, "/containers",
@@ -739,7 +739,7 @@ def protect():
     pods = CACHE.cached(CLUSTER.PODS_KEY, CLUSTER.PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
     at = CACHE.kept_at(CLUSTER.PODS_KEY)
     if at is not None and time.time() - at >= CLUSTER.PODS_SECONDS:
-        raise RuntimeError("the pod list could not be read; the last one is too old to act on")
+        raise RuntimeError("the pod list could not be read, and the last one is too old to act on")
     tops = [priority_of(p.get("spec") or {}, lad)[0] for p in pods
             if (p.get("metadata") or {}).get("namespace") not in system_ns]
     highest = max([t for t in tops if t is not None and t < SYSTEM_VALUE] or [d])
@@ -757,7 +757,7 @@ def protect():
         # Nothing ranks above the default; a class of its own below it goes.
         if current and now_value is not None and now_value < d and not busy():
             send(None)
-            return f"Homestead runs at the cluster default again, not {current} below it; it restarts once"
+            return f"Homestead runs at the cluster default again, not {current} below it. It restarts once."
         return None
     candidates = [r for r in lad["classes"] if not r["system"] and r["preempts"] and r["value"] >= highest]
     try:
@@ -772,7 +772,7 @@ def protect():
     if not candidates:
         ensure(("critical",), lad)
     send(target)
-    return f"Homestead runs as {target} now, so no app can evict it; it restarts once"
+    return f"Homestead runs as {target} now, so no app can evict it. It restarts once."
 
 
 def run(sleep=time.sleep):

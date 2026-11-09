@@ -102,7 +102,7 @@ class SharedLock:
     def _strict_acquire(self):
         """Never downgrade a safety journal to a process-local mutex."""
         if fcntl is None and msvcrt is None:
-            raise OSError("Shared job locking is unavailable; no operation was started")
+            raise OSError("Shared job locking is unavailable, so no job was started")
         self._handle = open(self._path(), "a+b", buffering=0)
         if fcntl is None and os.fstat(self._handle.fileno()).st_size == 0:
             self._handle.write(b"\0")
@@ -119,7 +119,7 @@ class SharedLock:
                 if error.errno not in (errno.EACCES, errno.EAGAIN):
                     raise
                 if time.monotonic() >= deadline:
-                    raise TimeoutError("Shared job store is busy; no operation was started") from error
+                    raise TimeoutError("The shared job store is busy, so no job was started") from error
                 time.sleep(.05)
 
     def __exit__(self, *exc):

@@ -23,12 +23,12 @@ async function open(flag) {
 try {
   let { page, card, errors } = await open();
   assert.equal(await card.getByText("Homestead's data has one copy").count(), 0, "two copies: nothing to say");
-  assert.equal(await card.getByText("Could not read Homestead's data copies").count(), 0);
+  assert.equal(await card.getByText("The copies of Homestead's data could not be read").count(), 0);
   assert.deepEqual(errors, []);
   await page.close();
 
   ({ page, card, errors } = await open(true));
-  await card.getByText("Homestead's data has one copy; this cluster can now keep two.").waitFor();
+  await card.getByText("Homestead's data has one copy, and this cluster can now keep two.").waitFor();
   await card.getByRole("button", { name: "Keep two copies" }).click();
   await page.locator("#selfDataClass").waitFor();
   assert.equal(await page.locator("#selfDataClass").inputValue(), "longhorn-r2", "the move starts with longhorn-r2 picked");
@@ -37,10 +37,10 @@ try {
   await page.close();
 
   ({ page, card, errors } = await open("unknown"));
-  await card.getByText("Could not read Homestead's data copies: Longhorn's nodes could not be read").waitFor();
+  await card.getByText("The copies of Homestead's data could not be read. Longhorn's nodes could not be read").waitFor();
   assert.equal(await card.getByRole("button", { name: "Keep two copies" }).count(), 0);
   await page.evaluate(() => HealthInsights.open("health"));
-  await page.locator(".ui-insight-list").getByText("Could not read Homestead's data copies").first().waitFor();
+  await page.locator(".ui-insight-list").getByText("Homestead's data copies could not be read").first().waitFor();
   assert.deepEqual(errors, []);
   await page.close();
   console.log("data copies: default, offer and unreadable checked");

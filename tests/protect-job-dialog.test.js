@@ -20,6 +20,7 @@ function openJobDialog(lh = LH) {
   const el = id => (els[id] ||= { value: "", hidden: false, textContent: "" });
   const ctx = { URL, document: { addEventListener() {} }, STATE: { data: { lh } },
     esc: s => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
+    tip: () => "",
     $: sel => el(sel), closeModal() {} };
   ctx.window = ctx;
   vm.createContext(ctx);

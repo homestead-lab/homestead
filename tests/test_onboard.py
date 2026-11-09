@@ -256,7 +256,7 @@ class RemovalTests(Base):
 
         report = onboard.removal_plan("node3")
 
-        self.assertTrue(any("rebooting" in w for w in report["warnings"]))
+        self.assertTrue(any("restarting" in w for w in report["warnings"]))
 
     def test_a_stuck_machine_or_longhorn_node_needs_force(self):
         self.cluster.kube.add(machine("custom-9", "gone", phase="Deleting",
@@ -294,7 +294,7 @@ class RemovalTests(Base):
         self.assertIn(("PATCH", "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/gone"), self.cluster.sent)
         with self.assertRaisesRegex(ValueError, "still has"):
             onboard.cleanup("longhorn", "node1")
-        with self.assertRaisesRegex(ValueError, "not a leftover"):
+        with self.assertRaisesRegex(ValueError, "not left over"):
             onboard.cleanup("machine", "custom-1")
 
 
@@ -381,7 +381,7 @@ class DiskJobRemovalTests(Base):
 
         self.assertIn(("DELETE", f"{NODES}/node3"), self.cluster.sent)
         self.assertIn("The saved storage allocation job disk-allocation-node3 (A disk-allocation job on node3) stays, "
-                      "and keeps blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once "
+                      "and keeps blocking Longhorn upgrades, shutdown and OS rollouts until it is ended from Jobs once "
                       "the host is removed", result["log"])
         self.assertEqual(["disk-allocation-node3"], [i["id"] for i in OPS.stored() if i["kind"] == "disk-allocation"],
                          "the job stays saved; ending it is a separate step")
@@ -389,19 +389,19 @@ class DiskJobRemovalTests(Base):
     def test_the_refusal_says_what_leaving_the_jobs_means(self):
         self.save(PENDING["storage allocation"])
         with self.assertRaisesRegex(ValueError, "To remove it anyway, confirm that the saved job stays, and keeps "
-                                    "blocking Longhorn upgrades, shutdown and OS rollouts until you end it from Jobs once "
+                                    "blocking Longhorn upgrades, shutdown and OS rollouts until it is ended from Jobs once "
                                     "the host is removed."):
             onboard.remove_node("node3", gone=True)
         self.save(PENDING["V2 disk preparation"])   # beside the allocation
         with self.assertRaisesRegex(ValueError, "To remove it anyway, confirm that the saved jobs stay, and keep "
-                                    "blocking Longhorn upgrades, shutdown and OS rollouts until you end them from Jobs once "
+                                    "blocking Longhorn upgrades, shutdown and OS rollouts until they are ended from Jobs once "
                                     "the host is removed."):
             onboard.remove_node("node3", gone=True)
 
     # What leaving a job means depends on its kind: only three can be ended from Jobs.
-    RETIRE = ("until it stops; it fails by itself once Longhorn's record of the host is deleted")
-    CLEANUP = ("until it ends: its next round refuses once the cluster's hosts change and lets go of the hosts "
-               "it cordoned; if it staged a RAM release on another host, it waits for that host's restart before it fails")
+    RETIRE = ("until it stops. It fails by itself once Longhorn's record of the host is deleted")
+    CLEANUP = ("until it ends. Its next round refuses once the cluster's hosts change, and uncordons the hosts "
+               "it cordoned. If it prepared a RAM release on another host, it waits for that host to restart before it fails")
 
     def left_behind(self, job, until):
         self.save(job)
@@ -425,7 +425,7 @@ class DiskJobRemovalTests(Base):
                   PENDING["disk retire"], PENDING["V2 cleanup"])
         stay = ("The saved jobs stay, and keep blocking Longhorn upgrades, shutdown and OS rollouts. "
                 "The storage allocation, V2 disk preparation and Longhorn runtime maintenance jobs do so "
-                "until you end them from Jobs once the host is removed. "
+                "until they are ended from Jobs once the host is removed. "
                 "The disk retire job does so " + self.RETIRE + ". The V2 cleanup job does so " + self.CLEANUP + ".")
         self.assertEqual(stay, onboard.removal_plan("node3")["disk_jobs_stay"])
         with self.assertRaises(ValueError) as refused:
@@ -435,12 +435,12 @@ class DiskJobRemovalTests(Base):
         self.assertEqual(5, sum("stays, and keeps blocking" in line for line in result["log"]))
         self.assertTrue(any("disk retire job" in line and line.endswith(self.RETIRE) for line in result["log"]))
         self.assertTrue(any("V2 cleanup job" in line and line.endswith(self.CLEANUP) for line in result["log"]))
-        self.assertTrue(any("storage allocation job" in line and line.endswith("until you end it from Jobs once the host is removed")
+        self.assertTrue(any("storage allocation job" in line and line.endswith("until it is ended from Jobs once the host is removed")
                             for line in result["log"]))
 
     def test_two_kinds_of_one_case_are_joined_with_and(self):
         text = onboard.stays([{"kind": "disk-allocation"}, {"kind": "disk-v2-convert"}, {"kind": "disk-retire"}])
-        self.assertIn(". The storage allocation and V2 disk preparation jobs do so until you end them", text)
+        self.assertIn(". The storage allocation and V2 disk preparation jobs do so until they are ended", text)
 
     def test_no_saved_job_means_nothing_to_say(self):
         self.assertEqual("", onboard.removal_plan("node3")["disk_jobs_stay"])

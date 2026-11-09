@@ -21,7 +21,7 @@ function setup({fail=false}={}) {
 test('source trust requires acknowledgement and submits exact reviewed key once',async()=>{
   const t=setup();await t.ctx.srcVerify('tower');
   assert.equal(t.fields.context,'operation-review');
-  assert.match(t.fields['#mbody'].innerHTML,/physical console/);
+  assert.match(t.fields['#mbody'].innerHTML,/server's own screen/);
   await t.ctx.sourceKeyTrust();assert.equal(t.calls.length,1);
   t.fields['#sourceKeyAck'].checked=true;
   await t.ctx.sourceKeyTrust();await t.ctx.sourceKeyTrust();
@@ -31,7 +31,7 @@ test('source trust requires acknowledgement and submits exact reviewed key once'
 test('uncertain trust is not retried and asks for a fresh scan',async()=>{
   const t=setup({fail:true});await t.ctx.srcVerify('tower');t.fields['#sourceKeyAck'].checked=true;
   await t.ctx.sourceKeyTrust();await t.ctx.sourceKeyTrust();
-  assert.equal(t.calls.length,2);assert.match(t.fields['#mbody'].innerHTML,/nothing was retried/);
+  assert.equal(t.calls.length,2);assert.match(t.fields['#mbody'].innerHTML,/Nothing was retried/);
 });
 test('closing a dialog ignores late scan and trust responses',async()=>{
   for(const operation of ['scan','trust']) {

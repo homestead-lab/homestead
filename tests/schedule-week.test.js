@@ -156,7 +156,7 @@ test("a schedule this page cannot read is named, not dropped", async () => {
   same(W.collect({ lh: { jobs: [{ name: "odd", cron: "@every 1h" }] }, crons: [{ name: "garbled", schedule: "garbage" }] }, FROM).unreadable,
     ["odd", "garbled"]);
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /Could not read the schedule of odd, garbled/);
+  assert.match(out.html, /Homestead could not read the schedule of odd, garbled/);
 });
 
 test("a job collapsed into 'runs all day' keeps its clash mark", () => {
@@ -172,7 +172,7 @@ test("each source that could not be read is named; one that does not apply is no
   const { W } = setup();
   const week = W.collect({ lh: { failed: "timed out" }, crons: { error: "forbidden" }, power: "nonsense",
     os: { failed: "x" }, settings: { failed: "x" } }, FROM);
-  same(week.unread, ["Longhorn's recurring jobs and Homestead's weekly trim", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
+  same(week.unread, ["Longhorn's schedules and Homestead's weekly trim", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
   same(W.collect({ lh: null }, FROM).unread, []);
 });
 
@@ -190,7 +190,7 @@ test("the page names what it could not read, leads with the clash and collapses 
   const { ctx, out } = setup({ "/api/lh/overview": LH, "/api/schedules": new Error("forbidden"), "/api/power-schedules": { items: [] },
     "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /Could not read CronJobs/);
+  assert.match(out.html, /Homestead could not read CronJobs/);
   assert.match(out.html, /1 clash this week/);
   assert.match(out.html, /<strong>nightly-backup<\/strong> \(backup\) and <strong>weekly-trim<\/strong>/, "inline: a callout shows <b> as its title block");
   assert.match(out.html, /nightly-backup/);
@@ -212,7 +212,7 @@ test("Longhorn's jobs that could not be read are named, never a quiet week with 
     "/api/schedules": [], "/api/power-schedules": { items: [] },
     "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /Could not read Longhorn's recurring jobs/);
+  assert.match(out.html, /Homestead could not read Longhorn's schedules/);
   assert.doesNotMatch(out.html, /No clashes this week/);
 });
 
@@ -346,5 +346,5 @@ test("unread Longhorn jobs say Homestead's weekly trim is missing too, since it 
     "/api/schedules": [], "/api/power-schedules": { items: [] },
     "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /Could not read Longhorn's recurring jobs and Homestead's weekly trim/);
+  assert.match(out.html, /Homestead could not read Longhorn's schedules and Homestead's weekly trim/);
 });

@@ -111,7 +111,7 @@ def plan(item, proposals, read, nodes, threshold):
         elif kind == "StatefulSet":
             spec = obj["spec"]
             if spec.get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
-                raise ValueError("StatefulSet scaling can delete its claims; change its retention policy before moving storage")
+                raise ValueError("Scaling the StatefulSet can delete its volumes. Change its retention policy before moving storage.")
             count, start = _count(spec.get("replicas")), _nonnegative(spec.get("ordinals", {}).get("start"))
             for ordinal in range(start, start + count):
                 pod_name = f"{name}-{ordinal}"

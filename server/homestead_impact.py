@@ -37,7 +37,7 @@ FAILOVER_WORDS = {
 # only once something deletes it. Longhorn does, for pods holding its
 # volumes, when its node-down policy (homestead_lhcapacity.NODE_DOWN) says so.
 SET_DELETED_BY = ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod")
-SET_WAITS = ("waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere "
+SET_WAITS = ("waits until its pod is deleted, because Kubernetes does not start a StatefulSet's pod elsewhere "
              "while the old one might still run.")
 SET_POINTER = " To have Longhorn do this, turn on Settings → Hardware and storage → Allow apps with storage to move off a failed host."
 # Longhorn deletes only a pod already leaving the down host, so it moves after
@@ -166,7 +166,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
     elif not hosts:
         reason = ("none is ready" if not others_ready
                   else f"it may only run on {', '.join(sorted(allowed))}" if allowed is not None
-                  else "the others are cordoned, or have taints it doesn't tolerate")
+                  else "the others are cordoned, or have taints it does not tolerate")
         row.update(outcome="stops", why="no other host can run it: " + reason)
     elif mode == "wait":
         row.update(outcome="waits", why=FAILOVER_WORDS["wait"][1])
@@ -229,13 +229,13 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
             missing = [f for f in w.get("hardware") or [] if not any((n.get("hardware") or {}).get(f) for n in nodes if n["name"] != node)]
             row.update(outcome="stops", why=(f"no other host has its {', '.join(missing)}" if missing else "no other host is ready"))
         elif stop is None:
-            row.update(outcome="unknown", why="couldn't be checked: where its volumes' copies are")
+            row.update(outcome="unknown", why="could not be checked: where its volumes' copies are")
         else:
             mode = w.get("failover") or "default"
             verb, when = FAILOVER_WORDS.get(mode, FAILOVER_WORDS["default"])
             held = [] if verb == "waits" else _single_host_claims(volumes, ns, w.get("claims"))
             if held and node_down is None:
-                row.update(outcome="unknown", why="couldn't be checked: whether apps with storage can move off a failed host")
+                row.update(outcome="unknown", why="could not be checked: whether apps with storage can move off a failed host")
             elif held and node_down not in DEPLOY_DELETED_BY:
                 row.update(outcome="waits", why=DEPLOY_WAITS.format(claim=held[0]) + SET_POINTER, setting="node_down")
             elif held:
@@ -266,13 +266,13 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
         elif not hosts:
             row.update(outcome="stops", why=f"it may only run on {', '.join(sorted(allowed))}" if allowed else "no other host is ready")
         elif raw_vms is None:
-            row.update(outcome="unknown", why=f"couldn't be checked: whether it has a device passed through from {node}, or may only run here")
+            row.update(outcome="unknown", why=f"could not be checked: whether it has a device passed through from {node}, or may only run here")
         elif stop is None:
-            row.update(outcome="unknown", why="couldn't be checked: where its volumes' copies are")
+            row.update(outcome="unknown", why="could not be checked: where its volumes' copies are")
         else:
             row.update(outcome="moves", to=hosts,
                        why="restarts on another host once this one is declared down" +
-                           ("; on a drain it moves live, without stopping" if v.get("migratable") else ""))
+                           (". On a drain it moves live, without stopping" if v.get("migratable") else ""))
         apps.append(row)
     for s in sets or []:
         if any(p.get("node") == node for p in s.get("pods") or []):

@@ -136,7 +136,7 @@ class KubeVirtTests(Kept):
         with self.assertRaisesRegex(ValueError, "no Helm controller"):
             ADDONS.install_kubevirt()
         Fake(platform={"kubevirt": True})
-        with self.assertRaisesRegex(ValueError, "installed already"):
+        with self.assertRaisesRegex(ValueError, "already installed"):
             ADDONS.install_kubevirt()
 
     def test_software_fallback_can_be_enabled_after_install(self):
@@ -297,7 +297,7 @@ class MultusTests(Kept):
         fake.get = lambda path: ({} if path == ADDONS.MULTUS.NAD_LIST else
                                 {"items": [{"metadata": {"name": "multus"}}]} if path == ADDONS.MULTUS.DAEMONSETS else Fake.get(fake, path))
         ADDONS.bind(fake.get, fake.send, lambda force=False: dict(fake.platform), lambda: {}, fake.fetch)
-        with self.assertRaisesRegex(ValueError, "installed already"):
+        with self.assertRaisesRegex(ValueError, "already installed"):
             ADDONS.install_multus()
         status = ADDONS.status()["multus"]
         self.assertTrue(status["installed"])

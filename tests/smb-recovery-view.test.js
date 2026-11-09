@@ -25,10 +25,10 @@ test("partial SMB service names offline shares without reporting mapping drift",
   const html = await render({ installed: true, enabled: true, in_sync: true, partial: true,
     served_shares: ["media"], offline_shares: [{ name: "photos", pvc: "single", reason: "Host <offline>" }],
     recovery_pending: { single: { action: "restore" } } });
-  assert.match(html, /Partial service/);
-  assert.match(html, /SMB offline · storage unavailable/);
+  assert.match(html, /Partly serving/);
+  assert.match(html, /Offline · storage unavailable/);
   assert.match(html, /Host &lt;offline&gt;/);
-  assert.match(html, /waiting to restore/);
+  assert.match(html, /waiting to add back/);
   assert.doesNotMatch(html, /out of sync/);
   assert.doesNotMatch(html, /onclick="repairSamba/);
 });
@@ -36,9 +36,9 @@ test("partial SMB service names offline shares without reporting mapping drift",
 test("failed restore offers retry and explains the working subset rollback", async () => {
   const html = await render({ installed: true, in_sync: true,
     recovery_failures: { single: "Check mounts <first>" }, recovery_warning: "API <unavailable>" });
-  assert.match(html, /Repair \/ retry recovery/);
-  assert.match(html, /Automatic restore paused/);
-  assert.match(html, /working subset was restored/);
+  assert.match(html, /Repair SMB server/);
+  assert.match(html, /no longer restored automatically/);
+  assert.match(html, /shares that work were restored/);
   assert.match(html, /API &lt;unavailable&gt;/);
   assert.doesNotMatch(html, /<first>/);
 });

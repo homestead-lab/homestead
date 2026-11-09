@@ -376,7 +376,7 @@ class Helm(Base):
         self.assertEqual("1.0.0", self.kube.object(path)["spec"]["version"])
         self.leader_round()
         message = self.finished(op)
-        self.assertNotIn("carries on", message)
+        self.assertNotIn("continues", message)
         self.assertIn("settings from before the upgrade", message)
 
 
@@ -635,12 +635,12 @@ class SecondReviewRound(Base):
         self.kube.fail(paths[1], 500, method="DELETE")
         OPS.cancel(op, by="alice")
         message = self.finished(op)
-        self.assertIn("homestead-pull-a and homestead-pull-b could not be stopped: delete them", message)
+        self.assertIn("homestead-pull-a and homestead-pull-b could not be stopped. Delete them", message)
         self.kube.discard(paths[0])
         op2, paths2 = self.pulls()
         self.kube.fail(paths2[0], 500, method="DELETE")
         OPS.cancel(op2, by="alice")
-        self.assertIn("homestead-pull-a could not be stopped: delete it", self.finished(op2))
+        self.assertIn("homestead-pull-a could not be stopped. Delete it", self.finished(op2))
 
     def test_a_read_that_fails_some_other_way_after_the_deletes_still_ends(self):
         self.kube.add(service())
@@ -648,13 +648,13 @@ class SecondReviewRound(Base):
         self.kube.fail(SVC, http.client.IncompleteRead(b""), method="GET", skip=2)
         OPS.cancel(op, by="alice")
         self.assertIsNone(self.kube.object(SVC))
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_an_import_read_that_fails_some_other_way_still_ends(self):
         op = OlderImport.started(self)
         self.kube.fail(CLAIM, http.client.IncompleteRead(b""), method="GET", skip=1)
         OPS.cancel(op, {"volumes": True}, by="alice")
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_a_pull_that_cannot_be_read_does_not_stop_the_others(self):
         op, paths = self.pulls()
@@ -678,7 +678,7 @@ class SecondReviewRound(Base):
         message = self.finished(op)
         self.assertIn(", web-more deleted", message)
         self.assertNotIn("web-data and web-more deleted", message)
-        self.assertIn("web-data was made again", message)
+        self.assertIn("web-data was created again", message)
         self.assertIsNotNone(self.kube.object(CLAIM))
 
     def test_an_import_whose_claim_cannot_be_read_after_its_delete_still_ends(self):
@@ -686,7 +686,7 @@ class SecondReviewRound(Base):
         self.kube.fail(CLAIM, 503, method="GET", skip=1)     # past the save's read
         OPS.cancel(op, {"volumes": True}, by="alice")
         self.assertIsNone(self.kube.object(CLAIM))
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_a_read_failing_after_the_deletes_does_not_undo_a_finished_cancel(self):
         self.kube.add(service())
@@ -695,7 +695,7 @@ class SecondReviewRound(Base):
         OPS.cancel(op, by="alice")
         self.assertIsNone(self.kube.object(SVC))
         message = self.finished(op)
-        self.assertIn("could not be read", message)
+        self.assertIn("could not read whether anything", message)
 
 
 class ABusyWorkerLockWaits(Base):
@@ -887,7 +887,7 @@ class ABusyWorkerLockWaits(Base):
         self.hold_for_ever(op)
         with self.assertRaises(ValueError) as refused:
             OPS.cancel(op, {"ack": True}, confirm="web")
-        self.assertIn("waits for you", str(refused.exception))
+        self.assertIn("waits for Cancel", str(refused.exception))
 
     def test_it_says_so_once_it_has_waited_long(self):
         op = self.rename()

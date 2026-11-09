@@ -140,7 +140,7 @@ class PreflightTests(unittest.TestCase):
     def test_slow_or_reversed_clock_rejects_receipt(self):
         for change in (61, -1):
             self.mutate = lambda _: setattr(self, "now", self.now + change)
-            with self.assertRaisesRegex(Held, "fresh check"): self.check.worker(self.pod)
+            with self.assertRaisesRegex(Held, "new check"): self.check.worker(self.pod)
 
     def test_scope_rejects_missing_dry_run_or_strict_flag_and_all_other_actions(self):
         path = "/api/v1/namespaces/lab/pods?dryRun=All&fieldValidation=Strict"

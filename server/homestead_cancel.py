@@ -96,10 +96,10 @@ def _kept_note(item, *paths):
     try:
         kept = RERUN.kept_since(item, kget, *paths)
     except Exception:   # the deletes are done: not a reason to call the cancel failed
-        return "; whether anything of that name was made since could not be read"
+        return ". Homestead could not read whether anything with that name was created since"
     if not kept:
         return ""
-    return (f"; {_names(kept)} {'was' if len(kept) == 1 else 'were'} made again since this cancel "
+    return (f". {_names(kept)} {'was' if len(kept) == 1 else 'were'} created again since this cancel "
             f"began, so the new {'one is' if len(kept) == 1 else 'ones are'} kept")
 
 
@@ -273,22 +273,22 @@ def deployment_plan(item):
             return {"mode": "rollback", "severity": "high",
                     "undo": [f"Finishes removing {name}: the Services that pointed at it"]}
         if not dep:
-            return {"mode": "stop", "keeps": [f"{name} no longer exists; there is nothing to remove"]}
+            return {"mode": "stop", "keeps": [f"{name} no longer exists, so there is nothing to remove"]}
         claims = _claims_of(dep)
         return {"mode": "rollback", "severity": "high",
                 "undo": [f"Deletes {name} and stops its pods",
                          "Deletes the Services that point at it"],
                 "keeps": ([f"Its {'volume' if len(claims) == 1 else 'volumes'} {_names(claims)} "
-                           f"{'is' if len(claims) == 1 else 'are'} kept, with anything written so far; "
-                           "delete them from Volumes if they are not wanted"] if claims else [])}
+                           f"{'is' if len(claims) == 1 else 'are'} kept, with anything written so far. "
+                           "Delete them on the Volumes page if they are not wanted."] if claims else [])}
     if _rolled_back_by(item, KUBE.get_optional(_deployment_path(ns, name), read=kget)):
         return {"mode": "rollback", "severity": "high",
                 "undo": [f"{name} is going back to the version it ran before this job already"],
                 "reviewed_target": _reviewed_target(item)}
     dep, target, why = rollout_target(ns, name, item.get("started_at"))
     if not target:
-        return {"mode": "forget", "keeps": [f"The change is saved in Kubernetes already ({why}); "
-                                            f"edit {name} to change it back"]}
+        return {"mode": "forget", "keeps": [f"The change is already saved in Kubernetes ({why}). "
+                                            f"Edit {name} to change it back."]}
     return {"mode": "rollback", "severity": "high",
             # A later rollout moves "one back": run again, this must still be what was reviewed.
             "reviewed_target": {"replicaset": target["metadata"].get("uid")},
@@ -302,20 +302,20 @@ def deployment_cancel(item, _options):
     ns, name = ref["namespace"], ref["name"]
     undo = _deployment_undo(item)
     if undo == "keep":
-        return "Stopped following it; the share change stays"
+        return "Stopped following it. The share change stays."
     if undo == "delete":
         done = _remove_workload_once(item, ns, name)
         if done == "gone":
             return f"{name} was already gone"
         if done == "kept":
             return f"{name} was made again since this cancel began, so the new one is kept"
-        return f"{name} was removed; its volumes are kept"
+        return f"{name} was removed. Its volumes are kept."
     if _rolled_back_by(item, KUBE.get_optional(_deployment_path(ns, name), read=kget)):
         return f"{name} is going back to the version it ran before this job"
     _, target, why = rollout_target(ns, name, item.get("started_at"))
     if not target:
         # What the plan said: the change stays, only the tracking stops.
-        return f"Stopped following it; the change stays ({why})"
+        return f"Stopped following it. The change stays ({why})."
     roll_back(ns, name, target, job=item.get("id", ""))
     return f"{name} is going back to revision {_revision(target)}"
 
@@ -326,8 +326,8 @@ def image_plan(item):
     dep = KUBE.get_optional(_deployment_path(ref["namespace"], ref["name"]), read=kget)
     previous = UPDATES._annotation_json(dep, UPDATES.PREVIOUS).get("images") if dep else {}
     if not previous:
-        return {"mode": "forget", "keeps": [f"{ref['name']} keeps no earlier image to go back to; "
-                                            "the new one stays"]}
+        return {"mode": "forget", "keeps": [f"{ref['name']} has no earlier image to return to, "
+                                            "so the new one stays"]}
     return {"mode": "rollback", "severity": "high",
             "can": False, "why_not": "Image rollback requires a fresh image and capacity review",
             "image_review": {"ns": ref["namespace"], "name": ref["name"]},
@@ -338,14 +338,14 @@ def image_plan(item):
 def image_cancel(item, _options):
     if image_plan(item).get("image_review"):
         raise ValueError("Image rollback requires a fresh image and capacity review")
-    return "Stopped tracking; no earlier recovery image exists and the workload is unchanged"
+    return "Stopped tracking. There is no earlier image to recover, and the app is not changed."
 
 
 # ------------------------------------------------------------- image cache
 def pull_plan(item):
     return {"mode": "stop", "undo": [f"Stops pulling {item['resource'].get('name') or 'the image'} "
                                      "and removes the pull's pods"],
-            "keeps": ["Nodes that have finished keep the image; clear it from Image cache if it is not wanted"]}
+            "keeps": ["Hosts that have finished keep the image. Clear it from Image cache if it is not wanted."]}
 
 
 def pull_cancel(item, _options):
@@ -354,7 +354,7 @@ def pull_cancel(item, _options):
         raise ValueError("that is not an image pre-pull")
     path = f"/apis/apps/v1/namespaces/{IMAGES.I.NS}/daemonsets/{name}?propagationPolicy=Background"
     _delete_saved(item, path)
-    return "Pull stopped; nodes that had finished keep the image" + _kept_note(item, path)
+    return "Download stopped. Hosts that had finished keep the image" + _kept_note(item, path)
 
 
 def _cleanup_pods(item):
@@ -371,8 +371,8 @@ def cleanup_plan(item):
     done = sum(phase in ("Succeeded", "gone") for _, phase in pods)
     return {"mode": "stop", "needs": "admin",
             "undo": [f"Stops the removal on the {_s(len(pods) - done, 'node')} it has not finished on"],
-            "keeps": [f"The {_s(done, 'node')} already cleaned no longer cache the image; "
-                      "it is fetched again when something needs it"]}
+            "keeps": [f"The {_s(done, 'host')} already cleaned no longer keep the image. "
+                      "It is downloaded again when something needs it."]}
 
 
 def cleanup_cancel(item, _options):
@@ -380,7 +380,7 @@ def cleanup_cancel(item, _options):
     paths = [f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}" for name, phase in _cleanup_pods(item)
              if phase not in ("Succeeded", "Failed", "gone")]
     stopped = _delete_saved(item, *paths)
-    return f"Stopped on {_s(stopped, 'node')}; nodes already cleaned stay so" + _kept_note(item, *paths)
+    return f"Stopped on {_s(stopped, 'host')}. Hosts already cleaned stay that way" + _kept_note(item, *paths)
 
 
 # ----------------------------------------------------------------- volumes
@@ -396,7 +396,7 @@ def restore_plan(item):
     return {"mode": "rollback", "needs": "admin", "severity": "high",
             "undo": [f"Deletes {ref['namespace']}/{ref['name']}, the claim being restored into, "
                      "with its partly restored volume"],
-            "keeps": ["The backup is not touched; restore from it again at any time"]}
+            "keeps": ["The backup does not change. It can be restored again at any time."]}
 
 
 def restore_cancel(item, _options):
@@ -407,7 +407,7 @@ def restore_cancel(item, _options):
     # restore removed and the name used again - is someone's data.
     made_by = (((claim or {}).get("metadata") or {}).get("annotations") or {}).get("homestead.io/restored-from-backup")
     if claim and ref.get("backup") and made_by != ref["backup"]:
-        return f"Restore stopped; {ref['name']} is no longer the claim it made, so it is kept"
+        return f"Restore stopped. {ref['name']} is no longer the volume it created, so it is kept."
     # This restore's own snapshot only: another restore into the same claim
     # name may have made its pair and not yet its claim. A job from before
     # the job kept it names it in the claim it made.
@@ -429,8 +429,8 @@ def restore_cancel(item, _options):
     kept = _kept_note(item, path)
     if kept:
         return f"Restore stopped{kept}"
-    return (f"Restore stopped; {ref['name']} is being deleted" if gone
-            else f"Restore stopped; {ref['name']} was already gone")
+    return (f"Restore stopped. {ref['name']} is being deleted." if gone
+            else f"Restore stopped. {ref['name']} had already been removed.")
 
 
 def backup_plan(item):
@@ -535,7 +535,7 @@ def import_cancel(item, options):
         done = ["copy stopped"]
     if plan["workload"]:
         if _remove_workload_once(item, plan["namespace"], plan["workload"]) == "kept":
-            done.append(f"{plan['workload']} was made again since, so the new one is kept")
+            done.append(f"{plan['workload']} was created again since, so the new one is kept")
         else:
             CONTAINER_IMPORT.wait_for_pods_gone(plan["namespace"], f"app={plan['workload']}")
             done.append(f"{plan['workload']} removed")
@@ -546,12 +546,12 @@ def import_cancel(item, options):
             kept = RERUN.kept_since(item, kget, *claims)
         except Exception:   # the deletes are done: not a reason to call the cancel failed
             kept = []
-            done.append("whether anything of those names was made since could not be read")
+            done.append("Homestead could not read whether anything with those names was created since")
         made = [row["name"] for row in plan["volumes"] if row["created"] and row["name"] not in kept]
         if made:
             done.append(f"{_names(made)} deleted")
         if kept:
-            done.append(f"{_names(kept)} {'was' if len(kept) == 1 else 'were'} made again since, "
+            done.append(f"{_names(kept)} {'was' if len(kept) == 1 else 'were'} created again since, "
                         f"so the new {'one is' if len(kept) == 1 else 'ones are'} kept")
     return "Import cancelled: " + ", ".join(done)
 
@@ -571,7 +571,7 @@ def disk_import_cancel(item, _options):
              f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
     _delete_saved(item, *paths)
     kept = _kept_note(item, *paths)
-    return f"Download stopped{kept}" if kept else f"Download stopped; {ref['name']} is being deleted"
+    return f"Download stopped{kept}" if kept else f"Download stopped. {ref['name']} is being deleted."
 
 
 # --------------------------------------------------------------------- VMs
@@ -591,21 +591,21 @@ def migration_cancel(item, _options):
             f"/virtualmachineinstancemigrations/{_q(ref['name'])}")
     _delete_saved(item, path)
     kept = _kept_note(item, path)
-    return f"Migration stopped{kept}" if kept else "Migration aborted; the VM stays where it was"
+    return f"Move stopped{kept}" if kept else "Move cancelled. The VM stays where it was."
 
 
 def k3s_plan(item):
     ref = item["ref"]
     if ref.get("dispatch_protocol") == 2:
         return {"mode": "forget", "can": False, "needs": "admin", "keeps": ["All resources and receipts remain unchanged"],
-                "why_not": "Use Inspect save outcome for this reviewed batch; stopping tracking cannot cancel resource writes"}
+                "why_not": "Use Check save outcome for this reviewed batch. Stopping tracking cannot cancel changes already sent."}
     legacy = not ref.get("retain_resources")
     kept = ["All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
             "This does not stop or undo installation, confirm readiness, or free any addresses.",
             "Inspect each VM and use its separate delete/impact controls if it is no longer wanted.",
-            "After this acknowledgement, the finished tracking record can be cleared. Save any recovery details you still need."]
+            "After this is accepted, the finished record can be cleared. Save any recovery details that are still needed."]
     if legacy:
-        kept.insert(0, "This older job has no creation identity receipts. A matching VM name or cluster label cannot prove it is the original VM; automatic cleanup is disabled.")
+        kept.insert(0, "This older job has no records of what it created. A matching VM name or cluster label does not prove it is the original VM, so nothing is cleaned up automatically.")
     return {"mode": "forget", "tracking_only": True, "can": ref.get("phase") != "provisioning",
             "needs": "admin" if legacy or item.get("status") == "failed" else "operator",
             "confirm": ref.get("name", ""),
@@ -616,29 +616,29 @@ def k3s_plan(item):
 def k3s_cancel(item, _options):
     ref = item["ref"]
     if ref.get("dispatch_protocol") == 2:
-        raise ValueError("Reviewed VM batches require signed outcome inspection; nothing was cancelled or deleted")
+        raise ValueError("A reviewed VM batch needs its outcome checked first. Nothing was cancelled or deleted.")
     if ref.get("phase") == "provisioning":
-        raise ValueError("VM creation may still be in flight; nothing was cancelled or deleted")
+        raise ValueError("The VMs may still be being created. Nothing was cancelled or deleted.")
     # Legacy names/labels cannot prove historical ownership. No cluster writes.
     ref["retain_resources"] = True
-    return "Stopped tracking guest startup. All VMs, disks, Secrets and IP-address records are retained; no cleanup or readiness verification was performed."
+    return "Stopped tracking the guests' start-up. All VMs, disks, Secrets and IP address records are kept. Nothing was cleaned up, and readiness was not checked."
 
 
 # --------------------------------------------------------- data and storage
 def restructure_plan(item):
     return {"mode": "forget", "needs": "admin", "confirm": item["ref"]["name"],
             "action": "Acknowledge and stop tracking",
-            "keeps": ["Legacy copy Jobs and all volumes remain; a copy already submitted may continue.",
-                      "Inspect the copy and storage mappings in Kubernetes before manually removing any legacy hold. Stopping tracking does not release it."],
-            "options": [{"id": "ack", "label": "I inspected the copy and accept partial data or late effects",
-                         "detail": "Stopping tracking does not stop the copy, restore mappings, or restart the app.", "default": False}]}
+            "keeps": ["Older copy jobs and all volumes stay, and a copy already started may continue.",
+                      "Check the copy and its storage in Kubernetes before removing any older hold manually. Stopping tracking does not release it."],
+            "options": [{"id": "ack", "label": "The copy was checked. Accept incomplete data or late effects.",
+                         "detail": "Stopping tracking does not stop the copy, restore the storage settings, or restart the app.", "default": False}]}
 
 
 def restructure_cancel(item, options):
     if options.get("ack") is not True:
         raise ValueError("Acknowledge the copy's partial data and possible late effects first")
     item["ref"]["retain_resources"] = False
-    return "Tracking stopped only. Copy Jobs, workload configuration and all volumes are unchanged; no restart or rollback was sent."
+    return "Only the tracking stopped. Copy jobs, app settings and all volumes are not changed, and nothing was restarted or rolled back."
 
 
 def reclass_plan(item):
@@ -653,7 +653,7 @@ def reclass_plan(item):
     if phase == "swap":
         return {"can": False, "needs": "admin",
                 "why_not": f"{claim} is being swapped onto the new volume. That takes seconds and must not stop "
-                           f"half-way; once it has finished, move {claim} back if you need to."}
+                           f"part-way. Once it has finished, move {claim} back if needed."}
     return {"mode": "forget", "needs": "admin",
             "keeps": [f"The move has finished: {claim} is on {ref['target']}, and the old copy is kept as "
                       f"{ref.get('old_pv', 'an old copy')}. Only the wait for things to start again stops."]}
@@ -664,15 +664,15 @@ def reclass_cancel(item, _options):
     if ref.get("phase", "stop") in RECLASS.BEFORE_SWAP:
         said = RECLASS._rollback(ref["namespace"], ref, "")[2]
         return said if str(said).startswith("Cancelled.") else f"Cancelled. {said}"
-    return "Stopped waiting; the move itself had finished"
+    return "Stopped waiting. The move itself had finished."
 
 
 def self_move_plan(item):
-    return {"can": False, "needs": "admin", "why_not": "This older data move has no verified handoff receipts. Inspect both retained volumes before recovery; automatic rollback or deletion is disabled."}
+    return {"can": False, "needs": "admin", "why_not": "This older data move has no confirmed handoff records. Check both kept volumes before recovering. Nothing is rolled back or deleted automatically."}
 
 
 def self_move_cancel(item, _options):
-    raise ValueError("This older data move requires manual review; both volumes are retained")
+    raise ValueError("This older data move must be reviewed manually. Both volumes are kept.")
 
 
 def disk_retire_plan(item):
@@ -680,8 +680,8 @@ def disk_retire_plan(item):
     phase = ref.get("phase", "stop")
     if phase in ("remove", "cleanup"):
         return {"can": False, "needs": "admin",
-                "why_not": "The disk is being taken out of Longhorn; that finishes in moments and "
-                           "cannot be stopped half-way"}
+                "why_not": "The disk is being removed from Longhorn. That finishes in moments and "
+                           "cannot be stopped part-way."}
     # A failed retire holds nothing. The cancel asks this under the job store's lock
     # and marks it active in the same hold (DISKS.retire_held); the review before it
     # asks too, as a preview.
@@ -695,13 +695,13 @@ def disk_retire_plan(item):
             "keeps": ([] if back else ["Nothing on the disk changes: it took no new replicas when the retire started"
                                        if item.get("status") == "failed"
                                        else "Scheduling stays off on the disk, as it was when the retire started"])
-            + ([f"The {_s(removed, 'failed replica')} already let go of cannot come back; "
-                f"{'its volume rebuilds' if removed == 1 else 'their volumes rebuild'} from healthy copies"]
-               if removed else ["No replica has been removed yet"])}
+            + ([f"The {_s(removed, 'failed volume copy', 'failed volume copies')} already released cannot come back. "
+                f"{'Its volume is' if removed == 1 else 'Their volumes are'} rebuilt from healthy copies."]
+               if removed else ["No volume copy has been removed yet"])}
     if item.get("status") == "failed":
         plan.update(action="Let replicas back" if back else "Close the retire", cleanup_says_action=True,
-                    lead=("This retire failed. Cleaning up lets replicas onto the disk again; "
-                          if back else "This retire failed. Cleaning up closes it and changes nothing on the disk; ")
+                    lead=("This disk replacement failed. Cleaning up lets volume copies onto the disk again, and "
+                          if back else "This disk replacement failed. Cleaning up closes it and changes nothing on the disk, and ")
                     + "the job stays in the list as failed.")
     return plan
 
@@ -752,7 +752,7 @@ def _moved_since_written(item, chart):
 
 
 def _changed_words(name):
-    return f"{name} has changed since this upgrade was written, so putting it back would undo that; nothing was changed"
+    return f"{name} has changed since this upgrade was written, so restoring it would undo that. Nothing was changed."
 
 
 def _no_put_back(item, action, name, chart):
@@ -807,8 +807,8 @@ def helm_plan(item):
     if _was_failed(item) and _went_back(item, chart):
         return {"mode": "rollback", "needs": "admin", "review_title": "Close it", "action": "Close it", "cleanup_says_action": True, "keeps": [],
                 "reviewed_target": _reviewed_target(item),
-                "lead": f"{name}'s earlier settings are back already: a put-back went through before it could say so. "
-                        "Closing this changes nothing on the chart; the job stays in the list as failed"}
+                "lead": f"{name}'s earlier settings are already restored, because a restore finished before it could report it. "
+                        "Closing this changes nothing on the chart, and the job stays in the list as failed."}
     # A failed job offers one thing: an upgrade's earlier settings, on the chart it wrote.
     if item.get("status") == "failed":
         why = _no_put_back(item, action, name, chart)
@@ -824,14 +824,14 @@ def helm_plan(item):
                 "undo": [f"Finishes what cancelling {name} began"]}
     if action == "uninstall" or not chart:
         return {"mode": "forget", "needs": "admin", "keeps": [
-            f"{name} is being removed already, and Kubernetes cannot take that back; install it again once it is gone"]}
+            f"{name} is already being removed, and Kubernetes cannot undo that. Install it again once it has been removed."]}
     if action == "upgrade":
         if item["ref"].get("no_change"):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"This upgrade changed nothing on {name}, so there is nothing of its own to put back"]}
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
-                f"No earlier settings of {name} were kept to go back to; the upgrade carries on"]}
+                f"No earlier settings of {name} were kept to restore, so the upgrade continues."]}
         # The settings kept are from before the latest upgrade, not this one's: going back
         # to them would undo that. A cancel of a failed job's put-back has its own path.
         if not _was_failed(item) and _moved_since_written(item, chart):
@@ -839,14 +839,14 @@ def helm_plan(item):
             why = f"{name} has changed since this upgrade was written, so it was not put back" if item.get("cancel_record") else _changed_words(name)
             return {"can": False, "needs": "admin", "why_not": why}
         plan = {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _chart_seen(chart),
-                "undo": [f"Puts {name}'s chart version and values back as they were before the upgrade; "
-                         "Helm runs again with them"],
-                "keeps": ["Anything the upgrade changed in the chart's own data - a database migration - "
+                "undo": [f"Restores {name}'s chart version and values from before the upgrade, "
+                         "and Helm runs again with them"],
+                "keeps": ["Anything the upgrade changed in the chart's own data, such as a database migration, "
                           "is not undone by Helm"]}
         if _was_failed(item):
             plan.update(review_title="Put back earlier settings", action="Put back earlier settings", cleanup_says_action=True,
-                        lead="This upgrade failed. Putting back returns the chart's version and values; "
-                             "the job stays in the list as failed")
+                        lead="This upgrade failed. Restoring brings back the chart's version and values, "
+                             "and the job stays in the list as failed.")
         return plan
     return {"mode": "rollback", "needs": "admin", "severity": "high",
             "undo": [f"Stops the install and deletes the chart {name}: the Helm controller then uninstalls "
@@ -875,11 +875,11 @@ def helm_cancel(item, _options):
         if why:
             raise ValueError(why)
     if action == "uninstall" or not chart:
-        return "Stopped following it; the removal carries on"
+        return "Stopped following it. The removal continues."
     ns = _helm_ns(item)
     if action == "upgrade":
         if item["ref"].get("no_change"):
-            return "Stopped following it; it changed nothing"
+            return "Stopped following it. It changed nothing."
         # The review read the chart a moment ago; this is the canceller's own read.
         if _moved_since_written(item, chart) and HELM.previous_spec(chart) is not None:
             raise ValueError(_changed_words(name))
@@ -888,20 +888,20 @@ def helm_cancel(item, _options):
             # reviewed, so a run cut off after it finds them gone, and it went back.
             if (item.get("cancel_record") or {}).get("mode") == "rollback":
                 return f"{name} is going back to its settings from before the upgrade"
-            return "Stopped following it; the upgrade carries on"
+            return "Stopped following it. The upgrade continues."
         return f"{name} is going back to its settings from before the upgrade"
     charts = f"/apis/helm.cattle.io/v1/namespaces/{ns}/helmcharts/{_q(name)}"
     _delete_saved(item, f"/apis/batch/v1/namespaces/{ns}/jobs/{_q(item['ref']['name'])}?propagationPolicy=Background", charts)
     if item["ref"]["cancel_uids"][charts] != chart["metadata"].get("uid"):
         return f"{name} was made again since this cancel began, so the new one is kept"
-    return f"Install stopped; the Helm controller is removing what {name} made"
+    return f"Install stopped. The Helm controller is removing what {name} created."
 
 
 def smart_plan(item):
     ref = item["ref"]
     return {"mode": "stop", "needs": "admin",
             "undo": [f"Aborts the {ref.get('test', '')} self-test on {ref['disk']} ({ref['node']})"],
-            "keeps": ["The drive logs the test as aborted; the disk and its data are not touched"]}
+            "keeps": ["The drive records the test as stopped. The disk and its data do not change."]}
 
 
 def smart_cancel(item, _options):
@@ -935,16 +935,16 @@ def move_plan(item):
         return {"mode": "forget", "needs": "admin", "keeps": ["This move's record is gone"]}
     return {"mode": "rollback", "needs": "admin", "severity": "high",
             "undo": [f"{move['name']} starts again on {move['cluster']}, where it came from",
-                     "What had arrived here - the workload, its Services and claims - is removed"],
+                     "What had arrived here, the app with its services and volumes, is removed"],
             "keeps": ["Backups made for the move stay in the backup store",
                       "If the move pointed this cluster's Longhorn at the other cluster's backup store, "
-                      "it stays pointed there; change it under Data protection"]}
+                      "it stays pointed there. Change it under Data protection."]}
 
 
 def move_cancel(item, _options):
     move_id = (item.get("ref") or {}).get("move", "")
     if not MOVE_STATE._find(move_id):
-        return "Stopped tracking it; this move's record is gone"
+        return "Stopped tracking it. This move's record is removed."
     moved = MOVE_ACTIONS.abandon(move_id)
     return moved.get("message") or "Put back"
 

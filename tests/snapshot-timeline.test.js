@@ -14,7 +14,7 @@ test("cleanup shows live volume-wide percentage and never invents completion", (
   const html = context.snapshotCleanupHtml({known: true, active: true, percent: 51, errors: []});
   assert.match(html, /cleanup 51%/);
   assert.match(html, /aria-valuenow="51"/);
-  assert.match(html, /volume-wide/);
+  assert.match(html, /cleanup of the whole volume/);
   assert.match(context.snapshotCleanupHtml({error: "<offline>"}), /&lt;offline>/);
   assert.doesNotMatch(context.snapshotCleanupHtml({known: false, active: false}), /100%|complete/);
   assert.match(context.snapshotCleanupHtml({known: true, active: true, percent: null}), /in progress/);
@@ -28,7 +28,7 @@ test("timeline distinguishes system and user points and protects live head", () 
   assert.ok(html.indexOf("expand") < html.indexOf("manual"));
   assert.match(html, />System</);
   assert.match(html, />User</);
-  assert.match(html, /parent of Volume Head/);
+  assert.match(html, /newest snapshot/);
   assert.match(html, /<time datetime=/);
   assert.equal((html.match(/lhRevert\(/g) || []).length, 1);
   assert.match(html, /Live data · now · never deleted/);

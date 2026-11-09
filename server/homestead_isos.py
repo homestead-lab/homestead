@@ -233,9 +233,9 @@ def _state(pvc, job):
     if status.get("succeeded"):
         return "ready", ""
     if status.get("failed") and not status.get("active"):
-        return "failed", "the copy failed; delete this ISO volume and make it ready again"
+        return "failed", "the copy failed. Delete this ISO volume and prepare it again"
     if not job:
-        return "failed", "its copy job is gone before finishing; delete this ISO volume and make it ready again"
+        return "failed", "its copy job was removed before it finished. Delete this ISO volume and prepare it again"
     return "copying", ""
 
 
@@ -352,7 +352,7 @@ def prepare(share, path, ns=None):
         ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
         raise
     return {"ok": True, "name": name, "job": name,
-            "detail": f"Copying {file['name']} into a volume; it can go in a CD-ROM drive once ready"}
+            "detail": f"Copying {file['name']} into a volume. It can go in a CD-ROM drive once it is ready."}
 
 
 def ready_volume(ns, name):
@@ -362,7 +362,7 @@ def ready_volume(ns, name):
         raise ValueError(f"{name} is not an ISO volume in {ns}")
     state, problem = _state(pvc, _jobs(ns).get(name))
     if state != "ready":
-        raise ValueError(problem or f"{name} is still being copied; attach it once it is ready")
+        raise ValueError(problem or f"{name} is still being copied. Attach it once it is ready.")
     return pvc
 
 
@@ -371,7 +371,7 @@ def delete(name, ns=None):
     users = _users(ns).get(name, [])
     if users:
         raise ValueError(f"{', '.join(sorted(users))} still {'has' if len(users) == 1 else 'have'} it in a "
-                         "CD-ROM drive; eject it there first")
+                         "CD-ROM drive. Eject it there first.")
     pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", read=kget)
     if not pvc or ((pvc.get("metadata") or {}).get("labels") or {}).get(LABEL) != "true":
         raise ValueError(f"{name} is not an ISO volume")
@@ -380,8 +380,8 @@ def delete(name, ns=None):
     except Exception:
         pass
     ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    return {"ok": True, "detail": f"{(pvc['metadata'].get('annotations') or {}).get(FILE, name)}'s volume deleted; "
-                                  "the file on the share is kept"}
+    return {"ok": True, "detail": f"{(pvc['metadata'].get('annotations') or {}).get(FILE, name)}'s volume deleted. "
+                                  "The file on the share is kept."}
 
 
 def _stamp(value):

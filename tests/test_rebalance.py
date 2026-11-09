@@ -267,7 +267,7 @@ class JobTests(unittest.TestCase):
         self.item["ref"]["started"] = time.time() - 3600 - 120 * 50 - 60
         R.status(self.item)
         self.assertFalse(self.deleted())
-        self.assertIn("another copy failed during the move; the old copy is kept", " ".join(self.item["ref"]["skipped"]))
+        self.assertIn("another copy failed during the move, so the old copy is kept", " ".join(self.item["ref"]["skipped"]))
         v = self.c.volume("v0")
         self.assertEqual(2, v["spec"]["numberOfReplicas"])
         self.assertNotIn(R.MOVING, v["metadata"].get("annotations") or {})

@@ -51,7 +51,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             self.assertTrue(plan["maintenance"]["budgets"][0]["wait_for_drain"])
             self.assertIn("power will not be sent", " ".join(plan["warnings"]))
         original = power.plan("node1", "reboot")
-        with self.assertRaisesRegex(ValueError, "pods remain"):
+        with self.assertRaisesRegex(ValueError, "App pods stayed"):
             power.recheck_after_drain(original)
 
     def test_longhorn_exception_requires_owned_pod_and_its_fresh_single_budget(self):
@@ -128,7 +128,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 mock.patch.object(NODE_ACTIONS, "_send_power") as helper:
             # Longhorn alone holding the host is waited on past the usual two
             # minutes - V2 engines let go slowly - and still never forced.
-            with self.assertRaisesRegex(ValueError, "after 5 minutes. Longhorn still prevents eviction.*Power was not sent"):
+            with self.assertRaisesRegex(ValueError, "after 5 minutes. Longhorn still prevents eviction.*Nothing was sent"):
                 NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=original["drain_pods"], before_send=lambda: None)
         cordon.assert_called_once_with("node1", True)
         helper.assert_not_called()
@@ -141,7 +141,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             def send(method, path, body):
                 if body["metadata"]["name"] == "instance-manager-test":
                     if replacement:
-                        self.objects["/api/v1/pods"]["items"][0]["metadata"]["uid"] = "replacement"
+                        self.objects["/api/v1/pods"]["items"][0]["metadata"]["uid"] = "replacing it"
                     else:
                         new = copy.deepcopy(self.pod)
                         new["metadata"].update(name="new-pod", uid="new-uid")
@@ -151,7 +151,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                     mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
                 # The pod that changed is named, so the next look starts there.
-                with self.assertRaisesRegex(ValueError, r"pods changed during drain \([\w.-]+/[\w.-]+ (arrived|changed)"):
+                with self.assertRaisesRegex(ValueError, r"Pods changed during the drain \([\w.-]+/[\w.-]+ (arrived|changed)"):
                     NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
                 self.assertEqual(2, evict.call_count)
 
@@ -202,7 +202,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", 429, "budget", {}, None)) as send, \
                 mock.patch.object(lifecycle.time, "sleep") as sleep:
             result = NODE_ACTIONS.drain("node1", wait=True)
-        self.assertEqual(["lab/app-a (HTTP 429: couldn't read why)"], result["skipped"])
+        self.assertEqual(["lab/app-a (HTTP 429: could not read why)"], result["skipped"])
         send.assert_called_once()
         sleep.assert_not_called()
 
@@ -307,7 +307,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
         original = power.plan("node1", "reboot")
         self.objects["/api/v1/pods"]["items"] = []
         self.objects[f"{power.LH}/replicas"]["items"][1]["status"]["currentState"] = "stopped"
-        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+        with self.assertRaisesRegex(ValueError, "effect on a volume changed"):
             power.recheck_after_drain(original)
 
     def test_expected_degradation_after_local_replica_stops_allows_final_check(self):
@@ -318,7 +318,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
         volume["status"]["robustness"] = "degraded"
         power.recheck_after_drain(original)
         volume["status"]["robustness"] = "faulted"
-        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+        with self.assertRaisesRegex(ValueError, "effect on a volume changed"):
             power.recheck_after_drain(original)
 
     def test_a_volume_that_finished_rebuilding_during_the_drain_is_no_reason_to_stop(self):
@@ -351,7 +351,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
         self.objects[f"{power.LH}/volumes"]["items"][0]["status"].update(state="attaching", robustness="unknown")
         now = [0]
         def sleep(seconds): now[0] += seconds
-        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+        with self.assertRaisesRegex(ValueError, "effect on a volume changed"):
             power.recheck_after_drain(original, clock=lambda: now[0], sleep=sleep)
         self.assertGreaterEqual(now[0], power.SETTLE)
 
@@ -363,16 +363,16 @@ class MaintenanceSafetyTests(unittest.TestCase):
         self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
         power.recheck_after_drain(original)
         replicas[0]["status"]["currentState"] = "stopped"
-        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+        with self.assertRaisesRegex(ValueError, "effect on a volume changed"):
             power.recheck_after_drain(original)
         replicas[0]["status"]["currentState"] = "running"
         self.objects[f"{power.LH}/volumes"]["items"].pop(0)
-        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+        with self.assertRaisesRegex(ValueError, "effect on a volume changed"):
             power.recheck_after_drain(original)
 
     def test_after_drain_new_pod_blocks_power(self):
         original = power.plan("node1", "reboot")
-        with self.assertRaisesRegex(ValueError, "pods remain"):
+        with self.assertRaisesRegex(ValueError, "App pods stayed"):
             power.recheck_after_drain(original)
         self.objects["/api/v1/pods"]["items"] = []
         power.recheck_after_drain(original)
@@ -383,7 +383,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot)
             self.assertEqual({"uid": "pod1"}, send.call_args.args[2]["deleteOptions"]["preconditions"])
             send.reset_mock()
-            self.pod["metadata"]["uid"] = "replacement"
+            self.pod["metadata"]["uid"] = "replacing it"
             with self.assertRaisesRegex(ValueError, "changed"):
                 NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot)
             send.assert_not_called()
@@ -443,8 +443,8 @@ class MaintenanceSafetyTests(unittest.TestCase):
     def test_post_drain_replacement_with_same_boot_id_blocks_power(self):
         original = power.plan("node1", "reboot")
         self.objects["/api/v1/pods"]["items"] = []
-        self.objects["/api/v1/nodes/node1"]["metadata"]["uid"] = "replacement"
-        with self.assertRaisesRegex(ValueError, "identity changed"):
+        self.objects["/api/v1/nodes/node1"]["metadata"]["uid"] = "replacing it"
+        with self.assertRaisesRegex(ValueError, "host changed during the drain"):
             power.recheck_after_drain(original)
 
     def test_reboot_observer_accepts_missed_notready_but_needs_known_old_boot(self):
@@ -475,7 +475,7 @@ class MaintenanceJobTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with mock.patch.object(ops, "DATA_DIR", directory):
                 job = ops.start("node-power", "Reboot", {}, "/nodes", {"node": "one", "phase": "reviewed"})
-                with self.assertRaisesRegex(ValueError, "already active"):
+                with self.assertRaisesRegex(ValueError, "already running"):
                     ops.start("node-power", "Reboot", {}, "/nodes", {"node": "one"})
                 ops.record_phase(job["id"], "sending", 20, "Sending", helper_pod="helper")
                 record = ops.stored()[0]

@@ -46,7 +46,7 @@ class StatePolicyTests(unittest.TestCase):
         self.assertFalse(self.select()["automatic"])
         result = self.select(version=None)
         self.assertTrue(result["automatic"])
-        self.assertIn("unverified", " ".join(result["warnings"]))
+        self.assertIn("not confirmed", " ".join(result["warnings"]))
 
     def test_resume_does_not_apply_future_instance_selectors(self):
         self.config["changedBlockTrackingLabelSelectors"] = {"virtualMachineLabelSelector": {}}
@@ -86,7 +86,7 @@ class StatePolicyTests(unittest.TestCase):
         for version in ("v1.3.1", "v1.4.0", "v1.5.0"):
             self.assertTrue(self.select(version=version)["blockers"])
         self.assertFalse(self.select(version="v1.6.0")["blockers"])
-        self.assertIn("unverified", " ".join(self.select(version=None)["warnings"]))
+        self.assertIn("not confirmed", " ".join(self.select(version=None)["warnings"]))
         self.config["developerConfiguration"]["featureGates"].append("VMPersistentState")
         self.assertFalse(self.select(version="v1.3.1")["blockers"])
 

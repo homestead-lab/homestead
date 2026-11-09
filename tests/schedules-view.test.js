@@ -81,7 +81,7 @@ test("the schedule editor offers Data Protection's shapes and saves the cron the
   Object.assign(fields("#ls_kind"), { value: "daily" });
   Object.assign(fields("#ls_time"), { value: "04:30" });
   ctx.scheduleChanged();
-  assert.match(fields("#ls_next").innerHTML, /Every day at 04:30 UTC\. Next: .*\(your time\)/);
+  assert.match(fields("#ls_next").innerHTML, /Every day at 04:30 UTC\. Next: .*\(local time\)/);
   await ctx.jobSave();
   assert.equal(out.calls[0].body.schedule, "30 4 * * *");
 });
@@ -98,7 +98,7 @@ test("a CronJob Homestead did not make is read-only and says who manages it", as
     job({ name: "kubectl-job", managed: false, managed_by: "" })]);
   await ctx.viewSchedules();
   assert.match(out.html, /managed by Helm/);
-  assert.match(out.html, /not made here/);
+  assert.match(out.html, /Not created here/);
   assert.match(out.html, /Run now/);
   assert.doesNotMatch(out.html, /jobEdit\(\{/);
   assert.doesNotMatch(out.html, /jobDel\(/);
@@ -109,7 +109,7 @@ test("a schedule Homestead made can still be edited and deleted", async () => {
   await ctx.viewSchedules();
   assert.match(out.html, /jobEdit\(\{/);
   assert.match(out.html, /jobDel\(/);
-  assert.doesNotMatch(out.html, /managed by|not made here/);
+  assert.doesNotMatch(out.html, /managed by|Not created here/);
 });
 
 test("saving sends the generation the page read, and an empty one for a new schedule", async () => {
@@ -139,7 +139,7 @@ test("a CronJob in another namespace says where it is and who applied it, and is
 test("a Longhorn recurring job is named as one", async () => {
   const { ctx, out } = setup([job({ ns: "longhorn-system", owner: "longhorn", managed: false, runnable: false })]);
   await ctx.viewSchedules();
-  assert.match(out.html, /Longhorn recurring job/);
+  assert.match(out.html, /Longhorn schedule/);
 });
 
 test("a failed last run is shown with its reason and the last success", async () => {

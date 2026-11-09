@@ -29,8 +29,8 @@ def _node_port_owner(state, namespace, service_name, ports):
 
 def _node_port_problem(owner):
     return (f"port {owner['port']}/{owner['protocol']} is already answered by {owner['namespace']}/{owner['service']}: "
-            "k3s's ServiceLB puts every Service on every node's own address, so each needs ports of its own - "
-            "choose another LAN port")
+            "k3s's ServiceLB puts every Service on every host's own address, so each needs its own ports. "
+            "Choose another LAN port.")
 
 
 def _ports(cfg):
@@ -82,16 +82,16 @@ def service_plan(cfg, require_workload=True):
         if not selector or any(row is not workload and row["namespace"] == namespace and
                                all(row.get("selector", {}).get(k) == v for k, v in selector.items())
                                for row in state["workloads"]):
-            raise ValueError("VM template labels do not uniquely identify this workload; give it a unique label before exposing it")
+            raise ValueError("The VM template labels do not identify this app uniquely. Give it a unique label before exposing it.")
     existing = next((row for row in state["services"] if row["namespace"] == namespace and row["name"] == service_name), None)
     if cfg.get("update"):
         target = "VirtualMachine/" + workload_name if kind == "VirtualMachine" else workload_name
         if not existing or not existing.get("uid") or existing["uid"] != cfg.get("uid") or existing.get("resource_version") != cfg.get("resource_version"):
-            raise ValueError("Service changed or disappeared; reopen VIP settings and review again")
+            raise ValueError("The Service changed or was removed. Open the virtual IP settings again and review again.")
         if existing.get("targets") != [target] or existing.get("exclusive_vip") or service_name in (NAMES.object_name("smb"), NAMES.object_name("nfs")):
-            raise ValueError("This Service is shared across workloads or managed by an add-on; change it in its owning settings")
+            raise ValueError("This Service is shared by several apps or managed by an add-on. Change it in the settings of what owns it.")
         if existing["type"] != cfg.get("type", "LoadBalancer"):
-            raise ValueError("Keep the existing Service type; create a separate Service to change reachability")
+            raise ValueError("Keep the existing Service type. Create a separate Service to change how it is reached.")
         state["services"] = [row for row in state["services"] if row is not existing]
     elif existing and cfg.get("replaces") and existing.get("uid") == cfg["replaces"]:
         # Checked before set_workload_address deletes it: plan as if it had gone.
@@ -111,14 +111,14 @@ def service_plan(cfg, require_workload=True):
         # k3s has no shared Homestead VIP: shared means the nodes' addresses.
         mode = "nodes"
     if mode == "nodes" and not INV.servicelb_present():
-        raise ValueError("this cluster has no ServiceLB to put a Service on the nodes' own addresses; give it a VIP")
-    warnings = ["Updating this Service can interrupt existing connections; its ClusterIP and unrelated settings are preserved."] if cfg.get("update") else []
+        raise ValueError("This cluster has no ServiceLB to put a Service on the hosts' own addresses. Give it a virtual IP.")
+    warnings = ["Updating this Service can interrupt existing connections. Its ClusterIP and other settings are kept."] if cfg.get("update") else []
     if kind == "VirtualMachine":
         warnings.append("Guest must listen on the target ports and allow them through its firewall. A VIP does not provide VM or storage failover.")
         if workload and workload.get("ports") and any(
                 not any(p.get("port") == requested["targetPort"] and (p.get("protocol") or "TCP") == requested["protocol"]
                         for p in workload["ports"]) for requested in ports):
-            raise ValueError("The VM interface does not forward these ports; edit its interface ports first")
+            raise ValueError("The VM interface does not forward these ports. Edit its interface ports first.")
     vip = ""
     if mode == "nodes" or (mode != "cluster" and INV.node_addresses_only()):
         # Whatever was asked for, ServiceLB publishes it on the nodes' own
@@ -132,7 +132,7 @@ def service_plan(cfg, require_workload=True):
             raise ValueError("the shared Homestead VIP is not configured")
         vip = STATE._ipv4(shared, "shared VIP")
         if vip in state["node_ips"]:
-            raise ValueError("The default workload VIP is a node address; choose a separate VIP in Networking")
+            raise ValueError("The default app virtual IP is a host address. Choose a separate virtual IP in Networking.")
         if vip in state["platform_addresses"]:
             raise ValueError(f"Homestead's shared address (LB_IP, {vip}) is the cluster's own address "
                              f"({state['platform_addresses'][vip]}). Set LB_IP to an address of "
@@ -145,19 +145,19 @@ def service_plan(cfg, require_workload=True):
     elif mode == "manual":
         vip = STATE._ipv4(cfg.get("vip"), "specific VIP")
         if vip in state["node_ips"]:
-            raise ValueError(f"{vip} is a cluster node address and cannot be used as a Service VIP")
+            raise ValueError(f"{vip} is a cluster host address and cannot be used as a virtual IP")
         # An address this Service already carries stays its own: an edit
         # elsewhere in the workload never fails on the address it has (#306).
         if not (existing and vip in (existing.get("external_ips") or [])):
             INV.check_address(vip, state)
         in_pool = vip in state["available_vips"] or any(vip == row["ip"] for row in state["vips"])
         if not in_pool:
-            warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")
+            warnings.append("This address is outside the Harvester IP pools that Homestead can see. Check DHCP and static reservations before creating it.")
 
     if "reviewed_vip" in cfg and cfg["reviewed_vip"] != vip:
-        raise ValueError("VIP allocation changed since review; review the address and ports again")
+        raise ValueError("The virtual IP changed since the review. Review the address and ports again.")
     if cfg.get("update") and (existing.get("lb_class") or "") != (PLATFORM.vip_spec(vip).get("loadBalancerClass") or ""):
-        raise ValueError("Changing this Service's load-balancer class requires replacement. Create an additional VIP Service first; the original listener is left untouched.")
+        raise ValueError("Changing this Service's load-balancer class means replacing it. Create another Service with a virtual IP first. The original listener is not changed.")
     owners = []
     if vip:
         for row in state["services"]:
@@ -167,10 +167,10 @@ def service_plan(cfg, require_workload=True):
             if p.get("load_balancer") == "kube-vip" and p.get("vip_service_election") is True:
                 expected = PLATFORM.vip_annotations(vip).get("kube-vip.io/leaseName")
                 if not expected or row.get("vip_lease") != expected or row["namespace"] != namespace:
-                    raise ValueError("Sharing this VIP requires a common kube-vip lease in the same namespace; use a dedicated VIP or migrate existing Services to a common lease first")
+                    raise ValueError("Sharing this virtual IP needs a shared kube-vip lease in the same namespace. Use a separate virtual IP, or move the existing Services to a shared lease first.")
             if cfg.get("exclusive_vip") or row.get("exclusive_vip"):
-                raise ValueError(f"{vip} is used by {row['namespace']}/{row['name']}; NFS needs its own VIP "
-                                 "while SMB and NFS run on independently placed pods with Local traffic routing")
+                raise ValueError(f"{vip} is used by {row['namespace']}/{row['name']}. NFS needs its own virtual IP "
+                                 "while SMB and NFS run on separately placed pods with Local traffic routing.")
             for existing in row["ports"]:
                 if any(int(port["port"]) == int(existing["port"]) and
                        port["protocol"] == str(existing["protocol"]).upper() for port in ports):
@@ -180,7 +180,7 @@ def service_plan(cfg, require_workload=True):
         owner = owners[0]
         raise ValueError(f"{vip}:{owner['port']}/{owner['protocol']} is already used by {owner['namespace']}/{owner['service']}")
     if vip and any(vip in row["external_ips"] for row in state["services"]):
-        warnings.append("This VIP is shared with existing Services; only the reviewed protocol/port listeners are new.")
+        warnings.append("This virtual IP is shared with existing Services. Only the reviewed protocol and port listeners are new.")
 
     declared = {(str(port.get("protocol") or "TCP").upper(), int(port.get("port") or 0))
                 for port in (workload or {}).get("ports", [])}
@@ -207,7 +207,7 @@ def create_service(cfg):
         service = STATE.kget(path)
         meta = service.get("metadata") or {}
         if meta.get("uid") != cfg.get("uid") or meta.get("resourceVersion") != cfg.get("resource_version"):
-            raise ValueError("Service changed after review; reopen VIP settings")
+            raise ValueError("The Service changed after the review. Open the virtual IP settings again.")
         # Preserve selector, ClusterIP, node ports and all unrelated metadata. Never delete/recreate.
         annotations = meta.setdefault("annotations", {})
         for key in ("kube-vip.io/loadbalancerIPs", "kube-vip.io/leaseName", "metallb.universe.tf/loadBalancerIPs", "metallb.universe.tf/allow-shared-ip"):
@@ -230,9 +230,9 @@ def create_service(cfg):
             else:
                 spec.pop("loadBalancerIP", None)
         if spec.get("externalIPs"):
-            raise ValueError("This Service also has externalIPs; use its YAML editor to review those addresses explicitly")
+            raise ValueError("This Service also has externalIPs. Use its YAML editor to review those addresses.")
         STATE.ksend("PUT", path, service)
-        return {"ok": True, **plan, "message": f"Service {plan['namespace']}/{plan['name']} updated; existing connections may reconnect"}
+        return {"ok": True, **plan, "message": f"Service {plan['namespace']}/{plan['name']} updated. Existing connections may reconnect."}
     if plan["workload_kind"] == "VirtualMachine":
         selector = plan["selector"]
     else:
@@ -360,7 +360,7 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
     name = service["metadata"]["name"]
     if not desired:
         STATE.ksend("DELETE", f"/api/v1/namespaces/{namespace}/services/{name}")
-        return f"Service {name} removed; its LAN address was released"
+        return f"Service {name} removed. Its LAN address was released."
 
     current = [{"name": port.get("name", ""), "port": int(port.get("port")),
                 "targetPort": int(port.get("targetPort", port.get("port"))),
@@ -429,7 +429,7 @@ def set_workload_address(namespace, workload, network_mode, vip_mode="shared", v
                 raise
             time.sleep(1)
         else:
-            raise ValueError(f"Service {namespace}/{meta['name']} is still being removed; save again in a moment")
+            raise ValueError(f"Service {namespace}/{meta['name']} is still being removed. Save again in a moment.")
         return create_service(cfg)["message"]
     if want == "ClusterIP":
         return ""
@@ -467,8 +467,8 @@ def delete_service(namespace, name, force=False):
     if not row:
         raise ValueError(f"Service {namespace}/{name} does not exist")
     if row["targets"] and not force:
-        raise ValueError(f"{namespace}/{name} still serves {', '.join(row['targets'])}; "
-                         "removing it takes that workload off the LAN")
+        raise ValueError(f"{namespace}/{name} still serves {', '.join(row['targets'])}, so "
+                         "removing it takes that app off the LAN")
     STATE.ksend("DELETE", f"/api/v1/namespaces/{namespace}/services/{name}")
     freed = [f"{ip}:{port['port']}/{port['protocol']}"
              for ip in row["external_ips"] for port in row["ports"]]

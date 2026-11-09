@@ -49,7 +49,7 @@ test("a duration drops a zero second part", () => {
 });
 
 test("the zone line names the reader's own zone", () => {
-  assert.equal(run("zoneLine()"), "Times are in your time zone (Europe/Berlin)");
+  assert.equal(run("zoneLine()"), "Times use this browser's time zone (Europe/Berlin)");
 });
 
 // Log lines keep their seconds, and a forecast's day key is a calendar day,
@@ -76,5 +76,5 @@ test("the uptime card's durations drop a zero second part too", () => {
 test("Schedules names the reader's zone for its next runs, not just \"your time\"", () => {
   const src = require("./helpers/lifecycle-source")();
   assert.doesNotMatch(src, /next runs in your time`/);
-  assert.match(src, /next runs in your time zone \(\$\{esc\(yourZone\(\)\)\}\)/);
+  assert.match(src, /next runs in this browser's time zone \(\$\{esc\(yourZone\(\)\)\}\)/);
 });

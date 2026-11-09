@@ -7,13 +7,13 @@ const ROB = r => r === "healthy" ? "#3ddc91" : r === "degraded" ? "#ffb020" : "#
 
      Access  ->  Containers  ->  Volumes  ->  Nodes (replica copies)
 
-   Lines join a VIP's port to the container behind it, a container to each
+   Lines join a virtual IP's port to the container behind it, a container to each
    volume it mounts, and a volume to each copy of it. Hovering anything lights
    up what it depends on and what depends on it - following the lines away from
-   it in each direction and never back, so a VIP that twelve apps share does
+   it in each direction and never back, so a virtual IP that twelve apps share does
    not light up all twelve when one of them is pointed at. */
 // Prefix graph identities, never display names or operational resource names.
-// Even matching VIPs and node names on two clusters must remain separate paths.
+// Even matching virtual IPs and node names on two clusters must remain separate paths.
 const archId = (id, site) => site ? `${id.slice(0,2)}${encodeURIComponent(site.id)}/${id.slice(2)}` : id;
 // A cluster missing from the view of all of them, in the words the lists use
 // (#705): one whose last graph is still drawn is out of date, not unloaded.
@@ -79,7 +79,7 @@ async function viewFlow() {
       ${f.vips.map(v => `<div class="a2item a2vip ${v.state && !["ok", "idle"].includes(v.state) ? "a2broken" : ""}" ${clusterAttr(v)} data-kind="access" data-id="${esc(v.id)}"
           data-node="${esc(v.node || "")}" title="${esc(archAddressWords(v))}">
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
-            <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
+            <span class="a2meta">${v.kind === "node" ? "node" : "Virtual IP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
           ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no host answers")}</div>` : ""}
           <div class="a2ports">${v.ports.map(p => `<button type="button" class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
             data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}" aria-label="Open ${esc(p.app)} on port ${p.port}"
@@ -102,10 +102,10 @@ async function viewFlow() {
           ${disconnectedVolumes.map(v => volumeCard(v, true)).join("")}</div>` : ""}
       </section>
 
-      <section class="a2col"><h4>Hosts &amp; replica copies</h4>
+      <section class="a2col"><h4>Hosts and volume copies</h4>
       ${f.nodes.map(n => `<div class="a2item a2node"${clusterAttr(n)} data-kind="node" data-id="${esc(n.id)}">
           <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
-          ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for VIP ${esc(ip)}">VIP ${esc(ip)}</span>`).join("")}</div>` : ""}
+          ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for virtual IP ${esc(ip)}">Virtual IP ${esc(ip)}</span>`).join("")}</div>` : ""}
           <div class="a2copies">${n.copies.map(c => `<span class="a2copy ${c.running ? "" : "stopped"}" id="${esc(`${n.id}|${c.vid}`)}"
             data-kind="copy" data-id="${esc(`${n.id}|${c.vid}`)}" title="${esc(c.vol)} on ${esc(n.name)}${c.running ? "" : " · not running"}">${esc(c.vol)}</span>`).join("")
             || '<span class="dim xs">no replicas here</span>'}</div></div>`).join("")}
@@ -174,7 +174,7 @@ function scheduledJobs(jobs) {
 /* What an address is, where it lives, and why it is not reachable if not. */
 function archAddressWords(v) {
   const what = v.kind === "node" ? `${v.ip} is ${v.node || "a host"}'s own address`
-    : v.node ? `VIP ${v.ip} · ${v.node} answers for it` : `VIP ${v.ip} · no host answers for it`;
+    : v.node ? `Virtual IP ${v.ip} · ${v.node} answers for it` : `Virtual IP ${v.ip} · no host answers for it`;
   return v.reason ? `${what} · ${v.reason}` : what;
 }
 
@@ -220,7 +220,7 @@ function archHighlight(id) {
 function archRelated(id) {
   const links = STATE.data.alinks || [];
   const start = [id];
-  // A VIP or a node stands for all of its ports or copies.
+  // A virtual IP or a node stands for all of its ports or copies.
   if (id.startsWith("i:")) links.forEach(([a]) => { if (a.startsWith("p:" + id.slice(2) + ":")) start.push(a); });
   if (id.startsWith("n:")) links.forEach(([, b]) => { if (b.startsWith(id + "|")) start.push(b); });
   // Where an address lives: its node, and a node's addresses - not followed

@@ -85,7 +85,7 @@ def tick():
         except HOSTRUN.Busy:
             continue    # another change has the host: next round, and the others go on (#597)
         if "done" not in out.split():
-            raise ValueError(f"could not check {node}'s auto-deploy folder: {(err or out)[:200]}")
+            raise ValueError(f"Homestead could not check {node}'s auto-deploy folder: {(err or out)[:200]}")
         marked = [line for line in out.splitlines() if line.startswith("/")]
         state[node] = {"at": int(time.time()), "marked": marked}
         done_now[node] = marked

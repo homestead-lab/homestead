@@ -50,7 +50,7 @@ def matcher(query, regex=False, case=False):
         raise ValueError("a search is at most 200 characters")
     if regex:
         if _SLOW.search(query):
-            raise ValueError("that expression repeats a group holding a repeat or a choice, which can take ages to run; simplify it")
+            raise ValueError("That expression repeats a group that holds a repeat or a choice. It can take a very long time to run, so simplify it.")
         try:
             pattern = re.compile(query, 0 if case else re.I)
         except re.error as error:
@@ -201,7 +201,7 @@ def exclusive():
     someone's request (a log alert's preview): it refuses at once rather
     than queueing behind a running search."""
     if not _ONE_AT_A_TIME.acquire(blocking=False):
-        raise ValueError("another log search is running; try again in a moment")
+        raise ValueError("Another log search is running. Try again in a moment.")
     try:
         yield
     finally:

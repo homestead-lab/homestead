@@ -23,17 +23,17 @@ test("insufficient replica slots cannot be overridden by Start anyway", async ()
       metrics_available: true, projected_percent: 60, used_gb: 1, projected_gb: 3, capacity_gb: 5,
       reservations_known: true, reserved_gb: 2, allocatable_gb: 4, reserved_cpu_percent: 100, request_slots: 2 }] });
   assert.match(html, /3 replicas exceed 2 slots/);
-  assert.match(html, /Already reserved: 2 \/ 4 GiB/);
+  assert.match(html, /already reserved 2 of 4 GiB/);
   assert.match(html, /50% CPU/);
-  assert.match(html, /snapshot, not a reservation/);
+  assert.match(html, /It is a snapshot and does not reserve anything/);
   assert.doesNotMatch(html, /Start anyway/);
 });
 
 test("unknown reservations are presented as unknown with explicit review", async () => {
   const html = await review({ requires_confirmation: true, additional: 1, warnings: ["unknown <state>"],
     candidates: [{ name: "node", eligible: true, reservations_known: false, metrics_available: false }] });
-  assert.match(html, /Scheduler reservations unavailable/);
-  assert.match(html, /memory use unknown/);
+  assert.match(html, /reservations unavailable/);
+  assert.match(html, /Memory use unknown/);
   assert.match(html, /unknown &lt;state&gt;/);
   assert.match(html, /wl_capacity_ok/);
   assert.match(html, /Start it anyway/);
@@ -42,15 +42,15 @@ test("unknown reservations are presented as unknown with explicit review", async
 test("topology conflicts identify the next pod without claiming all resource slots fit", async () => {
   const html = await review({ blocked: true, additional: 3, topology_status: "blocked", warnings: [],
     candidates: [{ name: "host<1>", eligible: false, reasons: ["required pod anti-affinity conflicts in zone=<west>"] }] });
-  assert.match(html, /cannot fit all requested replicas/);
-  assert.match(html, /can't run here: required pod anti-affinity/);
+  assert.match(html, /do not allow all its copies to fit/);
+  assert.match(html, /Cannot run here: required pod anti-affinity/);
   assert.match(html, /zone=&lt;west&gt;/);
   assert.doesNotMatch(html, /Start anyway/);
 });
 
 test("inconclusive topology remains an explicit warning", async () => {
   const html = await review({ requires_confirmation: true, additional: 2, topology_status: "unknown", candidates: [] });
-  assert.match(html, /placement remains unverified/);
+  assert.match(html, /placement and spread rules have not been checked/);
   assert.match(html, /wl_capacity_ok/);
 });
 
@@ -59,7 +59,7 @@ test("start review distinguishes required preferred and scheduler-selected launc
   const base = { requires_confirmation: true, additional: 1, candidates, warnings: [] };
   const pinned = await review({ ...base, placement: { pinned: "host<a>" } });
   assert.match(pinned, /<p class="ui-lead">Starts it on <b>host&lt;a&gt;<\/b>\./);
-  assert.match(pinned, /ui-chip info">pinned/);
+  assert.match(pinned, /ui-chip info">required/);
   const preferred = await review({ ...base, placement: { preferred: "host<a>" } });
   assert.match(preferred, /on <b>host&lt;a&gt;<\/b> if it can, or another host/);
   const automatic = await review(base);
@@ -71,8 +71,8 @@ test("start review distinguishes required preferred and scheduler-selected launc
 test("unavailable preference and blocked launches do not promise a host", async () => {
   const html = await review({ requires_confirmation: true, blocked: true, additional: 1, warnings: [],
     placement: { preferred: "offline" }, candidates: [{ name: "offline", eligible: false }] });
-  assert.match(html, /can't start until/);
-  assert.match(html, /can't run here/);
+  assert.match(html, /cannot start until/);
+  assert.match(html, /Cannot run here/);
   assert.doesNotMatch(html, /on <b>offline/);
   assert.doesNotMatch(html, /Start anyway/);
 });

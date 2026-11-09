@@ -20,7 +20,7 @@ def plan(obj, template, nodes, pods, threshold):
     hosts = {pod.get("spec", {}).get("nodeName") for pod in owned}
     if len(owned) != expected or len(hosts) != expected or None in hosts or any(
             pod.get("metadata", {}).get("deletionTimestamp") or pod.get("status", {}).get("phase") != "Running" for pod in owned):
-        blocked.append("Node probe placement is changing; refresh after it settles")
+        blocked.append("The host probe's placement is changing. Refresh once it settles.")
     inventory = {node["name"]: node for node in nodes}
     booked, pending, _, _ = R.reservations(pods)
     if pending:

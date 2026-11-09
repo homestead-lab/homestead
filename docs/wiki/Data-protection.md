@@ -4,7 +4,7 @@ When setting up backup storage or changing its address, Homestead saves the
 requested Longhorn target switch and retries while the store starts. Progress
 and the last error appear on Data protection and in the linked cluster's
 migration controls. The request survives a Homestead restart. After ten minutes
-it stops retrying and offers **Retry target switch**; **Storage settings** lets
+it stops retrying and offers **Retry backup target change**; **Storage settings** lets
 you correct the address and port. Retrying the target switch does not redeploy
 the store. Homestead verifies the actual S3 endpoint, as well as the bucket URL,
 before showing that Longhorn is pointed at the store.
@@ -21,7 +21,7 @@ Deleting a recovery point or cleaning up a system checkpoint requires an impact
 review and exact-name confirmation. A persistent job follows the request,
 Longhorn merge/purge progress and verified disappearance from the snapshot and
 engine inventories. It survives refresh/restart, reports errors and offers
-**Carry on** after a timeout; removal cannot be cancelled or undone. Reported
+**Resume job** after a timeout; removal cannot be cancelled or undone. Reported
 purge percentages are Longhorn's, not estimates of bytes reclaimed.
 
 Longhorn can retain a removed snapshot while it is the direct parent of Volume

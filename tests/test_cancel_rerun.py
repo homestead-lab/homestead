@@ -316,7 +316,7 @@ class NeverBeside(Base):
         self.assertIn("Still cancelling", self.stored(op)["message"])
 
     def test_what_a_restart_does_is_promised_only_where_it_is_true(self):
-        for kind, promise in ((SAFE_KIND, "the leader runs the cancel again"), (PERSON_KIND, "waits for you")):
+        for kind, promise in ((SAFE_KIND, "the leader runs the cancel again"), (PERSON_KIND, "waits for Cancel")):
             with self.subTest(kind):
                 op = self.job(kind, {"node": f"node-{kind}"})
                 release = self.slow_cancel_of(op, kind)
@@ -336,7 +336,7 @@ class NeverBeside(Base):
         put(OPS, items)
         with self.assertRaises(ValueError) as refused:
             OPS.cancel(op)
-        self.assertIn("waits for you", str(refused.exception))
+        self.assertIn("waits for Cancel", str(refused.exception))
 
     def slow_cancel_of(self, op, kind):
         started, gate = threading.Event(), threading.Event()
@@ -476,7 +476,7 @@ class StaysWithAPerson(Base):
         item = self.stored(op)
         self.assertEqual(OPS.CANCELLING, item["status"])
         self.assertIn("was not run again", item["message"])
-        self.assertIn("what you chose", item["message"])
+        self.assertIn("recorded the choice", item["message"])
 
     def test_one_from_before_this_version_may_still_be_running_on_an_old_replica(self):
         op = self.job()

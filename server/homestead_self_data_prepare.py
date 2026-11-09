@@ -73,7 +73,7 @@ def admission(read, ref, *, clock=time.time):
             or any(not D._capacity_warning(w) and w not in expected for w in report["warnings"])):
         raise J.Held("The destination binding helper does not fit the current storage, node or capacity constraints")
     if not 0 <= clock() - started <= 30:
-        raise J.Held("Destination capacity review expired; check again")
+        raise J.Held("The capacity review of the destination expired. Check again.")
     # Provisioning warnings are displayed separately and acknowledged as a
     # preparation risk, not a RAM override. Their wording changes after creation.
     receipt = {"proposal": J.digest(pod), "warnings": sorted({D.warning_key(w) for w in report["warnings"] if w not in expected})}
@@ -121,7 +121,7 @@ def review(read, namespace, deployment, body, *, actor, image, access_mode, thre
     pvc, pod = manifests(ref)
     for plural, name in (("persistentvolumeclaims", ref["destination"]), ("pods", pod["metadata"]["name"])):
         if _get(current, f"/api/v1/namespaces/{namespace}/{plural}/{name}") is not None:
-            raise J.Held("A preparation resource name is already used; it will not be adopted")
+            raise J.Held("A preparation resource name is already used, and Homestead does not take it over")
     capacity, receipt = admission(current, ref, clock=clock)
     D.validate_worker_approval({"threshold": threshold, "nodes": pins, "receipt": receipt})
     ref["admission"] = receipt
@@ -129,7 +129,7 @@ def review(read, namespace, deployment, body, *, actor, image, access_mode, thre
                "namespace_uid": J.identity(current("/api/v1/namespaces/" + namespace))["uid"], "plan": ref}
     public = {"destination": ref["destination"], "storage_class": cfg["storage_class"], "size": size, "access_mode": access_mode,
               "node": cfg["node"], "binding_mode": mode, "capacity": capacity,
-              "detail": "Prepares a new destination claim. Homestead keeps running on its original volume; copying needs a separate final review and empty-destination check."}
+              "detail": "Prepares a new destination volume. Homestead keeps running on its original volume. Copying needs its own final review and a check that the destination is empty."}
     return cfg, public, context, ref
 
 
@@ -142,7 +142,7 @@ def start(body, reviewed, ops):
     if jobs:
         raise J.Held(blocked_message("Finish running or recovery jobs before preparing Homestead's destination", jobs))
     return ops.start(KIND, "Prepare Homestead data volume", {"kind": "PersistentVolumeClaim", "namespace": ref["namespace"], "name": ref["destination"]},
-        "/settings", {**copy.deepcopy(ref), "storage_writes": [], "retain_resources": True}, "Preparation recorded; Homestead keeps running")
+        "/settings", {**copy.deepcopy(ref), "storage_writes": [], "retain_resources": True}, "Preparation recorded. Homestead keeps running.")
 
 
 def resolve(item, read, send, checkpoint, *, clock=time.time):
@@ -151,7 +151,7 @@ def resolve(item, read, send, checkpoint, *, clock=time.time):
     except J.Held:
         raise
     except Exception:
-        raise J.Held("Destination preparation could not verify its next step. Retain the job and resources; no request was retried") from None
+        raise J.Held("The destination preparation could not confirm its next step. Keep the job and resources. No request was retried.") from None
 
 
 def _resolve(item, read, send, checkpoint, *, clock=time.time):
@@ -163,7 +163,7 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
     dep = read(f"/apis/apps/v1/namespaces/{ns}/deployments/" + ref["deployment"]["name"])
     source = read(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/" + ref["source"]["name"])
     if any(J.identity(o)["uid"] != ref[k]["uid"] or J.shape(o) != ref[k]["shape"] or o["metadata"].get("deletionTimestamp") for o, k in ((dep, "deployment"), (source, "source"))):
-        raise J.Held("Homestead or its source changed during preparation; both volumes are retained")
+        raise J.Held("Homestead or its source changed during preparation. Both volumes are kept.")
     sc = read("/apis/storage.k8s.io/v1/storageclasses/" + ref["storage_class"])
     if sc["metadata"].get("deletionTimestamp") or _class_fact(sc) != ref["class"]:
         raise J.Held("The destination storage class changed after review")
@@ -173,9 +173,9 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
     if created is None:
         _, approved = admission(read, ref, clock=clock)
         if approved["proposal"] != ref["admission"]["proposal"] or not set(approved["warnings"]) <= set(ref["admission"]["warnings"]):
-            raise J.Held("Preparation capacity changed; no destination was created")
+            raise J.Held("The capacity for preparation changed, so no destination was created")
         writer.write("destination", "POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", pvc_body)
-        return "running", 15, "Creating the destination volume; Homestead is still running"
+        return "running", 15, "Creating the destination volume. Homestead is still running."
     pvc = read(created["target"]["path"])
     # Binding legitimately adds volumeName/annotations after creation. Pin the
     # accepted UID and require the reviewed request unchanged; never adopt by name.
@@ -191,17 +191,17 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
         if binder is None:
             _, approved = admission(read, ref, clock=clock)
             if approved["proposal"] != ref["admission"]["proposal"] or not set(approved["warnings"]) <= set(ref["admission"]["warnings"]):
-                raise J.Held("Binding-helper capacity warnings changed; review retained preparation resources")
+                raise J.Held("The capacity warnings of the binding helper changed. Review the kept preparation resources.")
             preview = send("POST", f"/api/v1/namespaces/{ns}/pods?dryRun=All&fieldValidation=Strict", copy.deepcopy(pod_body))
             B.admitted(pod_body, preview, {"apiVersion": "v1", "kind": "Pod", "namespace": ns, "name": pod_body["metadata"]["name"]}, dry_run=True, default=B.default_priority(read))
             writer.write("binding-pod", "POST", f"/api/v1/namespaces/{ns}/pods", pod_body)
             return "running", 40, "Scheduling a temporary read-only binding pod on the selected host"
         pod = read(binder["target"]["path"])
         if J.identity(pod)["uid"] != binder["after"]["uid"]:
-            raise J.Held("The binding pod was replaced; it will not be adopted")
+            raise J.Held("The binding pod was replaced, and Homestead does not take it over")
         B.admitted(pod_body, pod, binder["target"], default=B.default_priority(read))
         if pod.get("status", {}).get("phase") in ("Failed", "Succeeded"):
-            raise J.Held("The binding pod stopped before the destination bound; inspect retained resources")
+            raise J.Held("The binding pod stopped before the destination was bound. Check the kept resources.")
         return "running", 50, "Waiting for scheduler placement and destination provisioning"
     pv = read("/api/v1/persistentvolumes/" + pvc["spec"]["volumeName"])
     claim = pv.get("spec", {}).get("claimRef", {})
@@ -213,18 +213,18 @@ def _resolve(item, read, send, checkpoint, *, clock=time.time):
         if J.identity(pod)["uid"] != binder["after"]["uid"]: raise J.Held("The binding pod was replaced")
         B.admitted(pod_body, pod, binder["target"], default=B.default_priority(read))
         writer.write("release-binding", "DELETE", binder["target"]["path"], {"propagationPolicy": "Foreground"}, expected=J.identity(pod), own=True)
-        return "running", 85, "Destination bound; waiting for the temporary binding pod to release its mount"
+        return "running", 85, "Destination bound. Waiting for the temporary binding pod to release it."
     if removed and writer.observe(removed) is not None:
-        return "running", 90, "Waiting for the binding pod to finish terminating; no force deletion"
+        return "running", 90, "Waiting for the binding pod to stop. It is not force-deleted."
     ref["prepared"] = {"claim_uid": J.identity(pvc)["uid"], "volume_uid": J.identity(pv)["uid"], "volume": pv["metadata"]["name"]}
     ref["retain_resources"] = False
     checkpoint(item)
-    return "succeeded", 100, "Destination prepared. Homestead is still on its original volume; review the data move to continue"
+    return "succeeded", 100, "Destination prepared. Homestead is still on its original volume. Review the data move to continue."
 
 
 def cancel_plan(item):
     return {"can": False, "mode": "forget", "needs": "admin",
-            "why_not": "Inspect the preparation job before cleanup; its volume and binding-pod receipts must be retained",
+            "why_not": "Check the preparation job before cleaning up. The records of its volume and binding pod must be kept.",
             "keeps": ["Original and destination volumes", "Exact helper and creation receipts"]}
 
 
@@ -304,34 +304,34 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
         claim, ready = running_on()
         if claim != source:
             raise J.Held(f"Homestead is not running on the move's original volume {source} "
-                         f"(it mounts {claim or 'no data volume'}); inspect the move before closing it")
+                         f"(it mounts {claim or 'no data volume'}). Check the move before closing it.")
         if not ready:
-            raise J.Held("Homestead is not ready on its original volume yet; close the move once it is")
+            raise J.Held("Homestead is not ready on its original volume yet. Close the move once it is.")
         if _setup_without_record(item):
             if read is None:
                 raise J.Held("The move's control record cannot be checked")
             record = _get(read, f"/api/v1/namespaces/{namespace}/configmaps/{deployment}-data-handoff")
             if record is not None:
-                raise J.Held("The move's control record still exists; abandon the preparation in Move data first")
+                raise J.Held("The move's control record still exists. Abandon the preparation in Move data first.")
         others = []
         if preparation:
             left, others = _leftovers(read, ref)
             if left:
-                raise J.Held(f"{', '.join(left)} still exists and carries this preparation's label; "
-                             "remove it once you have checked it holds nothing you need, then close the record")
+                raise J.Held(f"{', '.join(left)} still exists and carries this preparation's label. "
+                             "Remove it after checking that it holds nothing needed, then close the record.")
         cfg = {"id": item["id"]}
         context = {"action": "self-data-handoff-close", "actor": actor, "namespace": namespace,
                    "status": item["status"], "ref": J.digest(ref)}
-        detail = (f"This preparation failed. Its claim {ref.get('destination')} and binding pod are gone, so closing "
-                  f"the record lets you prepare another volume. Homestead stays on {source}; nothing is created or deleted."
+        detail = (f"This preparation failed. Its volume {ref.get('destination')} and binding pod no longer exist, so closing "
+                  f"the record allows another volume to be prepared. Homestead stays on {source}. Nothing is created or deleted."
                   + (f" {', '.join(others)} has the same name but is not this preparation's, so it is left alone." if others else "")
                   if preparation else
-                  f"Homestead runs on its original volume {source}. Closing this record lets you "
-                  f"prepare another volume. Both {source} and {ref.get('destination')} are kept, "
-                  "with the move's recovery audit; nothing is copied or deleted.")
+                  f"Homestead runs on its original volume {source}. Closing this record allows "
+                  f"another volume to be prepared. Both {source} and {ref.get('destination')} are kept, "
+                  "with the move's recovery audit. Nothing is copied or deleted.")
         if not start:
             facts = [["Homestead runs on", source], ["Removed" if preparation else "Kept, unused", ref.get("destination")]]
-            ack = "Close this failed preparation's record" if preparation else "Close this move's record; keep both volumes and its audit"
+            ack = "Close this failed preparation's record" if preparation else "Close this move's record, and keep both volumes and its audit"
             return {**cfg, "source": source, "destination": ref.get("destination"), "facts": facts, "ack": ack,
                     "capacity_token": SIGN.issue(cfg, context), "detail": detail}
         if body.get("confirm_close") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
@@ -342,11 +342,11 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
         ref["recovery_closed"] = {"at": int(time.time()), "actor": actor, "source": source}
         item["updated_at"] = ops._now()
         ops._note(item, item["status"], item.get("progress", 100),
-                  f"Recovery closed: Homestead runs on {source}; " + ("its claim and binding pod were checked gone"
-                  if preparation else "both volumes and the recovery audit retained"))
+                  f"Recovery closed. Homestead runs on {source}. " + ("Its volume and binding pod were confirmed removed."
+                  if preparation else "Both volumes and the recovery audit are kept."))
         t.save(items)
         return {"ok": True, "id": item["id"],
-                "detail": f"Closed. {ref.get('destination')} is kept and unused; remove it from Volumes when you no longer need it."}
+                "detail": f"Closed. {ref.get('destination')} is kept and unused. Remove it on the Volumes page when it is no longer needed."}
 
 
 def blocking_jobs(ops, own_id=None):
@@ -371,7 +371,7 @@ def blocking_jobs(ops, own_id=None):
 
 def blocked_message(prefix, jobs):
     return prefix + ": " + "; ".join(j["title"] + " (" + j["status"] + ", " + j["id"] + ")"
-                                      for j in jobs[:6]) + ("; more jobs are listed in Jobs" if len(jobs) > 6 else "")
+                                      for j in jobs[:6]) + ("; more jobs are listed on the Jobs page" if len(jobs) > 6 else "")
 
 
 def archive(body, actor, namespace, deployment, ops, *, start=False):
@@ -397,12 +397,12 @@ def archive(body, actor, namespace, deployment, ops, *, start=False):
         if not start:
             return {**cfg, "destination": ref["destination"], "source": ref["source"]["name"],
                     "capacity_token": SIGN.issue(cfg, context),
-                    "detail": "Hides this completed preparation from Move data and Jobs. Both volumes are retained; no data is copied or deleted."}
+                    "detail": "Hides this finished preparation from Move data and Jobs. Both volumes are kept. No data is copied or deleted."}
         if body.get("confirm_archive") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
             raise J.Held("Review this preparation again and confirm archiving its record")
         ops.require_write()
         ref["preparation_archived"] = True
         item["updated_at"] = ops._now()
-        ops._note(item, item["status"], item.get("progress", 100), "Preparation record archived; volumes and receipts retained")
+        ops._note(item, item["status"], item.get("progress", 100), "Preparation record archived. The volumes and records are kept.")
         t.save(items)
         return {"ok": True, "id": item["id"], "detail": "Preparation archived. Both volumes and their creation receipts are retained."}

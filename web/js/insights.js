@@ -12,15 +12,15 @@ const HealthInsights = (() => {
     const rows=[], cp=data.cluster?.control_plane;
     if (cp?.etcd_total > 0) {
       if (known(cp.etcd_ready) && cp.etcd_ready < Math.floor(cp.etcd_total/2)+1)
-        rows.push(item("quorum","critical","etcd quorum is unavailable","Restore unavailable etcd hosts before making cluster changes.","cluster"));
+        rows.push(item("quorum","critical","Too few voting hosts are running","The cluster cannot store changes, because a majority of its voting hosts (etcd quorum) is not running. Bring the voting hosts back before changing the cluster.","cluster"));
       else if (cp.etcd_total === 1)
-        rows.push(item("quorum","low","Single control-plane host","This cluster's state is kept on one host, so it has no failover: if that host fails, the cluster comes back only from an etcd snapshot. That is normal for a one-node cluster. Keep snapshots (k3s takes one every 12 hours; the host doctor can take one now) and copy them to another machine. Three server hosts would survive the loss of one.","cluster"));
+        rows.push(item("quorum","low","One voting host","This cluster's state is stored on one host, so there is no failover. If that host fails, the cluster can be restored only from an etcd snapshot. This is normal for a single-host cluster. Keep snapshots (k3s takes one every 12 hours, and the host doctor can take one now) and copy them to another machine. Three server hosts would survive the loss of one.","cluster"));
       else if (cp.etcd_total === 2)
-        rows.push(item("quorum","medium","Two etcd members have no failure margin","Add a third etcd server - or a small machine as a tiebreaker, which holds a vote and runs no apps (Cluster → Add a host). Both current members are required for quorum.","cluster"));
+        rows.push(item("quorum","medium","Two voting hosts, so neither can fail","Add a third server, or a small machine as a tiebreaker, which votes and runs no apps (Cluster → Add a host). Both current voting hosts are needed for the cluster to work.","cluster"));
       else if (cp.quorum_margin === 0)
-        rows.push(item("quorum","medium","No etcd failure margin",`${cp.etcd_ready} of ${cp.etcd_total} etcd members are ready, the fewest that keep quorum: losing one more stops the control plane. Bring the others back before changing hosts.`,"cluster"));
+        rows.push(item("quorum","medium","No voting host can fail",`${cp.etcd_ready} of ${cp.etcd_total} voting hosts are ready, the fewest that keep the cluster working. Losing one more stops the control plane. Bring the others back before changing hosts.`,"cluster"));
     }
-    if (data.cluster?.unavailable?.length) rows.push(item("cluster-partial","low","Some platform checks are unavailable","Open Cluster to review missing observations.","cluster"));
+    if (data.cluster?.unavailable?.length) rows.push(item("cluster-partial","low","Some platform checks are unavailable","Open Cluster to see what could not be checked.","cluster"));
     for (const n of data.cluster?.nodes || []) {
       if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving apps and VMs.","node:"+n.name));
       else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move apps.","node:"+n.name));
@@ -28,9 +28,9 @@ const HealthInsights = (() => {
     const p=data.protection;
     if (p) {
       // Jobs that could not be read leave coverage, failed jobs and clashes unknown, not clear (#927).
-      if (p.jobs_unread) rows.push(item("unknown:protection-jobs","low","Backup job checks unavailable",`${p.jobs_unread}. Backup coverage, failed backup jobs and schedule clashes cannot be checked until they are read.`,"retry"));
+      if (p.jobs_unread) rows.push(item("unknown:protection-jobs","low","Backup job checks unavailable",`${p.jobs_unread}. Backup coverage, failed backup jobs and schedule conflicts cannot be checked until the jobs are read.`,"retry"));
       const unprotected=(p.volumes || []).filter(v=>v.backed_up === false);
-      if (unprotected.length) rows.push(item("backup-coverage","medium",`${unprotected.length} volume${unprotected.length===1?"":"s"} without scheduled backups`,"Assign a recurring external backup. Replicas and local snapshots do not replace a backup.","protect"));
+      if (unprotected.length) rows.push(item("backup-coverage","medium",`${unprotected.length} volume${unprotected.length===1?"":"s"} without scheduled backups`,"Assign a scheduled external backup. Volume copies and local snapshots do not replace a backup.","protect"));
       if (p.total > 0 && p.target?.configured === false) rows.push(item("backup-target","medium","Configure a backup destination","Choose a separate backup destination, then schedule backups.","protect"));
       else if (p.target?.configured && p.target.available === false) rows.push(item("backup-target","critical","Backup destination is unavailable",p.target.reason || "Restore access so backups can resume.","protect"));
       const failed=(p.jobs || []).filter(j=>j.task?.startsWith("backup") && j.last_failed);
@@ -45,9 +45,9 @@ const HealthInsights = (() => {
     }
     const temp=data.settings?.thresholds?.temperature, diskLimit=data.settings?.thresholds?.disk;
     for (const n of data.nodes || []) {
-      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","node:"+n.name));
+      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free up space or add capacity before the disk fills.","node:"+n.name));
       // An unreachable probe's reading is old: no temperature verdict from it (#705).
-      if (temp && n.probe?.state !== "unreachable" && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
+      if (temp && n.probe?.state !== "unreachable" && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Check the sensor and the cooling. Drive temperatures use their own thresholds.","node:"+n.name));
       for (const d of n.temps?.disks || []) {
         if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","disk:"+n.name+":"+d.name));
         // Asleep with no reading kept (#974): Homestead has nothing to judge it by.
@@ -64,30 +64,30 @@ const HealthInsights = (() => {
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
       // A volume only short of hosts (#841) opens the offer to match its copies.
       const route=issue.one_host?"one-host-copies":["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Trim:"protect",Workload:"workloads"})[issue.kind] || "cluster";
-      const finding=item(id,severity,`${({Node:"Host",Workload:"App",Trim:"Weekly trim failed:"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
+      const finding=item(id,severity,`${({Node:"Host",Workload:"App",Trim:"Weekly trim failed:"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Check this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }
     const h=data.self;
     if (h) {
-      if (h.api?.ok === false) rows.push(item("self-api","critical","Homestead cannot reach Kubernetes",h.api.error || "Check cluster connectivity.","settings:about#selfHealthCard"));
-      if (h.replicas?.pods && h.replicas.pods.filter(p=>p.ready).length < h.replicas.desired) rows.push(item("self-replicas","medium","Homestead has unavailable replicas","Inspect its pods and restart errors.","settings:about#replicaCard"));
-      if (h.data_copies?.state === "can-keep-two") rows.push(item("self-data-copies","low","Homestead's data has one copy; this cluster can now keep two","Keep a second copy on another host from Redundancy.","settings:about#replicaCard"));
-      else if (h.data_copies?.state === "unknown") rows.push(item("self-data-copies","low","Could not read Homestead's data copies",h.data_copies.error || "Retry or check access.","settings:about#replicaCard"));
+      if (h.api?.ok === false) rows.push(item("self-api","critical","Homestead cannot reach Kubernetes",h.api.error || "Check the connection to the cluster.","settings:about#selfHealthCard"));
+      if (h.replicas?.pods && h.replicas.pods.filter(p=>p.ready).length < h.replicas.desired) rows.push(item("self-replicas","medium","Some copies of Homestead are unavailable","Check its pods and their restart errors.","settings:about#replicaCard"));
+      if (h.data_copies?.state === "can-keep-two") rows.push(item("self-data-copies","low","Homestead's data has one copy, and this cluster can now keep two","Keep a second copy on another host under Redundancy.","settings:about#replicaCard"));
+      else if (h.data_copies?.state === "unknown") rows.push(item("self-data-copies","low","Homestead's data copies could not be read",h.data_copies.error || "Try again, or check access.","settings:about#replicaCard"));
       const loops=(h.loops || []).filter(l=>["failing","stale","error"].includes(l.state));
       if (loops.length) rows.push(item("self-loops","medium",`${loops.length} Homestead background check${loops.length===1?" needs":"s need"} attention`,loops.map(l=>l.label || l.name).join(", ")+". Review Homestead health.","settings:about#selfHealthCard"));
-      if (h.permissions?.state === "error") rows.push(item("self-permissions","critical","Homestead permissions need repair",h.permissions.detail || "Review the installation permissions.","about"));
-      if (h.probe && (!h.probe.installed || h.probe.reporting < h.probe.desired)) rows.push(item("probe","low","Host monitoring is incomplete","Check node probes to restore temperature and drive observations.","settings:about#selfHealthCard"));
-      if (h.addresses?.problem || h.addresses?.clashes?.length) rows.push(item("addresses","critical","A service address conflicts with the cluster","Review service addresses before changing hosts.","network:addresses"));
+      if (h.permissions?.state === "error") rows.push(item("self-permissions","critical","Homestead permissions need repair",h.permissions.detail || "Check the installation's permissions.","about"));
+      if (h.probe && (!h.probe.installed || h.probe.reporting < h.probe.desired)) rows.push(item("probe","low","Host monitoring is incomplete","Check the node probes to restore temperature and drive readings.","settings:about#selfHealthCard"));
+      if (h.addresses?.problem || h.addresses?.clashes?.length) rows.push(item("addresses","critical","A service address conflicts with the cluster","Check the service addresses before changing hosts.","network:addresses"));
     }
     // App volumes asking for more copies than the hosts can hold (#841): an
     // admin reviews matching them, or putting them back once hosts join.
     const c=data.copies, n=c?.volumes?.length || 0, volumes=`${n} volume${n===1?"":"s"}`;
     if (c?.state === "lower" && n) rows.push(item("one-host-copies","medium",`${volumes} ask${n===1?"s":""} for more copies than this cluster has hosts`,`This cluster has ${c.hosts} host, so Longhorn keeps one copy of each and marks ${n===1?"it":"them"} degraded. An admin can lower ${n===1?"it":"them"} in Match copies to hosts.`,"one-host-copies"));
     else if (c?.state === "raise" && n) rows.push(item("one-host-copies","low",`${volumes} can have ${n===1?"its":"their"} copies back`,`${c.hosts} hosts can now hold the copies ${n===1?"it":"they"} asked for before this cluster had one host.`,"one-host-copies"));
-    else if (c?.state === "unknown") rows.push(item("one-host-copies","low","Could not read volume copies",c.error || "Retry or check access.","storage"));
+    else if (c?.state === "unknown") rows.push(item("one-host-copies","low","The volume copies could not be read",c.error || "Try again, or check access.","storage"));
     rows.push(...leftoverRows(data.leftovers));
-    for (const key of needs.health) if (key !== "alerts" && data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health",copies:"Volume copy",leftovers:"Leftover storage"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
+    for (const key of needs.health) if (key !== "alerts" && data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health",copies:"Volume copy",leftovers:"Leftover storage"})[key]} checks unavailable`,"Try again, or check access. Health cannot be confirmed without this data.","retry"));
     // A finding the cluster tracks as an alert can be acknowledged by this
     // account; it returns by itself when the condition gets worse.
     const alerts=new Map((data.alerts?.active || []).map(a=>[a.key,a]));
@@ -104,13 +104,13 @@ const HealthInsights = (() => {
   const gib = bytes => {const g=(bytes || 0)/1024**3;return `${g>=10?Math.round(g):Math.round(g*10)/10} GiB`;};
   function leftoverRows(l) {
     const rows=[], r=l?.released, s=l?.iscsi;
-    if (r?.state === "unknown") rows.push(item("released-volumes","low","Could not read Released volumes",r.error || "Retry or check access.","storage"));
+    if (r?.state === "unknown") rows.push(item("released-volumes","low","Released volumes could not be read",r.error || "Try again, or check access.","storage"));
     else if (r?.volumes?.length) {
       const n=r.volumes.length, hosts=[...new Set(r.volumes.flatMap(v=>v.hosts || []))].sort();
       rows.push(item("released-volumes","low",`${n} Released volume${n===1?" holds":"s hold"} ${gib(r.volumes.reduce((sum,v)=>sum+(v.allocated_bytes || 0),0))}`,
         `${n===1?"Its claim was":"Their claims were"} deleted and ${n===1?"its class keeps":"their classes keep"} the data (Retain), so the space stays allocated${hosts.length?` on ${hosts.join(", ")}`:""} until ${n===1?"it is":"each is"} deleted. Review ${n===1?"it":"them"} to delete what is no longer needed.`,"released-volumes"));
     }
-    if (s?.state === "unknown") rows.push(item("iscsi","low","Could not check hosts' iSCSI sessions",s.error || "Retry or check access.","storage"));
+    if (s?.state === "unknown") rows.push(item("iscsi","low","The hosts' iSCSI sessions could not be checked",s.error || "Try again, or check access.","storage"));
     for (const h of s?.hosts || []) {
       const n=h.sessions?.length || 0;
       if (!n) continue;
@@ -166,7 +166,7 @@ const HealthInsights = (() => {
   }
   function resourceList(id, records, settings={}) {
     const rows=filteredRows(id,records,settings), running=rows.filter(r=>r.status==="Running").length;
-    const header=`<thead><tr><th>Name</th><th>State</th><th title="${id==="vms"?"Launcher CPU usage as a percentage of assigned cores":"100% equals one fully used CPU core"}">CPU</th><th>Memory</th></tr></thead>`;
+    const header=`<thead><tr><th>Name</th><th>State</th><th title="${id==="vms"?"The launcher's CPU use as a percentage of its assigned cores":"100% is one fully used CPU core"}">CPU</th><th>Memory</th></tr></thead>`;
     const row=r=>`<tr${clusterAttr(r.record)}><td><div class="dashboard-resource-name">${UI.statusDot(r.tone)}<span title="${esc([r.ns,r.name].filter(Boolean).join("/"))}">${esc(r.name)}</span></div></td><td><span class="dashboard-resource-state ${r.tone}" title="${esc(r.record.problem || r.status)}">${esc(r.status)}</span></td><td class="mono">${known(r.cpu)?esc(Math.round(r.cpu*10)/10)+"%":"—"}</td><td class="mono">${known(r.memory)?esc(vmBytes(r.memory)):"—"}</td></tr>`;
     const groups=Array.from({length:Math.ceil(rows.length/4)},(_,i)=>rows.slice(i*4,i*4+4));
     const table=rows.length?`<div class="dashboard-resource-scroll" tabindex="0" role="region" aria-label="${titles[id]} list"><div class="dashboard-resource-columns">${groups.map(group=>`<table class="dashboard-resource-table">${header}<tbody>${group.map(row).join("")}</tbody></table>`).join("")}</div></div>`:'<div class="empty small">No '+(id==="vms"?"virtual machines":"app containers")+' match this view.</div>';
@@ -193,7 +193,7 @@ const HealthInsights = (() => {
   }));
   async function acknowledge(key,version,undo=false) {
     try{await api("/api/alerts/acknowledge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,version,undo})});
-      toast(undo?"Acknowledgement removed":"Acknowledged until this condition worsens","ok");}
+      toast(undo?"Acknowledgement removed":"Acknowledged until this condition gets worse","ok");}
     catch(e){toast(e.message,"bad");}
     await load(true);
     window.refreshPwaAlerts?.(true);
@@ -206,7 +206,7 @@ const HealthInsights = (() => {
     const hottest=current.find(n=>n.temps?.max_c===max), where=hottest?[hottest.name,hottest.temps?.max_source].filter(Boolean).join(" · "):"";
     const open=rows.filter(r=>!r.alert?.acknowledged), acked=rows.length-open.length;
     const counts=["critical","medium","low"].map(level=>`${open.filter(r=>r.severity===level).length} ${level}`).join(" · ")+(acked?` · ${acked} acknowledged`:"");
-    return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Max observed temperature ${esc(max)}°C${where?` (${esc(where)})`:""}</span>`:""}</div>`+
+    return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Highest temperature ${esc(max)}°C${where?` (${esc(where)})`:""}</span>`:""}</div>`+
       (rows.length?list(rows,compact?3:Infinity):'<div class="empty small">No suggestions from the available checks.</div>')+
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
@@ -216,17 +216,17 @@ const HealthInsights = (() => {
   function body(id, settings={}) {
     if (!needs[id].every(key=>key in data))return '<div class="empty small"><span class="spin2"></span>Loading checks…</div>';
     if(id==="health")return healthBody(true);
-    if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
+    if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Try again to refresh this widget.")+UI.button("Try again","HealthInsights.load(true)");
     if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"],settings);
-    if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes reported.</div>');
-    if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active apps need attention.</div>');}
+    if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check the schedules under Data protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes were reported.</div>');
+    if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready} of ${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active apps need attention.</div>');}
     if(id==="updates") {
       const r=data.updates, rows=(r?.workloads || []).filter(w=>w.available || w.images?.some(i=>i.error)).map(w=>item(w.ns+"/"+w.name,w.available?"low":"medium",w.name,w.available?"Image update available":"Registry check failed",w.homestead?"settings:updates#homesteadUpdateCard":"images"));
       for(const c of data.components?.components || [])if(c.next)rows.push(item("component:"+c.id,"low",c.name,`${c.installed} → ${c.next}`,"settings:updates#settingsComponents"));
       rows.push(...pairRows(data.components));
       for(const [name,h] of Object.entries(data.hosts?.hosts || {}))if(h.updates?.length || h.reboot)rows.push(item("host:"+name,h.security?"medium":"low",name,`${h.updates?.length || 0} package updates${h.reboot?" · restart needed":""}`,"settings:updates#settingsHostUpdates:"+name));
       const incomplete=needs.updates.some(k=>data[k]===null) || r?.partial || (Array.isArray(r?.errors)?r.errors.length:r?.errors) || (data.hosts?.applies && !Object.keys(data.hosts.hosts || {}).length);
-      return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Review Updates.</div>':"");
+      return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Check Updates.</div>':"");
     }
     if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":""})),4);}
     return "";

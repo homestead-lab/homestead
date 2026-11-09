@@ -85,17 +85,17 @@ const reviewWith = async adds => {
 
 test("An app with a LAN address and a named user's volume lists both deploy-time additions", async () => {
   const html = await reviewWith([{ what: "a volume-owner init container", certain: true }, { what: "a LAN network attachment", certain: true }]);
-  assert.match(html, /Homestead also adds at deploy time: a volume-owner init container; a LAN network attachment\. Applying this file elsewhere won't add them\./);
+  assert.match(html, /Homestead also adds at deploy time: a volume-owner init container; a LAN network attachment\. Applying this file elsewhere does not add them\./);
 });
 
 test("An owner only the image could name is a may", async () => {
   const html = await reviewWith([{ what: "a volume-owner init container", certain: false }]);
-  assert.match(html, /At deploy time Homestead may add a volume-owner init container\. Applying this file elsewhere won't add it\./);
+  assert.match(html, /At deploy time Homestead may add a volume-owner init container\. Applying this file elsewhere does not add it\./);
 });
 
 test("A LAN app whose owner is unknown says the attachment and the may", async () => {
   const html = await reviewWith([{ what: "a volume-owner init container", certain: false }, { what: "a LAN network attachment", certain: true }]);
-  assert.match(html, /Homestead also adds at deploy time: a LAN network attachment, and may add a volume-owner init container\. Applying this file elsewhere won't add them\./);
+  assert.match(html, /Homestead also adds at deploy time: a LAN network attachment, and may add a volume-owner init container\. Applying this file elsewhere does not add them\./);
 });
 
 test("An app with neither has no deploy-time line", async () => {

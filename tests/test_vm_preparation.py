@@ -115,7 +115,7 @@ class EditPreparationTests(unittest.TestCase):
             return get(path)
         with mock.patch.object(vms, "kget", side_effect=read):
             with self.assertRaisesRegex(ValueError, "could not be read"):
-                VM_EDIT.prepare_edit("lab", "web", {"cloud_init": {"user_data": "replacement"}})
+                VM_EDIT.prepare_edit("lab", "web", {"cloud_init": {"user_data": "replacing it"}})
         self.assertEqual([], self.cluster.sent)
 
     def test_incomplete_claim_inventory_never_allows_source_replacement(self):
@@ -139,10 +139,10 @@ class EditPreparationTests(unittest.TestCase):
         def read(path):
             obj = get(path)
             if "/secrets/" in path:
-                obj["metadata"]["uid"] = "replacement"
+                obj["metadata"]["uid"] = "replacing it"
             return obj
         with mock.patch.object(vms, "kget", side_effect=read):
-            with self.assertRaisesRegex(ValueError, "dependency changed"):
+            with self.assertRaisesRegex(ValueError, "depends on changed"):
                 VM_EDIT.commit_edit(prepared)
         self.assertEqual([], self.cluster.sent)
 
@@ -154,7 +154,7 @@ class EditPreparationTests(unittest.TestCase):
                 return {"metadata": {"uid": "new-pvc", "resourceVersion": "1"}}
             return get(path)
         with mock.patch.object(vms, "kget", side_effect=read):
-            with self.assertRaisesRegex(ValueError, "now has a PVC"):
+            with self.assertRaisesRegex(ValueError, "now has a volume claim"):
                 VM_EDIT.commit_edit(prepared)
         self.assertEqual([], self.cluster.sent)
 
@@ -195,7 +195,7 @@ class EditPreparationTests(unittest.TestCase):
                     return {"metadata": {"name": "web-disk-0", "uid": "other", "resourceVersion": "1"}}
                 return get(path)
             with mock.patch.object(vms, "kget", side_effect=read):
-                with self.assertRaisesRegex(ValueError, "cannot be adopted"):
+                with self.assertRaisesRegex(ValueError, "cannot take it over"):
                     VM_EDIT.commit_edit(prepared)
         self.assertEqual([], self.cluster.sent)
 

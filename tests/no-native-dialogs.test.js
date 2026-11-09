@@ -95,7 +95,7 @@ test("storage prompts that delete or remove something have a title and a button 
   const checked = [], missing = [];
   for (const name of [...require("./helpers/storage-source").names(), "views-protect.js", "longhorn-v2-setup.js"]) {
     const source = fs.readFileSync(path.join(dir, name), "utf8");
-    for (const match of source.matchAll(/\bask\(\s*["'`](Delete|Remove|Erase|Disable)\b/g)) {
+    for (const match of source.matchAll(/\bask\(\s*["'`](Delete|Remove|Erase|Disable|Turn off)\b/g)) {
       const call = askCall(source, match.index + 3);
       const where = `${name}:${source.slice(0, match.index).split("\n").length}`;
       checked.push(where);

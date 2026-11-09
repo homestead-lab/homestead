@@ -124,16 +124,16 @@ def _disk_volume(vm, ns, claim, size, klass, source, to_create, effects):
     url, image = str(source.get("url") or "").strip(), str(source.get("image") or "").strip()
     if url and MASKS.has_stripped(url):
         # A copy shown below the reveal role, saved back, would download from the mask.
-        raise ValueError("this disk address is hidden in your copy; type the full address in again")
+        raise ValueError("This disk address is hidden in the copy shown. Type the full address again.")
     if url:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"{url} is not a download address; give the full http(s):// URL"
+            raise ValueError(f"{url} is not a download address. Give the full http(s):// URL"
                              + (", or pick the Harvester image" if harvester else ""))
         if not cdi and not harvester:
-            raise ValueError("CDI is not installed, so a disk cannot be downloaded; install it from kubevirt.io")
+            raise ValueError("CDI is not installed, so a disk cannot be downloaded. Install it from kubevirt.io.")
     if image and not harvester:
-        raise ValueError("images from the image list are Harvester's; use an image URL on this cluster")
+        raise ValueError("Images from the image list belong to Harvester. Use an image URL on this cluster.")
     _forget_templates(vm, claim)
     if harvester:
         template = {"metadata": {"name": claim, "annotations": {}},
@@ -233,7 +233,7 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
                 current = max((((pvc.get("status") or {}).get("capacity") or {}).get("storage", ""),
                               (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage", "")), key=_bytes)
                 if _bytes(size) < _bytes(current):
-                    raise ValueError(f"{claim} is {current}; a disk can grow but not shrink")
+                    raise ValueError(f"{claim} is {current}, and a disk can grow but not shrink")
                 if _bytes(size) > _bytes(current):
                     RESIZE.require(pvc, V.kget)
                     resize.append((claim, size))
@@ -418,7 +418,7 @@ def _read_cloud_init(vm, ns):
 def _identity(obj):
     meta = (obj or {}).get("metadata") or {}
     if not meta.get("uid") or not meta.get("resourceVersion"):
-        raise ValueError("Resource identity/version is unavailable; refresh before changing the VM")
+        raise ValueError("The VM could not be identified. Refresh before changing it.")
     return {key: meta[key] for key in ("uid", "resourceVersion")}
 
 
@@ -438,7 +438,7 @@ def _edit_cloud_init(vm, ns, cfg, effects):
     volume, key = _cloud_volume(tspec)
     current = _read_cloud_init(vm, ns)
     if current["source"] == "unreadable":
-        raise ValueError("Cloud-init could not be read; nothing can be changed until its Secret is available")
+        raise ValueError("Cloud-init could not be read, so nothing can be changed until its Secret is available")
     if user == current["user_data"] and network == current["network_data"]:
         return False
     if not volume:
@@ -473,11 +473,11 @@ def prepare_edit(ns, name, cfg, current=None):
     current = copy.deepcopy(current if current is not None else V._get(ns, name))
     identity = _identity(current)
     if current["metadata"].get("deletionTimestamp"):
-        raise ValueError("The VM is deleting; wait before editing")
+        raise ValueError("The VM is being deleted. Wait before editing.")
     vm = copy.deepcopy(current)
     spec = vm["spec"]
     if spec.get("instancetype") and any(key in cfg for key in ("cores", "memory")):
-        raise ValueError("CPU and memory are controlled by this VM's instance type. Leave those fields unchanged; change the profile through a separately reviewed configuration workflow.")
+        raise ValueError("CPU and memory are set by this VM's instance type. Leave those fields as they are, and change the instance type separately.")
     tspec = spec["template"]["spec"]
     dom = tspec["domain"]
     changed_hardware = False
@@ -526,7 +526,7 @@ def prepare_edit(ns, name, cfg, current=None):
         cpu = dom.setdefault("cpu", {})
         per = int(cpu.get("sockets") or 1) * int(cpu.get("threads") or 1)
         if cores % per:
-            raise ValueError(f"this VM has {cpu.get('sockets', 1)} socket(s) of {cpu.get('threads', 1)} thread(s); cores must be a multiple of {per}")
+            raise ValueError(f"This VM has {cpu.get('sockets', 1)} socket(s) of {cpu.get('threads', 1)} thread(s). The cores must be a multiple of {per}.")
         if cpu.get("cores") != cores // per:
             cpu["cores"] = cores // per
             changed_hardware = True
@@ -564,7 +564,7 @@ def prepare_edit(ns, name, cfg, current=None):
             if current_map:
                 labels = (current_map.get("metadata") or {}).get("labels") or {}
                 if labels.get("homestead.io/managed") != "true" or labels.get("app") != name:
-                    raise ValueError("The vBIOS ConfigMap belongs to another resource; inspect it before editing this VM")
+                    raise ValueError("The vBIOS ConfigMap belongs to another resource. Check it before editing this VM.")
             effect["identity"] = _identity(current_map) if current_map else None
         if effect["kind"] == "replace-datavolume" and effect["current"] is not None:
             effect["identity"] = _identity(effect.pop("current"))
@@ -579,21 +579,21 @@ def prepare_edit(ns, name, cfg, current=None):
 def _recheck_edit(prepared):
     ns, name = prepared["namespace"], prepared["name"]
     if _identity(V._get(ns, name)) != prepared["identity"]:
-        raise ValueError("The VM changed; review its edit again")
+        raise ValueError("The VM changed. Review its edit again.")
     for effect in prepared["effects"]:
         if effect["kind"] in ("image-download", "kubevirt-gates"):
             continue
         current = KUBE.get_optional(effect["path"], read=V.kget)
         if (None if current is None else _identity(current)) != effect.get("identity"):
-            raise ValueError("A VM dependency changed; review its edit again")
+            raise ValueError("Something the VM depends on changed. Review its edit again.")
         if effect["kind"] == "replace-datavolume":
             path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(effect['claim'])}"
             if KUBE.get_optional(path, read=V.kget) is not None:
-                raise ValueError("The disk now has a PVC; its source cannot be replaced")
+                raise ValueError("The disk now has a volume claim, so its source cannot be replaced")
     for claim, _ in prepared["resize"]:
         current = V.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
         if _identity(current) != _identity(prepared["claims"][claim]):
-            raise ValueError("A disk changed; review its resize again")
+            raise ValueError("A disk changed. Review its resize again.")
         RESIZE.require(current, V.kget)
     old_names = {_volume_claim(v) for v in prepared["current"]["spec"]["template"]["spec"].get("volumes") or []}
     new_names = {_volume_claim(v) for v in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - old_names - {""}
@@ -606,7 +606,7 @@ def _recheck_edit(prepared):
             if found is not None and ((found.get("metadata") or {}).get("labels") or {}).get("homestead.io/iso") == "true":
                 break
             if found is not None:
-                raise ValueError(f"New disk {claim} already exists; it cannot be adopted by this edit")
+                raise ValueError(f"New disk {claim} already exists, and this edit cannot take it over")
 
 
 def commit_edit(prepared, before_save=None, send=None):
@@ -625,7 +625,7 @@ def commit_edit(prepared, before_save=None, send=None):
     changed_hardware = prepared["changed_hardware"]
     _recheck_edit(prepared)
     if any(effect["kind"] == "replace-datavolume" and effect.get("identity") for effect in prepared["effects"]):
-        raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name/source, then detach the old disk; its data is retained.")
+        raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name or source, then detach the old disk. Its data is kept.")
     for effect in prepared["effects"]:
         if effect["kind"] == "image-download":
             result = HVIMAGE.download(V.kget, send, effect["namespace"], effect["url"], effect["storage_class"])
@@ -674,11 +674,11 @@ def commit_edit(prepared, before_save=None, send=None):
             pass
     detail = f"{name} saved"
     if grown:
-        detail += "; growing " + ", ".join(grown)
+        detail += ". Growing " + ", ".join(grown)
     if dropped:
-        detail += f"; {', '.join(dropped)} detached and kept"
+        detail += f". {', '.join(dropped)} detached and kept"
     if changed_hardware:
-        detail += "; restarting now to use the changes" if restarted else "; template updated; KubeVirt may apply supported changes live, otherwise review a restart"
+        detail += ". Restarting now to use the changes" if restarted else ". Template updated. KubeVirt may apply supported changes while it runs. Otherwise, review a restart"
     identity = (saved.get("metadata") or {}) if isinstance(saved, dict) else {}
     return {"ok": True, "detail": detail, "restart_needed": changed_hardware and not restarted,
             "vm_identity": {key: identity.get(key, "") for key in ("namespace", "name", "uid", "resourceVersion")}}

@@ -20,7 +20,7 @@ def evidence(spec, config, version=None):
         return result
     modes = [key for key, value in security.items() if value is not None]
     if len(modes) != 1 or not isinstance(security[modes[0]], dict):
-        blockers.append("VM launch security requires exactly one supported mode: SEV, SNP or TDX; other policies need verified admission support")
+        blockers.append("VM launch security needs exactly one supported mode: SEV, SNP or TDX. Other policies need confirmed support.")
         return result
     mode = modes[0]
     options = security[mode]
@@ -48,13 +48,13 @@ def evidence(spec, config, version=None):
     if mode == "sev" and (policy or {}).get("encryptedState") is True:
         result["selectors"]["kubevirt.io/sev-es"] = "true"
     if spec.get("architecture") != "amd64":
-        blockers.append("Encrypted-guest admission requires an explicitly resolved amd64 architecture; resolve the VM profile/default before starting")
+        blockers.append("An encrypted guest needs the amd64 architecture set explicitly. Set it in the VM's instance type or default before starting.")
 
     match = re.fullmatch(r"v?1\.(\d+)\.\d+", version or "")
     minor = int(match[1]) if match else None
     known = minor is not None and 3 <= minor <= 9
     if not known:
-        blockers.append("Encrypted-guest policy is unverified on this KubeVirt build or during its upgrade; verify supported admission before starting")
+        blockers.append("Encrypted guests are not confirmed on this KubeVirt build or during its upgrade. Confirm support before starting.")
     elif mode in ("snp", "tdx") and minor < 7:
         blockers.append("SNP/TDX launch-security settings require KubeVirt 1.7 or newer")
     developer = config.get("developerConfiguration") or {}
@@ -93,6 +93,6 @@ def evidence(spec, config, version=None):
     if mode == "sev" and attestation is not None:
         if spec.get("startStrategy") != "Paused":
             blockers.append("SEV attestation requires the guest start strategy to be Paused")
-        result["warnings"].append("SEV attestation must be completed separately before unpausing; this capacity review does not verify or inject guest secrets")
+        result["warnings"].append("SEV attestation must be completed separately before unpausing. This capacity review does not check or add guest secrets.")
     result["warnings"].append("Encryption host labels and device capacity do not prove firmware trust, attestation, guest compatibility or migration/failover support")
     return result

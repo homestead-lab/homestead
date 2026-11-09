@@ -190,8 +190,8 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
                 self.run_drain(kube, power=True)
         message = str(caught.exception)
         self.assertIn("lab/keep-ready", message)
-        self.assertIn("Host remains cordoned", message)
-        self.assertIn("Power was not sent", message)
+        self.assertIn("The host stays cordoned", message)
+        self.assertIn("Nothing was sent", message)
         self.assertLess(self.clock.now, BLOCKERS.BUDGET_WAIT)
         self.assertEqual(0, self.clock.now)
         self.assertFalse(self.sent)
@@ -206,8 +206,8 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         self.assertGreaterEqual(self.clock.now, BLOCKERS.BUDGET_WAIT)
         self.assertIn("lab/keep-ready", message)
         self.assertIn("still waiting", message)
-        self.assertIn("Host remains cordoned", message)
-        self.assertIn("Power was not sent", message)
+        self.assertIn("The host stays cordoned", message)
+        self.assertIn("Nothing was sent", message)
         self.assertFalse(self.sent)
 
     def test_instance_manager_refused_while_engines_detach_keeps_waiting(self):
@@ -247,9 +247,9 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         self.assertIn("orphan record", message)
         self.assertIn("vol-a", message)
         self.assertIn("vol-b-e-0 (no engine record)", message)
-        self.assertIn("review the restart again", message)
-        self.assertIn("Host remains cordoned", message)
-        self.assertIn("Power was not sent", message)
+        self.assertIn("Review the restart again", message)
+        self.assertIn("The host stays cordoned", message)
+        self.assertIn("Nothing was sent", message)
         self.assertFalse(self.sent)
 
     def test_unreadable_refusal_falls_back_to_todays_behaviour(self):
@@ -266,9 +266,9 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("after 5 minutes. Longhorn still prevents eviction", message)
         # What could not be read is said, not left out, with today's advice.
-        self.assertIn("Homestead couldn't check Longhorn instance-managers: HTTP 500", message)
-        self.assertIn("Homestead couldn't check Longhorn orphan records: HTTP 500", message)
-        self.assertIn("inspect Longhorn volumes, disruption budgets and pod events", message)
+        self.assertIn("Homestead could not check Longhorn instance-managers: HTTP 500", message)
+        self.assertIn("Homestead could not check Longhorn orphan records: HTTP 500", message)
+        self.assertIn("Check the Longhorn volumes, disruption budgets and pod events", message)
         # Any other pod: refused at once as today, and the message says why is unknown.
         self.clock, pod, pdb = Clock(), workload(), budget("keep-ready", expected=2, healthy=1)
         with Kube(pod, pdb) as kube:
@@ -279,7 +279,7 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertEqual(0, self.clock.now)
         self.assertIn("drain was refused for lab/app-a (HTTP 429", message)
-        self.assertIn("couldn't read why", message)
+        self.assertIn("could not read why", message)
 
 
     def test_a_stale_only_moment_shorter_than_the_grace_keeps_waiting(self):
@@ -324,7 +324,7 @@ class RefusalTests(unittest.TestCase):
                           urllib.error.HTTPError("eviction", 429, "x", {}, None),
                           too_many_requests("eviction", pdb)):  # the budget is not there to read
                 said = BLOCKERS.refusal(error, pod)
-                self.assertEqual({"budget": None, "passing": False, "why": "couldn't read why"},
+                self.assertEqual({"budget": None, "passing": False, "why": "could not read why"},
                                  {k: said[k] for k in ("budget", "passing", "why")})
 
     def test_a_budget_the_controller_has_not_caught_up_with_is_passing(self):
@@ -363,8 +363,8 @@ class RefusalTests(unittest.TestCase):
             kube.fail(BLOCKERS.CLAIMS, 500, times=10)
             said = BLOCKERS.stall_reason(NODE)
         self.assertIn("other Longhorn orphan record", said)
-        self.assertIn("Homestead couldn't check the volume claims: HTTP 500", said)
-        self.assertIn("review the restart again", said)
+        self.assertIn("Homestead could not check the volume claims: HTTP 500", said)
+        self.assertIn("Review the restart again", said)
 
     def test_stall_reason_is_empty_when_nothing_is_found(self):
         with Kube():

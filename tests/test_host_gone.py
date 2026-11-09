@@ -316,7 +316,7 @@ class EndTests(Review):
                         self.assertEqual((phase, status, "admin"), (record["previous_phase"], record["previous_status"], record["by"]))
                         self.assertEqual({k: v for k, v in job["ref"].items() if k != "phase"},
                                          {k: v for k, v in item["ref"].items() if k not in ("phase", "host_gone")})
-                        self.assertTrue(item["message"].startswith("Ended: its host node-a was removed"))
+                        self.assertTrue(item["message"].startswith("Ended, because its host node-a was removed"))
                         self.assertFalse(CONFLICTS.unresolved(item))
                         public = result["operation"]
                         self.assertTrue(public["dismissible"])

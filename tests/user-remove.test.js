@@ -27,7 +27,7 @@ test("removing from the card stays on the card and redraws it", async () => {
   await ctx.userRemove("alex", "card");
   assert.equal(calls.settings, 1, "the card is drawn again without the user");
   assert.deepEqual(calls.toasts, [["alex removed", "ok"]]);
-  assert.equal(calls.asked[0][1].ok, "Remove", "the button says what it does");
+  assert.equal(calls.asked[0][1].ok, "Remove user", "the button says what it does");
 });
 
 test("a user already removed elsewhere is not an error, and the row goes", async () => {

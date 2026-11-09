@@ -132,10 +132,10 @@ def drop_earlier(ref, send):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             return (f" Its record of before, Secret {ref['earlier_secret']}, could not be removed "
-                    f"(HTTP {error.code}); delete it when you no longer need it.")
+                    f"(HTTP {error.code}). Delete it when it is no longer needed.")
     except Exception:
-        return (f" Its record of before, Secret {ref['earlier_secret']}, could not be removed; "
-                "delete it when you no longer need it.")
+        return (f" Its record of before, Secret {ref['earlier_secret']}, could not be removed. "
+                "Delete it when it is no longer needed.")
     ref["earlier_dropped"] = True
     return ""
 
@@ -228,7 +228,7 @@ def validate_sources(config, current):
             mount = mounts.get(row.get("path"), {})
             if (mount.get("subPathExpr") or volumes.get(mount.get("name")) != origin.get("claim") or
                     COPY._folder(mount.get("subPath"), "source") != COPY._folder(origin.get("sub_path"), "source")):
-                raise ValueError("Copy source no longer matches the workload's mounted volume and folder; reopen Edit")
+                raise ValueError("The copy source no longer matches the app's mounted volume and folder. Open Edit again.")
 
 
 def helper_manifest(ns, name, moves):
@@ -250,7 +250,7 @@ def start(body, context, prepared, moves, read, ops, apply, send=None):
     if COPY.HELD in current["metadata"].get("annotations", {}):
         raise ValueError("An existing storage-copy hold needs inspection before another copy")
     if (source["uid"], source["resourceVersion"]) != (context["uid"], context["resourceVersion"]):
-        raise ValueError("Workload changed after review")
+        raise ValueError("The app changed after the review")
     guards(current, read)
     validate_sources(body, current)
     previous = claims(ns, moves, read, pending=[row["name"] for row in prepared["claims"]])
@@ -262,11 +262,11 @@ def start(body, context, prepared, moves, read, ops, apply, send=None):
     ref["earlier_digest"] = _sha(record)
     not_started = ""
     operation = ops.start(KIND, f"Move {name}'s data", {"kind": "Deployment", "namespace": ns, "name": name},
-                          "/containers", ref, "Recording storage edit; uncertain steps are never replayed")
+                          "/containers", ref, "Recording the storage edit. An uncertain step is never repeated.")
     ident = operation["id"]
     with LOCKS.worker_lock(ident, ops):
         try:
-            ops.record_phase(ident, "preparing", 5, "Saving the edited configuration stopped; original volumes are retained")
+            ops.record_phase(ident, "preparing", 5, "Saving the edited settings stopped. The original volumes are kept.")
             # Re-fence after the durable intent, before the multi-object edit.
             if IDENT.identity(read(path)) != source:
                 raise ValueError("Workload changed before the edit")
@@ -277,9 +277,9 @@ def start(body, context, prepared, moves, read, ops, apply, send=None):
             except Exception:
                 not_started = (f"The storage copy did not start: Homestead could not save {name}'s configuration from "
                                f"before the edit (Secret {earlier_name(source['uid'])}), which it needs to undo the edit "
-                               f"if the copy fails. Nothing was changed; {name} is still running as it was.")
+                               f"if the copy fails. Nothing was changed, and {name} is still running as it was.")
                 raise
-            ops.record_phase(ident, "preparing", 5, "Configuration from before the edit recorded; saving the edit stopped",
+            ops.record_phase(ident, "preparing", 5, "Settings from before the edit recorded. Saving the edit stopped.",
                              earlier_secret=kept["metadata"]["name"], earlier_uid=IDENT.identity(kept)["uid"])
             prepared["deployment"].setdefault("metadata", {}).setdefault("annotations", {})[MARKER] = ident
             result = apply()
@@ -304,12 +304,12 @@ def start(body, context, prepared, moves, read, ops, apply, send=None):
             return result
         except Exception:
             try:
-                ops.record_phase(ident, "failed", 5, not_started or "Storage edit outcome is unverified. Inspect the workload and volumes; nothing was retried or rolled back.")
+                ops.record_phase(ident, "failed", 5, not_started or "The outcome of the storage edit is not confirmed. Check the app and volumes. Nothing was retried or rolled back.")
             except Exception:
                 pass
             if not_started:
                 raise ValueError(not_started) from None
-            raise ValueError(f"Storage edit stopped; inspect job {ident}. Configuration or new volumes may have been saved. No automatic rollback or cleanup was performed.") from None
+            raise ValueError(f"The storage edit stopped. Check job {ident}. Settings or new volumes may have been saved. Nothing was rolled back or cleaned up automatically.") from None
 
 
 def held(item, read):
@@ -341,9 +341,9 @@ def copy_finished(ref, read):
     ns = ref["namespace"]
     job = read(f"/apis/batch/v1/namespaces/{ns}/jobs/{ref['job']}")
     if IDENT.identity(job)["uid"] != ref["job_uid"]:
-        raise IDENT.Stopped("The copy Job was replaced; its result is not trusted")
+        raise IDENT.Stopped("The copy Job was replaced, so its result is not trusted")
     if digest(job.get("spec", {}).get("template")) != ref.get("job_template_digest"):
-        raise IDENT.Stopped("The copy Job configuration changed; inspect its result")
+        raise IDENT.Stopped("The copy Job settings changed, so check its result")
     conditions = job.get("status", {}).get("conditions", [])
     failed = any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions)
     complete = any(c.get("type") == "Complete" and c.get("status") == "True" for c in conditions)
@@ -364,7 +364,7 @@ def exclusive(ref, read):
         if ref.get("job_uid") and owner.get("kind") == "Job" and owner.get("uid") == ref["job_uid"]:
             continue
         if any(v.get("persistentVolumeClaim", {}).get("claimName") in names for v in pod.get("spec", {}).get("volumes", [])):
-            raise IDENT.Stopped("Another active pod uses a copy volume; stop its consumers before moving this data")
+            raise IDENT.Stopped("Another running pod uses a copy volume. Stop what uses it before moving this data.")
 
 
 def resolve(item, read, send, ops, admission):
@@ -373,7 +373,7 @@ def resolve(item, read, send, ops, admission):
     if phase == "restore_intent":
         return resumed_restore(item, read, send)
     if phase in ("preparing", "copy_intent", "release_intent", "recovery_intent"):
-        return "running", percent, "A request may be unfinished. Inspect outcome; Homestead will not replay it."
+        return "running", percent, "A request may be unfinished. Choose Check outcome. Homestead does not send it again."
     try:
         if phase == "starting":
             dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
@@ -385,8 +385,8 @@ def resolve(item, read, send, ops, admission):
             if ready:
                 ref.update(phase="done", retain_resources=False)
                 note = drop_earlier(ref, send)
-                return "succeeded", 100, ("Copy finished; workload is ready" if count else "Copy finished; workload stays stopped as requested") + note
-            return "running", 90, "Copy finished; waiting for workload readiness (not an application-health check)"
+                return "succeeded", 100, ("Copy finished. The app is ready." if count else "Copy finished. The app stays stopped, as requested.") + note
+            return "running", 90, "Copy finished. Waiting for the app to be ready (this is not a check of the app's health)."
         dep = held(item, read)
         if not quiet(dep, read):
             return "running", percent or 10, "Waiting for all workload pods to terminate, including terminating pods"
@@ -402,7 +402,7 @@ def resolve(item, read, send, ops, admission):
                 return "running", 10, "Waiting for workload pods to terminate after the placement check"
             exclusive(ref, read)
             ref.update(phase="copy_intent", job=job_name, copy_gib=gib)
-            ops._finish(item, "running", 20, f"Submitting copy Job {ref['namespace']}/{job_name}; an uncertain request will not be replayed")
+            ops._finish(item, "running", 20, f"Starting copy Job {ref['namespace']}/{job_name}. An uncertain request is not repeated.")
             ops.checkpoint(item)  # before POST; never adopt a same-name Job on retry
             receipt = send("POST", f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs", body)
             meta = IDENT.identity(receipt)
@@ -410,9 +410,9 @@ def resolve(item, read, send, ops, admission):
                 raise IDENT.Stopped("Copy Job creation receipt did not match")
             ref.update(phase="copying", job_uid=meta["uid"], job_template_digest=digest(receipt["spec"]["template"]))
             ops.checkpoint(item)
-            return "running", 30, "Copying data; original volumes are retained"
+            return "running", 30, "Copying data. The original volumes are kept."
         if phase != "copying":
-            raise IDENT.Stopped("Copy phase is unknown; inspect retained resources")
+            raise IDENT.Stopped("The copy step is unknown. Check the kept resources.")
         complete, failed = copy_finished(ref, read)
         if failed:
             return restore(item, dep, read, send, ops, admission)
@@ -433,7 +433,7 @@ def resolve(item, read, send, ops, admission):
                  {"op": "add", "path": "/spec/replicas", "value": ref["replicas"]}]
         patch += _removals(dep["metadata"].get("annotations", {}))
         ref.update(phase="release_intent", running_digest=digest(proposed["spec"]))
-        ops._finish(item, "running", 75, "Copy completed and fresh placement checked; recording the restart request")
+        ops._finish(item, "running", 75, "Copy finished and placement checked again. Recording the restart request.")
         ops.checkpoint(item)
         result = _as(ref.get("started_by"), lambda: send("PATCH", IDENT.base(ref["namespace"]) + "/" + ref["name"], patch,
                                                          ctype="application/json-patch+json"))
@@ -441,7 +441,7 @@ def resolve(item, read, send, ops, admission):
             raise IDENT.Stopped("Restart response did not confirm the reviewed configuration")
         ref["phase"] = "starting"
         ops.checkpoint(item)
-        return "running", 85, "Copy finished; restart accepted, checking readiness"
+        return "running", 85, "Copy finished and restart accepted. Checking readiness."
     except KeptStopped as error:
         ref["retain_resources"] = True
         return "failed", percent, str(error)
@@ -450,7 +450,7 @@ def resolve(item, read, send, ops, admission):
         # Preserve intent phase when the response is uncertain; never infer
         # success from a same-name replacement or repeat the upstream request.
         ref["retain_resources"] = True
-        return "failed", percent, reason + ". Inspect outcome before starting anything; volumes were retained and no rollback was attempted."
+        return "failed", percent, reason + ". Choose Check outcome before starting anything. The volumes were kept, and nothing was rolled back."
 
 
 KEPT = "The new volumes and the copy Job were kept for inspection."
@@ -492,31 +492,31 @@ def restore(item, dep, read, send, ops, admission):
     try:
         dep = held(item, read)
         if not quiet(dep, read):
-            stay("its pods changed while the copy ran; check them, then start it")
+            stay("its pods changed while the copy ran. Check them, then start it")
         exclusive(ref, read)
     except KeptStopped:
         raise
     except IDENT.Stopped as error:
-        stay(str(error).rstrip(".").lower() + "; check it, then start it")
+        stay(str(error).rstrip(".").lower() + ". Check it, then start it")
     try:
         text = read_earlier(ref, read)
     except Exception:
-        stay("its configuration from before the edit could not be read, so the edit cannot be undone; "
-             "edit it back, then start it")
+        stay("its settings from before the edit could not be read, so the edit cannot be undone. "
+             "Edit it back, then start it")
     if not text:
-        stay("its configuration from before the edit was not recorded, was removed or was changed, so the edit cannot be "
-             "undone; edit it back, then start it")
+        stay("its settings from before the edit were not recorded, were removed or were changed, so the edit cannot be "
+             "undone. Edit it back, then start it")
     saved = json.loads(text)
     written = {m["to"] for m in ref["moves"]}
     used = {v.get("persistentVolumeClaim", {}).get("claimName") for v in saved["template"].get("spec", {}).get("volumes", [])}
     if written & used:
-        stay(f"the copy also wrote to {', '.join(sorted(written & used))}, which it used before the edit; "
-             "check that data, then start it")
+        stay(f"the copy also wrote to {', '.join(sorted(written & used))}, which it used before the edit. "
+             "Check that data, then start it")
     count = int(saved["replicas"] or 0)
     proposed = unheld(dep)
     proposed["spec"].update(template=saved["template"], replicas=count)
     if count and admission(proposed).get("blocked") is not False:
-        stay("it no longer fits current placement or storage constraints as it was; free room, then start it")
+        stay("it no longer fits the current placement or storage limits as it was. Free some room, then start it")
     meta = IDENT.identity(dep)
     patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
              {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
@@ -524,7 +524,7 @@ def restore(item, dep, read, send, ops, admission):
              {"op": "add", "path": "/spec/replicas", "value": count}] + _removals(dep["metadata"].get("annotations", {}))
     ref.update(phase="restore_intent", retain_resources=True, failure=why, earlier_replicas=count,
                earlier_template_digest=digest(saved["template"]))
-    ops._finish(item, "running", item.get("progress", 45), f"{why}; undoing the edit of {ref['name']}")
+    ops._finish(item, "running", item.get("progress", 45), f"{why}. Undoing the edit of {ref['name']}.")
     ops.checkpoint(item)  # before PATCH; an uncertain undo is never replayed
     path = IDENT.base(ref["namespace"]) + "/" + ref["name"]
     try:
@@ -551,7 +551,7 @@ def resumed_restore(item, read, send):
 
 def legacy_status(item):
     item["ref"]["retain_resources"] = True
-    return "failed", item.get("progress", 0), "Legacy storage move has no identity receipts. Inspect its workload and copy Job; no automatic restart, retry or rollback was performed."
+    return "failed", item.get("progress", 0), "This older storage move has no records of what it created. Check its app and copy Job. Nothing was restarted, retried or rolled back automatically."
 
 
 def recovery_plan(item, read, ops):
@@ -577,10 +577,10 @@ def recovery_plan(item, read, ops):
     try:
         dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
         if IDENT.identity(dep)["uid"] != ref["deployment"]["uid"]:
-            return {**plan, "why_not": "Workload was replaced; its hold will not be changed"}
+            return {**plan, "why_not": "The app was replaced, so its hold is not changed"}
         if ref.get("job"):
             if not ref.get("job_uid"):
-                return {**plan, "why_not": "Copy creation outcome is unknown. Inspect the recorded Job in Kubernetes; this UI will not adopt or delete it by name."}
+                return {**plan, "why_not": "Whether the copy was created is unknown. Check the recorded Job in Kubernetes. Homestead does not take over or delete it by name."}
             complete, failed = copy_finished(ref, read)
             if not (complete or failed):
                 return {**plan, "why_not": "Copy is still active. Wait for its pods to finish before releasing the hold."}
@@ -605,9 +605,9 @@ def recovery_run(item, options, read, send, ops):
         dep = read(IDENT.base(ref["namespace"]) + "/" + ref["name"])
         meta = IDENT.identity(dep)
         if meta["uid"] != ref["deployment"]["uid"]:
-            raise ValueError("Workload was replaced; no hold was changed")
+            raise ValueError("The app was replaced, so no hold was changed")
         if ref.get("job") and (not ref.get("job_uid") or not any(copy_finished(ref, read))):
-            raise ValueError("Copy completion cannot be verified; no hold was changed")
+            raise ValueError("The end of the copy cannot be confirmed, so no hold was changed")
         annotations = dep["metadata"].get("annotations", {})
         if annotations.get(MARKER) not in (None, item["id"]):
             raise ValueError("Another operation owns the hold")
@@ -619,7 +619,7 @@ def recovery_run(item, options, read, send, ops):
             # this metadata-only CAS. A retry cannot start or delete anything.
             result = send("PATCH", IDENT.base(ref["namespace"]) + "/" + ref["name"], patch, ctype="application/json-patch+json")
             if IDENT.identity(result)["uid"] != meta["uid"] or result["metadata"].get("annotations", {}).get(MARKER):
-                raise ValueError("Hold release was not confirmed; inspect before retrying")
+                raise ValueError("The release of the hold was not confirmed. Check it before trying again.")
         ref["retain_resources"] = False
         note = drop_earlier(ref, send)
-        return "Safety hold released; workload replicas, storage mappings, volumes and copy Job were not changed. Review the data before starting." + note
+        return "Safety hold released. The app's replicas, storage settings, volumes and copy Job were not changed. Review the data before starting." + note

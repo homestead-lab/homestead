@@ -70,7 +70,7 @@ class Snapshot:
         maximum = 1 if self.ports else None
         pods = active_pods(self.pods)
         if self.spec.get("hostNetwork"):
-            warnings.append("host networking may use undeclared host listeners; only declared ports can be checked")
+            warnings.append("Host networking may use ports that are not declared. Only declared ports can be checked.")
         if self.ports and self.pods is None:
             warnings.append("host-port usage is unavailable")
         for pod in pods:
@@ -111,7 +111,7 @@ class Snapshot:
                 # host's pod starts a live migration and its mount is refused.
                 if self.workload_kind != "vm" and sc and sc.get("provisioner") == "driver.longhorn.io" and str((sc.get("parameters") or {}).get("migratable", "")).lower() == "true":
                     if "ReadWriteMany" in modes:
-                        reasons.append(f"PVC {name}'s storage class is migratable, so several hosts can't mount it; choose a class without migratable for a shared volume")
+                        reasons.append(f"PVC {name}'s storage class is migratable, so several hosts cannot mount it. Choose a class without migratable for a shared volume.")
                     else:
                         warnings.append(f"PVC {name}'s storage class is migratable. That suits one host, not a volume several hosts mount")
             if pv:
@@ -136,7 +136,7 @@ class Snapshot:
                     reasons.append(f"PVC {name}'s storage class does not exist")
                 elif sc and not sc.get("_unknown") and sc.get("volumeBindingMode") == "WaitForFirstConsumer":
                     if self.spec.get("nodeName"):
-                        reasons.append(f"PVC {name} waits for a scheduler decision; nodeName bypasses its binding")
+                        reasons.append(f"PVC {name} waits for Kubernetes to place its pod, and nodeName skips that")
                     terms = sc.get("allowedTopologies") or []
                     if terms and not any(all((node.get("labels") or {}).get(expr.get("key")) in (expr.get("values") or [])
                                                  for expr in term.get("matchLabelExpressions") or []) for term in terms):

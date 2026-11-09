@@ -84,7 +84,7 @@ def _url(value, title):
     if parsed.scheme not in ("http", "https") or not parsed.hostname or len(url) > 500:
         raise ValueError(f"{title}: the address must be an http:// or https:// URL")
     if parsed.username or parsed.password:
-        raise ValueError(f"{title}: leave the password out of the address; the portal is readable by every user")
+        raise ValueError(f"{title}: leave the password out of the address, because every user can read the portal")
     return url
 
 

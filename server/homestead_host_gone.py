@@ -124,7 +124,7 @@ def _left_in_cluster(helper, namespace):
     if not helper or helper["state"] == "absent":
         return []
     name = helper["name"]
-    return [{"own": f"Helper Job {name} in {namespace}, pinned to the removed host: deleted when you end the job, "
+    return [{"own": f"Helper Job {name} in {namespace}, pinned to the removed host, is deleted when the job is ended, "
                     "only if it is still the same Job.",
              "other": f"A Job named {name} with another identity: left alone.",
              "unverified": f"Helper Job {name}: this job never saved its identity, so it is left alone; "
@@ -157,7 +157,7 @@ def _snapshot(item, read, actor, namespace):
         helper = None
         blockers.append(f"The helper Job {ref.get('job')} could not be read ({error}).")
     warnings = ["Homestead records the end, and deletes the helper Job below if it is still the same Job.",
-                "The job's record stays in Jobs until you dismiss it."]
+                "The job's record stays in Jobs until it is dismissed."]
     if "replaced" in evidence.values():
         warnings.insert(0, f"A host named {node} is in the cluster with a new identity. If it is the same machine and it was "
                            "not reinstalled, what this job left there is still on it.")
@@ -199,7 +199,7 @@ def resolve(body, ops, read, send, actor, namespace):
         if plan["blocked"]:
             raise ValueError(" ".join(plan["blockers"]) + " Nothing was ended.")
         if body.get("confirm_capacity") is not True or not REVIEW.valid({"id": ident, "capacity_token": body.get("capacity_token")}, context):
-            raise ValueError("What Homestead found has changed since the review, or the review expired. Review again; nothing was ended.")
+            raise ValueError("What Homestead found has changed since the review, or the review expired. Review again. Nothing was ended.")
         if body.get("acknowledge_host_gone") is not True or body.get("confirm") != plan["confirm"]:
             raise ValueError("Type the host's name and confirm that nothing on the host is changed. Nothing was ended.")
         ref, node = item["ref"], plan["node"]
@@ -209,11 +209,11 @@ def resolve(body, ops, read, send, actor, namespace):
                             "observed": context["observed"], "helper_job": outcome}
         ref["phase"] = CONFLICTS.HOST_GONE
         ops._finish(item, "failed", item.get("progress", 0),
-                    f"Ended: its host {node} was removed. Nothing on the host was changed; the record lists what may remain there.")
+                    f"Ended, because its host {node} was removed. Nothing on the host was changed. The record lists what may remain there.")
         t.save(items)
-        detail = f"Ended. {node}'s job no longer holds anything back; nothing on the host was changed."
+        detail = f"Ended. {node}'s job no longer holds anything back, and nothing on the host was changed."
         if outcome.startswith("not deleted"):
-            detail += f" The helper Job {context['helper']['name']} was {outcome}; delete it by hand once you have checked it."
+            detail += f" The helper Job {context['helper']['name']} was {outcome}. Delete it manually after checking it."
         return {"ok": True, "detail": detail, "operation": ops._public(item)}
 
 

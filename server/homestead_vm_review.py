@@ -88,7 +88,7 @@ def vm_power_capacity_plan(body):
         plan["blockers"].append("This VM uses the Once run strategy. Edit its run strategy and review that change before starting it again.")
         plan["blocked"] = True
     if policy_after != strategy:
-        plan["warnings"].append("Starting a Halted VM changes its KubeVirt run strategy to Always: it will be restarted after shutdown or failure until you stop it.")
+        plan["warnings"].append("Starting a Halted VM changes its KubeVirt run strategy to Always. It is restarted after a shutdown or failure until it is stopped.")
     plan["warnings"].append("Power requests address the VM by name. Identity is rechecked immediately before sending, but this is not an atomic scheduler reservation or a cross-resource transaction.")
     plan["requires_confirmation"] = True
     context = {"action": "vm-power", "observations": plan["vm"]["context"],
@@ -123,16 +123,16 @@ def _reviewed_vm_power(body):
     for path, expected in context["dependencies"].items():
         observed = VM_CAPACITY._optional(kget, path)
         if (VM_CAPACITY.VMRES.identity(observed) if observed else None) != expected:
-            raise CAPACITY_REVIEW.Rejected("A VM storage/network dependency changed during admission; review it again", plan)
+            raise CAPACITY_REVIEW.Rejected("Storage or a network the VM depends on changed during the final check. Review it again.", plan)
     # Re-read both identities after the inventory and token checks. Never retry
     # an API conflict by fetching and writing a new run policy.
     current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
     observations = context["observations"]
     if CAPACITY_REVIEW.review_identity(current) != observations["vm"]:
-        raise CAPACITY_REVIEW.Rejected("The VM changed during admission; review it again", plan)
+        raise CAPACITY_REVIEW.Rejected("The VM changed during the final check. Review it again.", plan)
     vmi = VM_CAPACITY._optional(kget, f"{VMS.API}/namespaces/{ns}/virtualmachineinstances/{name}")
     if (CAPACITY_REVIEW.review_identity(vmi) if vmi else None) != observations.get("vmi"):
-        raise CAPACITY_REVIEW.Rejected("The running VM instance changed during admission; review it again", plan)
+        raise CAPACITY_REVIEW.Rejected("The running VM instance changed during the final check. Review it again.", plan)
     def before_send():
         fresh, fresh_context = vm_power_capacity_plan(body)
         CAPACITY_REVIEW.enforce(body, fresh, fresh_context)
@@ -206,7 +206,7 @@ def vm_creation_capacity(prepared):
         plan["blockers"].append("Selected disk is referenced by existing VM(s), including stopped VMs: " + ", ".join(sorted(borrowed_users)))
         plan["blocked"] = True
     plan["warnings"] += ["Image import/provisioning may start before the guest. Importer and controller overhead is not fully rendered in this estimate.",
-                         "If a later step fails, created images, claims or Secrets are retained for inspection; do not blindly repeat creation."]
+                         "If a later step fails, any images, volume claims or Secrets already created are kept so they can be checked. Do not simply repeat the creation."]
     if prepared["vm"]["spec"].get("runStrategy") == "Halted":
         # Still show the future start plan, but a stopped VM does not allocate
         # a launcher. Storage provisioning/import can run independently.
@@ -260,7 +260,7 @@ def reviewed_vm_create(body):
             else:
                 actual = VM_CAPACITY.VMRES.identity(value) if value else None
             if actual != expected:
-                raise CAPACITY_REVIEW.Rejected("VM creation dependencies changed during image preparation; inspect retained resources and review again", fresh)
+                raise CAPACITY_REVIEW.Rejected("Something the new VM depends on changed while its image was prepared. Check the kept resources and review again.", fresh)
         CAPACITY_REVIEW.enforce(cfg, fresh, context)
     result = VM_MUTATION_JOB.dispatch("vm-create", cfg, cfg["namespace"], cfg["name"], None, OPS, IMP.ksend,
         lambda send: VM_CREATE.commit_vm(prepared, before_save=admit_after_preparation, send=send))
@@ -271,7 +271,7 @@ def reviewed_vm_create(body):
                               "note": f"VM {cfg['namespace']}/{cfg['name']}"})
         except Exception:
             result["warning"] = " ".join(filter(None, [result.get("warning"),
-                "VM created, but its IP-address record could not be saved; inspect IP addresses before reusing the address."]))
+                "The VM was created, but its IP address record could not be saved. Check IP addresses before using the address again."]))
     return result
 
 
@@ -324,12 +324,12 @@ def vm_edit_capacity(prepared):
                                planned_configmaps={e["path"]: e["body"] for e in prepared["effects"] if e["kind"] == "configmap" and e["body"]})
         plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
         if after == "Halted":
-            plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
+            plan["warnings"].append("The requested policy is Halted. The placement shown is cautious. A separate reviewed Start is needed to run it again.")
     else:
         plan = {"blocked": False, "blockers": [], "warnings": [], "vm": {"action": "edit"}}
     for effect in prepared["effects"]:
         if effect["kind"] == "replace-datavolume" and effect.get("identity"):
-            plan["blockers"].append("Existing DataVolume replacement is unsafe in an edit. Add a disk with a new name/source, then detach the old disk; no old disk is deleted.")
+            plan["blockers"].append("Replacing an existing DataVolume is unsafe in an edit. Add a disk with a new name or source, then detach the old disk. No old disk is deleted.")
             plan["blocked"] = True
     plan["vm"].update(admission_needed=needed, policy_before=before, policy_after=after)
     plan["warnings"].append("VM, Secret and disk changes are not a transaction. If saving fails, inspect retained resources before trying again. No automatic restart is sent by Save.")
@@ -363,7 +363,7 @@ def reviewed_vm_edit(body):
     def before_save(resolved):
         fresh, _, fresh_context = vm_edit_capacity(resolved)
         if fresh_context["expanded_spec"] != context["expanded_spec"]:
-            raise CAPACITY_REVIEW.Rejected("VM profile expansion changed during preparation; review the proposed resources again", fresh)
+            raise CAPACITY_REVIEW.Rejected("The VM's instance type settings changed during preparation. Review the proposed resources again.", fresh)
         for path, expected in context["dependencies"].items():
             value = VM_CAPACITY._optional(kget, path) if not isinstance(expected, list) else kget(path)
             if isinstance(expected, list):
@@ -374,7 +374,7 @@ def reviewed_vm_edit(body):
             else:
                 actual = VM_CAPACITY.VMRES.identity(value) if value else None
             if actual != expected:
-                raise CAPACITY_REVIEW.Rejected("VM edit dependencies changed; inspect retained resources and review again", fresh)
+                raise CAPACITY_REVIEW.Rejected("Something the edit depends on changed. Check the kept resources and review again.", fresh)
         CAPACITY_REVIEW.enforce(body, fresh, context)
         VM_EDIT._recheck_edit(resolved)
     return VM_MUTATION_JOB.dispatch("vm-edit", body, prepared["namespace"], prepared["name"], prepared["identity"], OPS, VMS.ksend,
@@ -392,7 +392,7 @@ def vm_cluster_configuration(body, *, preview=False):
     if not re.fullmatch(r"[a-f0-9]{32}", str(cfg.get("review_id") or "")):
         raise ValueError("Review the VM cluster first to freeze its generated identifiers")
     if not isinstance(cfg.get("macs"), dict) or set(cfg["macs"]) != {node["name"] for node in built["nodes"]}:
-        raise ValueError("VM cluster MAC addresses are incomplete; review again")
+        raise ValueError("The list of MAC addresses in the cluster is incomplete. Review again.")
     if len(set(cfg["macs"].values())) != len(built["nodes"]):
         raise ValueError("VM cluster MAC addresses must be distinct")
     cfg["storage_class"] = str(cfg.get("storage_class") or vm_default_class())
@@ -470,14 +470,14 @@ def reviewed_vm_cluster(body):
         fresh = VM_BATCH.plan(prepared, read, PLACE.get_nodes(), created=receipts,
                               threshold=get_app_settings()["thresholds"]["memory"]["critical"])
         if (fresh.get("numa_policy") or {}) != context["numa_policy"]:
-            raise CAPACITY_REVIEW.Rejected("Host allocation policy changed; retain partial resources and review again", fresh)
+            raise CAPACITY_REVIEW.Rejected("The host allocation policy changed. Keep anything already created and review again.", fresh)
         for path, expected in context["external"].items():
             value = VM_CAPACITY._optional(read, path) if expected is None else read(path)
             actual = (sorted([VM_CAPACITY.VMRES.identity(row) for row in VM_CAPACITY._items(read, path)],
                              key=lambda row: (row.get("namespace") or "", row.get("name") or ""))
                       if isinstance(expected, list) else VM_CAPACITY.VMRES.identity(value) if value else None)
             if actual != expected:
-                raise CAPACITY_REVIEW.Rejected("VM batch dependencies changed; retain partial resources and review again", fresh)
+                raise CAPACITY_REVIEW.Rejected("Something the batch of VMs depends on changed. Keep anything already created and review again.", fresh)
         CAPACITY_REVIEW.enforce(cfg, fresh, context)
     def before_node(config, made):
         receipts.update({row["name"]: row["identity"] for row in made})
@@ -501,7 +501,7 @@ def reviewed_vm_cluster(body):
             except Exception:
                 # A failed address record is not authority to repeat creation.
                 # Halt the batch with its pre-dispatch recovery intent retained.
-                raise ValueError("VM created but its IP-address record could not be saved; inspect it before continuing") from None
+                raise ValueError("The VM was created, but its IP address record could not be saved. Check it before continuing.") from None
         return result
     return K3SC.commit(batch, OPS, create_one=create_one, before_node=before_node, review=cfg, send=IMP.ksend)
 

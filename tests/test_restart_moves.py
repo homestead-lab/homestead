@@ -110,7 +110,7 @@ class Landing(unittest.TestCase):
         term = preference("k1")
         term["preference"]["matchExpressions"][0]["values"] = ["k1", "k2"]
         self.c.edit_dep("frigate", lambda d: prefers(d, term))
-        self.assertIn("isn't for one host", why_of(self.plan())["lab/frigate"])
+        self.assertIn("is not for one host", why_of(self.plan())["lab/frigate"])
 
     def test_reservations_favouring_its_host_leave_it_with_why(self):
         for host in ("k1", "k3"):
@@ -413,7 +413,7 @@ class RestartJob(unittest.TestCase):
         state, _, message = C.status(self.item)
         self.assertEqual("failed", state)
         self.assertIn("restarted on k2, not k1", message)
-        self.assertIn("the rest were not moved", message)
+        self.assertIn("The rest were not moved", message)
 
     def test_a_restart_still_rolling_is_waited_for(self):
         C.status(self.item)

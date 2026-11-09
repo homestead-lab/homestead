@@ -36,16 +36,16 @@ async function viewImport() {
   const classFacts = await part("/api/storageclasses?facts=1", "storage class details", null);
   STATE.data.classFacts = classFacts ? classFacts.facts || {} : STATE.data.classFacts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
-  paint(`${UI.pageHeader(`Import`, `Bring apps in from an Unraid or Docker server, or a Docker Compose file. VMs are imported under Virtual machines.`, `${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
+  paint(`${UI.pageHeader(`Import`, `Import apps from an Unraid or Docker server, or from a Docker Compose file. VMs are imported under Virtual machines.`, `${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
         // VM imports moved to their own page; this points there for a release or so.
-        { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}`)}
+        { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "VMs are imported under Virtual machines › Import." }])}`)}
     ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
 
-    <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
+    <div class="sec">Unraid and Docker servers ${tip("Apps on another server, such as Unraid or any Linux host running Docker, with their settings and appdata. Homestead connects to the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>
-    <div class="dim small" style="margin-top:10px">Each imported container gets its image, ports, variables and devices, and its
-      folders are copied into Longhorn volumes. It is created <b>stopped</b>: start it in Containers once the copy finishes.</div>`
+    <div class="dim small" style="margin-top:10px">Each imported app keeps its image, ports, variables and devices, and its
+      folders are copied into volumes. It is created <b>stopped</b>. Start it from Containers when the copy finishes.</div>`
       : importSourceSteps()}
 
     ${jobs.length ? `<div class="sec">Transfers</div>
@@ -58,7 +58,7 @@ async function viewImport() {
         <td class="small dim">${fmtWhen(j.start)}</td>
         <td data-actions>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || defaultNamespace())},${jsq(j.name)})` },
           { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || defaultNamespace())})`, need: "admin", danger: j.state === "failed",
-            tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
+            tip: j.state === "running" ? "Stop this copy and remove its job." : "Remove this job. Until it is removed, the volume it copied into cannot be deleted." }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
 `);
@@ -82,7 +82,7 @@ function importSourceCard(s) {
       <button class="btn sm danger" data-need="admin" title="Remove this server" onclick="srcDel(${jsq(s.name)})">✕</button></div>
     <div class="drow"><div class="dl">Appdata</div><div class="dv mono small">${esc(s.base_path)}</div></div>
     <div class="drow"><div class="dl">SSH key</div><div class="dv">${trusted ? '<span class="ok-t">Verified</span>' : '<span class="med-t">Not verified yet</span>'}</div></div>
-    ${trusted ? "" : '<div class="dim xs" style="margin-top:8px">Next: verify its SSH key, so Homestead knows it is talking to this server.</div>'}
+    ${trusted ? "" : '<div class="dim xs" style="margin-top:8px">Next, verify its SSH key, so that Homestead knows it is connecting to the right server.</div>'}
     <div class="row" style="margin-top:12px">${trusted
       ? `<button class="btn pri" data-need="admin" onclick="srcBrowse(${jsq(s.name)})">Import containers</button>
          <button class="btn" data-need="admin" onclick="srcVerify(${jsq(s.name)})">Verify again</button>`
@@ -96,12 +96,12 @@ function importSourceSteps() {
     <div><b>${title}</b><div class="dim small">${text}</div></div></div>`;
   return `<div class="card flat importsteps">
     <div class="importstep-row">
-      ${step(1, "Add the server", "Your Unraid server, or any Linux host running Docker: its address, an SSH login and where appdata lives.")}
-      ${step(2, "Verify its SSH key", "Compare the fingerprint with the server's own console. No password is sent until you trust it.")}
+      ${step(1, "Add the server", "An Unraid server or any Linux host running Docker. Enter its address, an SSH login and the appdata folder.")}
+      ${step(2, "Verify its SSH key", "Compare the fingerprint with the one shown on the server's console. No password is sent until the key is trusted.")}
       ${step(3, "Pick containers", "Image, ports, variables and devices come across, and each folder is copied into a Longhorn volume.")}
     </div>
     <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add an Unraid or Docker server</button>
-      <span class="dim small">Imported apps start stopped, and run once their data has been copied.</span></div>
+      <span class="dim small">Imported apps are created stopped, and can be started when their data has been copied.</span></div>
   </div>`;
 }
 window.importRemove = async (name, state, namespace = defaultNamespace()) => {
@@ -110,12 +110,12 @@ window.importRemove = async (name, state, namespace = defaultNamespace()) => {
     body: JSON.stringify({ name, namespace }) }).catch(e => ({ unread: e.message }));
   // Without the plan there is nothing safe to offer: not "it created nothing" (#620).
   if (plan.unread) {
-    modal(`Remove import · ${name}`, UI.callout("bad", "Could not check what this import created", esc(plan.unread)) + UI.actions(UI.cancel("Close")));
+    modal(`Remove import · ${name}`, UI.callout("bad", "Homestead could not check what this import created", esc(plan.unread)) + UI.actions(UI.cancel("Close")));
     return;
   }
   if (plan.journalled) {
-    modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
-      UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
+    modal(`Remove import job · ${name}`, UI.lead("Remove the copy job after a successful import. The app, its network addresses and all volumes are kept.") +
+      UI.callout("info", "Import not finished", "To check an import, open Recent jobs and choose Inspect import. A copy that is running, or whose result is unknown, cannot be removed here.") +
       UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow(${jsArg(name)},this,${jsArg(namespace)})`, {kind:"danger",id:"imr_go"})));
     return;
   }
@@ -125,26 +125,26 @@ window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   modal(running ? `Cancel import · ${name}` : `Remove import · ${name}`, `
     <div class="note">${running
       ? "Cancelling stops the copy where it is. Files already written stay on the volume."
-      : "Removing the job clears it from Transfers. While it exists it keeps referencing the volume it copied into, which blocks deleting that volume."}</div>
+      : "Removing the job clears it from Transfers. Until it is removed, the volume it copied into cannot be deleted."}</div>
     <div class="sec">Also remove what this import created</div>
     <div class="volume-delete-grid">
       <label class="volume-delete-option ${plan.workload ? "" : "disabled"}">
         <input type="checkbox" id="imr_workload" ${plan.workload ? "" : "disabled"}>
         <span><b>The app${plan.workload ? ` · ${esc(plan.workload)}` : ""}</b>
           <small>${plan.workload
-            ? "Deletes the Deployment this import created, and every Service pointing at it."
+            ? "Deletes the app this import created, and its network addresses."
             : "This import created no app, or it has already been deleted."}</small></span></label>
       ${claims.length ? claims.map(claim => `
       <label class="volume-delete-option danger ${claim.created ? "" : "disabled"}">
         <input type="checkbox" class="imr-volume" value="${esc(claim.name)}" ${claim.created ? "" : "disabled"}>
         <span><b>The volume · ${esc(claim.name)}</b>
           <small>${claim.created
-            ? "Deletes the claim this import created, along with whatever was copied into it."
-            : `${esc(claim.name)} existed before this import, so it is not this import's to delete. Remove it from Volumes if you mean to.`}</small></span></label>`).join("")
+            ? "Deletes the volume this import created, and everything copied into it."
+            : `${esc(claim.name)} existed before this import, so it is not deleted here. It can be deleted from Volumes.`}</small></span></label>`).join("")
       : `<label class="volume-delete-option danger disabled"><input type="checkbox" disabled>
         <span><b>The volume</b><small>No volume is recorded for this import.</small></span></label>`}
     </div>
-    ${plan.known === false ? '<div class="note">This import predates the record of what it created, so only the job is removed.</div>' : ""}
+    ${plan.known === false ? '<div class="note">This import is older than the record of what imports create, so only the job is removed.</div>' : ""}
     ${UI.actions(`<button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this,${jsq(namespace)})">${running ? "Cancel import" : "Remove"}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`)}`);
   if (window.applyRole) window.applyRole();
@@ -177,25 +177,25 @@ window.vmDiskImport = () => {
   // with no list, the server picks that class for a disk that names none.
   const classes = STATE.data.importStorageClasses || [];
   modal("Import VM disk", `
-    <div class="note"><b>CDI handles the conversion.</b> Provide a directly downloadable HTTP(S) qcow2, vmdk, raw, vdi, vhd or vhdx image. The source is streamed into a new Longhorn PVC; an existing disk is never overwritten.</div>
+    <div class="note">Enter the address of a disk image that can be downloaded directly over HTTP or HTTPS: qcow2, vmdk, raw, vdi, vhd or vhdx. The image is converted and copied into a new volume. No existing disk is overwritten.</div>
     <div class="f2" style="margin-top:16px">
-      <div class="f"><label>Namespace ${tip("The imported DataVolume and its PVC are created here. A VM using the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-      <div class="f"><label>Disk / PVC name ${tip("This becomes both the CDI DataVolume name and the resulting PVC name.")}</label><input id="vd_name" placeholder="ubuntu-server"></div>
+      <div class="f"><label>Namespace ${tip("The disk is created in this namespace. A VM that uses the disk must be in the same namespace.")}</label><select id="vd_ns">${namespaces.map(n => `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
+      <div class="f"><label>Disk name ${tip("The name of the new volume. Kubernetes uses it for both the DataVolume and the PersistentVolumeClaim.")}</label><input id="vd_name" placeholder="ubuntu-server"></div>
     </div>
-    <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. URLs containing embedded usernames or passwords are rejected; use a Kubernetes Secret for authenticated endpoints.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
+    <div class="f"><label>Image URL ${tip("HTTP and HTTPS only. Addresses that contain a user name or password are refused. For a server that needs a sign-in, use a credential Secret under Authenticated or private CA source.")}</label><input type="url" id="vd_url" placeholder="https://example.net/images/server.qcow2"></div>
     <div class="f2">
-      <div class="f"><label>Capacity (GiB) ${tip("Must be at least as large as the image's virtual disk capacity. CDI expands the converted disk to fit this PVC.")}</label><input type="number" min="1" max="16384" id="vd_size" value="20"></div>
+      <div class="f"><label>Capacity (GiB) ${tip("At least the size of the image's virtual disk. The converted disk is expanded to this size.")}</label><input type="number" min="1" max="16384" id="vd_size" value="20"></div>
       <div class="f"><label>Storage class</label><select id="vd_sc">${classes.length ? classes.map((s, i) => `<option value="${esc(s)}" ${i === 0 ? "selected" : ""}>${esc(s)}</option>`).join("") : '<option value="" selected>Homestead\'s default class</option>'}</select></div>
     </div>
     <div class="f2">
       <div class="f"><label>Access mode ${tip("RWO is the normal choice for a VM boot disk. RWX allows several hosts to mount it but does not make concurrent VM writes safe.")}</label><select id="vd_mode"><option value="ReadWriteOnce">RWO · one node</option><option value="ReadWriteMany">RWX · many nodes</option></select></div>
-      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the publisher's SHA-256 or SHA-512 hexadecimal digest.")}</label><div class="row" style="gap:7px"><select id="vd_algo" aria-label="Checksum type" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" aria-label="Checksum" placeholder="hex digest"></div></div>
+      <div class="f"><label>Checksum (optional) ${tip("Recommended for downloaded images. Paste the SHA-256 or SHA-512 checksum the publisher gives.")}</label><div class="row" style="gap:7px"><select id="vd_algo" aria-label="Checksum type" style="max-width:110px"><option value="sha256">SHA-256</option><option value="sha512">SHA-512</option></select><input id="vd_checksum" class="mono" aria-label="Checksum" placeholder="hex digest"></div></div>
     </div>
     <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
-      <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
-      <div class="f"><label>CA ConfigMap ${tip("Optional ConfigMap in the destination namespace containing the endpoint's CA certificate.")}</label><input id="vd_ca" placeholder="private-ca"></div></div></details>
+      <div class="f"><label>Credential Secret ${tip("Optional. A Secret in the same namespace with accessKeyId and secretKey fields, for servers that need a sign-in.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
+      <div class="f"><label>CA ConfigMap ${tip("Optional. A ConfigMap in the same namespace with the server's CA certificate, for servers with a private certificate.")}</label><input id="vd_ca" placeholder="private-ca"></div></div></details>
     ${UI.actions(`<button class="btn pri" onclick="doVmDiskImport()">Start import</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
-    <div class="dim xs" style="margin-top:12px">Progress continues under Jobs after this dialog closes. Source URLs are not copied into Homestead's operation history.</div>`, true);
+    <div class="dim xs" style="margin-top:12px">The import continues in Jobs after this dialog is closed. The image address is not saved in Homestead's job history.</div>`, true);
 };
 window.doVmDiskImport = async () => {
   const digest = $("#vd_checksum").value.trim();
@@ -214,27 +214,27 @@ window.doVmDiskImport = async () => {
 };
 /* What each type of server is for, in the dialog's lead. */
 const SOURCE_LEADS = {
-  unraid: "Homestead reaches the server over SSH, lists its Docker containers and VMs, and copies each one's data.",
-  ssh: "Homestead reaches the host over SSH, lists its Docker containers, and copies each one's appdata.",
-  proxmox: "Homestead reaches the Proxmox host over SSH (root, or a user that may run qm), lists its VMs, and copies each one's disks.",
+  unraid: "Homestead connects to the server over SSH, lists its Docker containers and VMs, and copies their data.",
+  ssh: "Homestead connects to the host over SSH, lists its Docker containers, and copies their appdata.",
+  proxmox: "Homestead connects to the Proxmox host over SSH, as root or a user allowed to run qm, lists its VMs, and copies their disks.",
 };
 /* Add a server: its type first, since it decides the rest. kind is the type to
    start on: Proxmox from the VM import page, Unraid elsewhere. */
 window.srcAdd = (kind = STATE.view === "vmimport" ? "proxmox" : "unraid") => {
   const option = (value, label) => `<option value="${value}"${value === kind ? " selected" : ""}>${label}</option>`;
-  modal("Add a server", `<p class="ui-lead" id="sc_lead">${esc(SOURCE_LEADS[kind] || SOURCE_LEADS.unraid)} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.</p>` +
+  modal("Add a server", `<p class="ui-lead" id="sc_lead">${esc(SOURCE_LEADS[kind] || SOURCE_LEADS.unraid)} Save it, then verify its SSH fingerprint. Homestead does not sign in until the fingerprint is trusted.</p>` +
   UI.field("Type", `<select id="sc_kind" onchange="srcKindChanged()">${option("unraid", "Unraid")}${option("proxmox", "Proxmox VE")}${option("ssh", "Other Docker host")}</select>`) +
   UI.fields(UI.field("Name", `<input id="sc_name" placeholder="${kind === "proxmox" ? "proxmox" : "unraid"}">`), UI.field("Address", '<input id="sc_host" placeholder="192.0.2.10">'),
     UI.field("Username", '<input id="sc_user" value="root" autocomplete="off">'), UI.field("Password", '<input type="password" id="sc_pass" autocomplete="new-password">'),
     UI.field("SSH port", '<input id="sc_port" type="number" min="1" max="65535" value="22">')) +
   `<div id="sc_path_field"${kind === "proxmox" ? " hidden" : ""}>${UI.field("Appdata folder", '<input id="sc_path" value="/mnt/user/appdata">')}</div>` +
-  UI.more("Credentials and source ownership", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a source does not revoke credentials already used by copy Jobs.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
+  UI.more("Password storage and trademarks", '<p>The password is stored in a Kubernetes Secret. Administrators with access to Secrets can read it. Removing a server does not cancel credentials that copy jobs are already using.</p><p>Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not affiliated with or endorsed by Lime Technology, Inc.</p>') +
   UI.actions(UI.cancel() + UI.button("Save and verify", "doSrcAdd()", {kind:"pri",id:"sc_save"})), false, "operation-review");
 };
 /* The lead and the appdata folder follow the type: a Proxmox host has no appdata. */
 window.srcKindChanged = () => {
   const kind = $("#sc_kind").value;
-  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then verify its SSH fingerprint: no login is attempted until you trust it.`;
+  $("#sc_lead").textContent = `${SOURCE_LEADS[kind] || SOURCE_LEADS.unraid} Save it, then check its SSH fingerprint. No sign-in is attempted until it is trusted.`;
   $("#sc_path_field").hidden = kind === "proxmox";
   $("#sc_name").placeholder = kind === "proxmox" ? "proxmox" : "unraid";
 };
@@ -256,13 +256,13 @@ window.doSrcAdd = async () => {
     // Refused (a bad name, a missing field): nothing was saved, so correct it
     // and save again. Anything else may have saved: refresh before retrying.
     if (e.status >= 400 && e.status < 500) { save.disabled = false; toast(e.message, "bad"); }
-    else toast(e.message + " — refresh Sources before retrying an uncertain save.", "bad");
+    else toast(e.message + " Refresh the list of servers before trying again.", "bad");
   }
 };
 /* Review, then trust a source's SSH host key (#909), on the shared review flow: it keeps the sequence, the
    busy flag and the one-shot send. This view keeps its words. */
 const SOURCE_KEY = UI.reviewFlow({
-  loading: name => modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No login or password is sent…</div>', false, "operation-review"),
+  loading: name => modal(`Verify source · ${name}`, '<div id="sourceKeyLoading" class="empty"><span class="spin2"></span>Reading the SSH host key. No sign-in or password is sent…</div>', false, "operation-review"),
   live: () => !!$("#sourceKeyLoading"),
   preview: async name => {
     const review = await api("/api/sources/scan", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
@@ -271,17 +271,17 @@ const SOURCE_KEY = UI.reviewFlow({
   },
   render: review => {
     const file = {"ssh-ed25519":"ed25519","ecdsa-sha2-nistp256":"ecdsa","ssh-rsa":"rsa"}[review.algorithm];
-    $("#mbody").innerHTML = UI.lead("Compare this fingerprint with the source host's own console before allowing Homestead to log in.") +
-      UI.callout(review.changed ? "bad" : "warn", review.changed ? "The source key changed" : "A scan is not proof of identity",
-        review.changed ? "A reinstall or an unexpected host can cause this. Confirm the change independently; do not trust it just to clear an error." : "Use the host's physical console or an already trusted management session, not this new SSH connection.") +
+    $("#mbody").innerHTML = UI.lead("Compare this fingerprint with the one shown on the server's console before allowing Homestead to sign in.") +
+      UI.callout(review.changed ? "bad" : "warn", review.changed ? "The server's key has changed" : "Check the fingerprint on the server itself",
+        review.changed ? "A reinstall or a different machine at this address can cause this. Confirm the change on the server itself before trusting it." : "Use the server's own screen or a management session already trusted, not this new SSH connection.") +
       UI.facts([["Host",esc(review.connection?.host) + ":" + esc(review.connection?.port)],["Host key",esc(review.algorithm)]]) +
       UI.section("Compare fingerprint", `<div class="mono" style="overflow-wrap:anywhere">${esc(review.fingerprint)}</div>`) +
-      UI.section("On the source console", `<code style="overflow-wrap:anywhere">ssh-keygen -lf /etc/ssh/ssh_host_${esc(file || "ed25519")}_key.pub</code>`) +
-      UI.more("What trusting changes", `<p>New discovery and copy connections must match this key. A key change stops new connections; it is never accepted automatically. Existing helpers retain the key and credentials they started with.</p>${review.previous ? `<p>Previously pinned: <span class="mono" style="overflow-wrap:anywhere">${esc(review.previous)}</span></p>` : ""}`) +
+      UI.section("Command to run on the server", `<code style="overflow-wrap:anywhere">ssh-keygen -lf /etc/ssh/ssh_host_${esc(file || "ed25519")}_key.pub</code>`) +
+      UI.more("Effects of trusting this key", `<p>New connections to this server must match this key. If the key changes, new connections stop until it is trusted again. Copies already running keep the key and credentials they started with.</p>${review.previous ? `<p>Previously trusted key: <span class="mono" style="overflow-wrap:anywhere">${esc(review.previous)}</span></p>` : ""}`) +
       UI.ack("sourceKeyAck", "I compared this fingerprint with the source host's console.", {onchange:"sourceKeyReady()"}) +
       UI.actions(UI.cancel("Not now") + UI.button("Trust this source", "sourceKeyTrust()", {kind:"pri",id:"sourceKeyApply",disabled:true}));
   },
-  failed: e => { $("#mbody").innerHTML = UI.callout("bad", "Source not verified", esc(e.message)) + UI.actions(UI.cancel("Close")); },
+  failed: e => { $("#mbody").innerHTML = UI.callout("bad", "The server was not verified", esc(e.message)) + UI.actions(UI.cancel("Close")); },
   ack: "sourceKeyAck", button: "sourceKeyApply",
   apply: async review => {
     const button = $("#sourceKeyApply");
@@ -289,11 +289,11 @@ const SOURCE_KEY = UI.reviewFlow({
     try {
       await api("/api/sources/trust", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         name:review.name,key:review.key,capacity_token:review.capacity_token,confirm_fingerprint:true})});
-      toast("Source key pinned", "ok");
+      toast("Server key trusted", "ok");
       if ($("#sourceKeyApply") === button) { closeModal(); importRepaint(); }
     } catch(e) {
-      if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Trust save not confirmed", esc(e.message) + " Refresh and scan again; nothing was retried.") + UI.actions(UI.cancel("Close"));
-      else toast("Trust save not confirmed. Refresh Sources before retrying.", "bad");
+      if ($("#sourceKeyApply") === button) $("#mbody").innerHTML = UI.callout("bad", "Homestead could not confirm that the key was trusted", esc(e.message) + " Refresh and read the key again. Nothing was retried.") + UI.actions(UI.cancel("Close"));
+      else toast("Homestead could not confirm that the key was trusted. Refresh the list of servers before trying again.", "bad");
     }
   },
 });
@@ -304,7 +304,7 @@ window.sourceKeyTrust = async () => {
   await SOURCE_KEY.apply();
 };
 window.srcDel = async name => {
-  if (!(await ask(`Remove import source "${name}"? Existing copy Jobs and their credentials are retained; this does not stop or revoke them.`, { title: "Remove import source", ok: "Remove", danger: true }))) return;
+  if (!(await ask(`Remove the server "${name}"? Copy jobs already running are not stopped, and keep their credentials.`, { title: "Remove server", ok: "Remove server", danger: true }))) return;
   try { await api("/api/sources/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
     toast("Removed", "ok"); importRepaint(); } catch (e) { toast(e.message, "bad"); }
 };
@@ -319,33 +319,33 @@ window.srcBrowse = async name => {
     const src = (STATE.data.srcs || []).find(s => s.name === name) || {};
     const entries = r.entries.filter(e => !e.startsWith("==") && !/^(WARNING|Permission|Warning)/i.test(e));
     $("#mbody").innerHTML = `${dc.containers.length ? `<div class="ctitle">Containers on ${esc(name)}</div>
-      <p class="muted small">Choose a container to carry over its image, ports, environment variables, icon and appdata mount automatically.</p>
+      <p class="muted small">Choose a container to import its image, ports, environment variables, icon and appdata folders.</p>
       <div class="apps importapps" style="margin-top:14px">${dc.containers.map(c => `<div class="card flat importapp">
         <div class="between"><b>${esc(c.name)}</b>${UI.chip(c.state || "unknown", c.state === "running" ? "ok" : "neutral")}</div>
         <div class="mono xs dim" style="margin-top:7px;word-break:break-all">${esc(c.image)}</div>
         <button class="btn pri wide sm" style="margin-top:10px" onclick="inspectImport(${jsq(name)},${jsq(c.name)})">Import container</button></div>`).join("")}</div>
       <div class="sec">Appdata folders</div>` : ""}` + (entries.length
-      ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Use this when Docker metadata is unavailable.</p>
+      ? `<p class="muted small">${entries.length} directories under <span class="mono">${esc(src.base_path)}</span>. Use these when Docker's container settings are not available.</p>
          <div class="apps" style="margin-top:14px;grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
          ${entries.map(e => `<div class="card flat" style="padding:13px">
            <div style="font-weight:660;word-break:break-all">${esc(e)}</div>
            <button class="btn wide sm" style="margin-top:10px"
              onclick="importSetup(${jsq(name)},${jsq(e)})">Import</button></div>`).join("")}</div>`
-      : `<div class="empty">No appdata folders returned. Check the credentials and that
+      : `<div class="empty">No appdata folders were found. Check the credentials, and check that
          <span class="mono">${esc(src.base_path)}</span> exists on ${esc(src.host)}.</div>`)
-      + (dc.unread ? UI.callout("warn", `Could not list the Docker containers on ${name}`, `${esc(dc.unread)} Only its appdata folders are offered.`)
-        : dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were listed on ${esc(name)}, so only its
-         appdata folders are offered. Check that Docker is running there and the SSH user may use it.</div>`);
+      + (dc.unread ? UI.callout("warn", `Could not list the Docker containers on ${name}`, `${esc(dc.unread)} Only its appdata folders are shown.`)
+        : dc.containers.length ? "" : `<div class="note" style="margin-top:12px">No Docker containers were found on ${esc(name)}, so only its
+         appdata folders are shown. Check that Docker is running there and that the SSH user is allowed to use it.</div>`);
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `srcBrowse(${jsArg(name)})`, dialog: true }); }
 };
 
 window.imageCleanupReview = digest => {
   const image = (STATE.data.imageCache?.images || []).find(row => row.digest === digest);
-  if (!image) return toast("Refresh Image Cache before cleaning this image", "bad");
-  if (image.protected || image.system) return toast("This image is protected and cannot be cleaned", "bad");
+  if (!image) return toast("Refresh the image cache before removing this image", "bad");
+  if (image.protected || image.system) return toast("This image is protected and cannot be removed", "bad");
   const perNode = bytesText(image.size_mb * 1024 ** 2);
-  modal("Clean cached image", `<div class="update-review">
-    ${UI.callout("bad", { html: `This deletes only the cached image layers, not an app.` }, `A future start may be slower while the registry image is downloaded again. Active, immediate rollback, and platform images are blocked server-side.`)}
+  modal("Remove cached image", `<div class="update-review">
+    ${UI.callout("bad", { html: `This removes only the image's cached files, not an app.` }, `The next start of an app that uses it may be slower while the image is downloaded again. Images in use, images kept for a rollback and platform images cannot be removed.`)}
     <div class="update-image"><div><span>Image</span><code>${esc(image.name)}</code></div>
       <div><span>Digest</span><code>${esc(digest)}</code></div><div><span>Per host</span><code>${esc(perNode)}</code></div></div>
     <div class="f"><label>Remove from hosts</label><div class="cleanup-nodes">${image.nodes.map(node =>
@@ -364,7 +364,7 @@ window.imageCleanupApply = async digest => {
   try {
     const result = await api("/api/images/cleanup", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ digest, nodes }) });
-    toast(`Cleanup started on ${result.nodes.length} host${result.nodes.length === 1 ? "" : "s"}`, "ok");
+    toast(`Removal started on ${result.nodes.length} host${result.nodes.length === 1 ? "" : "s"}`, "ok");
     closeModal();
   } catch (error) { toast(error.message, "bad"); }
 };
@@ -374,7 +374,7 @@ window.inspectImport = async (source, container) => {
     const cfg = await api("/api/sources/inspect", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: source, container }) });
     importSetup(source, container, cfg);
-  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not inspect ${esc(container)}</b><br><span class="dim small">${esc(e.message)}</span></div>`; }
+  } catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>${esc(container)} could not be read</b><br><span class="dim small">${esc(e.message)}</span></div>`; }
 };
 /* Every Docker mount under the source appdata path is importable; anything
    else on the host is offered but left unticked, because it is not appdata. */
@@ -426,15 +426,15 @@ function importMappingRow(row = {}) {
       <label class="switch"><input class="imm-on" type="checkbox" ${row.include === false ? "" : "checked"} onchange="imSyncMaps()">Create</label>
       <button class="iconbtn row-remove" type="button" title="Remove scratch volume" onclick="this.closest('.im-map').remove();imSyncMaps()">×</button>
       <div class="dim xs" style="grid-column:1/-1;margin-top:-4px">${row.mount_path === "/dev/shm"
-        ? "Shared memory, as <code>--shm-size</code> gave it on the source. A pod gets 64 MiB otherwise, which is not enough for apps that pass frames or buffers between processes."
-        : "This was tmpfs on the source: a RAM disk that starts empty every time. Kubernetes gives it the same thing, capped at this size and counted against the host's memory."}</div></div>`;
+        ? "Shared memory, as set with <code>--shm-size</code> on the source. Without it an app gets 64 MiB, which is not enough for apps that pass video frames or buffers between processes."
+        : "This was a RAM disk (tmpfs) on the source, which starts empty each time. The app gets the same here, limited to this size and counted against the host's memory."}</div></div>`;
   }
   return `<div class="im-map" data-pvc="${esc(row.pvc || "")}">
     <div><label>Source folder on the host</label><input class="imm-remote" type="text" value="${esc(row.remote_path || "")}" placeholder="/mnt/user/appdata/app/config" oninput="imSyncMaps()"></div>
     <div><label>Goes to volume</label><select class="imm-pvc" onchange="imSyncMaps()"></select></div>
     <div><label>Subfolder</label><input class="imm-folder" type="text" value="${esc(row.folder || "")}" placeholder="${esc(importFolderName(row.remote_path, row.mount_path))}" oninput="imSyncMaps()"></div>
     <div><label>Path inside the container</label><input class="imm-mount" type="text" value="${esc(row.mount_path || "")}" placeholder="/config"></div>
-    <div><label>Contents ${tip("Copy: the folder's files are copied into the volume. Mount empty: the volume is mounted at this path with nothing copied - new recordings, say, where the old ones stay behind. Leave out: not mounted at all.")}</label>
+    <div><label>Contents ${tip("Copy copies the folder's files into the volume. Mount empty mounts the volume at this path without copying anything, for example for new recordings when the old ones are left behind. Leave out does not mount it.")}</label>
       <select class="imm-mode" onchange="imSyncMaps()">
         <option value="copy" ${row.include === false || row.copy === false ? "" : "selected"}>Copy</option>
         <option value="empty" ${row.copy === false && row.include !== false ? "selected" : ""}>Mount empty</option>
@@ -459,8 +459,8 @@ function importVolumeRow(volume = {}, index = 0) {
     <div><label>Volume name</label><input class="imv-name" type="text" value="${esc(volume.name || "")}" list="im_pvc_list" oninput="imSyncVolumes()">
       <datalist id="im_pvc_list">${claims.map(claim => `<option value="${esc(claim.name)}">${esc(claim.size || "")} ${esc((claim.access_modes || []).join("/"))}</option>`).join("")}</datalist></div>
     <div><label>Source</label><select class="imv-kind" onchange="imSyncVolumes()">
-      <option value="new-rwo" ${volume.access_mode === "ReadWriteMany" ? "" : "selected"}>New Longhorn volume · RWO</option>
-      <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume · RWX</option>
+      <option value="new-rwo" ${volume.access_mode === "ReadWriteMany" ? "" : "selected"}>New volume (one host)</option>
+      <option value="new-rwx" ${volume.access_mode === "ReadWriteMany" ? "selected" : ""}>New shared volume</option>
       <option value="existing" ${volume.create === false ? "selected" : ""}>Existing PVC · merge data</option></select></div>
     <div><label>Size GiB</label><input class="imv-size" type="number" min="1" max="16384" value="${esc(volume.size_gb || 10)}"></div>
     <div><label>Storage class</label><select class="imv-class">${storageClassOptions(classes, defaultStorageClass(classes, volume.storage_class, facts), facts)}</select></div>
@@ -527,12 +527,12 @@ window.imSyncMaps = () => {
   const note = $("#im_maps_note");
   if (note) {
     const targets = new Set(rows.map(row => $(".imm-pvc", row)?.value).filter(Boolean));
-    const ram = scratch.length ? ` ${scratch.length} RAM scratch volume${scratch.length === 1 ? "" : "s"} is created empty.` : "";
-    const mounted = empty.length ? ` ${empty.length} more mounted empty, nothing copied.` : "";
+    const ram = scratch.length ? ` ${scratch.length} RAM disk${scratch.length === 1 ? " is" : "s are"} created empty.` : "";
+    const mounted = empty.length ? ` ${empty.length} more ${empty.length === 1 ? "is" : "are"} mounted empty, with nothing copied.` : "";
     note.textContent = (!rows.length ? "Nothing selected to copy."
-      : targets.size > 1 ? `${rows.length} folders across ${targets.size} volumes, each mounted back separately.`
-      : rows.length > 1 ? `${rows.length} folders into one volume, each in its own subfolder.`
-      : "One folder copied to the root of its volume.") + mounted + ram;
+      : targets.size > 1 ? `${rows.length} folders into ${targets.size} volumes, each mounted at its own path.`
+      : rows.length > 1 ? `${rows.length} folders into one volume, each in its own folder.`
+      : "One folder, copied to the top level of its volume.") + mounted + ram;
   }
   const sizes = STATE.data.importSizes || {};
   const everything = importSourcePaths();
@@ -544,11 +544,11 @@ window.imSyncMaps = () => {
     // A folder mapped in its own right never travels inside its parent, so say
     // so on the parent: otherwise the recordings look like they went missing.
     const inside = path ? everything.filter(other => other.startsWith(path + "/")) : [];
-    const skips = inside.length ? ` · leaves out ${inside.map(other => other.slice(path.length)).join(", ")}, mapped separately` : "";
+    const skips = inside.length ? ` · leaves out ${inside.map(other => other.slice(path.length)).join(", ")}, which ${inside.length === 1 ? "is" : "are"} mapped separately` : "";
     readout.classList.toggle("bad", sizes[path] === "missing");
     readout.textContent = (!(path in sizes) ? ""
       : sizes[path] === "missing" ? "this folder does not exist on the source"
-      : sizes[path] === null ? "size unknown — du timed out on this folder"
+      : sizes[path] === null ? "size unknown: measuring this folder took too long"
       : `${importBytes(sizes[path])} to copy`) + (sizes[path] === "missing" ? "" : skips);
   });
 };
@@ -584,9 +584,9 @@ window.imMeasure = async source => {
       const copying = new Set(importMappings().filter(map => !map.medium).map(map => map.remote_path));
       const missing = (result.missing || []).filter(path => copying.has(path));
       note.innerHTML = `${importBytes(result.total_bytes)} measured across ${paths.length - missing.length} folder${paths.length - missing.length === 1 ? "" : "s"}`
-        + (missing.length ? `. <b>${missing.map(esc).join(", ")} ${missing.length === 1 ? "does" : "do"} not exist on the source</b> — fix the path or untick the folder, or the copy will fail.`
-          : result.complete ? ". Volume sizes set from what is actually there, with room to grow."
-          : `, but some folders timed out after ${result.timeout_seconds}s — the sizes cover only what was measured.`);
+        + (missing.length ? `. <b>${missing.map(esc).join(", ")} ${missing.length === 1 ? "does" : "do"} not exist on the source.</b> Correct the path or untick the folder, or the copy will fail.`
+          : result.complete ? ". Volume sizes are set from the measured data, with room to grow."
+          : `. Some folders took longer than ${result.timeout_seconds} seconds to measure, so the sizes include only what was measured.`);
     }
   } catch (e) { toast(e.message, "bad"); }
   finally { if (button) { button.disabled = false; button.textContent = "Measure sizes"; } }
@@ -628,7 +628,7 @@ window.imNamespace = async ns => {
   if (storage.unread) {
     STATE.data.importStorage = { ...(STATE.data.importStorage || {}), pvcs: [] };
     $$("datalist#im_pvc_list").forEach(list => { list.innerHTML = ""; });
-    toast(`Could not read the volumes in ${ns}: ${storage.unread}`, "warn");
+    toast(`The volumes in ${ns} could not be read: ${storage.unread}`, "warn");
     return;
   }
   STATE.data.importStorage = storage;
@@ -666,12 +666,12 @@ window.importSetup = async (source, dir, cfg = {}) => {
     nodeAddressesOnly() ? null : vipChoices().catch(e => ({ unread: e.message }))]);
   // An unread network is not "no addresses": the picker would offer only a new one (#620).
   if (importVips?.unread) {
-    childModal("Import · " + dir, UI.error({ message: importVips.unread }, { title: "Could not open the import", dialog: true }));
+    childModal("Import · " + dir, UI.error({ message: importVips.unread }, { title: "The import could not be opened", dialog: true }));
     return;
   }
   // No class list is not "pick none": the server would choose one (#620).
   if (storage.unread) {
-    childModal("Import · " + dir, UI.callout("bad", "Could not read the storage options", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
+    childModal("Import · " + dir, UI.callout("bad", "The storage options could not be read", esc(storage.unread)) + UI.actions(UI.cancel("Close")));
     return;
   }
   if (Array.isArray(liveNodes) && liveNodes.length) STATE.data.nodes = liveNodes;
@@ -681,63 +681,62 @@ window.importSetup = async (source, dir, cfg = {}) => {
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
   const appStep = `
     <div class="f2"><div class="f"><label>App name</label><input type="text" id="im_name" value="${esc(name)}"></div>
-      <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are all created here. Existing volumes to merge into are offered from this namespace.")}</label>
+      <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are created in this namespace. Existing volumes in it can also receive the data.")}</label>
         <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set([defaultNamespace(), ...(STATE.data.importNamespaces || [])])].map(n =>
           `<option value="${esc(n)}" ${n === defaultNamespace() ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
-    <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
+    <div class="f"><label>Docker image ${tip("Read from Docker on the source server. The tag can be changed before importing.")}</label>
       <input type="text" id="im_image" value="${esc(cfg.image || "")}" placeholder="lscr.io/linuxserver/${esc(name)}:latest"></div>
     <div class="f"><label>Logo URL</label><input type="url" id="im_icon" value="${esc(cfg.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>
-    ${liveNodes?.unread ? UI.callout("warn", "Could not read the hosts just now", `${esc(liveNodes.unread)} · the hardware offered is from the hosts last read`) : ""}
-    <div class="sec">Hardware requirements ${tip("Docker device mappings are pre-selected. Add or remove features before import; placement will be limited to hosts that provide every selected feature.")}</div>
+    ${liveNodes?.unread ? UI.callout("warn", "The hosts could not be read", `${esc(liveNodes.unread)} The hardware shown is from the last reading.`) : ""}
+    <div class="sec">Hardware requirements ${tip("Devices the container used in Docker are already selected. Add or remove them before importing. The app runs only on hosts that have every selected device.")}</div>
     <div class="hwchoices">${hardwareChoices("im_hw", cfg.hardware || [])}</div>
-    <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device a VPN needs.")}</div>
+    <div class="sec">Privileges ${tip("Read from Docker on the source: privileged mode, added capabilities, and the /dev/net/tun device that a VPN needs.")}</div>
     ${privilegeFields("im_pv", cfg)}`;
   const storageStep = `
-    ${keeps ? "" : `<div class="note good" id="im_nothing">This container keeps nothing on disk, so there is nothing to copy and no
-        volume to create. Import will bring across its image, ports and environment alone.
+    ${keeps ? "" : `<div class="note good" id="im_nothing">This container stores nothing on disk, so there is nothing to copy and no
+        volume to create. The import brings only its image, ports and environment variables.
         <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
     <div id="im_storage" ${keeps ? "" : "hidden"}>
-    ${UI.field("Source data safety", '<select id="im_consistency" onchange="imSafetyNote(false)"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
-    <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose Source data safety", "How the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.")}</div>
+    ${UI.field("Source data safety", '<select id="im_consistency" onchange="imSafetyNote(false)"><option value="">Choose before copying…</option><option value="stopped">Everything that writes to these folders is stopped</option><option value="snapshot">These folders are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. The snapshot option skips that check, so make sure the folders really are the snapshot." : "Homestead does not stop apps on the source. Stop everything that writes to these folders, or choose folders that hold a backup, before copying."})}
+    <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose an option under Source data safety", "Say how the data stays unchanged while it is copied: everything that writes to it is stopped, or the folders are a snapshot or backup.")}</div>
     <div id="im_map_picture"></div>
-    <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
+    <div class="sec">Folders ${tip("Each folder the container uses can be copied into a volume, mounted empty or left out. Several folders can share one volume. Each then has its own folder in the volume and is mounted where the container expects it.")}</div>
     ${keeps && cfg.guessed_path ? `${UI.callout("warn", "", `Nothing this container mounts is under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
-      so Homestead cannot tell which folder holds its configuration. Tick the ones to copy yourself.`)}` : ""}
+      so Homestead cannot tell which folder holds its configuration. Tick the folders to copy.`)}` : ""}
     <div id="im_maps">${importMappingRows(cfg, src).map(importMappingRow).join("")}</div>
     <div class="row"><button class="btn sm" onclick="imAddMap()">＋ add folder</button>
       <button class="btn sm" onclick="imAddScratch()">＋ add RAM scratch</button>
       <button class="btn sm" id="im_measure" onclick="imMeasure(${jsq(source)})">Measure sizes</button></div>
     <div class="dim xs" id="im_maps_note" style="margin-top:8px"></div>
     <details class="import-advanced"><summary class="dim small">Override file ownership (rarely needed)</summary>
-      <div class="note">The copy keeps the ownership the files already had on the source, so the app finds
-        its appdata exactly as it left it. Set these only when the container should run as a different user
-        here than it did there.</div>
+      <div class="note">The copy keeps each file's owner from the source, so the app finds its appdata
+        as it left it. Set these only if the app should run as a different user here.</div>
       <div class="f2"><div class="f"><label>Owner UID</label>
-        <input type="number" id="im_uid" min="0" max="65535" placeholder="keep what the source had"></div>
+        <input type="number" id="im_uid" min="0" max="65535" placeholder="same as the source"></div>
         <div class="f"><label>Owner GID</label><input type="number" id="im_gid" min="0" max="65535" placeholder="same as UID"></div></div>
     </details>
-    <div class="sec">Volumes ${tip("An import can fill more than one volume: appdata on a small replicated claim, recordings on a large one - they rarely want the same one. Each folder above says which volume it goes to.")}</div>
+    <div class="sec">Volumes ${tip("An import can use more than one volume, for example a small volume for appdata and a large one for recordings. Each folder above shows which volume it goes to.")}</div>
     <div id="im_volumes"></div>
     <button class="btn sm" onclick="imAddVolume()">＋ add volume</button>
     </div>`;
   const networkStep = `
-    <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (VIP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
-      <div class="f"><label>VIP allocation ${tip("Use the default workload VIP configured in Networking, another reserved address, or a specific VIP. Shared ports must be unique.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : `${importVips.shared ? `<option value="shared">Default workload VIP · ${esc(importVips.shared)}</option>` : ""}${nodeAddressChoice(!importVips.shared)}<option value="auto">New automatic VIP</option><option value="manual">Specific VIP</option>`}</select></div></div>
-    <div class="f" id="im_vip_wrap" style="display:none"><label>Specific VIP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
-    <div class="sec">Port mappings ${tip("Container port is what the app listens on. LAN port is what you open from another device. TCP and UDP mappings are kept separately.")}</div>
+    <div class="sec">Network</div><div class="f2"><div class="f"><label>Docker network → Kubernetes</label><select id="im_net"><option value="loadbalancer">LAN access (virtual IP)</option><option value="internal">Cluster only</option><option value="host" ${cfg.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option></select></div>
+      <div class="f"><label>Virtual IP ${tip("A virtual IP (VIP) is a LAN address that moves to another host if its host fails. Use the default virtual IP set in Networking, a new virtual IP or a specific one. Ports on a shared virtual IP must not clash.")}</label><select id="im_vip" onchange="$('#im_vip_wrap').style.display = this.value === 'manual' ? '' : 'none'">${nodeAddressesOnly() ? nodeAddressOption() : `${importVips.shared ? `<option value="shared">Default virtual IP · ${esc(importVips.shared)}</option>` : ""}${nodeAddressChoice(!importVips.shared)}<option value="auto">New virtual IP, chosen automatically</option><option value="manual">Specific virtual IP</option>`}</select></div></div>
+    <div class="f" id="im_vip_wrap" style="display:none"><label>Specific virtual IP</label><div id="im_vip_pick"><span class="dim xs"><span class="spin2"></span></span></div></div>
+    <div class="sec">Port mappings ${tip("The container port is the one the app listens on. The LAN port is the one other devices connect to. TCP and UDP are mapped separately.")}</div>
     <div id="im_ports">${(cfg.ports || []).map(p => `<div class="f4 im-port"><div><label>Container</label><input class="ipc" type="number" value="${p.container}"></div><div><label>LAN</label><input class="iph" type="number" value="${p.host}"></div><div><label>Protocol</label><select class="ipp"><option ${p.protocol === "TCP" ? "selected" : ""}>TCP</option><option ${p.protocol === "UDP" ? "selected" : ""}>UDP</option></select></div><label class="switch"><input class="ipe" type="checkbox" ${p.expose !== false ? "checked" : ""}>Expose</label></div>`).join("")}</div>
     <button class="btn sm" onclick="imAddPort()">＋ add port</button>
-    <div class="sec">Environment variables ${tip("Copied from Docker inspect. Review secrets and host-specific paths before starting the imported app.")}</div>
+    <div class="sec">Environment variables ${tip("Copied from the Docker container. Check passwords and paths that only apply to the old server before starting the app.")}</div>
     <div id="im_env">${Object.entries(cfg.env || {}).map(([k,v]) => `<div class="f2 im-env"><div class="f"><label>Variable</label><input class="iek" value="${esc(k)}"></div><div class="f"><label>Value</label><input class="iev" value="${esc(v)}"></div></div>`).join("")}</div>
     <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>`;
   const reviewStep = `
     <div class="sec">Memory</div>
-    <div class="f2"><div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "im_memory", cfg.memory || "256Mi", { placeholder: "256", label: "Memory reserved" })}</div>
-      <div class="f"><label>Memory max ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", "im_memory_limit", cfg.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "im_memory" })}</div></div>
-    ${UI.more("How the import runs", `<p>The copy runs as a Job: you can close this and watch it on the Import page, folder by folder; large appdata directories take a while. Its helper reserves 128 MiB and is limited to 512 MiB.</p>
-      <p>The application is created stopped. Once the copy is done, Start in Containers checks capacity again before it runs.</p>`)}`;
+    <div class="f2"><div class="f"><label>Memory reserved ${tip('The memory kept free for this app on its host. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "im_memory", cfg.memory || "256Mi", { placeholder: "256", label: "Memory reserved" })}</div>
+      <div class="f"><label>Memory max ${tip('The most memory this app may use. Above it, the app is stopped and restarted. Leave it empty for no limit. It cannot be lower than Memory reserved.')}</label>${UI.quantity("memory", "im_memory_limit", cfg.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "im_memory" })}</div></div>
+    ${UI.more("How the import runs", `<p>The copy runs as a job. This dialog can be closed, and the copy followed folder by folder on the Import page. Large appdata folders take a while. The copy helper reserves 128 MiB of memory and uses at most 512 MiB.</p>
+      <p>The app is created stopped. When the copy is done, starting it from Containers checks again that there is room for it.</p>`)}`;
   childModal("Import · " + dir, stepper("im_steps", [
     { title: "App", html: appStep }, { title: "Storage", html: storageStep },
     { title: "Network", html: networkStep }, { title: "Memory and review", html: reviewStep }],
@@ -801,7 +800,7 @@ window.clusterCheck = async name => {
   const trouble = check.compatible === false || ["unreachable", "refused"].includes(check.state);
   if (!note) return;
   if (trouble) note.innerHTML = `${UI.callout(tone === "warn" ? "warn" : "bad", "", `${esc(check.message || "")}`, { className: "clvernote" })}`;
-  else if (check.state === "differs") note.innerHTML = `<div class="dim xs clverdim">This cluster runs v${esc(HOMESTEAD_VERSION)}. Moves work between the two.</div>`;
+  else if (check.state === "differs") note.innerHTML = `<div class="dim xs clverdim">This cluster runs v${esc(HOMESTEAD_VERSION)}. Apps can be moved between the two.</div>`;
   if (!trouble) clusterReady(name);
 };
 
@@ -822,7 +821,7 @@ window.clusterReady = async name => {
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
   host.innerHTML = step(true, "Connected")
     + (["pending", "applying"].includes(store.longhorn?.state)
-      ? step(false, `Backup target on ${esc(name)} is switching`, `<div class="dim xs">${esc(store.longhorn.detail)}. Homestead retries automatically.</div>`)
+      ? step(false, `Backup target on ${esc(name)} is switching`, `<div class="dim xs">${esc(store.longhorn.detail)}. Homestead tries again automatically.</div>`)
       : store.longhorn?.state === "failed" || (store.ready && store.longhorn?.pointed === false)
       ? step(false, `Longhorn on ${esc(name)} is not writing to its backup storage`,
           `<div class="dim xs">${esc(store.longhorn.detail || `Current endpoint: ${store.longhorn.endpoint || "none"}`)}</div>
@@ -832,20 +831,20 @@ window.clusterReady = async name => {
           `<div><button class="btn sm pri" data-need="admin" onclick="clusterTransfersOn(${jsq(name)})">Enable it</button></div>`)
       : target.configured && target.reachable_off_cluster && !target.answers
       ? step(false, `Backup storage on ${esc(name)} is at <span class="mono">${esc(target.endpoint || "")}</span>, but this cluster cannot reach it`,
-          `<div class="dim xs">It may still be starting. Otherwise the address is taken by something else or firewalled - give it another.</div>
+          `<div class="dim xs">It may still be starting. Otherwise, the address is used by something else or blocked by a firewall. Give it another address.</div>
            <div><button class="btn sm" data-need="admin" onclick="clusterStorage(${jsq(name)},true)">Give it another address</button></div>`)
       : r.update_first
       ? step(false, `${esc(name)} runs Homestead v${esc(r.version?.version || "?")}, which sets up backup storage with MinIO - whose images can no longer be downloaded`,
-          `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/homestead-lab/homestead:2.8.111</div>`)
+          `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here. To update it, run:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/homestead-lab/homestead:2.8.111</div>`)
       : target.configured && target.reachable_off_cluster
       ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")} · ${esc(target.endpoint || "")}</div>`)
       : target.configured
-        ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it${target.endpoint ? ` - it is at <span class="mono">${esc(target.endpoint)}</span>, inside that cluster` : ""}`,
+        ? step(false, `Backup storage on ${esc(name)} has no LAN address, so this cluster cannot read it.${target.endpoint ? ` Its address, <span class="mono">${esc(target.endpoint)}</span>, works only inside that cluster.` : ""}`,
             `<div><button class="btn sm" data-need="admin" onclick="clusterStorage(${jsq(name)},true)">Give it an address</button></div>`)
         : store.deployed && !store.ready
-          ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads the S3 server; this checks again every 15 seconds.</div>')
+          ? step(false, `Backup storage on ${esc(name)} is starting`, '<div class="dim xs">Its first start downloads the storage server. This is checked again every 15 seconds.</div>')
         : store.deployed
-          ? step(false, `Backup storage is running on ${esc(name)}, but its Longhorn is not pointed at it yet`,
+          ? step(false, `Backup storage is running on ${esc(name)}, but its backups are not set to use it yet`,
               `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Finish setting it up</button></div>`)
         : step(false, `${esc(name)} has no backup storage yet`,
             `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Set it up on ${esc(name)}</button></div>`))
@@ -887,29 +886,29 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
   // the apps that share it, so no address of its own is needed.
   childModal(`Backup storage · ${name}`, `<div class="ui-stack">
     ${UI.lead(addressOnly
-      ? `The backup storage on <b>${esc(name)}</b> runs, but only inside that cluster. Give it an address on your LAN and this cluster reads the backups from there.`
-      : `Puts an S3 store (RustFS) on a Longhorn volume on <b>${esc(name)}</b> and points its Longhorn backups at it. A move backs each volume up there, then restores it here.`)}
+      ? `The backup storage on <b>${esc(name)}</b> is running, but can be reached only inside that cluster. Give it a LAN address so that this cluster can read the backups.`
+      : `Sets up backup storage (RustFS, an S3 server) on <b>${esc(name)}</b> and sends its backups there. A move backs up each volume there, then restores it here.`)}
     ${UI.fields(
       addressOnly ? "" : UI.field("Size (GiB)", '<input id="cs_size" type="number" min="5" value="100">'),
       UI.field("Address", `<select id="cs_pick" onchange="$('#cs_ip').hidden = this.value !== '__typed'">
-          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "Its hosts' own addresses"}</option>
-          ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s VIPs">${free.filter(v => v.from === "vips").map(v =>
+          <option value="__shared" selected>${shared ? `Its shared address · ${esc(shared)}` : "The addresses of its hosts"}</option>
+          ${free.some(v => v.from === "vips") ? `<optgroup label="An address of its own: ${esc(name)}'s virtual IPs">${free.filter(v => v.from === "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}${v.label ? ` · ${esc(v.label)}` : ""}</option>`).join("")}</optgroup>` : ""}
           ${free.some(v => v.from !== "vips") ? `<optgroup label="An address of its own: free in ${esc(name)}'s IP pools">${free.filter(v => v.from !== "vips").map(v =>
             `<option value="${esc(v.ip)}">${esc(v.ip)}</option>`).join("")}</optgroup>` : ""}
           <option value="__typed">Type an address…</option></select>
         <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
-        { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its hosts' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
+        { help: `${shared ? `${esc(name)}'s apps share this address, and the backup storage uses its own port on it.` : `${esc(name)} gives apps the addresses of its hosts, and the backup storage uses its own port on them.`} Choose a separate address only to keep its traffic apart.` }),
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
-        { help: "Blank keeps the existing port or uses 9000. The console uses the next port; both must be available." }))}
-    ${UI.more("Whose address this is", `<p>This address serves ${esc(name)}'s backup store. The destination reads backups from it without taking the address. The store shares the source cluster's disks; keep an independent backup.</p>`)}
-    ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
+        { help: "Leave it empty to keep the current port, or to use 9000. The console uses the next port. Both ports must be free." }))}
+    ${UI.more("About this address", `<p>This address belongs to ${esc(name)}'s backup storage. This cluster reads backups from it but does not take the address over. The backup storage uses the other cluster's disks, so also keep a backup somewhere else.</p>`)}
+    ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button(addressOnly ? "Set address" : "Set up backup storage", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
   </div>`);
 };
 window.clusterStorageGo = async name => {
   const pick = $("#cs_pick")?.value || "__shared";
   const address = pick === "__typed" ? $("#cs_ip").value.trim() : pick === "__shared" ? "" : pick;
-  if (pick === "__typed" && !address) return toast("Type the address this cluster should reach it at", "bad");
+  if (pick === "__typed" && !address) return toast("Enter the address this cluster should use to reach it", "bad");
   const button = $("#cs_go");
   if (button) { button.disabled = true; button.textContent = "Working…"; }
   try {
@@ -922,7 +921,7 @@ window.clusterStorageGo = async name => {
     setTimeout(() => { clusterReady(name); if (after) after(); }, 1500);
   } catch (e) {
     toast(e.message, "bad");
-    if (button) { button.disabled = false; button.textContent = "Set it up"; }
+    if (button) { button.disabled = false; button.textContent = "Set up backup storage"; }
   }
 };
 
@@ -968,7 +967,7 @@ window.clusterInventory = report => {
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `${UI.chip("cannot move", "bad")}<div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
-    : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
+    : '<div class="empty">Homestead found no apps or VMs on that cluster.</div>'}
   ${clusterVolumesHtml(report)}
   ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`);
 };
@@ -979,7 +978,7 @@ function clusterVolumesHtml(report) {
   const volumes = report.volumes || [];
   if (!volumes.length) return "";
   return `<h3 style="margin:18px 0 8px">Volumes</h3>
-  <div class="dim xs" style="margin-bottom:8px">A volume moves on its own when nothing is using it. Moving an app or VM brings its volumes with it.</div>
+  <div class="dim xs" style="margin-bottom:8px">A volume can be moved by itself when nothing uses it. Moving an app or VM moves its volumes too.</div>
   <div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>Volume</th><th>Size</th><th>Used by</th><th></th></tr></thead><tbody>
     ${volumes.map(v => `<tr>
@@ -1025,29 +1024,29 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   childModal(`${verb} from ${cluster} · ${name}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, UI.dialog({ shape: "review",
     subject: { kind: kind === "vm" ? "VM" : kind === "volume" ? "Volume" : "App", name, where: `${cluster}${sourceNamespace ? ` · ${sourceNamespace}` : ""}` },
     lead: `${kind === "volume"
-    ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
-      and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
-      you change your mind.`
+    ? `Backs up ${esc(name)} on ${esc(cluster)} to the shared backup storage while nothing uses it,
+      and restores it here. The original stays on ${esc(cluster)} until it is removed, so nothing is lost if
+      the move is undone.`
     : copy ? `Creates a stopped copy here from backups of the source's volumes. ${kind === "vm"
-      ? "A VM keeps running while its disks are snapshotted, when its cluster's Homestead can do that; the review says."
-      : "The source pauses for its volume backups, then resumes its previous running state."}
-      Review the copy's network settings before starting it.`
+      ? "The VM keeps running while its disks are backed up, if the other cluster's Homestead supports it. The review shows whether it does."
+      : "The original app is paused while its volumes are backed up, then returns to how it was running."}
+      Check the copy's network settings before starting it.`
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
-      storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
-      until you remove it, so it can be put back at any point before then.`}`,
+      storage, restores them here and starts it here. The original stays on ${esc(cluster)}, stopped,
+      until it is removed, so the move can be undone until then.`}`,
     body: `
   <div class="f2"><div class="f"><label>Namespace here</label><input id="mv_ns" value="${esc(defaultNamespace())}"></div>
-    ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address its Services get on this cluster. Shared uses this Homestead's own address; automatic takes a free one from the Harvester IP pool.")}</label>
+    ${kind !== "container" ? "" : `<div class="f"><label>Address ${tip("The LAN address the app gets on this cluster. Shared uses the address this cluster's apps share. Automatic takes a free address from the IP pool.")}</label>
       <select id="mv_mode" onchange="moveAddressMode(this.value)">
         <option value="shared">This cluster's shared address</option>
-        <option value="automatic">Next free pool address</option>
+        <option value="automatic">Next free address from the pool</option>
         <option value="manual">A specific address</option></select></div>`}</div>
   <div class="f" id="mv_ip_wrap" hidden><label>Specific address</label><input id="mv_ip" class="mono" placeholder="192.0.2.245" data-ipam></div>
   <div class="f"><label>Destination storage class</label><select id="mv_sc" disabled><option value="">Loading destination classes…</option></select>
-    <div class="dim xs">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>
+    <div class="dim xs">Restored volumes take this storage class's number of copies, disk tags and other settings.</div></div>
   ${copy && kind === "vm" ? `<div class="f" id="mv_stop_row" hidden><label class="switch"><input type="checkbox" id="mv_stop"
       onchange="moveStopSource(${jsq(cluster)},${jsq(kind)},${jsq(name)},this.checked)"> Stop the VM while its disks are backed up</label>
-    <div class="dim xs">It starts again on ${esc(cluster)} once the backups are done. Stopping gives the copy the disks of a cleanly shut-down guest, without needing its guest agent.</div></div>` : ""}
+    <div class="dim xs">It starts again on ${esc(cluster)} when the backups are done. Stopping it gives the copy cleanly shut-down disks, without needing the guest agent.</div></div>` : ""}
   <div id="mv_plan"></div>
 `,
     actions: { dismiss: { label: "Cancel", onclick: "modalBack()" },
@@ -1113,13 +1112,13 @@ function moveDevicesTable(plan, cluster, kind, name) {
         ${resources.map(r => `<option value="${esc(r.resource)}" ${r.resource === choice.resource ? "selected" : ""}>${esc(r.label || r.resource)} · ${esc(r.nodes?.join(", ") || "unavailable")}</option>`).join("")}</select></td>
       <td data-label="vBIOS" data-wide><select aria-label="vBIOS for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'rom',this.value)" ${choice.resource === "" ? "disabled" : ""}>
         ${d.rom ? `<option value="source" ${!("rom" in choice) || choice.rom === "source" ? "selected" : ""}>Keep source vBIOS</option>` : ""}
-        <option value="" ${choice.rom === "" || !d.rom && !uploaded ? "selected" : ""}>Use device default ROM</option>
+        <option value="" ${choice.rom === "" || !d.rom && !uploaded ? "selected" : ""}>Use the device's own ROM</option>
         ${uploaded ? `<option selected disabled>${esc(MOVE_ROM_NAMES[d.name] || "Supplied vBIOS")}</option>` : ""}</select>
         <input type="file" class="pd_rom" aria-label="Upload destination vBIOS for ${esc(d.name)}" accept=".rom,.bin,application/octet-stream" onchange="moveDeviceRom(${handler},this)" ${choice.resource === "" ? "disabled" : ""}></td></tr>`;
   }).join("");
-  return `<div class="f"><label>Passthrough on this cluster</label><p class="dim small">Map each source device to hardware here, or leave it out. Prepare IOMMU and devices under Hosts → Hardware first. A different GPU may need a different vBIOS.</p>
+  return `<div class="f"><label>Passthrough on this cluster</label><p class="dim small">Match each device from the source to hardware here, or leave it out. Prepare IOMMU and the devices under Hosts → Hardware first. A different GPU may need a different vBIOS.</p>
     <div class="tblwrap"><table class="tbl stack dense vm-passthrough-table"><colgroup><col style="width:25%"><col style="width:40%"><col style="width:35%"></colgroup><thead><tr><th>Source device</th><th>Destination device</th><th>vBIOS</th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${plan.device_hosts?.length ? `<p class="dim small">Hosts offering all selected devices: ${plan.device_hosts.map(esc).join(", ")}.</p>` : ""}</div>`;
+    ${plan.device_hosts?.length ? `<p class="dim small">Hosts with all the selected devices: ${plan.device_hosts.map(esc).join(", ")}.</p>` : ""}</div>`;
 }
 
 /* One volume's choice changed: remembered, and the move checked again. */
@@ -1130,7 +1129,7 @@ window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
   movePlan(cluster, kind, name);
 };
 
-const MOVE_VOLUME_ACTIONS = { move: "Move its data", blank: "Create blank", skip: "Skip (use one already here)" };
+const MOVE_VOLUME_ACTIONS = { move: "Move its data", blank: "Create empty", skip: "Use the volume already here" };
 function moveVolumesTable(plan, cluster, kind, name) {
   const volumes = plan.claims || [];
   if (!volumes.length) return "";
@@ -1153,8 +1152,8 @@ function moveVolumesTable(plan, cluster, kind, name) {
             onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value)"> GiB`
         : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GiB, as it is` : "as it is here"}</span>`}</td></tr>`;
   }).join("");
-  return `<div class="f"><label>Volumes ${tip("Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.")}</label>
-    <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="f"><label>Volumes ${tip("Move its data backs up the volume there and restores it here. Create empty makes an empty volume of the size chosen, for example for a cache. Use the volume already here uses a volume with the same name on this cluster. A moved volume needs a Longhorn storage class. An empty one can use any.")}</label>
+    <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Data</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 const moveLoading = ({ host, go }) => {
@@ -1172,7 +1171,7 @@ const MOVE_PLAN = UI.reviewFlow({
     if (stopChoice) stopChoice.hidden = plan.can_live !== true;
     if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
       plan.unusable = true;
-      host.innerHTML = UI.callout("bad", "Update Homestead here before copying", "This destination only supports moves.");
+      host.innerHTML = UI.callout("bad", "Update Homestead on this cluster before copying", "This cluster's Homestead supports only moves.");
       return;
     }
     // A plan without each volume's action is from before there was a choice: every volume moves.
@@ -1191,19 +1190,19 @@ const MOVE_PLAN = UI.reviewFlow({
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
       ${UI.notices([...(plan.blockers || []).map(b => ["bad", b]), ...(plan.warnings || []).map(w => ["warn", w])],
-        plan.blockers?.length ? `This ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"} cannot start` : "Before you start",
+        plan.blockers?.length ? `This ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"} cannot start` : "Before starting",
         { actions: plan.blockers?.length && fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(cluster)},${fix.kind === "source-address"},() => movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)}))">${fix.kind === "source-address"
           ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : "" })}
       ${plan.ok ? `${(plan.warnings?.length
         // Ready with warnings: the one notice is the warnings, and this is said plainly.
-        ? (t, b) => `<p class="ui-lead"><b>${t}</b> ${b}</p>` : (t, b) => UI.callout("ok", { html: t }, b))(`Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.`, `${kind === "volume" ? `${esc(name)} (${plan.total_gb} GiB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
+        ? (t, b) => `<p class="ui-lead"><b>${t}</b> ${b}</p>` : (t, b) => UI.callout("ok", { html: t }, b))(`Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.`, `${kind === "volume" ? `${esc(name)} (${plan.total_gb} GiB) is transferred through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be set to use`}.`
           : volumes.some(c => c.action === "move") ? (() => { const moving = volumes.filter(c => c.action === "move");
-            return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GiB) ${moving.length === 1 ? "goes" : "go"}
-          through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`; })()
-          : volumes.length ? "No volume's data is moved, so only its definition travels."
-          : "It has no volumes, so only its definition travels."}
-        ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
-        ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}`)}` : ""}
+            return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GiB) ${moving.length === 1 ? "is transferred" : "are transferred"}
+          through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be set to use`}.`; })()
+          : volumes.length ? "No volume data is moved, so only its settings are transferred."
+          : "It has no volumes, so only its settings are transferred."}
+        ${plan.addresses?.length ? `<br>It will be reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
+        ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will be stopped here too.`}`)}` : ""}
       ${moveVolumesTable(plan, cluster, kind, name)}${moveDevicesTable(plan, cluster, kind, name)}`;
     MOVE_PLAN.ready();
   },
@@ -1215,7 +1214,7 @@ const MOVE_PLAN = UI.reviewFlow({
     try {
       await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body) });
-      toast(`${copy ? "Copying" : "Moving"} ${name} from ${cluster}; follow progress under Linked clusters or in Activity`, "ok");
+      toast(`${copy ? "Copying" : "Moving"} ${name} from ${cluster}. Progress is shown under Linked clusters and in Activity.`, "ok");
       closeModal(); movesRepaint();
     } catch (e) {
       toast(e.message, "bad");
@@ -1243,22 +1242,22 @@ window.moveStart = async (cluster, kind, name) => {
   const body = JSON.parse(JSON.stringify(moveBody(cluster, kind, name)));
   const copy = body.transfer_mode === "copy";
   const question = copy ? `Copy ${name} from ${cluster}?` + String.fromCharCode(10, 10)
-      + (MOVE_LIVE ? "It keeps running while its disks are snapshotted and backed up. The destination copy stays stopped."
-        : MOVE_STOP_SOURCE ? "It stops while its disks are backed up, then starts again as it was. The destination copy stays stopped."
-        : "The source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped.")
+      + (MOVE_LIVE ? "It keeps running while its disks are backed up. The copy here stays stopped."
+        : MOVE_STOP_SOURCE ? "It stops while its disks are backed up, then starts again as it was. The copy here stays stopped."
+        : "The original stops while its volumes are backed up, then returns to how it was running. The copy here stays stopped.")
     : kind === "volume"
     ? `Bring the volume ${name} here from ${cluster}?` + String.fromCharCode(10, 10)
-      + `Nothing on ${cluster} can use it until the move finishes or is put back.`
+      + `Nothing on ${cluster} can use it until the move finishes or is undone.`
     : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
-      + "It is unavailable from the moment it stops there until it starts here.";
-  if (!(await ask(question, { title: copy ? "Copy here" : "Move here", ok: copy ? "Copy" : kind === "volume" ? "Move" : "Stop and move", danger: !copy && kind !== "volume" }))) return;
-  if (!review || MOVE_PLAN.review !== review) return toast("The transfer settings changed; review them again", "bad");
+      + "It is unavailable from when it stops there until it starts here.";
+  if (!(await ask(question, { title: copy ? "Copy to this cluster" : "Move to this cluster", ok: copy ? `Copy ${name}` : kind === "volume" ? "Move volume" : `Stop and move ${name}`, danger: !copy && kind !== "volume" }))) return;
+  if (!review || MOVE_PLAN.review !== review) return toast("The transfer settings changed. Review them again.", "bad");
   MOVE_STARTING = { body, copy, cluster, name };
   await MOVE_PLAN.apply();
 };
 
-const MOVE_PHASE_WORDS = { joining: "Share storage", quiescing: "Stop there", "backing-up": "Back up",
-  "releasing-source": "Resume source", syncing: "See backups", restoring: "Restore here", creating: "Create here", starting: "Start here" };
+const MOVE_PHASE_WORDS = { joining: "Connect backup storage", quiescing: "Stop the original", "backing-up": "Back up volumes",
+  "releasing-source": "Restart the original", syncing: "Find the backups", restoring: "Restore volumes", creating: "Create it here", starting: "Start it here" };
 
 function movesHtml(moves) {
   return (moves || []).map(m => {
@@ -1269,16 +1268,16 @@ function movesHtml(moves) {
       const state = m.status === "succeeded" || index < m.phase_index ? "done"
         : index === m.phase_index ? (m.status === "failed" ? "failed" : m.status === "running" ? "active" : "")
         : "";
-      return `<div class="${state}"><i></i><span><b>${esc(copy && phase === "starting" ? "Keep copy stopped" : MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
+      return `<div class="${state}"><i></i><span><b>${esc(copy && phase === "starting" ? "Leave the copy stopped" : MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
     }).join("");
     const actions = [
       m.status === "failed" || m.resource_cleanup_pending ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.cleanup_pending || m.resource_cleanup_pending ? "Retry cleanup" : m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
       m.status === "succeeded" && !m.source_removed && !copy
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.kind)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
-        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"},${jsq(copy ? "copy" : "move")})">${copy ? m.status === "succeeded" ? "Remove copy" : "Cancel copy" : m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
+        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"},${jsq(copy ? "copy" : "move")})">${copy ? m.status === "succeeded" ? "Remove copy" : "Cancel copy" : m.source_stopped === false ? "Cancel move" : "Undo move"}</button>` : "",
       ["succeeded", "cancelled", "failed"].includes(m.status) && !(copy && m.source_stopped) && m.can_dismiss !== false
-        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list, touching neither cluster` : m.status === "succeeded" && !m.source_removed && !copy ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
+        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list. Nothing changes on either cluster.` : m.status === "succeeded" && !m.source_removed && !copy ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until it is removed there.` : "Clear it from this list."}"
             onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
     ].join("");
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
@@ -1331,32 +1330,32 @@ window.moveAct = async (action, id) => {
 window.moveBack = async (id, name, cluster, status, stopped = true, transferMode = "move") => {
   if (transferMode === "copy") {
     if (!(await ask(`${status === "succeeded" ? "Remove the copy of" : "Cancel copying"} ${name}?` + String.fromCharCode(10, 10)
-      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`, { title: status === "succeeded" ? "Remove copy" : "Cancel copying", ok: status === "succeeded" ? "Remove copy" : "Cancel copying", danger: true }))) return;
+      + `Everything this copy created here is removed, including its volume data. The original on ${cluster} is kept${stopped ? ", and returns to how it was running" : " as it is"}.`, { title: status === "succeeded" ? "Remove copy" : "Cancel copying", ok: status === "succeeded" ? "Remove copy" : "Cancel copying", danger: true }))) return;
     return moveAct("abandon", id);
   }
   // Nothing has stopped on the source yet: undoing it only cancels the move.
   if (!stopped) {
     if (!(await ask(`Cancel moving ${name}?` + String.fromCharCode(10, 10)
-        + `Nothing has stopped on ${cluster}; anything this move set up here is removed.`, { title: "Cancel move", ok: "Cancel move", danger: true }))) return;
+        + `Nothing has stopped on ${cluster}. Anything this move set up here is removed.`, { title: "Cancel move", ok: "Cancel move", danger: true }))) return;
     return moveAct("abandon", id);
   }
   const landed = status === "succeeded";
-  if (!(await ask(`Put ${name} back on ${cluster}?` + String.fromCharCode(10, 10)
-      + "It starts again there, as it was, and what this move created here is removed"
-      + (landed ? ", including anything written to it here since it arrived." : "."), { title: "Put it back", ok: "Put back" }))) return;
+  if (!(await ask(`Undo the move of ${name} to ${cluster}?` + String.fromCharCode(10, 10)
+      + "It starts again there as it was, and what this move created here is removed"
+      + (landed ? ", including any data written here since it arrived." : "."), { title: "Undo move", ok: "Undo move" }))) return;
   moveAct("abandon", id);
 };
 
 window.moveFinish = (id, name, cluster, kind) => modal(`Remove from ${cluster} · ${name}`, kind === "volume" ? `
-  <p>${esc(name)} is here now. Removing the original from ${esc(cluster)} deletes that copy and makes the move
-    permanent: after this it cannot be put back.</p>
+  <p>${esc(name)} is here now. Removing the original from ${esc(cluster)} deletes it there and makes the move
+    permanent. The move can no longer be undone.</p>
   <div class="note">Its backup stays in the backup storage.</div>` : `
   <p>${esc(name)} is running here. Removing the stopped original from ${esc(cluster)} makes the move
-    permanent: after this it cannot be put back.</p>
-  <label class="switch"><input type="checkbox" id="mv_vols"> Also delete the volumes it moved on ${esc(cluster)}</label>
-  <div class="dim xs">Volumes it skipped or made blank here stay on ${esc(cluster)}: they are the only copy of that data.</div>
-  <div class="note">Leaving the volumes costs space on ${esc(cluster)} but keeps a copy of the data as it
-    was at the moment of the move. Their backups stay in the backup storage either way.</div>
+    permanent. The move can no longer be undone.</p>
+  <label class="switch"><input type="checkbox" id="mv_vols"> Also delete the moved volumes on ${esc(cluster)}</label>
+  <div class="dim xs">Volumes that were skipped or created empty here stay on ${esc(cluster)}, because they hold the only copy of that data.</div>
+  <div class="note">Keeping the volumes uses space on ${esc(cluster)}, but keeps a copy of the data as it
+    was when it was moved. Their backups stay in the backup storage either way.</div>
   ${UI.actions(`<button class="btn danger" data-need="admin" onclick="moveFinishNow(${jsq(id)})">Remove from ${esc(cluster)}</button>
     <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not yet</button>`)}`);
 
@@ -1394,7 +1393,7 @@ window.doImport = async source => {
     ports: $$(".im-port").map(r => ({ container: +$(".ipc", r).value, host: +$(".iph", r).value || +$(".ipc", r).value, protocol: $(".ipp", r).value, expose: $(".ipe", r).checked })).filter(p => p.container),
     env, hardware: selectedHardware("im_hw"), ...(readPrivileges("im_pv") || {}), network_mode: $("#im_net").value, vip_mode: $("#im_vip").value, lb_ip: ($("#im_lb_ip")?.value || "").trim(),
     uid: $("#im_uid").value.trim(), gid: $("#im_gid").value.trim() };
-  if (!body.name || !body.image) return toast("App name and image are required", "bad");
+  if (!body.name || !body.image) return toast("Enter the app name and image", "bad");
   for (const volume of volumes) {
     const measured = body.mappings.filter(row => row.pvc === volume.name)
       .reduce((sum, row) => sum + (row.bytes || 0), 0);
@@ -1429,7 +1428,7 @@ window.doImport = async source => {
   body.remote_path = copied[0]?.remote_path || "";
   body.mount_path = copied[0]?.mount_path || "/config";
   if (reused.length && !(await ask(`Import into existing volume${reused.length === 1 ? "" : "s"} ${reused.join(", ")}?` +
-      "\n\nThe current data is kept, but imported files with the same names may be replaced.", { title: "Import into existing volumes", ok: "Import" }))) return;
+      "\n\nThe current data is kept, but imported files with the same names may replace existing files.", { title: "Import into existing volumes", ok: "Import app" }))) return;
   await importReview(body);
 };
 
@@ -1438,14 +1437,14 @@ window.doImport = async source => {
 const IMPORT_REVIEW = UI.reviewFlow({
   preview: async config => {
     const result = await api("/api/import/preview", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(config)});
-    if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("Import review unavailable; refresh before continuing.");
+    if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("The import review is not available. Refresh before continuing.");
     return {config, ...result};
   },
   render: (result, config) => {
     const phaseWarnings = new Map();
     for (const phase of result.phases) {
       const warnings = capacityNotes(phase.capacity).concerns;
-      if (phase.capacity.blocked && !warnings.length) warnings.push("Capacity checks block this phase.");
+      if (phase.capacity.blocked && !warnings.length) warnings.push("There is not enough room for this step.");
       for (const warning of warnings) phaseWarnings.set(warning, [...(phaseWarnings.get(warning) || []), phase.title]);
     }
     const warningItems = [...new Set(result.capacity.warnings || [])].map(w => `<li>${esc(w)}</li>`);
@@ -1455,13 +1454,13 @@ const IMPORT_REVIEW = UI.reviewFlow({
 
     childModal("Review import", `<div class="update-review">
       <div class="reviewbox"><b>${esc(config.name)}</b><p>${esc(config.image)}</p>
-        ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copy from a consistent snapshot or backup. Source-container checks are skipped; verify the selected paths." : "All source writers must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after copying each folder." : " Homestead cannot verify other writers.")}</p>` : ""}
+        ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copies from a snapshot or backup. The check of the original container is skipped, so make sure the folders are correct." : "Everything that writes to these folders must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after each folder is copied." : " Other programs are not checked.")}</p>` : ""}
         ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
-      </div>${warningItems.length ? UI.callout(result.capacity.blocked ? "bad" : "warn", result.capacity.blocked ? "Import blocked" : "Review before importing", `<ul class="ui-list">${warningItems.join("")}</ul>`) : ""}
-      ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.') : ''}
+      </div>${warningItems.length ? UI.callout(result.capacity.blocked ? "bad" : "warn", result.capacity.blocked ? "The import cannot start" : "Check before importing", `<ul class="ui-list">${warningItems.join("")}</ul>`) : ""}
+      ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space at the destination is checked against the size of the source folders, and folders that could not be measured are listed in the job log. The space is not reserved. An unsafe path stops the copy, and a failed copy keeps both sides.') : ''}
       ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
-      ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> Import it anyway, replacing files</label>' : ''}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Import</button>`)}</div>`, true);
+      ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> Import anyway and replace existing files</label>' : ''}
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Import app</button>`)}</div>`, true);
   },
   failed: e => toast(e.message, "bad"),
   blocked: review => review.capacity.blocked, ack: "importConfirm",
@@ -1471,11 +1470,11 @@ const IMPORT_REVIEW = UI.reviewFlow({
       const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
       if (result.operation) window.noteOperation?.(result.operation);
-      toast(result.job ? "Copy started; the application stays stopped" : "Import configuration saved", "ok");
+      toast(result.job ? "Copy started. The app stays stopped until it is started." : "Import settings saved", "ok");
       closeModal(); resetPaint(); viewImport();
     } catch (e) {
       // An unknown outcome is never an automatic retry: the flow consumed the review.
-      toast(e.message + " — inspect Recent jobs before trying again; any created volumes are kept.", "bad");
+      toast(e.message + " Check Recent jobs before trying again. Any volumes already created are kept.", "bad");
       $("#importGo").textContent = "Review again";
       $("#importGo").disabled = false;
       $("#importGo").onclick = () => importReview(review.config);
@@ -1493,16 +1492,16 @@ window.confirmImport = async () => {
 window.moveDismiss = async (id = "") => {
   let all;
   try { all = await api("/api/move/moves"); }
-  catch (e) { return toast(`The moves could not be read, so nothing was cleared: ${e.message}`, "bad"); }
+  catch (e) { return toast(`The moves could not be read, so nothing was cleared. ${e.message}`, "bad"); }
   const failed = id ? all.find(m => m.id === id && m.status === "failed") : null;
   const rows = all.filter(m => (!id || m.id === id) && m.status === "succeeded" && !m.source_removed);
   if (failed && !(await ask(`Clear the failed move of ${failed.name}?` + String.fromCharCode(10, 10)
       + "Nothing is changed on either cluster. "
-      + (failed.source_stopped !== false ? `${failed.name} stays stopped on ${failed.cluster}: start it there from its page if you still want it running. ` : "")
-      + "Anything the move made here stays too; remove it here if you do not want it. Retry and Put back are no longer offered.", { title: "Clear failed move", ok: "Clear" }))) return;
+      + (failed.source_stopped !== false ? `${failed.name} stays stopped on ${failed.cluster}. Start it there from its page if it should run. ` : "")
+      + "Anything the move created here also stays. Remove it here if it is not wanted. Retry and Undo move are no longer offered.", { title: "Clear failed move", ok: "Clear move" }))) return;
   if (!failed && rows.length && !(await ask(`Clear ${id ? "this move" : "finished moves"} from the list?` + String.fromCharCode(10, 10)
-      + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")} - `
-      + "nothing is removed there, and Put back is no longer offered here.", { title: "Clear finished moves", ok: "Clear" }))) return;
+      + `${[...new Set(rows.map(m => m.cluster))].join(", ")} keeps the stopped original of ${rows.map(m => m.name).join(", ")}. `
+      + "Nothing is removed there, and Undo move is no longer offered here.", { title: "Clear finished moves", ok: "Clear moves" }))) return;
   try {
     const r = await api("/api/move/moves/dismiss", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
     toast(r.detail, "ok");
@@ -1518,7 +1517,7 @@ window.moveDismiss = async (id = "") => {
 const HOLD_KINDS = { vm: "VM", container: "App", volume: "Volume" };
 
 function moveHoldsHtml(h) {
-  if (h.error) return UI.callout("bad", "Could not read what transfers hold here", esc(h.error));
+  if (h.error) return UI.callout("bad", "The items held for transfers could not be read", esc(h.error));
   const holds = h.holds || [], left = h.leftovers || [];
   window.__moveHolds = { holds, left };
   const since = row => row.since ? ` · since ${esc(fmtAgo(Math.max(0, Date.now() / 1000 - row.since)))}` : "";
@@ -1532,7 +1531,7 @@ function moveHoldsHtml(h) {
           ${row.deleting ? ` · ${row.deleting} deleting` : ""} · transfer ${esc(row.transfer_id)}</div></div>
       <button class="btn sm" data-need="admin" onclick="moveLeftoverTidy(${i})">Remove</button></li>`;
   return `${holds.length ? `<h3 style="margin:18px 0 8px">Held here for transfers</h3>
-      <p class="dim xs">Moves and copies to other clusters hold these. The other cluster lets go when its transfer finishes or is cancelled; release one only if that transfer is no longer listed there.</p>
+      <p class="dim xs">Moves and copies to other clusters hold these. Each is released when its transfer finishes or is cancelled. Release one here only if its transfer is no longer listed on the other cluster.</p>
       <ul class="fleet-list">${holds.map(holdRow).join("")}</ul>` : ""}
     ${left.length ? `<h3 style="margin:18px 0 8px">Leftovers from transfers</h3>
       <p class="dim xs">Backups and snapshots made for transfers that no longer hold anything here. They use space here and in backup storage.</p>
@@ -1546,11 +1545,11 @@ window.moveHoldRelease = async i => {
   const nl = String.fromCharCode(10, 10);
   const effect = row.kept_running
     ? `${row.name} keeps running as it is.`
-    : `${row.name} is put back as it was before the transfer, so it starts again if it was running then.`
-      + (row.copy ? "" : ` If that move finished, ${row.name} already runs on the other cluster, and both would run.`);
+    : `${row.name} returns to how it was before the transfer, so it starts again if it was running then.`
+      + (row.copy ? "" : ` If that move finished, ${row.name} already runs on the other cluster, and both copies would run.`);
   if (!(await ask(`Release ${row.name}?` + nl + effect + nl
-      + "The transfer's backups and snapshots here are deleted. A transfer still running on the other cluster fails at its next step; cancel it there instead if it is listed.",
-      { title: "Release hold", ok: "Release", danger: !row.kept_running }))) return;
+      + "The transfer's backups and snapshots here are deleted. A transfer still running on the other cluster fails at its next step. If it is listed there, cancel it there instead.",
+      { title: "Release hold", ok: "Release hold", danger: !row.kept_running }))) return;
   try {
     const r = await api("/api/move/holds/release", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ kind: row.kind, namespace: row.namespace, name: row.name, transfer_id: row.transfer_id, uid: row.uid }) });
@@ -1562,10 +1561,10 @@ window.moveHoldRelease = async i => {
 window.moveLeftoverTidy = async i => {
   const row = window.__moveHolds?.left?.[i];
   if (!row) return;
-  if (!(await ask(`Remove what transfer ${row.transfer_id} left here?` + String.fromCharCode(10, 10)
+  if (!(await ask(`Remove what transfer ${row.transfer_id} left on this cluster?` + String.fromCharCode(10, 10)
       + `Deletes its ${[row.backups && `${row.backups} backup${row.backups === 1 ? "" : "s"}`, row.snapshots && `${row.snapshots} snapshot${row.snapshots === 1 ? "" : "s"}`].filter(Boolean).join(" and ")}`
-      + `${row.name ? ` of ${row.name}` : ""}, and its folder in backup storage once nothing else is kept there. ${row.name ? `${row.name} itself is not touched.` : ""}`,
-      { title: "Remove leftovers", ok: "Remove", danger: true }))) return;
+      + `${row.name ? ` of ${row.name}` : ""}, and its folder in backup storage once nothing else is kept there. ${row.name ? `${row.name} itself is not changed.` : ""}`,
+      { title: "Remove leftovers", ok: "Remove leftovers", danger: true }))) return;
   try {
     const r = await api("/api/move/holds/tidy", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ transfer_id: row.transfer_id, source_uid: row.source_uid }) });

@@ -36,7 +36,7 @@ test("no count is written as word(s)", () => {
 test("Kubernetes states read as words", () => {
   const { stateWords } = coreHelpers();
   assert.equal(stateWords("NotReady"), "Not ready");
-  assert.equal(stateWords("ErrorUnschedulable"), "Can't be scheduled");
+  assert.equal(stateWords("ErrorUnschedulable"), "No host can run it");
   assert.equal(stateWords("Ready"), "Ready");
   assert.equal(stateWords("CrashLoopBackOff"), "Crash loop back off");
   assert.equal(stateWords(""), "");

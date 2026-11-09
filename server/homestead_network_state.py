@@ -57,7 +57,7 @@ def _unread(state):
 def _complete(state, outcome):
     """state, or a refusal naming what could not be read and what did not happen."""
     if _unread(state):
-        raise ValueError(f"{_unread(state)}; {outcome}. Try again in a moment")
+        raise ValueError(f"Homestead {_unread(state)}, so {outcome}. Try again in a moment.")
     return state
 
 
@@ -67,7 +67,7 @@ def _read(path, what):
         return _items(path, strict=True)
     except Exception as error:
         print(f"Networking: could not read {what}: {str(error)[:160]}", flush=True)
-        raise ValueError(f"could not read the cluster's {what}; nothing was changed. Try again in a moment") from error
+        raise ValueError(f"Homestead could not read the cluster's {what}, so nothing was changed. Try again in a moment.") from error
 
 
 def _name(value, label):
