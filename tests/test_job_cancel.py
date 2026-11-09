@@ -201,7 +201,7 @@ class K3sClusterTests(Store):
                          (plan["mode"], plan["confirm"], plan["needs"], plan["severity"]))
         self.assertTrue(plan["tracking_only"])
         self.assertEqual([], plan["undo"])
-        self.assertIn("no creation identity receipts", plan["keeps"][0])
+        self.assertIn("no records of what it created", plan["keeps"][0])
         self.assertIn("IP-address records remain", " ".join(plan["keeps"]))
 
     def test_cancelling_retains_every_vm_disk_and_address(self):
@@ -448,7 +448,7 @@ class ReclassTests(Store):
     def test_the_swap_itself_cannot_be_interrupted(self):
         op = self.op("swap")
         self.assertFalse(OPS.cancel_plan(op)["can"])
-        with self.assertRaisesRegex(ValueError, "must not stop half-way"):
+        with self.assertRaisesRegex(ValueError, "must not stop part-way"):
             OPS.cancel(op)
 
 

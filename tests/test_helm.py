@@ -290,8 +290,8 @@ class HelmJobTests(unittest.TestCase):
         self.assertEqual("Put back earlier settings", plan["review_title"])
         self.assertEqual("Put back earlier settings", plan["action"])
         self.assertTrue(plan["cleanup_says_action"])
-        self.assertEqual("This upgrade failed. Putting back returns the chart's version and values; "
-                         "the job stays in the list as failed", plan["lead"])
+        self.assertEqual("This upgrade failed. Restoring brings back the chart's version and values, "
+                         "and the job stays in the list as failed.", plan["lead"])
 
     def test_a_running_upgrades_cancel_keeps_its_own_words(self):
         plan = OPS.cancel_plan(self.upgraded())
@@ -407,7 +407,7 @@ class HelmJobTests(unittest.TestCase):
         self.assertEqual("Close it", plan["action"])
         self.assertEqual("Close it", plan["review_title"])
         self.assertTrue(plan["cleanup_says_action"], "or the button reads \"Remove what it made\"")
-        self.assertIn("are back already", plan["lead"])
+        self.assertIn("are already restored", plan["lead"])
         self.assertEqual([], plan["undo"])
         self.assertEqual([], plan["keeps"], "nothing is left going for it to name")
         self.kube.writes.clear()

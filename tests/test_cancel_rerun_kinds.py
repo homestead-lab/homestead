@@ -648,13 +648,13 @@ class SecondReviewRound(Base):
         self.kube.fail(SVC, http.client.IncompleteRead(b""), method="GET", skip=2)
         OPS.cancel(op, by="alice")
         self.assertIsNone(self.kube.object(SVC))
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_an_import_read_that_fails_some_other_way_still_ends(self):
         op = OlderImport.started(self)
         self.kube.fail(CLAIM, http.client.IncompleteRead(b""), method="GET", skip=1)
         OPS.cancel(op, {"volumes": True}, by="alice")
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_a_pull_that_cannot_be_read_does_not_stop_the_others(self):
         op, paths = self.pulls()
@@ -686,7 +686,7 @@ class SecondReviewRound(Base):
         self.kube.fail(CLAIM, 503, method="GET", skip=1)     # past the save's read
         OPS.cancel(op, {"volumes": True}, by="alice")
         self.assertIsNone(self.kube.object(CLAIM))
-        self.assertIn("could not be read", self.finished(op))
+        self.assertIn("could not read whether anything", self.finished(op))
 
     def test_a_read_failing_after_the_deletes_does_not_undo_a_finished_cancel(self):
         self.kube.add(service())
@@ -695,7 +695,7 @@ class SecondReviewRound(Base):
         OPS.cancel(op, by="alice")
         self.assertIsNone(self.kube.object(SVC))
         message = self.finished(op)
-        self.assertIn("could not be read", message)
+        self.assertIn("could not read whether anything", message)
 
 
 class ABusyWorkerLockWaits(Base):

@@ -687,8 +687,8 @@ class RetireWaitTests(unittest.TestCase):
         said = next(i for i in JOBS.stored() if i["id"] == first)["ref"]["removed"]
         self.assertEqual(2, len(said))
         keeps = " ".join(JOBS.cancel_plan(again)["keeps"])
-        self.assertNotIn("No replica has been removed", keeps)
-        self.assertIn("2 failed replicas", keeps)
+        self.assertNotIn("No volume copy has been removed", keeps)
+        self.assertIn("2 failed volume copies", keeps)
 
     def test_a_retire_over_a_failed_one_of_a_disk_that_was_off_finds_it_off(self):
         DISKS.set_scheduling("node3", "bd-sdb", False)
@@ -710,14 +710,14 @@ class RetireWaitTests(unittest.TestCase):
         DISKS.set_scheduling("node3", "bd-sdb", False)
         plan = JOBS.cancel_plan(self.force())
         self.assertEqual([], plan["undo"])
-        self.assertIn("No replica has been removed", " ".join(plan["keeps"]))
+        self.assertIn("No volume copy has been removed", " ".join(plan["keeps"]))
 
     def test_a_retire_that_was_put_back_passes_nothing_on(self):
         self.older(phase="cancelled")
         DISKS.set_scheduling("node3", "bd-sdb", False)
         plan = JOBS.cancel_plan(self.force())
         self.assertEqual([], plan["undo"])
-        self.assertIn("No replica has been removed", " ".join(plan["keeps"]))
+        self.assertIn("No volume copy has been removed", " ".join(plan["keeps"]))
 
     def test_the_failed_message_says_how_to_let_replicas_back_once_it_is_dismissed(self):
         ident = self.failed()
@@ -773,8 +773,8 @@ class RetireWaitTests(unittest.TestCase):
         self.pass_time(self.LIMIT)
         self.assertEqual("failed", self.look(ident)["status"])
         keeps = " ".join(JOBS.cancel_plan(ident)["keeps"])
-        self.assertNotIn("No replica has been removed", keeps)
-        self.assertIn("2 failed replicas", keeps)
+        self.assertNotIn("No volume copy has been removed", keeps)
+        self.assertIn("2 failed volume copies", keeps)
 
     def test_a_crash_while_letting_replicas_go_is_remembered(self):
         class Crash(BaseException):

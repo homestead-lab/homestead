@@ -159,7 +159,7 @@ class BootstrapRecoveryTests(unittest.TestCase):
                 cancel.k3s_cancel(item, {})
             item["ref"]["phase"] = "awaiting-ready"
             self.assertEqual("forget", cancel.k3s_plan(item)["mode"])
-            self.assertIn("retained", cancel.k3s_cancel(item, {}))
+            self.assertIn("are kept", cancel.k3s_cancel(item, {}))
             delete.assert_not_called()
             forget.assert_not_called()
 
