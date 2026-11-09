@@ -106,7 +106,7 @@ function scheduleDialog(kind, ns, name, back = null, read = null) {
   const how = kind === "vm" ? `${name} is shut down cleanly, as Stop does, and started through the same room check as Start.`
     : `${name} is stopped, as Stop does, and started again with the copies it had, after the same room check as Start.`;
   modal(`Schedule · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Stop ${name} and start it again at set times, on the days chosen. ${how} It can be started manually in between, and it stops again at the next stop time.`))}
+    ${UI.lead(esc(`Stop ${name} and start it again at set times, on the days chosen. ${how} It can be started manually in between, and stops again at the next stop time.`))}
     ${UI.fields(
       UI.field("Stop at", `<input id="sc_stop" type="time" value="${esc(s?.stop ?? (s ? "" : "01:00"))}" oninput="schedPreview()">`, { help: "Leave empty to only start it." }),
       UI.field("Start at", `<input id="sc_start" type="time" value="${esc(s?.start ?? (s ? "" : "07:00"))}" oninput="schedPreview()">`, { help: "Leave empty to only stop it." }))}
