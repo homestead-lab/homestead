@@ -678,7 +678,7 @@ class SecondReviewRound(Base):
         message = self.finished(op)
         self.assertIn(", web-more deleted", message)
         self.assertNotIn("web-data and web-more deleted", message)
-        self.assertIn("web-data was made again", message)
+        self.assertIn("web-data was created again", message)
         self.assertIsNotNone(self.kube.object(CLAIM))
 
     def test_an_import_whose_claim_cannot_be_read_after_its_delete_still_ends(self):
