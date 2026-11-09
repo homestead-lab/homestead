@@ -162,7 +162,7 @@ class ReviewTests(Case):
 
     def test_a_rollout_working_on_this_host_blocks_the_review(self):
         self.rollout("node-a")
-        self.assertIn("An OS update of every host is working on this host; wait for it to move on, or stop it",
+        self.assertIn("An OS update of every host is working on this host. Wait for it to move on, or stop it.",
                       self.plan()["hard_blockers"])
         with mock.patch.object(POWER, "power_enabled", lambda: True):
             self.assertTrue(self.plan(action="reboot")["ready"], "a reboot's review doesn't ask")
@@ -180,7 +180,7 @@ class ReviewTests(Case):
 
     def test_a_host_not_ready_is_refused_in_its_own_words(self):
         self.edit(lambda n: n["status"]["conditions"][0].update(status="False"))
-        self.assertIn("The host is not Ready; maintenance is declared before it goes down", self.plan()["hard_blockers"])
+        self.assertIn("The host is not ready. Maintenance must be declared before it goes down.", self.plan()["hard_blockers"])
 
     def test_there_is_no_force(self):
         with self.assertRaisesRegex(ValueError, "force"):

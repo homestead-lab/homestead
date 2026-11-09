@@ -41,7 +41,7 @@ class ResolverTests(unittest.TestCase):
     def test_a_job_whose_replica_was_evicted_is_carried_on(self):
         (state, _, message), resume = self.status(job(), gone=True)
         self.assertEqual("running", state)
-        self.assertIn("carrying on", message)
+        self.assertIn("Continuing", message)
         resume.assert_called_once()
 
     def test_a_live_worker_may_wait_on_longhorn_for_longer_than_four_minutes(self):

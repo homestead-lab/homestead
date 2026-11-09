@@ -173,7 +173,7 @@ class LastHelpersTests(unittest.TestCase):
             module._get("/x", True)
 
     def test_disk_preparation_takes_only_a_404_of_an_optional_object_as_missing(self):
-        self.check_inventory_get(DISK_V2, r"Disk preparation inventory is unavailable \(HTTP {code}\)",
+        self.check_inventory_get(DISK_V2, r"The disk list for preparation is unavailable \(HTTP {code}\)",
                                  "^Disk preparation inventory is incomplete$")
 
     def test_the_v2_upgrade_takes_only_a_404_of_an_optional_object_as_missing(self):
