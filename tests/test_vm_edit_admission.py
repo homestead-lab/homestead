@@ -346,7 +346,7 @@ class VMEditAdmissionTests(unittest.TestCase):
         with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
-        self.assertIn("profile expansion changed", result[1]["error"])
+        self.assertIn("instance type settings changed", result[1]["error"])
         writes.assert_not_called()
 
     def test_instance_type_cpu_memory_overrides_are_rejected_without_writes(self):

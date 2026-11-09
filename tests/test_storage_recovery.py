@@ -108,7 +108,7 @@ class StorageRecoveryTests(RecoveryFixture):
         item = self.load()
         self.assertEqual("failed", item["status"])
         self.assertTrue(item["ref"]["retain_resources"])
-        self.assertIn("copy jobs may continue", item["message"])
+        self.assertIn("Copy jobs already accepted may continue", item["message"])
         self.act("continue")
         self.assertEqual("running", self.load()["status"])
         self.assertEqual(before, len(self.cluster.sent))

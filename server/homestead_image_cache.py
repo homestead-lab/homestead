@@ -818,7 +818,7 @@ def pull_progress(read, ref):
     said = "; ".join(f"{row['node'] or 'a node'}: {row['reason']}" for row in failing[:3])
     why = f" ({ref['pull_error']})" if ref.get("pull_error") else ""
     if any(row["unread"] for row in failing):
-        why += " (pull events could not be read; going by the pod status)"
+        why += " (the download events could not be read, so this is based on the pod status)"
     if len(failing) < desired - ready:
         ref.pop("pull_failing_since", None)     # a pod not made yet, or still pulling, can get there
         return "running", progress, f"{counted}; {said}{why}"[:400]
@@ -828,8 +828,8 @@ def pull_progress(read, ref):
     image = failing[0]["image"] or next((c.get("image") for c in ((ds.get("spec") or {}).get("template") or {}).get(
         "spec", {}).get("initContainers") or [] if c.get("image")), "the image")
     stop_prepull(ref["name"])
-    return "failed", progress, (f"Could not pull {image}: {said}{why}. {counted}; "
-                                "the pull was stopped")[:500]
+    return "failed", progress, (f"Homestead could not download {image}: {said}{why}. {counted}. "
+                                "The download was stopped.")[:500]
 
 
 def _not_failing(ref):
@@ -994,7 +994,7 @@ def prepull(image, nodes=None, own=False, reuse=False):
     return {"ok": True, "daemonset": name, "image": image, "nodes": sorted(wanted),
             "skipped": skipped,
             "message": f"Pulling onto {len(wanted)} node{'' if len(wanted) == 1 else 's'}"
-                       + (f"; skipped {', '.join(skipped)} (cordoned or not ready)" if skipped else "")}
+                       + (f". Skipped {', '.join(skipped)} (cordoned or not ready)" if skipped else "")}
 
 
 def prepull_status(sweep=True):
@@ -1074,7 +1074,7 @@ def forget_rollback(namespace, name):
           {"metadata": {"annotations": {key: None for key in keys}}},
           ctype="application/merge-patch+json")
     I._bust("imgcache", "wl")
-    return {"ok": True, "detail": f"{name} no longer keeps its previous image; it can be cleaned up now"}
+    return {"ok": True, "detail": f"{name} no longer keeps its previous image, so it can be cleaned up now"}
 
 
 # An image removal pod's time to run: a containerd that does not answer ends

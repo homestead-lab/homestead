@@ -102,15 +102,15 @@ def plan(current, proposed, namespace, get, get_nodes, planner, threshold, plann
     warnings = result["warnings"]
     if replicas:
         warnings.append("updated pod estimates include every container, not only the added container")
-        warnings.append("post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed")
-        warnings.append("live RAM still includes old pods; it is not subtracted from the conservative projection")
+        warnings.append("The capacity after the stop assumes the old pods released their ports and volumes. That is not guaranteed.")
+        warnings.append("The RAM in use still includes the old pods, and it is not taken off the cautious estimate")
     else:
-        warnings.append("this workload is stopped; the template changes but no pods are started")
+        warnings.append("This app is stopped. The template changes, but no pods are started.")
     if not known:
-        warnings.append("Deployment pod ownership is unverified; reclaimed resources and final placement are unknown")
+        warnings.append("What owns the Deployment's pods is not confirmed. The freed resources and final placement are unknown.")
     paused = bool(proposed.get("spec", {}).get("paused"))
     if paused:
-        warnings.append("Deployment is paused; the template will not roll out until it is resumed")
+        warnings.append("The Deployment is paused, so the template does not roll out until it is resumed")
     released, _, _, _ = RESOURCES.reservations(owned)
     details = {"strategy": kind, "replicas": replicas, "ownership_known": known,
                "owned_pods": [(p.get("metadata") or {}).get("name", "?") for p in owned],
@@ -119,7 +119,7 @@ def plan(current, proposed, namespace, get, get_nodes, planner, threshold, plann
                "start_blocked": False, "intermediate_steps_verified": False}
     if kind == "Recreate":
         if replicas:
-            warnings.append("Recreate stops all old pods before replacements start; all containers in this workload will be unavailable during the restart")
+            warnings.append("Recreate stops all old pods before the new ones start. Every container in this app is unavailable during the restart.")
     elif replicas:
         rolling = strategy.get("rollingUpdate") or {}
         surge = fence(rolling.get("maxSurge", "25%"), replicas, True)
@@ -131,7 +131,7 @@ def plan(current, proposed, namespace, get, get_nodes, planner, threshold, plann
                 raise ValueError("RollingUpdate cannot set both maxSurge and maxUnavailable to zero")
             unavailable = 1
         details.update(max_surge=surge, max_unavailable=unavailable)
-        warnings.append(f"RollingUpdate permits {surge} extra pod(s) and {unavailable} unavailable replica(s); terminating pods can extend the overlap")
+        warnings.append(f"RollingUpdate allows {surge} extra pod(s) and {unavailable} unavailable replica(s). Pods that are stopping can make the overlap longer.")
         if surge:
             first = preview(1, pods)
             # Bound the display workload, not the actual controller setting.
@@ -145,13 +145,13 @@ def plan(current, proposed, namespace, get, get_nodes, planner, threshold, plann
                     result["blocked"] = True
                     warnings.append("rollout cannot start now: no replacement pod fits. maxUnavailable=0 keeps every healthy old replica running")
                 else:
-                    warnings.append("a replacement cannot currently fit alongside old pods; progress depends on allowed old-pod removal, termination and volume release")
-        warnings.append("intermediate rolling-update placement and readiness are not fully simulated; a fitting first pod is not a completion guarantee")
+                    warnings.append("A new pod cannot fit next to the old pods now. Progress depends on old pods being removed, stopping and releasing their volumes.")
+        warnings.append("The placement and readiness during a rolling update are not fully checked. A first pod that fits does not guarantee the update finishes.")
     details["paused"] = paused
     if paused:
         details["resume_blocked"] = result["blocked"]
         result["blocked"] = False
-        warnings.append("only the paused template is being saved; capacity must be checked again before resuming")
+        warnings.append("Only the paused template is being saved. The capacity must be checked again before resuming.")
     result["rollout"] = details
     result["requires_confirmation"] = True
     return result

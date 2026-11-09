@@ -148,7 +148,7 @@ class StorageAdmissionTests(unittest.TestCase):
             numa={"guestMappingPassthrough": {}}, dedicatedCpuPlacement=True)
         result = self.plan()
         self.assertTrue(result["blocked"], result)
-        self.assertIn("verified local CPU", " ".join(result["blockers"]))
+        self.assertIn("confirmed local CPU", " ".join(result["blockers"]))
 
     def test_two_individually_fitting_workloads_cannot_double_book_capacity(self):
         self.controller("Deployment", "one", "5Gi"); self.controller("Deployment", "two", "5Gi")

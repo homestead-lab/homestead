@@ -1414,7 +1414,7 @@ class HeldBeforeTheStopTests(MoveTest):
         for reboot in (False, True):
             if reboot:
                 m.rebooted("node-a")
-            with self.assertRaisesRegex(Held, "(?s)expired.*going back.*new move"):
+            with self.assertRaisesRegex(Held, "(?s)expired.*Going back.*new move"):
                 R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
         self.assertEqual(before, self.kube.writes)
         self.assertEqual([], m.writes_to(m.dep_path))
@@ -1460,7 +1460,7 @@ class HeldBeforeTheStopTests(MoveTest):
         self.assertIn("node-a", view["message"])
         self.assertIn("return-original", view["message"])
         self.assertEqual([], m.writes_to(m.dep_path))
-        with self.assertRaisesRegex(Held, "going back"):
+        with self.assertRaisesRegex(Held, "Going back"):
             R.review(self.load(), m.read, lambda _: m.logs_text, "resume", clock=lambda: m.now)
         review = R.review(self.load(), m.read, lambda _: m.logs_text, "return-original", clock=lambda: m.now)
         R.confirm(self.load(), m.read, lambda _: m.logs_text, "return-original", review["fingerprint"], clock=lambda: m.now)

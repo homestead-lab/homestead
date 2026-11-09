@@ -257,7 +257,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/{item['name']}"] = current
         result = server.VM_BATCH.plan(prepared, self.read, self.nodes, created={item["name"]: {"uid": "created-uid"}})
         self.assertTrue(result["blocked"])
-        self.assertIn("physical topology alone cannot authorize", str(result["blockers"]))
+        self.assertIn("physical layout alone cannot allow", str(result["blockers"]))
         self.assertEqual([], self.sent)
 
         # Once an actual UID-owned launcher is assigned, the batch accounts
@@ -268,7 +268,7 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachineinstances/{item['name']}"] = vmi
         self.pods.append(pod)
         result = server.VM_BATCH.plan(prepared, self.read, self.nodes, created={item["name"]: {"uid": "created-uid"}})
-        self.assertNotIn("physical topology alone cannot authorize", str(result["blockers"]))
+        self.assertNotIn("physical layout alone cannot allow", str(result["blockers"]))
         self.assertEqual([], self.sent)
 
     def test_joint_network_devices_cannot_be_double_booked_across_guest_vms(self):

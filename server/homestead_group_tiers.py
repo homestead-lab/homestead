@@ -149,7 +149,7 @@ def resolve(dep, tiers, ladder, *, kind="app", managed=False):
     return {"tier": "normal", "class": None, "source": "default", "runs": runs}
 
 
-CHANGED = "Group tiers changed elsewhere; try again"
+CHANGED = "The group tiers changed elsewhere. Try again."
 
 
 def workload_group(value):
@@ -219,7 +219,7 @@ def _tidy(group, renamed_from):
             break
         except (OSError, ValueError):
             break
-    return "the group tiers couldn't be brought up to date: check them in Priority tiers…"
+    return "the group tiers could not be brought up to date. Check them in Priority tiers."
 
 
 def set_workload_groups(b):
@@ -302,7 +302,7 @@ def set_group_tier(b):
         raise ValueError(f"{OWN_GROUP} looks after its own tier: it ranks at least as high as any app")
     members = [dep for dep in kget(DEPLOYMENTS).get("items", []) if group_of(dep) == group]
     if not members:
-        raise ValueError(f"{group} has no apps; put apps in it first")
+        raise ValueError(f"{group} has no apps. Put apps in it first.")
     tiers, version = read()
     new = dict(tiers or {})   # a map that isn't one is replaced
     if tier == "none":
@@ -367,7 +367,7 @@ def edit_tier(dep, choice, get=None):
         return choice
     group = group_of(dep)
     if not group or group == OWN_GROUP:
-        raise ValueError(f"{_meta(dep).get('name', 'it')} isn't in a group; choose a tier")
+        raise ValueError(f"{_meta(dep).get('name', 'It')} is not in a group. Choose a tier.")
     tiers = stored(get)
     if tiers is None:
         raise ValueError("Homestead could not read the group tiers just now. Try again, or choose a tier.")

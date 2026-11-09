@@ -69,7 +69,7 @@ class RecoveryTests(unittest.TestCase):
         del self.objects[self.prefix + "/replicas"]
         found, warning = self.observe()
         self.assertEqual({}, found)
-        self.assertIn("could not be verified", warning)
+        self.assertIn("could not confirm", warning)
         state = recovery.plan({"suspended": {"single": "offline"}}, self.rows, found, warning, 10)
         self.assertEqual({"single": "offline"}, state["suspended"])
 
@@ -87,7 +87,7 @@ class RecoveryTests(unittest.TestCase):
         self.objects["/api/v1/nodes"]["metadata"] = {"continue": "next-page"}
         found, warning = self.observe()
         self.assertEqual({}, found)
-        self.assertIn("could not be verified", warning)
+        self.assertIn("could not confirm", warning)
 
     def test_debounce_restore_and_unknown_interruptions(self):
         found, warning = self.observe()

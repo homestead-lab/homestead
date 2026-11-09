@@ -59,7 +59,7 @@ class HardwareTests(unittest.TestCase):
     def test_non_gpu_and_unverified_host_devices_cannot_disable_the_display(self):
         for resource in ("example/nic", "example/usb", "example/unknown"):
             with self.subTest(resource=resource), mock.patch("homestead_passthrough.resources", return_value={"resources": [
-                    {"resource": "example/nic", "gpu": False}, {"resource": "example/usb", "gpu": False}]}), self.assertRaisesRegex(ValueError, "verified"):
+                    {"resource": "example/nic", "gpu": False}, {"resource": "example/usb", "gpu": False}]}), self.assertRaisesRegex(ValueError, "confirms"):
                 HW.apply(vm({"devices": {"hostDevices": [{"name": "device", "deviceName": resource}]}}), {"boot_output": "gpu"})
 
     def test_field_only_edits_preserve_boot_output_requirements(self):
@@ -133,7 +133,7 @@ class HardwareTests(unittest.TestCase):
     def test_requirements_are_said(self):
         notes = " ".join(HW.requirements({"cpu": {"dedicated": True, "model": "host-passthrough"}, "hugepages": "1Gi",
                                           "tpm": "persistent", "eviction": "LiveMigrate"}, {}, nodes=1))
-        for words in ("static CPU manager", "1Gi", "VMPersistentState", "second node", "same CPU"):
+        for words in ("static CPU manager", "1Gi", "VMPersistentState", "second host", "same CPU"):
             self.assertIn(words, notes)
 
     def test_cpu_models_every_node_has(self):

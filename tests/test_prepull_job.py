@@ -177,7 +177,7 @@ class PrepullJobTests(PullCase):
         self.assertEqual("running", self.step()["status"])
         failed = self.step(IMAGES.PULL_STUCK_FOR + 1)
         self.assertEqual("failed", failed["status"], "an events outage does not keep a bad pull going for ever")
-        self.assertIn("pull events could not be read", failed["message"])
+        self.assertIn("download events could not be read", failed["message"])
 
     def test_a_pod_list_that_cannot_be_read_keeps_the_clock(self):
         self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
@@ -196,7 +196,7 @@ class PrepullJobTests(PullCase):
         self.step()
         failed = self.step(IMAGES.PULL_STUCK_FOR + 1)
         self.assertEqual("failed", failed["status"])
-        self.assertIn(f"Could not pull {PAUSE}", failed["message"])
+        self.assertIn(f"could not download {PAUSE}", failed["message"])
 
     def test_no_credentials_from_the_registry_s_words_are_kept_or_shown(self):
         # Built in pieces: push protection refuses token-shaped strings even when fake.

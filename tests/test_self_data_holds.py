@@ -279,7 +279,7 @@ class HeldMoveRecoveryTests(unittest.TestCase):
 
     def test_hold_after_the_start_request_resumes_forward_and_never_back(self):
         self.started_then_held(True)
-        with self.assertRaisesRegex(Held, "Cutover"): self.confirm("return-original")
+        with self.assertRaisesRegex(Held, "switch-over"): self.confirm("return-original")
         self.resumes_forward()
 
     def test_hold_before_the_start_request_can_still_resume_forward(self):

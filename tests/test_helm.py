@@ -502,7 +502,7 @@ class HelmJobTests(unittest.TestCase):
         ident = self.no_change_upgrade()
         job = self.look(ident)
         self.assertEqual("succeeded", job["status"], "nothing went wrong")
-        self.assertEqual("This upgrade changed none of grafana's settings, so nothing ran; if its last upgrade failed, it still has", job["message"])
+        self.assertEqual("This upgrade changed none of grafana's settings, so nothing ran. If its last upgrade failed, it still has", job["message"])
 
     def test_empty_values_from_an_unchanged_dialog_are_no_change_on_a_chart_with_none(self):
         # The dialog sends values "" for a chart with no valuesContent.
@@ -616,7 +616,7 @@ class HelmJobTests(unittest.TestCase):
         job = self.look(ident)
         self.assertEqual("failed", job["status"])
         self.assertTrue(job["cleanable"])
-        self.assertEqual("Helm failed; the helm-install-grafana job's log in kube-system says why", job["message"])
+        self.assertEqual("Helm failed. The log of the helm-install-grafana job in kube-system says why.", job["message"])
 
     def test_a_failed_condition_that_is_false_does_not_end_it(self):
         ident = self.upgraded()
@@ -858,7 +858,7 @@ class HelmJobTests(unittest.TestCase):
         self.chart()
         job = self.look(ident)
         self.assertEqual("succeeded", job["status"], "the chart it removed is gone; this is another one")
-        self.assertEqual("Helm removed grafana; a chart of that name has been made since", job["message"])
+        self.assertEqual("Helm removed grafana. A chart with that name has been created since", job["message"])
 
     def test_an_unproved_uninstall_whose_chart_was_made_again_does_not_call_it_gone(self):
         self.cancelling()

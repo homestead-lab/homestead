@@ -153,7 +153,7 @@ class SmbRecoveryTests(unittest.TestCase):
             with self.subTest(answer=answer):
                 result = SMB_RECOVERY.observe([{"pvc": "data"}], Reads({nodes: answer}), "lab")
                 self.assertEqual(result[0], {})
-                self.assertIn("could not be verified", result[1])
+                self.assertIn("could not confirm", result[1])
 
 
 if __name__ == "__main__":

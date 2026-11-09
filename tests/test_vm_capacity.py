@@ -259,7 +259,7 @@ class VMCapacityTests(unittest.TestCase):
             "metadata": {"name": "longhorn", "uid": "sc-uid", "resourceVersion": "1"},
             "volumeBindingMode": "WaitForFirstConsumer"}
         self.assertFalse(self.plan()["blocked"])
-        self.assertIn("first-consumer", " ".join(self.plan()["warnings"]))
+        self.assertIn("first user", " ".join(self.plan()["warnings"]))
 
     def test_planned_migratable_vm_disk_not_rejected_as_container_storage(self):
         self.vm["spec"]["template"]["spec"]["volumes"] = [{"name": "root", "persistentVolumeClaim": {"claimName": "root"}}]
@@ -281,7 +281,7 @@ class VMCapacityTests(unittest.TestCase):
         self.pods.append({"metadata": {"name": "other-vm", "namespace": "lab", "uid": "other-uid", "resourceVersion": "1"},
                           "spec": {"nodeName": "node1", "containers": [], "volumes": [{"persistentVolumeClaim": {"claimName": "root"}}]},
                           "status": {"phase": "Running"}})
-        self.assertIn("concurrent disk writers", " ".join(self.plan()["blockers"]))
+        self.assertIn("two writers on one disk", " ".join(self.plan()["blockers"]))
         self.pods[0]["status"]["phase"] = "Succeeded"
         self.assertFalse(self.plan()["blocked"])
 
@@ -320,7 +320,7 @@ class VMCapacityTests(unittest.TestCase):
         self.assertFalse(result["blocked"])
         self.assertEqual(0.0, result["candidates"][0]["reserved_gb"])
         self.assertGreater(result["candidates"][0]["projected_gb"], 14)
-        self.assertIn("post-stop", " ".join(result["warnings"]))
+        self.assertIn("after the stop", " ".join(result["warnings"]))
 
     def test_unpause_requires_provable_resident(self):
         self.assertTrue(self.plan(action="unpause")["blocked"])
@@ -339,7 +339,7 @@ class VMCapacityTests(unittest.TestCase):
     def test_restart_during_migration_is_blocked(self):
         vmi, _ = self.running()
         vmi["status"]["migrationState"] = {"migrationUid": "migrating"}
-        self.assertIn("current VMI is migrating; wait for migration to finish", self.plan(action="restart")["blockers"])
+        self.assertIn("The current VM instance is migrating. Wait for the migration to finish.", self.plan(action="restart")["blockers"])
 
     def test_deleting_vm_cannot_start(self):
         self.vm["metadata"]["deletionTimestamp"] = "now"

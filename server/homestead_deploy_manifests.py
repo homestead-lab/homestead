@@ -49,7 +49,7 @@ def analyze_deploy_intent(cfg):
             port["description"] = "Optional: expose only when this workload provides DHCP"
             if "network" not in intents:
                 intents.append("network")
-            notes.append("DHCP port 67 stays disabled unless you explicitly expose it.")
+            notes.append("DHCP port 67 stays off unless it is exposed on purpose.")
 
     volumes = updated.get("volumes") or []
 
@@ -86,11 +86,11 @@ def analyze_deploy_intent(cfg):
     if data_paths:
         if "storage" not in intents:
             intents.append("storage")
-        notes.append("Persistent data paths start as editable Longhorn claims; choose RWX when multiple replicas or workloads must attach: " + ", ".join(filter(None, data_paths)) + ".")
+        notes.append("Persistent data paths start as editable Longhorn volumes. Choose RWX when more than one replica or app must use them: " + ", ".join(filter(None, data_paths)) + ".")
     if any(item.get("access_mode") == "ReadWriteMany" for item in volumes):
         if "storage" not in intents:
             intents.append("storage")
-        notes.append("Template wording indicates shared storage; review the proposed RWX claim and size.")
+        notes.append("The template suggests shared storage. Review the proposed shared (RWX) volume and its size.")
 
     generated = [item.get("key") for item in (updated.get("env_meta") or []) if item.get("generate")]
     if generated:
@@ -115,13 +115,13 @@ def analyze_deploy_intent(cfg):
         intents.append("safety")
         dependencies.append({"kind": "runtime", "name": "Host container-runtime control",
                              "required": True, "managed": False})
-        notes.append("This template requests a host container-runtime socket and can create or control other containers; it needs a Kubernetes-specific deployment design.")
+        notes.append("This template asks for a host container-runtime socket and can create or control other containers. It needs a deployment designed for Kubernetes.")
     if dependencies:
         intents.append("dependency")
         notes.append("Review the external services listed below before deployment.")
     if updated.get("template_devices"):
         intents.append("hardware")
-        notes.append("Imported device paths are matched to reusable hardware features; verify eligible hosts before deploying.")
+        notes.append("Imported device paths are matched to hardware features. Check which hosts can run it before deploying.")
     network = str(updated.get("template_network") or "bridge").lower()
     if network == "host":
         intents.append("network")

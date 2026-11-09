@@ -313,7 +313,7 @@ class AppHoldTest(unittest.TestCase):
              "application/merge-patch+json")
         result = HOLD.restart(record, "node-power", "j1", wait_seconds=0)
         self.assertIsInstance(result, HOLD.KeptStopped)
-        self.assertIn("Import", result.reason)
+        self.assertIn("import setup", result.reason)
 
     def test_a_claim_used_elsewhere_keeps_it_stopped(self):
         other = obj("StatefulSet", "other", "s-other")

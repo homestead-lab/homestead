@@ -57,9 +57,9 @@ ROCKY = "https://dl.rockylinux.org/pub/rocky"
 ALMA = "https://repo.almalinux.org/almalinux"
 CENTOS = "https://cloud.centos.org/centos"
 SUSE = "https://download.opensuse.org"
-MINIMAL = "Smaller: fewer packages and no manuals, for a server you set up yourself"
-DEBIAN_CLOUD = "A kernel slimmed for VMs - the usual choice"
-DEBIAN_GENERIC = "The full kernel with every driver - for hardware passed through to the VM"
+MINIMAL = "Smaller, with fewer packages and no manuals, for a server set up by hand"
+DEBIAN_CLOUD = "A kernel slimmed for VMs, and the usual choice"
+DEBIAN_GENERIC = "The full kernel with every driver, for hardware passed through to the VM"
 STANDARD = "The standard cloud image"
 SUSE_MINIMAL = "openSUSE's minimal cloud VM"
 LVM = "Its disk under LVM, to grow or split later"
@@ -127,7 +127,7 @@ CATALOG = [
     _entry("arch", "Arch Linux", "Arch Linux", "Cloud", "Rolling release", "arch",
            {"amd64": "https://geo.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2"}),
     _entry("alpine", "Alpine", "Alpine Linux", "Cloud-init",
-           "Tiny - musl and OpenRC rather than glibc and systemd", "alpine", resolve="alpine"),
+           "Tiny, with musl and OpenRC rather than glibc and systemd", "alpine", resolve="alpine"),
 ]
 BY_ID = {entry["id"]: entry for entry in CATALOG}
 FEDORA = "https://fedoraproject.org/releases.json"
@@ -265,7 +265,7 @@ def load():
     return data, cm
 
 
-UNREADABLE = "the VM store's record (homestead-vm-store) is not one Homestead wrote; nothing was changed"
+UNREADABLE = "The VM store's record (homestead-vm-store) was not written by Homestead, so nothing was changed"
 
 
 def _checked(data):
@@ -429,7 +429,7 @@ def keep(image_id, auto=True):
             + [dict(stored.get(m["image"]) or {}, **m) for m in mine]
         record["versions"] = sorted(versions, key=lambda v: v.get("added", 0))
     _update(change)
-    return {"ok": True, "detail": detail + ("; it keeps itself current" if auto else "")}
+    return {"ok": True, "detail": detail + (". It keeps itself up to date" if auto else "")}
 
 
 def set_auto(image_id, auto):
@@ -462,7 +462,7 @@ def forget(image_id):
             except Exception:
                 left.append(version["image"])
     _update(lambda data: data["kept"].pop(image_id, None))
-    return {"ok": True, "detail": "No longer kept" + (f"; {', '.join(left)} stay{'s' if len(left) == 1 else ''} while disks use "
+    return {"ok": True, "detail": "No longer kept" + (f". {', '.join(left)} stay{'s' if len(left) == 1 else ''} while disks use "
                                                      f"{'it' if len(left) == 1 else 'them'}" if left else "")}
 
 

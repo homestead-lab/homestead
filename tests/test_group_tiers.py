@@ -328,7 +328,7 @@ class MembershipTests(unittest.TestCase):
         self.cluster.unreadable(http(403, MAP))
         result = self.move("Home", "ha")
         self.assertEqual("group", self.cluster.annotations("lab/ha")["homestead.io/tier"])
-        self.assertIn("couldn't", result["detail"])
+        self.assertIn("could not", result["detail"])
 
     def test_a_managed_add_on_is_refused_and_nothing_is_patched(self):
         def refuse(ns, name):
@@ -678,7 +678,7 @@ class EditTests(unittest.TestCase):
         self.assertEqual({"homestead.io/group": "Home"}, dep["metadata"]["annotations"])
 
     def test_from_its_group_is_refused_for_an_app_in_no_group(self):
-        with self.assertRaisesRegex(ValueError, "isn't in a group"):
+        with self.assertRaisesRegex(ValueError, "is not in a group"):
             WORKLOAD_EDIT._apply_tier(app("ha"), "group")
 
     def test_from_its_group_waits_while_the_tiers_cant_be_read(self):

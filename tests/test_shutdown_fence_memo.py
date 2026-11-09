@@ -58,7 +58,7 @@ class FenceMemoTests(unittest.TestCase):
         self.renew()
         self.state[0] = {"phase": "draining"}
         self.now[0] += K.FENCE_TTL
-        with self.assertRaisesRegex(ValueError, "Cluster shutdown is active"):
+        with self.assertRaisesRegex(ValueError, "cluster shutdown is running"):
             self.renew()
 
     def test_a_read_that_fails_refuses_the_write_and_is_not_kept(self):
@@ -75,7 +75,7 @@ class FenceMemoTests(unittest.TestCase):
         K._ksend("POST", "/api/v1/namespaces/lab/secrets",
                  {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": CS.NAME, "namespace": "lab"},
                   "data": {}}, shutdown_bypass=True)
-        with self.assertRaisesRegex(ValueError, "Cluster shutdown is active"):
+        with self.assertRaisesRegex(ValueError, "cluster shutdown is running"):
             self.renew()
 
 
@@ -87,7 +87,7 @@ class FenceMemoTests(unittest.TestCase):
             self.state[0] = {"phase": "draining"}
         self.during_read.append(coordinator_writes_during_the_read)
         self.renew()                    # the reading it began with lets this one write through
-        with self.assertRaisesRegex(ValueError, "Cluster shutdown is active"):
+        with self.assertRaisesRegex(ValueError, "cluster shutdown is running"):
             self.renew()
 
 

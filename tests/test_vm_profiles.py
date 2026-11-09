@@ -75,7 +75,7 @@ class VMProfileTests(unittest.TestCase):
             detail = vms.detail("lab", "web")
         self.assertIsNone(detail["cores"])
         self.assertEqual("", detail["memory"])
-        self.assertIn("could not be resolved", detail["profile_error"])
+        self.assertIn("could not be read", detail["profile_error"])
         self.assertNotIn("private-error", detail["profile_error"])
         self.assertEqual([], cluster.sent)
 

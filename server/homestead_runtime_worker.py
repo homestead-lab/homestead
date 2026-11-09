@@ -246,7 +246,7 @@ def copy_runtime(source, target, expected):
         os.chmod(dst, entry['mode'])
         keep_attrs(dst, entry['attrs'])
         if not entry['directory']: os.utime(dst, ns=(entry['mtime'], entry['mtime']))
-    require(manifest(target) == expected, 'Runtime copy verification failed; source remains intact')
+    require(manifest(target) == expected, 'The check of the runtime copy failed. The source is not changed.')
     apply_metadata(target, metadata(source))
     run('sync', '-f', str(target))
 
@@ -285,7 +285,7 @@ def process_use(proc, device, own_ns, number, forbidden):
                 require(opened.st_dev != device and not (stat.S_ISBLK(opened.st_mode) and opened.st_rdev == device),
                         'A process still has the retained filesystem open')
         require((proc / 'stat').read_text().rsplit(')', 1)[1].split()[19] == started,
-                'Process identity changed during inspection; review the stopped host again')
+                'A process changed during the check. Review the stopped host again.')
     except FileNotFoundError:
         if proc.exists(): raise
         # A proven exited process cannot retain a mount or open file. Access
@@ -321,7 +321,7 @@ def source_check(plan, point):
 def inspect(plan):
     require(sys.version_info >= (3, 11), 'Python 3.11 or newer is required on the host')
     plain(BASE.parent, True); administrative(BASE); administrative(FSTAB); administrative(SYSTEMD); administrative(Path('/mnt'))
-    require(not BASE.exists(), 'A saved runtime relocation exists; open its maintenance job')
+    require(not BASE.exists(), 'A saved runtime move exists. Open its maintenance job.')
     require(root_identity()['filesystem'] in ('ext4', 'xfs'), 'OS runtime destination needs ext4 or XFS')
     plan['root'] = root_identity()
     data = source_check(plan, SOURCE)
@@ -441,7 +441,7 @@ def recover_staging(folder):
     if dropin.exists():dropin.unlink()
     run('sync','-f',str(dropin.parent));run('systemctl','daemon-reload')
     require('homestead-longhorn-runtime.service' not in run('systemctl','show',plan['service'],'-p','Requires','--value').split(),
-            'Another required runtime dependency remains; Kubernetes must stay stopped')
+            'Something else the runtime needs is still there, so Kubernetes must stay stopped')
     return {'phase':'unarmed','message':'Original source retained. Start '+plan['service']+' explicitly, then recheck the Homestead job to restore staging.'}
 
 
@@ -522,7 +522,7 @@ def _boot(folder):
         completed = sum(verified_partial(SOURCE,folder/name,expected) for name in ('active','archive'))
         remaining = 2 * sum(i.get('size', 0) for i in expected.values()) - completed
         require(usage.f_bavail * usage.f_frsize >= remaining + RESERVE,
-                'OS free space changed; original is retained read-only')
+                'The free space on the OS disk changed. The original is kept read-only.')
         if phase == 'staged':
             save(folder, {'phase': 'copying', 'manifest': expected})
         else:

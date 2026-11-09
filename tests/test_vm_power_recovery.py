@@ -101,7 +101,7 @@ class VMPowerRecoveryTests(unittest.TestCase):
             review = recovery.preview(self.ident, ops, self.read, "admin")
             self.assertTrue(review["plan"]["blocked"])
             self.assertIsNone(review["capacity_token"])
-            with self.assertRaisesRegex(ValueError, "dispatcher is active"):
+            with self.assertRaisesRegex(ValueError, "dispatcher is running"):
                 recovery.resolve(good, ops, self.read, "admin")
         self.assertEqual("uncertain", ops.stored()[0]["ref"]["phase"])
 

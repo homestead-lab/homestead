@@ -61,7 +61,7 @@ class RecoveryTests(unittest.TestCase):
     def test_confirmation_binds_anchor_version_even_if_resource_shapes_are_equal(self):
         proposed = self.review()
         anchor = self.anchor(); anchor.report("coordinator-uid", 1001, "held", "Different review")
-        with self.assertRaisesRegex(Held, "facts changed"):
+        with self.assertRaisesRegex(Held, "details changed"):
             self.confirm(fingerprint=proposed["fingerprint"])
 
     def test_fresh_lease_renewal_does_not_prevent_confirmation(self):

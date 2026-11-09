@@ -72,9 +72,9 @@ class PreviewTests(unittest.TestCase):
                   "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}]},
                   "spec": {}} for n in ("node-a", "node-b")]
         f = CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")
-        self.assertIn("1 VM couldn't be checked", f["sentence"])
+        self.assertIn("1 VM could not be checked", f["sentence"])
         p["apps"].append({"kind": "app", "ns": "lab", "name": "web", "outcome": "unknown"})
-        self.assertIn("1 app couldn't be checked and 1 VM couldn't be checked",
+        self.assertIn("1 app could not be checked and 1 VM could not be checked",
                       CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")["sentence"])
 
     def test_unread_addresses_make_the_count_unknown_never_zero(self):
@@ -302,7 +302,7 @@ class VmDisksAndImportsTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "500"):
             VM_CREATE.list_vm_disks()
         # A new VM may not take a disk another VM might hold.
-        with self.assertRaisesRegex(ValueError, "Couldn't check whether another VM uses this disk; try again in a moment"):
+        with self.assertRaisesRegex(ValueError, "could not check whether another VM uses this disk. Try again in a moment"):
             VM_CREATE._disk_consumers()
 
     def test_no_imports_is_an_empty_list(self):

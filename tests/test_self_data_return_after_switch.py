@@ -28,7 +28,7 @@ from homestead_storage_journal import Held
 from fakes.kube import Kube
 from fakes.self_data_move import Move, NS
 
-CUTOVER_WORDS = "Cutover has been requested"
+CUTOVER_WORDS = "switch-over has been requested"
 
 
 class Base(unittest.TestCase):
@@ -270,7 +270,7 @@ class GoingBackTests(Base):
         job["metadata"].pop("finalizers", None)
         job["metadata"].pop("deletionTimestamp", None)
         self.kube.add(job)
-        with self.assertRaisesRegex(Held, "no completed release"):
+        with self.assertRaisesRegex(Held, "not finished releasing"):
             self.preview("return-original")
 
     def with_a_start_entry(self, state):

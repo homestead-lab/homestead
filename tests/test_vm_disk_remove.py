@@ -142,11 +142,11 @@ class ReviewTests(Base):
 
     def test_a_datavolume_homestead_didnt_import_is_refused(self):
         self.disk(label="")
-        with self.assertRaisesRegex(ValueError, "isn't a disk"):
+        with self.assertRaisesRegex(ValueError, "is not a disk"):
             REMOVE.plan(NS, DISK)
 
     def test_an_absent_disk_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "isn't a disk"):
+        with self.assertRaisesRegex(ValueError, "is not a disk"):
             REMOVE.plan(NS, "no-such-disk")
 
     def test_a_name_that_isnt_one_is_refused_before_any_read(self):
@@ -212,7 +212,7 @@ class ReviewTests(Base):
     def test_an_unreadable_list_of_apps_refuses(self):
         self.finished_disk()
         self.kube.fail(f"/apis/apps/v1/namespaces/{NS}/deployments", 500)
-        with self.assertRaisesRegex(ValueError, "Couldn't read what uses this disk"):
+        with self.assertRaisesRegex(ValueError, "could not read what uses this disk"):
             REMOVE.plan(NS, DISK)
 
     def test_a_vm_or_pod_on_cdis_work_claims_blocks_it(self):
@@ -232,7 +232,7 @@ class ReviewTests(Base):
         self.finished_disk()
         with mock.patch.object(JOBS, "CDI_CANCELLABLE", {"unraid-vm-import"}):
             for kind, ref, words in (("unraid-vm-import", {"disks": [{"dv": DISK}]}, "Cancel that import"),
-                                     ("vm-disk-import", {"name": DISK}, "can't be cancelled yet")):
+                                     ("vm-disk-import", {"name": DISK}, "cannot be cancelled yet")):
                 operation = self.job_on(kind, "running", **ref)
                 self.assertIn(words, REMOVE.plan(NS, DISK)["blocking"][0], kind)
                 with JOBS.transaction():

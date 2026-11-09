@@ -66,7 +66,7 @@ class CrashRetryStopTests(unittest.TestCase):
         before = copy.deepcopy(self.vm)
         result = self.stop()
         self.assertTrue(result["ok"])
-        self.assertIn("Boot retries stopped", result["detail"])
+        self.assertIn("Start retries stopped", result["detail"])
         self.assertEqual("Halted", self.vm["spec"]["runStrategy"])
         before["spec"]["runStrategy"] = "Halted"
         self.assertEqual(before, self.vm, "No disk, hardware, cloud-init or retry history should change")

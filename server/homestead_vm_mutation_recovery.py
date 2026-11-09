@@ -22,7 +22,7 @@ def _snapshot(item, read, actor):
             or ref.get("phase") not in (("provisioning", "awaiting-ready", "failed") if batch else ("prepared", "writing", "failed", "copying") if importing else ("prepared", "writing", "failed"))):
         raise ValueError("This job has no unresolved configuration dispatch")
     if ref.get("dispatch_protocol") != (2 if batch else 1):
-        raise ValueError("This legacy job has no verifiable dispatcher fence; manual journal recovery is required")
+        raise ValueError("This older job has no dispatcher fence that can be checked. Its record must be recovered manually.")
     names = [row["name"] for row in ref["nodes"]] if batch else [ref["name"]]
     if not names or len(names) != len(set(names)):
         raise ValueError("Recovery target list is malformed")
@@ -56,12 +56,12 @@ def _snapshot(item, read, actor):
                          "relationship": "not found" if not identity else "identity unproven" if not expected else
                          "same identity" if identity["uid"] == expected["uid"] else "replacement; not adopted",
                          "last_write": last.get("phase", "not dispatched"), "deleting": deleting})
-    warnings = ["This resolves tracking only. It changes no VM, image, disk or Secret; partial resources remain for inspection.",
+    warnings = ["This only resolves the tracking. It changes no VM, image, disk or Secret, and anything already created stays so it can be checked.",
                 "The Homestead dispatcher is no longer active, but Kubernetes may still apply a previously sent request late. Current state does not prove its original outcome.",
                 "Accepted receipts prove only that individual resource writes were acknowledged, not that the full save completed or the guest is healthy.",
                 "This releases the job's block on future VM reviews. It never retries, adopts replacements or rolls back resources. The old approval remains consumed."]
     if batch:
-        warnings.append("All planned VMs are shown, including those not dispatched. Guest installation may continue; this does not verify k3s health, free IP addresses or resume the remaining batch.")
+        warnings.append("All planned VMs are shown, including those not sent. Guest installation may continue. This does not check k3s health or free IP addresses, and it does not resume the rest of the batch.")
     if importing:
         blockers += IMPORT.recovery_blockers(item, read)
         warnings = ["This records an unknown outcome only. It does not retry the import, start the app, remove its safety hold or delete any workload, Service, Job or volume.",
@@ -102,9 +102,9 @@ def resolve(body, ops, read, actor):
                 item.update(tracking_stopped=True, tracking_stopped_at=ops._now())
             importing = item["kind"] == IMPORT.KIND
             ops._finish(item, "failed", item.get("progress", 0),
-                        f"{actor} inspected the incomplete {'import' if importing else 'VM save'}; outcome remains unknown. Resources retained; no retry or rollback; a late effect remains possible.")
+                        f"{actor} checked the unfinished {'import' if importing else 'VM save'}, and its outcome is still unknown. The resources are kept. Nothing was retried or rolled back, and a late effect is still possible.")
             t.save(items)
             return {"ok": True, "detail": "Tracking resolved as unknown; no cluster change was sent. Resources and import holds remain; any new action requires a fresh review." if importing else "Tracking resolved as unknown; no cluster change was sent. Resources remain and any new VM action requires a fresh review.",
                     "operation": ops._public(item)}
     except RECOVERY.DispatcherBusy:
-        raise ValueError("The dispatcher is active; nothing was resolved. Wait and review again.") from None
+        raise ValueError("The dispatcher is running, so nothing was resolved. Wait and review again.") from None

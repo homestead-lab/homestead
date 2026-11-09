@@ -63,7 +63,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88, extra_entries=Non
             meta = current.get("metadata") or {}
             if (meta.get("uid") != receipt.get("uid") or meta.get("deletionTimestamp") or
                     not contains(current.get("spec"), vm["spec"])):
-                raise ValueError(f"Created VM {name} changed during the batch; inspect it before creating more VMs")
+                raise ValueError(f"New VM {name} changed during the batch. Check it before creating more VMs.")
             vmi = CAPACITY._optional(read, f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachineinstances/{name}")
             owned, known = RESOURCES.launchers(current, vmi, pods)
             if vmi and not known:
@@ -72,7 +72,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88, extra_entries=Non
                 raise ValueError(f"Created VM {name} launcher identity/version is incomplete")
             if vmi and (vmi.get("metadata", {}).get("deletionTimestamp") or
                         ((vmi.get("status") or {}).get("migrationState") or {}).get("startTimestamp")):
-                raise ValueError(f"Created VM {name} is terminating or migrating; stop and review the remaining batch")
+                raise ValueError(f"New VM {name} is stopping or migrating. Stop and review the rest of the batch.")
             scheduled = [pod for pod in owned if pod.get("spec", {}).get("nodeName") and
                          not pod.get("metadata", {}).get("deletionTimestamp")]
             if len(scheduled) > 1 or any(pod.get("metadata", {}).get("deletionTimestamp") for pod in owned):
@@ -136,7 +136,7 @@ def plan(prepared, read, nodes, *, created=None, threshold=88, extra_entries=Non
         # then debits the same snapshot, including synthetic cell assignments.
         allocations = {node["name"]: CAPACITY.ALLOCATION.inspect(node, read) for node in nodes}
         if numa_entries and not any(value["verified"] for value in allocations.values()):
-            blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+            blockers.append("NUMA guest placement needs confirmed local CPU and hugepage allocations. The physical layout alone cannot allow a start.")
     def allocation_options(entry, host, snapshot):
         if entry["name"] not in numa_entries:
             return [None]
@@ -150,8 +150,8 @@ def plan(prepared, read, nodes, *, created=None, threshold=88, extra_entries=Non
     if blockers:
         result.update(blocked=True, status="blocked")
     result["warnings"] = sorted(set(result["warnings"]) | warnings | {
-        "Image importers and launcher sidecars can need additional resources; RAM requests are lower bounds and version-uncertain IO-thread CPU uses conservative planning, not guaranteed capacity."} | (set() if mixed else {
-        "Three guest servers provide guest-level quorum only. Shared physical hosts/storage can still fail together; placement examples are not enforced."}))
+        "Image importers and launcher sidecars can need more resources. RAM requests are a minimum, and IO-thread CPU is estimated cautiously, so the capacity is not guaranteed."} | (set() if mixed else {
+        "Three guest servers give quorum only inside the new cluster. Shared physical hosts or storage can still fail together, and the placement examples are not enforced."}))
     result["vm_count"] = len(prepared)
     result["created_count"] = len(created)
     return result
