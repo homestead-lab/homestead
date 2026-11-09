@@ -39,7 +39,7 @@ test("a schedule set in another time zone says so in its time line, not as a sec
   const zone = vm.runInContext("schedZone()", c);
   c.scheduleDialog("vm", "default", "home-assistant-os");
   assert.doesNotMatch(html, /ui-callout/);
-  assert.ok(html.includes(`Times are in this browser&#39;s time zone (${zone}). These times were set in Pacific/Chatham. Saving sets them in ${zone}.`) || html.includes(`Times are in this browser's time zone (${zone}). These times were set in Pacific/Chatham. Saving sets them in ${zone}.`), html);
+  assert.ok(html.includes(`Times use this browser&#39;s time zone (${zone}). These times were set in Pacific/Chatham. Saving sets them in ${zone}.`) || html.includes(`Times use this browser's time zone (${zone}). These times were set in Pacific/Chatham. Saving sets them in ${zone}.`), html);
 });
 
 test("several concerns make one notice, in the worst tone, with a line each", () => {

@@ -49,7 +49,7 @@ test("a duration drops a zero second part", () => {
 });
 
 test("the zone line names the reader's own zone", () => {
-  assert.equal(run("zoneLine()"), "Times are in this browser's time zone (Europe/Berlin)");
+  assert.equal(run("zoneLine()"), "Times use this browser's time zone (Europe/Berlin)");
 });
 
 // Log lines keep their seconds, and a forecast's day key is a calendar day,
