@@ -274,7 +274,7 @@ def ensure_two_copy_class():
                 "message": "Homestead's data now keeps two copies, on different hosts. Longhorn is making the second."}
     r2 = found.get("r2") or {}
     if r2.get("exists") and not r2.get("usable"):
-        return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved; "
+        return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved. "
                                   "pick a class that keeps two copies in Move data"}
     created = False
     if not r2.get("exists"):

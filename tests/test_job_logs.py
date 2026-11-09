@@ -233,7 +233,7 @@ class RemovedHelperTests(unittest.TestCase):
     def test_a_power_helper_removed_after_its_bound_says_so(self):
         ref = {"helper_pod": "homestead-reboot-node-a-1", "helper_uid": "uid", "helper_namespace": "lab"}
         out = JL.node_power(self.item(ref, self.LONG_AGO))
-        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        self.assertIn("removed automatically 7 days after it finished. The steps above are the record", out[0]["note"])
         self.assertNotIn("does not confirm that the host shut down", out[0]["note"])
         recent = JL.node_power(self.item(ref, self.LATELY))
         self.assertIn("does not confirm that the host shut down", recent[0]["note"], "a helper missing early still warns")
@@ -241,7 +241,7 @@ class RemovedHelperTests(unittest.TestCase):
     def test_a_copy_job_removed_after_its_bound_says_so(self):
         ref = {"namespace": "apps", "job": "app-restructure-a1b2c3", "job_uid": "uid"}
         out = JL.copy_job(self.item(ref, self.LONG_AGO))
-        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        self.assertIn("removed automatically 7 days after it finished. The steps above are the record", out[0]["note"])
         with self.assertRaises(urllib.error.HTTPError):
             JL.copy_job(self.item(ref, self.LATELY))
         running = dict(self.item(ref, self.LONG_AGO), status="running")

@@ -30,7 +30,7 @@ def options(evidence, spec, pods, host):
         local_devices = {name for name in R.resource_names(spec) if "/" in name} - {
             "devices.kubevirt.io/kvm", "devices.kubevirt.io/tun", "devices.kubevirt.io/vhost-net"}
         if local_devices or spec.get("resourceClaims") or allocated.get("dynamic_resources_present"):
-            result["reason"] = "Device locality is not verified for this NUMA placement; CPU and memory counts alone cannot authorize it"
+            result["reason"] = "Device locality is not confirmed for this NUMA placement. CPU and memory counts alone cannot allow it."
             return result
         if policy["cpuManagerPolicy"] != "static" or policy["memoryManagerPolicy"] != "Static":
             result["reason"] = "This VM needs kubelet Static CPU and memory management to verify local capacity"
@@ -109,7 +109,7 @@ def options(evidence, spec, pods, host):
                     meta = pod.get("metadata") or {}
                     names = {c["name"] for c in pod.get("spec", {}).get("containers", [])}
                     if not names <= observed.get((meta.get("namespace"), meta.get("name")), set()):
-                        result["reason"] = "A running workload is missing from the allocation snapshot; refresh after its allocation settles"
+                        result["reason"] = "A running app is missing from the allocation snapshot. Refresh once its allocation settles."
                         return result
                 continue
             for cell in targets:
@@ -126,8 +126,8 @@ def options(evidence, spec, pods, host):
             if cell["cpu"] >= requested["cpu"] and cell["memory"] >= requested["memory"] and all(
                     cell["pages"].get(size, 0) >= value for size, value in requested["pages"].items()):
                 result["options"].append({"cell": cell["id"], "demand": requested})
-        result["reason"] = ("Dedicated CPUs and memory fit together on a local NUMA cell; kubelet makes the final allocation"
+        result["reason"] = ("Dedicated CPUs and memory fit together on a local NUMA cell. The kubelet makes the final allocation"
                             if result["options"] else "No NUMA cell has enough unallocated dedicated CPUs and local memory after reservations")
     except Exception:
-        result["reason"] = "Local CPU/memory accounting is incomplete; placement cannot be verified"
+        result["reason"] = "The local CPU and memory figures are incomplete, so the placement cannot be checked"
     return result

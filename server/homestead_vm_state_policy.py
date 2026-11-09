@@ -58,7 +58,7 @@ def selection(vm, spec, config, read, *, version=None, cold=True):
         if minor is not None and 3 <= minor <= 5 and "VMPersistentState" not in gates:
             result["blockers"].append("This KubeVirt version requires the VMPersistentState feature gate for persistent TPM/EFI")
         elif (minor is None or not 3 <= minor <= 9) and "VMPersistentState" not in gates:
-            result["warnings"].append("Persistent-state feature availability is unverified on this KubeVirt build")
+            result["warnings"].append("Persistent-state support is not confirmed on this KubeVirt build")
     selectors = config.get("changedBlockTrackingLabelSelectors")
     if selectors is None:
         return result
@@ -68,7 +68,7 @@ def selection(vm, spec, config, read, *, version=None, cold=True):
     if "IncrementalBackup" not in gates:
         if minor is not None and 3 <= minor <= 9:
             return result
-        result["warnings"].append("Incremental-backup defaults are unverified on this KubeVirt build; configured selectors are conservatively included")
+        result["warnings"].append("The incremental backup defaults are not confirmed on this KubeVirt build, so the configured selectors are included to be safe")
     try:
         if not isinstance(selectors, dict) or set(selectors) - {"namespaceLabelSelector", "virtualMachineLabelSelector"}:
             raise ValueError("Backup-state selector configuration is invalid")
@@ -87,7 +87,7 @@ def selection(vm, spec, config, read, *, version=None, cold=True):
             selected = matches(selectors["namespaceLabelSelector"], meta.get("labels") or {})
         result["automatic"] = selected
         if selected:
-            result["warnings"].append("KubeVirt backup-tracking selectors require persistent VM state; this does not configure a backup target or prove a usable backup exists")
+            result["warnings"].append("KubeVirt's backup tracking needs persistent VM state. This does not set a backup target or prove that a usable backup exists.")
     except ValueError as error:
         result["blockers"].append(str(error))
     except Exception:

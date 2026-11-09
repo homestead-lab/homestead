@@ -250,7 +250,7 @@ def inspect(node):
     out, err = hostrun.run(node, INSPECT.replace("echo END\n", extra + "echo END\n"), timeout=90)
     facts = parse(out)
     if not facts["complete"]:
-        raise ValueError(f"could not look at {node}'s devices: {(err or out)[-200:]}")
+        raise ValueError(f"Homestead could not check {node}'s devices: {(err or out)[-200:]}")
     permitted = _permitted()
     for row in facts["pci"]:
         row["permitted"] = row["resource"] in permitted

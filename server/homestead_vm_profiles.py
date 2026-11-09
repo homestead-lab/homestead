@@ -15,7 +15,7 @@ def expand(vm, read, send=None):
     metadata = vm.get("metadata") or {}
     keys = ("namespace", "name", "uid", "resourceVersion")
     if any(not metadata.get(key) for key in keys) or metadata.get("deletionTimestamp"):
-        raise ValueError("VM identity is unavailable for profile expansion; refresh it first")
+        raise ValueError("The VM could not be identified to read its instance type. Refresh it first.")
     base = "/apis/subresources.kubevirt.io/v1/namespaces/" + quote(metadata["namespace"], safe="")
     try:
         if send is None:
@@ -25,12 +25,12 @@ def expand(vm, read, send=None):
             # the named VirtualMachine (unlike PUT /virtualmachines/{name}).
             result = send("PUT", base + "/expand-vm-spec", copy.deepcopy(vm))
     except urllib.error.HTTPError as error:
-        raise ValueError(f"KubeVirt profile expansion is unavailable (HTTP {error.code}). Check the cluster API and Homestead RBAC; no VM change was sent.") from error
+        raise ValueError(f"KubeVirt could not expand the instance type (HTTP {error.code}). Check the cluster API and Homestead's permissions. No VM change was sent.") from error
     if not isinstance(result, dict):
         raise ValueError("KubeVirt returned an invalid profile expansion")
     observed = result.get("metadata") or {}
     if not isinstance(observed, dict) or any(observed.get(key) != metadata[key] for key in keys) or observed.get("deletionTimestamp"):
-        raise ValueError("The VM changed during profile expansion; refresh its review")
+        raise ValueError("The VM changed while its instance type was read. Refresh its review.")
     spec = result.get("spec")
     template = spec.get("template") if isinstance(spec, dict) else None
     expanded = template.get("spec") if isinstance(template, dict) else None

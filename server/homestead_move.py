@@ -179,7 +179,7 @@ def inventory():
     try:
         deployments = kget("/apis/apps/v1/deployments").get("items", [])
     except Exception as error:
-        raise ValueError(f"could not read workloads: {str(error)[:120]}") from error
+        raise ValueError(f"Homestead could not read the apps: {str(error)[:120]}") from error
     rows = [_workload_row(d) for d in deployments
             if (d["metadata"].get("namespace") or "") == NS]
     rows.sort(key=lambda row: row["name"])

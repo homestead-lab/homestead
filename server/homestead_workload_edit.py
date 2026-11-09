@@ -152,7 +152,7 @@ def _renamed_deployment(dep, ns, new_name):
 
 
 def rename_workload(*args, **kwargs):
-    raise ValueError("Use the reviewed rename workflow; legacy rename cannot safely change workloads")
+    raise ValueError("Use the reviewed rename. The older rename cannot change apps safely.")
 
 
 
@@ -209,7 +209,7 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
                 continue
             if str(value) == ENVSEC.MASK:
                 if key not in held:
-                    raise ValueError(f"{container.get('name')}: {key}'s value is hidden; type it in again")
+                    raise ValueError(f"{container.get('name')}: {key}'s value is hidden. Type it again.")
                 literals.append(copy.deepcopy(held[key]))
             else:
                 literals.append({"name": str(key), "value": str(value)})
@@ -604,7 +604,7 @@ def prepare_edit(cfg, current=None):
         raise ValueError("removed containers must be a list of names")
     existing = {container.get("name"): container for container in containers}
     if len(removed) != len(set(removed)) or set(removed) - set(existing):
-        raise ValueError("a removed container no longer exists or was submitted twice; reopen Edit")
+        raise ValueError("A removed container no longer exists or was sent twice. Open Edit again.")
     containers[:] = [container for container in containers if container.get("name") not in removed]
     container_requests = []
     if "containers" in cfg:
@@ -743,7 +743,7 @@ def edit_workload(cfg, hold=False, prepared=None):
     prepared = prepared if prepared is not None else prepare_edit(cfg)
     dep, workload_name = prepared["deployment"], prepared["name"]
     if workload_name != name:
-        raise ValueError("Use the reviewed rename workflow; save other changes separately")
+        raise ValueError("Use the reviewed rename, and save other changes separately")
     for path, cm in prepared["seeds"]:
         L.ksend("PUT", path, cm)
     _create_pending_pvcs(ns, prepared["claims"])

@@ -64,7 +64,7 @@ def restore_plan(backup, namespace, pvc_name):
                         "message": f"Namespace {namespace} does not exist"}
         elif pvc_name and KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=LH.kget) is not None:
             conflict = {"kind": "PersistentVolumeClaim", "name": pvc_name,
-                        "message": f"PVC {namespace}/{pvc_name} already exists; choose a new name"}
+                        "message": f"PVC {namespace}/{pvc_name} already exists. Choose a new name."}
     regular = [c for c in LH.kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
                if c.get("provisioner") == "driver.longhorn.io"
                and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage"))]
@@ -187,7 +187,7 @@ def validate_restore_class(base, volume_mode="Filesystem", migration=False):
         raise ValueError("Migrated volumes need an Immediate storage class. They restore before the workload starts")
     refusal = class_refusal(base, volume_mode)
     if refusal:
-        raise ValueError(f"{refusal}; choose another storage class")
+        raise ValueError(f"{refusal}. Choose another storage class.")
 
 
 def restore_support():

@@ -30,7 +30,7 @@ def bytes_for(value, label="memory"):
     # Less than a mebibyte is a slip, not a size: "390m" is 0.39 bytes in
     # Kubernetes and a bare "390" is 390 bytes - both mean 390Mi (#311).
     if amount < 1024 ** 2:
-        raise ValueError(f"{label} {value} is less than 1 MiB; did you mean {match.group(1)}Mi?")
+        raise ValueError(f"{label} {value} is less than 1 MiB. Did you mean {match.group(1)}Mi?")
     return amount
 
 

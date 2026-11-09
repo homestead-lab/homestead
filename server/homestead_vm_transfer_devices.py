@@ -22,9 +22,9 @@ def prepare(definition, namespace, choices=None):
         if not isinstance(hooks, list) or any(not isinstance(hook, dict) for hook in hooks):
             raise ValueError()
     except (ValueError, TypeError):
-        raise ValueError("The VM's hook sidecar configuration cannot be read; repair it before transferring") from None
+        raise ValueError("The VM's hook sidecar settings cannot be read. Repair them before moving it.") from None
     if any((hook.get("configMap") or {}).get("name") != own_cm for hook in hooks) or hooks and not any(d["rom"] for d in devices):
-        raise ValueError("This VM uses a custom hook sidecar; configure its dependencies separately before transferring it")
+        raise ValueError("This VM uses a custom hook sidecar. Set up what it needs separately before moving it.")
     if not devices:
         if choices:
             raise ValueError("This VM has no passthrough devices to map")
@@ -51,7 +51,7 @@ def prepare(definition, namespace, choices=None):
             continue
         target = resources.get(resource)
         if not target or not target.get("nodes"):
-            raise ValueError(f"The destination device for {name} is not offered by a host; prepare it under Nodes → Hardware")
+            raise ValueError(f"The destination device for {name} is not offered by a host. Prepare it under Nodes → Hardware.")
         if device["gpu"] and target["kind"] != "pci":
             raise ValueError(f"GPU {name} needs a PCI device")
         cfg["map"][name] = resource
@@ -63,7 +63,7 @@ def prepare(definition, namespace, choices=None):
             raise ValueError(f"USB device {name} cannot use a vBIOS file")
         cfg["roms"][name] = data
     if common_hosts is not None and not common_hosts:
-        raise ValueError("No destination host offers all the selected passthrough devices; choose devices on the same host")
+        raise ValueError("No destination host offers all the chosen passthrough devices. Choose devices on the same host.")
     roms = {name: PASS.check_rom(data) for name, data in definition["vbios"].items()}
     effects = []
     PASS.edit_vm(vm, namespace, cfg, effects, roms)

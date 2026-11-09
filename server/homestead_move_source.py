@@ -118,7 +118,7 @@ def _users(claim):
         pods = kget(f"/api/v1/namespaces/{_namespace()}/pods").get("items", [])
     except Exception as error:
         # Unknown is not "unused": a volume moved while written would arrive torn.
-        raise ValueError(f"could not tell whether {claim} is in use: {str(error)[:120]}") from error
+        raise ValueError(f"Homestead could not tell whether {claim} is in use: {str(error)[:120]}") from error
     return sorted(pod["metadata"]["name"] for pod in pods
                   if (pod.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
                   and any((v.get("persistentVolumeClaim") or {}).get("claimName") == claim

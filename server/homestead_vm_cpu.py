@@ -68,9 +68,9 @@ def project(vm, spec, config, version=None):
     modern = bool(match and 6 <= int(match[1]) <= 9)
     legacy = bool(match and 3 <= int(match[1]) <= 5)
     if not (modern or legacy):
-        warnings.append("KubeVirt renderer version is unknown, changing or outside the verified range; CPU/thread estimates need launcher verification")
+        warnings.append("The KubeVirt renderer version is unknown, changing or untested. The CPU and thread estimates need checking on the launcher.")
     if threads and not modern:
-        warnings.append("Supplemental IO-thread CPU accounting differs on this KubeVirt version; a conservative CPU allowance is used, not an exact scheduler request")
+        warnings.append("Extra IO-thread CPU is counted differently on this KubeVirt version. A cautious CPU allowance is used, not an exact request.")
     explicit = requests.get("cpu", limits.get("cpu"))
     dedicated = cpu.get("dedicatedCpuPlacement") is True
     annotations = ((vm.get("spec") or {}).get("template", {}).get("metadata") or {}).get("annotations") or {}
@@ -88,7 +88,7 @@ def project(vm, spec, config, version=None):
             parity = amount // 1000 + (threads if modern else 0)
             extra = 2 if PARITY in annotations and (not (modern or legacy) or parity % 2 == 0) else 1
             amount += extra * 1000
-            warnings.append(f"isolated emulator CPU includes {extra} extra core(s); host SMT/CPU-manager admission remains required")
+            warnings.append(f"isolated emulator CPU includes {extra} extra core(s). The host still needs SMT and the CPU manager to allow it.")
         warnings.append("dedicated CPU topology, NUMA and CPU-manager allocations still require kubelet admission")
     elif explicit is not None:
         amount = RESOURCES.quantity(explicit, "cpu")

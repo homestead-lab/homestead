@@ -334,7 +334,7 @@ class NetworkingTests(unittest.TestCase):
         """With no Services seen, every VIP looked free and 192.0.2.242, which
         homestead answers on, was handed out again (#615)."""
         self.failing("/api/v1/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was changed"):
             SVC.service_plan({"namespace": "lab", "name": "pihole", "vip_mode": "automatic",
                                      "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
 
@@ -348,7 +348,7 @@ class NetworkingTests(unittest.TestCase):
 
     def test_a_failed_read_of_its_services_changes_no_ports(self):
         self.failing("/api/v1/namespaces/lab/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was changed"):
             SVC.sync_workload_ports("lab", "homestead", [
                 {"name": "web", "container": 8088, "host": 9090, "protocol": "TCP", "expose": True}])
         self.assertEqual([], self.sent)
@@ -372,7 +372,7 @@ class NetworkingTests(unittest.TestCase):
     def test_a_deployments_read_that_fails_does_not_make_an_apps_service_look_orphaned(self):
         """Every Service's targets were empty, so deleting one needed no force."""
         self.failing("/apis/apps/v1/deployments")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments; nothing was deleted"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments, so nothing was deleted"):
             SVC.delete_service("lab", "homestead")
         self.assertEqual([], self.sent)
 
@@ -381,7 +381,7 @@ class NetworkingTests(unittest.TestCase):
             "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
             "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
         self.failing("/api/v1/nodes")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes; nothing was added"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes, so nothing was added"):
             REG.add_vips({"ip": "192.0.2.210"})
         self.assertEqual([], self.sent)
 
@@ -391,7 +391,7 @@ class NetworkingTests(unittest.TestCase):
             "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
             "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
         self.failing("/api/v1/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was removed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was removed"):
             REG.remove_vip("192.0.2.242")
         self.assertEqual([], self.sent)
 

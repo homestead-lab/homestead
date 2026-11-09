@@ -140,7 +140,7 @@ def _end(request):
     if not event:
         return _no_maintenance()
     if _draining(node):
-        return ROUTER.Reply(409, {"error": "A power job is still draining this host; wait for it, then end the maintenance"})
+        return ROUTER.Reply(409, {"error": "A restart or shutdown is still draining this host. Wait for it, then end the maintenance."})
     event, first = HISTORY.maintenance_end(event["op"])
     ROUTER.forget("uptime")
     detail, ok = _allow_scheduling(node, event)

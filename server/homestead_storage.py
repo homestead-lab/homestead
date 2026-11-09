@@ -694,7 +694,7 @@ def edit_volume(cfg):
                                     .get("requests", {}).get("storage", "0"))
         now_gb = -(-requested_mb // 1024) if requested_mb else 0
         if now_gb and wanted < now_gb:
-            raise ValueError(f"{name} is {now_gb} GiB; volumes can grow but not shrink")
+            raise ValueError(f"{name} is {now_gb} GiB, and volumes can grow but not shrink")
         if wanted != now_gb:
             options = volume_edit_options(ns, name, pvc)
             if not options["can_expand"]:

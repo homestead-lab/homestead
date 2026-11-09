@@ -380,8 +380,8 @@ def delete(name, ns=None):
     except Exception:
         pass
     ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    return {"ok": True, "detail": f"{(pvc['metadata'].get('annotations') or {}).get(FILE, name)}'s volume deleted; "
-                                  "the file on the share is kept"}
+    return {"ok": True, "detail": f"{(pvc['metadata'].get('annotations') or {}).get(FILE, name)}'s volume deleted. "
+                                  "The file on the share is kept."}
 
 
 def _stamp(value):

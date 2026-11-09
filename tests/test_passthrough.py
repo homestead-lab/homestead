@@ -213,7 +213,7 @@ class PassthroughTests(unittest.TestCase):
     def test_incomplete_inspection_cannot_replace_last_good_inventory(self):
         facts = PASS.inspect("node-1")
         self.host.out = "PCI partial\n"
-        with self.assertRaisesRegex(ValueError, "could not look"):
+        with self.assertRaisesRegex(ValueError, "could not check"):
             PASS.inspect("node-1")
         self.assertEqual(facts, PASS.inventory("node-1")["facts"])
 

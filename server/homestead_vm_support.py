@@ -78,7 +78,7 @@ def project(vm, spec, config, network, read=None, planned_configmaps=None):
                 raise ValueError()
         except (ValueError, TypeError):
             hooks = []
-            result["blockers"].append("VM hook sidecars could not be parsed; their resources and dependencies are unknown")
+            result["blockers"].append("The VM hook sidecars could not be read, so what they use and need is unknown")
     for index in range(len(hooks) + network["sidecars"]):
         support("sidecar", f"hook-sidecar-{index}", {}, {})
     namespace = vm["metadata"]["namespace"]
@@ -141,7 +141,7 @@ def project(vm, spec, config, network, read=None, planned_configmaps=None):
         amount, unbounded = RESOURCES.memory_estimate(result)
         result["support_memory"] = amount
         if unbounded:
-            result["warnings"].append("VM hook sidecars have no memory limit; their configured requests are only a lower bound")
+            result["warnings"].append("VM hook sidecars have no memory limit, so their configured requests are only a minimum")
     else:
         result["support_memory"] = 0
     return result

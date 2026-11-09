@@ -104,7 +104,7 @@ def resolve(body, ops, read, actor):
             ops._finish(item, "failed", item.get("progress", 0),
                         f"{actor} checked the unfinished {'import' if importing else 'VM save'}, and its outcome is still unknown. The resources are kept. Nothing was retried or rolled back, and a late effect is still possible.")
             t.save(items)
-            return {"ok": True, "detail": "Tracking resolved as unknown; no cluster change was sent. Resources and import holds remain; any new action requires a fresh review." if importing else "Tracking resolved as unknown; no cluster change was sent. Resources remain and any new VM action requires a fresh review.",
+            return {"ok": True, "detail": "Tracking resolved as unknown, and nothing was sent to the cluster. The resources and import holds stay. Any new action needs a new review." if importing else "Tracking resolved as unknown; no cluster change was sent. Resources remain and any new VM action requires a fresh review.",
                     "operation": ops._public(item)}
     except RECOVERY.DispatcherBusy:
         raise ValueError("The dispatcher is running, so nothing was resolved. Wait and review again.") from None

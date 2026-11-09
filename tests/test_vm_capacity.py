@@ -74,7 +74,7 @@ class VMCapacityTests(unittest.TestCase):
     def test_upgrade_does_not_guess_encryption_policy(self):
         self.encrypted()
         self.config["status"]["targetKubeVirtVersion"] = "v1.10.0"
-        self.assertIn("Encrypted-guest policy is unverified", str(self.plan()["blockers"]))
+        self.assertIn("Encrypted guests are not confirmed", str(self.plan()["blockers"]))
 
     def numa_host(self):
         self.vm["spec"]["template"]["spec"]["domain"]["cpu"].update(

@@ -23,7 +23,7 @@ def backups(volume=None, strict=False):
     try:
         listing = LH.kget(path)
         if strict and (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)):
-            raise ValueError("backup inventory is incomplete; retry after Longhorn responds")
+            raise ValueError("The backup list is incomplete. Retry once Longhorn answers.")
         items = listing.get("items", [])
     except Exception:
         if strict:
@@ -134,7 +134,7 @@ def ensure_move_backup(volume, snapshot, backup, cleanup_id="", source_uid=""):
     status = snap.get("status") or {}
     problem = move_snapshot_error(snap)
     if problem:
-        raise ValueError(f"migration snapshot is unavailable: {problem}; retry the move for a fresh snapshot")
+        raise ValueError(f"The migration snapshot is unavailable: {problem}. Retry the move for a new snapshot.")
     if not status.get("readyToUse"):
         return {"backup": backup, "pending": True}
     if not BACKUP_TARGET.backup_target().get("configured"):

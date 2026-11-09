@@ -184,7 +184,7 @@ def install(version="dev"):
             if error.code != 409:
                 raise
     return _note({"state": "installed",
-                  "detail": NAME + " installed; each node reports once its pod is ready"})
+                  "detail": NAME + " installed. Each host reports once its pod is ready."})
 
 
 def remove():

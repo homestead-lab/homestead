@@ -243,7 +243,7 @@ def _error(error):
     registry URL or what an auth server answered."""
     code = getattr(error, "code", 0)
     if code == 429:
-        return "the registry asked Homestead to slow down; try again in a minute"
+        return "The registry asked Homestead to slow down. Try again in a minute."
     if code in (401, 403):
         return "registry authentication required"
     if code:

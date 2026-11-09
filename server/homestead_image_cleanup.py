@@ -151,7 +151,7 @@ def clean_unused(body):
         raise ValueError("review the unused images first")
     fresh, report = _plan()
     if fresh["token"] != reviewed:
-        raise ValueError("the unused images changed since the review; review again")
+        raise ValueError("The unused images changed since the review. Review again.")
     if not fresh["images"]:
         return {"ok": True, "removed": 0, "skipped": [], "freed_mb": 0,
                 "detail": "No unused images to clean up"}

@@ -59,7 +59,7 @@ def setup(request):
     # The first administrator: from the LAN only, and with the setup code (#737).
     b = request.body
     if connected(request).cloudflare:
-        return Reply(403, {"error": "finish setting Homestead up from your LAN; "
+        return Reply(403, {"error": "Finish setting Homestead up from the LAN. "
                                     "setup is not offered through the tunnel"})
     first = SETUP_CODE.first_admin(b, request.addr, request.conn.headers.get("User-Agent", ""))
     signin(request, "setup", first, detail="the first administrator")

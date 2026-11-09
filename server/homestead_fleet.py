@@ -808,7 +808,7 @@ def _login(url, username, password):
     except ValueError as error:
         raise ValueError(f"that Homestead refused the sign-in: {error}") from error
     except Unreachable as error:
-        raise ValueError(f"could not reach that Homestead: {error}") from error
+        raise ValueError(f"Homestead could not reach that Homestead: {error}") from error
     cookie = response.headers.get("Set-Cookie", "")
     token = cookie.split("homestead_session=", 1)[-1].split(";", 1)[0] if cookie else ""
     if not token:

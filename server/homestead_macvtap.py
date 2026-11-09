@@ -237,7 +237,7 @@ def install(cfg=None):
     cfg = cfg or {}
     p = platform(True) or {}
     if p.get("harvester"):
-        raise ValueError("Harvester's VMs use its bridges; macvtap is not needed there")
+        raise ValueError("Harvester's VMs use its bridges, so macvtap is not needed there")
     if not p.get("kubevirt"):
         raise ValueError("macvtap is for virtual machines: install KubeVirt first")
     if not p.get("helm_controller"):
@@ -277,7 +277,7 @@ def upgrade(target):
         "macvtap", target, manifests(p.get("distribution", ""), target), "")
     KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart, kget, ksend)
     homestead_routes.forget("helm")   # the Helm page shows the new version (#978)
-    return f"macvtap is moving to {target}; running VMs keep their interfaces"
+    return f"macvtap is moving to {target}. Running VMs keep their interfaces."
 
 
 def nad_config(name, mtu=None):

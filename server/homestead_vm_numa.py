@@ -38,5 +38,5 @@ def policy(spec, config, version=None):
         result["blockers"].append("NUMA guest-mapping policy is unverified on this KubeVirt build or during its upgrade")
     if (config.get("developerConfiguration") or {}).get("useEmulation") is True:
         result["blockers"].append("NUMA guest mapping requires dedicated hardware CPU placement, not software emulation")
-    result["warnings"].append("NUMA guest mapping needs matching local CPU and hugepage allocations; node-wide totals and online CPU counts do not prove those allocations are available")
+    result["warnings"].append("NUMA guest mapping needs matching local CPU and hugepage allocations. Host-wide totals and online CPU counts do not prove those are available.")
     return result

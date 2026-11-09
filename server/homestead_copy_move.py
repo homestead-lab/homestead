@@ -237,7 +237,7 @@ def status(item):
         leaving = [r for r in copies if off(r)]
         if not leaving:
             _put_back(ref, keep_tags=True)
-            return "succeeded", 100, f"Moved {done} cop{'y' if done == 1 else 'ies'} of {label}; and every copy is on the chosen disks"
+            return "succeeded", 100, f"Moved {done} cop{'y' if done == 1 else 'ies'} of {label}. Every copy is on the chosen disks."
         if len(copies) != ref["original"] or not all(whole_copy(r) for r in copies):
             waited = ref.setdefault("unsettled_since", now)
             if now - waited > 900:

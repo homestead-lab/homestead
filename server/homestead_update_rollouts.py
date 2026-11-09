@@ -103,7 +103,7 @@ def _named_release(dep, pods, version):
     be read, the release's tag, which the cluster pulls and checks itself."""
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     if U.PART(ns, name) != "self":
-        raise ValueError("only Homestead itself can be put on a release you name")
+        raise ValueError("Only Homestead itself can be set to a named release")
     if not REGISTRY.release_key(version):
         raise ValueError("name a Homestead release, such as 2.8.334 or 2.8.334-dev.1")
     tracked = U._annotation_json(dep, U.TRACKED)

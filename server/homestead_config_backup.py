@@ -115,7 +115,7 @@ def unseal(doc, passphrase):
     if not isinstance(doc, dict) or doc.get("format") != FORMAT:
         raise ValueError("that is not a Homestead configuration backup")
     if int(doc.get("version") or 0) > FILE_VERSION:
-        raise ValueError("that backup was made by a newer Homestead; update this one first")
+        raise ValueError("That backup was made by a newer Homestead. Update this one first.")
     try:
         kdf = doc["kdf"]
         params = {"n": int(kdf["n"]), "r": int(kdf["r"]), "p": int(kdf["p"])}
