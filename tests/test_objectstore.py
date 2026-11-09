@@ -438,7 +438,7 @@ class ObjectStoreTests(unittest.TestCase):
         self._deployment(0)
         with mock.patch.object(BACKUP_TARGET, "on_harvester", return_value=True), \
                 mock.patch.object(store, "ensure_bucket") as bucket:
-            with self.assertRaisesRegex(ValueError, "still starting.*waiting"):
+            with self.assertRaisesRegex(ValueError, "still starting.*Waiting"):
                 store.point_longhorn(replace=True)
         bucket.assert_not_called()
         self.assertEqual([], self.sent, "no credentials or target changed while starting")
@@ -460,7 +460,7 @@ class ObjectStoreTests(unittest.TestCase):
     def test_an_unreachable_or_unusable_bucket_keeps_the_old_target_and_credentials(self):
         self._service("192.0.2.20", "192.0.2.20")
         self._deployment(1)
-        for failure, expected in ((urllib.error.URLError("connection refused"), "not reachable yet"),
+        for failure, expected in ((urllib.error.URLError("connection refused"), "cannot be reached yet"),
                                   (False, "bucket.*not ready")):
             with self.subTest(failure=failure), \
                     mock.patch.object(BACKUP_TARGET, "on_harvester", return_value=True), \

@@ -132,9 +132,9 @@ class ReaderTests(unittest.TestCase):
         self.logs["/api/v1/namespaces/lab/pods/owned/log"] = "confirmed copy log"
         self.assertEqual("confirmed copy log", JL.copy_job({"ref": ref})[0]["text"])
         self.objects[("/apis/batch/v1/namespaces/lab/jobs/copy", "")]["metadata"]["uid"] = "replaced"
-        self.assertIn("identity changed", JL.copy_job({"ref": ref})[0]["note"])
+        self.assertIn("changed, so the logs", JL.copy_job({"ref": ref})[0]["note"])
         del ref["job_uid"]
-        self.assertIn("No confirmed", JL.copy_job({"ref": ref})[0]["note"])
+        self.assertIn("is not confirmed", JL.copy_job({"ref": ref})[0]["note"])
 
     def test_an_older_kubevirt_says_where_to_look_instead(self):
         self.objects[("/api/v1/namespaces/lab/pods", JL._q("vm.kubevirt.io/name=c-server-1"))] = {"items": [
@@ -161,7 +161,7 @@ class ReaderTests(unittest.TestCase):
             "spec": {"template": {"spec": {"domain": {"devices": {}}}}}}
         out = JL.k3s_cluster({"ref": {"namespace": "lab", "nodes": [
             {"name": "c-server-1", "role": "server", "address": "192.0.2.60"}]}})
-        self.assertIn("clusters made from now on do", out[0]["note"])
+        self.assertIn("Clusters created from now on do", out[0]["note"])
 
     def test_a_job_shows_its_newest_pods_output(self):
         self.objects[("/api/v1/namespaces/lab/pods", JL._q("job-name=homestead-import-frigate"))] = {"items": [
@@ -234,9 +234,9 @@ class RemovedHelperTests(unittest.TestCase):
         ref = {"helper_pod": "homestead-reboot-node-a-1", "helper_uid": "uid", "helper_namespace": "lab"}
         out = JL.node_power(self.item(ref, self.LONG_AGO))
         self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
-        self.assertNotIn("does not confirm shutdown", out[0]["note"])
+        self.assertNotIn("does not confirm that the host shut down", out[0]["note"])
         recent = JL.node_power(self.item(ref, self.LATELY))
-        self.assertIn("does not confirm shutdown", recent[0]["note"], "a helper missing early still warns")
+        self.assertIn("does not confirm that the host shut down", recent[0]["note"], "a helper missing early still warns")
 
     def test_a_copy_job_removed_after_its_bound_says_so(self):
         ref = {"namespace": "apps", "job": "app-restructure-a1b2c3", "job_uid": "uid"}

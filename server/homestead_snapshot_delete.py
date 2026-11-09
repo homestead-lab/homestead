@@ -76,7 +76,7 @@ def plan(volume, name):
         blockers.append("Snapshot or volume identity is unavailable")
     purge = KUBE.get_optional(f"{API}/settings/disable-snapshot-purge", read=kget)
     if purge and str(purge.get("value")).lower() == "true":
-        blockers.append("Longhorn snapshot purge is disabled; enable it in Longhorn before requesting cleanup")
+        blockers.append("Longhorn snapshot purge is off. Turn it on in Longhorn before asking for cleanup.")
     return {"volume": volume, "name": name, "uid": snap["metadata"].get("uid", ""),
             "volume_uid": vol["metadata"].get("uid", ""), "source": source(snap),
             "created": status.get("creationTime", ""),
@@ -91,13 +91,13 @@ def start(cfg, ops):
     if p["blockers"]:
         raise ValueError("; ".join(p["blockers"]))
     if not cfg.get("uid") or cfg["uid"] != p["uid"] or cfg.get("volume_uid") != p["volume_uid"]:
-        raise ValueError("snapshot or volume changed; review deletion again")
+        raise ValueError("The snapshot or volume changed. Review the deletion again.")
     if cfg.get("confirmation") != p["name"]:
         raise ValueError("type the snapshot name exactly to confirm")
     return ops.start("snapshot-delete", f"Remove {p['source']} snapshot {p['name']}",
                      {"kind": "Snapshot", "name": p["name"]}, "/data-protection",
                      {**p, "phase": "request", "since": time.time()},
-                     "Queued for Longhorn removal and merge; space is not reclaimed immediately")
+                     "Queued for Longhorn to remove and merge. The space is not freed immediately.")
 
 
 def resolve(item):
@@ -106,20 +106,20 @@ def resolve(item):
         return "failed", item.get("progress", 0), "The cleanup is still pending after one hour. Longhorn may continue. Check how the snapshot depends on the current data, then choose Resume job to follow it again."
     volume = KUBE.get_optional(f"{API}/volumes/{ref['volume']}", read=kget)
     if not volume or volume["metadata"].get("uid") != ref["volume_uid"]:
-        return "failed", 0, "Backing volume disappeared or changed; no further actions taken"
+        return "failed", 0, "The volume was removed or changed, so nothing more was done"
     snap = KUBE.get_optional(f"{API}/snapshots/{ref['name']}", read=kget)
     if snap and snap["metadata"].get("uid") != ref["uid"]:
-        return "failed", 0, "Snapshot identity changed; replacement left untouched"
+        return "failed", 0, "The snapshot changed, so its replacement was not touched"
     if ref["phase"] == "request" and snap and not snap["metadata"].get("deletionTimestamp"):
         p = plan(ref["volume"], ref["name"])
         if p["uid"] != ref["uid"] or p["volume_uid"] != ref["volume_uid"]:
-            return "failed", 0, "Snapshot or volume changed during recheck; replacement left untouched"
+            return "failed", 0, "The snapshot or volume changed during the second check, so its replacement was not touched"
         if p["blockers"] or p["source"] != ref["source"]:
-            return "failed", 0, "; ".join(p["blockers"]) or "Snapshot source changed; review again"
+            return "failed", 0, "; ".join(p["blockers"]) or "The snapshot source changed. Review again."
         ksend("DELETE", f"{API}/snapshots/{ref['name']}",
               {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": ref["uid"]}})
         ref["phase"] = "monitor"
-        return "running", 10, "Removal requested; Longhorn will mark, merge and purge eligible blocks"
+        return "running", 10, "Removal requested. Longhorn marks, merges and purges the blocks it can."
     ref["phase"] = "monitor"
     listing = kget(f"{API}/engines")
     if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
@@ -133,18 +133,18 @@ def resolve(item):
     running = [p for p in purges if p.get("isPurging")]
     if running:
         pct = min(max(0, min(100, int(p.get("progress") or 0))) for p in running)
-        return "running", 10 + int(pct * .8), f"Longhorn merge/purge {pct}% (slowest active replica); verifying removal afterwards"
+        return "running", 10 + int(pct * .8), f"Longhorn merge and purge {pct}% (slowest volume copy). The removal is checked afterwards."
     remaining = [st["snapshots"][ref["name"]] for st in statuses
                  if ref["name"] in (st.get("snapshots") or {})]
     if snap is None and engines and all(isinstance(st.get("snapshots"), dict) for st in statuses) and not remaining:
-        return "succeeded", 100, "Snapshot removed from Longhorn and its engines; shared blocks may remain in newer snapshots"
+        return "succeeded", 100, "Snapshot removed from Longhorn and its engines. Shared blocks may remain in newer snapshots."
     st = (snap or {}).get("status") or {}
     if (st.get("markRemoved") and "volume-head" in (st.get("children") or {})) or any(
             r.get("removed") and "volume-head" in (r.get("children") or {}) for r in remaining):
-        return "running", 20, "Marked for removal but still parent of Volume Head. Take a fresh snapshot to create a boundary; Longhorn can then finish merging. No automatic snapshot is created."
+        return "running", 20, "Marked for removal, but it is still the parent of Volume Head. Take a new snapshot, and Longhorn can then finish merging. No snapshot is taken automatically."
     if st.get("error"):
         return "running", 15, "Longhorn is waiting: " + str(st["error"])
-    return "running", 15, "Waiting for Longhorn attachment/merge and finalizer cleanup; no force-detach or finalizer removal"
+    return "running", 15, "Waiting for Longhorn to attach, merge and clean up. Nothing is force-detached, and no finalizer is removed."
 
 
 def resumable(item):

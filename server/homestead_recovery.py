@@ -398,7 +398,7 @@ def _plural(count, one, many):
 
 # True however it clears: the plan found nothing, a run was cancelled, a host left, the
 # choice changed. The alerts engine posts the last wording it saw, so this can't say why.
-CLEARED = "This alert has cleared; Balance hosts shows anything that could still move."
+CLEARED = "This alert has cleared. Balance hosts shows anything that could still move."
 
 
 def _auto_facts(data, maintenance):
@@ -407,7 +407,7 @@ def _auto_facts(data, maintenance):
     waiting = auto.get("waiting") or {}
     facts = [{"key": "recovery:stopped", "category": "joins", "severity": "degraded",
               "title": f"Moving containers back is stopped: {auto['paused'].get('why', '')}",
-              "body": "Nothing moves back by itself until you Resume it in Settings, or change the choice.",
+              "body": "Nothing moves back by itself until it is resumed in Settings, or the choice is changed.",
               "resolved": "Moving containers back has started again", "href": "/settings?tab=placement", "signals": {"stopped": 1}}] \
         if auto.get("paused") else []
     settled = auto.get("settled") or {}
@@ -420,10 +420,10 @@ def _auto_facts(data, maintenance):
         return facts
     who = " and ".join(hosts) if len(hosts) < 3 else f"{len(hosts)} hosts"
     parts = [f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away." if moves or later else ""]
-    parts.append(f"Waiting: {'; '.join(reasons)}." if reasons else "They move by themselves, one at a time; each restarts once." if moves else "")
+    parts.append(f"Waiting: {'; '.join(reasons)}." if reasons else "They move by themselves, one at a time, and each restarts once." if moves else "")
     if later:
         apps = _plural(later, "critical app", "critical apps")
-        parts.append(f"The update window has no days set, so {apps} {'stays' if later == 1 else 'stay'} until you move {'it' if later == 1 else 'them'}."
+        parts.append(f"The update window has no days set, so {apps} {'stays' if later == 1 else 'stay'} until {'it is' if later == 1 else 'they are'} moved."
                      if maintenance and not maintenance.get("days")
                      else f"{apps} {'waits' if later == 1 else 'wait'} for the update window ({(maintenance or {}).get('start', '')} UTC).")
     if flux_out:
@@ -433,7 +433,7 @@ def _auto_facts(data, maintenance):
         named = "; ".join(f"{row['id']}: {row['why']}" for row in kept[:3])
         more = f"; and {total - 3} more in Settings" if total > 3 else ""
         parts.append(f"{_plural(total, 'container stays where it is', 'containers stay where they are')}, and Balance hosts can still "
-                     f"move {'it' if total == 1 else 'them'} if you choose: {named}{more}.")
+                     f"move {'it' if total == 1 else 'them'} if chosen: {named}{more}.")
     verb = "is" if len(hosts) == 1 else "are"
     title = (f"{who} {verb} back, but moving containers back waits: {' and '.join(away)} {'is' if len(away) == 1 else 'are'} away" if away
              else f"{who} {verb} back: {_plural(moves, 'container', 'containers')} could move to even out the hosts" if moves
@@ -483,7 +483,7 @@ def alert_facts(mode=None, maintenance=None):
     found, undone = data["suggestion"], data["undone"]
     facts = [{"key": "recovery:restart-undone", "category": "joins", "severity": "degraded",
               "title": f"{undone['by']} removed Homestead's restart mark from {undone['app']}, so it restarted a second time",
-              "body": f"Apps {undone['by']} applies are left out of moves back until you Resume.",
+              "body": f"Apps that {undone['by']} applies are left out of moves back until they are resumed.",
               "resolved": "Moves back can restart apps again", "href": "/settings?tab=placement",
               "signals": {"undone": 1}}] if undone else []
     if mode == "auto":
@@ -493,12 +493,12 @@ def alert_facts(mode=None, maintenance=None):
     hosts, moves = found["hosts"], found["moves"]
     who = " and ".join(hosts) if len(hosts) < 3 else f"{len(hosts)} hosts"
     if mode != "window" or not maintenance:
-        then = "Nothing moves until you review it."
+        then = "Nothing moves until it is reviewed."
     elif not maintenance.get("days"):
-        then = "The update window has no days set, so nothing moves by itself; review it."
+        then = "The update window has no days set, so nothing moves by itself. Review it."
     else:
-        then = (f"Those it can move in the next update window ({maintenance['start']} UTC) unless you start it sooner - "
-                "not any whose scheduled job runs then; Settings lists the rest.")
+        then = (f"Those it can move in the next update window ({maintenance['start']} UTC) unless it is started sooner, "
+                "except any whose scheduled job runs then. Settings lists the rest.")
     return facts + [{"key": "recovery:rebalance", "category": "joins", "severity": "info",
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
@@ -617,7 +617,7 @@ def _auto_tick(current, placement, nodes, standby, returned, now):
     keep = guarded(read("/apis/batch/v1/cronjobs").get("items", []), deployments, now, now + MOVE_WAIT * len(whole["moves"]))
     chosen = plan(sorted(left_out | later | cooldown | set(keep)), avoid=standby, restart=restart, back=back, may_restart=may_restart)
     if not whole.get("metrics") or (whole.get("metrics_state") or {}).get("state") != "ok":
-        reasons.append("The CPU and memory figures aren't current")
+        reasons.append("The CPU and memory figures are not current")
     kept = whole.get("kept") or []
     flux_out = 0 if placement.get("mode") == "spread" else sum((managed_by(d) or {}).get("by") == "Flux" for d in deployments)
     _auto_wait(reasons, rows, sum(m["id"] in later for m in whole["moves"]), len(left_out), kept[:KEPT_SHOWN], gone, flux_out, len(kept))

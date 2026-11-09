@@ -114,7 +114,7 @@ class SetupTests(unittest.TestCase):
         plan = V.plan()
         self.assertFalse(plan['can_enable'])
         self.assertTrue(plan['nodes'][0]['can_prepare'])
-        self.assertIn('0 MiB capacity', ' '.join(plan['blockers']))
+        self.assertIn('0 MiB of capacity', ' '.join(plan['blockers']))
         with patch.object(V.CAP, 'save') as save, self.assertRaises(ValueError):
             V.enable({'confirm': True, 'review_token': plan['review_token']})
         save.assert_not_called()
@@ -203,12 +203,12 @@ class SetupTests(unittest.TestCase):
         body = self.c.request()
         first = V.prepare(body)
         self.assertEqual(first, V.prepare(body))
-        with self.assertRaisesRegex(ValueError, 'already active'): V.prepare({**body, 'request_id': 'b' * 24})
+        with self.assertRaisesRegex(ValueError, 'already running'): V.prepare({**body, 'request_id': 'b' * 24})
         self.assertEqual(1, len(self.c.jobs()))
     def test_maintenance_excludes_host_preparation(self):
         for kind in ('node-power', 'host-os'):
             self.c.ops.items = [{'kind': kind, 'status': 'running', 'ref': {'node': 'k3s-test'}}]
-            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'already active'): V.prepare(self.c.request())
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'already running'): V.prepare(self.c.request())
         self.assertEqual([], self.c.sent)
     def test_missing_job_is_never_replayed_by_observer(self):
         V.prepare(self.c.request()); self.c.drop_jobs()

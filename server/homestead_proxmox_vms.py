@@ -171,7 +171,7 @@ def plan(vmid, state, cfg, facts):
         if opts.get("media") == "cdrom":
             if volid and volid != "none":
                 dropped.append({"what": "CD-ROM", "detail": volid.rsplit("/", 1)[-1],
-                                "reason": "an ISO is only needed to install; add one in Edit VM if you still need it"})
+                                "reason": "an ISO is only needed to install. Add one in Edit VM if it is still needed."})
             continue
         if volid.startswith("/"):
             dropped.append({"what": f"Disk {key}", "detail": volid,
@@ -180,9 +180,9 @@ def plan(vmid, state, cfg, facts):
         seen = facts.get(volid) or {}
         path, fmt, virtual = seen.get("path", ""), seen.get("format") or "raw", int(seen.get("virtual") or 0)
         problem = ("" if path.startswith("/") else
-                   f"{volid} is on storage with no file or device to read on the host (such as Ceph); move the disk to local storage first") or (
+                   f"{volid} is on storage with no file or device to read on the host (such as Ceph). Move the disk to local storage first.") or (
                    "" if virtual else f"{volid} could not be read on the host") or (
-                   "" if fmt in UPLOADABLE else f"{volid} is {fmt}; convert it to qcow2 or raw on Proxmox first (qm disk move --format qcow2)")
+                   "" if fmt in UPLOADABLE else f"{volid} is {fmt}. Convert it to qcow2 or raw on Proxmox first (qm disk move --format qcow2).")
         disk = {"key": key, "volid": volid, "path": path, "target": key, "unraid_bus": bus,
                 "bus": DISK_BUSES.get(bus, "virtio"), "format": fmt, "virtual": virtual,
                 "size": int(seen.get("size") or 0), "used": int(seen.get("used") or 0),
@@ -196,13 +196,13 @@ def plan(vmid, state, cfg, facts):
         disk["index"] = index
     for key in sorted(k for k in cfg if re.fullmatch(r"unused\d+", k)):
         dropped.append({"what": "Unused disk", "detail": options(cfg[key])[0],
-                        "reason": "detached from the VM on Proxmox, so it isn't part of it"})
+                        "reason": "detached from the VM on Proxmox, so it is not part of it"})
     for key in sorted(k for k in cfg if re.fullmatch(r"hostpci\d+", k)):
         dropped.append({"what": "GPU or PCI device", "detail": options(cfg[key])[0], "hardware": True,
-                        "reason": "passthrough is tied to the Proxmox host's hardware; add it from Homestead's hardware devices in Edit VM"})
+                        "reason": "passthrough is tied to the Proxmox host's hardware. Add it from Homestead's hardware devices in Edit VM."})
     for key in sorted(k for k in cfg if re.fullmatch(r"usb\d+", k)):
         dropped.append({"what": "USB device", "detail": options(cfg[key])[0], "hardware": True,
-                        "reason": "passthrough is tied to the Proxmox host's hardware; add it from Homestead's hardware devices in Edit VM"})
+                        "reason": "passthrough is tied to the Proxmox host's hardware. Add it from Homestead's hardware devices in Edit VM."})
     nets = sorted((k for k in cfg if re.fullmatch(r"net\d+", k)), key=lambda k: int(k[3:]))
     nic = {}
     for i, key in enumerate(nets):
@@ -216,23 +216,23 @@ def plan(vmid, state, cfg, facts):
                             "reason": "a Homestead VM starts with one network card"})
     if cfg.get("affinity"):
         dropped.append({"what": "CPU affinity", "detail": cfg["affinity"],
-                        "reason": "the Proxmox host's own tuning for its cores; the core count comes across"})
+                        "reason": "the Proxmox host's own tuning for its cores. The number of cores is kept."})
     uefi = cfg.get("bios") == "ovmf"
     efi_opts = options(cfg.get("efidisk0", ""))[1]
     machine = cfg.get("machine", "")
     notes = []
     if uefi and cfg.get("efidisk0"):
-        notes.append("its EFI variables (efidisk0) start fresh here, so boot entries Proxmox kept are gone; "
-                     "Windows and most Linux boot from the disk's default entry")
+        notes.append("its EFI variables (efidisk0) start fresh here, so the boot entries Proxmox kept are lost. "
+                     "Windows and most Linux systems start from the disk's default entry")
     if "tpmstate0" in cfg:
-        notes.append("its TPM comes across as a new one - Proxmox keeps the old one's contents - so BitLocker, "
-                     "if it is on, asks once for its recovery key")
+        notes.append("its TPM is created new, because Proxmox keeps the contents of the old one. If BitLocker "
+                     "is on, it asks once for its recovery key")
     if "q35" not in machine:
         was = machine or "i440fx, Proxmox's default,"
-        notes.append(f"{was} becomes q35, the only machine type KubeVirt runs; "
-                     "Linux doesn't mind, and Windows finds its devices again on first boot")
+        notes.append(f"{was} becomes q35, the only machine type KubeVirt runs. "
+                     "Linux is not affected, and Windows finds its devices again when it first starts")
     if nic.get("vlan"):
-        notes.append(f"its network card was on VLAN {nic['vlan']}; pick a LAN network here that carries that VLAN")
+        notes.append(f"its network card was on VLAN {nic['vlan']}. Choose a LAN network here that carries that VLAN")
     sockets, cores = int(cfg.get("sockets") or 1), int(cfg.get("cores") or 1)
     vcpus = int(cfg["vcpus"]) if str(cfg.get("vcpus") or "").isdigit() else sockets * cores
     mib = _memory_mib(cfg.get("memory"))
@@ -262,7 +262,7 @@ def listing(lines):
     if not found["qm"]:
         return {"hypervisor": False, "vms": []}
     if not found["complete"]:
-        raise ValueError("Proxmox's VM list was cut short; try again")
+        raise ValueError("Proxmox's VM list was incomplete. Try again.")
     vms = [plan(vmid, state, parse_config(text), found["disks"]) for vmid, state, text in found["vms"]]
     return {"hypervisor": True, "vms": sorted(vms, key=lambda v: (v["name"].lower(), v["vmid"]))}
 

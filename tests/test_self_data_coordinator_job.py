@@ -714,7 +714,7 @@ class ClusterChangedTests(unittest.TestCase):
     def held_on_the_change(self):
         view = self.run_.tick()
         self.assertEqual("held", view["status"])
-        self.assertIn("membership changed", view["message"])
+        self.assertIn("hosts changed", view["message"])
 
     def test_a_host_removed_at_a_capacity_check_holds_and_going_back_works(self):
         self.m.removed("node-b")
@@ -1026,7 +1026,7 @@ class ClusterChangedAfterTheSwitchTests(unittest.TestCase):
         run.tick(); m.stopped(); run.tick(); run.tick(); m.copy_finished(); run.tick(); run.tick(); m.copy_released(); run.tick()
         self.assertEqual("switch", m.state()["phase"])
         m.joined("node-c")
-        self.assertIn("membership changed", run.tick()["message"])
+        self.assertIn("hosts changed", run.tick()["message"])
         self.assertNotIn("switch", m.steps())
 
     def test_going_back_before_any_request_with_homesteads_pod_on_a_removed_host_still_refuses(self):
@@ -2184,7 +2184,7 @@ class TwoPodsTests(MoveTest):
         changed = L.configuration(self.m.scope, self.m.handle["uid"], "e" * 64)
         view = self.m.runner(self.second_pod, config=changed).tick()
         self.assertEqual("held", view["status"])
-        self.assertIn("configuration", view["message"])
+        self.assertIn("settings differ", view["message"])
 
     def test_a_clock_behind_the_last_heartbeat_does_not_hold(self):
         """Hosts' clocks differ by a little; the record only moves forward."""

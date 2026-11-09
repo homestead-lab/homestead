@@ -394,7 +394,7 @@ class VolumeSourceTests(unittest.TestCase):
                                          "volumes": [{"claim": "frigate-config"}]}])
             self.assertEqual(["frigate-config"], [r["name"] for r in rows])
             self.assertFalse(rows[0]["movable"])
-            self.assertIn("in use by frigate", rows[0]["blockers"][0])
+            self.assertIn("In use by frigate", rows[0]["blockers"][0])
             rows = client._volume_rows([{"name": "frigate", "running": False,
                                          "volumes": [{"claim": "frigate-config"}]}])
             self.assertTrue(rows[0]["movable"])
@@ -850,7 +850,7 @@ class EngineTests(unittest.TestCase):
 
         self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
         self.assertTrue(STATE.moves()[0]["source_removed"])
-        with self.assertRaisesRegex(ValueError, "nothing to put back"):
+        with self.assertRaisesRegex(ValueError, "nothing to return"):
             ACT.abandon(move["id"])
 
     def test_a_volume_moves_on_its_own_and_lands_restored(self):
@@ -1019,7 +1019,7 @@ class EngineTests(unittest.TestCase):
 
         move = STATE._find(move_id)
         self.assertTrue(move["source_removed"])
-        self.assertIn("lives here now", move["message"])
+        self.assertIn("is here now", move["message"])
         self.assertNotIn("/apis/apps/v1/namespaces/lab/deployments/frigate", self.cluster.objects)
 
     def test_tidying_up_writes_only_its_own_fields_over_a_newer_record(self):

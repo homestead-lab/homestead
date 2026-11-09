@@ -167,7 +167,7 @@ class Journal:
         self.entries = self.ref.setdefault("storage_writes", [])
         if (not isinstance(self.entries, list) or any(not isinstance(e, dict) or not isinstance(e.get("step"), str) for e in self.entries)
                 or len({e["step"] for e in self.entries}) != len(self.entries)):
-            raise Held("Storage write history is invalid; inspect the job")
+            raise Held("The storage write history is invalid. Check the job.")
 
     def _get(self, path):
         try:
@@ -177,7 +177,7 @@ class Journal:
 
     def check(self):
         if self.failed or any(e.get("state") != "accepted" for e in self.entries):
-            raise Held("A storage request is unresolved; inspect the job before continuing")
+            raise Held("A storage request is unsettled. Check the job before continuing.")
 
     def _save(self):
         self.ref["retain_resources"] = True
@@ -187,23 +187,23 @@ class Journal:
             self.failed = True
             # Said with its cause: a full disk, a stale data mount and a fenced
             # write each want a different next step.
-            raise Held("Storage write progress could not be saved; inspect its retained intent before continuing "
+            raise Held("The storage write progress could not be saved. Check the kept request before continuing "
                        f"({type(error).__name__}: {str(error)[:160]})") from None
 
     def observe(self, entry):
         """Observe a confirmed receipt, never adopt or resend an uncertain one."""
         if entry.get("state") != "accepted":
-            raise Held("A storage request is unresolved; nothing will be repeated automatically")
+            raise Held("A storage request is unsettled, so nothing is repeated automatically")
         current = self._get(entry["target"]["path"])
         expected = entry["before"] if entry["method"] == "DELETE" else entry["after"]
         if current is None and entry["method"] == "DELETE":
             return None
         self._check_target(current, entry["target"])
         if identity(current)["uid"] != expected["uid"]:
-            raise Held("A storage resource was replaced; the receipt cannot apply to its replacement")
+            raise Held("A storage resource was replaced, and its record does not apply to the replacement")
         if entry["method"] != "DELETE":
             if current["metadata"].get("deletionTimestamp") or shape(current) != entry["shape"]:
-                raise Held("A confirmed storage resource changed; review the handoff before continuing")
+                raise Held("A confirmed storage resource changed. Review the handover before continuing.")
         return current  # accepted deletion may still be waiting for finalizers
 
     @staticmethod
@@ -287,7 +287,7 @@ class Journal:
         before = None
         if method == "POST":
             if expected is not None or current is not None:
-                raise Held("The storage creation name is already used; it will not be adopted")
+                raise Held("The storage name is already used, and Homestead does not take it over")
         else:
             self._check_target(current, dest)
             before = identity(current)
@@ -301,11 +301,11 @@ class Journal:
                 raise Held("A storage resource changed after the review, so no request was sent")
             if own and not any(e["method"] == "POST" and e.get("state") == "accepted" and e["target"] == dest
                                and (e.get("after") or {}).get("uid") == before["uid"] for e in self.entries):
-                raise Held("Homestead did not create this resource for this operation; it will not be released as a helper")
+                raise Held("Homestead did not create this resource for this job, so it is not released as a helper")
             if expected.get("shape") and shape(current) != expected["shape"]:
                 raise Held("Storage resource configuration changed after review")
             if current["metadata"].get("deletionTimestamp"):
-                raise Held("Storage resource is already deleting; inspect it before continuing")
+                raise Held("The storage resource is already being deleted. Check it before continuing.")
         request = copy.deepcopy(body)
         if method in ("PUT", "PATCH"):
             meta = request.setdefault("metadata", {})
@@ -347,7 +347,7 @@ class Journal:
                 fresh = self._status_only(error, event, dest, baseline)
                 if fresh is None:
                     self._refuse(event, "refused" if refused else "uncertain")
-                    raise Held("Storage request failed or its outcome is uncertain; inspect retained resources. Nothing was retried") from None
+                    raise Held("The storage request failed, or its outcome is uncertain. Check the kept resources. Nothing was retried.") from None
                 if self.before_write is not None:
                     try:
                         self.before_write()
@@ -380,6 +380,6 @@ class Journal:
                 self._save()
             except Held:
                 pass
-            raise Held("Storage API receipt could not be verified; no resource will be adopted or request repeated") from None
+            raise Held("The storage API's answer could not be confirmed. No resource is taken over and no request is repeated.") from None
         self._save()
         return result

@@ -177,8 +177,8 @@ class LastHelpersTests(unittest.TestCase):
                                  "^Disk preparation inventory is incomplete$")
 
     def test_the_v2_upgrade_takes_only_a_404_of_an_optional_object_as_missing(self):
-        self.check_inventory_get(LHV2_UPGRADE, r"Longhorn upgrade inventory is unavailable \(HTTP {code}\)",
-                                 "Longhorn upgrade inventory is incomplete")
+        self.check_inventory_get(LHV2_UPGRADE, r"Longhorn upgrade information is unavailable \(HTTP {code}\)",
+                                 "Longhorn upgrade information is incomplete")
         self.reading(LHV2_UPGRADE, http_error(404))
         self.assertEqual([], LHV2_UPGRADE._items("/x", True))
         with self.assertRaisesRegex(ValueError, r"\(HTTP 404\)"):

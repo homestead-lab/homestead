@@ -33,7 +33,7 @@ def _retry(move_id):
         # Its backups may be from before the source ran again (a lost reply
         # still counts); resuming would bring old data here.
         raise ValueError(f"{move['name']} may run again on {move['cluster']}, so this move's backups may be out of "
-                         "date; cancel it, then start a new move")
+                         "date. Cancel it, then start a new move.")
     if move.get("phase") == "starting":
         # A fresh start request and a fresh START_GRACE: the old one already ran
         # out. start_requested stays: the source must not start once this one may have.
@@ -43,7 +43,7 @@ def _retry(move_id):
     done = []
     # Our own phrases, joined as one sentence: only its first letter is raised.
     with STATE.recording(lambda: _sentence(done) or f"Began retrying {move['name']}", "the retry",
-                         "The move stays failed; retry again once the data volume answers."):
+                         "The move stays failed. Retry once the data volume answers."):
         if move.get("phase") == "joining":
             done.append("began releasing the backup storage this move had borrowed")
             TARGET._release_target(move)
@@ -78,8 +78,8 @@ def _abandon(move_id):
     if not move:
         raise ValueError("no such move")
     if move.get("source_removed"):
-        raise ValueError(f"{move['name']} was already removed from {move['cluster']}; "
-                         "there is nothing to put back")
+        raise ValueError(f"{move['name']} was already removed from {move['cluster']}, "
+                         "so there is nothing to return")
     stopped = STATE._source_held(move)
     move.update(status="cancelled", message="Putting it back" if stopped else "Cancelling", updated_at=STATE._now())
     move.setdefault("flags", {})["cancelling"] = True
@@ -102,16 +102,16 @@ def _abandon(move_id):
             if not isinstance(error, STATE.STORE_ERRORS):
                 done.append(f"removing them stopped: {str(error)[:200]}")
             move.update(status="failed", message=(
-                f"Removing what this move made here failed; {name} stays stopped on {cluster} until it is gone. "
-                "Retry cancellation" if stopped else
-                "Transfer cleanup failed; retry cleanup to remove its remaining destination objects"))
+                f"Removing what this move created here failed, so {name} stays stopped on {cluster} until it has been removed. "
+                "Retry the cancellation." if stopped else
+                "The transfer cleanup failed. Retry the cleanup to remove what is left at the destination."))
             STATE._store(move)
             raise
         done[-1] = f"removed {', '.join(removed)} here" if removed else "nothing of it was here to remove"
         if stopped and (running or move["flags"].get("destination_deletion_pending")):
             move.update(status="failed", message=(
-                f"{running or 'What this move made'} is still running here; {name} stays stopped on {cluster} until it "
-                "is gone. Homestead tries the cancellation again"))
+                f"{running or 'What this move created'} is still running here, so {name} stays stopped on {cluster} until it "
+                "has been removed. Homestead tries the cancellation again."))
             STATE._store(move)
             return STATE._public(move)
     # Nothing stopped there yet means nothing to start again there - and no
@@ -124,7 +124,7 @@ def _abandon(move_id):
             stopped = status.get("source_uid") == move.get("source_uid") and status.get("transfer_owner") in ("", move["id"])
         released = STATE._source_action(move, "release") if stopped else {"detail": f"Source on {cluster} kept as it was"}
     except Exception:
-        move.update(status="failed", message="Source recovery failed; retry cancellation to restore its running state")
+        move.update(status="failed", message="Recovering the source failed. Retry the cancellation so it runs as before.")
         STATE._store(move)
         raise
     # The source runs again: a failed write says so.
@@ -200,7 +200,7 @@ def dismiss(move_id=None):
             match = next((m for m in rows if m["id"] == move_id), None)
             if not match:
                 raise ValueError("no such move")
-            raise ValueError("a move still running cannot be cleared; cancel it, or wait for it to finish or fail")
+            raise ValueError("A move that is still running cannot be cleared. Cancel it, or wait for it to finish or fail.")
         if any(m.get("transfer_mode") == "copy" and STATE._source_held(m) for m in gone):
             raise ValueError("Cancel the failed copy to restore its source before dismissing it")
         if any((m.get("flags") or {}).get("target_cleanup_pending")
@@ -218,7 +218,7 @@ def dismiss(move_id=None):
         stopped = STATE._source_held(m) and not m.get("source_removed")
         made = [c["claim"] for c in m.get("claims") or [] if c.get("created")]
         created = bool((m.get("flags") or {}).get("created_at"))
-        left = ([f"{m['name']} stays stopped on {m['cluster']}; start it there from its page"] if stopped else []) +                ([f"what it made here stays ({', '.join(([m['name']] if created else []) + made)})"] if made or created else [])
+        left = ([f"{m['name']} stays stopped on {m['cluster']}, so start it there from its page"] if stopped else []) +                ([f"what it made here stays ({', '.join(([m['name']] if created else []) + made)})"] if made or created else [])
         return {"ok": True, "dismissed": 1,
                 "detail": f"cleared the failed move of {m['name']}" + (f"; {'; '.join(left)}" if left else "")}
     kept = [m for m in gone if m.get("status") == "succeeded" and not m.get("source_removed")
@@ -260,14 +260,14 @@ def _remove_source(move_id, volumes):
         if not new_enough:
             raise ValueError(f"Update {move['cluster']}'s Homestead to 2.8.250 or later first. "
                              f"Its release ({there or 'unknown'}) would delete every volume of {move['name']}, "
-                             "not only the moved ones; or remove the original without its volumes")
+                             "not only the moved ones. Or remove the original without its volumes.")
         body["claims"] = moved
     done = STATE.CLIENT.remote(move["cluster"], "/api/move/source", body)
     move.update(source_removed=True, updated_at=STATE._now(),
-                message=f"{move['name']} lives here now; {done.get('detail', 'removed')} "
+                message=f"{move['name']} is here now. {done.get('detail', 'removed')[:1].upper()}{done.get('detail', 'removed')[1:]} "
                         f"on {move['cluster']}")
     with STATE.recording(f"Removed {move['name']} from {move['cluster']}", "that",
-                         "This move may still offer to remove it; the original is gone there."):
+                         "This move may still offer to remove it, but the original has been removed there."):
         STATE._store(move)
     return STATE._public(move)
 

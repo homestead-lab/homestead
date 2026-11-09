@@ -650,7 +650,7 @@ class HeldMoveRecoveryTests(RecoveryFixture):
         ref["handoff_phase"] = "stop"
         self.save()
         self.assertEqual("failed", self.poll()[0])
-        self.assertIn("changed after review", self.load()["ref"]["storage_hold"])
+        self.assertIn("changed after the review", self.load()["ref"]["storage_hold"])
         self.assertFalse(self.preview()["plan"]["can_retry"])
         self.act("rollback")
         self.poll()

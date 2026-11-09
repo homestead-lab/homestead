@@ -114,12 +114,12 @@ def _nodes(read, pinned, now, *, boots=True, members=True):
     raw = _inventory(read, "/api/v1/nodes")
     expected = {n["name"]: n for n in pinned}
     if len(expected) != len(pinned):
-        raise Held("Cluster membership changed; review the data move placement again")
+        raise Held("The cluster's hosts changed. Review the data move placement again.")
     if not members:
         raw = [n for n in raw if n["metadata"]["name"] in expected and n["metadata"]["uid"] == expected[n["metadata"]["name"]]["uid"]
                and not n["metadata"].get("deletionTimestamp")]
     elif {n["metadata"]["name"] for n in raw} != set(expected):
-        raise Held("Cluster membership changed; review the data move placement again")
+        raise Held("The cluster's hosts changed. Review the data move placement again.")
     try:
         metrics = {n["metadata"]["name"]: n for n in _inventory(read, "/apis/metrics.k8s.io/v1beta1/nodes", metric=True)}
     except Exception:
@@ -133,7 +133,7 @@ def _nodes(read, pinned, now, *, boots=True, members=True):
             raise Held("A reviewed host was replaced, restarted or removed")
         alloc = status.get("allocatable", {})
         if any(RESOURCES.quantity(alloc.get(key), key) <= 0 for key in ("memory", "cpu", "pods")):
-            raise Held("Node allocatable resources are unavailable; capacity cannot be verified")
+            raise Held("The hosts' available resources are unknown, so the capacity cannot be checked")
         cap = RESOURCES.quantity(status.get("capacity", {}).get("memory"))
         if cap <= 0:
             raise Held("Node memory capacity is unavailable")
@@ -235,9 +235,9 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
         namespace, pods, nodes, {}, threshold, read=current, features=[])
     warnings = sorted(set(report["warnings"]) | set(single["warnings"]))
     if report["blocked"] or any(not _capacity_warning(w) for w in warnings):
-        raise Held("Placement has an unresolved storage or scheduler constraint; a memory override cannot bypass it")
+        raise Held("The placement has an unsettled storage or scheduling limit, and a memory override cannot skip it")
     if not 0 <= clock() - started <= 30:
-        raise Held("The data move capacity check took too long; obtain a fresh review")
+        raise Held("The data move capacity check took too long. Get a new review.")
     report["warnings"] = warnings
     report["receipt"] = {"proposal": _review_key(fingerprint, threshold, pinned_nodes),
                          "warnings": sorted({warning_key(w) for w in warnings})}
@@ -260,7 +260,7 @@ class WorkerAdmitter:
         accepted = self.approval["receipt"]
         if (report["receipt"]["proposal"] != accepted["proposal"]
                 or not set(report["receipt"]["warnings"]) <= set(accepted["warnings"])):
-            raise Held("The coordinator workload or capacity warnings changed; review before starting it")
+            raise Held("The coordinator or its capacity warnings changed. Review it before starting it.")
         return True
 
 
@@ -292,7 +292,7 @@ class Admitter:
             for stage, proposed in (("copy", copying), ("restart", starting)):
                 _, _, fingerprint = _proposal(stage, proposed, self.namespace)
                 if _review_key(fingerprint, self.policy["threshold"], self.nodes) != self.policy["reviews"][stage]["proposal"]:
-                    raise Held("Copy or restart approval no longer matches; Homestead has not been stopped")
+                    raise Held("The copy or restart approval no longer matches, so Homestead has not been stopped")
             return True
         stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
         report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock, boots=False,
@@ -308,7 +308,7 @@ class Admitter:
             # said in the warning's own words, so it can be acted on.
             what = ([f"the {stage} workload changed"] if report["receipt"]["proposal"] != approved["proposal"] else []) +                    [f"new warning: {str(text)[:160]}" for text in
                     [next((w for w in report.get("warnings") or [] if warning_key(w) == key), "") for key in new[:2]] if text]
-            message = f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); review the new warnings before continuing"
+            message = f"The capacity or the app changed at the {stage} step ({'; '.join(what)}). Review the new warnings before continuing."
             back = self._just_back_with_no_figure(report, approved, new)
             if back:
                 from homestead_self_data_coordinator import FigurePending

@@ -32,7 +32,7 @@ def _items(path):
     try:
         return KUBE.items(path, read=kget)
     except KUBE.Incomplete as error:
-        raise ValueError("V2 setup inventory is incomplete; check again") from error
+        raise ValueError("The V2 setup information is incomplete. Check again.") from error
 
 
 def _hash(value):
@@ -170,7 +170,7 @@ def plan():
             problems.append(f"Not enough CPU for V2's instance manager on this host. It reserves {cpu_need}m and Kubernetes has "
                             f"{max(0, cpu_alloc - cpu_used)}m left: free some, give the host more CPUs, or lower guaranteed-instance-manager-cpu")
         if not memory_ready:
-            problems.append(f"Kubernetes reports {capacity} MiB capacity / {allocatable} MiB allocatable; V2 needs {required} MiB plus other hugepage requests")
+            problems.append(f"Kubernetes reports {capacity} MiB of capacity, with {allocatable} MiB available. V2 needs {required} MiB plus other hugepage requests.")
         if not (managed or configured or engine_ready):
             problems.append("Run host preparation to verify nvme-cli and persistent configuration")
         if not managed and not supported and not engine_ready:
@@ -190,7 +190,7 @@ def plan():
         fewest = min(counts.values())
         if mask[0] >= fewest:
             if fewest < 2:
-                blockers.extend(f"{name}: Longhorn V2 needs at least 2 CPUs - one to poll, one kept for the host - and it has {n}"
+                blockers.extend(f"{name}: Longhorn V2 needs at least 2 CPUs, one to poll and one kept for the host, and it has {n}"
                                 for name, n in counts.items() if n < 2)
             else:
                 cores = fewest - 1
@@ -312,7 +312,7 @@ def _matches(ref, job):
 def _ensure(ref, create=False):
     node = kget('/api/v1/nodes/' + ref['node'])
     if node['metadata']['uid'] != ref['node_uid']:
-        raise ValueError("Host identity changed; review V2 setup again")
+        raise ValueError("The host changed. Review the V2 setup again.")
     path = f"/apis/batch/v1/namespaces/{NS}/jobs/{ref['name']}"
     job = KUBE.get_optional(path, read=kget)
     body = _body(ref)
@@ -320,7 +320,7 @@ def _ensure(ref, create=False):
         if not create:
             raise ValueError('The host setup Job is missing. Check saved tasks before reviewing another attempt.')
         if node.get('status', {}).get('nodeInfo', {}).get('bootID') != ref['boot_id']:
-            raise ValueError('Host restarted; review V2 setup again')
+            raise ValueError('The host restarted. Review the V2 setup again.')
         try:
             return ksend('POST', path.rsplit('/', 1)[0], body)
         except urllib.error.HTTPError as error:
@@ -340,7 +340,7 @@ def prepare(body):
         current = plan()
         row = next((n for n in current['nodes'] if n['node'] == body.get('node')), None)
         if not row or row['review_token'] != body.get('review_token'):
-            raise ValueError('Host setup requirements changed; review again')
+            raise ValueError('The host setup requirements changed. Review again.')
         name = 'homestead-v2-' + body['request_id']
         saved = ops.stored()
         existing = next((i for i in saved if i.get('kind') == KIND and i.get('ref', {}).get('name') == name), None)
@@ -349,13 +349,13 @@ def prepare(body):
                 raise ValueError('This request ID belongs to another review')
             return {'operation': ops._public(existing)}
         if any(i.get('kind') in (KIND, 'node-power', 'host-os') and i.get('status') not in ops.TERMINAL and i.get('ref', {}).get('node') == row['node'] for i in saved):
-            raise ValueError('A host setup or maintenance task is already active; inspect Jobs first')
+            raise ValueError('A host setup or maintenance task is already running. Check Jobs first.')
         if current['harvester'] or not row['can_prepare']:
-            raise ValueError('Host preparation is unavailable or already running; check its saved task')
+            raise ValueError('Host preparation is unavailable or already running. Check its saved task.')
         ref = {k: row[k] for k in ('node', 'node_uid', 'boot_id', 'required_mib', 'target_pages', 'distribution', 'version')}
         ref.update(name=name, namespace=NS, approval=row['review_token'])
         op = ops.start(KIND, 'Prepare Longhorn V2 on ' + row['node'], {'kind': 'Node', 'name': row['node']},
-                       '/settings?tab=hardware', ref, 'Queued host prerequisite setup; no reboot or disk changes')
+                       '/settings?tab=hardware', ref, 'Host preparation queued. It does not restart the host or change disks.')
         _ensure(ref, create=True)
         return {'operation': op}
 
@@ -367,10 +367,10 @@ def progress(item):
         return 'failed', item.get('progress', 0), str(error)
     state = _job_state(job)
     if state == 'failed':
-        return 'failed', 100, 'Host preparation failed; inspect its log before retrying. Partial configuration is retained.'
+        return 'failed', 100, 'Host preparation failed. Check its log before trying again. Any settings already made are kept.'
     if state == 'succeeded':
-        return 'succeeded', 100, 'Host configured. Recheck Kubernetes hugepage capacity; review a reboot if needed.'
-    return 'running', 25 if job.get('status', {}).get('active') else 5, 'Preparing packages, modules and hugepages; open the task log for live steps'
+        return 'succeeded', 100, 'Host set up. Check the Kubernetes hugepage capacity again, and review a restart if needed.'
+    return 'running', 25 if job.get('status', {}).get('active') else 5, 'Preparing packages, modules and hugepages. Open the task log to follow each step.'
 
 
 def enable(body):
@@ -382,7 +382,7 @@ def _enable_locked(body):
     CLEANUP.require_idle()
     current = plan()
     if body.get('confirm') is not True or body.get('review_token') != current['review_token']:
-        raise ValueError('V2 setup changed; check and confirm the enable step again')
+        raise ValueError('The V2 setup changed. Check and confirm the step that turns it on again.')
     if not current['can_enable']:
         raise ValueError('; '.join(current['blockers']) or 'V2 is already enabled')
     fix = current.get('cpu_mask_fix')
@@ -390,7 +390,7 @@ def _enable_locked(body):
         # Fewer polling cores, so each host keeps one: SPDK refuses otherwise.
         setting = kget(LH + '/settings/data-engine-cpu-mask')
         if _value(setting, '') != fix['from']:
-            raise ValueError("Longhorn's V2 CPU mask changed; check and confirm the enable step again")
+            raise ValueError("Longhorn's V2 CPU mask changed. Check and confirm the step that turns it on again.")
         setting['value'] = fix['to']
         ksend('PUT', LH + '/settings/data-engine-cpu-mask', setting)
     CAP.save({'v2': True}, allow_v2_enable=True)

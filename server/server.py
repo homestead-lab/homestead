@@ -781,7 +781,7 @@ def self_data_handoff_status(operation):
                 if recovery["operation"] == operation and not recovery["writable"]:
                     view = SELF_DATA_WORKER.unavailable_status(operation)
                     view.update(status="preparing", can_abandon=True, requires_review=False,
-                        message="Homestead is still on its original volume. You can wait for preparation or abandon it safely before the move starts.")
+                        message="Homestead is still on its original volume. Wait for the preparation, or abandon it safely before the move starts.")
                     job = next((i for i in OPS.stored() if i.get("kind") == SELF_DATA_EXECUTE.KIND and i.get("ref", {}).get("operation") == operation), None)
                     error = (job or {}).get("ref", {}).get("setup_error")
                     if error:
@@ -804,7 +804,7 @@ def self_data_handoff_status(operation):
                     # given up here, as after a restart.
                     view.update(status="held" if ref.get("setup_error") else "preparing", requires_review=bool(ref.get("setup_error")),
                         can_abandon=bool(ref.get("setup_error") and ref.get("anchor_uid")), live=True,
-                        message=("Setup stopped; Homestead is still on its original volume. " + ref["setup_error"]) if ref.get("setup_error")
+                        message=("Setup stopped. Homestead is still on its original volume. " + ref["setup_error"]) if ref.get("setup_error")
                             else "Preparing the move. Homestead is still online.")
                     return view
                 anchor = SELF_DATA_FENCE.A.Anchor(KUBE_HELPERS.kget, None, SELF.NS, NAMES.BRAND)
@@ -824,7 +824,7 @@ def abandon_self_data_preparation(body):
         raise SELF_DATA_FENCE.Held("Data-move recovery is unavailable")
     recovery = _self_data_fence.recovery()
     if body.get("operation") != recovery["operation"]:
-        raise SELF_DATA_FENCE.Held("The preparation changed; reload its status")
+        raise SELF_DATA_FENCE.Held("The preparation changed. Reload its status.")
     anchor = SELF_DATA_FENCE.A.Anchor(KUBE_HELPERS.kget, KUBE_HELPERS._ksend, SELF.NS, NAMES.BRAND).load(operation=recovery["operation"], uid=recovery["anchor_uid"])
     if not anchor.state.get("setup_aborted"):
         anchor.abort_setup()  # CAS disarms the publisher; never clears a published handoff.
@@ -873,7 +873,7 @@ def start_self_data_move(body, actor):
         threading.Thread(target=task.run, name="self-data-setup", daemon=True).start()
     except Exception:
         task.checkpoint(setup_error="The move setup could not start. Inspect the saved job before trying again.")
-        raise SELF_DATA_FENCE.Held("Move setup could not start; no data was copied or switched") from None
+        raise SELF_DATA_FENCE.Held("The move setup could not start, so no data was copied or switched") from None
     return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
 
 
@@ -919,11 +919,11 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
     {"id": "settings", "label": "Settings", "detail": "Site name, health thresholds, update policy, App Store feed",
      "objects": [("configmaps", DEFAULT_NS, _settings_map())]},
     {"id": "users", "label": "Users and roles", "detail": "Every account, its role and password",
-     "caution": "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup.",
+     "caution": "Replaces every account and password with the backup's, and signs everyone out. Sign in again with an account from the backup.",
      "default": False, "objects": [("secrets", DEFAULT_NS, AUTH.SECRET_NAME())]},
     {"id": "hardware", "label": "Hardware features", "detail": "Device mappings: iGPU, Coral, USB and the rest",
      "objects": [("configmaps", DEFAULT_NS, HW._hardware_map())]},
-    {"id": "vips", "label": "VIPs", "detail": "Your saved VIPs, their labels and the default workload VIP",
+    {"id": "vips", "label": "Virtual IPs", "detail": "The saved virtual IPs, their labels and the default app virtual IP",
      "objects": [("configmaps", DEFAULT_NS, VIP_REGISTRY.VIP_MAP)]},
     {"id": "ipam", "label": "IP addresses", "detail": "Subnets, documented addresses, and the UniFi connection",
      "objects": [("configmaps", DEFAULT_NS, IPAM._map()), ("secrets", DEFAULT_NS, IPAM._secret())]},
@@ -934,7 +934,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
     {"id": "group-tiers", "label": "Group tiers", "detail": "The priority tier each Containers group gives the apps that follow it",
      "objects": [("configmaps", DEFAULT_NS, GROUPS._map())]},
     {"id": "shares", "label": "Network shares", "detail": "Shares, their options, and SMB users",
-     "caution": "Brings back share definitions and SMB users; the volumes they point at must still exist.",
+     "caution": "Restores the share settings and SMB users. The volumes they point at must still exist.",
      "objects": [("configmaps", SMB_NAMESPACE, SHARES.CONFIGMAP()), ("secrets", SMB_NAMESPACE, SHARES.SECRET())]},
     {"id": "sources", "label": "Import sources", "detail": "Unraid and Docker hosts to import from",
      "objects": [("configmaps", DEFAULT_NS, IMP._sources_map())]},
@@ -973,7 +973,7 @@ def iso_storage_class():
             body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
                     "metadata": {"name": ISO_CLASS, "labels": {NAMES.key("managed"): "true"},
                                  "annotations": {"field.cattle.io/description":
-                                                 "Homestead's ISO copies: one replica; the originals are on the shares"}},
+                                                 "Homestead's ISO copies: one volume copy, because the originals are on the shares"}},
                     "provisioner": "driver.longhorn.io", "parameters": parameters,
                     "reclaimPolicy": "Delete", "allowVolumeExpansion": True, "volumeBindingMode": "Immediate"}
             try:
@@ -1362,7 +1362,7 @@ class H(HTTP.LimitedHandler):
             return None
         need = needed_role(path, self.command)
         if not AUTH.allows(self.role, need):
-            self._send(403, {"error": f"your role ({self.role}) cannot do this — {need} required",
+            self._send(403, {"error": f"This needs the {need} role, and the {self.role} role cannot do it",
                              "role": self.role, "needed": need})
             return True
         self._diagnostic_authorized = True
@@ -1373,7 +1373,7 @@ class H(HTTP.LimitedHandler):
         and let through with its scopes, which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
         if not WEB_PATHS.takes_key(path):
-            self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics; GET /api/v1/openapi.json lists what they can do"})
+            self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics. GET /api/v1/openapi.json lists what they can do."})
             return True
         try:
             key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
@@ -1727,7 +1727,7 @@ def finish_self_data_helpers():
         except Exception:  # an API error: the next pass observes a delete, keeps both PVCs
             failures += 1
         time.sleep(2 * failures or 2)
-    print("Data move helper cleanup needs review; both volumes are retained", flush=True)
+    print("The data move helper cleanup needs a review. Both volumes are kept.", flush=True)
 
 
 def finish_self_data_boot():
@@ -1750,7 +1750,7 @@ def finish_self_data_boot():
                 start_background_tasks()
             except Exception:
                 _self_data_boot_failed = True
-                print("Data move startup needs review; background activation did not complete", flush=True)
+                print("The data move start-up needs a review. Background jobs did not start.", flush=True)
                 return
             _self_data_boot_pending = False
             return

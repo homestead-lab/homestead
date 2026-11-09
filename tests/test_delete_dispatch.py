@@ -93,7 +93,7 @@ class DeleteAWorkload(Served):
         self.role = "viewer"
         status, headers, body = self.request(WORKLOAD)
         self.assertEqual(403, status)
-        self.assertEqual({"error": "your role (viewer) cannot do this — operator required",
+        self.assertEqual({"error": "This needs the operator role, and the viewer role cannot do it",
                           "role": "viewer", "needed": "operator"}, json.loads(body))
         self.assertEqual("close", dict(headers)["Connection"])
         self.delete.assert_not_called()
@@ -133,7 +133,7 @@ class MalformedDeletes(Served):
                                  (status, json.loads(body)))
                 self.role = "viewer"
                 status, _, body = self.request(path)
-                self.assertEqual((403, {"error": "your role (viewer) cannot do this — operator required",
+                self.assertEqual((403, {"error": "This needs the operator role, and the viewer role cannot do it",
                                         "role": "viewer", "needed": "operator"}), (status, json.loads(body)))
         self.delete.assert_not_called()
 

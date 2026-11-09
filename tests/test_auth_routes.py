@@ -498,7 +498,7 @@ class KeysAndAccounts(Routes):
                          "/api/auth/role", "/api/auth/users/delete"):
                 with self.subTest(role=role, path=path):
                     a = self.send("POST", path, {"username": "robin"}, token=token)
-                    self.assertEqual((403, {"error": f"your role ({role}) cannot do this — admin required",
+                    self.assertEqual((403, {"error": f"This needs the admin role, and the {role} role cannot do it",
                                             "role": role, "needed": "admin"}), (a.status, a.body))
         a = self.send("POST", "/api/auth/users", {"username": "robin"}, token="nobody")
         self.assertEqual((401, {"error": "not signed in", "auth": False}), (a.status, a.body))

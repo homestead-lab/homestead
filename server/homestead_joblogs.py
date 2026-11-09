@@ -161,7 +161,7 @@ def _no_console_log(ns, name):
         kv = {}
     version = (kv.get("status") or {}).get("observedKubeVirtVersion", "")
     if version and _version(version) < (1, 1):
-        return f"KubeVirt {version} keeps no console output - 1.1 and later can: {instead}"
+        return f"KubeVirt {version} keeps no console output, but 1.1 and later can: {instead}"
     try:
         vm = kget(f"/apis/kubevirt.io/v1/namespaces/{_q(ns)}/virtualmachines/{_q(name)}")
         asked = ((((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("domain") or {}
@@ -171,7 +171,7 @@ def _no_console_log(ns, name):
     if asked:
         return f"{name} asks for its console to be kept, but it started before that took effect: {instead}"
     return (f"this cluster's KubeVirt keeps no console output unless a VM asks for it, and {name} was made "
-            f"before Homestead asked; clusters made from now on do. For this one, {instead}")
+            f"before Homestead asked. Clusters created from now on do. For this one, {instead}")
 
 
 def k3s_cluster(item):
@@ -222,31 +222,31 @@ def node_power(item):
     ref = item.get("ref") or {}
     name, uid, ns = ref.get("helper_pod"), ref.get("helper_uid"), ref.get("helper_namespace", "lab")
     if ref.get("action") == "maintenance":
-        return [{"title": "Maintenance", "text": "", "note": "Maintenance only cordons and drains a host; it starts no helper. The steps above show how far it got."}]
+        return [{"title": "Maintenance", "text": "", "note": "Maintenance only cordons and drains a host, and it starts no helper. The steps above show how far it got."}]
     if not name:
-        return [{"title": "Power helper", "text": "", "note": "No power helper was submitted. The steps above show where maintenance stopped; inspect the host's cordon state."}]
+        return [{"title": "Power helper", "text": "", "note": "No power helper was started. The steps above show where maintenance stopped. Check whether the host is cordoned."}]
     if not uid:
-        return [{"title": "Power helper", "text": "", "note": f"Creation of {ns}/{name} was not confirmed. Inspect it in Kubernetes before retrying; no same-name pod is assumed to belong to this request."}]
+        return [{"title": "Power helper", "text": "", "note": f"Creating {ns}/{name} was not confirmed. Check it in Kubernetes before trying again. A pod with the same name is not assumed to belong to this request."}]
     try:
         pod = kget(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
     except Exception as error:
         removed = isinstance(error, urllib.error.HTTPError) and error.code == 404 and _removed(item, "node-power")
         if removed:
             return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} was {removed}."}]
-        return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} is unavailable. This does not confirm shutdown; check the host's console or physical power."}]
+        return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} is unavailable. This does not confirm that the host shut down. Check its console or power light."}]
     if (pod.get("metadata") or {}).get("uid") != uid:
-        return [{"title": "Power helper", "text": "", "note": "Helper identity changed; replacement events and logs are not shown."}]
+        return [{"title": "Power helper", "text": "", "note": "The helper changed, so the events and logs of its replacement are not shown."}]
     try:
         events = {"title": "Power helper events", "text": _events(ns, name, uid), "note": ""}
     except Exception:
-        events = {"title": "Power helper events", "text": "", "note": "Events are unavailable; try refreshing the log."}
+        events = {"title": "Power helper events", "text": "", "note": "Events are unavailable. Try refreshing the log."}
     return [events, _pod_source(ns, pod, "Power helper log", "power")]
 
 
 def copy_job(item):
     ref = item.get("ref") or {}
     if not ref.get("job_uid"):
-        return [{"title": "Copy", "text": "", "note": "No confirmed copy Job identity; inspect the durable job steps."}]
+        return [{"title": "Copy", "text": "", "note": "The copy Job is not confirmed. Check the saved job steps."}]
     try:
         obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
     except urllib.error.HTTPError as error:
@@ -255,7 +255,7 @@ def copy_job(item):
             raise
         return [{"title": "Copy", "text": "", "note": f"The copy Job {ref['namespace']}/{ref['job']} was {removed}."}]
     if obj.get("metadata", {}).get("uid") != ref["job_uid"]:
-        return [{"title": "Copy", "text": "", "note": "Copy Job identity changed; replacement logs are not shown."}]
+        return [{"title": "Copy", "text": "", "note": "The copy Job changed, so the logs of its replacement are not shown."}]
     pods = [p for p in _pods(ref["namespace"], f"job-name={ref['job']}") if any(
         o.get("controller") is True and o.get("kind") == "Job" and o.get("uid") == ref["job_uid"]
         for o in p.get("metadata", {}).get("ownerReferences", []))]

@@ -68,7 +68,7 @@ class WriteBarrier:
             os.makedirs(self.directory, exist_ok=True)
             fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         except OSError:
-            raise DataUnavailable("The shared data activity lock is unavailable; no change was authorized") from None
+            raise DataUnavailable("The shared data lock is unavailable, so no change was allowed") from None
         try:
             info, current = os.fstat(fd), os.lstat(path)
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
@@ -98,7 +98,7 @@ class WriteBarrier:
             except BlockingIOError:
                 raise MoveHeld("Homestead is finishing current work for its data move. Wait before making changes") from None
             except OSError:
-                raise DataUnavailable("The shared data activity lock is unavailable; no change was authorized") from None
+                raise DataUnavailable("The shared data lock is unavailable, so no change was allowed") from None
             self.local.depth = 1
             _as_move(self.check)  # Fence may have been published while opening the lock.
             yield
@@ -126,7 +126,7 @@ class WriteBarrier:
                         raise Held("Current Homestead activity has not finished. No copy or shutdown was authorized") from None
                     time.sleep(.05)
                 except OSError:
-                    raise Held("The data activity lock could not be acquired; no copy or shutdown was authorized") from None
+                    raise Held("The data lock could not be taken, so no copy or shutdown was allowed") from None
             self.local.depth = 1
             self.check()
             yield
@@ -176,7 +176,7 @@ def mounted_data(directory):
     except Held:
         raise
     except Exception:
-        raise Held("The running process could not verify its data mount; no move was authorized") from None
+        raise Held("The running process could not confirm its data volume, so no move was allowed") from None
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -255,7 +255,7 @@ def read_marker(directory):
                 after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
             raise Held("The data handoff marker changed while reading it")
     except (OSError, UnicodeError):
-        raise Held("The data handoff marker cannot be read; data access must be recovered") from None
+        raise Held("The handover marker cannot be read. Access to the data must be recovered.") from None
     if len(raw) > 8192:
         raise Held("The data handoff marker is invalid")
     try:
@@ -273,7 +273,7 @@ def read_marker(directory):
         if value["source"] == value["destination"] or value["source_uid"] == value["destination_uid"]:
             raise ValueError()
     except (ValueError, TypeError, KeyError, UnicodeError):
-        raise Held("The data handoff marker is invalid; it cannot authorize startup") from None
+        raise Held("The handover marker is invalid, so it cannot allow Homestead to start") from None
     return value
 
 
@@ -299,7 +299,7 @@ class Fence:
         except Held:
             raise
         except Exception:
-            raise Held("Data handoff state is unavailable; startup and writes remain held") from None
+            raise Held("The handover state is unavailable. Starting and writing stay held.") from None
 
     def _inspect(self):
         marker = read_marker(self.directory)
@@ -325,7 +325,7 @@ class Fence:
                     self.completed_checked = True
                     return {"mode": "done", "writable": True, "operation": saved.state["operation"], "anchor_uid": saved.handle()["uid"], "cleanup": True}
         if marker is None and self.observed_marker:
-            raise Held("The recorded data handoff marker disappeared; it is not safe to resume")
+            raise Held("The recorded handover marker disappeared, so it is not safe to continue")
         self.observed_marker = self.observed_marker or marker is not None
         control = self._anchor()
         if marker is None:
@@ -346,9 +346,9 @@ class Fence:
         if "pointer_receipt" not in state:
             return self.recovery(control)
         if state.get("runtime", {}).get("state") == "held":
-            raise Held("The data move needs a recovery review; startup and writes remain held")
+            raise Held("The data move needs a recovery review. Starting and writing stay held.")
         if state.get("pointer_receipt") != A.pointer_digest(self.namespace, state, marker["anchor_uid"]):
-            raise Held("The data handoff local receipt was not confirmed; startup and writes remain held")
+            raise Held("The local handover record was not confirmed. Starting and writing stay held.")
         plan = state.get("plan", {})
         if (state["source"]["name"], state["source"]["uid"], state["destination"],
                 plan.get("destination_pvc", {}).get("uid")) != (
@@ -356,7 +356,7 @@ class Fence:
             raise Held("The local data handoff receipt no longer matches the reviewed volumes")
         entries = state["journal"]["ref"]["storage_writes"]
         if any(e["state"] != "accepted" for e in entries):
-            raise Held("The data handoff has an unresolved request; no jobs will be resumed")
+            raise Held("The handover has an unsettled request, so no jobs are resumed")
         if state.get("recovery", {}).get("action") == "return-original":
             starts = [e for e in entries if e["step"] == "recover-start" and e["method"] == "PUT"
                       and e["target"]["path"] == f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}"]
@@ -380,7 +380,7 @@ class Fence:
                     "anchor_uid": marker["anchor_uid"], "source_binding": binding}
         phase = state["phase"]
         if phase not in ("start", "done") or state.get("copy_receipt", {}).get("state") != "verified":
-            raise Held("Homestead is held while its data is being moved; the coordinator owns progress")
+            raise Held("Homestead is held while its data is being moved. The coordinator runs the move.")
         dep_path = f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}"
         starts = [e for e in entries if e["step"] == "start" and e["method"] == "PUT" and e["target"]["path"] == dep_path]
         releases = [e for e in entries if e["step"] == "release-copy" and e["method"] == "DELETE" and e["target"]["kind"] == "Job"]
@@ -410,7 +410,7 @@ class Fence:
             control = self._anchor().load(operation=obj["metadata"]["labels"][A.LABEL], uid=identity(obj)["uid"])
         state = control.state
         if state["phase"] != "prepare" or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]:
-            raise Held("This move has been handed over. Recovery must inspect both retained volumes; automatic rollback is not safe")
+            raise Held("This move has been handed over. Recovery must check both kept volumes, because an automatic rollback is not safe.")
         marker = read_marker(self.directory)
         if marker is not None and marker != A.pointer(self.namespace, state, control.handle()["uid"]):
             raise Held("The local move receipt does not match this preparation")
@@ -452,7 +452,7 @@ class Fence:
         if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("readOnly"):
             raise Held("The current Homestead data claim cannot be verified")
         if volumes[0].get("persistentVolumeClaim", {}).get("claimName") != marker["destination"]:
-            raise Held("This pod still mounts the original data volume; its jobs must not resume")
+            raise Held("This pod still mounts the original data volume, so its jobs must not resume")
         expected = plan["destination_pvc"]
         pvc = self.read(f"/api/v1/namespaces/{self.namespace}/persistentvolumeclaims/{marker['destination']}")
         pv = self.read("/api/v1/persistentvolumes/" + plan["destination_pv"]["name"])
@@ -485,4 +485,4 @@ class Fence:
             return
         result = self.inspect()
         if not result["writable"]:
-            raise Held("Homestead is verifying its new data volume; changes and background jobs are held")
+            raise Held("Homestead is checking its new data volume. Changes and background jobs are held.")

@@ -182,7 +182,7 @@ def _change(fn):
 
         def apply(stored):
             if stored is not None and not isinstance(stored, dict):
-                raise ValueError("the linked clusters' list is not a JSON object; nothing was changed")
+                raise ValueError("The list of linked clusters is not a JSON object, so nothing was changed")
             state = stored or {}
             key, _ = _read_key()
             result = fn(copy.deepcopy(state), key)
@@ -250,13 +250,13 @@ def _store_key(key, attempts=4):
             if error.code != 409 and not (error.code == 404 and current is not None):
                 raise
             error.close()
-    raise RuntimeError("the linked clusters' key kept changing while it was being saved; try again")
+    raise RuntimeError("The linked clusters' key kept changing while it was being saved. Try again.")
 
 
 def _settled(state):
     """The list a change is made on has this Homestead's own id."""
     if not state.get("self"):
-        raise ValueError("the linked clusters' list was removed meanwhile; nothing was changed, try again")
+        raise ValueError("The list of linked clusters was removed in the meantime, so nothing was changed. Try again.")
     return state
 
 
@@ -494,7 +494,7 @@ class ReplayStore:
                     if ticket["digest"] in records:
                         ticket["error"] = "signed request was already used"
                     elif len(records) >= self.LIMIT:
-                        ticket["error"] = "fleet request limit reached; try again later"
+                        ticket["error"] = "The linked clusters' request limit was reached. Try again later."
                     else:
                         records[ticket["digest"]] = now + 2 * SKEW
                 if all(ticket["error"] for ticket in batch):
@@ -514,7 +514,7 @@ class ReplayStore:
                 kept = written if isinstance(written, dict) and (written.get("metadata") or {}).get("resourceVersion") else None
                 self._current = kept and {"metadata": kept["metadata"], "data": kept.get("data") or {}}
                 return
-            raise PermissionError("fleet replay store is busy; try again")
+            raise PermissionError("The linked clusters' request store is busy. Try again.")
         except PermissionError as error:
             for ticket in batch:
                 ticket["error"] = ticket["error"] or str(error)
@@ -826,7 +826,7 @@ def _refuse_plain(sent_to, what, plain_ok):
     if plain and not plain_ok:
         names = ", ".join(f"{m.get('name') or m.get('url')} ({m.get('url')})" for m in plain)
         raise ValueError(f"{what} would go unencrypted to {names}: that is a plain http:// address. "
-                         "Agree to send it unencrypted, or give it an https:// address; nothing was sent")
+                         "Agree to send it unencrypted, or give it an https:// address. Nothing was sent.")
 
 
 def join(url, username, password, own_url="", plain_ok=False):
@@ -850,14 +850,14 @@ def join(url, username, password, own_url="", plain_ok=False):
     try:
         there, _ = _json(url, "GET", "/api/fleet", token=token)
     except ValueError as error:
-        raise ValueError(f"that Homestead cannot be linked - update it to {VERSION} first ({error})") from error
+        raise ValueError(f"That Homestead cannot be linked. Update it to {VERSION} first ({error}).") from error
     if any(m.get("id") == there.get("self") for m in state.get("members", [])):
         raise ValueError(f"{(there.get('members') or [{}])[0].get('name') or 'that Homestead'} is already linked")
     if len(there.get("members") or []) > 1:
         raise ValueError(f"that Homestead is already linked with {len(there['members']) - 1} other cluster(s). "
                          "Unlink it there first, or link this one from there.")
     if int(there.get("protocol") or 0) != PROTOCOL:
-        raise ValueError("that Homestead links clusters differently; update both to the same release first")
+        raise ValueError("That Homestead links clusters differently. Update both to the same release first.")
     with _lock:
         state, key = _ensure()
         rows = [dict(m, url=own) if m["id"] == state["self"] else m for m in state["members"]]
@@ -896,7 +896,7 @@ def accept(body):
         # another copy is refused the same way.
         _settled(state)
         if len(state.get("members", [])) > 1:
-            raise ValueError("this Homestead is already linked; unlink it first")
+            raise ValueError("This Homestead is already linked. Unlink it first.")
         mine = _self_record(state, url=url)
         mine["handle"] = handle(mine["name"], {m.get("handle") for m in rows})
         taken["mine"] = mine
@@ -905,7 +905,7 @@ def accept(body):
     with _lock:
         state, _ = _ensure()
         if len(state.get("members", [])) > 1:
-            raise ValueError("this Homestead is already linked; unlink it first")
+            raise ValueError("This Homestead is already linked. Unlink it first.")
         rows = _plain_handles([m for m in body.get("members") or [] if isinstance(m, dict) and m.get("id")])
         if not rows or not body.get("key"):
             raise ValueError("nothing to link to")

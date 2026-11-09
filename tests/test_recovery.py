@@ -167,7 +167,7 @@ class AlertTests(TempData):
         fact = recovery.alert_facts("suggest")[0]
         self.assertEqual(("joins", "info", "/containers?panel=rebalance"), (fact["category"], fact["severity"], fact["href"]))
         self.assertIn("b is back: 3 containers", fact["title"])
-        self.assertIn("Nothing moves until you review it", fact["body"])
+        self.assertIn("Nothing moves until it is reviewed", fact["body"])
 
     def test_in_window_mode_it_says_when_they_move_or_that_they_will_not(self):
         self.back(1)
@@ -1053,7 +1053,7 @@ class AutoAlertTests(AutoCase):
         recovery.suggest(["lab/db"], at(12, 5))
         for mode in ("suggest", "window", "auto"):
             line = recovery.alert_facts(mode, WINDOW)[0]["resolved"]
-            self.assertEqual("This alert has cleared; Balance hosts shows anything that could still move.", line, mode)
+            self.assertEqual("This alert has cleared. Balance hosts shows anything that could still move.", line, mode)
 
     def test_a_hold_with_apps_kept_doesnt_say_they_started_elsewhere_when_nothing_else_is_said(self):
         self.kept, self.would = self.KEPT, []
@@ -1096,7 +1096,7 @@ class AutoAlertTests(AutoCase):
         self.deployments = [tiered("web", "web-data", "important"), tiered("db", "db-data", "important")]
         self.back_at_noon()
         self.go()
-        self.assertIn("The update window has no days set, so 2 critical apps stay until you move them", self.facts()[0]["body"])
+        self.assertIn("The update window has no days set, so 2 critical apps stay until they are moved", self.facts()[0]["body"])
 
     def test_the_alert_says_flux_apps_are_left_out_outside_spread(self):
         recovery.managed_by = lambda dep: {"by": "Flux", "detected": True} if dep["metadata"]["name"] == "db" else {}

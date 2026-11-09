@@ -195,7 +195,7 @@ class AllocationConfigurationTests(unittest.TestCase):
 
     def test_unmanaged_sidecar_or_foreign_auth_secret_is_not_replaced(self):
         self.obj["spec"]["template"]["spec"]["containers"].append({"name": "allocation"})
-        with self.assertRaisesRegex(ValueError, "Unmanaged"):
+        with self.assertRaisesRegex(ValueError, "does not manage"):
             probe.configure(self.body, "1")
         self.obj["spec"]["template"]["spec"]["containers"].pop()
         self.secret = {"metadata": {"uid": "private"}, "data": {"key": "private"}}
@@ -241,7 +241,7 @@ class AllocationConfigurationTests(unittest.TestCase):
     def test_capacity_warning_override_is_explicit_and_bound_to_review(self):
         self.capacity.return_value.update(warnings=["RAM high"])
         for body in (self.body, {**self.body, "confirm_capacity": True, "capacity_review": "old"}):
-            with self.assertRaisesRegex(ValueError, "fresh review"):
+            with self.assertRaisesRegex(ValueError, "new review"):
                 probe.configure(body, "9.9.9")
             self.assertEqual([], self.sent)
         probe.configure({**self.body, "confirm_capacity": True, "capacity_review": "capacity-1"}, "9.9.9")

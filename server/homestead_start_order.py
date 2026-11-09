@@ -169,7 +169,7 @@ def clean(dep, value, deployments, services):
         return None
     ns, name = _ref(dep)
     if isinstance(value, dict) and value.get("unreadable"):
-        raise ValueError(f"Starts after can't be read on {name}; set it again or clear it")
+        raise ValueError(f"Starts after cannot be read on {name}. Set it again or clear it.")
     if not isinstance(value, dict) or not isinstance(value.get("after", []), list):
         raise ValueError("Starts after must be a list of apps")
     timeout = value.get("timeout", TIMEOUT[1])
@@ -191,7 +191,7 @@ def clean(dep, value, deployments, services):
     if len(wanted) > MAX_AFTER:
         raise ValueError(f"Starts after takes at most {MAX_AFTER} apps")
     if never_gated(ns, name):
-        raise ValueError("Homestead and system apps can't wait for other apps")
+        raise ValueError("Homestead and system apps cannot wait for other apps")
     # Only what changed is checked: an entry kept exactly as stored stays,
     # even when its app has since gone (the alerts say so), so an unrelated
     # edit never fails on it. A new or changed entry must work now.
@@ -199,7 +199,7 @@ def clean(dep, value, deployments, services):
     after = []
     for (dep_ns, app), item in wanted:
         if (dep_ns, app) == (ns, name):
-            raise ValueError("an app can't start after itself")
+            raise ValueError("An app cannot start after itself")
         as_stored = {"ns": dep_ns, "app": app, "service": item.get("service"), "port": item.get("port")}
         if as_stored in kept:
             after.append(as_stored)
@@ -219,11 +219,11 @@ def clean(dep, value, deployments, services):
         after.append({"ns": dep_ns, "app": app, "service": svc["name"], "port": port})
     spec = _pod_spec(dep)
     if spec.get("dnsPolicy") in ("Default", "None"):
-        raise ValueError(f"{name} does not use cluster DNS (dnsPolicy {spec['dnsPolicy']}), so it can't find "
-                         f"{after[0]['app']}; set dnsPolicy to ClusterFirst")
+        raise ValueError(f"{name} does not use cluster DNS (dnsPolicy {spec['dnsPolicy']}), so it cannot find "
+                         f"{after[0]['app']}. Set dnsPolicy to ClusterFirst.")
     if spec.get("hostNetwork") and spec.get("dnsPolicy") != "ClusterFirstWithHostNet":
-        raise ValueError(f"{name} uses the host's network without cluster DNS; set dnsPolicy to "
-                         f"ClusterFirstWithHostNet so it can find {after[0]['app']}")
+        raise ValueError(f"{name} uses the host's network without cluster DNS. Set dnsPolicy to "
+                         f"ClusterFirstWithHostNet so it can find {after[0]['app']}.")
     edges = graph(deployments)
     edges[(ns, name)] = [(a["ns"], a["app"]) for a in after]
     loop = find_cycle(edges, (ns, name))
@@ -344,7 +344,7 @@ def _managed(dep):
 
 
 def managed_message(name, owner):
-    return f"{name}'s start order is set where {owner['by']} applies it; commit the lines Homestead shows"
+    return f"{name}'s start order is set where {owner['by']} applies it. Commit the lines Homestead shows."
 
 
 def _same(dep, setting):
@@ -718,17 +718,17 @@ def alert_facts(workloads, now=None):
         if gone:
             facts.append({"key": f"starts-after:gone:{ns}/{name}", "category": "degraded", "severity": "degraded",
                           "title": f"{name} waits for {_words(gone)}, which no longer exists",
-                          "body": f"Remove it from Starts after in {name}'s Edit; until then each start of {name} "
+                          "body": f"Remove it from Starts after in {name}'s Edit. Until then, each start of {name} "
                                   "waits for it.", "resolved": f"{name} waits only for apps that exist", "href": href,
                           "signals": {}})
         gate = row.get("start_gate")
         if gate == "differs" or (gate == "missing" and (setting or {}).get("managed")):
             # The same setting saved again is no change: Edit's button sends restore_gate.
             fix = ("commit the lines Edit → Placement shows" if (setting or {}).get("managed")
-                   else "use Put the start gate back in Edit → Placement; that restarts it once")
+                   else "use Put the start gate back in Edit → Placement, which restarts it once")
             facts.append({"key": f"starts-after:differs:{ns}/{name}", "category": "degraded", "severity": "info",
                           "title": f"{name}'s start gate does not match its setting",
-                          "body": f"Its pods don't wait as Starts after says: {fix}.",
+                          "body": f"Its pods do not wait as Starts after says. To fix it, {fix}.",
                           "resolved": f"{name}'s start gate matches its setting", "href": href, "signals": {}})
     # A loop made outside Homestead: with Keep waiting it never starts.
     refs = [(r["ns"], r["name"]) for r in rows]
@@ -747,8 +747,8 @@ def alert_facts(workloads, now=None):
         facts.append({"key": "starts-after:cycle:" + ",".join(f"{ns}/{n}" for ns, n in members),
                       "category": "degraded", "severity": "degraded",
                       "title": f"{_words(n for _, n in members)} wait for each other",
-                      "body": "Each starts only after the other: with Keep waiting neither starts; "
-                              "set one of them to Start anyway, or remove one of the links.",
+                      "body": "Each starts only after the other, so with Keep waiting neither starts. "
+                              "Set one of them to Start anyway, or remove one of the links.",
                       "resolved": "no apps wait for each other", "href": "/containers", "signals": {}})
     return facts
 

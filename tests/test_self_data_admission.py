@@ -142,7 +142,7 @@ class AdmissionTests(unittest.TestCase):
         admit = self.admit()
         self.nodes[0]["status"]["nodeInfo"]["bootID"] = "other"
         self.assertTrue(admit("start", self.dep))
-        with self.assertRaisesRegex(Held, "rebooted"):
+        with self.assertRaisesRegex(Held, "restarted"):
             self.review()
 
     def test_taints_affinity_and_cordon_are_hard_blockers(self):
