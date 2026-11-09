@@ -104,7 +104,7 @@ class ManifestOperatorTests(unittest.TestCase):
                         return output, ""
                     return json.dumps({"kind": "List", "items": self.live}), ""
                 with patch.object(O, "_read_input", side_effect=read_input):
-                    with self.assertRaisesRegex(ValueError, "Could not read the upstream operator manifest: .+[^ ]"):
+                    with self.assertRaisesRegex(ValueError, "could not read the upstream operator manifest: .+[^ ]"):
                         self.enable()
         self.assertFalse(self.sent)
         self.assertFalse(any("change" in options for _, _, options in self.runs))

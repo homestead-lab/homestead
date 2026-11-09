@@ -256,7 +256,7 @@ def reviewed(moves, exclude, token):
     if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
         raise ValueError("Review the copies to move again")
     if review_token(moves, exclude) != token:
-        raise ValueError("The moves differ from the review; review again")
+        raise ValueError("The moves differ from the review. Review again.")
     hosts, volumes = inventory()
     by_name = {v["name"]: v for v in volumes}
     out = []
@@ -264,9 +264,9 @@ def reviewed(moves, exclude, token):
         v, host = by_name.get(m["volume"]), hosts.get(m["to"])
         if (not v or v["why"] or m["from"] not in v["hosts"] or m["to"] in v["hosts"] or v["attached"] == m["from"]
                 or v["app"] in set(exclude or ())):
-            raise ValueError(f"{m['claim']} changed since the review; review again")
+            raise ValueError(f"{m['claim']} changed since the review. Review again.")
         if not host or not host["takes"]:
-            raise ValueError(f"{m['to']} does not take copies now; review again")
+            raise ValueError(f"{m['to']} does not take copies now. Review again.")
         out.append({**{k: m[k] for k in keys}, "size_gb": round(v["size"] / GIB, 1), "attached": bool(v["attached"])})
     return out
 
@@ -365,7 +365,7 @@ def status(item):
             # for. The count is still one over, so Longhorn rebuilds it.
             if sum(1 for r in copies if r is not old and whole_copy(r)) < ref["original"]:
                 if now - ref["started"] > 3600 + 120 * move.get("size_gb", 0):
-                    return skip("another copy failed during the move; the old copy is kept")
+                    return skip("another copy failed during the move, so the old copy is kept")
                 return "running", progress, f"Waiting for Longhorn to rebuild a failed copy of {move['claim']} before removing the one on {move['from']}"
             ksend("DELETE", f"{LH}/replicas/{(old.get('metadata') or {}).get('name')}")
         # Still marked: until the old copy is gone it is one over, not short.
@@ -381,14 +381,14 @@ def status(item):
         if now - ref.get("settle_from", now) > 900:
             _replicas(move["volume"], ref["original"])
             ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1, placed=False, gone_since=None)
-            return "running", progress, f"{move['claim']} moved; Longhorn is still tidying its copies"
+            return "running", progress, f"{move['claim']} moved. Longhorn is still tidying its copies."
         return "running", progress, f"Waiting for {move['claim']} to settle at {spec.get('numberOfReplicas')} copies"
     return skip("an unknown step")
 
 
 def cancel_plan(item):
     return {"mode": "stop", "action": "Stop rebalancing",
-            "undo": ["The copy being built now is dropped; the volume keeps the copies it had"],
+            "undo": ["The copy being built now is dropped. The volume keeps the copies it had."],
             "keeps": ["Copies already moved stay where they are"], "needs": "operator"}
 
 
@@ -406,7 +406,7 @@ def start_reviewed(b):
     running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
-        return ROUTER.Reply(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
+        return ROUTER.Reply(409, {"error": "A rebalance is already running. Follow it in Jobs.", "operation": running})
     if b.get("moves") is not None:
         # The copies reviewed, checked against Longhorn now - not a
         # plan made again from sizes that grow while apps write.
@@ -418,7 +418,7 @@ def start_reviewed(b):
     else:
         chosen = plan(b.get("exclude") or [])
         if chosen["review_token"] != b.get("review_token"):
-            return ROUTER.Reply(409, {"error": "Volume copies changed since the review; review again", "plan": chosen})
+            return ROUTER.Reply(409, {"error": "The volume copies changed since the review. Review again.", "plan": chosen})
     if not chosen["moves"]:
         return ROUTER.Reply(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": chosen})
     operation = OPS.start(KIND, f"Rebalance {len(chosen['moves'])} volume cop{'y' if len(chosen['moves']) == 1 else 'ies'}",

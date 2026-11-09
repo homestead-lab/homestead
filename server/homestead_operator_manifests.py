@@ -44,7 +44,7 @@ def inspect(component, read, platform):
         raise ValueError("Manifest upgrades are available on k3s and RKE2 clusters")
     rows = KUBE.items(path, read=read)
     if len(rows) != 1:
-        raise ValueError(f"Expected one {label} configuration; inspect the installation before enabling upgrades")
+        raise ValueError(f"Expected one set of {label} settings. Check the installation before turning on upgrades.")
     cr = rows[0]
     meta = cr.get("metadata") or {}
     if (meta.get("name") != component or (component == "kubevirt" and meta.get("namespace") != namespace)
@@ -54,14 +54,14 @@ def inspect(component, read, platform):
     for obj in (cr, dep):
         owner = external(obj)
         if owner:
-            raise ValueError(f"{label} is managed by {owner}; upgrade it through that manager")
+            raise ValueError(f"{label} is managed by {owner}. Upgrade it through that manager.")
     containers = dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []
     images = [c.get("image", "") for c in containers if c.get("name") == deployment]
     if len(images) != 1 or not re.fullmatch(rf"quay\.io/kubevirt/{deployment}:v\d+\.\d+\.\d+", images[0]):
-        raise ValueError(f"{label} uses a custom operator image; keep using its existing upgrade method")
+        raise ValueError(f"{label} uses a custom operator image. Keep using its existing upgrade method.")
     spec = cr.get("spec") or {}
     if spec.get("imageTag") or spec.get("imageRegistry"):
-        raise ValueError(f"{label} has a custom image version or registry; keep using its existing upgrade method")
+        raise ValueError(f"{label} has a custom image version or registry. Keep using its existing upgrade method.")
     return cr
 
 
@@ -150,7 +150,7 @@ def _documents(component, version, addons, node, command):
             rows.extend(items)
     except (ValueError, TypeError, KeyError) as error:
         detail = err.strip() or str(error) or "kubectl returned an unreadable manifest"
-        raise ValueError(f"Could not read the upstream operator manifest: {detail[:200]}") from None
+        raise ValueError(f"Homestead could not read the upstream operator manifest: {detail[:200]}") from None
     allowed = {"Namespace": "v1", "ServiceAccount": "v1", "ConfigMap": "v1", "Deployment": "apps/v1",
                "ClusterRole": "rbac.authorization.k8s.io/v1", "ClusterRoleBinding": "rbac.authorization.k8s.io/v1",
                "Role": "rbac.authorization.k8s.io/v1", "RoleBinding": "rbac.authorization.k8s.io/v1",
@@ -199,16 +199,16 @@ def prepare(component, version, read, platform, addons):
         if len(current) != len(found) or (answer.get("metadata") or {}).get("continue"):
             raise ValueError("incomplete resource list")
     except (ValueError, TypeError, KeyError) as error:
-        raise ValueError(f"Could not inspect the operator resources: {(err or str(error))[:200]}") from None
+        raise ValueError(f"Homestead could not check the operator resources: {(err or str(error))[:200]}") from None
     allowed = {_key(row) for row in rows}
     if set(current) - allowed:
         raise ValueError("The operator resource inspection returned unexpected objects")
     operator = ("apps/v1", "Deployment", component, PARTS[component][3])
     if operator not in current:
-        raise ValueError("The operator deployment disappeared during inspection; refresh before trying again")
+        raise ValueError("The operator deployment was removed during the check. Refresh before trying again.")
     expected = read(f"/apis/apps/v1/namespaces/{component}/deployments/{PARTS[component][3]}")
     if (current[operator].get("metadata") or {}).get("uid") != (expected.get("metadata") or {}).get("uid"):
-        raise ValueError("The host's Kubernetes connection does not match this operator; no change was made")
+        raise ValueError("The host's Kubernetes connection does not match this operator, so nothing was changed")
     for row in rows:
         live = current.get(_key(row))
         if live is not None:
@@ -256,8 +256,8 @@ def upgrade(component, target, read, platform, addons):
     payload = "".join(json.dumps(row, separators=(",", ":")) + "\n" for row in rows).encode()
     out, err = HOSTRUN.run(node, script, timeout=180, change=f"Upgrade {PARTS[component][0]} to {target}", stdin=payload)
     if out.strip() != "homestead-operator-applied":
-        raise ValueError(f"Operator update stopped: {(err or out)[:500]}. Some resources may have applied; inspect before retrying")
-    return f"{PARTS[component][0]} is moving to {target}; its existing configuration is preserved"
+        raise ValueError(f"Operator update stopped: {(err or out)[:500]}. Some resources may have been applied. Check before trying again.")
+    return f"{PARTS[component][0]} is moving to {target}. Its existing settings are kept."
 
 
 def configuration(component, read):
@@ -265,13 +265,13 @@ def configuration(component, read):
     label, path, _, _ = PARTS[component]
     rows = KUBE.items(path, read=read)
     if len(rows) != 1 or not isinstance(rows[0].get("spec"), dict):
-        raise ValueError(f"Cannot read the complete {label} configuration; no upgrade was started")
+        raise ValueError(f"The complete {label} settings cannot be read, so no upgrade was started")
     row = rows[0]
     meta = row.get("metadata") or {}
     if meta.get("name") != component or (component == "kubevirt" and meta.get("namespace") != "kubevirt"):
         raise ValueError(f"Cannot verify the {label} configuration identity")
     if row["spec"].get("imageTag") or row["spec"].get("imageRegistry"):
-        raise ValueError(f"{label} has a custom image version or registry; keep using its existing upgrade method")
+        raise ValueError(f"{label} has a custom image version or registry. Keep using its existing upgrade method.")
     return json.dumps({"apiVersion": row.get("apiVersion") or ("kubevirt.io/v1" if component == "kubevirt" else "cdi.kubevirt.io/v1beta1"),
                        "kind": label, "metadata": {key: copy.deepcopy(meta[key]) for key in ("name", "namespace", "labels", "annotations") if key in meta},
                        "spec": copy.deepcopy(row["spec"])}) + "\n"

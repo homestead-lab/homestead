@@ -250,7 +250,7 @@ def _detached_copies_loop():
 def allocation_probe_capacity(obj, template):
     listing = kget("/api/v1/pods")
     if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
-        raise ValueError("Complete workload inventory is unavailable; nothing was changed")
+        raise ValueError("The full list of apps is unavailable, so nothing was changed")
     return ALLOCATION_CAPACITY.plan(obj, template, PLACE.get_nodes(), listing["items"],
                                     get_app_settings()["thresholds"]["memory"]["critical"])
 
@@ -284,7 +284,7 @@ def set_update_mode(b):
           ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True, "mode": chosen,
-            "detail": f"{name} updates itself in the maintenance window" if chosen == "auto" else f"{name} waits for you to update it"}
+            "detail": f"{name} updates itself in the maintenance window" if chosen == "auto" else f"{name} waits to be updated manually"}
 
 
 def _baseline_loop():
@@ -402,12 +402,12 @@ def _upgrade_node_probe():
         if result["state"] in ("updated", "review", "waiting"):
             print(f"VM placement checks: {result['detail']}", flush=True)
     except Exception:
-        print("VM placement helper not updated; review its settings in Cluster > Add-ons", flush=True)
+        print("The VM placement helper was not updated. Review its settings in Cluster > Add-ons.", flush=True)
 
 
 def reviewed_image_update(body, action):
     if body.get("action", "update") != action:
-        raise ValueError("image action changed; review again")
+        raise ValueError("The image action changed. Review again.")
     prepared, capacity, context = image_update_capacity_plan(body, action)
     CAPACITY_REVIEW.enforce(body, capacity, context)
     if action == "update":
@@ -434,8 +434,8 @@ def _harvester_upgrade_status(item):
         now = _clock()
         if now - ref.setdefault("missing_since", now) >= UPGRADE_MISSING_LIMIT:
             return "failed", 1, (f"Harvester has no upgrade named {name} after {UPGRADE_MISSING_LIMIT // 60} minutes: "
-                                 "it was deleted, or Harvester never took it. Homestead has stopped following it; "
-                                 "Harvester's own dashboard shows whether anything is upgrading")
+                                 "It was deleted, or Harvester never took it. Homestead has stopped following it. "
+                                 "Harvester's own dashboard shows whether anything is upgrading.")
         return "running", 1, "Waiting for Harvester to take the upgrade"
     ref.pop("missing_since", None)
     step = next((s["label"] for s in row["steps"] if s["state"] in ("running", "failed")), "")

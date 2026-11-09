@@ -74,8 +74,8 @@ def additional_container_configs(cfg):
         allowed = {"name", "image", "env", "ports", "volumes", "hardware", "cpu", "memory", "memory_limit",
                    "privileges", "privileged", "cap_add", "tun", "volume_owners", "new", "container_name"}
         if set(row) - allowed - {"namespace", "workload_name", "network_mode", "target_mode", "app_profile", "env_bindings"}:
-            raise ValueError("additional containers take only their own settings. Image, resources, ports, environment, "
-                             "hardware and storage are theirs; pod settings are shared")
+            raise ValueError("Additional containers take only their own settings. Image, resources, ports, environment, "
+                             "hardware and storage are their own, and pod settings are shared.")
         item = {key: copy.deepcopy(value) for key, value in row.items() if key in allowed}
         item.update(namespace=cfg.get("namespace") or DEFAULT_NS,
                     workload_name=cfg.get("workload_name") or cfg.get("name"),
@@ -111,7 +111,7 @@ def import_namespace(value):
         return ns
     ns = _dns_name(ns, "namespace")
     if ns in SYS_NS or ns not in NSMOD.names(False):
-        raise ValueError(f"namespace {ns} is not one an app can be imported into; create it under Namespaces first")
+        raise ValueError(f"Namespace {ns} is not one an app can be imported into. Create it under Namespaces first.")
     return ns
 
 
@@ -137,8 +137,8 @@ def import_capacity_plan(body):
                                        threshold, planned_claims=claims, pod_snapshot=pods,
                                        nodes_snapshot=nodes)
             phases.append({"title": title, "capacity": plan})
-    warnings = ["No resources are created until you confirm. Copy and application are reviewed separately, not as concurrent workloads.",
-                "Imported files can replace files with the same names in existing volumes. Source consistency is not guaranteed; stop the source app or use a consistent backup.",
+    warnings = ["Nothing is created until it is confirmed. The copy and the app are reviewed separately, not as apps running at the same time.",
+                "Imported files can replace files with the same names in existing volumes. A consistent source is not guaranteed, so stop the source app or use a consistent backup.",
                 "Storage provisioning, actual free filesystem space and future placement are not guaranteed by this review.",
                 "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
     capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
@@ -240,7 +240,7 @@ def compose_preparation(b):
     report = compose_report(b)
     chosen = set(b.get("services") or [row["name"] for row in report["services"]])
     if chosen - {row["name"] for row in report["services"]}:
-        raise ValueError("selected Compose service no longer exists; review again")
+        raise ValueError("The chosen Compose service no longer exists. Review again.")
     rows = {row["name"]: row for row in report["services"] if row["name"] in chosen}
     if not rows:
         raise ValueError("choose at least one service to create")
@@ -279,7 +279,7 @@ def compose_apply(b):
     HOSTACCESS.require_cfg(configs)
     plan = DEPLOY.compose_capacity(entries, claims)
     if plan["status"] == "unknown":
-        raise CAPACITY_REVIEW.Rejected("Complete batch placement could not be verified; split the batch and review again", plan)
+        raise CAPACITY_REVIEW.Rejected("The placement of the whole batch could not be confirmed. Split the batch and review again.", plan)
     CAPACITY_REVIEW.enforce(b, plan, {"action": "compose", "configs": configs})
     created, controllers = [], {}
     for cfg, entry in zip(configs, entries):
@@ -289,14 +289,14 @@ def compose_apply(b):
                 fresh = DEPLOY.compose_capacity(entries, claims, controllers)
                 if fresh["blocked"]:
                     return {"ok": False, "created": created, "failed": name,
-                            "error": "Remaining batch no longer fits the checked capacity; review again", "capacity": fresh}
+                            "error": "The rest of the batch no longer fits the checked capacity. Review again.", "capacity": fresh}
             result = DEPLOY.run_deploy(copy.deepcopy(cfg))
             created.append(result["name"])
             # Never assume the Deployment has pods just because POST returned.
             ns = cfg["namespace"]
             controller = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{result['name']}")
             if not controller.get("metadata", {}).get("uid"):
-                raise ValueError("created workload identity is unavailable; stopped before the next service")
+                raise ValueError("The new app could not be confirmed, so it stopped before the next service")
             controllers[name] = controller
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:300]
@@ -443,7 +443,7 @@ def _moves_loop():
 def rollout_review_context(current):
     meta = current.get("metadata") or {}
     if not meta.get("uid") or not meta.get("resourceVersion"):
-        raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
+        raise ValueError("The app could not be identified. Refresh before changing its pod.")
     # settled, not resourceVersion, is what the token binds (CAPACITY_REVIEW.review_form):
     # a rollout's status writes do not void the review, a spec or metadata change does.
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"], "settled": CAPACITY_REVIEW.review_identity(current)["settled"]}

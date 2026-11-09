@@ -24,7 +24,7 @@ def _exclusive(ident, ops):
     try:
         lock.acquire()
     except TimeoutError as error:
-        raise DispatcherBusy("The dispatcher is active; wait and review again") from error
+        raise DispatcherBusy("The dispatcher is running. Wait and review again.") from error
     try:
         yield
     finally:
@@ -37,11 +37,11 @@ def _object(read, path):
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
-        raise ValueError(f"Recovery inventory is unavailable (HTTP {error.code}); nothing was changed") from error
+        raise ValueError(f"The recovery information is unavailable (HTTP {error.code}), so nothing was changed") from error
     except OSError as error:
-        raise ValueError("Recovery inventory could not be reached; nothing was changed") from error
+        raise ValueError("The recovery information could not be reached, so nothing was changed") from error
     if not isinstance(value, dict):
-        raise ValueError("Recovery inventory is malformed; nothing was changed")
+        raise ValueError("The recovery information is malformed, so nothing was changed")
     return value
 
 
@@ -60,7 +60,7 @@ def _snapshot(item, read, actor):
         raise ValueError("This job does not have an unresolved uncertain power dispatch")
     blockers = []
     if ref.get("dispatch_protocol") != 1:
-        blockers.append("This legacy job has no verifiable dispatcher fence; manual journal recovery is required before resolving it.")
+        blockers.append("This older job has no dispatcher fence that can be checked. Its record must be recovered manually before resolving it.")
     ns, name = ref["namespace"], ref["name"]
     base = f"{POWER.API}/namespaces/{quote(ns, safe='')}"
     vm = _object(read, base + "/virtualmachines/" + quote(name, safe=""))
@@ -82,7 +82,7 @@ def _snapshot(item, read, actor):
         (owner.get("uid"), owner.get("name")) == (vid["uid"], name)
         for owner in ((vmi.get("metadata") or {}).get("ownerReferences") or [])))
     if not owned:
-        blockers.append("The instance cannot be attributed to the current VM; inspect ownership before resolving.")
+        blockers.append("The instance cannot be tied to the current VM. Check what owns it before resolving.")
     conditions = istate.get("conditions") or []
     evidence = {"vm": vid, "instance": iid, "same_vm": bool(vid and vid["uid"] == ref["uid"]),
                 "run_strategy": (vm.get("spec", {}).get("runStrategy") or ("Always" if vm.get("spec", {}).get("running") else "Halted")) if vm else "Not applicable",
@@ -93,7 +93,7 @@ def _snapshot(item, read, actor):
                 "queued_changes": len(requests)}
     warnings = ["This resolves Homestead's tracking record only. It sends no power request and changes no VM, disk, Secret or restart policy.",
                 "The Homestead dispatcher is not holding this job's lock, but Kubernetes may still apply the earlier request late. An empty queue or a running VM does not prove which request caused it.",
-                "Acknowledging releases this job's block on future power reviews. It does not retry or roll back anything; any later action needs its own fresh review.",
+                "Accepting this releases the job's block on later power reviews. It does not retry or roll back anything. Any later action needs its own new review.",
                 "The original outcome will remain unknown in the audit record, even if the guest is currently running. Guest application health is not verified."]
     if not evidence["same_vm"]:
         warnings.append("The original VM is missing or has been replaced. This review does not adopt or change the replacement.")
@@ -118,7 +118,7 @@ def preview(ident, ops, read, actor):
             plan, context = _snapshot(_job(ops.stored(), ident), read, actor)
             return {"plan": plan, "capacity_token": REVIEW.issue({"id": ident}, context)}
     except DispatcherBusy:
-        return {"plan": {"id": ident, "blocked": True, "blockers": ["A Homestead dispatcher is still active for this job. Wait; it cannot be resolved while sending power."],
+        return {"plan": {"id": ident, "blocked": True, "blockers": ["A Homestead dispatcher is still running for this job. Wait, because it cannot be resolved while it sends a power request."],
                          "warnings": [], "requires_confirmation": True}, "capacity_token": None}
 
 
@@ -139,9 +139,9 @@ def resolve(body, ops, read, actor):
                                "late_effect_acknowledged": True}
             ref.update(phase="resolved-unknown", retain_resources=False)
             ops._finish(item, "failed", item.get("progress", 0),
-                        f"{actor} acknowledged an unknown power outcome after inspection. No retry or rollback was sent; a late effect is still possible.")
+                        f"{actor} accepted an unknown power outcome after checking it. Nothing was retried or rolled back. A late effect is still possible.")
             t.save(items)
-            return {"ok": True, "detail": "Tracking resolved as unknown; no cluster change was sent. Any new power action requires a fresh review.",
+            return {"ok": True, "detail": "Tracking resolved as unknown, and nothing was sent to the cluster. Any new power action needs a new review.",
                     "operation": ops._public(item)}
     except DispatcherBusy as error:
-        raise ValueError("The dispatcher is active; nothing was resolved. Wait and review again.") from error
+        raise ValueError("The dispatcher is running, so nothing was resolved. Wait and review again.") from error

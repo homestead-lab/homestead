@@ -84,7 +84,7 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
             result["dependencies"]["state-vmi"] = identity(vmi)
             migration = (vmi.get("status") or {}).get("migrationState") or {}
             if migration and not (migration.get("completed") or migration.get("failed")):
-                raise ValueError("Persistent VM state is migrating; wait for handoff/recovery")
+                raise ValueError("The VM state is migrating. Wait for the handover or recovery.")
             for volume in (vmi.get("status") or {}).get("volumeStatus") or []:
                 if str(volume.get("name", "")).startswith(PREFIX):
                     claim = (volume.get("persistentVolumeClaimInfo") or {}).get("claimName")
@@ -101,7 +101,7 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
         result["dependencies"]["state-candidates:" + base] = sorted(
             [identity(obj) for obj in candidates], key=lambda item: str(item["name"]))
         if len(candidates) > 1:
-            raise ValueError("Multiple persistent VM state PVCs match; resolve migration/legacy state before starting")
+            raise ValueError("More than one VM state volume matches. Settle the migration or older state before starting.")
         if candidates:
             candidate = candidates[0]
             claim = (candidate.get("metadata") or {}).get("name")
@@ -109,7 +109,7 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
             if identity(pvc) != identity(candidate):
                 raise ValueError("Persistent VM state PVC changed during inspection")
             if not owned(pvc):
-                raise ValueError("Persistent VM state PVC belongs to another or unverifiable VM identity; it will not be adopted")
+                raise ValueError("The VM state volume belongs to another VM, or its VM cannot be confirmed. It is not taken over.")
             if reported and reported != [claim]:
                 raise ValueError("Persistent VM state PVC disagrees with the running instance")
             state = pvc.get("spec") or {}
@@ -130,17 +130,17 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
                 sc = object_at("/apis/storage.k8s.io/v1/storageclasses/" + quote(klass or "", safe=""))
                 if not klass or sc.get("volumeBindingMode") != "WaitForFirstConsumer":
                     raise ValueError("Persistent VM state PVC is still provisioning")
-                result["warnings"].append("Persistent VM state waits for first-consumer binding; provisioning capacity is unverified")
+                result["warnings"].append("The VM state volume waits for its first user, so the storage capacity is not checked")
             else:
                 raise ValueError("Persistent VM state PVC is not Bound or waiting for first-consumer placement")
             result["volumes"].append({"name": "homestead-state-evidence", "persistentVolumeClaim": {"claimName": claim}})
-            result["warnings"].append(f"Persistent VM state uses PVC {claim}; preserve it with the VM's disks when moving or recovering this VM")
+            result["warnings"].append(f"The VM's state is kept on volume {claim}. Keep it with the VM's disks when moving or recovering this VM.")
             return result
         if (reported or (vm.get("status") or {}).get("created") or (vm.get("status") or {}).get("ready") or
                 ((vmi or {}).get("status") or {}).get("phase") in ("Running", "Succeeded", "Failed")):
-            raise ValueError("Previously created/running VM has no persistent state PVC; recover its state before starting")
+            raise ValueError("This VM ran before but has no state volume. Recover its state before starting.")
         if object_at(base + "/" + quote(legacy, safe=""), missing=True, namespaced=True) is not None:
-            raise ValueError("Persistent VM state PVC appeared during inspection; refresh")
+            raise ValueError("A VM state volume appeared during the check. Refresh.")
         explicit = (config or {}).get("vmStateStorageClass")
         klass = explicit
         if not klass:
@@ -158,7 +158,7 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
                 choices = virt or normal
             else:
                 if virt and {identity(obj)["name"] for obj in virt} != {identity(obj)["name"] for obj in normal}:
-                    raise ValueError("Persistent VM state default differs by KubeVirt version; configure an explicit VM-state storage class")
+                    raise ValueError("The default for VM state differs between KubeVirt versions. Set a VM state storage class.")
                 choices = normal
             if len(choices) != 1:
                 raise ValueError("Persistent VM state needs one unambiguous default storage class")
@@ -183,5 +183,5 @@ def inspect(vm, spec, config, read, *, vmi=None, version=None, cold=True):
     except ValueError as error:
         result["blockers"].append(str(error))
     except Exception:
-        result["blockers"].append("Persistent VM state dependencies could not be verified; check inventory permissions/connectivity")
+        result["blockers"].append("What the VM state depends on could not be checked. Check permissions and connections.")
     return result

@@ -93,11 +93,11 @@ def validate_boot_output(vm):
         raise ValueError("Primary boot output conflicts with the virtual display setting")
     if output == "gpu":
         if not _has_gpu(devices):
-            raise ValueError("GPU boot output needs an attached GPU verified in the host device inventory; inspect its host or choose web console output")
+            raise ValueError("GPU boot output needs an attached GPU that the host device list confirms. Check its host, or choose web console output.")
         if settings["firmware"] != "uefi":
-            raise ValueError("GPU boot output needs UEFI firmware; choose web console output before switching to BIOS")
+            raise ValueError("GPU boot output needs UEFI firmware. Choose web console output before switching to BIOS.")
     if output == "serial" and not settings["serial"]:
-        raise ValueError("Serial boot output needs the serial console enabled; choose another boot output before disabling it")
+        raise ValueError("Serial boot output needs the serial console. Choose another boot output before turning it off.")
 
 
 def apply(vm, cfg, locked_cpu=False):
@@ -289,27 +289,27 @@ def requirements(settings, kubevirt=None, nodes=0):
                 .get("developerConfiguration", {}).get("featureGates") or [])
     notes = []
     if settings.get("boot_output") == "gpu":
-        notes.append("GPU boot output uses UEFI and turns off the VNC display. Connect the monitor to the passed-through GPU; "
-                     "it needs a UEFI-capable ROM and guest drivers. Changing firmware can require repairing the guest bootloader.")
+        notes.append("GPU boot output uses UEFI and turns off the VNC display. Connect the monitor to the passed-through GPU. "
+                     "It needs a UEFI-capable ROM and guest drivers. Changing firmware can mean repairing the guest bootloader.")
     cpu = settings.get("cpu") or {}
     if cpu.get("dedicated"):
-        notes.append("Dedicated CPUs need nodes whose kubelet runs the static CPU manager policy; "
-                     "elsewhere the VM does not start.")
+        notes.append("Dedicated CPUs need hosts whose kubelet runs the static CPU manager policy. "
+                     "On other hosts the VM does not start.")
     if settings.get("hugepages"):
         notes.append(f"Hugepages of {settings['hugepages']} must be reserved on the node (a kernel "
                      "setting), or the VM does not start.")
     persistent = settings.get("efi_persistent") or settings.get("tpm") == "persistent"
     if persistent and "VMPersistentState" not in gates:
-        notes.append("Persistent EFI variables or TPM state are kept in a small volume per VM; on "
+        notes.append("Persistent EFI variables or TPM state are kept in a small volume per VM. On "
                      "KubeVirt releases before 1.5 this needs its VMPersistentState feature.")
     if settings.get("secure_boot"):
-        notes.append("Secure Boot needs a guest whose bootloader is signed - Windows 11, and most "
+        notes.append("Secure Boot needs a guest whose bootloader is signed, such as Windows 11 and most "
                      "current Linux installers.")
     if settings.get("eviction") in ("LiveMigrate",) and nodes < 2:
-        notes.append("Live migration needs a second node; on one node a drain waits for the VM.")
+        notes.append("Live migration needs a second host. On one host, a drain waits for the VM.")
     if cpu.get("model") == "host-passthrough":
-        notes.append("host-passthrough exposes this node's exact CPU; the VM can then only live-"
-                     "migrate to nodes with the same CPU.")
+        notes.append("host-passthrough exposes this host's exact CPU. The VM can then only live-"
+                     "migrate to hosts with the same CPU.")
     return notes
 
 

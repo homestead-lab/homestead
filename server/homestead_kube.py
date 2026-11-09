@@ -416,16 +416,16 @@ def items(path, optional_group=None, read=_CLIENT):
         groups = read("/apis").get("groups")
         if (not isinstance(groups, list) or not groups
                 or any(not isinstance(g, dict) or not g.get("name") for g in groups)):
-            raise Incomplete("Kubernetes did not say which APIs it serves; refresh and try again")
+            raise Incomplete("Kubernetes did not say which APIs it serves. Refresh and try again.")
         if any(g["name"] == optional_group for g in groups):
             raise
         error.close()
         return []
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or (listing.get("metadata") or {}).get("continue")):
-        raise Incomplete(f"Kubernetes returned an incomplete list for {path}; refresh and try again")
+        raise Incomplete(f"Kubernetes returned an incomplete list for {path}. Refresh and try again.")
     if any(not isinstance(row, dict) for row in listing["items"]):
-        raise Incomplete(f"Kubernetes returned a list with invalid entries for {path}; refresh and try again")
+        raise Incomplete(f"Kubernetes returned a list with invalid entries for {path}. Refresh and try again.")
     return listing["items"]
 
 
@@ -477,7 +477,7 @@ def put_past_status(path, body, read, write, still_allowed=None):
     # What can't be read is not taken as unchanged.
     if not meta.get("uid") or now.get("uid") != meta["uid"] or not meta.get("generation") or (
             now.get("generation") != meta["generation"]):
-        raise ValueError(f"{name} changed while this was being saved, so nothing was written; look at it and try again")
+        raise ValueError(f"{name} changed while this was being saved, so nothing was written. Check it and try again.")
     if still_allowed:
         still_allowed(fresh)
     metadata = {key: value for key, value in now.items() if key != "managedFields"}
@@ -487,7 +487,7 @@ def put_past_status(path, body, read, write, still_allowed=None):
         if error.code != 409:
             raise
         error.close()
-    raise ValueError(f"{name} kept being updated while this was being saved, so nothing was written; try again in a moment")
+    raise ValueError(f"{name} kept being updated while this was being saved, so nothing was written. Try again in a moment.")
 
 
 def definite_refusal(code):
@@ -541,7 +541,7 @@ def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=N
                 raw = base64.b64decode(raw).decode("utf-8")
             value = json.loads(raw) if raw is not None else None
         except (ValueError, TypeError):
-            raise ValueError(f"{key} in {name} is not valid JSON; nothing was changed") from None
+            raise ValueError(f"{key} in {name} is not valid JSON, so nothing was changed") from None
         text = json.dumps(fn(copy.deepcopy(value)), **dump)
         stored = base64.b64encode(text.encode("utf-8")).decode("ascii") if secret else text
         try:
@@ -563,7 +563,7 @@ def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=N
             if error.code != 409 and not (error.code == 404 and current is not None):
                 raise
             error.close()
-    raise RuntimeError(f"{name} kept changing while it was being saved, so this change was not saved; try again")
+    raise RuntimeError(f"{name} kept changing while it was being saved, so this change was not saved. Try again.")
 
 
 def require_workload_target(ns, name):
@@ -586,7 +586,7 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
     if not shutdown_bypass and FENCE_READY:
         shutdown = _fence_state()
         if shutdown and shutdown["phase"] not in ("released", "failed"):
-            raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
+            raise ValueError("A cluster shutdown is running. Open Cluster → Shut down cluster to see its progress or recover.")
     try:
         return transport(method, path, body, ctype, timeout)
     finally:

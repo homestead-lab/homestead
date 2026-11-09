@@ -164,7 +164,7 @@ def resolve(item, checkpoint, now=None):
                 if "409" not in str(error) and "already exists" not in str(error).lower():
                     return "failed", 10, f"Nothing was updated: the snapshot of {row['claim']} could not be made ({str(error)[:160]})"
         to("update")
-        return "running", 25, "Snapshots made; installing the update"
+        return "running", 25, "Snapshots taken. Installing the update."
     if phase == "update":
         to("updating")
         phase = "updating"
@@ -174,9 +174,9 @@ def resolve(item, checkpoint, now=None):
         except ValueError as error:
             if "no image update" in str(error) and ref.get("before"):
                 to("watch", updated_at=ref.get("updated_at") or now)   # committed before a restart
-                return "running", 50, "Update installed; waiting for the new pods"
+                return "running", 50, "Update installed. Waiting for the new pods."
             if "no image update" in str(error):
-                return "succeeded", 100, f"{name} is already current; nothing was changed"
+                return "succeeded", 100, f"{name} is already up to date, so nothing was changed"
             return "failed", 25, f"Nothing was updated: {str(error)[:200]}"
         if any(i.get("candidate") != i.get("source") for i in _waiting(prepared)):
             return "failed", 25, "Nothing was updated: the waiting update is a new version, which waits for someone to choose it"
@@ -184,13 +184,13 @@ def resolve(item, checkpoint, now=None):
         updates.commit_prepared(prepared)
         _refresh(ns, name)
         to("watch", updated_at=now)
-        return "running", 50, "Update installed; waiting for the new pods"
+        return "running", 50, "Update installed. Waiting for the new pods."
     if phase == "watch":
         dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
         if not ref.get("rolled_at"):
             if _rolled_out(dep):
                 to("watch", rolled_at=now)
-                return "running", 70, "New pods are ready; waiting for it to answer"
+                return "running", 70, "The new pods are ready. Waiting for it to answer."
             if now - ref.get("updated_at", now) > ROLLOUT_WAIT:
                 # Starts after (#746): new pods waiting in their start gate are
                 # waiting for an app they need, not broken by the update; the
@@ -214,7 +214,7 @@ def resolve(item, checkpoint, now=None):
         if state.get("state") == "off" or not state:
             if now - ref["rolled_at"] >= STEADY:
                 return _done(item, "it has stayed ready (it has no answer check)")
-            return "running", 80, "Ready; making sure it stays up"
+            return "running", 80, "Ready. Making sure it stays up."
         if fresh and state.get("state") in ("up", "slow"):
             return _done(item, "it is answering again")
         if fresh and state.get("state") == "down":
@@ -271,7 +271,7 @@ def _roll_back(item, to, why):
         _refresh(ref["namespace"], ref["name"])
     except ValueError as error:
         if "does not change" not in str(error):
-            return ("failed", 100, f"The update failed - {why} - and rolling back did not work either: "
+            return ("failed", 100, f"The update failed ({why}), and rolling back did not work either: "
                     f"{str(error)[:160]}. Roll it back from Containers. {_snapshots_said(ref)}")
     to("rolled-back")
     return ("failed", 100, f"Rolled back: after the update {why}. The previous image is running again. "

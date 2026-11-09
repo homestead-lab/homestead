@@ -164,7 +164,7 @@ def start(body):
         if not REVIEW.valid(cfg, _context(plan)): raise ValueError('Host or storage changed, or the review expired. Review again.')
         item = ops.start(KIND, 'Move Longhorn runtime on ' + cfg['node'], {'kind':'Node','name':cfg['node']},
                          '/nodes?node=' + cfg['node'] + '&section=storage',
-                         {**plan, 'phase':'queued', 'approval':cfg['capacity_token']}, 'Runtime relocation approved; source files retained')
+                         {**plan, 'phase':'queued', 'approval':cfg['capacity_token']}, 'Runtime move approved. The source files are kept.')
         return public(_saved(item['id']))
 
 
@@ -221,9 +221,9 @@ def progress(item):
             _arm(ref)
             ref['phase'] = 'staged'; ops.checkpoint(item)
         elif ref['phase'] == 'staging':
-            raise ValueError('Staging was interrupted. Recheck this job; no helper is repeated automatically.')
+            raise ValueError('Staging was interrupted. Check this job again. No helper is repeated automatically.')
         if not V2._ready(V2._get('/api/v1/nodes/' + ref['node'])):
-            return 'running', item.get('progress', 20), 'Waiting for the host to return from runtime maintenance; the original LV remains retained'
+            return 'running', item.get('progress', 20), 'Waiting for the host to return from runtime maintenance. The original logical volume is kept.'
         def on_host():
             state = _call(ref['node'], 'read(' + _folder(ref) + ' / "state.json")')
             phase = state['phase']
@@ -233,7 +233,7 @@ def progress(item):
                 _call(ref['node'], '(runtime_check(read(' + _folder(ref) + ' / "plan.json"), ' + _folder(ref) + '), True)[1]')
             ref['phase'] = phase
             if phase == 'retired': return 'succeeded', 100, 'Runtime moved and its archived originals retired. Review Prepare for V2 separately.'
-            if phase == 'relocated': return 'running', 70, 'Runtime moved. Original LV and archive retained; review retirement to continue.'
+            if phase == 'relocated': return 'running', 70, 'Runtime moved. The original logical volume and archive are kept. Review the retirement to continue.'
             return 'running', 20 if phase == 'staged' else 85, 'Reboot through host maintenance to ' + ('move runtime' if phase == 'staged' else 'retire the archived original runtime')
         # Waiting for a reboot can take days: the host is looked at every CADENCE interval (#975).
         return CADENCE.look(item, 'longhorn-runtime', on_host)
@@ -256,7 +256,7 @@ def recheck(operation_id):
         else:state = _call(ref['node'], 'read(' + _folder(ref) + ' / "state.json")')
         if state['phase'] == 'unarmed': state = _arm(ref)
         ref['phase'] = state['phase']
-        item.update(status='running', message='Saved maintenance state rechecked; source has not been erased')
+        item.update(status='running', message='Saved maintenance state checked again. The source has not been erased.')
         ops.checkpoint(item)
         return public(item)
 
@@ -276,7 +276,7 @@ def retire(body):
         if body.get('confirm_capacity') is not True or body.get('confirm_device') != ref['hardware']['device'] or cfg['action'] != 'retire-runtime':
             raise ValueError('Type the reviewed device name and confirm retirement of its archived runtime files')
         state = _call(ref['node'], 'retirement(' + _folder(ref) + ')')
-        if not REVIEW.valid(cfg, {'plan':_context(ref),'state':state}): raise ValueError('Retirement review changed or expired; review again')
+        if not REVIEW.valid(cfg, {'plan':_context(ref),'state':state}): raise ValueError('The retirement review changed or expired. Review again.')
         _call(ref['node'], 'arm_retirement(' + _folder(ref) + ')', write=True)
         ref['phase'] = 'retire-staged'; item.update(status='running')
         ops.checkpoint(item)
@@ -294,7 +294,7 @@ def protect_mutations(disks):
 
 def register(operations):
     operations.RESOLVERS[KIND] = progress
-    operations.CANCEL_BLOCKS[KIND] = lambda item: 'Runtime maintenance keeps a boot gate and retained source. Recheck its saved state; do not discard it.'
+    operations.CANCEL_BLOCKS[KIND] = lambda item: 'Runtime maintenance keeps a start-up gate and the kept source. Check its saved state again, and do not discard it.'
     operations.VIEWS[KIND] = lambda item, out: out.update(cancellable=False, cleanable=False, runtime_maintenance=True)
 
 

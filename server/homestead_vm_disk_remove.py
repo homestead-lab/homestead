@@ -60,7 +60,7 @@ def _why_it_stays(ns, name, work):
                 continue
             users.add((row["kind"], row["name"]))
     if warnings:
-        raise ValueError(f"Couldn't read what uses this disk: {warnings[0]}. Try again in a moment")
+        raise ValueError(f"Homestead could not read what uses this disk: {warnings[0]}. Try again in a moment.")
     return why + [f"{kind} {user} uses it" for kind, user in sorted(users)]
 
 
@@ -71,7 +71,7 @@ def _hold_words(job):
         return "An import is still clearing up after itself. Wait for it to end, then review this again"
     if job.get("kind") in OPS.CDI_CANCELLABLE:
         return "An import is still working on it. Cancel that import or wait for it to end, then review this again"
-    return "An import is still working on it. Wait for it to end, then review this again: this kind of import can't be cancelled yet"
+    return "An import is still working on it. Wait for it to end, then review this again, because this kind of import cannot be cancelled yet."
 
 
 def _holds(ns, name):
@@ -110,7 +110,7 @@ def _review(namespace, name):
     name = I._required_name(name, "disk name")
     dv = RESOURCES.optional(I.kget, _dv_path(ns, name))
     if not dv or ((dv["metadata"].get("labels") or {}).get(I.VM_DISK_LABEL)) != "true":
-        raise ValueError(f"{ns}/{name} isn't a disk Homestead imported; nothing was changed")
+        raise ValueError(f"{ns}/{name} is not a disk Homestead imported, so nothing was changed")
     work = _receipt(dv)
     blocking = _why_it_stays(ns, name, work) + _holds(ns, name) + _storage_holds(ns, name, work)
     phase = str((dv.get("status") or {}).get("phase") or "Pending")
@@ -119,10 +119,10 @@ def _review(namespace, name):
             "capacity": _storage(dv).get("resources", {}).get("requests", {}).get("storage", ""),
             "storage_class": _storage(dv).get("storageClassName", ""), "blocking": blocking,
             "goes": _what_goes(ns, name, dv, work), "confirm": name,
-            "note": ("This disk is finished: a VM can still be made from it with Create VM. Removing it deletes it for good. "
-                     "The source isn't touched." if finished else
-                     "This removes the disk, its claim and what CDI made for it, along with the data copied so far. "
-                     "The source isn't touched.")}, work
+            "note": ("This disk is finished, and a VM can still be created from it with Create VM. Removing it deletes it for good. "
+                     "The source is not touched." if finished else
+                     "This removes the disk, its volume claim and what CDI created for it, along with the data copied so far. "
+                     "The source is not touched.")}, work
 
 
 def plan(namespace, name):
@@ -135,7 +135,7 @@ def remove(body, actor=""):
         review, work = _review(body.get("namespace"), body.get("name"))
         ns, name = review["namespace"], review["name"]
         if str(body.get("uid") or "") != review["uid"]:
-            raise ValueError("The disk changed after this review; review it again")
+            raise ValueError("The disk changed after this review. Review it again.")
         if str(body.get("confirmation") or "").strip() != review["confirm"]:
             raise ValueError("Type the disk's name to remove it")
         if review["blocking"]:
@@ -160,7 +160,7 @@ def status(item):
         why = _why_it_stays(ns, name, ref["cdi_cleanup"]) if dv and not dv["metadata"].get("deletionTimestamp") else []
     except Exception:
         ref["retain_resources"] = True
-        return "running", 99, f"Removing disk {name}; Kubernetes could not confirm that nothing uses it"
+        return "running", 99, f"Removing disk {name}. Kubernetes could not confirm that nothing uses it"
     if why:
         detail = f"{'. '.join(why)}. Disk {name} and its data were kept"
         ref.update(phase="failed", detail=detail, retain_resources=False)
@@ -218,7 +218,7 @@ def cancel_run(item, _options):
     ref = item["ref"]
     words = _left_words(_left(ref))
     ref.update(phase="failed", retain_resources=False)
-    return f"Stopped following; Homestead sends no more deletes. {words}"
+    return f"Stopped following. Homestead sends no more deletes. {words}"
 
 
 ROUTES = {

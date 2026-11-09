@@ -145,11 +145,11 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
     if not dry_run:
         identity(obj)
     if meta.get("labels", {}) != body.get("metadata", {}).get("labels", {}):
-        raise Held("Admission changed helper labels; it must not join another workload's service")
+        raise Held("The final check changed the helper's labels, and it must not join another app's service")
     if pod_annotations(obj) != body.get("metadata", {}).get("annotations", {}):
         raise Held("Admission added unreviewed helper annotations")
     if not _subset(body, obj):
-        raise Held("Admission changed a reviewed helper setting; inspect it before continuing")
+        raise Held("The final check changed a reviewed helper setting. Check it before continuing.")
     kind = obj["kind"]
     if kind == "Job":
         _job_admitted(body, obj, target, default=default)
@@ -180,8 +180,8 @@ def admitted(body, obj, target, *, dry_run=False, default=None):
                 or spec.get("priority", given["value"]) != given["value"]
                 or spec.get("preemptionPolicy", given["preemptionPolicy"]) != given["preemptionPolicy"]):
             if unread:
-                raise PriorityUnknown("Homestead couldn't read the cluster's PriorityClasses, so it can't confirm the helper's "
-                                      "priority. Check that it may list them, and try again")
+                raise PriorityUnknown("Homestead could not read the cluster's PriorityClasses, so it cannot confirm the helper's "
+                                      "priority. Check that it is allowed to list them, and try again.")
             raise Held("The helper placement changed after review")
         for toleration in spec.get("tolerations", []):
             if (set(toleration) != {"key", "operator", "effect", "tolerationSeconds"}
@@ -292,7 +292,7 @@ class Setup:
 
     def _current(self, *, allow_plan=False):
         if self.failed:
-            raise Held("Helper setup stopped after an unverified request; nothing will be retried")
+            raise Held("The helper setup stopped after an unconfirmed request, so nothing is retried")
         if len(self.bodies) != len(self.resources) or any(digest(body) != resource["payload"] for body, resource in zip(self.bodies, self.resources)):
             raise Held("A helper manifest changed after its setup review")
         handle = self.anchor.handle()
@@ -312,7 +312,7 @@ class Setup:
 
     def _observe(self, index, receipt):
         if receipt["state"] != "accepted":
-            raise Held("A helper request is unresolved; inspect it without retrying or adopting by name")
+            raise Held("A helper request is unsettled. Check it without retrying it or taking it over by name.")
         target = self.resources[index]["target"]
         obj = self._get(target["path"])
         admitted(self.bodies[index], obj, target, default=self.default)
@@ -342,7 +342,7 @@ class Setup:
         i = len(receipts)
         target, body = self.resources[i]["target"], self.bodies[i]
         if self._get(target["path"]) is not None:
-            raise Held("A helper name is already in use; it will not be adopted or replaced")
+            raise Held("A helper name is already in use, so it is not taken over or replaced")
         if target["kind"] == "Job":
             if self.admit is None or self.admit(copy.deepcopy(body)) is not True:
                 raise Held("Current capacity and placement must be reviewed before starting the coordinator")
@@ -370,7 +370,7 @@ class Setup:
             self.failed = True
             receipts[-1] = {"state": "unverified"}
             self._finish_failed(receipts)
-            raise Held("The helper creation receipt could not be verified; inspect the retained resource") from None
+            raise Held("The record of the helper's creation could not be confirmed. Check the kept resource.") from None
         self.anchor.checkpoint_setup(receipts)
         return {"created": len(receipts), "total": len(self.resources), "complete": len(receipts) == len(self.resources)}
 
@@ -390,7 +390,7 @@ class Setup:
         observed = [self._observe(i, receipt) for i, receipt in enumerate(setup["receipts"])]
         job = observed[-2]
         if any(c.get("type") == "Failed" and c.get("status") == "True" for c in job.get("status", {}).get("conditions", [])):
-            raise Held("The move's coordinator Job failed before the move began; Homestead was not stopped. Close this move and start again")
+            raise Held("The move's coordinator Job failed before the move began, so Homestead was not stopped. Close this move and start again.")
         listed = self._get(f"/api/v1/namespaces/{self.anchor.namespace}/pods") or {}
         pods = [p for p in listed.get("items", [])
                 if any(o.get("kind") == "Job" and o.get("uid") == identity(job)["uid"] for o in p.get("metadata", {}).get("ownerReferences", []))

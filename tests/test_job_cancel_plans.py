@@ -49,7 +49,7 @@ def reference_plan(item):
         plan.update(can=False, why_not="Storage growth cannot be interrupted safely. Let the helper finish, then recheck its saved outcome.")
         return plan
     if item.get("kind") == "longhorn-runtime":
-        plan.update(can=False, why_not='Runtime maintenance keeps a boot gate and retained source. Recheck its saved state; do not discard it.')
+        plan.update(can=False, why_not='Runtime maintenance keeps a start-up gate and the kept source. Check its saved state again, and do not discard it.')
         return plan
     if entry:
         plan.update(entry[0](item) or {})
