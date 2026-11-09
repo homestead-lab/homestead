@@ -944,7 +944,7 @@ window.smartDisk = async (node, disk) => {
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("short") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'short')">Short test</button>
         <button class="btn" data-need="admin" ${!s.available || active || !(s.supported_tests || []).includes("long") ? "disabled" : ""} onclick="smartStartConfirm(${jsq(node)},${jsq(disk)},'long')">Long test</button>
       </div></div>
-      <div class="note"><b>USB and NVMe drives.</b> Some USB adapters hide drive health data, and NVMe drives report different counters from SATA drives. Homestead shows values a drive does not report as unsupported, not as zero.</div>`;
+      <div class="note"><b>USB and NVMe drives.</b> Some USB adapters hide health data, and NVMe drives report other counters than SATA drives. Homestead shows values a drive does not report as unsupported, not as zero.</div>`;
   } catch (e) { target.innerHTML = UI.error(e, { retry: `smartDisk(${jsArg(node)},${jsArg(disk)})`, dialog: target.id === "mbody" }); }
 };
 

@@ -270,8 +270,8 @@ function outageSectionHtml(kind, row) {
     <div class="outage-restart"${r ? "" : " hidden"}>${UI.fields(
       UI.field("After it has been down for", `<div class="outage-unit"><input id="oa_after" type="number" inputmode="numeric" min="1" max="1440" value="${r?.after_min || 5}"><span class="dim small">minutes</span></div>`),
       UI.field("At most", `<div class="outage-unit"><input id="oa_max" type="number" inputmode="numeric" min="1" max="10" value="${r?.max || 3}"><span class="dim small">times</span></div>`,
-        { help: "Then it raises an alert and stops trying until the app has been up for 30 minutes." }))}
-      <p class="dim xs">${kind === "vm" ? "A clean restart, only when a port is chosen above. " : ""}Never while a job is working on it.</p></div>
+        { help: "Then it raises an alert and stops until it is up for 30 minutes." }))}
+      <p class="dim xs">${kind === "vm" ? "A clean restart, only with a port chosen above, never during a job." : "Never during a job."}</p></div>
     <label class="switch" title="Called when it goes down, comes back, is restarted or stops trying, and after an automatic update"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
       ${UI.field("Format", webhookFormatSelect("oa_format", a.format))}
