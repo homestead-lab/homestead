@@ -163,8 +163,17 @@ const IMAGE_REVIEW = UI.reviewFlow({
       const config = {ns: item.ns, name: item.name, action, approved: true,
         ...(item.cluster ? {cluster: item.cluster, clusterName: item.clusterName || item.cluster} : {}),
         ...(item.part ? {part: item.part} : {}), ...(item.version ? {version: item.version} : {})};
-      const preview = await api("/api/image-updates/preview", {method: "POST",
-        headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
+      let preview;
+      try {
+        preview = await api("/api/image-updates/preview", {method: "POST",
+          headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
+      } catch (error) {
+        if (action !== "rollback" && /no image update is currently available/i.test(error.message || "")) {
+          await loadImageUpdates(false, true);
+          error.imageAlreadyCurrent = true;
+        }
+        throw error;
+      }
       if (IMAGE_REVIEW_OPEN !== input || !$("#imageReviewLoading")) throw new Error("This review was replaced");
       if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("Image capacity review unavailable; no update was started");
       rows.push({config, preview});
@@ -221,6 +230,12 @@ const IMAGE_REVIEW = UI.reviewFlow({
     if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   },
   failed: error => {
+    if (error.imageAlreadyCurrent) {
+      $("#mbody").innerHTML = UI.callout("", "The selected update is no longer available.",
+        "No update was started by this review. Open Image updates to see what remains.")
+        + UI.actions(UI.cancel("Close") + UI.button("Image updates", "imageUpdateCenter()"));
+      return;
+    }
     $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));
   },
   blocked: rows => rows.some(row => row.preview.capacity.blocked), ack: "imageCapacityApprove", button: "imageCapacityApply",
