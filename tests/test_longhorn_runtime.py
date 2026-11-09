@@ -235,7 +235,7 @@ class RuntimeProcessTests(unittest.TestCase):
                 count+=1
                 if count>1:return value.replace('12345','12346')
             return value
-        with patch.object(Path,'read_text',reused),self.assertRaisesRegex(ValueError,'identity changed'):self.check()
+        with patch.object(Path,'read_text',reused),self.assertRaisesRegex(ValueError,'process changed'):self.check()
 
 
 class RuntimeStagingTests(unittest.TestCase):

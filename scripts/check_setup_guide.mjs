@@ -47,7 +47,7 @@ try {
     assert.equal(await page.locator("#setupReturn").isVisible(), false);
     await page.evaluate(() => setupOpen("lan"));
     await page.getByText("Configuration found", { exact: true }).waitFor();
-    assert.match(await page.locator("#setupStep").innerText(), /does not test host interfaces/);
+    assert.match(await page.locator("#setupStep").innerText(), /does not test host network cards/);
     await stepAction("Configure LAN networks");
     await page.locator("#netVmNets .vip-own").waitFor();
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();

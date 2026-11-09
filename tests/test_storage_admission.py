@@ -197,7 +197,7 @@ class StorageAdmissionTests(unittest.TestCase):
     def test_statefulset_auto_delete_retention_is_not_silently_accepted(self):
         self.controller("StatefulSet", "database")
         self.proposals[0]["object"]["spec"]["persistentVolumeClaimRetentionPolicy"] = {"whenScaled": "Delete"}
-        with self.assertRaisesRegex(ValueError, "delete its claims"): self.plan()
+        with self.assertRaisesRegex(ValueError, "delete its volumes"): self.plan()
 
     def test_cronjob_models_parallelism_and_warns_about_future_executions(self):
         self.controller("CronJob", "backup", "3Gi", count=3)

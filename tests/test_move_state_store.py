@@ -287,7 +287,7 @@ class StoreTests(unittest.TestCase):
         self.assert_says_what_was_done(reply, "backup storage", "Activity item")
         self.assertEqual("Released the backup storage this move had borrowed; added an Activity item to retry "
                          "aaaaaaaaaaaa, which ends as failed, but Homestead could not record the retry on its data "
-                         "volume (it is not valid JSON). The move stays failed; retry again once the data volume answers.",
+                         "volume (it is not valid JSON). The move stays failed. Retry once the data volume answers.",
                          reply.body["error"])
 
     def test_a_refused_removal_is_named_when_its_failure_cannot_be_recorded(self):

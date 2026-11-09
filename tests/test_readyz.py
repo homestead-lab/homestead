@@ -566,7 +566,7 @@ class DataUnavailableIsStillAMoveHold(unittest.TestCase):
             with FENCE.WriteBarrier(temp.name, lambda: None).activity():
                 pass
         self.assertIsInstance(caught.exception, FENCE.MoveHeld)
-        self.assertEqual("The shared data activity lock is unavailable; no change was authorized", str(caught.exception))
+        self.assertEqual("The shared data lock is unavailable, so no change was allowed", str(caught.exception))
 
     @unittest.skipIf(os.geteuid() == 0, "root writes through mode 0555")
     @unittest.skipUnless(FENCE.fcntl is not None, "Linux shared locking")
@@ -579,7 +579,7 @@ class DataUnavailableIsStillAMoveHold(unittest.TestCase):
             with FENCE.WriteBarrier(temp.name, lambda: None).freeze(timeout=.05):
                 pass
         self.assertNotIsInstance(caught.exception, FENCE.MoveHeld)
-        self.assertEqual("The shared data activity lock is unavailable; no change was authorized", str(caught.exception))
+        self.assertEqual("The shared data lock is unavailable, so no change was allowed", str(caught.exception))
 
 
 class ReadyzDataCheckOverARealSocket(unittest.TestCase):
