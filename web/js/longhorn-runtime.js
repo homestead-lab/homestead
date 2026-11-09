@@ -12,8 +12,8 @@ function runtimeScope(plan,retire=false){
     ['Original LV retained at',`<span class="disk-v2-identity mono">${esc(plan.retained)}</span>`]
   ])+UI.table([{label:'Area'},{label:'Result'}],[
     ['OS and other logical volumes','Keep all existing files and boundaries'],
-    ['/var/lib/longhorn','Same path; runtime uses the OS filesystem'],
-    ['Original Longhorn LV',retire?'Remove only verified, archived runtime files; keep filesystem and disk configuration':'Keep all files; mount read-only after moving runtime'],
+    ['/var/lib/longhorn','Same path, on the system filesystem'],
+    ['Original Longhorn LV',retire?'Remove only the checked, archived runtime files, and keep the filesystem and disk settings':'Keep all files, and mount read-only after moving the runtime'],
     ['Archive on OS filesystem','Keep a separate, verified copy'],
     ['V2 preparation','Separate review and erase approval after retirement']
   ])+UI.facts([['Stable device',`<span class="disk-v2-identity mono">${esc(plan.stable_device)}</span>`]]));
@@ -29,10 +29,10 @@ window.runtimeMoveOpen=async(node,disk)=>{
     runtimeApproval={node,disk,request_id:plan.request_id,capacity_token:plan.capacity_token};
     host.innerHTML=UI.lead('Move Longhorn’s runtime files to the OS filesystem. The logical volume is kept until the copy is verified.')+
       UI.steps([{title:'Move runtime'},{title:'Retire original files'},{title:'Review V2'}],0)+
-      UI.callout('warn','Two maintenance restarts','One moves the runtime; after a second review, the next removes the archived originals. A single-host cluster is down for each.')+
+      UI.callout('warn','Two maintenance restarts','The first moves the runtime. After a second review, the next removes the archived originals. A single-host cluster is down for each one.')+
       runtimeScope(plan)+`<p class="ui-help">${esc(diskV2GiB(plan.runtime_bytes*2))} for runtime and archive · ${esc(diskV2GiB(plan.available_bytes))} free on OS</p>`+UI.meter({now:plan.runtime_bytes*200/plan.available_bytes,label:'Runtime and archive as a share of OS free space'})+
-      UI.more('Safety and recovery','<p class="ui-help">Move or remove every replica and backing image first. The host checks the copy before Kubernetes starts; if unsure, it stops and keeps both. Recovery steps are saved with the receipt. Leave LVM, mounts and Longhorn disks alone until it ends.</p>')+
-      UI.ack('runtimeConfirm','Stage the move; I restart the host separately',{onchange:"$('#runtimeStart').disabled=!this.checked"})+
+      UI.more('Safety and recovery','<p class="ui-help">Move or remove every volume copy and backing image first. The host checks the copy before Kubernetes starts, and if anything is uncertain, it stops and keeps both. Recovery steps are saved with the record. Do not change LVM, mounts or Longhorn disks until it ends.</p>')+
+      UI.ack('runtimeConfirm','Prepare the move. The host is restarted separately.',{onchange:"$('#runtimeStart').disabled=!this.checked"})+
       UI.actions(UI.cancel('Close')+UI.button('Stage runtime move','runtimeMoveStart()',{kind:'pri',id:'runtimeStart',disabled:true,attrs:'data-need="admin"'}));
     window.applyRole?.();
   }catch(e){if($('#runtimeReview')===host)host.innerHTML=UI.callout('warn','Runtime move unavailable',esc(e.message))+UI.actions(UI.cancel('Close'));}
@@ -63,7 +63,7 @@ window.runtimeMoveWatch=async id=>{
   async function poll(){
     if(sequence!==runtimeSequence||$('#runtimeStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
     try{const item=await api('/api/disks/runtime/status?id='+encodeURIComponent(id));if(sequence!==runtimeSequence||$('#runtimeStatus')!==host)return;runtimePaint(item);if(item.status==='succeeded'||item.status==='failed')return;}
-    catch(e){if($('#runtimeStatus')===host)host.innerHTML=UI.callout('info','Waiting for host maintenance','The original LV remains retained. Reconnect when the host returns; completion is not assumed.')+UI.actions(UI.cancel('Close'));}
+    catch(e){if($('#runtimeStatus')===host)host.innerHTML=UI.callout('info','Waiting for host maintenance','The original logical volume is kept. Reconnect when the host returns. Completion is not assumed.')+UI.actions(UI.cancel('Close'));}
     runtimeTimer=setTimeout(poll,5000);
   }await poll();
 };

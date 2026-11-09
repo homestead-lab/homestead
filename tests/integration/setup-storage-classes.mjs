@@ -73,9 +73,9 @@ try {
     const recipe = id => page.locator(`[data-storage-recipe="${id}"]`);
     await page.waitForSelector('[data-storage-recipe="r3"]');
     assert.equal(await page.locator("[data-storage-recipe]").count(), 5);
-    assert.match(await recipe("hdd").textContent(), /No schedulable V1 disk has the hdd tag/);
+    assert.match(await recipe("hdd").textContent(), /No usable V1 disk has the hdd tag/);
     assert.match(await recipe("r2").textContent(), /longhorn-r2-containers/);
-    assert.match(await recipe("r3").textContent(), /Fewer than 3/);
+    assert.match(await recipe("r3").textContent(), /This is fewer than 3/);
     assert.equal(await page.evaluate(() => storageFixture.calls.length), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     await page.evaluate(() => window.scrollTo(0, 0));
@@ -141,7 +141,7 @@ try {
     await recipe("ssd").getByRole("button", { name: "Review and create" }).click();
     await page.waitForFunction(() => !document.querySelector("#sc_go").disabled);
     assert.equal(await page.locator('#sc_disktags input[value="ssd"]').isChecked(), true);
-    assert.match(await page.locator("#sc_reach").textContent(), /Could not read disk availability/);
+    assert.match(await page.locator("#sc_reach").textContent(), /Disk availability could not be read/);
     await page.evaluate(() => closeModal());
     const before = await page.evaluate(() => storageFixture.calls.length);
     await page.evaluate(async () => {

@@ -192,11 +192,11 @@ def self_data_preparation(body, actor, *, start=False):
             SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             operation = SELF_DATA_PREPARE.start(body, result, OPS)
             return {"ok": True, "operation": operation, "destination": result[3]["destination"],
-                    "detail": "Preparing the new volume. Homestead stays on its original data until you confirm the final move."}
+                    "detail": "Preparing the new volume. Homestead stays on its original data until the final move is confirmed."}
     except SELF_DATA_FENCE.Held:
         raise
     except Exception:
-        raise SELF_DATA_FENCE.Held("Destination preparation is unavailable. Inspect jobs before retrying; no data volume was deleted") from None
+        raise SELF_DATA_FENCE.Held("The destination preparation is unavailable. Check Jobs before trying again. No data volume was deleted.") from None
 
 
 def self_data_preparation_progress(item):
@@ -223,7 +223,7 @@ def self_data_preparation_state():
             message = item.get("message", "")
             if item["status"] == "succeeded" and ref.get("prepared") and not reusable:
                 message = ("Homestead currently uses this volume. The preparation is complete." if ref["destination"] == info.get("pvc")
-                           else "Prepared for an earlier source volume. It cannot move Homestead's current data; the volume is retained.")
+                           else "Prepared for an earlier source volume, so it cannot move Homestead's current data. The volume is kept.")
             jobs.append({"id": item["id"], "operation": ref["operation"], "destination": ref["destination"],
                 "source": ref["source"]["name"], "storage_class": ref["storage_class"], "node": ref["node"],
                 "status": item["status"], "progress": item.get("progress", 0), "message": message, "prepared": reusable,
@@ -266,7 +266,7 @@ def preview_self_data_move(body, actor):
     except SELF_DATA_FENCE.Held:
         raise
     except Exception:
-        raise SELF_DATA_FENCE.Held("The data move review is unavailable. Nothing was changed; check cluster access and volume readiness") from None
+        raise SELF_DATA_FENCE.Held("The data move review is unavailable. Nothing was changed. Check access to the cluster and whether the volumes are ready.") from None
 
 
 def move_homestead_data(storage_class):
@@ -277,7 +277,7 @@ def _data_move_status(item):
     # Old jobs lack pre-write receipts and a quiesced-copy proof. Reading one
     # after an upgrade must not silently switch claims or report safe success.
     item["ref"]["retain_resources"] = True
-    return "failed", 0, "This older data move needs manual review. Both volumes are retained; no copy, restart or claim switch was requested."
+    return "failed", 0, "This older data move needs a manual review. Both volumes are kept. No copy, restart or volume switch was requested."
 
 
 def _reconcile_permissions():
@@ -449,7 +449,7 @@ def _self_data_helper_image(read, ns):
         raise SELF_DATA_FENCE.Held("The running Homestead image is not ready to be used for this move")
     digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
     if not digest_match:
-        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
+        raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable. Wait for it before reviewing.")
     return pod, ROLLOUTS._immutable(containers[0]["image"], digest_match.group(1))
 
 
@@ -459,7 +459,7 @@ def _require_no_data_handoff(read, ns):
     except urllib.error.HTTPError as error:
         if error.code == 404: return
         raise
-    raise SELF_DATA_FENCE.Held("An earlier data move record exists; review it before starting another move")
+    raise SELF_DATA_FENCE.Held("A record of an earlier data move exists. Review it before starting another move.")
 
 
 def register(ops):

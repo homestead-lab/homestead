@@ -60,7 +60,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_rebound_volume_or_changed_storage_class_invalidates_review(self):
         body=self.approved()
-        self.cluster.pvs['pv-old']['metadata']['uid']='replacement'
+        self.cluster.pvs['pv-old']['metadata']['uid']='replacing it'
         with self.assertRaises(ValueError):rc.start_reviewed(body,'admin',self.ops)
         self.assertEqual([],self.cluster.sent)
 
@@ -89,7 +89,7 @@ class ReviewTests(unittest.TestCase):
     def test_queued_start_rechecks_before_stopping_anything(self):
         item=rc.start_reviewed(self.approved(),'admin',self.ops)
         self.assertIn('review_fences',item['ref'])
-        self.cluster.deps['frigate']['metadata']['uid']='replacement'
+        self.cluster.deps['frigate']['metadata']['uid']='replacing it'
         state,_,message=rc.resolve(item)
         self.assertEqual('failed',state)
         self.assertIn('Review again',message)
@@ -109,7 +109,7 @@ class ReviewTests(unittest.TestCase):
         self.extra['/api/v1/namespaces/lab/pods']=urllib.error.HTTPError('',404,'missing',{},None)
         with mock.patch.object(rc,'_rollback') as rollback:
             for _ in range(rc.MISS_LIMIT+1):
-                with self.assertRaisesRegex(ValueError,'waiting to check'):rc.resolve(item)
+                with self.assertRaisesRegex(ValueError,'Waiting to check'):rc.resolve(item)
             rollback.assert_not_called()
         self.assertEqual([],self.cluster.sent)
 
@@ -130,7 +130,7 @@ class ReviewTests(unittest.TestCase):
         self.extra['/apis']={'groups':[{'name':'apps'}]}
         self.assertTrue(rc.preview(self.body,'admin',self.ops)['ok'])
         self.extra['/apis']={'groups':[]}  # names no group: says nothing about KubeVirt
-        with self.assertRaisesRegex(ValueError,'inventory is incomplete'):rc.preview(self.body,'admin',self.ops)
+        with self.assertRaisesRegex(ValueError,'list is incomplete'):rc.preview(self.body,'admin',self.ops)
         self.extra['/apis']={'groups':[{'name':'kubevirt.io'}]}
         with self.assertRaises(urllib.error.HTTPError):rc.preview(self.body,'admin',self.ops)
         self.extra['/apis']={}
@@ -216,7 +216,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_datavolume_owner_mismatch_is_never_detached(self):
         path = self.datavolume()
-        self.extra[path]['metadata']['uid'] = 'replacement'
+        self.extra[path]['metadata']['uid'] = 'replacing it'
         with self.assertRaisesRegex(ValueError, 'ownership'): self.approved()
         self.assertEqual([], self.cluster.sent)
 
@@ -235,7 +235,7 @@ class HistoryTests(unittest.TestCase):
     def test_queued_move_is_exclusive_under_history_lock(self):
         resource={'name':'data','namespace':'lab'}
         ops.start('reclass','First',resource,'/',{'phase':'stop'})
-        with self.assertRaisesRegex(ValueError,'already has'):
+        with self.assertRaisesRegex(ValueError,'already moving'):
             ops.start('reclass','Second',resource,'/',{'phase':'stop'})
         self.assertEqual(1,len(ops.snapshot()))
 
@@ -253,6 +253,6 @@ class HistoryTests(unittest.TestCase):
         item={'id':'first','kind':'reclass','status':'failed','resource':{'name':'data','namespace':'lab'},'ref':{'phase':'copy'}}
         put(ops,[item])
         with mock.patch.dict(ops.RESUMABLE,{'reclass':lambda item:''}),store_writes(ops) as written:
-            with self.assertRaisesRegex(ValueError,'already has'):
+            with self.assertRaisesRegex(ValueError,'already moving'):
                 ops.start('reclass','Move',item['resource'],'/',{'phase':'stop'})
         self.assertEqual([],written)

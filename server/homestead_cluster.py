@@ -299,7 +299,7 @@ def inventory():
         pods = homestead_routes.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
         at = homestead_routes.CACHE.kept_at(PODS_KEY)
         if at is not None and time.time() - at >= PODS_SECONDS:
-            raise RuntimeError("the pod list could not be read; the last one is too old to show")
+            raise RuntimeError("the pod list could not be read, and the last one is too old to show")
     except Exception as error:
         unavailable.append({"section": "System services", "reason": str(error)[:180]})
         pods = []
@@ -578,7 +578,7 @@ def events():
             if not token:
                 print(f"Events read failed: {error}", file=sys.stderr)
                 return {"events": [], "total": 0, "limited": False,
-                        "error": "Kubernetes did not answer the events read; refresh to try again"}
+                        "error": "Kubernetes did not answer the request for events. Refresh to try again."}
             # 410: the continue token expired. Either way, keep what was read.
             if not (isinstance(error, urllib.error.HTTPError) and error.code == 410):
                 print(f"Events read stopped after {total}: {error}", file=sys.stderr)

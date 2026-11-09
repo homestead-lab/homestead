@@ -383,7 +383,7 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
                       "node": spec.get("nodeName", ""),
                       **{k: found[k] for k in ("log_tail", "log_error") if k in found}}
             if went > 1:
-                record["note"] = f"{went} restarts since the last look; Kubernetes kept the reason for the last one only"
+                record["note"] = f"{went} restarts since the last look. Kubernetes kept the reason for the last one only."
             add(key, record)
         for uid, (key, pod) in current.items():
             meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}

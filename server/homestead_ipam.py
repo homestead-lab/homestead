@@ -110,7 +110,7 @@ def update(change, attempts=4):
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 raise
-    raise RuntimeError("the address record kept changing underneath; try again")
+    raise RuntimeError("The address record kept changing during the save. Try again.")
 
 
 # ------------------------------------------------------------------ subnets
@@ -151,7 +151,7 @@ def _clean_subnet(row):
 def save_subnets(rows):
     rows = rows or []
     if len(rows) > MAX_SUBNETS:
-        raise ValueError(f"{len(rows)} subnets were sent; at most {MAX_SUBNETS} can be documented, "
+        raise ValueError(f"{len(rows)} subnets were sent. At most {MAX_SUBNETS} can be documented, "
                          f"so remove {len(rows) - MAX_SUBNETS} and save again")
     clean = [_clean_subnet(row) for row in rows]
     cidrs = [row["cidr"] for row in clean]
@@ -339,8 +339,8 @@ def view():
     pools = _pool_ranges(facts)
     # With the cluster's Nodes or Services unread, their addresses would look
     # free: offer none until they can be read (#615).
-    unread = (f"could not read the cluster's {' and '.join(facts['unread'])}; "
-              "no address is offered as free until it can be") if facts.get("unread") else ""
+    unread = (f"Homestead could not read the cluster's {' and '.join(facts['unread'])}, so "
+              "no address is offered as free until it can") if facts.get("unread") else ""
     subnets = []
     for subnet in data["subnets"]:
         network = ipaddress.ip_network(subnet["cidr"])
@@ -603,7 +603,7 @@ def unifi_fetch(cfg, key, get=None):
             offset += len(batch)
             if not batch or offset >= int(page.get("totalCount") or 0):
                 return rows
-        raise _TooManyPages(f"the controller listed more than {UNIFI_PAGES} pages of {path}; stopped there")
+        raise _TooManyPages(f"the controller listed more than {UNIFI_PAGES} pages of {path}, so Homestead stopped there")
 
     clients, devices = pages("clients"), pages("devices")
     reservations, networks, notes, known = [], [], [], {}
@@ -730,7 +730,7 @@ def sync_unifi(get=None):
         raise ValueError("set the UniFi console's address and API key first")
     key = _unifi_key()
     if not key and get is None:
-        raise ValueError("the UniFi API key is missing; save it again")
+        raise ValueError("The UniFi API key is missing. Save it again.")
     try:
         fetched = unifi_fetch(cfg, key, get)
     except urllib.error.HTTPError as error:
@@ -743,7 +743,7 @@ def sync_unifi(get=None):
         raise ValueError(str(error)[:160])
     except (OSError, ValueError) as error:
         _record_sync(False, str(error)[:160])
-        raise ValueError(f"could not reach the UniFi console: {str(error)[:120]}")
+        raise ValueError(f"Homestead could not reach the UniFi console: {str(error)[:120]}")
 
     def change(data):
         touched = merge_unifi(data, fetched)

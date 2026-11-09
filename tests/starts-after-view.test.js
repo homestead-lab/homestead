@@ -37,7 +37,7 @@ test("the block lists the stored apps, with other namespaces and a port choice w
   assert.match(html, /value="5"/, "300 s is shown as 5 minutes");
   assert.match(html, /Start anyway/);
   assert.match(html, /Keep waiting/);
-  assert.match(html, /<option value="lab\/worker" disabled>worker · no Service with a TCP port<\/option>/);
+  assert.match(html, /<option value="lab\/worker" disabled>worker · has no TCP port to wait for<\/option>/);
 });
 
 test("an app that has gone stays in its row, marked", () => {
@@ -55,26 +55,26 @@ test("an app Flux applies shows the lines to commit and offers to show them for 
   const html = load().startsAfterBlock(form({ managed_by: "Flux", after: [{ ns: "lab", app: "postgres", service: "postgres", port: 5432 }],
     gate: "not-committed", git: "metadata:\n  annotations:\n    homestead.io/starts-after: x\n" }), ctx);
   assert.match(html, /<pre[^>]*id="e_starts_git"[^>]*>metadata:/);
-  assert.match(html, /where Flux applies it/);
+  assert.match(html, /Commit the lines below to Flux/);
   assert.match(html, /Show the lines to commit/);
 });
 
 test("a read that failed says so and offers nothing to change", () => {
   const html = load().startsAfterBlock({ error: "the API timed out" }, ctx);
-  assert.match(html, /Could not read Starts after: the API timed out/);
+  assert.match(html, /Starts after could not be read\. the API timed out/);
   assert.match(html, /Retry/);
   assert.doesNotMatch(html, /id="e_starts_rows"/);
 });
 
 test("a setting edited by hand is said, and can be cleared", () => {
   const html = load().startsAfterBlock(form({ unreadable: true }), ctx);
-  assert.match(html, /can't be read/);
+  assert.match(html, /cannot be read/);
   assert.match(html, /Clear it/);
 });
 
 test("Homestead and its helpers are told they can't wait", () => {
   const html = load().startsAfterBlock(form(), { ...ctx, fixed: true });
-  assert.match(html, /can't wait for other apps/);
+  assert.match(html, /cannot wait for other apps/);
   assert.doesNotMatch(html, /id="e_starts_rows"/);
 });
 
@@ -131,19 +131,19 @@ test("a row that started without an app says when and why", () => {
     start_setting: { timeout: 300, after: [] }, start_gate: "rendered" };
   const r = load().startWaitText(w, NOW);
   assert.equal(r.chip, "");
-  assert.equal(r.line, "Started without app-2 at 07:05: app-2 was not ready after 5 min");
+  assert.equal(r.line, "Started without app-2 at 07:05, because app-2 was not ready after 5 min");
 });
 
 test("a gate that doesn't match, one not committed, and a setting that can't be read", () => {
   const c = load();
   assert.equal(c.startWaitText({ start_gate: "differs", start_setting: { after: [], timeout: 300 } }, NOW).line,
-    "Its start gate doesn't match its setting: put it back in Edit → Placement");
+    "Its start order does not match its setting. Restore it in Edit → Placement.");
   assert.equal(c.startWaitText({ start_gate: "missing", start_setting: { managed: true, after: [], timeout: 300 } }, NOW).line,
-    "Its start gate isn't committed yet: commit the lines Edit shows");
+    "Its start order is not committed yet. Commit the lines shown in Edit.");
   assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs", start_note: "its Starts after setting could not be read" }, NOW).line,
-    "Could not read its Starts after setting");
+    "Its Starts after setting could not be read");
   assert.equal(c.startWaitText({ start_unreadable: true, start_gate: "differs" }, NOW).line,
-    "Its Starts after setting can't be read: set it again in Edit");
+    "Its Starts after setting cannot be read. Set it again in Edit.");
   assert.equal(c.startWaitText({ start_gate: "none" }, NOW), null);
   assert.equal(c.startWaitText({}, NOW), null);
 });
@@ -158,9 +158,9 @@ test("the apps it starts after, with the gone ones marked", () => {
 
 test("Start says which stopped apps it will wait for", () => {
   const c = load();
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300), " app-2 is stopped: app-1 will wait for it up to 5 min.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 90), " app-2 and app-3 are stopped: app-1 will wait for them up to 1.5 min.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], null), " app-2 is stopped: app-1 will wait for it before it starts.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300), " app-2 is stopped, so app-1 waits for it up to 5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 90), " app-2 and app-3 are stopped, so app-1 waits for them up to 1.5 min.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], null), " app-2 is stopped, so app-1 waits for it before it starts.");
   assert.equal(c.startWaitsLine("app-1", [], 300), "");
 });
 
@@ -204,7 +204,7 @@ test("rows are labelled for screen readers", () => {
 test("a changed Starts after on an app Flux applies is said in the review, not dropped silently", () => {
   const c = load();
   assert.equal(c.startsAfterManagedNote(form({ managed_by: "Flux" }), true),
-    "Starts after is not saved here: Flux applies this app, so commit the lines shown under Placement.");
+    "Starts after is not saved here, because Flux manages this app. Commit the lines shown under Placement.");
   assert.equal(c.startsAfterManagedNote(form({ managed_by: "Flux" }), false), "");
   assert.equal(c.startsAfterManagedNote(form(), true), "");
 });
@@ -227,7 +227,7 @@ test("Show the lines to commit asks for the lines only, and never saves", async 
 test("the time is checked only when there are apps to wait for", () => {
   const c = load();
   assert.equal(c.startsAfterProblem({ after: [], timeout: NaN, on_timeout: "start" }), "");
-  assert.equal(c.startsAfterProblem({ after: [{ app: "x" }], timeout: 10, on_timeout: "start" }), "Wait up to: between 0.5 and 60 minutes");
+  assert.equal(c.startsAfterProblem({ after: [{ app: "x" }], timeout: 10, on_timeout: "start" }), "Wait up to must be between 0.5 and 60 minutes");
   assert.equal(c.startsAfterProblem({ after: [{ app: "x" }], timeout: 300, on_timeout: "start" }), "");
   assert.equal(c.startsAfterProblem(undefined), "");
 });
@@ -245,8 +245,8 @@ test("a gate changed outside Homestead can be put back, which sends the setting 
 
 test("Start: several apps it keeps waiting for, and a read that failed", () => {
   const c = load();
-  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300, "wait"), " app-2 is stopped: app-1 will wait for it until it is up.");
-  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 300, "wait"), " app-2 and app-3 are stopped: app-1 will wait for them until they are up.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2"], 300, "wait"), " app-2 is stopped, so app-1 waits for it until it is up.");
+  assert.equal(c.startWaitsLine("app-1", ["app-2", "app-3"], 300, "wait"), " app-2 and app-3 are stopped, so app-1 waits for them until they are up.");
   assert.equal(c.startWaitsLine("app-1", [], 300, "start", "could not check which apps it starts after: API down"),
     " Could not check which apps it starts after: API down.");
 });

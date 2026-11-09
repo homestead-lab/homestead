@@ -184,7 +184,7 @@ def address_problem(ip, state=None):
     """Why an address cannot be given to a Service here, or "" if it can."""
     state = state or inventory()
     if STATE._unread(state):
-        return f"{STATE._unread(state)}, so whether {ip} is free is not known; try again in a moment"
+        return f"{STATE._unread(state)}, so whether {ip} is free is not known. Try again in a moment."
     ip = str(ip or "").strip()
     owner = state.get("platform_addresses", {}).get(ip)
     if owner:
@@ -211,7 +211,7 @@ def cluster_address_problem(ip, state):
     """Why a VM's static address clashes with the cluster's own or a
     Service's, or "" - from an inventory ({} when none could be had)."""
     if not state or STATE._unread(state):
-        return (f"{STATE._unread(state) or 'could not read the cluster'}, so whether {ip} is free is not known; "
+        return (f"{STATE._unread(state) or 'could not read the cluster'}, so whether {ip} is free is not known. "
                 "try again in a moment")
     if ip in (state.get("node_ips") or []) or ip in (state.get("platform_addresses") or {}):
         return f"{ip} is one of the cluster's own addresses"

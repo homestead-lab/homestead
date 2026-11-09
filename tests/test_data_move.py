@@ -100,7 +100,7 @@ class DataMoveTests(unittest.TestCase):
         item = {"ref": {"namespace": "lab", "job": "old", "old": "source", "new": "target"}}
         with mock.patch.object(cancel, "_delete") as delete:
             self.assertFalse(cancel.self_move_plan(item)["can"])
-            with self.assertRaisesRegex(ValueError, "both volumes are retained"):
+            with self.assertRaisesRegex(ValueError, "Both volumes are kept"):
                 cancel.self_move_cancel(item, {})
         delete.assert_not_called()
 

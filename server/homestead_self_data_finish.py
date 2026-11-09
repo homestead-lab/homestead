@@ -76,7 +76,7 @@ def read(directory, namespace, deployment):
     except Held:
         raise
     except Exception:
-        raise Held("The completed data-move receipt is invalid; it cannot authorize startup") from None
+        raise Held("The record of the finished data move is invalid, so it cannot allow Homestead to start") from None
 
 
 def _get(read_api, path):
@@ -121,7 +121,7 @@ def finish(fence, read_api, send):
         # just the presence of a file which an earlier copy may have carried.
         fence.inspect()
         expected_marker = A.pointer(fence.namespace, anchor.state, anchor.handle()["uid"]) if "plan" in anchor.state else None
-        if marker is not None and marker != expected_marker: raise Held("Another data move is active; cleanup is not authorized")
+        if marker is not None and marker != expected_marker: raise Held("Another data move is running, so cleanup is not allowed")
         setup = anchor.state.get("setup", {"resources": [], "receipts": []})
         aborted = anchor.state.get("setup_aborted") is True
         if not aborted and not B.complete(setup): raise Held("Helper cleanup needs complete creation receipts")
@@ -138,17 +138,17 @@ def finish(fence, read_api, send):
                 if row is None or row["state"] != "deleted":
                     value["cleanup"][path] = {"uid": uid, "state": "deleted"}; _save(directory, value)
                 continue
-            if identity(obj)["uid"] != uid: raise Held("A helper name was reused; its replacement will not be deleted")
+            if identity(obj)["uid"] != uid: raise Held("A helper name was reused, so its replacement is not deleted")
             if row is not None:
                 if row["state"] == "intent" and obj.get("metadata", {}).get("deletionTimestamp"):
                     return {"done": False, "message": "Waiting for temporary helper removal"}
                 if row["state"] != "intent":
-                    raise Held("Helper deletion is still pending or its reply was lost. Nothing was retried; inspect the retained cleanup receipt")
+                    raise Held("Deleting a helper is still waiting, or its reply was lost. Nothing was retried. Check the kept cleanup record.")
                 # The same object (uid checked above) with no deletionTimestamp:
                 # the DELETE never took effect, since an accepted Foreground
                 # delete marks the object at once. Sending it again is pinned to
                 # this uid, so it can never reach a replacement.
-            if fingerprint is not None and B.fingerprint(obj) != fingerprint: raise Held("A helper changed before cleanup; inspect it first")
+            if fingerprint is not None and B.fingerprint(obj) != fingerprint: raise Held("A helper changed before cleanup. Check it first.")
             if fingerprint is None:
                 state = anchor._decode(obj, anchor.state["operation"], uid)
                 if (state["phase"] != "done" and not state.get("setup_aborted")) or state.get("plan") != anchor.state.get("plan"):

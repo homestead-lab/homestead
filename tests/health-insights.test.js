@@ -2,7 +2,7 @@ const test=require("node:test"),assert=require("node:assert/strict"),H=require("
 const base=()=>({overview:{health_issues:[]},cluster:{control_plane:{etcd_total:3,etcd_ready:3,quorum_margin:1}},protection:{volumes:[]},nodes:[],self:{},settings:{thresholds:{temperature:{warning:70,critical:85},disk:{warning:75,critical:90}}}});
 test("quorum advice uses etcd membership, not total hosts or control-plane count",()=>{
  const s=base();s.cluster.control_plane={total:2,etcd_total:0};assert.equal(H.advice(s).length,0);
- s.cluster.control_plane={total:2,etcd_total:2,etcd_ready:2};assert.match(H.advice(s)[0].title,/Two etcd/);assert.equal(H.advice(s)[0].severity,"medium");
+ s.cluster.control_plane={total:2,etcd_total:2,etcd_ready:2};assert.match(H.advice(s)[0].title,/Two voting hosts/);assert.equal(H.advice(s)[0].severity,"medium");
  s.cluster.control_plane.etcd_ready=1;assert.equal(H.advice(s)[0].severity,"critical");
 });
 test("snapshot-only volumes need external backups; a schedule does not mean a copy exists",()=>{
@@ -26,10 +26,10 @@ test("a finding the cluster tracks as an alert carries its acknowledgement and s
 test("one etcd server is explained as a single-host cluster, not a margin warning",()=>{
  const s=base();s.cluster.control_plane={etcd_total:1,etcd_ready:1,quorum_margin:0};
  const quorum=H.advice(s).find(r=>r.id==="quorum");
- assert.equal(quorum.severity,"low");assert.equal(quorum.title,"Single control-plane host");
+ assert.equal(quorum.severity,"low");assert.equal(quorum.title,"One voting host");
  assert.match(quorum.detail,/snapshot/);
  s.cluster.control_plane={etcd_total:3,etcd_ready:2,quorum_margin:0};
- assert.match(H.advice(s).find(r=>r.id==="quorum").detail,/2 of 3 etcd members are ready/);
+ assert.match(H.advice(s).find(r=>r.id==="quorum").detail,/2 of 3 voting hosts are ready/);
 });
 test("a finding about one host or drive reviews that host or drive",()=>{
  const s=base();s.nodes=[{name:"host",fs_pct:95,temps:{disks:[{name:"sda",health:{state:"attention",summary:"2 reallocated sectors"}}]}}];
@@ -77,7 +77,7 @@ test("compact resource lists exclude platform helpers and preserve unknown and s
  assert.equal(vms[0].tone,'bad');assert.equal(vms[1].cpu,null);assert.equal(vms[2].cpu,25);assert.equal(vms[2].memory,1024);
 });
 test("#731: Homestead's data on one copy, on a cluster that can now keep two, is low advice to Redundancy",()=>{
- const title="Homestead's data has one copy; this cluster can now keep two";
+ const title="Homestead's data has one copy, and this cluster can now keep two";
  const s=base();s.self={data_copies:{state:"can-keep-two",copies:1,storage_hosts:2,room_hosts:2}};
  const rows=H.advice(s).filter(r=>r.id==="self-data-copies");
  assert.equal(rows.length,1);assert.equal(rows[0].severity,"low");assert.equal(rows[0].title,title);
@@ -92,7 +92,7 @@ test("#731/#620: Homestead's data copies that could not be read are said, with t
  const s=base();s.self={data_copies:{state:"unknown",error:"Longhorn's nodes could not be read"}};
  const rows=H.advice(s).filter(r=>r.id==="self-data-copies");
  assert.equal(rows.length,1);assert.equal(rows[0].severity,"low");
- assert.equal(rows[0].title,"Could not read Homestead's data copies");
+ assert.equal(rows[0].title,"Homestead's data copies could not be read");
  assert.match(rows[0].detail,/Longhorn's nodes could not be read/);
  assert.equal(rows[0].route,"settings:about#replicaCard");
 });

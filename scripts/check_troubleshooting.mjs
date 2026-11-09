@@ -15,7 +15,7 @@ try {
     await page.goto(`${base}/settings?demo=1&tab=troubleshooting`, { waitUntil: "networkidle" });
     await page.locator("#diagnosticReports table").waitFor();
     const button = name => page.getByRole("button", { name, exact: true });
-    await button("Record a bug").click(); await button("Start recording").click();
+    await button("Record bug").click(); await button("Start recording").click();
     await page.locator("#diagnosticRecorder:not(.hidden)").waitFor();
     await page.evaluate(() => go("workloads"));
     await page.locator("#views .phead").waitFor({state:"attached"});
@@ -39,7 +39,7 @@ try {
       };
     });
     await button("Stop recording").click();
-    await page.getByText(/Could not save all events/).waitFor();
+    await page.getByText(/Not all events could be saved/).waitFor();
     await button("Save and review").click();
     await page.locator("#bugTitle").waitFor();
     const id = await page.evaluate(async () => (await api("/api/diagnostics")).find(row => row.title === "Bug report").id);

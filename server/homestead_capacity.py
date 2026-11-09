@@ -248,11 +248,11 @@ def _deletion_clause(waiting, unchecked, unread=False, vms_unchecked=0):
         parts.append("1 app waits until its pod is deleted" if waiting == 1
                      else f"{waiting} apps wait until their pod is deleted")
     if unchecked:
-        parts.append(f"{unchecked} app{'' if unchecked == 1 else 's'} couldn't be checked")
+        parts.append(f"{unchecked} app{'' if unchecked == 1 else 's'} could not be checked")
     if vms_unchecked:
-        parts.append(f"{vms_unchecked} VM{'' if vms_unchecked == 1 else 's'} couldn't be checked")
-    clause = f" {' and '.join(parts)}; If this host goes down says why." if parts else ""
-    return clause + (" StatefulSets couldn't be read, so they aren't counted." if unread else "")
+        parts.append(f"{vms_unchecked} VM{'' if vms_unchecked == 1 else 's'} could not be checked")
+    clause = f" {' and '.join(parts)[:1].upper()}{' and '.join(parts)[1:]}. If this host goes down says why." if parts else ""
+    return clause + (" StatefulSets could not be read, so they are not counted." if unread else "")
 
 
 # What every_host reads, bound by server.py: the cluster, a host's impact
@@ -290,7 +290,7 @@ def every_host():
         except Exception as error:
             out.append({"node": name, "verdict": "unknown", "moving": 0, "hosts": [], "waits": [], "evicted": [],
                         "unreserved": 0, "pending": 0, "waiting_for_deletion": 0,
-                        "sentence": f"Could not work out what happens if {name} fails: {str(error)[:120]}"})
+                        "sentence": f"Homestead could not work out what happens if {name} fails: {str(error)[:120]}"})
     # The cluster's own figures, not the largest of any one host's: every
     # app that reserves nothing, and every app with a pod waiting for a host.
     apps = {}

@@ -146,7 +146,7 @@ test("Protection plans and Protect open with a lead, not a muted paragraph", () 
 
 test("Snapshots says once how to read it, and its actions sit in a Close footer", () => {
   const snaps = body("lhSnaps");
-  assert.match(snaps, /UI\.lead\("Oldest first\. Restore or browse any snapshot or backup\."\)/);
+  assert.match(snaps, /UI\.lead\("Oldest first\. Any snapshot or backup can be restored or browsed\."\)/);
   assert.doesNotMatch(snaps, /Checkpoint ancestry can branch/);
   assert.doesNotMatch(src, /No active Longhorn purge reported/);
   assert.match(snaps, /UI\.actions\([\s\S]*Take snapshot now[\s\S]*UI\.cancel\("Close"\)/);
@@ -155,7 +155,7 @@ test("Snapshots says once how to read it, and its actions sit in a Close footer"
 
 test("Backups has one notice when the volume is gone, and a Close footer", () => {
   const backups = body("lhBackupList");
-  assert.match(backups, /UI\.callout\("warn", "The volume is gone"/);
+  assert.match(backups, /UI\.callout\("warn", "The volume was deleted"/);
   assert.match(backups, /UI\.lead\(/, "it opens with one sentence, like the other dialogs");
   assert.doesNotMatch(backups, /class="note/);
   assert.match(backups, /UI\.cancel\("Close"\)/);
@@ -175,7 +175,7 @@ test("warning and error boxes in Data Protection only go down", () => {
 test("New storage class says nothing about migration until Live-migratable is ticked", () => {
   const storage = require("./helpers/storage-source")();
   assert.match(storage, /<div id="sc_hint" hidden><\/div>/);
-  assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Migratable is for VM live migration/);
+  assert.match(storage, /Live-migratable · for VM disks \$\{tip\("Live-migratable is for moving running VMs/);
   const hint = between(storage, "window.storageClassHint", "\n};\n");
   assert.match(hint, /hint\.hidden = !on/);
   assert.match(hint, /UI\.callout\("warn"/);

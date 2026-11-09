@@ -35,12 +35,12 @@ test("deploy review shows unknown capacity and escapes warnings", async () => {
   const t = setup(warning);
   await t.context.window.doDeploy();
   assert.match(t.html(), /planned &lt;volume&gt;/);
-  assert.match(t.html(), /Live RAM unavailable/);
-  assert.match(t.html(), /Scheduler reservations unavailable/);
-  assert.match(t.html(), /snapshot, not a reservation/);
+  assert.match(t.html(), /Current memory use unavailable/);
+  assert.match(t.html(), /Reservations unavailable/);
+  assert.match(t.html(), /This is a snapshot\. It does not reserve capacity/);
   assert.match(t.html(), /deployCapacityConfirm/);
   assert.match(t.html(), /Deploy it despite the warnings/);
-  assert.match(t.html(), /Capacity warnings can be overridden/);
+  assert.match(t.html(), /Capacity warnings, such as high expected memory use or missing usage figures, can be accepted/);
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
 });
@@ -63,15 +63,15 @@ test("blocked placement cannot be submitted even with checkbox", async () => {
   t.fields["#deployCapacityConfirm"].checked = true;
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
-  assert.match(t.html(), /cannot fit/);
+  assert.match(t.html(), /does not fit/);
   assert.doesNotMatch(t.html(), /id="deployCapacityConfirm"/);
-  assert.match(t.html(), /placement blocker, not just a capacity warning/);
+  assert.match(t.html(), /This prevents placement\. It is not only a capacity warning/);
 });
 
 test("missing capacity response fails closed", async () => {
   const t = setup(null);
   await t.context.window.doDeploy();
-  assert.match(t.notices.join(" "), /Capacity preview unavailable/);
+  assert.match(t.notices.join(" "), /The capacity review is not available/);
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
 });
@@ -81,8 +81,8 @@ test("shared-pod review distinguishes conditional released RAM and restart conse
     owned_pods: ["demo-pod"], release_request_gb: 1 } });
   t.setConfig({ target_mode: "existing", target_workload: "shared" });
   await t.context.window.doDeploy();
-  assert.match(t.html(), /capacity after old pods stop/);
-  assert.match(t.html(), /released only after termination/);
+  assert.match(t.html(), /Capacity after the old copies stop/);
+  assert.match(t.html(), /released only after they stop/);
   await t.context.window.confirmDeploy();
   assert.equal(t.sent.length, 0);
   t.fields["#deployConfirm"].checked = true;
@@ -109,15 +109,15 @@ test("rolling overlap shortage is distinct from a hard rollout blocker", async (
     overlap: { ...warning, blocked: true } } });
   t.setConfig({ target_mode: "existing", target_workload: "shared" });
   await t.context.window.doDeploy();
-  assert.match(t.html(), /This overlap does not fit while old pods remain/);
+  assert.match(t.html(), /The new and old copies do not fit together/);
   assert.doesNotMatch(t.html(), /This deployment cannot fit/);
-  assert.match(t.html(), /Intermediate rollout steps remain unverified/);
+  assert.match(t.html(), /The steps during the update are not checked/);
 });
 
 test("shared pod cannot submit without a rollout capacity response", async () => {
   const t = setup(null);
   t.setConfig({ target_mode: "existing", target_workload: "shared" });
   await t.context.window.doDeploy();
-  assert.match(t.notices.join(" "), /Capacity preview unavailable/);
+  assert.match(t.notices.join(" "), /The capacity review is not available/);
   assert.equal(t.sent.length, 0);
 });

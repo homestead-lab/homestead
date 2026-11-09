@@ -146,7 +146,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.body["action"] = "rollback"
         result, send, _ = self.call("/api/image-updates/preview", self.body)
         self.assertEqual(400, result[0], result)
-        self.assertIn("mutable", result[1]["error"])
+        self.assertIn("can change", result[1]["error"])
         send.assert_not_called()
 
     def test_job_cancellation_cannot_bypass_review(self):
@@ -253,5 +253,5 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.pods = [one, two]
         result, send, _ = self.call("/api/image-updates/preview", self.body)
         self.assertEqual(400, result[0], result)
-        self.assertIn("multiple running digests", result[1]["error"])
+        self.assertIn("more than one digest", result[1]["error"])
         send.assert_not_called()

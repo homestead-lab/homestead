@@ -32,7 +32,7 @@ def dispatch(body, context, ops, send, before_send):
            "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "dispatch_protocol": 1}
     job = ops.start("vm-power", f"{action.capitalize()} VM {vm['name']}",
                     {"kind": "VirtualMachine", "namespace": vm["namespace"], "name": vm["name"]},
-                    "/vms", ref, "Power intent recorded; rechecking before dispatch")
+                    "/vms", ref, "Power request recorded. Checking again before sending it.")
     ident = job["id"]
     with worker_lock(ident, ops):
         return _dispatch_owned(ident, vm["name"], ops, send, before_send)
@@ -42,9 +42,9 @@ def _dispatch_owned(ident, name, ops, send, before_send):
     try:
         before_send()
     except Exception:
-        ops.record_phase(ident, "failed", 0, "Final admission failed; no power request was sent. Review again.", retain_resources=False)
+        ops.record_phase(ident, "failed", 0, "The final check failed, so no power request was sent. Review it again.", retain_resources=False)
         raise
-    ops.record_phase(ident, "dispatching", 10, "Sending exactly one power request; do not repeat it")
+    ops.record_phase(ident, "dispatching", 10, "Sending exactly one power request. Do not repeat it.")
     try:
         result = send()
     except Exception as error:
@@ -52,21 +52,21 @@ def _dispatch_owned(ident, name, ops, send, before_send):
         # loss/server error can happen after the API accepted the operation.
         refused = isinstance(error, urllib.error.HTTPError) and error.code in (400, 401, 403, 404, 405, 409, 422)
         phase = "failed" if refused else "uncertain"
-        message = (f"KubeVirt refused the request (HTTP {error.code}); nothing was retried." if refused else
-                   "The power response was lost or uncertain. Inspect the VM and this job; nothing was retried.")
+        message = (f"KubeVirt refused the request (HTTP {error.code}). Nothing was retried." if refused else
+                   "The power response was lost or uncertain. Check the VM and this job. Nothing was retried.")
         try:
             ops.record_phase(ident, phase, 10, message, retain_resources=not refused)
         except Exception:
             # The durable dispatch intent remains authoritative if outcome
             # journaling fails. Never retry either the write or the mutation.
-            message = "Power outcome could not be recorded. Inspect the retained dispatch job; nothing was retried."
+            message = "The power outcome could not be recorded. Check the kept job. Nothing was retried."
         raise ValueError(f"{message} Job {ident}.") from error
     try:
         operation = ops.record_phase(ident, "accepted", 25,
-            "KubeVirt accepted the request; waiting for the expected VM instance to become ready")
+            "KubeVirt accepted the request. Waiting for the VM instance to become ready.")
     except Exception as error:
-        raise ValueError(f"KubeVirt accepted power but its receipt could not be saved. Inspect job {ident}; do not repeat the request.") from error
-    return {**result, "detail": f"Power request accepted for {name}; follow its job for readiness", "operation": operation}
+        raise ValueError(f"KubeVirt accepted the power request, but its record could not be saved. Check job {ident}, and do not repeat the request.") from error
+    return {**result, "detail": f"Power request accepted for {name}. Follow its job to see when it is ready.", "operation": operation}
 
 
 def status(item, read):
@@ -74,21 +74,21 @@ def status(item, read):
     phase = ref.get("phase")
     if phase in ("prepared", "dispatching", "uncertain"):
         age = time.time() - float(ref.get("phase_at") or 0)
-        text = ("Power dispatch is in progress; it is never automatically resent" if age < 60 and phase != "uncertain" else
-                "Dispatch outcome needs inspection. Homestead may have stopped before recording the response; no request will be resent.")
+        text = ("The power request is being sent. It is never sent again automatically." if age < 60 and phase != "uncertain" else
+                "The outcome of the request needs checking. Homestead may have stopped before recording the response. No request is sent again.")
         return "running", 10 if phase != "prepared" else 0, text
     if phase != "accepted":
-        return "failed", 0, "Power journal phase is unrecognized; inspect recovery records before taking action"
+        return "failed", 0, "The power record has an unknown step. Check the recovery records before doing anything."
     ns, name = quote(ref["namespace"], safe=""), quote(ref["name"], safe="")
     try:
         vm = read(f"{API}/namespaces/{ns}/virtualmachines/{name}")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        return "running", 25, "The target VM is missing; inspect it before stopping tracking or creating a replacement"
+        return "running", 25, "The VM is missing. Check it before stopping tracking or creating a replacement."
     meta = vm.get("metadata") or {}
     if (meta.get("namespace"), meta.get("name"), meta.get("uid")) != (ref["namespace"], ref["name"], ref["uid"]) or meta.get("deletionTimestamp"):
-        return "running", 25, "The VM identity changed or is deleting; this job does not follow a replacement VM"
+        return "running", 25, "The VM changed or is being deleted. This job does not follow a replacement VM."
     try:
         vmi = read(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
     except urllib.error.HTTPError as error:
@@ -105,7 +105,7 @@ def status(item, read):
         return "running", 35, "Waiting for a non-deleting instance owned by the reviewed VM"
     previous = ref.get("previous_vmi_uid")
     if ref["action"] == "unpause" and imeta["uid"] != previous:
-        return "running", 35, "The instance changed; this job cannot confirm resuming the reviewed guest"
+        return "running", 35, "The instance changed, so this job cannot confirm that the reviewed guest resumed"
     if ref["action"] in ("start", "restart", "reset") and imeta["uid"] == previous:
         return "running", 40, "Waiting for the old VM instance to be replaced"
     conditions = state.get("conditions") or []
@@ -113,8 +113,8 @@ def status(item, read):
     ready = any(row.get("type") == "Ready" and row.get("status") == "True" for row in conditions)
     if state.get("phase") == "Running" and ready and not paused:
         ref.update(retain_resources=False, observed_vmi_uid=imeta["uid"])
-        return "succeeded", 100, "Expected VM instance is running and ready; guest application health is not verified"
-    return "running", 60, f"VM instance is {str(state.get('phase') or 'pending')[:40]}; waiting for Running, Ready and not paused"
+        return "succeeded", 100, "The VM instance is running and ready. The health of the guest's apps is not checked."
+    return "running", 60, f"The VM instance is {str(state.get('phase') or 'pending')[:40]}. Waiting for it to be running, ready and not paused."
 
 
 def cancel_plan(item):
@@ -132,8 +132,8 @@ def cancel_run(item, options):
         raise ValueError("Cannot forget an uncertain power request")
     item["ref"]["retain_resources"] = False
     if item["ref"]["phase"] == "prepared":
-        return "Cancelled before power dispatch; the approval remains consumed"
-    return "Stopped tracking the accepted request; KubeVirt is unchanged and the approval remains consumed"
+        return "Cancelled before the power request was sent. The approval stays used."
+    return "Stopped tracking the accepted request. KubeVirt is not changed, and the approval stays used."
 
 
 def register(ops):

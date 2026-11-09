@@ -30,10 +30,10 @@ Harvester, or kube-vip/MetalLB on k3s - rather than a host's own address.
 **Expose workload** publishes an app's port, either inside the cluster only or
 on the LAN. On the LAN it takes an address:
 
-- **Automatic** - the next free one from your VIPs, then from Harvester's IP
-  pools;
-- **Specific VIP** - one you choose from your list, by label;
-- **Default workload VIP** - the address selected under **Workload VIPs → Make default**,
+- **Automatic**: the next free one from the virtual IPs, then from Harvester's IP
+  pools.
+- **Specific virtual IP**: one chosen from the list, by label.
+- **Default virtual IP**: the address chosen under **Virtual IPs → Make default**,
   shared on free ports. This is separate from the cluster API and can differ from
   Homestead's access address. Changing the default does not move existing Services.
 
@@ -94,7 +94,7 @@ it; hovering a node lights its addresses, and an address its node.
 
 ### Container and VM editors
 
-Container **Edit → Service VIP → Configure default / selected VIP** opens the same
+Container **Edit → Virtual IP → Configure default / specific virtual IP** opens the same
 labelled address picker. Save changed container ports first. Other unsaved fields
 are kept when you return; Service changes apply separately and do not restart the pod.
 Select an existing Service to change its VIP in place, or create an additional one.
@@ -102,10 +102,10 @@ The review checks collisions and resource identity; changes to a Service's immut
 load-balancer class are refused rather than deleting/recreating it. Unrelated settings
 and its ClusterIP are retained. Existing connections may reconnect when the VIP changes.
 
-For a **new VM**, choose the pod network, then **Default workload VIP** or
-**Selected VIP**. This is a two-step flow: create the VM, then review and publish its
+For a **new VM**, choose the cluster network, then **Default virtual IP** or
+**Specific virtual IP**. This is a two-step flow: create the VM, then review and publish its
 port mappings. Cancelling or failing the second step leaves the created VM in place;
-continue from **Edit → Network → Configure default / selected VIP** without recreating it.
+continue from **Edit → Network → Configure default / specific virtual IP** without recreating it.
 The same control is available when editing an existing VM with a masquerade pod interface.
 
 A bridged **direct LAN interface** is different: its MAC identifies the NIC, not
@@ -154,8 +154,8 @@ they are for - "media apps", "DNS".
    means the first address you entered. You can also choose **Make default** on a
    saved address's card later. Existing Services do not move.
 3. Choose **Use this VIP** on its card to open the workload/port form with that
-   address selected. Or choose **Default workload VIP** or **Specific VIP** in
-   Deploy's networking section. Specific VIP offers a labelled dropdown, including
+   address selected. Or choose **Default virtual IP** or **Specific virtual IP** in
+   Deploy's networking section. Specific virtual IP offers a labelled dropdown, including
    in **Expose workload** and VM port exposure. Review the plan before creating the Service.
 
 Saving a VIP does not alter the router or announce the address immediately. A

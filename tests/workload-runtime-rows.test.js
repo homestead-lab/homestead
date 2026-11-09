@@ -84,5 +84,5 @@ test("an app whose Services couldn't be read says so, never no listeners", () =>
   assert.match(context.accessPorts([]), /—/);
   const unread = context.accessPorts(null);
   assert.doesNotMatch(unread, /—/);
-  assert.match(unread, /couldn(?:'|&#39;)t read/i);
+  assert.match(unread, /Not read/);
 });

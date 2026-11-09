@@ -6,14 +6,14 @@
    the same rows work while creating a workload and while editing one. */
 
 const VOLUME_KIND_LABELS = {
-  "new-rwo": "New Longhorn volume · RWO",
+  "new-rwo": "New single-host volume · RWO",
   "new-rwx": "New shared volume · RWX",
-  planned: "Reuse new volume in this form",
-  existing: "Existing PVC · keep data",
-  ephemeral: "Temporary pod storage · emptyDir",
-  memory: "Memory scratch · RAM-backed",
+  planned: "A new volume from this form",
+  existing: "Existing volume · keeps its data",
+  ephemeral: "Temporary storage · emptyDir",
+  memory: "Scratch space in memory · RAM",
   shm: "Shared memory · /dev/shm",
-  host: "Host path · advanced",
+  host: "Host folder · advanced",
 };
 const VOLUME_KINDS = ["new-rwo", "new-rwx", "planned", "existing", "pod", "ephemeral", "memory", "shm", "host"];
 const SHM_PATH = "/dev/shm";
@@ -26,11 +26,11 @@ const VOLUME_PICKER_DEFAULTS = {
   podVolumes: () => [],
   allowPod: () => false,
   kinds: VOLUME_KINDS,
-  podLabel: "Existing volume in this pod",
-  podEmpty: "Choose a volume already in this pod…",
-  podUnavailable: "No reusable volumes in this pod",
-  podHelp: "Mounts a volume already defined in this pod into this container.",
-  pathLabel: "Container mount path",
+  podLabel: "A volume this app already uses",
+  podEmpty: "Choose a volume this app already uses…",
+  podUnavailable: "This app has no volumes to share",
+  podHelp: "Gives this container a volume that the app already uses.",
+  pathLabel: "Path in the container",
   pathPlaceholder: "/config",
   newSourceHelp: "",
   removable: true,
@@ -163,13 +163,13 @@ window.storageClassOptions = storageClassOptions;
 function storageClassBadges(facts) {
   if (!facts) return "";
   const badges = [];
-  if (facts.replicas) badges.push(UI.chip(`${facts.replicas} replica${facts.replicas === "1" ? "" : "s"}`, "neutral"));
+  if (facts.replicas) badges.push(UI.chip(`${facts.replicas} cop${facts.replicas === "1" ? "y" : "ies"}`, "neutral"));
   if (facts.engine) badges.push(UI.chip(`Longhorn ${facts.engine.toUpperCase()}`, facts.engine === "v2" ? "info" : "neutral", { tip: facts.engine === "v2"
-    ? "Longhorn's V2 data engine (SPDK): faster, and needs hugepages and a V2 disk on each host." : "Longhorn's V1 data engine, the default." }));
+    ? "Longhorn's V2 data engine (SPDK). It is faster, and needs hugepages and a V2 disk on each host." : "Longhorn's V1 data engine, the default." }));
   badges.push(facts.encrypted ? UI.chip("encrypted", "info") : UI.chip("not encrypted", "neutral"));
   badges.push(facts.expandable ? UI.chip("can grow", "ok") : UI.chip("fixed size", "neutral"));
   if (facts.reclaim === "Retain") badges.push(UI.chip("keeps data on delete", "info"));
-  if (facts.migratable) badges.push(UI.chip("VM disk class", "neutral", { tip: "Made for VM live migration. Fine for one pod on one host; not for a volume several hosts mount (RWX)." }));
+  if (facts.migratable) badges.push(UI.chip("VM disk class", "neutral", { tip: "Made for VMs that move while running. Suitable for one app on one host, but not for a volume used on several hosts (RWX)." }));
   if (facts.default) badges.push(UI.chip("default", "ok"));
   return badges.join("");
 }
@@ -180,10 +180,10 @@ function claimRisk(claim, ctx) {
   if (!claim.node || (target && claim.node === target)) return "";
   const rwo = !(claim.access_modes || []).includes("ReadWriteMany");
   if (claim.migratable) {
-    return ` It is attached on ${claim.node} and its class is migratable, so Longhorn will try to live-migrate it rather than attach it here — that mount usually fails.`;
+    return ` It is attached on ${claim.node} and its class is made for VMs, so Longhorn tries to move it instead of attaching it here, and that usually fails.`;
   }
   if (rwo) {
-    return ` It is ReadWriteOnce and attached on ${claim.node}, so it cannot mount here at the same time.`;
+    return ` It is a single-host volume attached on ${claim.node}, so it cannot be used here at the same time.`;
   }
   return "";
 }
@@ -235,8 +235,8 @@ function volumeSourceList(row, kind) {
   if (requested && !values.some(v => v.value === requested)) {
     values = [{ value: requested, label: kind === "planned" ? "not defined in this form" : "currently mounted" }, ...values];
   }
-  const emptyLabel = kind === "planned" ? "Choose a new volume from another mapping…" : kind === "pod" ? ctx.podEmpty : "Choose an existing PVC…";
-  const unavailable = kind === "planned" ? "Define a new volume in another mapping first" : kind === "pod" ? ctx.podUnavailable : "No existing PVCs in this namespace";
+  const emptyLabel = kind === "planned" ? "Choose a new volume from another storage row…" : kind === "pod" ? ctx.podEmpty : "Choose an existing volume…";
+  const unavailable = kind === "planned" ? "Add a new volume in another storage row first" : kind === "pod" ? ctx.podUnavailable : "No existing volumes in this namespace";
   choice.innerHTML = values.length
     ? `<option value="">${emptyLabel}</option>` + values.map(v => `<option value="${esc(v.value)}">${esc(v.value)} · ${esc(v.label)}</option>`).join("")
     : `<option value="">${unavailable}</option>`;
@@ -274,7 +274,7 @@ function syncVolumeRow(row) {
   const first = sharedVolumeRow(row);
   const moved = volumeMove(row);
   $(".vcopy", row).style.display = moved ? "flex" : "none";
-  if (moved) $(".vcopy-text", row).textContent = `Copy the data from ${moved} (the container stops while it copies; the original files are kept)`;
+  if (moved) $(".vcopy-text", row).textContent = `Copy the data from ${moved} (the container stops during the copy, and the original files are kept)`;
   $(".vnew", row).style.display = (isNew && !first) || ram ? "grid" : "none";
   $(".vfolder", row).style.display = ctx.folders !== false && volumeHasFolders(actual) ? "block" : "none";
   $(".vnew", row).classList.toggle("ram", ram);
@@ -295,21 +295,21 @@ function syncVolumeRow(row) {
   choice.style.display = selectable ? "block" : "none";
   source.disabled = actual === "ephemeral" || ram;
   source.placeholder = actual === "host" ? "/mnt/storage or /dev/…" : "new PVC name";
-  $(".vsource-label", row).textContent = actual === "host" ? "Host path" : actual === "pod" ? "Pod volume" : actual === "planned" ? "New volume in this form" : actual === "existing" ? "Existing PVC" : "New PVC name";
+  $(".vsource-label", row).textContent = actual === "host" ? "Host folder" : actual === "pod" ? "App volume" : actual === "planned" ? "New volume in this form" : actual === "existing" ? "Existing volume" : "New volume name";
   const selectedSource = volumeSourceValue(row);
   const selectedPvc = actual === "existing" ? (ctx.pvcs() || []).find(v => v.name === selectedSource) : null;
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
-  $(".vhelp", row).textContent = first ? `Shares ${selectedSource}, created once using the original mapping's size and storage class. Choose a folder here, or leave blank to mount the whole volume.`
-    : actual === "planned" ? "Choose a new volume defined in another storage mapping. It does not need to exist yet."
-    : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this app (single-node attachment).")
-    : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
-        (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
-    : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The claim and data are kept.${claimRisk(selectedPvc, ctx)}` : "Mounts an existing PVC without creating or deleting it."
+  $(".vhelp", row).textContent = first ? `Shares ${selectedSource}, created once with the size and storage class of its first row. Choose a folder here, or leave blank to use the whole volume.`
+    : actual === "planned" ? "Choose a new volume added in another storage row. It does not need to exist yet."
+    : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn volume for this app, attached to one host at a time.")
+    : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates a shared Longhorn volume that several apps can use at once.") +
+        (hidden ? ` ${hidden} storage class${hidden === 1 ? " is" : "es are"} hidden, because they create volumes for VMs, which Longhorn cannot give to an app.` : "")
+    : actual === "existing" ? selectedPvc ? `${selectedPvc.name}: ${claimSummary(selectedPvc)}. The volume and its data are kept.${claimRisk(selectedPvc, ctx)}` : "Uses an existing volume without creating or deleting it."
     : actual === "pod" ? selectedPodVolume ? `${selectedPodVolume.name}: ${selectedPodVolume.kind}${selectedPodVolume.source ? ` (${selectedPodVolume.source})` : ""}. The same storage is shared with the other container.` : ctx.podHelp
-    : shm ? "Kubernetes gives every pod 64 MiB of /dev/shm and no way to ask for more, so this mounts a RAM disk over it. Apps that pass frames or buffers between processes - Frigate, Chromium, Postgres - need far more than the default. It counts against the host's memory."
-    : ram ? "Creates a RAM disk of this size inside the pod. It starts empty every time and counts against the host's memory; this is what a tmpfs mount becomes."
-    : actual === "ephemeral" ? "Creates temporary pod storage. Its contents are deleted when the pod is replaced; ideal for cache or transcoding."
-    : "Mounts this exact host path; the container can only run where that path exists.";
+    : shm ? "Kubernetes gives every app 64 MiB of /dev/shm and no way to ask for more, so this mounts a RAM disk over it. Apps that pass frames or buffers between processes, such as Frigate, Chromium and Postgres, need far more than the default. It counts against the host's memory."
+    : ram ? "Creates a RAM disk of this size inside the app. It starts empty every time and counts against the host's memory. This is what a tmpfs mount becomes."
+    : actual === "ephemeral" ? "Creates temporary storage. Its contents are deleted when the app restarts, which suits a cache or transcoding."
+    : "Uses this exact folder on the host. The container can run only on hosts where that folder exists.";
 }
 
 function addVolumeRow(host, v = {}) {
@@ -327,22 +327,22 @@ function addVolumeRow(host, v = {}) {
   d.dataset.originClaim = (v.origin && v.origin.claim) || "";
   d.dataset.originFolder = (v.origin && v.origin.sub_path) || "";
   const classes = ctx.storageClasses() || [];
-  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage mapping")}</b>${v.role ? UI.chip(v.role, "neutral") : ""}${v.required ? ` ${UI.chip("required", "warn")}` : ""}</div>
-      ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage mapping" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
+  d.innerHTML = `<div class="volume-title"><div><b>${esc(v.label || "Storage")}</b>${v.role ? UI.chip(v.role, "neutral") : ""}${v.required ? ` ${UI.chip("required", "warn")}` : ""}</div>
+      ${ctx.removable ? '<button class="iconbtn row-remove" type="button" title="Remove storage" onclick="removeVolumeRow(this)">×</button>' : ""}</div>
     ${v.description ? `<div class="dim small volume-desc">${esc(v.description)}</div>` : ""}
     <div class="deploy-volume-grid">
       <div><label>${esc(ctx.pathLabel)}</label><input class="vp" type="text" value="${esc(v.path || "")}" placeholder="${esc(ctx.pathPlaceholder)}"></div>
-      <div><label>Storage source</label><select class="vk">${kinds.map(k =>
+      <div><label>Storage type</label><select class="vk">${kinds.map(k =>
         `<option value="${k}" ${k === kind ? "selected" : ""}>${esc(k === "pod" ? ctx.podLabel : VOLUME_KIND_LABELS[k])}</option>`).join("")}</select></div>
-      <div class="vsource"><label class="vsource-label">Volume / path</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" aria-label="Volume" style="display:none"></select></div>
-      <div class="vfolder"><label title="Mount one folder of the volume here, so several paths can share one volume">Folder in volume</label><input class="vsub" type="text" value="${esc(v.sub_path || "")}" placeholder="whole volume"></div>
+      <div class="vsource"><label class="vsource-label">Volume or folder</label><input class="vs" type="text" value="${esc(v.source || "")}"><select class="vselect" aria-label="Volume" style="display:none"></select></div>
+      <div class="vfolder"><label title="Use one folder of the volume here, so that several paths can share one volume">Folder in volume</label><input class="vsub" type="text" value="${esc(v.sub_path || "")}" placeholder="whole volume"></div>
       <div class="vnew"><div><label class="vsize-label">Size GiB</label><input class="vz" type="number" min="1" value="${v.size_gb || 5}"></div>
         <div><label>Storage class</label><select class="vsc">${storageClassOptions(classes, defaultStorageClass(classes, v.storage_class, ctx.classFacts()), ctx.classFacts())}</select></div></div>
     </div>
     <div class="vclass-badges" style="display:none"></div>
     <label class="switch vcopy" style="display:none"><input class="vcopy-on" type="checkbox" checked><span class="vcopy-text"></span></label>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
-    ${v.template_source && v.template_source !== v.source ? `<div class="template-source">${esc(v.template_origin || "Unraid")} source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
+    ${v.template_source && v.template_source !== v.source ? `<div class="template-source">${esc(v.template_origin || "Unraid")} source: <span class="mono">${esc(v.template_source)}</span> · Choose where it is stored above.</div>` : ""}`;
   d.dataset.newSource = kind.startsWith("new-") ? String(v.source || "").trim() : "";
   host.appendChild(d); syncVolumeRows(host);
   // A row's name decides whether later rows are folders in its volume.

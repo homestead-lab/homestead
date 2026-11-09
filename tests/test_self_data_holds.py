@@ -279,7 +279,7 @@ class HeldMoveRecoveryTests(unittest.TestCase):
 
     def test_hold_after_the_start_request_resumes_forward_and_never_back(self):
         self.started_then_held(True)
-        with self.assertRaisesRegex(Held, "Cutover"): self.confirm("return-original")
+        with self.assertRaisesRegex(Held, "switch-over"): self.confirm("return-original")
         self.resumes_forward()
 
     def test_hold_before_the_start_request_can_still_resume_forward(self):
@@ -505,7 +505,7 @@ class InvolvedHostTests(unittest.TestCase):
         c = Cluster(extra_nodes=("node-b",))
         c.objects["/api/v1/namespaces/lab/pods/old-1"]["spec"]["nodeName"] = "node-b"
         self.reboot(c, "node-b")
-        with self.assertRaisesRegex(Held, "rebooted"): c.step()
+        with self.assertRaisesRegex(Held, "restarted"): c.step()
         self.assertEqual(2, c.objects[c.dep_path]["spec"]["replicas"])
 
     def test_reboot_of_a_host_a_volume_is_pinned_to_holds_nothing(self):

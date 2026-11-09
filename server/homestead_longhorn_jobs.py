@@ -89,7 +89,7 @@ def run_job(name):
         cron = LH.kget(f"/apis/batch/v1/namespaces/{LH.LHNS}/cronjobs/{name}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise ValueError(f"Longhorn has not set up {name}'s schedule yet; try again in a moment")
+            raise ValueError(f"Longhorn has not set up {name}'s schedule yet. Try again in a moment.")
         raise
     template = (cron.get("spec", {}) or {}).get("jobTemplate", {}) or {}
     job_name = f"{name[:40]}-now-{int(time.time()) % 1000000:06d}"
@@ -124,7 +124,7 @@ def run_status(item):
     if status.get("succeeded"):
         return "succeeded", 100, "Finished"
     if status.get("failed") and not status.get("active"):
-        return "failed", 100, "The run failed; its pod's log in longhorn-system says why"
+        return "failed", 100, "The run failed. Its pod's log in longhorn-system says why."
     return "running", 40 if status.get("active") else 10, "Running" if status.get("active") else "Starting"
 
 
@@ -182,7 +182,7 @@ def save_job(cfg):
             raise
         error.close()
         return homestead_routes.Reply(409, {"error": LH.JOB_CHANGED if generation else
-                                            f"There is already a job called {name}; edit that one instead"})
+                                            f"There is already a job called {name}. Edit that one instead."})
     LH._bust("lhjobs", "lhvols", "lhov")
     return {"ok": True, "name": name}
 
@@ -253,8 +253,8 @@ def trim_volume(volume):
         raise
     state = (found.get("status") or {}).get("state", "")
     if state != "attached":
-        raise ValueError(f"{name} is {state or 'not attached'}: Longhorn trims a volume only while it is in use; "
-                         "the weekly trim reaches it the next time it is")
+        raise ValueError(f"{name} is {state or 'not attached'}: Longhorn trims a volume only while it is in use. "
+                         "The weekly trim reaches it the next time it is.")
     ACCESS.require(LH.kget, LH.ksend, SELF.NS, f"Trimming {name}")
     _backend("POST", f"/volumes/{name}?action=trimFilesystem", {})
     return {"ok": True, "detail": f"{name} is being trimmed: space its deleted files held goes back to Longhorn"}

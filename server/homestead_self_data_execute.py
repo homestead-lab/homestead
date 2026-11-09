@@ -40,7 +40,7 @@ def enqueue(ops, execution):
     return ops.start(KIND, "Move Homestead data", {"kind": "PersistentVolumeClaim", "name": cfg["destination"], "namespace": scope.namespace},
         "/settings", {"namespace": scope.namespace, "deployment": scope.deployment, "operation": scope.operation,
         "destination": cfg["destination"], "source": execution["source"]["metadata"]["name"],
-        "retain_resources": True, "setup_state": "intent"}, "Preparing the move; Homestead is still online")
+        "retain_resources": True, "setup_state": "intent"}, "Preparing the move. Homestead is still online.")
 
 
 def handshake(job, execution, anchor_uid):
@@ -147,8 +147,8 @@ def resolve(item, read, *, clock=time.time, directory=None):
         except (TypeError, ValueError):
             age = 0
         if item.get("id") in _ACTIVE or age <= SETUP_STALE:
-            return "running", 0, "Preparing the move. If Homestead restarted, inspect this job; setup will not be replayed."
-        ref["setup_error"] = ("Setup stopped before it recorded its control record; nothing was handed over and Homestead "
+            return "running", 0, "Preparing the move. If Homestead restarted, check this job. The setup is not repeated."
+        ref["setup_error"] = ("Setup stopped before it saved its control record. Nothing was handed over, and Homestead "
                               "keeps its original volume. Abandon the preparation, or close this record in Move data.")
         return "failed", 0, ref["setup_error"]
     try:
@@ -160,7 +160,7 @@ def resolve(item, read, *, clock=time.time, directory=None):
             return "succeeded", 100, view["message"]
         return ("failed" if view["requires_review"] else "running"), 0, view["message"]
     except Exception:
-        return "running", 0, "Cannot verify move progress. Both volumes are retained; no action has been repeated."
+        return "running", 0, "The move's progress cannot be confirmed. Both volumes are kept, and nothing has been repeated."
 
 
 class Execution:
@@ -193,7 +193,7 @@ class Execution:
                 with ops.transaction():
                     idle(ops, self.job_id)
                     if next(i for i in ops.stored() if i["id"] == self.job_id).get("status") in ops.TERMINAL:
-                        raise Held("This move's job was already closed; start a new move")
+                        raise Held("This move's job was already closed. Start a new move.")
                     handle = anchor.create(operation=scope.operation,
                         deployment={"name": scope.deployment, **identity(e["deployment"])},
                         source={"name": e["source"]["metadata"]["name"], **identity(e["source"])},

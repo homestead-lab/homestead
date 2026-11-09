@@ -251,7 +251,7 @@ volumes:
 
         self.assertEqual(("500m", "512Mi", 2), (row["config"]["cpu"], row["config"]["memory"], row["config"]["replicas"]))
         self.assertEqual("2048Mi", row["config"]["memory_limit"])
-        self.assertTrue(any("enforced maximum" in n["message"] for n in row["notes"]))
+        self.assertTrue(any("hard maximum" in n["message"] for n in row["notes"]))
 
     def test_ram_disks_and_shared_memory(self):
         text = "services:\n  app:\n    image: app\n    shm_size: 2gb\n    tmpfs:\n      - /run:size=64m\n"

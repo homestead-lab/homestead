@@ -260,7 +260,7 @@ def ensure_two_copy_class():
     found = facts()
     out = {"ok": False, "storage_class": TWO_COPIES, "created": False, "raised": False}
     if found.get("state") == "unknown":
-        return {**out, "message": f"Could not read Homestead's data copies: {found.get('error')}"}
+        return {**out, "message": f"Homestead could not read its data copies: {found.get('error')}"}
     if found.get("state") != "can-keep-two":
         return {**out, "message": NOTHING_TO_DO.get(found.get("state"), NOTHING_TO_DO["n/a"])}
     if found.get("action") == "raise":
@@ -271,10 +271,10 @@ def ensure_two_copy_class():
         SHARED.write_json(NODE_PARITY._path(), state, indent=1, sort_keys=True)
         homestead_routes.forget("data-copies")
         return {**out, "ok": True, "raised": True, "storage_class": found.get("storage_class"),
-                "message": "Homestead's data now keeps two copies, on different hosts; Longhorn is making the second"}
+                "message": "Homestead's data now keeps two copies, on different hosts. Longhorn is making the second."}
     r2 = found.get("r2") or {}
     if r2.get("exists") and not r2.get("usable"):
-        return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved; "
+        return {**out, "message": f"{r2.get('why')}. Homestead's data was not moved. "
                                   "pick a class that keeps two copies in Move data"}
     created = False
     if not r2.get("exists"):
@@ -285,7 +285,7 @@ def ensure_two_copy_class():
         homestead_routes.forget("data-copies")
     return {**out, "ok": True, "created": created,
             "message": (f"{TWO_COPIES} created: two copies on different hosts. " if created else "")
-            + f"Review the move of Homestead's data onto {TWO_COPIES}; Homestead stops briefly while it is copied"}
+            + f"Review the move of Homestead's data onto {TWO_COPIES}; and Homestead stops briefly while it is copied"}
 
 
 ROUTES = {

@@ -34,10 +34,10 @@ def reference_plan(item):
         plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
         return plan
     if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
-        plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
+        plan.update(can=False, why_not="Use the storage move review to pause safely. Cancelling must not roll back or delete kept data.")
         return plan
     if item.get("kind") == "longhorn-v2-prepare":
-        plan.update(can=False, why_not="Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log")
+        plan.update(can=False, why_not="Stopping tracking does not undo host package and memory changes. Check the preparation log.")
         return plan
     if item.get("kind") == "longhorn-v2-cleanup":
         plan.update(can=False, why_not="Inspect saved V2 cleanup. A host may have memory changes awaiting restart.")
@@ -49,7 +49,7 @@ def reference_plan(item):
         plan.update(can=False, why_not="Storage growth cannot be interrupted safely. Let the helper finish, then recheck its saved outcome.")
         return plan
     if item.get("kind") == "longhorn-runtime":
-        plan.update(can=False, why_not='Runtime maintenance keeps a boot gate and retained source. Recheck its saved state; do not discard it.')
+        plan.update(can=False, why_not='Runtime maintenance keeps a start-up gate and the kept source. Check its saved state again, and do not discard it.')
         return plan
     if entry:
         plan.update(entry[0](item) or {})

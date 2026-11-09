@@ -116,7 +116,7 @@ def appstore_install(request):
     result = reviewed_deploy(cfg)
     reused = result.get("reused_volumes") or []
     if reused:
-        result["detail"] = f"kept the existing {', '.join(reused)} - its data carries on"
+        result["detail"] = f"kept the existing {', '.join(reused)}, and its data stays"
     return result
 
 
@@ -205,7 +205,7 @@ def deploy_adds(b):
         if lad.get("fallback") and not lad.get("forbidden"):
             # The read failed: PRIORITY.ensure refuses, and Deploy with it, until it can read them.
             adds.append({"what": f"a PriorityClass {PRIORITY.TIERS[tier]['name']} if the cluster has none "
-                                 "(its classes could not be read just now; Deploy waits until they can)", "certain": False})
+                                 "(its classes could not be read just now, so Deploy waits until they can)", "certain": False})
         else:
             # Listing forbidden: made by name where missing (_ensure_by_name), as before #429.
             step = None if lad.get("fallback") else lad.get(tier)
@@ -302,10 +302,10 @@ def compose_capacity(entries, claims, created=None):
             continue
         current = read(f"/apis/apps/v1/namespaces/{ns}/deployments/{entry['name']}")
         if current.get("metadata", {}).get("uid") != previous.get("metadata", {}).get("uid") or current.get("spec") != previous.get("spec"):
-            raise ValueError(entry["name"] + " changed during batch creation; review the remaining services again")
+            raise ValueError(entry["name"] + " changed while the batch was being created. Review the remaining services again.")
         owned, known = ROLLOUT_CAPACITY.owned_pods(current, pods, read, ns)
         if not known:
-            raise ValueError(entry["name"] + " pod ownership is unavailable; remaining services were not created")
+            raise ValueError(entry["name"] + ": what owns its pods is unknown, so the remaining services were not created")
         scheduled = [p for p in owned if p.get("spec", {}).get("nodeName") and not p.get("metadata", {}).get("deletionTimestamp")]
         for pod in scheduled:
             spec = pod["spec"]

@@ -208,15 +208,15 @@ def _orphan_rows(node, orphans, engines):
             else:
                 said.append(f"{kind or 'unknown'} {params.get(INSTANCE_NAME) or orphan['metadata']['name']}")
         fix = ("Check each in Longhorn before removing it. An instance record whose volume runs elsewhere and "
-               "is healthy can go; ")
-        fix += ("removing a replica-data record deletes an on-disk copy of the volume's data, which may be its "
+               "is healthy can be removed. ")
+        fix += ("Removing a replica-data record deletes an on-disk copy of the volume's data, which may be its "
                 "last copy, so remove one only once the volume is healthy on other hosts."
                 if data else "Homestead does not remove these.")
         count = len(other)
         rows.append(_row(
             f"other-orphans:{node}", "other-orphans",
             f"{count} other Longhorn orphan record{'s' if count != 1 else ''} on {node}: {_names(said)}",
-            f"Longhorn keeps what an orphan record names on {node} until the record is removed; an instance "
+            f"Longhorn keeps what an orphan record names on {node} until the record is removed. An instance "
             f"record can keep {node}'s instance-manager from stopping.",
             fix))
     if removing:
@@ -224,9 +224,9 @@ def _orphan_rows(node, orphans, engines):
         rows.append(_row(
             f"removing-orphans:{node}", "removing-orphans",
             f"{count} Longhorn orphan record{'s' if count != 1 else ''} on {node} being removed: {_names(removing)}",
-            f"Longhorn keeps a removed orphan record until it has cleaned up what the record names on {node}; "
-            f"until then an engine record's leftover process can still hold {node}'s instance-manager.",
-            "Longhorn is cleaning up; review the restart again in a minute. If a record stays, check Longhorn on "
+            f"Longhorn keeps a removed orphan record until it has cleaned up what the record names on {node}. "
+            f"Until then, an engine record's leftover process can still hold {node}'s instance-manager.",
+            "Longhorn is cleaning up. Review the restart again in a minute. If a record stays, check Longhorn on "
             f"{node} (its instance-manager may not be reachable)."))
     return rows
 
@@ -263,7 +263,7 @@ def _elsewhere_row(node, managers, engines, named):
         f"{_names(stale)}, which no longer run{'s' if len(stale) == 1 else ''} on {node}",
         f"Longhorn keeps {node}'s instance-manager, and its disruption budget at 0, while it lists engines, "
         "so the drain cannot evict it.",
-        "Longhorn normally records these as orphans within minutes; review the restart again then. "
+        "Longhorn normally records these as orphans within minutes. Review the restart again then. "
         "If they stay, check the instance-manager in Longhorn.")]
 
 
@@ -341,15 +341,15 @@ def _stuck_rows(node, pods, claims, attachments, now):
         if held:
             what += f" and still holds volume{'s' if len(held) != 1 else ''} {_names(held)} attached there"
         elif volume_of is None or attached is None:
-            what += "; its volumes couldn't be checked"
+            what += ", and its volumes could not be checked"
         finalizers = meta.get("finalizers") or []
         why = (f"Its phase is {phase}"
                + (f" and it waits on finalizer{'s' if len(finalizers) != 1 else ''} {_names(finalizers)}"
                   if finalizers else "")
                + f". While it exists its volumes stay attached to {node}, so their storage cannot leave the host.")
-        fix = ("Its containers have stopped, so force-deleting the pod is safe; if a volume stays attached "
+        fix = ("Its containers have stopped, so force-deleting the pod is safe. If a volume stays attached "
                "afterwards, the host still has it mounted." if phase in ("Succeeded", "Failed") else
-               "Find out why it does not stop (its events, the host's kubelet) before force-deleting it: a "
+               "Find out why it does not stop (its events, the host's kubelet) before force-deleting it. A "
                "force delete of a pod whose containers still run can leave two writers on one volume.")
         rows.append(_row(f"stuck-pod:{ns}/{name}", "stuck-pod", what, why, fix))
     return sorted(rows, key=lambda row: row["id"])
@@ -365,9 +365,9 @@ def for_host(node, now=None, read=None):
 def failed(error):
     """The one row for a check that failed as a whole: unread, never skipped."""
     return _row("unread:drain-blockers", "unread",
-                f"Homestead couldn't check what would keep this host from draining: {_reason(error)}",
+                f"Homestead could not check what would keep this host from draining: {_reason(error)}",
                 "What it would show was not checked, so something there may still hold this host.",
-                "Review the restart again; if this stays, check Homestead's access to the cluster.")
+                "Review the restart again. If this stays, check Homestead's access to the cluster.")
 
 
 # How long a pod has been stuck is said, not compared: the same pod a minute
@@ -409,9 +409,9 @@ def _for_host(node, now=None, read=None):
             rows += _unused_attachment_rows(node, pods, items("claims"), items("attachments"))
     for key in unread:
         rows.append(_row(
-            f"unread:{key}", "unread", f"Homestead couldn't check {UNREAD_WHAT[key]}: {_reason(got[key])}",
+            f"unread:{key}", "unread", f"Homestead could not check {UNREAD_WHAT[key]}: {_reason(got[key])}",
             "What it would show was not checked, so something there may still hold this host.",
-            "Review the restart again; if this stays, check Homestead's access to the cluster."))
+            "Review the restart again. If this stays, check Homestead's access to the cluster."))
     return rows
 
 
@@ -436,7 +436,7 @@ PDB = "/apis/policy/v1/namespaces/{ns}/poddisruptionbudgets/{name}"
 # createTooManyRequestsError, cause type policyv1.DisruptionBudgetCause).
 BUDGET_CAUSE = "DisruptionBudget"
 _BUDGET_NAMED = re.compile(r"^The disruption budget (\S+) (?:needs \d+ healthy pods|is still being processed)")
-UNREAD_WHY = "couldn't read why"
+UNREAD_WHY = "could not read why"
 
 
 def refusal(error, pod, read=None):
@@ -512,7 +512,7 @@ def engines_here(node, read=None):
     return len(live), rows
 
 
-GENERAL_ADVICE = "inspect Longhorn volumes, disruption budgets and pod events"
+GENERAL_ADVICE = "Check the Longhorn volumes, disruption budgets and pod events"
 
 
 def say(node, rows):
@@ -522,9 +522,9 @@ def say(node, rows):
     found = [row["what"] for row in rows if row["kind"] != "unread"]
     unread = [row["what"] for row in rows if row["kind"] == "unread"]
     if found:
-        return f"what holds {node}: " + "; ".join(found + unread) + "; review the restart again for what to do"
+        return f"what holds {node}: " + "; ".join(found + unread) + ". Review the restart again to see what to do"
     if unread:
-        return "; ".join(unread) + "; " + GENERAL_ADVICE
+        return "; ".join(unread) + ". " + GENERAL_ADVICE
     return ""
 
 
@@ -574,16 +574,16 @@ def _remove_one(node, item, read, send):
     try:
         orphan = read(f"{ORPHANS}/{urllib.parse.quote(name, safe='')}")
     except urllib.error.HTTPError as error:
-        return "it is gone already" if error.code == 404 else f"it couldn't be read ({_reason(error)})"
+        return "it has already been removed" if error.code == 404 else f"it could not be read ({_reason(error)})"
     except Exception as error:
-        return f"it couldn't be read ({_reason(error)})"
+        return f"it could not be read ({_reason(error)})"
     meta, spec = orphan.get("metadata") or {}, orphan.get("spec") or {}
     if meta.get("uid") == item["uid"] and meta.get("deletionTimestamp"):
-        return "it is being removed already"
+        return "it is already being removed"
     if meta.get("uid") != item["uid"] or meta.get("resourceVersion") != item["resourceVersion"]:
-        return "it changed since the review; review the restart again"
+        return "it changed since the review, so review the restart again"
     if spec.get("orphanType") != ENGINE_INSTANCE:
-        return "it is not an engine-instance record; Homestead removes only those"
+        return "it is not an engine instance record, and Homestead removes only those"
     if spec.get("nodeID") != node:
         return f"it is not on {node}"
     engine_name = (spec.get("parameters") or {}).get(INSTANCE_NAME) or ""
@@ -592,7 +592,7 @@ def _remove_one(node, item, read, send):
     try:
         engine = read(f"{ENGINES}/{urllib.parse.quote(engine_name, safe='')}")
     except Exception as error:
-        return f"its engine {engine_name} couldn't be read ({_reason(error)})"
+        return f"its engine {engine_name} could not be read ({_reason(error)})"
     where = _engine_node(engine)
     if not where:
         return f"its engine {engine_name} is not running anywhere Homestead can see"
@@ -611,7 +611,7 @@ def _remove_one(node, item, read, send):
     except Exception as error:
         im = error
     if isinstance(im, Exception):
-        return f"its engine's instance-manager {manager} couldn't be read ({_reason(im)})"
+        return f"its engine's instance-manager {manager} could not be read ({_reason(im)})"
     if (im.get("spec") or {}).get("nodeID") == node:
         return f"its engine {engine_name} still runs in {node}'s instance-manager"
     try:
@@ -620,12 +620,12 @@ def _remove_one(node, item, read, send):
               "preconditions": {"uid": item["uid"], "resourceVersion": item["resourceVersion"]}})
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return "it is gone already"
+            return "it has already been removed"
         if error.code == 409:
-            return "it changed since the review; review the restart again"
+            return "it changed since the review, so review the restart again"
         return f"Kubernetes refused to remove it ({_reason(error)})"
     except Exception as error:
-        return f"it couldn't be removed ({_reason(error)})"
+        return f"it could not be removed ({_reason(error)})"
     return None
 
 

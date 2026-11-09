@@ -33,7 +33,7 @@ try {
     await networkManage("lab","speedtest");
   });
   assert.match(await page.locator("#net_current_access").innerText(),/192.0.2.109:3000/);
-  assert.match(await page.locator("#net_current_access").innerText(),/not a VIP/);
+  assert.match(await page.locator("#net_current_access").innerText(),/not a virtual IP/);
   assert.equal(await page.locator("input[name=net_access][value=nodes]").isChecked(),true);
   assert.equal(await page.locator("#net_lb_ip").inputValue(),"");
   assert.equal(await page.locator('input[name=net_address][value="192.0.2.109"]').count(),0);
@@ -61,5 +61,5 @@ try {
   assert.equal(await page.evaluate(()=>networkConfig().update),true);
   assert.equal(await page.evaluate(()=>networkConfig().uid),"existing");
   assert.deepEqual(errors,[]);
-  console.log("Node access is not a VIP; safe additional connection; review invalidation; dark/light/mobile passed");
+  console.log("Node access is not a virtual IP; safe additional connection; review invalidation; dark/light/mobile passed");
 } finally {await browser.close();}

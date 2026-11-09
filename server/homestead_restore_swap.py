@@ -219,7 +219,7 @@ def _day(at):
 
 def _until(at, days):
     if not days:
-        return "until you delete it"
+        return "until it is deleted"
     return "until " + _day(at + days * DAY)
 
 
@@ -278,7 +278,7 @@ def _users(ns, claim):
                 if claim in RECLASS._claims_in(spec_of(obj)):
                     found.append({"kind": kind, "name": obj["metadata"]["name"], "obj": obj})
             except (KeyError, TypeError):
-                raise ValueError("The workload list is incomplete; what uses the volume cannot be checked") from None
+                raise ValueError("The app list is incomplete, so what uses the volume cannot be checked") from None
     loose = [p["metadata"]["name"] for p in _pods_using(ns, claim) if not _owned(p, found)]
     return found, loose
 
@@ -375,7 +375,7 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     source_ns, source_claim = _backup_claim(status)
     ns, claim = ns or source_ns, claim or source_claim
     if not ns or not claim:
-        raise ValueError("This backup does not say which volume it came from; choose the app and its volume")
+        raise ValueError("This backup does not say which volume it came from. Choose the app and its volume.")
     ns, claim = _valid(ns, "namespace"), _valid(claim, "volume name")
     if new_name:
         new_name = _valid(new_name, "the new volume's name")
@@ -385,7 +385,7 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
         blockers.append("system namespaces are changed with Kubernetes administration tools, not here")
     pvc = KUBE.get_optional(_pvc_path(ns, claim), read=kget)
     if pvc is None:
-        raise ValueError(f"{ns}/{claim} no longer exists; restore the backup into a new volume instead")
+        raise ValueError(f"{ns}/{claim} no longer exists. Restore the backup into a new volume instead.")
     users, loose = _users(ns, claim)
     deployments = [u for u in users if u["kind"] == "Deployment"]
     if not app:
@@ -394,14 +394,14 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     mine = next((u for u in users if u["name"] == app), None)
     dep = mine["obj"] if mine and mine["kind"] == "Deployment" else {}
     if not app or not mine:
-        blockers.append(f"no app mounts {claim}; restore the backup into a new volume instead")
+        blockers.append(f"No app mounts {claim}. Restore the backup into a new volume instead.")
     elif mine["kind"] != "Deployment":
-        blockers.append(f"{app} is a {mine['kind']}: restoring into one is not supported yet; "
-                        "restore the backup into a new volume instead")
+        blockers.append(f"{app} is a {mine['kind']}: restoring into one is not supported yet. "
+                        "Restore the backup into a new volume instead.")
     others = [u for u in users if u is not mine]
     if others:
-        blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}; "
-                        "only a volume one app uses can be swapped")
+        blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}. "
+                        "Only a volume that one app uses can be swapped.")
     if loose:
         blockers.append(f"Stop {', '.join(loose[:3])} first. It use{'s' if len(loose) == 1 else ''} {claim} and belong"
                         f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again")
@@ -412,8 +412,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
         blockers.append(found["conflict"]["message"])
     busy = _busy(OPS.snapshot(), ns, app, (claim, name))
     if busy:
-        blockers.append(f"{app or claim} already has a job running ({busy.get('title') or busy.get('kind')}); "
-                        "let it finish first")
+        blockers.append(f"{app or claim} already has a job running ({busy.get('title') or busy.get('kind')}). "
+                        "Let it finish first.")
     managed = UPDATES.managed_by(dep) if dep else {}
     if managed:
         notices.append(f"{app} is applied by {managed['by']}"
@@ -421,8 +421,8 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
                        + f": its next sync puts {claim} back. Change the claim where {managed['by']} reads it too.")
     others_mounted = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in _volumes(dep)} - {None, "", claim})
     if others_mounted:
-        notices.append(f"{app} also uses {', '.join(others_mounted)}; only {claim} is restored, "
-                       "so what they hold may no longer match")
+        notices.append(f"{app} also uses {', '.join(others_mounted)}. Only {claim} is restored, "
+                       "so what they hold may no longer match.")
     indexes = _indexes(dep, claim) if dep else []
     volume = _volumes(dep)[indexes[0]]["name"] if indexes else ""
     containers = [{"name": c.get("name", ""), "path": m.get("mountPath", "")}
@@ -440,7 +440,7 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
                                       else "no other class can take it, so make one first"))
     access = (spec.get("accessModes") or ["ReadWriteOnce"])[0]
     if access not in ("ReadWriteOnce", "ReadWriteMany"):
-        blockers.append(f"{claim} is {access}; a restore makes ReadWriteOnce or ReadWriteMany volumes only")
+        blockers.append(f"{claim} is {access}. A restore makes only ReadWriteOnce or ReadWriteMany volumes.")
     current_gb = _gib(((spec.get("resources") or {}).get("requests") or {}).get("storage"))
     minimum = int(found.get("minimum_size_gb") or 1)
     size = int(size_gb or max(minimum, current_gb))
@@ -487,15 +487,15 @@ def start(body):
     b = body or {}
     p = plan(b.get("backup"), b.get("namespace") or "", b.get("app") or "", b.get("claim") or "",
              b.get("new_name") or "", b.get("storage_class") or "", b.get("size_gb"))
-    stale = MODULE_ROUTES.Reply(409, {"error": "The app, its volume or the backup changed since this review; "
-                                               "check the plan again", "plan": public(p)})
+    stale = MODULE_ROUTES.Reply(409, {"error": "The app, its volume or the backup changed since this review. "
+                                               "Check the plan again.", "plan": public(p)})
     if str(b.get("digest") or "") != p["digest"]:
         return stale
     if p["blockers"]:
         raise ValueError(p["blockers"][0])
     if p["managed"] and b.get("accept_gitops") is not True:
         raise ValueError(f"{p['app']['name']} is applied by {p['managed']['by']}, whose next sync puts the old "
-                         "volume back; confirm you have read that to go on")
+                         "volume back. Confirm that this has been read to continue.")
     ns, app, old, new = p["app"]["namespace"], p["app"]["name"], p["claim"], p["new_claim"]
     pvc, dep, inner = p["_internal"]["pvc"], p["_internal"]["dep"], p["_internal"]
     restore_id = secrets.token_hex(12)
@@ -517,14 +517,14 @@ def start(body):
                 or (now_pvc.get("metadata") or {}).get("uid") != ref["old_uid"]):
             return stale
         if KUBE.get_optional(_pvc_path(ns, new), read=kget) is not None:
-            raise ValueError(f"{ns}/{new} exists now; check the plan again for a free name")
+            raise ValueError(f"{ns}/{new} exists now. Check the plan again for a free name.")
         busy = _busy(OPS.snapshot(), ns, app, (old, new))
         if busy:
-            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}); let it finish first")
+            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}). Let it finish first.")
         operation = OPS.start(KIND, f"Restore {app} from a backup", {"kind": "Deployment", "name": app, "namespace": ns},
                               "/data-protection", ref, f"Restoring into {new}")
     return {"ok": True, "operation": operation, "name": new,
-            "detail": f"Restoring into {new}; {app} keeps running until the data is ready"}
+            "detail": f"Restoring into {new}. {app} keeps running until the data is ready."}
 
 
 # ---- the job ----------------------------------------------------------------
@@ -635,7 +635,7 @@ def _put_back(item, why, now):
                 if _mark(item, ref["new_claim"], uid, ref["old_claim"], "not-used", now):
                     made = ref["new_claim"]
     tail = f" The restored volume {made} is kept {_until(now, _days())}." if made else ""
-    return "failed", 100, f"{why}. Nothing was changed; {ref['app']} runs on {ref['old_claim']} as before.{tail}"
+    return "failed", 100, f"{why}. Nothing was changed, and {ref['app']} runs on {ref['old_claim']} as before.{tail}"
 
 
 def _swap_back_writes(item, now):
@@ -673,12 +673,12 @@ def _swap_back(item, to, why, now):
             _scale(ref, ref.get("replicas_before", 1))
             state = f"{ref['app']} was started again, on {_pointed_at(ref)}"
         except Exception:
-            state = (f"{ref['app']} is stopped (0 replicas) and points at {_pointed_at(ref)}: "
-                     "point it at the volume you want with Edit, then start it with Scale")
+            state = (f"{ref['app']} is stopped (0 replicas) and points at {_pointed_at(ref)}. "
+                     "Point it at the right volume with Edit, then start it with Scale.")
         return ("failed", 100, f"On the restored volume {ref['app']} {why}, and swapping back did not work either: "
                 f"{str(error)[:160]}. {state}. Its previous volume is {ref['old_claim']}.")
     to("back-starting", back_at=now)
-    return "running", 95, f"Swapped back to {ref['old_claim']}; waiting for {ref['app']} to be ready"
+    return "running", 95, f"Swapped back to {ref['old_claim']}. Waiting for {ref['app']} to be ready."
 
 
 def resolve(item, checkpoint, now=None):
@@ -719,7 +719,7 @@ def resolve(item, checkpoint, now=None):
         using = _pods_using(ns, old)
         if using:
             if now - float(ref.get("since") or now) > STOP_WAIT:
-                return _put_back(item, f"{app} did not let go of {old} in time - "
+                return _put_back(item, f"{app} did not release {old} in time. "
                                        f"{using[0]['metadata']['name']} still uses it", now)
             return "running", 45, f"Stopping {app}"
         to("swapping")
@@ -749,7 +749,7 @@ def resolve(item, checkpoint, now=None):
         phase = "starting"
     if phase == "starting":
         if ref.get("replicas_before", 1) == 0:
-            return "succeeded", 100, f"{app} now uses {new}; it stays stopped, as it was. {_kept(ref, now)}"
+            return "succeeded", 100, f"{app} now uses {new}. It stays stopped, as it was. {_kept(ref, now)}"
         with fence(ref.get("old_volume")):
             _scale(ref, ref.get("replicas_before", 1))
         to("watching", started_at=now)
@@ -759,26 +759,26 @@ def resolve(item, checkpoint, now=None):
         if not ref.get("rolled_at"):
             if AUTOUPDATE._rolled_out(dep):
                 to("watching", rolled_at=now)
-                return "running", 80, f"{app} is ready; waiting for it to answer"
+                return "running", 80, f"{app} is ready. Waiting for it to answer."
             if now - float(ref.get("started_at") or now) > AUTOUPDATE.ROLLOUT_WAIT:
                 return _swap_back(item, to, f"was not ready after {AUTOUPDATE.ROLLOUT_WAIT // 60} minutes", now)
             return "running", 75, f"Waiting for {app} to be ready"
         if not AUTOUPDATE._rolled_out(dep):
             if _still_bad(ref, now):
                 return _swap_back(item, to, "stopped being ready", now)
-            return "running", 82, f"{app} is not ready; checking again before swapping back"
+            return "running", 82, f"{app} is not ready. Checking again before swapping back."
         state = uptime_report().get(f"{ns}/{app}") or {}
         last = state.get("last") or {}
         fresh = (last.get("at") or 0) > ref["rolled_at"]
         if fresh and state.get("state") == "down":
             if _still_bad(ref, now):
                 return _swap_back(item, to, f"stopped answering ({last.get('error') or 'no answer'})", now)
-            return "running", 86, f"{app} did not answer; checking again before swapping back"
+            return "running", 86, f"{app} did not answer. Checking again before swapping back."
         ref.pop("bad_since", None)
         if state.get("state") == "off" or not state:
             if now - ref["rolled_at"] >= AUTOUPDATE.STEADY:
                 return "succeeded", 100, f"{app} runs on {new}. {_kept(ref, now)}"
-            return "running", 85, f"{app} is ready; making sure it stays up"
+            return "running", 85, f"{app} is ready. Making sure it stays up."
         if fresh and state.get("state") in ("up", "slow"):
             return "succeeded", 100, f"{app} runs on {new}. {_kept(ref, now)}"
         if now - ref["rolled_at"] > AUTOUPDATE.ANSWER_WAIT:
@@ -793,12 +793,12 @@ def resolve(item, checkpoint, now=None):
         said = (f"Swapped back: on the {'restored' if ref['direction'] == 'restore' else 'other'} volume {app} "
                 f"{ref.get('why') or 'did not come up'}. It runs on its previous volume {old} again. "
                 f"The {'restored' if ref['direction'] == 'restore' else 'other'} volume {new} is kept "
-                f"{_until(float(ref.get('back_at') or now), _days())} for you to look at.")
+                f"{_until(float(ref.get('back_at') or now), _days())} so it can be checked.")
         if ref.get("replicas_before", 1) == 0 or AUTOUPDATE._rolled_out(dep):
             return "failed", 100, said
         if now - float(ref.get("back_at") or now) > AUTOUPDATE.ROLLOUT_WAIT:
-            return "failed", 100, said + f" It is not ready on {old} yet either; look at its pods."
-        return "running", 96, f"Swapped back to {old}; waiting for {app} to be ready"
+            return "failed", 100, said + f" It is not ready on {old} yet either. Check its pods."
+        return "running", 96, f"Swapped back to {old}. Waiting for {app} to be ready."
     return "failed", item.get("progress", 0), f"Unknown step {phase}"
 
 
@@ -816,7 +816,7 @@ def _kept(ref, now):
 def cancel_plan(item):
     ref = item["ref"]
     if ref.get("phase") in ("swapping-back", "back-starting"):
-        return {"mode": "stop", "can": False, "why_not": "It is swapping back already; let that finish"}
+        return {"mode": "stop", "can": False, "why_not": "It is already swapping back. Let that finish."}
     if ref.get("swapped") or ref.get("phase") in ("starting", "watching"):
         return {"mode": "rollback", "needs": "admin", "severity": "low",
                 "undo": [f"{ref['app']} is stopped, pointed back at {ref['old_claim']} and started again"],
@@ -846,7 +846,7 @@ def cancel_run(item, _options):
         with fence(ref.get("old_volume")):
             _scale(ref, ref.get("replicas_before", 1))
     ref.update(phase="cancelled", since=now)
-    return f"Cancelled. Nothing was changed; {ref['app']} runs on {ref['old_claim']} as before."
+    return f"Cancelled. Nothing was changed, and {ref['app']} runs on {ref['old_claim']} as before."
 
 
 # ---- previous volumes --------------------------------------------------------
@@ -964,8 +964,8 @@ def _swap_blockers(ns, app, claims, dep):
         users, loose = _users(ns, claim)
         others = [u for u in users if (u["kind"], u["name"]) != ("Deployment", app)]
         if others:
-            blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}; "
-                            "only a volume one app uses can be swapped")
+            blockers.append(f"{claim} is also used by {', '.join(u['kind'] + ' ' + u['name'] for u in others[:3])}. "
+                            "Only a volume that one app uses can be swapped.")
         if loose:
             blockers.append(f"Stop {', '.join(loose[:3])} first. It use{'s' if len(loose) == 1 else ''} {claim} and belong"
                             f"{'s' if len(loose) == 1 else ''} to nothing Homestead can stop and start again")
@@ -984,24 +984,24 @@ def swap_back(body):
             raise ValueError(f"{ns}/{name} is not a previous volume")
         dep = KUBE.get_optional(_dep_path(ns, app), read=kget)
         if not dep:
-            raise ValueError(f"{app} no longer exists in {ns}; nothing to swap back")
+            raise ValueError(f"{app} no longer exists in {ns}, so there is nothing to swap back")
         indexes = _indexes(dep, current)
         if not indexes:
-            raise ValueError(f"{app} no longer uses {current}; point it at {name} with Edit instead")
+            raise ValueError(f"{app} no longer uses {current}. Point it at {name} with Edit instead.")
         digest = _back_digest(ns, app, current, name, record.get("uid", ""), dep)
         if str(b.get("digest") or "") != digest:
-            return MODULE_ROUTES.Reply(409, {"error": f"{app} or {name} changed since this was shown; check it again",
+            return MODULE_ROUTES.Reply(409, {"error": f"{app} or {name} changed since this was shown. Check it again.",
                                              "volume": _row(ns, name, record, pvc, keep_days(), dep=dep)})
         blockers = _swap_blockers(ns, app, (current, name), dep)
         if blockers:
             raise ValueError(blockers[0])
         managed = UPDATES.managed_by(dep)
         if managed and b.get("accept_gitops") is not True:
-            raise ValueError(f"{app} is applied by {managed['by']}, whose next sync puts {current} back; "
-                             "confirm you have read that to go on")
+            raise ValueError(f"{app} is applied by {managed['by']}, whose next sync puts {current} back. "
+                             "Confirm that this has been read to continue.")
         busy = _busy(OPS.snapshot(), ns, app, (current, name))
         if busy:
-            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}); let it finish first")
+            raise ValueError(f"{app} already has a job running ({busy.get('title') or busy.get('kind')}). Let it finish first.")
         leaving = KUBE.get_optional(_pvc_path(ns, current), read=kget) or {}
         ref = {"namespace": ns, "app": app, "kind": "Deployment", "volume": _volumes(dep)[indexes[0]]["name"],
                "indexes": indexes, "old_claim": current, "new_claim": name,
@@ -1050,7 +1050,7 @@ def _expire_one(ns, name, record, pvc, days, active, now):
         _unmark(ns, name)
         other = _keep_the_other(ns, name, record, now)
         note({"key": f"previous-volume:{ns}/{name}:in-use:{int(now)}", "category": "degraded", "severity": "info",
-              "event": True, "title": f"{app or 'An app'} uses {name} again; it is no longer kept for deletion",
+              "event": True, "title": f"{app or 'An app'} uses {name} again, so it is no longer due for deletion",
               "body": f"{users[0]['kind']} {users[0]['name']} mounts it, so it is not a previous volume any more."
                       + (f" {other}, which it ran on, is kept as its previous volume instead." if other else ""),
               "href": "/data-protection"})
@@ -1163,8 +1163,8 @@ def alert_facts(now=None):
             facts.append({"key": f"previous-volume:{ns}/{name}", "category": "degraded", "severity": "info",
                           "title": f"{who} previous volume {name} could not be deleted",
                           "resolved": f"{who} previous volume {name} is no longer due for deletion",
-                          "body": f"It is past its time, but {record['held']}. Delete it yourself under Data protection, "
-                                  "Previous volumes, or Keep it.",
+                          "body": f"It is past its time, but {record['held']}. Delete it manually under Data protection, "
+                                  "Previous volumes, or keep it.",
                           "href": "/data-protection?" + urllib.parse.urlencode({"previous": f"{ns}/{name}"})})
             continue
         when = ("soon" if due <= now else "tomorrow" if due - now <= 1.5 * DAY else

@@ -103,7 +103,7 @@ class StoreMemoTests(unittest.TestCase):
         path = os.path.join(self.tmp.name, operations.STORE)
         os.replace(path, path + ".old")
         Path(path).write_text("{not json")
-        with self.assertRaisesRegex(ValueError, "could not be read safely"):
+        with self.assertRaisesRegex(ValueError, "could not read the job history safely"):
             operations.stored()
 
 

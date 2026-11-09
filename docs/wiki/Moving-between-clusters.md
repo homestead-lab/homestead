@@ -37,7 +37,7 @@ workloads** lists what is still needed, with a button beside each:
 - **The source has a backup target already** (a NAS, S3) - the destination
   uses the same one. If the two clusters use different targets, the review
   says so and the destination is pointed at the source's for the move.
-- **It has none** - **Set it up** runs an S3 server (RustFS) on the source, on a
+- **It has none**: **Set up** runs an S3 server (RustFS) on the source, on a
   Longhorn volume, makes the bucket and points the source's Longhorn at it. The
   **Migration** button beside the source under Linked clusters does the same.
 - **Migration from it is off** - the source's store is stopped; its

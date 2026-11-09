@@ -75,7 +75,7 @@ class PersistentStateTests(unittest.TestCase):
         pvc["metadata"].pop("labels")
         self.assertFalse(self.inspect()["blockers"])
         pvc["metadata"]["ownerReferences"][0]["uid"] = "old-vm"
-        self.assertIn("not be adopted", " ".join(self.inspect()["blockers"]))
+        self.assertIn("not taken over", " ".join(self.inspect()["blockers"]))
 
     def test_new_vm_must_not_adopt_an_existing_label_match(self):
         self.claim()

@@ -60,7 +60,7 @@ try {
     // same person signs back in, so the page carries on rather than reloading.
     await page.evaluate(() => { ME = "test-user"; ROLE = "admin";
       startLoop(); startUpdateChecks(); startOperationChecks(); });
-    await page.getByText("Session expired — sign in again", { exact: true }).waitFor();
+    await page.getByText("The session has expired. Sign in again.", { exact: true }).waitFor();
     await page.locator("#lg_user").fill("test-user");
     await page.locator("#lg_pass").fill("another-password");
     await page.evaluate(() => { window.testPassword = document.querySelector("#lg_pass"); });

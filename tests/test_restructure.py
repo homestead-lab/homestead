@@ -200,7 +200,7 @@ class ResolveTests(unittest.TestCase):
         with mock.patch.object(RESTRUCTURE, "ksend") as send:
             status, _, message = RESTRUCTURE.resolve(item)
         self.assertEqual("failed", status)
-        self.assertIn("no identity receipts", message)
+        self.assertIn("no records of what it created", message)
         self.assertTrue(item["ref"]["retain_resources"])
         send.assert_not_called()
 

@@ -29,7 +29,7 @@ class Refused(Stopped):
 def identity(obj):
     meta = obj.get("metadata") or {}
     if not all(isinstance(meta.get(key), str) and meta[key] for key in ("name", "namespace", "uid", "resourceVersion")) or meta.get("deletionTimestamp"):
-        raise Stopped("Workload identity is unavailable or being removed; refresh before renaming")
+        raise Stopped("The app could not be identified or is being removed. Refresh before renaming.")
     return {key: meta[key] for key in ("name", "namespace", "uid", "resourceVersion")}
 
 
@@ -63,10 +63,10 @@ def guards(current, target, read):
         listing = read(path.replace("autoscaling/v2", "autoscaling/v1"))
     if listing is not None:
         if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
-            raise Stopped("Autoscaler inventory is incomplete; rename cannot start")
+            raise Stopped("The list of autoscalers is incomplete, so the rename cannot start")
         if any(row.get("spec", {}).get("scaleTargetRef", {}).get("kind") == "Deployment" and
                row["spec"]["scaleTargetRef"].get("name") in (meta["name"], target) for row in listing["items"]):
-            raise Stopped("Remove autoscaling for these workload names before renaming; an autoscaler could restart either copy")
+            raise Stopped("Remove autoscaling for these app names before renaming, because an autoscaler could restart either copy")
 
 
 def prepare(body, current, clone, read):
@@ -75,7 +75,7 @@ def prepare(body, current, clone, read):
     source = identity(current)
     guards(current, body["workload_name"], read)
     if KUBE.get_optional(base(source["namespace"]) + "/" + body["workload_name"], read=read) is not None:
-        raise ValueError("The new workload name already exists; choose another name")
+        raise ValueError("An app with the new name already exists. Choose another name.")
     count = current.get("spec", {}).get("replicas", 1)
     if type(count) is not int or not 0 <= count <= 100:
         raise ValueError("Workload replica count is unsupported")
@@ -83,7 +83,7 @@ def prepare(body, current, clone, read):
     old_labels = current["spec"]["template"].get("metadata", {}).get("labels", {})
     new_labels = proposed["spec"]["template"].get("metadata", {}).get("labels", {})
     if any(new_labels.get(key) != value for key, value in old_labels.items()):
-        raise ValueError("Rename would change existing pod labels, possibly breaking Services; review controller-generated labels first")
+        raise ValueError("The rename would change existing pod labels, which could break Services. Review the labels Kubernetes generated first.")
     # Completion was verified against the original UID above. The completed
     # copy Job is historical evidence, not an interlock owned by the new UID.
     proposed.get("metadata", {}).get("annotations", {}).pop(IMPORT.JOB, None)
@@ -101,7 +101,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0])}
     job = ops.start(KIND, f"Rename {old} to {new}", {"kind": "Deployment", "namespace": ns, "name": old},
-                    "/containers", ref, "Rename reviewed; preparing the replacement")
+                    "/containers", ref, "Rename reviewed. Preparing the replacement.")
     ident, writes, progress = job["id"], [], 0
     # The original's replica count while it is stopped and nothing has asked
     # the replacement to start. Only a stop wait that runs out puts it back,
@@ -150,7 +150,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
     def current(path, expected):
         obj = read(path)
         if identity(obj)["uid"] != expected["uid"]:
-            raise Stopped("Workload was replaced; rename stopped")
+            raise Stopped("The app was replaced, so the rename stopped")
         return obj
 
     def scale(obj, count, percent, refusable=False):
@@ -162,13 +162,13 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
         expected_spec = copy.deepcopy(obj["spec"])
         expected_spec["replicas"] = count
         if result.get("spec") != expected_spec:
-            raise Stopped("Scaling changed more than the replica count; inspect both workloads before continuing")
+            raise Stopped("Scaling changed more than the number of replicas. Check both apps before continuing.")
         return result
 
     def stopped(expected):
         obj = current(source_path, expected)
         if obj.get("spec", {}).get("replicas") != 0 or obj["spec"] != stopped_spec:
-            raise Stopped("The original workload changed or restarted; inspect both copies")
+            raise Stopped("The original app changed or restarted. Check both copies.")
         pods = ROLLOUT.items(read, "/api/v1/pods")
         owned, known = ROLLOUT.owned_pods(obj, pods, read, ns)
         # Terminating pods count. Zero controller counters are not proof that
@@ -270,10 +270,10 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 except Stopped as error:
                     return None, f"{refused}: {error}"
                 except Exception:
-                    return None, f"{refused}: its write was refused and the workloads could not be checked again; nothing was written"
+                    return None, f"{refused}: its write was refused and the apps could not be checked again, so nothing was written"
                 scale(obj, count, progress, refusable=True)
         except Refused:
-            return None, f"{refused}: the API server refused the write twice; nothing was written"
+            return None, f"{refused}: the API server refused the write twice, so nothing was written"
         except Exception:
             # The write is journalled by mutation(); it is never retried.
             if writes and writes[-1]["phase"] == "accepted":
@@ -298,11 +298,11 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 count = obj.get("spec", {}).get("replicas", 1)
                 pods, known = ROLLOUT.owned_pods(obj, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
             except Exception:
-                parts.append(f"could not read {name}: inspect before starting anything")
+                parts.append(f"could not read {name}, so check before starting anything")
                 both = False
                 continue
             if not known:
-                parts.append(f"could not read {name}'s pods: inspect before starting anything")
+                parts.append(f"could not read {name}'s pods, so check before starting anything")
             elif count:
                 parts.append(f"{name} is set to {_count(count)}")
             elif pods:
@@ -318,7 +318,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             phase("checking", 5, "Checking the reviewed workload identity and autoscalers")
             source = read(source_path)
             if identity(source) != context["source"]:
-                raise Stopped("Workload changed after review")
+                raise Stopped("The app changed after the review")
             guards(source, new, read)
             if KUBE.get_optional(target_path, read=read) is not None:
                 raise Stopped("The new workload name is no longer free")
@@ -331,10 +331,10 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             guards(target, old, read)
             target_pods, known = ROLLOUT.owned_pods(target, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
             if target_spec.get("replicas") != 0 or not known or target_pods:
-                raise Stopped("The replacement is not confirmed stopped; the original was left unchanged")
+                raise Stopped("The replacement is not confirmed as stopped, so the original was not changed")
             before = source["spec"].get("replicas", 1)
             # Recorded before the stop, so a recovery after a crash still knows it.
-            phase("stopping", 25, f"Stopping {old}; volumes and service addresses are kept", target=target_id,
+            phase("stopping", 25, f"Stopping {old}. Its volumes and service addresses are kept.", target=target_id,
                   before_rename={"replicas": before, "uid": identity(source)["uid"], "new_uid": target_id["uid"]})
             guards(source, new, read)
             source = scale(source, 0, 30)
@@ -348,7 +348,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 if time.monotonic() >= deadline:
                     raise StopTimedOut("Old pods did not finish stopping")
                 sleep(2)
-            phase("admission", 50, "Old pods have stopped; checking current placement before starting the replacement")
+            phase("admission", 50, "The old pods have stopped. Checking placement before starting the replacement.")
             guards(source, new, read)
             target = current(target_path, target_id)
             guards(target, old, read)
@@ -359,7 +359,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             admitted["spec"]["replicas"] = desired
             check = admission(admitted)
             if not isinstance(check, dict) or check.get("blocked") is not False:
-                raise Stopped("Replacement no longer fits; review retained workloads before starting either")
+                raise Stopped("The replacement no longer fits. Review the kept apps before starting either.")
             # Explicit initial RAM-warning acceptance also applies to the fresh
             # pressure estimate; it never overrides a hard placement blocker.
             source, done = stopped(identity(source))
@@ -390,7 +390,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 raise Stopped("Original workload is not stopped")
             source_id = identity(source)
             guards(source, new, read)
-            phase("retiring", 90, "Replacement is ready or intentionally stopped; removing only the original Deployment")
+            phase("retiring", 90, "The replacement is ready or stopped on purpose. Removing only the original Deployment.")
             # Orphan dependents: a PVC, ConfigMap or Service owned by this
             # Deployment must never be garbage-collected as part of a rename.
             # Stopped old ReplicaSets are retained too, not guessed disposable.
@@ -413,8 +413,8 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             reason = str(error) if isinstance(error, Stopped) else "Cluster state or job storage could not be verified"
             updates = {}
             if restore is None:
-                message = f"{reason}. Inspect both workload names. No automatic rollback or cleanup was performed."
-                raised = f"{reason}. Inspect rename job {ident}; nothing was retried or automatically restored."
+                message = f"{reason.rstrip('.')}. Inspect both workload names. No automatic rollback or cleanup was performed."
+                raised = f"{reason.rstrip('.')}. Check rename job {ident}. Nothing was retried or restored automatically."
             else:
                 # The replacement was never asked to start. A stop that ran out
                 # of time puts the original back when put_back finds it safe;
@@ -423,13 +423,13 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 restored, outcome = put_back(restore) if isinstance(error, StopTimedOut) else (
                     None, f"{old} was not put back to {_count(restore)} automatically")
                 if restored:
-                    outcome += f"; {new} was kept, stopped"
+                    outcome += f". {new} was kept and stopped"
                     updates["restored"] = restored
                 else:
                     outcome += (f"; {now_state()}. To bring the app back: Containers → {old} → "
                                 f"Start with {_count(restore)}, then delete {new}")
-                message = f"{reason}. {outcome}. Inspect both workload names."
-                raised = f"{reason}. {outcome}. Inspect rename job {ident}."
+                message = f"{reason.rstrip('.')}. {outcome}. Check both app names."
+                raised = f"{reason.rstrip('.')}. {outcome}. Check rename job {ident}."
             try:
                 phase("failed", progress, message, retain_resources=bool(writes), **updates)
             except Exception:
@@ -441,15 +441,15 @@ def status(item, ops):
     try:
         with LOCKS.worker_lock(item["id"], ops, timeout=.01):
             before = _before(item)
-            return "running", item.get("progress", 0), "Rename dispatcher is no longer active. Inspect both workload names and choose Inspect outcome; requests are never replayed." + (f" {before}." if before else "")
+            return "running", item.get("progress", 0), "The rename is no longer running. Check both app names and choose Check outcome. Requests are never sent again." + (f" {before}." if before else "")
     except Exception:
-        return "running", item.get("progress", 0), item.get("message") or "Inspect the rename if progress has stopped; requests are never replayed"
+        return "running", item.get("progress", 0), item.get("message") or "Check the rename if progress has stopped. Requests are never repeated."
 
 
 def recovery_plan(item, read, ops):
     plan = {"mode": "forget", "action": "Acknowledge and stop tracking", "needs": "admin", "confirm": item["ref"]["name"],
             "can": False, "why_not": "Rename is still running or its dispatcher cannot be checked", "keeps": [],
-            "options": [{"id": "ack", "label": "I checked both workloads; an uncertain request may still take effect",
+            "options": [{"id": "ack", "label": "Both apps were checked. An uncertain request may still take effect.",
                          "detail": "This does not undo the rename, delete resources, or cancel Kubernetes requests.", "default": False}]}
     if _before(item):
         plan["keeps"].append(_before(item))
@@ -488,7 +488,7 @@ def recovery_run(item, options, read, ops):
         # Cluster resources are deliberately unchanged. The permanent approval
         # ledger still prevents reusing the old request after tracking closes.
         item["ref"]["retain_resources"] = False
-        return "Resources unchanged; outcome remains unverified. No request was cancelled, retried or rolled back."
+        return "The resources were not changed, and the outcome is still not confirmed. No request was cancelled, retried or rolled back."
 
 
 def register(ops):

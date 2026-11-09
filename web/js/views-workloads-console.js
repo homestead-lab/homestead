@@ -16,7 +16,7 @@ window.wlConsole = (ns, name, fromRoute = false) => {
       </select></div>
       <button class="btn pri" id="consoleConnect" onclick="consoleConnect()">Connect</button>
     </div>
-    ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
+    ${pods.length ? `<div class="console-security">Operators only · The start and end of each session are recorded, but commands and output are not.</div>
       <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
       <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
       : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the app and wait until its pod is running.</span></div>`}`, true);
@@ -110,7 +110,7 @@ window.consoleConnect = async (attempt = 0) => {
     if (message.type === "output") term.write(message.data);
     else if (message.type === "error") {
       const canFallback = selected === "auto" && attempt < shells.length - 1 && /not found|executable|no such file/i.test(message.data || "");
-      if (canFallback) { term.write(`\r\n\x1b[33m${shell} unavailable; trying ${shells[attempt + 1]}…\x1b[0m\r\n`); return consoleConnect(attempt + 1); }
+      if (canFallback) { term.write(`\r\n\x1b[33m${shell} unavailable. Trying ${shells[attempt + 1]}…\x1b[0m\r\n`); return consoleConnect(attempt + 1); }
       term.write(`\r\n\x1b[31m${message.data || "Console error"}\x1b[0m\r\n`);
     } else if (message.type === "disconnected") state(`disconnected · ${message.reason || "session ended"}`);
   };

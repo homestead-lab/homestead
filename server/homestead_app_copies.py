@@ -121,11 +121,11 @@ def apply(body):
         raise ValueError("each volume needs its name and the counts reviewed")
     found = facts()
     if found["state"] == "unknown":
-        return {"ok": False, "changed": [], "message": f"Could not read the volumes' copies: {found.get('error')}. Nothing was changed"}
+        return {"ok": False, "changed": [], "message": f"Homestead could not read the volumes' copies: {found.get('error')}. Nothing was changed."}
     offered = {row["volume"]: row for row in found["volumes"]} if found["state"] == action else {}
     if not reviewed or any(offered.get(name, {}).get("from") != have or offered.get(name, {}).get("to") != want
                            for name, have, want in reviewed):
-        return {"ok": False, "changed": [], "message": "The volumes changed since the review. Nothing was changed; review again"}
+        return {"ok": False, "changed": [], "message": "The volumes changed since the review. Nothing was changed. Review again."}
     changed, failed = [], []
     try:
         for name, have, want in reviewed:

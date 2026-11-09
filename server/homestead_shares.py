@@ -174,9 +174,9 @@ def _config_rows():
     try:
         rows = json.loads((obj.get("data") or {}).get("shares.json", "[]"))
     except (TypeError, ValueError) as error:
-        raise ValueError("saved share settings are invalid; Samba was left unchanged") from error
+        raise ValueError("the saved share settings are invalid, so Samba was not changed") from error
     if not isinstance(rows, list):
-        raise ValueError("saved share settings are not a list; Samba was left unchanged")
+        raise ValueError("the saved share settings are not a list, so Samba was not changed")
     return rows, obj
 
 
@@ -194,7 +194,7 @@ def _credentials(tolerant=False):
             return {}, obj
         # Taken as "no passwords", the next save would write every share's
         # password away, and Samba would be set up without them (#621).
-        raise ValueError("the saved share passwords could not be read; nothing was changed")
+        raise ValueError("the saved share passwords could not be read, so nothing was changed")
     return value, obj
 
 
@@ -268,7 +268,7 @@ def list_shares():
 
 
 CHANGED = ("The share settings were changed elsewhere meanwhile (another tab or another copy of "
-           "Homestead), so this change was not saved over them; open them again and retry")
+           "Homestead), so this change was not saved over them. Open them again and try again.")
 
 
 def _save(kind, plural, name, key, value, current):
@@ -360,7 +360,7 @@ def _commit(rows, credentials, config_obj, secret_obj, deployment):
             except Exception as failure:
                 recovery.append(str(failure))
         if recovery:
-            raise RuntimeError(f"{error}; share settings could not be restored: "
+            raise RuntimeError(f"{error}. The share settings could not be restored: "
                                + "; ".join(recovery)) from error
         raise
 
@@ -424,9 +424,9 @@ def save_user(user, password, action="create"):
     if action not in ("create", "password"):
         raise ValueError("choose create or password")
     if action == "create" and exists:
-        raise ValueError("SMB user already exists; select it or change its password in SMB users")
+        raise ValueError("This SMB user already exists. Select it, or change its password in SMB users.")
     if action == "password" and not exists:
-        raise ValueError("SMB user no longer exists; refresh the user list")
+        raise ValueError("This SMB user no longer exists. Refresh the user list.")
     _set_account_password(credentials, rows, user, password)
     assigned = account_shares(rows, user)
     if assigned:
@@ -437,7 +437,7 @@ def save_user(user, password, action="create"):
         result = None
     _clear_cache()
     return {"user": user, "shares": assigned, "deployment": result,
-            "message": "SMB password updated for all assigned shares; Samba is restarting" if assigned
+            "message": "SMB password updated for all assigned shares. Samba is restarting." if assigned
                        else "SMB user saved"}
 
 
@@ -517,15 +517,15 @@ def claim_warnings(pvc_name):
             warnings.append(
                 f"{pvc_name} may not mount on {here}. It is attached on {attached} and its storage "
                 "class is migratable, so Longhorn will try to live-migrate it instead of attaching "
-                "it. That mount usually fails; if it does, this change is rolled back and your "
-                "existing shares keep serving.")
+                "it. That mount usually fails. If it does, this change is rolled back and the "
+                "existing shares keep working.")
         elif "ReadWriteMany" not in modes:
             warnings.append(
                 f"Samba on {here} cannot mount {pvc_name} while it is attached on {attached}. "
-                "It is ReadWriteOnce. If the mount fails, this change is rolled back and your "
-                "existing shares keep serving.")
+                "It is ReadWriteOnce. If the mount fails, this change is rolled back and the "
+                "existing shares keep working.")
     if status.get("robustness") and status["robustness"] not in ("healthy", ""):
-        warnings.append(f"{pvc_name} is {status['robustness']} in Longhorn; repair its replicas "
+        warnings.append(f"{pvc_name} is {status['robustness']} in Longhorn. Repair its volume copies "
                         "before relying on this share.")
     return warnings
 
@@ -787,15 +787,15 @@ def create_share(name, size_gb, user, password, public, read_only=False,
     recycle_days = RECYCLE.days_value(recycle_days)
     rows, credentials, config_obj, secret_obj, deployment = _state()
     if any(row.get("name") == name for row in rows):
-        raise ValueError("share already exists; use Edit to change it")
+        raise ValueError("This share already exists. Use Edit to change it.")
     if account_mode not in (None, "existing", "new"):
         raise ValueError("choose an existing or new SMB user")
     if not public and account_mode:
         known = bool(account_password(credentials, user))
         if account_mode == "existing" and (not known or password):
-            raise ValueError("select an existing SMB user; change passwords in SMB users")
+            raise ValueError("Select an existing SMB user. Change passwords in SMB users.")
         if account_mode == "new" and known:
-            raise ValueError("SMB user already exists; select it from existing users")
+            raise ValueError("This SMB user already exists. Select it from the existing users.")
         if account_mode == "new" and (not password or any(c in str(password) for c in (";", "\n", "\r", "\x00"))):
             raise ValueError("password is required and cannot contain semicolons or line breaks")
     if not deployment and install:
@@ -840,7 +840,7 @@ def create_share(name, size_gb, user, password, public, read_only=False,
         if not reused:
             shared_with = account_shares(rows, user, exclude=name)
             if shared_with:
-                warnings.append(f"{user} is also used by {', '.join(shared_with)}; Samba keeps one "
+                warnings.append(f"{user} is also used by {', '.join(shared_with)}. Samba keeps one "
                                 "password per account, so those shares now use this password too.")
     _validate_access(rows, credentials)
     try:
@@ -877,7 +877,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False, recycle=N
     else:
         size_gb = _size(size_gb)
         if old_size and size_gb < old_size:
-            raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GiB")
+            raise ValueError(f"Longhorn volumes cannot shrink. Choose at least {old_size} GiB.")
         if not old_size or size_gb > old_size:
             RESIZE.require(pvc, kget)
     previous = (bool(row.get("public")), str(row.get("user") or "lab"),
@@ -898,7 +898,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False, recycle=N
     else:
         existing = account_password(credentials, user) or account_password(credentials, previous[1])
         if not existing:
-            raise ValueError(f"{user} has no password yet; set one to keep this share private")
+            raise ValueError(f"{user} has no password yet. Set one to keep this share private.")
         _set_account_password(credentials, rows, user, existing)
     access_changed = previous != (bool(public), user, bool(read_only), (bin_on, bin_days)) or password_changed
     _validate_access(rows, credentials)
@@ -914,7 +914,7 @@ def edit_share(name, size_gb, user, password, public, read_only=False, recycle=N
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in rows],
             "deployment": result, "deployment_updated": access_changed,
-            "message": (f"Share {name} updated; Samba is restarting" if access_changed
+            "message": (f"Share {name} updated. Samba is restarting." if access_changed
                         else f"Share {name} size updated")}
 
 
@@ -938,7 +938,7 @@ def delete_share(name):
         _clear_cache()
         return {"shares": [_public(item, credentials) for item in keep],
                 "deployment": result, "removed_claims": removed_claims,
-                "message": "Share was already absent; SMB mappings checked and reconciled"}
+                "message": "The share had already been removed. The SMB settings were checked and corrected."}
     old_claim = next(row.get("pvc") for row in rows if row.get("name") == name)
     remaining = [row["name"] for row in keep if row.get("pvc") == old_claim]
     credentials.pop(name, None)
@@ -946,22 +946,22 @@ def delete_share(name):
     _clear_cache()
     return {"shares": [_public(item, credentials) for item in keep],
             "deployment": result, "removed_claims": removed_claims, "remaining_shares": remaining,
-            "message": f"Share {name} removed; its volume was kept" +
-                       (f" and remains mounted for {', '.join(remaining)}" if remaining else "; waiting for the old SMB pod to release its mount")}
+            "message": f"Share {name} removed. Its volume was kept" +
+                       (f" and remains mounted for {', '.join(remaining)}" if remaining else ". Waiting for the old SMB pod to release it.")}
 
 
 def removal_progress(item):
     """Ready replicas alone do not prove that an old pod released its mounts."""
     ref = item["ref"]
     if time.time() - ref["since"] > 1200:
-        return "failed", 50, "SMB mount release has not completed after 20 minutes; inspect terminating pods and node health. No volumes were deleted."
+        return "failed", 50, "The SMB pod has not released its volumes after 20 minutes. Check the stopping pods and the health of the hosts. No volumes were deleted."
     deployment = _deployment_state()[2]
     if deployment and ref.get("uid") and deployment["metadata"].get("uid") != ref["uid"]:
-        return "failed", 20, "SMB deployment was replaced; review its current shares"
+        return "failed", 20, "The SMB deployment was replaced. Review its current shares."
     claims = set(ref.get("removed_claims") or [])
     spec = (((deployment or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
     if any((v.get("persistentVolumeClaim") or {}).get("claimName") in claims for v in spec.get("volumes") or []):
-        return "failed", 20, "The SMB configuration references a removed claim again; review shares before retrying"
+        return "failed", 20, "The SMB settings refer to a removed volume again. Review the shares before trying again."
     pods = kget(f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{SAMBA_NAME}")
     if not isinstance(pods.get("items"), list) or pods.get("metadata", {}).get("continue"):
         raise ValueError("SMB pod inventory incomplete")
@@ -970,9 +970,9 @@ def removal_progress(item):
     if holding:
         return "running", 45, "Waiting for old SMB pod mount release: " + ", ".join(holding)
     if deployment and not _samba_ready():
-        return "running", 75, "Removed mounts released; waiting for the remaining SMB shares to be ready"
+        return "running", 75, "The removed volumes are released. Waiting for the remaining SMB shares to be ready."
     _clear_cache()
-    return "succeeded", 100, "SMB mappings removed and old pods released them; PVCs and data kept" if claims else "Share removed; its PVC remains mounted for other configured shares"
+    return "succeeded", 100, "Share settings removed, and the old pods released the volumes. The volumes and data are kept." if claims else "Share removed. Its volume stays mounted for the other shares."
 
 
 # Its routes and who may use them (homestead_routes.py).

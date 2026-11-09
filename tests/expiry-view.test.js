@@ -71,7 +71,7 @@ test("a source that could not be read is named, and the summary does not say not
   const { ctx, out } = view({ "/api/expiry": report([], { errors: { "tls-secrets": "HTTP Error 403: Forbidden" } }) });
   await vm.runInContext("viewExpiry()", ctx);
   const shown = text(out.html);
-  assert.match(shown, /Could not read/);
+  assert.match(shown, /could not be read/);
   assert.match(shown, /TLS Secrets/);
   assert.match(shown, /403/);
   assert.doesNotMatch(shown, /nothing expires/i);

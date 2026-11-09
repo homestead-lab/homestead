@@ -66,7 +66,7 @@ class StorageClassTests(unittest.TestCase):
                 return {"items": [{"spec": {"storageClassName": "longhorn", "persistentVolumeReclaimPolicy": "Retain"}}]}
             return original(path, **kwargs)
         server.KUBE_HELPERS.kget = read
-        with self.assertRaisesRegex(ValueError, "retained data"):
+        with self.assertRaisesRegex(ValueError, "kept data"):
             STORAGE_CLASSES.delete_storage_class("longhorn")
         self.assertEqual([], self.sent)
 
@@ -137,7 +137,7 @@ class StorageClassTests(unittest.TestCase):
 
         self.assertEqual(("DELETE", "/apis/storage.k8s.io/v1/storageclasses/longhorn"),
                          self.sent[-1][:2])
-        self.assertIn("untouched", result["message"])
+        self.assertIn("not changed", result["message"])
 
     def test_duplicate_names_and_impossible_replica_counts_are_refused(self):
         with self.assertRaisesRegex(ValueError, "already exists"):
@@ -217,7 +217,7 @@ class LonghornV2Tests(unittest.TestCase):
         self.assertNotIn("will not schedule", result["message"])
         self.enabled = "false"
         result = STORAGE_CLASSES.create_storage_class({"name": "longhorn-v2b", "replicas": 1, "engine": "v2"})
-        self.assertIn("switched off", result["message"])
+        self.assertIn("turned off", result["message"])
         with self.assertRaises(ValueError):
             STORAGE_CLASSES.create_storage_class({"name": "longhorn-v3", "engine": "v3"})
 

@@ -129,7 +129,7 @@ class DiskTests(unittest.TestCase):
 
     def test_harvester_adds_a_disk_by_provisioning_its_blockdevice(self):
         c = cluster(self)
-        with self.assertRaisesRegex(ValueError, "tick erase"):
+        with self.assertRaisesRegex(ValueError, "Tick Erase it first"):
             DISKS.add({"node": "node1", "blockdevice": "bd-sdb"})
         DISKS.add({"node": "node1", "blockdevice": "bd-sdb", "wipe": True})
         method, path, body = sent(c)[-1]
@@ -159,7 +159,7 @@ class DiskTests(unittest.TestCase):
 
     def test_a_disk_is_removed_only_once_it_is_empty_and_closed(self):
         c = cluster(self, harvester=False)
-        with self.assertRaisesRegex(ValueError, "evict it first"):
+        with self.assertRaisesRegex(ValueError, "off first"):
             DISKS.remove("node1", "default-disk")
         DISKS.evict("node1", "default-disk")
         self.assertEqual({"evictionRequested": True, "allowScheduling": False},
@@ -170,7 +170,7 @@ class DiskTests(unittest.TestCase):
         edited(c, NODE_PATH, drained)
         # A disk whose status forgot its replicas still has them: they say so.
         c.add(replica("r3", nodeID="node1", diskPath="/var/lib/harvester/defaultdisk", volumeName="pvc-1"))
-        with self.assertRaisesRegex(ValueError, "1 replica"):
+        with self.assertRaisesRegex(ValueError, "1 volume copy"):
             DISKS.remove("node1", "default-disk")
         c.discard(f"{DISKS.LH}/replicas/r3")
         DISKS.remove("node1", "default-disk")

@@ -140,14 +140,14 @@ class ResourceProjectionTests(unittest.TestCase):
 
     def test_unreadable_config_does_not_claim_emulation_or_kvm_defaults(self):
         result = resources.project(self.vm)
-        self.assertIn("configuration is unavailable", " ".join(result["warnings"]))
+        self.assertIn("settings are unavailable", " ".join(result["warnings"]))
         self.assertNotIn("devices.kubevirt.io/kvm", self.pod(result)["containers"][0]["resources"]["requests"])
 
     def test_kvm_requirement_and_emulation(self):
         self.assertEqual(1, pods.pod_request(self.pod(self.project()), "devices.kubevirt.io/kvm"))
         result = self.project({"developerConfiguration": {"useEmulation": True}})
         self.assertEqual(0, pods.pod_request(self.pod(result), "devices.kubevirt.io/kvm"))
-        self.assertIn("software emulation", " ".join(result["warnings"]))
+        self.assertIn("Software emulation", " ".join(result["warnings"]))
 
     def test_dedicated_cpu_and_emulator_are_not_overcommitted(self):
         self.domain["cpu"].update({"dedicatedCpuPlacement": True, "isolateEmulatorThread": True})

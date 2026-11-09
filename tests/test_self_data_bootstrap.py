@@ -347,7 +347,7 @@ class BootstrapTests(unittest.TestCase):
             self.all_created()
 
     # #466: classes Homestead couldn't read are told apart from no default class.
-    UNREAD = "couldn't read the cluster's PriorityClasses"
+    UNREAD = "could not read the cluster's PriorityClasses"
 
     @staticmethod
     def refusing(code):

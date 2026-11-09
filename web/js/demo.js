@@ -301,7 +301,7 @@
         mounts: [], can_add: true, needs_wipe: false, longhorn: [],
         blockdevice: { name: "bd-node3-sdc", path: "/dev/sdc", provisioned: false, fstype: "", state: "Active" } }],
   };
-  // Which node answers for the management VIP and serves shared volumes.
+  // Which node answers for the management virtual IP and serves shared volumes.
   const demoDuties = {
     "harvester-node1": { vips: ["192.0.2.210", "192.0.2.214", "192.0.2.215", "192.0.2.216"], management_vip: ["192.0.2.210"], rwx: [], control_plane_vip: false },
     "harvester-node2": { vips: [], management_vip: [], rwx: ["share-media", "frigate-config"], control_plane_vip: false },
@@ -599,7 +599,7 @@
   const exposed = workloads.filter(row => row.ports.length);
   const network = {
     controller: { name: "kube-vip", installed: true, desired: 3, ready: 3, healthy: true,
-      mode: "ARP Service controller · explicit VIP allocation" },
+      mode: "ARP Service controller · explicit virtual IP allocation" },
     summary: { services: 8, app_services: 3, load_balancers: 3, vips: 3,
       listeners: 3, unhealthy: 0, ready_endpoints: 3 },
     available_vips: ["192.0.2.230", "192.0.2.231", "192.0.2.217", "192.0.2.218"], available_vip_count: 4,
@@ -641,7 +641,7 @@
     ingresses: [],
   };
   /* Nodes & addresses: node1 answers for the management address and the app
-     VIPs; the file shares' address is answered for and left off its Service,
+     virtual IPs; the file shares' address is answered for and left off its Service,
      the fault Homestead records for kube-vip. */
   const listener = (port, service, workloads, ready = 1) => ({ port, protocol: "TCP", namespace: service === "ingress-expose" ? "kube-system" : "lab", service, workloads, ready });
   const place = (ip, node, listeners, state = "ok", reason = "") => ({ ip, kind: "vip", node, controller: "kube-vip", listeners,
@@ -669,7 +669,7 @@
     const ns = url.searchParams.get("ns") || "";
     const name = url.searchParams.get("name") || "";
     const conflict = name === "frigate-config" ? { kind: "PersistentVolumeClaim", name,
-      message: `PVC ${ns}/${name} already exists; choose a new name` } : null;
+      message: `PVC ${ns}/${name} already exists. Choose a new name.` } : null;
     return { backup: lhBackups[0].name, source_volume: "pvc-demo-frigate",
       created: lhBackups[0].created, backup_size_mb: lhBackups[0].size_mb,
       volume_size_bytes: 21474836480, minimum_size_gb: 20,
@@ -748,7 +748,7 @@
     desc: "Network video recorder with local AI object detection.", downloads: 24800000, stars: 42000,
     trending: 7.8, top_trending: 5.4, top_performing: 7.8, first_seen: 1640995200,
     maintainer: "blakeblackshear", official: true, categories: ["HomeAutomation", "Security"],
-    spotlight: { date: 1785556800, month: "Aug 2026", reason: "Local AI object detection for every camera you own.", who: "Homestead demo" },
+    spotlight: { date: 1785556800, month: "Aug 2026", reason: "Local AI object detection for every camera.", who: "Homestead demo" },
     deploy: {
       name: "frigate", image: "ghcr.io/blakeblackshear/frigate:stable", icon: "",
       ports: [{ container: 8971, host: 8971, expose: true, protocol: "TCP" },
@@ -799,10 +799,10 @@
       session_expires: Math.floor(Date.now() / 1000) + 86400 * 27,
       session_max_days: 90 },
     "/api/node/probe/install": { state: "installed",
-      detail: "homestead-nodeprobe installed; each node reports once its pod is ready" },
+      detail: "homestead-nodeprobe installed. Each host reports once its pod is ready." },
     "/api/node/probe/remove": { state: "absent", detail: "the node probe was removed" },
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
-      uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
+      uid: "demo-probe", resource_version: "1", detail: "Placement checks are off (demo, so no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
@@ -834,7 +834,7 @@
       const req = JSON.parse(init.body), members = req.members || [];
       const refusals = [];
       if (members.length < 2) refusals.push("a bond needs two or more NICs");
-      if (members.includes("enp3s0") && !req.allow_down) refusals.push("enp3s0 has no link: plug it in, or confirm you want it in the bond anyway");
+      if (members.includes("enp3s0") && !req.allow_down) refusals.push("enp3s0 has no link. Plug it in, or confirm that it belongs in the bond anyway.");
       if (req.mode === "802.3ad" && !req.lacp_confirmed) refusals.push("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, which works on any switch");
       return { node: req.node, action: req.action, bond: "bond0", members, mode: req.mode || "active-backup", primary: req.primary, keep: "",
         address: "192.0.2.12/24", carries_on: "bond0", renamed: true, refusals, digest: "demo", rollback_seconds: 240,
@@ -858,14 +858,14 @@
         warnings: config && config.nodes.length > 1 && req.action === "change" ? [`${config.name} is the uplink of ${config.nodes.length} hosts (${config.nodes.join(", ")}): they all change`] : [],
         digest: "demo" };
     },
-    "/api/network/uplinks/apply": () => ({ ok: true, detail: "Sent to Harvester; follow each host under Jobs" }),
+    "/api/network/uplinks/apply": () => ({ ok: true, detail: "Sent to Harvester. Follow each host under Jobs." }),
     "/api/nodes/ports": url => {
       const report = demoPorts();
       const node = url.searchParams.get("node");
       return node ? report.hosts[node] || { node, available: false, ports: [], conditions: [], reason: "No node probe answers on this host." } : report;
     }, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
-    // Homestead's own services, on node addresses until put on a VIP (views-network.js).
+    // Homestead's own services, on node addresses until put on a virtual IP (views-network.js).
     "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [
       { id: "web", label: "Homestead's web page", namespace: "lab", workload: "homestead", present: true, vip: "", vip_service: "",
         node_addresses: ["192.0.2.207", "192.0.2.208"], ports: [{ name: "http", port: 8088, target_port: 8080, protocol: "TCP" }] },
@@ -877,9 +877,9 @@
       { id: "web", label: "Homestead's web page", action: "add", detail: "8088 on 192.0.2.242, as homestead-vip" },
       { id: "objectstore", label: "Backup storage (S3)", action: "kept", detail: "already on 192.0.2.242" },
       { id: "smb", label: "Network shares (SMB)", action: "add", detail: "445 on 192.0.2.242, as homestead-smb-vip" }] },
-    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main VIP",
+    "/api/network/vips/change": { old: "192.0.2.242", new: "192.0.2.210", default: true, label: "Main virtual IP",
       services: [{ namespace: "lab", name: "homestead-vip", ports: ["8088/TCP"], targets: ["homestead"] },
-        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.0.2.242 is now 192.0.2.210; 2 Services moved with it" },
+        { namespace: "lab", name: "frigate", ports: ["5000/TCP"], targets: ["frigate"] }], detail: "192.0.2.242 is now 192.0.2.210. 2 Services moved with it" },
     "/api/welcome": { show: false, done: false, harvester: false, load_balancer: "kube-vip", steps: {
       address: { done: false, url: "", shared_vip: "192.0.2.242", vips: 2 }, probe: { done: true }, backups: { done: false },
       updates: { applies: true, done: false } } },
@@ -914,7 +914,7 @@
       };
       const lastRun = { id: "os-1", status: "succeeded", reason: "asked", finished: now - 396000, nodes: Object.keys(DEMO_OS_WAITING),
         message: "3 hosts done; 0 restarted; needing a restart: harvester-node2 (harvester-node2: some workloads have no other host to run on)",
-        results: [{ node: "harvester-node2", ok: true, note: "updates installed; restart not done: some workloads have no other host to run on", restart_needed: true }] };
+        results: [{ node: "harvester-node2", ok: true, note: "updates installed, but the restart was not done: some workloads have no other host to run on", restart_needed: true }] };
       const every = run && run.nodes.length === 3;
       return { applies: true, every_s: 21600, checking: { running: false, hosts: [], done: [], failed: {} },
         hosts: Object.fromEntries(Object.keys(DEMO_OS_WAITING).map(name => [name, host(name)])),
@@ -928,7 +928,7 @@
     },
     "/api/os-updates/preview": url => {
       const own = "harvester-node1", names = url.searchParams.getAll("node").sort((a, b) => (a === own) - (b === own) || a.localeCompare(b));
-      return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is running already; it has to end first" : "", review_token: "demo",
+      return { restart_policy: "when-needed", single_copy: false, blocked: window.__demoOsRun ? "An OS update is already running. It must end first." : "", review_token: "demo",
         hosts: names.map(node => { const updates = DEMO_OS_WAITING[node] || []; return { node, ready: true, updates, security: updates.filter(u => u.security).length,
           reboot: node === "harvester-node2", reboot_for: node === "harvester-node2" ? "linux-image-6.8.0-90-generic" : "", at: Math.floor(Date.now() / 1000) - 15660,
           homestead_here: node === own, restart_refusal: node === own ? "some workloads have no other host to run on" : "", restart_unread: "", busy: "" }; }) };
@@ -1075,14 +1075,14 @@
           { mac: "52:54:00:3a:1c:07" },
           { tpm: true, hyperv: true,
             dropped: [{ what: "GPU or PCI device", detail: "0000:01:00.0", hardware: true, reason: "passthrough is tied to Unraid's hardware; add it from Homestead's hardware devices in Edit VM" },
-              { what: "CD-ROM", detail: "virtio-win-0.1.262.iso", reason: "an ISO is only needed to install; add one in Edit VM if you still need it" },
+              { what: "CD-ROM", detail: "virtio-win-0.1.262.iso", reason: "an ISO is only needed to install. Add one in Edit VM if it is still needed." },
               { what: "CPU pinning", detail: "vcpupin", reason: "Unraid's own tuning for its cores; the core count comes across" }],
             notes: ["its TPM comes across as a new one - Unraid keeps the old one's contents - so BitLocker, if it is on, asks once for its recovery key"] }),
       ] };
     },
     "/api/sources/vms/shutdown": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return { ok: true, message: `Asked ${body.source} to shut ${body.vm} down; it shows as shut off once the guest has stopped` };
+      return { ok: true, message: `Asked ${body.source} to shut ${body.vm} down. It shows as shut off once the guest has stopped.` };
     },
     "/api/vms/import-unraid/room": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
@@ -1157,15 +1157,15 @@
     "/api/images/vm/delete": { ok: true, detail: "debian-12-genericcloud-amd64.qcow2 is being deleted, with its copies on 1 node" },
     "/api/images/prepull": { ok: true, daemonset: "homestead-pull-redis-7b0d4e19",
       nodes: ["harvester-node1", "harvester-node3"], skipped: ["harvester-node2"],
-      message: "Pulling onto 2 nodes; skipped harvester-node2 (cordoned or not ready)" },
+      message: "Downloading onto 2 hosts. Skipped harvester-node2 (cordoned or not ready)" },
     "/api/images/prepull/stop": { ok: true, message: "Pre-pull homestead-pull-frigate-3f9a1c2e stopped" },
-    "/api/network/vm-networks": { ok: true, name: "default/lan", detail: "VM network default/lan made, on the untagged LAN of mgmt; VMs and containers can join it now" },
+    "/api/network/vm-networks": { ok: true, name: "default/lan", detail: "VM network default/lan created, on the untagged LAN of mgmt. VMs and containers can join it now." },
     "/api/node/bridge/inspect": (url, init) => ({ node: JSON.parse(init.body).node, interface: "eth0", mac: "18:60:24:f5:e5:09",
       address: "192.0.2.109/24", dhcp: true, gateway: "192.0.2.1", file: "/etc/netplan/00-installer-config.yaml", netplan_id: "eth0",
       services: ["k3s"], bridge: "br0", problem: "", rollback_seconds: 240 }),
-    "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0; follow it under Jobs` }),
+    "/api/node/bridge": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node} is moving to br0. Follow it under Jobs.` }),
     "/api/images/scan": { ok: true, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], detail: "asking containerd on 3 nodes for every image" },
-    "/api/images/forget-rollback": { ok: true, detail: "home-assistant no longer keeps its previous image; it can be cleaned up now" },
+    "/api/images/forget-rollback": { ok: true, detail: "home-assistant no longer keeps its previous image, so it can be cleaned up now" },
     // Two linked clusters (branch answers, dr-site is off) and staging, added for
     // moves before linking existed.
     "/api/move/clusters": [
@@ -1178,7 +1178,7 @@
         state: "unreachable", message: "could not reach dr-site: no answer from http://192.0.2.251:8088" };
       if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.335-dev.12",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "staging runs 2.8.190 and this one 2.8.335-dev.12. Moves work between them; this Homestead is the newer of the two." };
+        message: "staging runs 2.8.190 and this one 2.8.335-dev.12. Moves work between them, and this Homestead is the newer of the two." };
       return { name, version: "2.8.335-dev.12", protocol: 1, local_version: "2.8.335-dev.12", local_protocol: 1,
         state: "same", compatible: true, message: "Both run Homestead 2.8.335-dev.12." };
     },
@@ -1259,8 +1259,8 @@
       })(),
     "/api/move/start": { id: "d1", status: "running" },
     "/api/host-console": { version: "2.8.335-dev.12", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
-      { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
-      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.335-dev.12", detail: "Installed 2.8.335-dev.12; matches this release" },
+      { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243. Update available." },
+      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.335-dev.12", detail: "Installed 2.8.335-dev.12, which matches this release" },
       { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
     "/api/compose/preview": () => ({ capacity_token: "demo-compose-review", capacity: {
       status: "fits", blocked: false, requires_confirmation: true, pods: 3,
@@ -1289,7 +1289,7 @@
             volumes: [{ path: "/var/lib/postgresql/data", source: "pgdata", kind: "new-rwo", type: "pvc", create: true, size_gb: 5, access_mode: "ReadWriteOnce" }] } },
         { name: "webserver", source_name: "webserver", line: 18, image: "ghcr.io/paperless-ngx/paperless-ngx:latest", errors: [],
           warnings: [{ line: 26, message: "set TZ in environment (for example TZ: Europe/London) for the local time zone" }],
-          notes: [{ line: 27, message: "./consume becomes new volume webserver-consume; its current contents are not copied. Import › Container source can bring them across" }],
+          notes: [{ line: 27, message: "./consume becomes the new volume webserver-consume. Its current contents are not copied. Import › Container source can bring them across" }],
           summary: { ports: ["8000→8000/tcp"], lan: true, network: "loadbalancer", env: 3, hardware: [], command: "",
             volumes: [{ path: "/usr/src/paperless/data", kind: "new-rwo", source: "data", template_source: "" },
               { path: "/usr/src/paperless/consume", kind: "new-rwo", source: "webserver-consume", template_source: "./consume" }] },
@@ -1302,7 +1302,7 @@
               { path: "/usr/src/paperless/consume", source: "webserver-consume", kind: "new-rwo", type: "pvc", create: true, size_gb: 5,
                 access_mode: "ReadWriteOnce", template_source: "./consume", template_origin: "Compose" }],
             app_profile: { label: "Imported from Docker Compose", level: "review", intent: "compose",
-              notes: ["./consume becomes new volume webserver-consume; its current contents are not copied. Import › Container source can bring them across"] } } }] }),
+              notes: ["./consume becomes the new volume webserver-consume. Its current contents are not copied. Import › Container source can bring them across"] } } }] }),
     "/api/compose/apply": { ok: true, created: ["broker", "db", "webserver"] },
     "/api/onboard/guide": { version: "1.4.1", arch: "amd64",
       iso: "https://releases.rancher.com/harvester/v1.4.1/harvester-v1.4.1-amd64.iso",
@@ -1410,7 +1410,7 @@
         name: "gpu-ssd-w11", backups: 2, snapshots: 2, deleting: 0 }] }),
     "/api/move/holds/release": { ok: true, complete: true, pending: [], retained: [], detail: "win-dev kept running throughout the copy" },
     "/api/move/holds/tidy": { ok: true, complete: true, pending: [], retained: [], detail: "Removed what the transfer left here" },
-    "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on branch" },
+    "/api/move/moves/finish": { ok: true, message: "mosquitto is here now. Removed workload mosquitto on branch" },
     "/api/move/moves": () => [
       { id: "d2", cluster: "branch", kind: "container", name: "grafana", source_namespace: "lab",
         namespace: "lab", status: "failed", phase: "joining", phase_index: 0, source_stopped: false,
@@ -1425,7 +1425,7 @@
       { id: "d0", cluster: "branch", kind: "container", name: "mosquitto", source_namespace: "lab",
         namespace: "lab", status: "succeeded", phase: "done", phase_index: 7,
         phases: ["joining", "quiescing", "backing-up", "syncing", "restoring", "creating", "starting", "done"],
-        progress: 100, message: "mosquitto is running here; still stopped on branch until you remove it there",
+        progress: 100, message: "mosquitto is running here. It stays stopped on branch until it is removed there.",
         source_removed: false, created_at: new Date(Date.now() - 50 * 60e3).toISOString(), claims: [] }],
     "/api/objectstore": { deployed: true, ready: true, endpoint: "http://192.0.2.244:9000",
       reachable_off_cluster: true, bucket: "homestead-backups", size_gb: 100,
@@ -1438,7 +1438,7 @@
       secret: "homestead-backup-credentials", endpoint: "http://192.0.2.244:9000",
       reachable_off_cluster: true, detail: "Longhorn will back up here" },
     "/api/objectstore/remove": { ok: true, detail: "object storage removed" },
-    "/api/move/clusters/target": { pending: true, detail: "Backup target switch queued; Homestead will retry when storage is ready" },
+    "/api/move/clusters/target": { pending: true, detail: "Backup target switch queued. Homestead tries again when the storage is ready." },
     "/api/vmimages": [],
     "/api/vms": demoVms,
     "/api/vm": url => {
@@ -1481,7 +1481,7 @@ ssh_pwauth: true
       shares: [{ name: "media", pvc: "share-media", sub_path: "" }, { name: "backups", pvc: "share-backups", sub_path: "" }] },
     "/api/vm/isos/browse": url => ({ share: url.searchParams.get("share"), path: url.searchParams.get("path") || "",
       folders: url.searchParams.get("path") ? [] : ["isos", "installers", "photos"], isos: url.searchParams.get("path") === "isos" ? 2 : 0 }),
-    "/api/vm/isos/prepare": { ok: true, name: "iso-win11", detail: "Copying Win11_24H2_EnglishInternational_x64.iso into a volume; it can go in a CD-ROM drive once ready" },
+    "/api/vm/isos/prepare": { ok: true, name: "iso-win11", detail: "Copying Win11_24H2_EnglishInternational_x64.iso into a volume. It can go in a CD-ROM drive once it is ready." },
     "/api/vm/isos/delete": { ok: true, detail: "The ISO's volume deleted; the file on the share is kept" },
     "/api/vm/isos/keep": { ok: true, keep_days: 7, detail: "ISO copies no VM uses are removed after 7 days" },
     "/api/vm/isos/folders": { ok: true, folders: [], detail: "ISO folders saved" },
@@ -1504,12 +1504,12 @@ ssh_pwauth: true
       if (!["start","restart","unpause"].includes(body.action)) return {ok:true,detail:`${body.name}: ${body.action} requested`};
       const operation={id:`demo-power-${Date.now()}`,kind:"vm-power",title:`${body.action} VM ${body.name}`,
         resource:{kind:"VirtualMachine",namespace:body.ns,name:body.name},href:"/vms",status:"running",progress:25,
-        message:"KubeVirt accepted the request; waiting for the expected VM instance to become ready",
+        message:"KubeVirt accepted the request. Waiting for the VM instance to become ready.",
         started_at:new Date().toISOString(),cancellable:true,dismissible:false};
       (window.__demoOps ??=[]).unshift(operation);
-      return {ok:true,detail:`Power request accepted for ${body.name}; follow its job for readiness`,operation};
+      return {ok:true,detail:`Power request accepted for ${body.name}. Follow its job to see when it is ready.`,operation};
     },
-    "/api/vm/edit": { ok: true, detail: "saved; no Restart request was sent" },
+    "/api/vm/edit": { ok: true, detail: "saved. No Restart request was sent." },
     "/api/vm/edit/preview": (url, init) => {
       const b = JSON.parse(init.body || "{}"), memory = parseFloat(b.memory) || 4;
       return {capacity_token:"demo-vm-edit", volumes:[], capacity:{blocked:false, blockers:[], requires_confirmation:true,
@@ -1520,7 +1520,7 @@ ssh_pwauth: true
         vm:{action:"edit", admission_needed:true, guest_memory_gb:memory, request_is_lower_bound:true,
           policy_before:"RerunOnFailure", policy_after:b.run_strategy || "RerunOnFailure"}}};
     },
-    "/api/vm/delete": { ok: true, detail: "deleted; its disks are kept" },
+    "/api/vm/delete": { ok: true, detail: "deleted. Its disks are kept." },
     "/api/sources": (url, init) => {
       const source={name:"unraid",host:"192.0.2.10",port:22,user:"root",kind:"unraid",base_path:"/mnt/user/appdata",ssh_trust:{fingerprint:"SHA256:demo-previous-key"}};
       return init?.method === "POST" ? {ok:true,sources:[{...source,...JSON.parse(init.body),password:undefined,ssh_trust:undefined}]} : [source];
@@ -1555,7 +1555,7 @@ ssh_pwauth: true
           {title:"Imported application",capacity}]};
     },
     "/api/import": { ok: true, job: "homestead-import-media-server", pvc: "media-server-appdata",
-      deployment: "media-server", note: "Deployment created stopped; start it once the copy job finishes." },
+      deployment: "media-server", note: "Deployment created stopped. Start it once the copy job finishes." },
     "/api/imports/delete": { ok: true, message: "Import removed", removed: [] },
     "/api/imports/cleanup-plan": (url, init) => {
       if (JSON.parse(init.body).name === "homestead-import-photos") return {journalled:true,known:true,volumes:[]};
@@ -1575,7 +1575,7 @@ ssh_pwauth: true
       const body = JSON.parse(opts.body || '{}');
       return window.__demoSnapshotFiles = {namespace:'lab', session:'homestead-snapshot-files-' + body.request_id, state:'preparing', stage:'clone', percent:42,
         expires:Math.floor(Date.now() / 1000) + 1800, source:{claim:'frigate-config', snapshot:body.snapshot, created:'2026-10-18T03:00:00Z',
-        method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy'}, message:'Preparing the selected snapshot; the live volume stays online'};
+        method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy'}, message:'Preparing the chosen snapshot. The live volume stays online.'};
     },
     "/api/snapshot-files/status": () => ({...window.__demoSnapshotFiles, state:window.__demoSnapshotWaiting ? 'preparing' : 'ready'}),
     "/api/snapshot-files/list": url => ({path:url.searchParams.get('path') || '', read_only:true, entries:[
@@ -1614,7 +1614,7 @@ ssh_pwauth: true
     "/api/files/read": url => ({ path: url.searchParams.get("path") || "notes.txt", size: 96,
       content: "detectors:\n  coral:\n    type: edgetpu\n\nmqtt:\n  host: mqtt\n" }),
     "/api/files/write": { ok: true, path: "config/config.yml", bytes: 96,
-      message: "Saved config/config.yml (96 bytes); previous contents kept as config.yml.homestead-bak" },
+      message: "Saved config/config.yml (96 bytes). The previous contents are kept as config.yml.homestead-bak" },
     "/api/files/close": { ok: true, stopped: true },
     // The file manager (filemanager.js): a volume's folders with owners and
     // permissions; every change answers as done, nothing is kept.
@@ -1731,7 +1731,7 @@ ssh_pwauth: true
       served_shares: ["media", "photos", "secure"], in_sync: true, image: "dperson/samba:latest" },
     "/api/shares/nfs/server": { installed: true, enabled: true, desired: 1, ready: 1,
       name: "homestead-nfs", address: "192.0.2.246", exports: ["media"], image: "pedroetb/nfs-server:v2.4.0",
-      recovery: { level: "limited", detail: "Reconnect recovery prerequisites checked; lock recovery is unsupported",
+      recovery: { level: "limited", detail: "What reconnect recovery needs was checked. Lock recovery is not supported.",
         eligible_hosts: ["harvester-node1", "harvester-node2", "harvester-node3"], blockers: [],
         warnings: ["Longhorn RWX re-exports do not support NFS lock recovery. Use this gateway for ordinary files."], lock_recovery: false } },
     "/api/shares/options": { namespace: "lab", samba_installed: true, node: "harvester-node2",
@@ -1745,7 +1745,7 @@ ssh_pwauth: true
       folder: "/shares/media/.deleted" },
     "/api/shares/recycle/empty": { ok: true, detail: "emptied the recycle bin of media: 4.5 GiB in 12 files" },
     "/api/shares/edit": { ok: true, shares, deployment_updated: true,
-      message: "Share secure updated; Samba is restarting" },
+      message: "Share secure updated. Samba is restarting." },
     // A finished batch plus one still running, which is the case the clear
     // button exists for and the one it must not touch.
     "/api/operations": () => (window.__demoOps ??= [
@@ -1768,7 +1768,7 @@ ssh_pwauth: true
           ["verify", "Check the copy", "todo"], ["swap", "Swap the new volume in", "todo"], ["start", "Start everything again", "todo"]]
           .map(([id, label, state]) => ({ id, label, state })) },
       { id: "op5", kind: "k3s-cluster", title: "k3s cluster k3s-lab", status: "running", progress: 60, cancellable: true,
-        message: "VMs running; installing k3s on k3s-lab-server-1 (192.0.2.60) - a few minutes",
+        message: "VMs running. Installing k3s on k3s-lab-server-1 (192.0.2.60), which takes a few minutes.",
         started_at: new Date(Date.now() - 4e5).toISOString(), href: "/vms",
         resource: { kind: "VirtualMachine", name: "k3s-lab-server-1", namespace: "lab" } },
     ]),
@@ -1816,8 +1816,8 @@ ssh_pwauth: true
       if (!op?.power_recovery || op.demo_dispatching || body.capacity_token!=="demo-recovery-review" || body.confirm!==op.resource.name || !body.confirm_capacity || !body.acknowledge_unknown)
         throw new Error("Review the uncertain outcome and confirm the VM name first");
       Object.assign(op,{status:"failed",power_recovery:false,cancellable:false,dismissible:false,
-        message:"Admin acknowledged an unknown outcome. No retry or rollback was sent; a late effect is still possible.",finished_at:new Date().toISOString()});
-      return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
+        message:"Admin accepted an unknown power outcome after checking it. Nothing was retried or rolled back. A late effect is still possible.",finished_at:new Date().toISOString()});
+      return {ok:true,detail:"Tracking resolved as unknown, and nothing was sent to the cluster",operation:op};
     },
     "/api/operations/host-gone/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
@@ -1826,12 +1826,12 @@ ssh_pwauth: true
       return {capacity_token:"demo-host-gone-review",plan:{id,kind:op.kind,node,phase:"preparing",blocked:false,blockers:[],
         evidence:{node:"missing",longhorn:"missing"},requires_confirmation:true,confirm:node,
         left_on_host:["/dev/sdb (serial DEMO123, /dev/disk/by-id/ata-DEMO) may be partly erased: the erase helper may have started on it."],
-        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host: deleted when you end the job, only if it is still the same Job."],
+        left_in_cluster:["Helper Job homestead-disk-v2-demo in lab, pinned to the removed host, is deleted when the job is ended, only if it is still the same Job."],
         released:["Longhorn upgrades, cluster shutdown and OS rollouts, which this job holds back cluster-wide.",
           `Disk and host jobs on a host named ${node}.`,"Starting V2 cleanup (disabling Longhorn V2).",
           "Storage jobs on the volumes it moved to other hosts: pvc-demo-photos."],
         warnings:["Nothing on the host is changed. Homestead records the end and, if it is still the same Job, deletes the helper Job listed below. Cancelling stays refused.",
-          "The job's record stays in Jobs, with what it did, until you dismiss it."]}};
+          "The job's record stays in Jobs, with what it did, until it is dismissed."]}};
     },
     "/api/operations/host-gone/resolve": (url, init) => {
       const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
@@ -1839,7 +1839,7 @@ ssh_pwauth: true
       if (!op?.host_gone_endable || body.capacity_token!=="demo-host-gone-review" || body.confirm!==node || !body.confirm_capacity || !body.acknowledge_host_gone)
         throw new Error("Type the host's name and confirm that nothing on the host is changed. Nothing was ended.");
       Object.assign(op,{status:"failed",host_gone_endable:false,cancellable:false,dismissible:true,finished_at:new Date().toISOString(),
-        message:`Ended: its host ${node} was removed. Nothing on the host was changed; the record lists what may remain there.`});
+        message:`Ended, because its host ${node} was removed. Nothing on the host was changed. The record lists what may remain there.`});
       return {ok:true,detail:`Ended. ${node}'s job no longer holds anything back; nothing on the host was changed.`,operation:op};
     },
     "/api/operations/vm-recovery/preview": (url, init) => {
@@ -1871,9 +1871,9 @@ ssh_pwauth: true
       if (!op?.mutation_recovery || op.demo_dispatching || body.capacity_token!=="demo-vm-recovery" || body.confirm!==(op.kind==="k3s-cluster"?op.batch_name:op.resource.name) || !body.confirm_capacity || !body.acknowledge_unknown)
         throw new Error("Review the retained resources and confirm the VM name first");
       Object.assign(op,{status:"failed",mutation_recovery:false,cancellable:false,dismissible:false,
-        message:"Admin inspected the incomplete save. Resources retained, outcome unknown; no retry or rollback.",finished_at:new Date().toISOString()});
+        message:"Admin checked the unfinished VM save, and its outcome is still unknown. The resources are kept. Nothing was retried or rolled back.",finished_at:new Date().toISOString()});
       if(op.kind==="k3s-cluster")op.tracking_stopped=true;
-      return {ok:true,detail:"Tracking resolved as unknown; no cluster change was sent",operation:op};
+      return {ok:true,detail:"Tracking resolved as unknown, and nothing was sent to the cluster",operation:op};
     },
     "/api/operations/cancel-plan": (url, init) => {
       const id = JSON.parse(init?.body || "{}").id;
@@ -1889,9 +1889,9 @@ ssh_pwauth: true
         keeps:["This older job has no creation identity receipts. A matching name or label cannot prove it is the original VM; automatic cleanup is disabled.",
           "All VMs, disks, Secrets and IP-address records remain. Guest installation may continue.",
           "Inspect each VM separately before removing it. No addresses are freed and readiness is not verified.",
-          "After acknowledgement, the finished tracking record can be cleared. Save any recovery details you still need."] };
+          "After this is accepted, the finished record can be cleared. Save any recovery details that are still needed."] };
       if (op.kind === "reclass") return { ...base, can: false, needs: "admin",
-        why_not: "Use Review storage move to pause safely; retained data is not rolled back or deleted." };
+        why_not: "Use Review storage move to pause safely. Kept data is not rolled back or deleted." };
       return { ...base, mode: "rollback", action: "Cancel and put back",
         undo: ["home-assistant's home-assistant goes back to ghcr.io/home-assistant/home-assistant@sha256:4be1…"],
         keeps: ["home-assistant's pods restart once more, onto that image"] };
@@ -1923,7 +1923,7 @@ ssh_pwauth: true
         if(JSON.parse(init.body).confirm!=="k3s-lab")throw new Error("Type k3s-lab to confirm");
         Object.assign(op,{status:op.status==="failed"?"failed":"cancelled",cancellable:false,cleanable:false,
           tracking_stopped:true,dismissible:true,finished_at:new Date().toISOString(),
-          message:"Tracking stopped. All VMs, disks, Secrets and IP-address records are retained; no cleanup or readiness verification was performed."});
+          message:"Stopped tracking the guests' start-up. All VMs, disks, Secrets and IP address records are kept. Nothing was cleaned up, and readiness was not checked."});
         return {ok:true,id,detail:op.message,operation:op};
       }
       if (op) Object.assign(op, { status: "cancelled", cancellable: false, finished_at: new Date().toISOString(),
@@ -1961,8 +1961,8 @@ ssh_pwauth: true
     "/api/network/vips/add": { ok: true, added: ["192.0.2.232"], skipped: [], detail: "1 address added" },
     "/api/network/vips/remove": { ok: true, detail: "192.0.2.231 is no longer reserved for Homestead" },
     "/api/network/vips/label": { ok: true },
-    "/api/self/samba": { ok: true, detail: "Samba is stopping; the shares, their volumes and passwords are kept" },
-    "/api/self/nfs": { ok: true, detail: "NFS stopped; exports, shares and every PVC were kept" },
+    "/api/self/samba": { ok: true, detail: "Samba is stopping. The shares, their volumes and passwords are kept." },
+    "/api/self/nfs": { ok: true, detail: "NFS stopped. Exports, shares and every volume were kept." },
     "/api/addons/nfs/remove": { ok: true, detail: "NFS server removed. Export settings and PVCs were kept." },
     "/api/shares/nfs": { ok: true, detail: "NFS export saved" },
     "/api/volumes/other": [{ namespace: "lab", name: "scratch-cache", volume: "pvc-demo-local", storage_class: "local-path",
@@ -1978,8 +1978,8 @@ ssh_pwauth: true
         : op.id !== body.id));
       const gone = before - window.__demoOps.length;
       return { ok: true, dismissed: gone, remaining: window.__demoOps.length,
-        detail: gone ? `cleared ${gone} finished job${gone === 1 ? "" : "s"}; 1 still running`
-          : "nothing finished to clear" };
+        detail: gone ? `Cleared ${gone} finished job${gone === 1 ? "" : "s"}. 1 still running.`
+          : "Nothing finished to clear." };
     },
     "/api/cluster/shutdown/plan": () => ({ready: !window.__demoShutdownBlocked, blockers: window.__demoShutdownBlocked ? ['Gracefully stop these VMs first: default/home-assistant-os', 'lab/paperless: disruption budget permits no verified eviction'] : [],
       confirm:'SHUT DOWN CLUSTER', review_token:'demo-shutdown', nodes: nodes.map(n => ({name:n.name, cordoned:false})), pods:12, volumes:8, homestead_node:nodes[0].name, local_storage:[]}),
@@ -1994,7 +1994,7 @@ ssh_pwauth: true
       return {state:window.__demoShutdown || null};
     },
     "/api/cluster/shutdown/cancel": () => {
-      if (window.__demoShutdown) Object.assign(window.__demoShutdown, {phase:'failed', message:'Shutdown cancelled. Original scheduling restored; check workloads.'});
+      if (window.__demoShutdown) Object.assign(window.__demoShutdown, {phase:'failed', message:'Shutdown cancelled. The hosts are uncordoned as before. Check the apps.'});
       return {ok:true};
     },
     "/api/cluster/shutdown/recover": () => { window.__demoShutdown = null; return {ok:true}; },
@@ -2044,20 +2044,20 @@ ssh_pwauth: true
         return { operation: op, steps: [], background: true };
       }
       const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
-        progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
+        progress: 5, message: "Cordoning the host. Nothing has been sent to the host yet", started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
         power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage),
           holds: !body.force && Object.values(body.choices || {}).length > 0, held: Object.values(body.choices || {}).filter(c => c === "wait").length } };
       const phases = op.power.direct
-        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
-        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11; power has not been sent"]] : []),
-           ["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
-           ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
-           ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
+        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Starting the power helper. Its outcome is watched."], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to shut down"]]
+        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11. Nothing has been sent to the host yet"]] : []),
+           ["draining", 10, "Evicting app and system pods: 9 left"], ["draining", 12, "Evicting app and system pods: 3 left"],
+           ["verifying", 15, "Drain finished. Checking quorum, VMs, pods and volume copies again before the restart or shutdown"],
+           ["sending", 20, "Starting the power helper. Its outcome is watched."], ["observing", 60, reboot ? "The host is ready. Waiting for 2 volumes to become available." : "The host is not ready. Waiting to confirm that it shut down or returned."]];
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
       phases.forEach(([phase, progress, message], i) => setTimeout(() => Object.assign(op, { progress, message, power: { ...op.power, phase } }), (i + 1) * 2500));
       setTimeout(() => Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(),
-        message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
+        message: reboot ? "The host restarted and its volumes are available. The host stays cordoned." : "The host is off." }), (phases.length + 1) * 2500);
       return { operation: op, steps: [], background: true };
     },
     // Starting a StatefulSet's stuck pod elsewhere (#441): a ready review, then a job that walks the real stages.
@@ -2092,7 +2092,7 @@ ssh_pwauth: true
         host_settings: ["--node-ip", "192.0.2.14"], members: ["harvester-node1", "harvester-node2", "harvester-node3"], replicas: 3 },
       review_token: "demo-promote" }),
     "/api/node/promote": () => ({ ok: true, operation: { id: "demo-promote", kind: "host-promote", status: "running", progress: 10,
-      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server; follow it under Jobs" }),
+      title: "Make a host a server", message: "Moving apps off" }, detail: "Making the host a server. Follow it under Jobs." }),
     "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
       total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
     "/api/node/impact": url => ({ node: url.searchParams.get("node"),
@@ -2140,7 +2140,7 @@ ssh_pwauth: true
       }
       if (plan.action === "maintenance") {
         plan.warnings = plannedOutage
-          ? ["This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. It only records the maintenance. Whatever you then do to the host takes the whole cluster with it"]
+          ? ["This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. It only records the maintenance. Anything then done to the host affects the whole cluster."]
           : ["DaemonSets and static pods remain on the host; their services stop if it goes down.", ...plan.warnings.slice(1)];
         if (plannedOutage) plan.hold = [];
         if (window.__demoDeclared?.[plan.node]) Object.assign(plan, { ready: false, blockers: ["This host is already in maintenance"], hard_blockers: ["This host is already in maintenance"] });
@@ -2419,9 +2419,9 @@ ssh_pwauth: true
     "/api/addons/longhorn": { ok: true, name: "longhorn", job: "helm-install-longhorn", copies: 2,
       detail: "Longhorn is being installed, keeping 2 copies of each volume." },
     "/api/addons/kube-vip": { ok: true, name: "kube-vip", job: "helm-install-kube-vip", interface: "eth0", class_only: true,
-      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Your VIPs" },
+      detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Virtual IPs" },
     "/api/addons/multus": { ok: true, name: "multus", job: "helm-install-multus",
-      detail: "Multus is being installed on every node; pods already running are left as they are. LAN networks can be made once it is up" },
+      detail: "Multus is being installed on every host. Pods already running are left as they are. LAN networks can be created once it is running." },
     "/api/addons/kubevirt": { ok: true, name: "homestead-kubevirt", job: "helm-install-homestead-kubevirt",
       kubevirt: "v1.9.0", cdi: "v1.62.0", emulation: false, detail: "KubeVirt v1.9.0 and CDI v1.62.0 are being installed" },
     "/api/vm/create-options": demoPlatform === "harvester"
@@ -2467,7 +2467,7 @@ ssh_pwauth: true
         images: [
           row("ubuntu-24.04", "Ubuntu", "Ubuntu 24.04 LTS", "Server", "The standard server image", "ubuntu", 597,
             H ? { kept: true, auto: true, ready: true, update: true, versions: [here("default/image-7f3a2c", 3)] } : {}),
-          row("ubuntu-24.04-minimal", "Ubuntu", "Ubuntu 24.04 LTS", "Minimal", "Smaller: fewer packages and no manuals, for a server you set up yourself", "ubuntu", 252),
+          row("ubuntu-24.04-minimal", "Ubuntu", "Ubuntu 24.04 LTS", "Minimal", "Smaller, with fewer packages and no manuals, for a server set up by hand", "ubuntu", 252),
           row("ubuntu-22.04", "Ubuntu", "Ubuntu 22.04 LTS", "Server", "The standard server image", "ubuntu", 701),
           row("debian-13", "Debian", "Debian 13 (trixie)", "Cloud", "A kernel slimmed for VMs - the usual choice", "debian", 325,
             H ? { kept: true, auto: true, versions: [{ image: "default/image-91bd0e", added: now, ready: false, failed: false, progress: 42 }] } : {}),
@@ -2477,7 +2477,7 @@ ssh_pwauth: true
           row("rocky-10-lvm", "Rocky Linux", "Rocky Linux 10", "LVM", "Its disk under LVM, to grow or split later", "rocky", 519),
           row("alpine", "Alpine", "Alpine Linux", "Cloud-init", "Tiny - musl and OpenRC rather than glibc and systemd", "alpine", 148)] };
     })(),
-    "/api/vm/store/keep": { ok: true, detail: "Fedora Cloud is downloading as a Harvester image; it keeps itself current" },
+    "/api/vm/store/keep": { ok: true, detail: "Fedora Cloud is downloading as a Harvester image. It keeps itself up to date." },
     "/api/vm/store/refresh": { ok: true, updated: ["Ubuntu 24.04 LTS"], tidied: [] },
     // The numbers from a real two-disk-heavy cluster: node1 is nearly full.
     "/api/longhorn/capacity": { node_down: "do-nothing", rebuild_limit: 5, over_provisioning: 100, minimal_available: 25, warn_pct: 80, crit_pct: 95,
@@ -2660,7 +2660,7 @@ ssh_pwauth: true
         { ...own, id: "lab/vaultwarden", current: "critical", wanted: "critical", suggested: "critical", why: "looks like home automation, a password manager, a database, DNS or a tunnel" },
         { ...own, id: "lab/paperless", current: "normal", wanted: "normal", suggested: "", why: "" },
         { ...own, id: "ci/actions-runner", current: "normal", wanted: "normal", suggested: "low", why: "looks like batch or CI work" },
-        { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps); set priorityClassName there" },
+        { ...own, id: "media/jellyfin", current: "normal", wanted: "normal", suggested: "", why: "", managed: "Flux", note: "Flux applies it (Kustomization flux-system/apps). Set priorityClassName there." },
         { ...own, id: "vm:lab/windows-desktop", kind: "vm", current: "normal", wanted: "normal", suggested: "", why: "" },
         { ...own, id: "sts:lab/postgres", kind: "sts", current: "normal", wanted: "normal", suggested: "critical",
           why: "looks like home automation, a password manager, a database, DNS or a tunnel" }];
@@ -2737,13 +2737,13 @@ ssh_pwauth: true
         error: "", system: false, state: device.endsWith("c") ? "blank" : "longhorn", mount_point: `/mnt/${device.split("/").pop()}`,
         choices: device.endsWith("c") ? ["format"] : ["import", "erase"] };
     },
-    "/api/disks/setup": { ok: true, path: "/mnt/sdc", tags: ["hdd"], detail: "/dev/sdc is formatted and mounted at /mnt/sdc; Longhorn is adding it on harvester-node3, tagged hdd" },
+    "/api/disks/setup": { ok: true, path: "/mnt/sdc", tags: ["hdd"], detail: "/dev/sdc is formatted and mounted at /mnt/sdc. Longhorn is adding it on harvester-node3, tagged hdd." },
     "/api/disks/os-space": { root: "/dev/mapper/ubuntu--vg-ubuntu--lv", root_free_gb: 71.2, vg: "ubuntu-vg", size_gb: 235.4, free_gb: 135.4,
       lvs: { "ubuntu-lv": 100 }, pvs: ["/dev/sda3"], tools: ["lvcreate", "mkfs.ext4", "chattr", "findmnt"], lvm_tools: true,
       reserve_gb: 24, usable_gb: 111, exists: false, taken: { v1: false, v2: false }, mount_point: "/mnt/longhorn-os",
       regions: [{ disk: "sdb", start: 419432448, sectors: 1534019584, sector: 512, size_gb: 731 }],
       lvm_problems: { v1: "", v2: "" }, problem: "" },
-    "/api/disks/os-space/use": { ok: true, path: "/mnt/longhorn-os", tags: ["os"], detail: "A 111 GiB volume in ubuntu-vg is mounted at /mnt/longhorn-os; Longhorn is adding it on node-1, tagged os" },
+    "/api/disks/os-space/use": { ok: true, path: "/mnt/longhorn-os", tags: ["os"], detail: "A 111 GiB volume in ubuntu-vg is mounted at /mnt/longhorn-os. Longhorn is adding it on node-1, tagged os." },
     "/api/disks/add": { ok: true, detail: "Harvester is wiping and adding /dev/sdb on harvester-node1 to Longhorn" },
     "/api/disks/scheduling": { ok: true, detail: "done" }, "/api/disks/evict": { ok: true, detail: "moving replicas off" },
     "/api/disks/remove": { ok: true, detail: "released" },
@@ -2879,7 +2879,7 @@ ssh_pwauth: true
         if (!blocker) {
           blocker = {id:"data-batch-recovery",title:"k3s cluster k3s-demo",kind:"k3s-cluster",batch_name:"k3s-demo",
             status:"failed",progress:10,mutation_recovery:true,recovery:true,dismissible:false,href:"/vms?find=k3s-demo",
-            resource:{namespace:"lab",name:"k3s-demo-server-1"},message:"Guest verification timed out (0/1 ready). Resources are retained; inspect the batch outcome."};
+            resource:{namespace:"lab",name:"k3s-demo-server-1"},message:"The guest check timed out (0 of 1 ready). The resources are kept. Check the batch outcome."};
           window.__demoOps.push(blocker);
         }
       }
@@ -2889,17 +2889,17 @@ ssh_pwauth: true
         blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,
-          message: "Destination prepared. Review the move when you are ready for downtime." }] : [] };
+          message: "Destination prepared. Review the move when ready for downtime." }] : [] };
     },
     "/api/self/data/prepare/archive/preview": (url, init) => ({ id: JSON.parse(init.body).id,
       destination: "homestead-data-prepared", source: "homestead-data", capacity_token: "demo-only",
-      detail: "Hides this completed preparation from Move data and Jobs. Both volumes are retained; no data is copied or deleted." }),
+      detail: "Hides this finished preparation from Move data and Jobs. Both volumes are kept. No data is copied or deleted." }),
     "/api/self/data/prepare/archive": () => { window.__demoDataPrepared = false; return {ok: true}; },
     "/api/self/data/prepare/preview": { size: "2Gi", storage_class: "longhorn", capacity_token: "demo-only", capacity: {
       blocked: false, warnings: ["Storage capacity is not reserved until provisioning completes."], candidates: [] } },
     "/api/self/data/move/preview": { capacity_token: "demo-only", downtime: "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
       stages: ["Start move coordinator", "Copy and verify", "Restart Homestead"].map((label, i) => ({ label, detail: i ? "Conditional on stopping Homestead first. Capacity is checked again before acting." : "Starts alongside Homestead.", capacity: { blocked: false, warnings: [], candidates: [] } })) },
-    "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
+    "/api/self/data/move": { ok: true, detail: "Copying homestead-data to homestead-data-shared on longhorn. Homestead restarts on it when it is done." },
     // App links carry the app's Answering state, as the server's portal_status gives it.
     "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id,
       link.icon === "workload:lab/home-assistant" ? { up: true, ms: 2840, state: "slow", source: "monitoring", error: "", code: 200 }
@@ -2938,7 +2938,7 @@ ssh_pwauth: true
       const body = JSON.parse(init?.body || "{}");
       const w = workloads.find(x => x.ns === body.ns && x.name === body.name);
       if (w) w.update_mode = body.mode;
-      return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits for you to update it` };
+      return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits to be updated manually` };
     },
     // Schedules (schedules.js): paperless overnight, the k3s test VMs out of
     // working hours - one of whose last starts was refused for room.
@@ -3224,7 +3224,7 @@ ssh_pwauth: true
         notices: flux ? ["frigate is applied by Flux (Kustomization flux-system/apps): its next sync puts frigate-config back. Change the claim where Flux reads it too."] : [],
         blockers: late ? [`${lateWhy}; choose another storage class`] : [], digest: "demo-restore-swap", ready: !late };
     },
-    "/api/restore-swap": () => ({ ok: true, name: "frigate-config-restore", detail: "Restoring into frigate-config-restore; frigate keeps running until the data is ready",
+    "/api/restore-swap": () => ({ ok: true, name: "frigate-config-restore", detail: "Restoring into frigate-config-restore. frigate keeps running until the data is ready.",
       operation: { id: "demo-restore-swap", kind: "restore-swap", status: "queued" } }),
     // Previous volumes: one expiring in 6 days, one reminded (goes tomorrow), one kept.
     "/api/volumes/previous": () => {
@@ -3659,7 +3659,7 @@ ssh_pwauth: true
   responses["/api/expiry/keys"] = () => ({ warn_days: 21, critical_days: 7, items: [
     ...demoKeys.keys.map(k => ({ ...expiryRow("api-key", "", k.name, (k.expires - expiryNow()) / 86400), owner: k.owner })),
     { ...expiryRow("fleet-key", "", "Linked-cluster key", 0), not_after: null, days_left: null, state: "no-expiry",
-      note: "It has no expiry; it changes when a cluster is unlinked" }] });
+      note: "It has no expiry. It changes when a cluster is unlinked." }] });
   responses["/api/firewall/preview"] = (url, init) => {
     const cfg = JSON.parse(init?.body || "{}");
     return {review:"demo-reviewed-policy",pods:[`${cfg.target.name}-demo`],overlapping:[],update:!!cfg.uid,
@@ -3686,7 +3686,7 @@ ssh_pwauth: true
     ["settings", "Settings", "Site name, health thresholds, update policy, App Store feed", true],
     ["users", "Users and roles", "Every account, its role and password", false, "Replaces every account and password with the backup's, and signs everyone out - sign in again with an account from the backup."],
     ["hardware", "Hardware features", "Device mappings: iGPU, Coral, USB and the rest", true],
-    ["vips", "VIPs", "Your saved VIPs, their labels and the default workload VIP", true],
+    ["vips", "Virtual IPs", "The saved virtual IPs, their labels and the default app virtual IP", true],
     ["ipam", "IP addresses", "Subnets, documented addresses, and the UniFi connection", true],
     ["mqtt", "MQTT", "The broker, its credentials and what is published", true],
     ["portal", "Portal", "Its sections and tiles", true],
@@ -3701,7 +3701,7 @@ ssh_pwauth: true
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
         state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
-    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
+    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, virtual IPs, Portal" },
   });
   const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
   const demoKeys = { scopes: { read: "Read status: the cluster, nodes, containers, VMs, alerts and jobs",
@@ -3739,13 +3739,13 @@ ssh_pwauth: true
       decided_by: "demo", detail: "Deleted the snapshot snap-0412 of frigate-config", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
       action: "Delete the snapshot snap-0412 of frigate-config", summary: { action: "Delete the snapshot snap-0412 of frigate-config", plan: { volume: "frigate-config", size_gb: 4.2 } }, args: { volume: "frigate-config", snapshot: "snap-0412" }, result: { ok: true } },
     { id: "d9a2b6c15e847f03", tool: "restore_backup", title: "Restore a backup", status: "failed", reason: "", created: ago(300), expires: ago(270), ended: ago(288),
-      decided_by: "demo", detail: "The cluster changed since you reviewed this: the volume paperless-data is now 24 GiB, not 20 GiB. Ask the agent to try again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
+      decided_by: "demo", detail: "The cluster changed since this was reviewed: the volume paperless-data is now 24 GiB, not 20 GiB. Ask the agent to try again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
       action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", summary: { action: "Restore the backup backup-7f3a91 as the volume lab/paperless-data", plan: { size_gb: 20 } }, args: { backup: "backup-7f3a91" }, result: null },
     { id: "e0b3c7d2a9f15846", tool: "delete_vm", title: "Delete a VM", status: "denied", reason: "Not used", created: ago(1500), expires: ago(1470), ended: ago(1490),
       decided_by: "demo", detail: "denied by demo", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
       action: "Delete the VM lab/test-win", summary: { action: "Delete the VM lab/test-win", disks: ["test-win-root"] }, args: { namespace: "lab", name: "test-win" }, result: null },
     { id: "f1c4d8e3b0a26957", tool: "delete_container", title: "Delete a container", status: "expired", reason: "", created: ago(2900), expires: ago(2870), ended: ago(2870),
-      decided_by: null, detail: "Nobody approved it in time; the agent can ask again", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
+      decided_by: null, detail: "Nobody approved it in time. The agent can ask again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
       action: "Delete the container lab/scratch", summary: { action: "Delete the container lab/scratch", replicas: 0 }, args: { namespace: "lab", name: "scratch" }, result: null }] };
   responses["/api/agents/requests"] = () => ({ pending: demoAgent.pending.length,
     requests: [...demoAgent.pending, ...demoAgent.finished].map(r => ({ ...r, can_decide: r.role !== "admin" || ROLE === "admin" })) });
@@ -4024,7 +4024,7 @@ ssh_pwauth: true
       const bar = document.createElement("div");
       bar.id = "demoBanner";
       bar.className = "demobanner";
-      bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing you do here is saved. `
+      bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing done here is saved. `
         + '<a href="https://github.com/homestead-lab/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
       document.body.prepend(bar);
     };
@@ -4048,7 +4048,7 @@ ssh_pwauth: true
       saved ||= {revision:null,layout:null};
       if(init?.method === "POST") {
         const body=JSON.parse(init.body);
-        if(body.revision!==saved.revision)return new Response(JSON.stringify({error:"Your dashboard changed in another session. Cancel and reopen the editor to load the latest layout."}),{status:409,headers:{"Content-Type":"application/json"}});
+        if(body.revision!==saved.revision)return new Response(JSON.stringify({error:"The dashboard changed in another session. Cancel and open the editor again to load the latest layout."}),{status:409,headers:{"Content-Type":"application/json"}});
         saved={revision:crypto.randomUUID(),layout:body.layout};localStorage.setItem(storageKey,JSON.stringify(saved));
       }
       return new Response(JSON.stringify(saved),{status:200,headers:{"Content-Type":"application/json"}});

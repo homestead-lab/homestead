@@ -137,7 +137,7 @@ def admission_pods(get, pods):
         service = get(f"/api/v1/namespaces/{ns}/services/{name}")
         selector = service.get("spec", {}).get("selector")
         if not selector:
-            raise ValueError(f"Admission service {ns}/{name} has no pod selector; its shutdown dependency cannot be verified")
+            raise ValueError(f"Admission service {ns}/{name} has no pod selector. Its part in the shutdown cannot be checked.")
         keep.extend(p for p in pods if p["metadata"].get("namespace") == ns and
                     all(p["metadata"].get("labels", {}).get(k) == v for k, v in selector.items()) and M.drainable(p))
     return {p["metadata"]["uid"]: p for p in keep}
@@ -168,11 +168,11 @@ class Shutdown:
             legacy = KUBE.get_optional(f"/api/v1/namespaces/{self.ns}/configmaps/{NAME}", read=self.get)
             if legacy is not None:
                 self._legacy_absent.pop(self.ns, None)
-                raise ValueError("Legacy shutdown ConfigMap found; inspect and retire its helpers and journal from a cluster console before starting another shutdown")
+                raise ValueError("An older shutdown ConfigMap was found. Check and remove its helpers and record from a cluster console before starting another shutdown.")
             self._legacy_absent[self.ns] = legacy_clock()
             return None
         if journal.get("kind") != "Secret" or journal.get("type") != JOURNAL_TYPE:
-            raise ValueError("Unexpected shutdown journal type; power was not authorized")
+            raise ValueError("The shutdown record has an unexpected type, so no host was shut down")
         journal["data"] = {key: base64.b64decode(value, validate=True).decode("utf-8")
                            for key, value in journal["data"].items()}
         return journal
@@ -193,14 +193,14 @@ class Shutdown:
         for _ in range(8):
             journal = self.read()
             if not journal or (uid and journal["metadata"]["uid"] != uid):
-                raise ValueError("Shutdown journal identity changed; power was not authorized")
+                raise ValueError("The shutdown record changed, so no host was shut down")
             fn(journal["data"])
             try:
                 return self.write("PUT", self.path, journal)
             except urllib.error.HTTPError as error:
                 if error.code != 409:
                     raise
-        raise ValueError("Shutdown journal is busy; inspect its progress")
+        raise ValueError("The shutdown record is busy. Check its progress.")
 
     def review(self, journal_uid=None):
         nodes = sorted((node_row(n) for n in inventory(self.get, "/api/v1/nodes")), key=lambda n: n["name"])
@@ -210,7 +210,7 @@ class Shutdown:
         targets = [p for p in pods if consumer(p) and not helper(p, journal_uid) and p["metadata"]["uid"] not in admission]
         problems = []
         if any(v.get("persistentVolumeClaim") for p in admission.values() for v in p.get("spec", {}).get("volumes", [])):
-            problems.append("An admission webhook uses a persistent volume; its dependency needs a separate shutdown plan")
+            problems.append("An admission webhook uses a persistent volume, so it needs its own shutdown plan")
         if not self.enabled:
             problems.append("Host power control is disabled on this installation")
         if not nodes or any(not n["ready"] or not n["boot_id"] or not n["uid"] for n in nodes):
@@ -227,7 +227,7 @@ class Shutdown:
         # this review ran on - and go back to their number on recovery.
         copies = int(deployment.get("spec", {}).get("replicas", 1) or 1)
         if not any(identity(p) == identity(own) for p in siblings):
-            problems.append("Homestead's running pod is not one of its Deployment's; refresh and review again")
+            problems.append("Homestead's running pod does not belong to its Deployment. Refresh and review again.")
         vmis = [v for v in inventory(self.get, VMI, True) if v.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
         managed = [v for v in vmis if any(o.get("kind") == "VirtualMachine" and o.get("controller")
                                           for o in v.get("metadata", {}).get("ownerReferences") or [])]
@@ -252,7 +252,7 @@ class Shutdown:
             problems.append("Repair faulted or unknown Longhorn volumes before shutting down")
         old = self.state()
         if old and old["phase"] != "released" and not journal_uid:
-            problems.append("An existing shutdown needs attention; open its progress")
+            problems.append("An earlier shutdown needs attention. Open its progress.")
         snapshot = {"nodes": nodes, "pods": M.pod_snapshot(targets), "own": identity(own),
                     "own_node": own_node, "image": self.image,
                     "service_account": own.get("spec", {}).get("serviceAccountName"),
@@ -327,9 +327,9 @@ class Shutdown:
         if not plan["ready"]:
             raise ValueError("; ".join(plan["blockers"]))
         if body.get("review_token") != plan["review_token"]:
-            raise ValueError("Cluster impact changed; review shutdown again")
+            raise ValueError("The effect on the cluster changed. Review the shutdown again.")
         state = {"run": uuid.uuid4().hex[:16], "phase": "preparing", "progress": 0,
-                 "message": "Preparing independent shutdown helpers; no host power sent",
+                 "message": "Preparing the shutdown helpers. No host has been shut down.",
                  "deadline": self.clock() + LIFETIME, "plan": plan["snapshot"], "review_token": plan["review_token"]}
         previous = self.read()
         journal = {"apiVersion": "v1", "kind": "Secret", "type": JOURNAL_TYPE,
@@ -337,7 +337,7 @@ class Shutdown:
               "data": {"state": encode(state)}}
         if previous:
             if json.loads(previous["data"]["state"])["phase"] != "released":
-                raise ValueError("A shutdown already exists; inspect it before retrying")
+                raise ValueError("A shutdown already exists. Check it before trying again.")
             journal["metadata"]["resourceVersion"] = previous["metadata"]["resourceVersion"]
         journal = self.write("PUT" if previous else "POST", self.path if previous else self.path.rsplit("/", 1)[0], journal)
         uid = journal["metadata"]["uid"]
@@ -361,7 +361,7 @@ class Shutdown:
         volumes = inventory(self.get, LH, not bool(self.state()["plan"]["volumes"]))
         expected = self.state()["plan"]["volumes"]
         if sorted(identity(v) for v in volumes) != expected:
-            raise ValueError("Longhorn volume inventory changed; power was not authorized")
+            raise ValueError("The list of Longhorn volumes changed, so no host was shut down")
         try:
             rebuilding = rebuild_only(inventory(self.get, LH_ATTACHMENTS, True))
         except Exception:
@@ -380,7 +380,7 @@ class Shutdown:
                 obj = self.get("/api/v1/nodes/" + n["name"])
                 current = node_row(obj)
                 if current["uid"] != n["uid"]:
-                    raise ValueError("Host identity changed; inspect scheduling on " + n["name"])
+                    raise ValueError("The host changed. Check whether it is cordoned: " + n["name"])
                 if obj["metadata"].get("annotations", {}).get(ANNOTATION) != run:
                     break
                 changes = [{"op": "test", "path": "/metadata/resourceVersion", "value": obj["metadata"]["resourceVersion"]},
@@ -403,7 +403,7 @@ class Shutdown:
         journal = self.read()
         state = json.loads(journal["data"]["state"])
         if run != state["run"] or state["phase"] == "released":
-            raise ValueError("Shutdown changed; refresh its progress")
+            raise ValueError("The shutdown changed. Refresh its progress.")
         live = [node_row(self.get("/api/v1/nodes/" + n["name"])) for n in state["plan"]["nodes"]]
         # Every host on a new boot: no helper of the old one can act any more.
         rebooted = "commit" in journal["data"] and all(n["boot_id"] != old["boot_id"] for n, old in zip(live, state["plan"]["nodes"]))
@@ -417,14 +417,14 @@ class Shutdown:
         pods = inventory(self.get, "/api/v1/pods")
         if any(helper(p, journal["metadata"]["uid"]) and self.run_pod(p, run)
                and p.get("status", {}).get("phase") not in ("Succeeded", "Failed") for p in pods):
-            raise ValueError("Shutdown helpers have not all terminated; inspect their status before recovering scheduling")
+            raise ValueError("Not every shutdown helper has ended. Check them before uncordoning the hosts.")
         self.restore(state["plan"], run)
         self.release_holds(state["plan"], run)
         def release(data):
             current = json.loads(data["state"])
             if current["run"] != run:
                 raise ValueError("Shutdown identity changed")
-            current.update(phase="released", message="Scheduling restored; inspect workload and storage health", progress=100)
+            current.update(phase="released", message="The hosts are uncordoned. Check the health of the apps and storage.", progress=100)
             data["state"] = encode(current)
         self.change(release, journal["metadata"]["uid"])
         _maintenance(lambda HISTORY: [HISTORY.maintenance_close(f"cs:{run}:{n['name']}", outcome="returned")
@@ -502,13 +502,13 @@ class Shutdown:
     def progress(self, item):
         state = self.state()
         if not state or state["run"] != item["ref"]["run"]:
-            return "failed", 0, "Shutdown journal changed; inspect cluster and host power state"
+            return "failed", 0, "The shutdown record changed. Check the cluster and whether the hosts are on."
         self.record_maintenance(state)
         phase = state["phase"]
         status = "succeeded" if phase == "released" else "failed" if phase == "failed" or self.clock() > state["deadline"] else "running"
         message = state["message"]
         if self.clock() > state["deadline"] and phase not in ("released", "failed"):
-            message = "Shutdown observation ended. Check physical host power; open Cluster → Shut down cluster for recovery"
+            message = "Homestead stopped watching the shutdown. Check whether the hosts are off, and open Cluster → Shut down cluster to recover."
         return status, state["progress"], message
 
 
@@ -534,7 +534,7 @@ class Coordinator:
             raise ValueError("Shutdown journal was replaced")
         state = json.loads(journal["data"]["state"])
         if state["run"] != self.run or self.s.clock() >= state["deadline"]:
-            raise ValueError("Shutdown expired; power was not authorized")
+            raise ValueError("The shutdown expired, so no host was shut down")
         if journal["data"].get("cancel"):
             raise ValueError("Shutdown cancelled before final power handoff")
         return journal, state
@@ -560,7 +560,7 @@ class Coordinator:
         live = sorted((node_row(n) for n in inventory(self.s.get, "/api/v1/nodes")), key=lambda n: n["name"])
         if [(n["name"], n["uid"], n["boot_id"], n["ready"]) for n in live] != [
                 (n["name"], n["uid"], n["boot_id"], True) for n in self.plan["nodes"]]:
-            raise ValueError("Host membership, readiness or boot identity changed; power was not sent")
+            raise ValueError("The hosts, their readiness or their start-up changed, so nothing was sent")
 
     def consumers(self, pods):
         admission = admission_pods(self.s.get, pods)
@@ -573,7 +573,7 @@ class Coordinator:
         each marked with this run and what it was, for recovery."""
         vms = self.plan.get("vms") or []
         if vms:
-            self.report("stopping-vms", 5, f"Shutting down {len(vms)} VM(s) from inside; no host power sent")
+            self.report("stopping-vms", 5, f"Shutting down {len(vms)} VM{'' if len(vms) == 1 else 's'} from inside. No host has been shut down.")
             for ns, name, _ in vms:
                 path = f"{VM_API}/namespaces/{ns}/virtualmachines/{name}"
                 vm = self.s.get(path)
@@ -598,7 +598,7 @@ class Coordinator:
                 self.s.sleep(3)
         if int(self.plan.get("copies") or 1) > 1:
             ns, own = self.plan["own"][0], self.plan["own"][1]
-            self.report("one-copy", 8, f"Running Homestead as one copy for the shutdown; it goes back to {self.plan['copies']} on recovery")
+            self.report("one-copy", 8, f"Running Homestead as one copy for the shutdown. It returns to {self.plan['copies']} on recovery.")
             # The copy kept is the one the review ran on.
             self.s.send("PATCH", f"/api/v1/namespaces/{ns}/pods/{own}",
                         {"metadata": {"annotations": {"controller.kubernetes.io/pod-deletion-cost": "100000"}}},
@@ -615,7 +615,7 @@ class Coordinator:
                 if not others:
                     break
                 if self.s.clock() > until:
-                    raise ValueError("Homestead's other copies did not stop within 5 minutes; no host was powered off")
+                    raise ValueError("Homestead's other copies did not stop within 5 minutes, so no host was shut down")
                 self.s.sleep(2)
 
     def drain(self, own=False):
@@ -640,7 +640,7 @@ class Coordinator:
             if not targets:
                 return
             if any(p["metadata"]["uid"] not in reviewed for p in targets):
-                raise ValueError("A new application pod started during shutdown; review again")
+                raise ValueError("A new app pod started during the shutdown. Review it again.")
             rows = []
             for pod in targets:
                 ns, name, uid = identity(pod)
@@ -712,7 +712,7 @@ class Coordinator:
                     break
                 self.report("preparing", 10, "Checking independent power helper on " + ", ".join(waiting))
                 if self.s.clock() > until:
-                    raise ValueError("Power helpers did not become ready; no hosts drained or powered off")
+                    raise ValueError("The power helpers did not become ready, so no host was drained or shut down")
                 self.s.sleep(2)
             for n in self.plan["nodes"]:
                 self.current()
@@ -725,9 +725,9 @@ class Coordinator:
                              {"op": "test", "path": "/metadata/resourceVersion", "value": obj["metadata"]["resourceVersion"]},
                              {"op": "add", "path": "/metadata/annotations", "value": {**obj["metadata"].get("annotations", {}), ANNOTATION: self.run}},
                              {"op": "add", "path": "/spec/unschedulable", "value": True}], ctype="application/json-patch+json")
-            self.report("draining", 25, "All hosts cordoned; draining application pods. Homestead stays online")
+            self.report("draining", 25, "All hosts are cordoned. Draining app pods. Homestead stays online.")
             self.drain()
-            self.report("stopping-homestead", 65, "Applications drained. Independent coordinator will stop Homestead next; this page will disconnect")
+            self.report("stopping-homestead", 65, "Apps drained. A separate coordinator stops Homestead next, so this page disconnects.")
             self.s.sleep(10)  # Give connected browsers a chance to display the handoff.
             self.drain(own=True)
             until = self.s.clock() + 300
@@ -739,7 +739,7 @@ class Coordinator:
                     break
                 self.report("detaching", 80, "Waiting for Longhorn volumes to detach: " + ", ".join(attached[:6]))
                 if self.s.clock() > until:
-                    raise ValueError("Longhorn volumes did not detach; no host power sent")
+                    raise ValueError("Longhorn volumes were not released, so no host was shut down")
                 self.s.sleep(2)
             # Check again immediately before publishing the one-way handoff.
             self.drain()
@@ -753,7 +753,7 @@ class Coordinator:
             except urllib.error.HTTPError as error:
                 if error.code != 409:
                     raise
-            self.report("handoff", 90, "Power handoff committed. Host timers request power-off in 30 seconds; Homestead's host in 90 seconds. Physical power is unverified", commit=True)
+            self.report("handoff", 90, "Shutdown handed over. The hosts shut down in 30 seconds, and Homestead's host in 90 seconds. Whether they turn off is not confirmed.", commit=True)
         except Exception as error:
             journal = self.s.read()
             if not journal or journal["metadata"]["uid"] != self.uid or "commit" in journal["data"]:
@@ -762,13 +762,13 @@ class Coordinator:
             try:
                 self.s.restore(self.plan, self.run)
                 self.s.release_holds(self.plan, self.run)
-                message += ". Original scheduling restored, and what was stopped started again; check workloads before retrying"
+                message += ". The hosts are uncordoned as before, and what was stopped started again. Check the apps before trying again."
             except Exception as recovery:
                 message += ". Scheduling recovery needs attention: " + str(recovery)
             def failed(data):
                 current = json.loads(data["state"])
                 if current["run"] != self.run or "commit" in data:
-                    raise ValueError("Shutdown handoff changed; recovery stopped")
+                    raise ValueError("The shutdown handover changed, so recovery stopped")
                 current.update(phase="failed", message=message[:1500])
                 data["state"] = encode(current)
             self.s.change(failed, self.uid)
@@ -815,10 +815,10 @@ def agent(shutdown, uid, run, index, execute=subprocess.check_output):
     node = state["plan"]["nodes"][index]
     boot = execute(HOST + ["set -e; command -v systemctl >/dev/null; command -v systemd-run >/dev/null; cat /proc/sys/kernel/random/boot_id"], timeout=15).decode().strip()
     if boot != node["boot_id"]:
-        raise ValueError("Host boot changed; power helper disarmed")
+        raise ValueError("The host restarted, so the power helper was turned off")
     def ready(data):
         if json.loads(data["state"])["run"] != run or "commit" in data or data.get("cancel"):
-            raise ValueError("Shutdown already changed; helper disarmed")
+            raise ValueError("The shutdown already changed, so the helper was turned off")
         data["ready-" + str(index)] = boot
     shutdown.change(ready, uid)
     while True:
@@ -841,7 +841,7 @@ def agent(shutdown, uid, run, index, execute=subprocess.check_output):
             # systemd owns this timer after the pod/API stops. No shell input
             # comes from the request; the run ID and delay are checked here.
             execute(HOST + [f'systemd-run --unit=homestead-shutdown-{run} --on-active={delay}s --timer-property=AccuracySec=1s "$(command -v systemctl)" poweroff'], timeout=15)
-            print(f"Power timer accepted on {node['name']}; request in {delay} seconds; physical power unverified", flush=True)
+            print(f"Power timer accepted on {node['name']}. Shutdown in {delay} seconds. Whether it turns off is not confirmed.", flush=True)
             def sent(data):
                 if json.loads(data["state"])["run"] != run:
                     raise ValueError("Shutdown journal changed after power timer was accepted")

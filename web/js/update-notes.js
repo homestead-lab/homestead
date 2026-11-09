@@ -14,13 +14,13 @@
     const out = [], env = c.env || {};
     if (c.ports.added.length) out.push(line("add", "New port", codes(c.ports.added)));
     if (c.ports.removed.length) out.push(line("del", "Port no longer exposed", codes(c.ports.removed)));
-    if (c.volumes.added.length) out.push(line("add", "New volume", `${codes(c.volumes.added)} <span class="dim">not kept unless you add storage for it</span>`));
+    if (c.volumes.added.length) out.push(line("add", "New volume", `${codes(c.volumes.added)} <span class="dim">not kept unless storage is added for it</span>`));
     if (c.volumes.removed.length) out.push(line("del", "Volume no longer declared", codes(c.volumes.removed)));
     if (env.added?.length) out.push(line("add", "New default setting", codes(env.added)));
     if (env.removed?.length) out.push(line("del", "Default setting removed", codes(env.removed)));
     if (env.changed?.length) out.push(line("chg", "Default changed", `${codes(env.changed)} <span class="dim">value changed</span>`));
     if (c.user) out.push(line("chg", "Runs as", `<code>${esc(c.user.was)}</code> → <code>${esc(c.user.now)}</code> <span class="dim">${c.user.overridden_by != null
-      ? `your app runs it as <code>${esc(c.user.overridden_by)}</code>, so this does not apply`
+      ? `the app runs it as <code>${esc(c.user.overridden_by)}</code>, so this does not apply`
       : "files it writes may need new owners"}</span>`));
     return out;
   };
@@ -41,7 +41,7 @@
       ${head ? `<div class="un-links">${head}</div>` : `<p class="un-quiet">This image does not say where its source or release notes are.</p>`}
       ${lines.length ? `<ul class="un-lines">${lines.join("")}</ul>`
         : `<p class="un-same">${icon("check")} Same ports, volumes and settings as the version running now.</p>`}
-      ${own.length ? `<p class="un-quiet">Your app sets ${codes(own)} itself, so its own values still apply.</p>` : ""}${build}</div>`;
+      ${own.length ? `<p class="un-quiet">The app sets ${codes(own)} itself, so its own values still apply.</p>` : ""}${build}</div>`;
   };
 
   const render = results => {
@@ -65,7 +65,7 @@
         return {config, notes: await api("/api/image-updates/notes", {method: "POST", timeout: 20000,
           headers: {"Content-Type": "application/json", ...(config.cluster ? {"X-Homestead-Cluster": config.cluster} : {})},
           body: JSON.stringify({ns: config.ns, name: config.name})})};
-      } catch (error) { return {config, error: error.message || "Could not read what changed"}; }
+      } catch (error) { return {config, error: error.message || "The changes could not be read"}; }
     }));
     if (el.isConnected) el.innerHTML = render(results);
   };

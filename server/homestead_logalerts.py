@@ -162,7 +162,7 @@ def validate(body, known_apps=None, existing_ids=(), named=True):
     if rule_id is None:
         rule_id = "la-" + secrets.token_hex(6)
     elif not (isinstance(rule_id, str) and _ID.fullmatch(rule_id) and rule_id in existing_ids):
-        raise ValueError("that log alert no longer exists; refresh and try again")
+        raise ValueError("That log alert no longer exists. Refresh and try again.")
     name = str(body.get("name") or "").strip()
     if named and (not name or len(name) > 60):
         raise ValueError("give the alert a name of at most 60 characters")
@@ -216,7 +216,7 @@ def _existing(state, rule_id):
     rule = next((r for r in state["rules"] if r["id"] == rule_id), None) \
         if isinstance(rule_id, str) and _ID.fullmatch(rule_id) else None
     if rule is None:
-        raise ValueError("that log alert no longer exists; refresh and try again")
+        raise ValueError("That log alert no longer exists. Refresh and try again.")
     return rule
 
 
@@ -608,7 +608,7 @@ def preview(body, now=None):
 
     with LOGSEARCH.exclusive():
         if _inflight["preview"]:
-            raise ValueError("an earlier try is still reading logs; try again in a moment")
+            raise ValueError("An earlier try is still reading logs. Try again in a moment.")
         stamps, found, unread, capped = [], [], set(), set()
         targets = LOGSEARCH.targets(workloads, rule["apps"])[:MAX_CONTAINERS]
         pool = ThreadPoolExecutor(max_workers=PREVIEW_WORKERS)

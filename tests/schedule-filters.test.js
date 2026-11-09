@@ -109,7 +109,7 @@ test("This week is one table, When / Kind / What / App or host / Open, with one 
   assert.match(out.html, /class="tbl stack compact"/);
   assert.equal((out.html.match(/<div class="ui-callout /g) || []).length, 1, "the clash and what could not be read share one callout");
   assert.match(out.html, /1 clash this week/);
-  assert.match(out.html, /Could not read CronJobs/);
+  assert.match(out.html, /Homestead could not read CronJobs/);
   const backup = out.html.split("<tr").find(r => r.includes("<b>frigate-backup</b>"));
   assert.match(backup, /data-label="App or host">lab\/frigate</);
   assert.match(backup, /Backups/);
@@ -203,8 +203,8 @@ test("review I1: when the apps or the volumes cannot be read, every run is still
   assert.match(out.html, /<b>db-dump<\/b>/);
   assert.doesNotMatch(out.html, /schedules are missing/);
   assert.doesNotMatch(out.html, /Some schedules are missing/);
-  assert.match(out.html, /Could not read the apps list: no run names its app/);
-  assert.match(out.html, /Could not read volume copies: no run names its host/);
+  assert.match(out.html, /Homestead could not read the apps list: no run names its app/);
+  assert.match(out.html, /Homestead could not read volume copies: no run names its host/);
 });
 
 test("review I2: a Host chosen on This week does not empty Schedules, which filters on App only", async () => {
@@ -225,14 +225,14 @@ test("review M1: a CronJob in another namespace says Homestead cannot see its ap
   const { ctx, out } = setup(answers);
   await ctx.viewScheduleWeek();
   const row = out.html.split("<tr").find(r => r.includes("<b>backup-photos</b>"));
-  assert.match(row, /data-tip="Homestead can&#39;t see which app this touches \(another namespace\)"|data-tip="Homestead can't see which app this touches \(another namespace\)"/);
+  assert.match(row, /data-tip="Homestead cannot see which app this affects \(another namespace\)"/);
   ctx.weekFilter("app", "lab/frigate");
   assert.doesNotMatch(out.html, /<b>backup-photos<\/b>/);
-  assert.match(out.html, /\d+ runs? in other namespaces may touch it: Homestead can't see which app they touch/);
+  assert.match(out.html, /\d+ runs? in other namespaces may affect it, but Homestead cannot see which apps they affect/);
   const s = setup({ "/api/schedules": [elsewhere, cron({ claims: ["frigate-config"] })], "/api/workloads": APPS },
     { session: { "homestead.schedule.filter": JSON.stringify({ app: "lab/frigate" }) } });
   await s.ctx.viewSchedules();
-  assert.match(s.out.html, /1 job in another namespace may touch it: Homestead can't see which app it touches/);
+  assert.match(s.out.html, /1 job in another namespace may affect it, but Homestead cannot see which app it affects/);
 });
 
 test("review M2: the Schedules summary line follows the filter", async () => {
@@ -260,9 +260,9 @@ test("re-review 1: with power stops and the apps unread, the page says the stop-
   const { ctx, out } = setup({ ...QUIET, "/api/lh/overview": STOP_LH, "/api/schedules": [], "/api/power-schedules": STOPS,
     "/api/workloads": new Error("forbidden") });
   await ctx.viewScheduleWeek();
-  assert.match(out.html, /Could not read the apps list: no run names its app; whether an app.s power stop falls in its backup was not checked\./);
+  assert.match(out.html, /Homestead could not read the apps list: no run names its app; whether an app.s power stop falls in its backup was not checked\./);
   assert.doesNotMatch(out.html, /No clashes this week/);
-  assert.equal((out.html.match(/Could not read the apps list/g) || []).length, 1, "one line for the one failed read");
+  assert.equal((out.html.match(/could not read the apps list/g) || []).length, 1, "one line for the one failed read");
 });
 
 test("re-review 2: the window is said to be maybe missing only when it is set and not listed already, in one line", async () => {
@@ -271,11 +271,11 @@ test("re-review 2: the window is said to be maybe missing only when it is set an
   for (const [what, settings] of [["no window", window_("auto", "off", null)], ["a balance-only window", window_("auto", "window")]]) {
     const html = await page(settings);
     assert.doesNotMatch(html, /missing/, `${what}: nothing is missing`);
-    assert.equal((html.match(/Could not read the apps list/g) || []).length, 1, `${what}: one line`);
+    assert.equal((html.match(/could not read the apps list/g) || []).length, 1, `${what}: one line`);
   }
   const html = await page(window_("auto", "off"));
-  assert.match(seen(html), /Could not read the apps list: no run names its app\. The maintenance window may be missing: whether an app updates itself in it is not known\./);
-  assert.equal((seen(html).match(/Could not read the apps list/g) || []).length, 1, "a window that may be missing: still one line");
+  assert.match(seen(html), /Homestead could not read the apps list: no run names its app\. The maintenance window may be missing: whether an app updates itself in it is not known\./);
+  assert.equal((seen(html).match(/could not read the apps list/g) || []).length, 1, "a window that may be missing: still one line");
 });
 
 test("re-review minor: the hidden count of another namespace's runs counts runs, an all-day job by its runs", async () => {
@@ -284,7 +284,7 @@ test("re-review minor: the hidden count of another namespace's runs counts runs,
   const { ctx, out } = setup({ ...QUIET, "/api/lh/overview": LH, "/api/schedules": [elsewhere], "/api/workloads": APPS });
   await ctx.viewScheduleWeek();
   ctx.weekFilter("app", "lab/frigate");
-  assert.match(out.html, /About 336 runs in other namespaces may touch it/);
+  assert.match(out.html, /About 336 runs in other namespaces may affect it/);
 });
 
 test("re-review 3: a window with no days never runs, so an unread apps list does not make it maybe missing", () => {

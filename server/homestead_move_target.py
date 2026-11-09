@@ -57,7 +57,7 @@ def _borrow_target(move, there=None):
         return _borrow_target_locked(move, there)
     except urllib.error.HTTPError as error:
         # Secret admission errors can include their submitted stringData.
-        raise STATE.CLIENT.Unreachable("Could not prepare transfer backup storage; check Kubernetes and retry") from error
+        raise STATE.CLIENT.Unreachable("Homestead could not prepare backup storage for the transfer. Check Kubernetes and try again.") from error
 
 
 def _borrow_target_locked(move, there=None):
@@ -76,8 +76,8 @@ def _borrow_target_locked(move, there=None):
                 endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
                 if endpoint and hasattr(STATE.CLIENT, "answers") and not STATE.CLIENT.answers(endpoint):
                     raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
-                                     f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
-                                     "under Linked clusters - then retry")
+                                     f"Give it an address this cluster can reach with {move['cluster']}'s Migration button "
+                                     "under Linked clusters, then try again.")
                 shared = STATE._same_target(STATE.LH.backup_target(), there)
                 secret = "" if shared else f"{STATE.JOIN_SECRET}-{move['id']}-{secrets.token_hex(4)}"
                 target = {"state": here if shared else STATE.LH.transfer_target_state(here, there["url"], secret, credentials),
@@ -90,7 +90,7 @@ def _borrow_target_locked(move, there=None):
         if here == journal["applied"]:
             return True
         if here != journal["previous"]:
-            raise ValueError("Backup storage changed during this transfer; cancel it and review the storage settings")
+            raise ValueError("Backup storage changed during this transfer. Cancel it and review the storage settings.")
         target = move["transfer_target"]
         if target["secret"]:
             path = f"/api/v1/namespaces/{STATE.LHNS}/secrets"
@@ -109,9 +109,9 @@ def _borrow_target_locked(move, there=None):
         try:
             applied = STATE.LH.replace_backup_target_state(here, journal["applied"])
         except Exception as error:
-            raise STATE.CLIENT.Unreachable("Could not apply the transfer backup target; check backup storage and retry") from error
+            raise STATE.CLIENT.Unreachable("Homestead could not set the backup target for the transfer. Check backup storage and try again.") from error
         if not applied:
-            raise ValueError("Backup storage changed while the transfer was starting; cancel it and review the settings")
+            raise ValueError("Backup storage changed while the transfer was starting. Cancel it and review the settings.")
         return True
 
 
@@ -123,7 +123,7 @@ def _release_target(move):
             try:
                 STATE.LH.replace_backup_target_state(journal["applied"], journal["previous"])
             except Exception as error:
-                raise STATE.CLIENT.Unreachable("Could not restore previous backup storage; cleanup will retry") from error
+                raise STATE.CLIENT.Unreachable("Homestead could not restore the previous backup storage. Cleanup tries again.") from error
             _target_journal({})
         move.setdefault("flags", {}).pop("target_cleanup_pending", None)
         target = move.get("transfer_target") or {}

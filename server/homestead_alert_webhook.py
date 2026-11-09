@@ -245,7 +245,7 @@ def test_webhook(b):
     stored = load() if OUTAGE.HIDDEN in url else None
     url = OUTAGE.webhook_url(OUTAGE.restore(url, (stored or {}).get("webhook")))
     if not OUTAGE._allow_test():
-        return ROUTER.Reply(429, {"error": f"at most {OUTAGE.TEST_LIMIT} tests a minute; wait a little and send it again"})
+        return ROUTER.Reply(429, {"error": f"At most {OUTAGE.TEST_LIMIT} tests a minute. Wait a little and send it again."})
     sample = {"phase": "raised", "severity": "info", "category": "test", "key": "test",
               "title": "Homestead", "body": "A test alert from Homestead"}
     shown = {**notice(sample), "level": "default", "tags": "test_tube"}

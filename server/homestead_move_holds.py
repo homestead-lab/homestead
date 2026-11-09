@@ -98,16 +98,16 @@ def release(kind, namespace, name, transfer_id="", uid=""):
         obj = SRC._object(kind_, name)
         meta = obj.get("metadata") or {}
         if not uid or meta.get("uid") != uid:
-            raise ValueError(f"{name} was replaced since this page read it; refresh and look again")
+            raise ValueError(f"{name} was replaced since this page read it. Refresh and check again.")
         if NAMES.read(SRC._annotations(obj), SRC.OWNER) != (transfer_id or ""):
-            raise ValueError(f"{name} is held by a different transfer now; refresh and look again")
+            raise ValueError(f"{name} is held by a different transfer now. Refresh and check again.")
         if not transfer_id and not SRC._origin(obj):
             return {"ok": True, "detail": f"{name} is no longer held", "complete": True}
         answer = SRC.release(kind_, name, transfer_id, uid) if transfer_id else SRC.release(kind_, name)
         tidy = _tidy(transfer_id, uid) if transfer_id else {"complete": True, "pending": [], "retained": []}
         detail = answer.get("detail", f"{name} is no longer held")
         if not tidy["complete"]:
-            detail += "; Longhorn is still deleting what the transfer made here, so it shows under Leftovers until it is gone"
+            detail += ". Longhorn is still deleting what the transfer created here, so it shows under Leftovers until it has been removed"
         return {"ok": True, "detail": detail, **tidy}
     return SRC.in_namespace(namespace, run)
 
@@ -117,12 +117,12 @@ def tidy(transfer_id, source_uid):
     for kind, obj in _workloads():
         meta = obj.get("metadata") or {}
         if meta.get("uid") == source_uid and NAMES.read(SRC._annotations(obj), SRC.OWNER) == transfer_id:
-            raise ValueError(f"{meta.get('name', 'That workload')} is still held by that transfer; "
-                             "release it first, or let the transfer finish")
+            raise ValueError(f"{meta.get('name', 'That workload')} is still held by that transfer. "
+                             "Release it first, or let the transfer finish.")
     result = _tidy(transfer_id, source_uid)
     return {"ok": True, **result,
             "detail": "Removed what the transfer left here" if result["complete"]
-                      else "Longhorn is still deleting some of it; look again in a minute"}
+                      else "Longhorn is still deleting some of it. Check again in a minute."}
 
 
 def _body(request, *keys):

@@ -171,7 +171,7 @@ def storage_class_usage():
     counts = {}
     claims = kget("/api/v1/persistentvolumeclaims")
     if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
-        raise ValueError("Could not check every claim using the storage classes; try again")
+        raise ValueError("Homestead could not check every claim that uses the storage classes. Try again.")
     for item in claims["items"]:
         name = STORAGE_RESIZE.storage_class(item)
         if name:
@@ -250,19 +250,19 @@ def create_storage_class(cfg):
         wanted = " and ".join(x for x in (f"a disk tagged {', '.join(disk_tags)}" if disk_tags else "",
                                           f"the node tags {', '.join(node_tags)}" if node_tags else "") if x)
         if reach is None:
-            warning += f"; whether a node has {wanted} could not be read from Longhorn"
+            warning += f". Whether a host has {wanted} could not be read from Longhorn"
         elif not reach:
-            warning += f"; no node has {wanted} yet, so its volumes will not schedule until one does"
+            warning += f". No host has {wanted} yet, so its volumes are not placed until one does"
         elif len(reach) < replicas:
-            warning += (f"; only {', '.join(reach)} ha{'s' if len(reach) == 1 else 've'} {wanted}, fewer than "
-                        f"its {replicas} replicas, so its volumes will run degraded")
+            warning += (f". Only {', '.join(reach)} ha{'s' if len(reach) == 1 else 've'} {wanted}, fewer than "
+                        f"its {replicas} volume copies, so its volumes run degraded")
     if engine == "v2":
         parameters["dataEngine"] = "v2"
         v2 = v2_engine_status()
         if not v2["enabled"]:
-            warning = "; V2 is switched off in Longhorn, so its volumes will not schedule until it is on"
+            warning = ". V2 is turned off in Longhorn, so its volumes are not placed until it is on"
         elif not v2["ready_nodes"]:
-            warning = "; no node has a V2 disk and hugepages yet, so its volumes will not schedule"
+            warning = ". No host has a V2 disk and hugepages yet, so its volumes are not placed"
     body = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
             "metadata": {"name": name, "labels": {NAMES.key("managed"): "true"},
                          "annotations": {DEFAULT_CLASS_ANNOTATION: "true"} if cfg.get("default") else {}},
@@ -428,19 +428,19 @@ def delete_storage_class(name):
     if row["internal"]:
         raise ValueError(f"{name} is reserved by Harvester and must not be deleted")
     if row["default"]:
-        raise ValueError(f"{name} is the default class; make another class the default first")
+        raise ValueError(f"{name} is the default class. Make another class the default first.")
     if row["in_use"]:
         raise ValueError(f"{name} still backs {row['in_use']} claim"
-                         f"{'s' if row['in_use'] != 1 else ''}; existing volumes keep working, "
-                         "but the class cannot be removed while claims reference it")
+                         f"{'s' if row['in_use'] != 1 else ''}. Existing volumes keep working, "
+                         "but the class cannot be removed while claims refer to it.")
     volumes = kget("/api/v1/persistentvolumes")
     if "items" not in volumes or (volumes.get("metadata") or {}).get("continue"):
-        raise ValueError("Could not check every backing volume; the StorageClass was not deleted")
+        raise ValueError("Homestead could not check every volume behind it, so the StorageClass was not deleted")
     if any((pv.get("spec") or {}).get("storageClassName") == name for pv in volumes["items"]):
-        raise ValueError("This StorageClass still backs a persistent volume; keep it so retained data can be recovered and resized")
+        raise ValueError("This StorageClass still backs a persistent volume. Keep it, so the kept data can be recovered and resized.")
     ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
     return {"ok": True, "classes": storage_class_inventory(),
-            "message": f"Storage class {name} deleted; existing volumes are untouched"}
+            "message": f"Storage class {name} deleted. Existing volumes are not changed."}
 
 
 def _restore_class_repair(pvc):
@@ -459,7 +459,7 @@ def _restore_class_repair(pvc):
     users = [c for c in claims["items"] if ((c.get("metadata") or {}).get("annotations") or {}).get(
                  "volume.beta.kubernetes.io/storage-class", (c.get("spec") or {}).get("storageClassName")) == name]
     if not meta.get("uid") or not any((c.get("metadata") or {}).get("uid") == meta["uid"] for c in users):
-        raise ValueError("The claim changed; reopen the volume editor")
+        raise ValueError("The claim changed. Open the volume editor again.")
     parameters = None
     reclaim = None
     for claim in users:
@@ -532,11 +532,11 @@ def repair_volume_class(cfg):
         if error.code != 404:
             raise
     else:
-        raise ValueError("The StorageClass already exists; reopen the volume editor")
+        raise ValueError("The StorageClass already exists. Open the volume editor again.")
     body = _restore_class_repair(pvc)
     ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
     CACHE.drop_where(_cache, lambda key: key.startswith(("stor", "sc", "vol")))
-    return {"ok": True, "detail": "Resize support repaired. You can now enlarge the volume."}
+    return {"ok": True, "detail": "Resize support repaired. The volume can now be enlarged."}
 
 
 def class_choices(with_facts=False):

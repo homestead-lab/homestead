@@ -58,7 +58,7 @@ def pointer_digest(namespace, state, uid):
 
 def _keys(value, required, optional=()):
     if not isinstance(value, dict) or not set(required) <= set(value) <= set(required) | set(optional):
-        raise Held("The data handoff control record is invalid; inspect it before continuing")
+        raise Held("The handover control record is invalid. Check it before continuing.")
 
 
 def _name(value):
@@ -292,7 +292,7 @@ def _validate(state, namespace):
             raise Held("An unverified data copy cannot carry a completion receipt")
     encoded = json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False)
     if len(encoded.encode()) > MAX_BYTES:
-        raise Held("The data handoff control record is full; nothing more was sent")
+        raise Held("The handover control record is full, so nothing more was sent")
     return encoded
 
 
@@ -356,7 +356,7 @@ class Anchor:
             state = self._decode(obj, operation, uid)
         except Exception:
             self.failed = True
-            raise Held("The recorded data handoff cannot be read; no replacement was adopted") from None
+            raise Held("The recorded handover cannot be read, so no replacement was taken over") from None
         self.obj, self.state = copy.deepcopy(obj), state
         return self
 
@@ -377,13 +377,13 @@ class Anchor:
                 raise Held("Control receipt differs from the requested journal")
         except Exception:
             self.failed = True
-            raise Held("The data handoff control write was not verified; inspect it before continuing. Nothing was retried") from None
+            raise Held("The write to the handover control record was not confirmed. Check it before continuing. Nothing was retried.") from None
         self.obj, self.state = copy.deepcopy(result), copy.deepcopy(decoded)
 
     def _replace(self, state):
         self.handle()
         if self.state.get("setup_aborted"):
-            raise Held("Preparation was abandoned; this operation cannot be resumed")
+            raise Held("The preparation was abandoned, so this job cannot be resumed")
         encoded = _validate(state, self.namespace)
         body = copy.deepcopy(self.obj)
         body.pop("status", None)
@@ -554,7 +554,7 @@ class Anchor:
     def abort_setup(self):
         self.handle()
         if self.state["phase"] != "prepare" or "pointer_receipt" in self.state or self.state["journal"]["ref"]["storage_writes"]:
-            raise Held("The move has already been handed over; automatic rollback is not safe")
+            raise Held("The move has already been handed over, so an automatic rollback is not safe")
         state = copy.deepcopy(self.state)
         state["setup_aborted"] = True
         self._replace(state)

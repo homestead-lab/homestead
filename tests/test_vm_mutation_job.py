@@ -50,7 +50,7 @@ class VMMutationJobTests(unittest.TestCase):
 
     def failed(self):
         self.send.side_effect = TimeoutError("test-secret-value")
-        with self.assertRaisesRegex(ValueError, "Inspect job") as error:
+        with self.assertRaisesRegex(ValueError, "Check job") as error:
             self.dispatch()
         self.assertNotIn("test-secret-value", str(error.exception))
         return ops.stored()[0]["id"]
@@ -67,7 +67,7 @@ class VMMutationJobTests(unittest.TestCase):
     def test_success_means_acknowledged_config_not_guest_health_and_cannot_replay(self):
         result = self.dispatch()
         self.assertEqual("succeeded", result["operation"]["status"])
-        self.assertIn("health are not verified", result["operation"]["message"])
+        self.assertIn("healthy is not checked", result["operation"]["message"])
         item = ops.stored()[0]
         self.assertEqual("accepted", item["ref"]["writes"][0]["phase"])
         self.assertFalse(item["ref"]["retain_resources"])
@@ -204,7 +204,7 @@ class VMMutationJobTests(unittest.TestCase):
             result = recovery.preview(ident, ops, self.read, "admin")
             self.assertTrue(result["plan"]["blocked"])
             self.assertIsNone(result["capacity_token"])
-            with self.assertRaisesRegex(ValueError, "dispatcher is active"):
+            with self.assertRaisesRegex(ValueError, "dispatcher is running"):
                 recovery.resolve(good, ops, self.read, "admin")
         finally:
             finish.set()

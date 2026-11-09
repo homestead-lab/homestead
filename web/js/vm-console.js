@@ -29,7 +29,7 @@ function vmConsoleDisplayNote(ns, name) {
   if (!vm || !vm.display || vm.display === "virtual") return "";
   return vm.display === "gpu"
     ? UI.callout("warn", "No virtual display: the picture is on the passed-through GPU",
-      "This VM has a GPU passed through and no virtual display adapter, so Screen shows nothing. Use a monitor on the GPU, Remote Desktop, or Serial - or turn the virtual display on under Edit → Display and devices.")
+      "This VM has a GPU passed through and no virtual display adapter, so Screen shows nothing. Use a monitor on the GPU, Remote Desktop or Serial, or turn the virtual display on under Edit → Display and devices.")
     : UI.callout("warn", "No virtual display", "This VM has no display adapter, so Screen shows nothing. Use Serial, or turn the virtual display on under Edit → Display and devices.");
 }
 window.vmConsoleDisplayNote = vmConsoleDisplayNote;
@@ -47,7 +47,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
       ${kind === "vnc" ? `<span class="vmc-tools">
         ${VMC_TOUCH() ? `<button class="btn sm" id="vmcKeyboard" onclick="vmConsoleKeyboard()" title="Open this device's keyboard to type into the VM">Keyboard</button>` : ""}
         <button class="btn sm" onclick="vmConsoleKeys()" title="Send Ctrl+Alt+Del to the VM">Ctrl+Alt+Del</button>
-        <button class="btn sm" onclick="vmConsolePaste()" title="Paste text into the VM - it is typed key by key (Ctrl+Shift+V on the screen)">${icon("copy")}Paste</button>
+        <button class="btn sm" onclick="vmConsolePaste()" title="Paste text into the VM. It is typed key by key (Ctrl+Shift+V on the screen).">${icon("copy")}Paste</button>
         <select id="vmcLayout" class="sm" style="width:auto" aria-label="The VM's keyboard layout" onchange="vmKeyLayoutChanged(this.value)"
           title="The keyboard layout set inside the VM: pasted text is typed as the keys that make each character there">${Object.entries(VMC_LAYOUTS).map(([id, label]) =>
           `<option value="${id}" ${id === vmKeyLayout() ? "selected" : ""}>${label} keyboard</option>`).join("")}</select>
@@ -57,7 +57,7 @@ window.vmConsole = (ns, name, kind = "vnc") => {
         <button class="btn sm" onclick="vmSerialCopy()" title="Copy the selected output, or all of it (Ctrl+Shift+C)">${icon("copy")}Copy</button>
         <button class="btn sm" onclick="vmSerialPaste()" title="Send the clipboard to the serial port (Ctrl+Shift+V)">Paste</button></span>`}
     </div>
-    <div class="console-security">Operator-only · session start and stop are audited; what is typed and shown is not recorded.</div>
+    <div class="console-security">Operators only · The start and end of each session are recorded, but what is typed and shown is not.</div>
     ${kind === "vnc" ? vmConsoleDisplayNote(ns, name) : ""}
     ${kind === "vnc" ? `<div class="vmc-paste" id="vmcPaste" hidden>
         <textarea id="vmcPasteText" rows="3" spellcheck="false" autocomplete="off"
@@ -121,7 +121,7 @@ function vmConsoleSerial() {
   const socket = new WebSocket(vmConsoleUrl("serial"));
   VMC.socket = VMC.serial = socket;
   window.__consoleSocket = socket;   // consoleSend and Ctrl+C reuse it
-  socket.onopen = () => { vmConsoleState("connected · serial port 1"); $("#consoleInput")?.focus(); };
+  socket.onopen = () => { vmConsoleState("Connected · serial port 1"); $("#consoleInput")?.focus(); };
   socket.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch (_) { return; }
@@ -129,7 +129,7 @@ function vmConsoleSerial() {
     if (message.type === "output") consoleWrite(String(message.data).replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|\r(?!\n)/g, ""));
   };
   socket.onclose = () => { if (VMC.socket === socket) vmConsoleState("disconnected"); };
-  socket.onerror = () => { if (VMC.socket === socket) vmConsoleState("unavailable · check the VM is running and your role"); };
+  socket.onerror = () => { if (VMC.socket === socket) vmConsoleState("Unavailable · Check that the VM is running and that the account has the operator role."); };
 }
 
 window.vmConsoleKeys = () => { if (VMC.rfb) { VMC.rfb.sendCtrlAltDel(); VMC.rfb.focus({ preventScroll: true }); } };
@@ -185,7 +185,7 @@ window.vmConsoleKeyboard = () => {
   if (!field) return;
   VMC.keyboard = !VMC.keyboard;
   if (button) button.classList.toggle("pri", VMC.keyboard);
-  if (VMC.keyboard) { field.focus({ preventScroll: true }); vmConsoleState("keyboard open · what you type goes to the VM"); }
+  if (VMC.keyboard) { field.focus({ preventScroll: true }); vmConsoleState("Keyboard open · Typing goes to the VM"); }
   else { field.blur(); vmConsoleState("keyboard closed"); }
 };
 
@@ -313,7 +313,7 @@ window.vmSerialPaste = async () => {
   const text = await readClipboard();
   if (text === null) {
     $("#consoleInput")?.focus();
-    return toast("This page may not read the clipboard - paste into the box below with Ctrl+V, then Send", "warn");
+    return toast("This page is not allowed to read the clipboard. Paste into the box below with Ctrl+V, then choose Send.", "warn");
   }
   socket.send(JSON.stringify({ type: "input", data: text.replace(/\r\n?|\n/g, "\r") }));
 };

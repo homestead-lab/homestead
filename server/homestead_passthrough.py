@@ -250,7 +250,7 @@ def inspect(node):
     out, err = hostrun.run(node, INSPECT.replace("echo END\n", extra + "echo END\n"), timeout=90)
     facts = parse(out)
     if not facts["complete"]:
-        raise ValueError(f"could not look at {node}'s devices: {(err or out)[-200:]}")
+        raise ValueError(f"Homestead could not check {node}'s devices: {(err or out)[-200:]}")
     permitted = _permitted()
     for row in facts["pci"]:
         row["permitted"] = row["resource"] in permitted
@@ -302,11 +302,11 @@ def capture_vbios(node, address):
     if not gpu or not str(gpu.get("class") or "").startswith("03"):
         raise ValueError("vBIOS capture is only available for a GPU on this host")
     if gpu.get("driver") not in (None, "", "vfio-pci"):
-        raise ValueError("Give this GPU to VMs first; capture does not detach an active host display")
+        raise ValueError("Give this GPU to VMs first. Reading its ROM does not take it away from an active host display.")
     try:
         instances = kget("/apis/kubevirt.io/v1/virtualmachineinstances")["items"]
     except Exception:
-        raise ValueError("VM device use could not be checked; no ROM was read") from None
+        raise ValueError("Homestead could not check which VMs use the device, so no ROM was read") from None
     resources_in_group = {r.get("resource") for r in facts["pci"]
                           if r["address"] in [address, *gpu.get("group_members", [])]}
     for instance in instances:
@@ -323,13 +323,13 @@ def capture_vbios(node, address):
     out, err = hostrun.run(node, capture_script(address), timeout=60)
     if not out.startswith("ROM\n") or not out.rstrip().endswith("\nEND"):
         problem = next((l[4:] for l in out.splitlines() if l.startswith("ERR ")), "")
-        raise ValueError(problem or "The GPU ROM could not be read; upload a dump from this card instead")
+        raise ValueError(problem or "The GPU ROM could not be read. Upload a dump from this card instead.")
     raw = check_rom("".join(out.splitlines()[1:-1]))
     # Check every PCI image, including the EFI image, before offering a dump.
     offset = 0
     while True:
         if offset + 26 > len(raw) or raw[offset:offset + 2] != b"\x55\xaa":
-            raise ValueError("The captured ROM is truncated or invalid; upload a dump from this card instead")
+            raise ValueError("The ROM that was read is incomplete or invalid. Upload a dump from this card instead.")
         pcir = offset + int.from_bytes(raw[offset + 24:offset + 26], "little")
         if pcir + 22 > len(raw) or raw[pcir:pcir + 4] != b"PCIR":
             raise ValueError("The captured ROM has no valid PCI image header")
@@ -375,8 +375,8 @@ def enable_iommu(node):
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-200:]
         raise ValueError(f"IOMMU was not switched on on {node}: {problem}")
     return {"ok": True, "restart_needed": True,
-            "detail": f"{done[3:]} is in {node}'s kernel command line; restart it from Host actions for IOMMU to be on "
-                      "(firmware must have VT-d or AMD-Vi enabled too)"}
+            "detail": f"{done[3:]} is in {node}'s kernel command line. Restart the host from Host actions to turn IOMMU on. "
+                      "The firmware must also have VT-d or AMD-Vi turned on."}
 
 
 # ---- handing a PCI device over (k3s and RKE2) -----------------------------------
@@ -446,7 +446,7 @@ def give(node, address):
     if not row:
         raise ValueError(f"{node} has no PCI device {address}")
     if not facts["iommu"]:
-        raise ValueError(f"IOMMU is off on {node}; switch it on and restart the host first")
+        raise ValueError(f"IOMMU is off on {node}. Turn it on and restart the host first.")
     if row["problems"]:
         raise ValueError(f"{address} stays with {node}: {'; '.join(row['problems'])}")
     members = [r for r in facts["pci"] if r["address"] in row["group_members"]]
@@ -548,7 +548,7 @@ def ensure_gates(*gates, send=None):
             return None
         meta = kv.get("metadata") or {}
         if reviewed and not all(meta.get(key) for key in ("uid", "resourceVersion")):
-            raise ValueError("KubeVirt identity/version is unavailable; review the device settings again")
+            raise ValueError("KubeVirt could not be identified. Review the device settings again.")
         return {"spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}}
     KUBEVIRT_CR.update(change, current=_kubevirt, write=send or ksend)
     return list(missing)
@@ -587,7 +587,7 @@ def _harvester_inventory(node):
     pci = [d for d in (_get(f"{HV}/pcidevices") or {}).get("items") or [] if (d.get("status") or {}).get("nodeName") == node]
     usb = [d for d in (_get(f"{HV}/usbdevices") or {}).get("items") or [] if (d.get("status") or {}).get("nodeName") == node]
     if _get(f"{HV}/pcidevices") is None:
-        raise ValueError("Harvester's pcidevices-controller add-on is off; enable it under Harvester's Advanced > Add-ons")
+        raise ValueError("Harvester's pcidevices-controller add-on is off. Turn it on under Harvester's Advanced > Add-ons.")
     claimed = {c["metadata"]["name"] for c in (_get(f"{HV}/pcideviceclaims") or {}).get("items") or []}
     uclaimed = {c["metadata"]["name"] for c in (_get(f"{HV}/usbdeviceclaims") or {}).get("items") or []}
     rows = []
@@ -727,10 +727,10 @@ def check_rom(data):
     if not raw:
         raise ValueError("the ROM file is empty")
     if len(raw) > ROM_LIMIT:
-        raise ValueError(f"the ROM is {len(raw) // 1024} KiB; up to {ROM_LIMIT // 1024} KiB fits (trim any dump header)")
+        raise ValueError(f"The ROM is {len(raw) // 1024} KiB, and up to {ROM_LIMIT // 1024} KiB fits. Remove any dump header.")
     if raw[:2] != b"\x55\xaa":
-        raise ValueError("the file does not start with a PCI ROM signature (55 AA); a dump from GPU-Z or nvflash may "
-                         "carry a header to trim first")
+        raise ValueError("The file does not start with a PCI ROM signature (55 AA). A dump from GPU-Z or nvflash may "
+                         "have a header to remove first.")
     return raw
 
 
@@ -810,7 +810,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if name not in names:
             raise ValueError(f"{name} is not one of this VM's devices")
         if not isinstance(resource, str) or resource not in known:
-            raise ValueError(f"{resource or 'that device'} is not a device VMs may use; hand it over from its host first")
+            raise ValueError(f"{resource or 'That device'} is not a device that VMs can use. Give it to VMs from its host first.")
         if kinds.get(resource) == "usb" and any(d.get("name") == name for d in devices.get("gpus") or []):
             raise ValueError(f"GPU {name} needs a PCI device")
         for device in hostdevs + list(devices.get("gpus") or []):
@@ -820,7 +820,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
     for add in cfg.get("add") or []:
         resource = str(add.get("resource") or "")
         if resource not in known:
-            raise ValueError(f"{resource or 'that device'} is not a device VMs may use; hand it over from its host first")
+            raise ValueError(f"{resource or 'That device'} is not a device that VMs can use. Give it to VMs from its host first.")
         index = 0
         while f"hostdev-{index}" in names:
             index += 1
@@ -845,7 +845,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if data:
             resource = next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)
             if kinds.get(resource) == "usb":
-                raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
+                raise ValueError("USB devices cannot use a vBIOS file. Clear the ROM or choose a PCI device.")
             roms[name] = check_rom(data)
         else:
             roms.pop(name, None)
@@ -854,7 +854,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if name not in names:
             roms.pop(name)
         elif kinds.get(next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)) == "usb":
-            raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
+            raise ValueError("USB devices cannot use a vBIOS file. Clear the ROM or choose a PCI device.")
     if set(roms) != have or cfg.get("roms"):
         cm = f"{vm['metadata']['name']}-vbios"
         path = f"/api/v1/namespaces/{ns}/configmaps/{cm}"
@@ -869,7 +869,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
                 body["metadata"]["ownerReferences"] = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                     "name": vm["metadata"]["name"], "uid": vm["metadata"]["uid"]}]
             if len(json.dumps(body["data"]).encode()) > 1024 * 1024:
-                raise ValueError("The combined vBIOS files exceed the ConfigMap's 1 MiB limit; use smaller ROM files")
+                raise ValueError("The vBIOS files together are over the ConfigMap's 1 MiB limit. Use smaller ROM files.")
             effects.append({"kind": "configmap", "path": path, "body": body})
             sidecars.append({"args": ["--version", "v1alpha2"],
                              "configMap": {"name": cm, "key": HOOK_KEY, "hookPath": "/usr/bin/onDefineDomain"}})
@@ -903,7 +903,7 @@ def roms_from_configmap(vm, cm, replaced=()):
     roms = {name: check_rom(data) for name, data in re.findall(r'^\s+"([^"]+)": "([A-Za-z0-9+/=]+)"', script, re.M) if name not in replaced}
     expected = {d["name"] for d in vm_devices(vm) if d["rom"]}
     if set(roms) != expected - replaced:
-        raise ValueError("The VM's vBIOS ConfigMap is missing or incomplete; restore its ROM files before editing or transferring devices")
+        raise ValueError("The VM's vBIOS ConfigMap is missing or incomplete. Restore its ROM files before editing or moving devices.")
     return roms
 
 
@@ -914,7 +914,7 @@ def write_configmap(effect, send):
     exists = existing is not None
     identity = {key: (existing.get("metadata") or {}).get(key) for key in ("uid", "resourceVersion")} if exists else None
     if "identity" in effect and identity != effect["identity"]:
-        raise ValueError("The vBIOS ConfigMap changed; review the edit again")
+        raise ValueError("The vBIOS ConfigMap changed. Review the edit again.")
     if body is None:
         if exists:
             # Save's journal never deletes dependencies. Clearing the data

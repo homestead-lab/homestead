@@ -72,9 +72,9 @@ class PreviewTests(unittest.TestCase):
                   "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}]},
                   "spec": {}} for n in ("node-a", "node-b")]
         f = CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")
-        self.assertIn("1 VM couldn't be checked", f["sentence"])
+        self.assertIn("1 VM could not be checked", f["sentence"])
         p["apps"].append({"kind": "app", "ns": "lab", "name": "web", "outcome": "unknown"})
-        self.assertIn("1 app couldn't be checked and 1 VM couldn't be checked",
+        self.assertIn("1 app could not be checked and 1 VM could not be checked",
                       CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")["sentence"])
 
     def test_unread_addresses_make_the_count_unknown_never_zero(self):
@@ -141,12 +141,12 @@ class YourVipsTests(unittest.TestCase):
 
     def test_a_registry_that_cannot_be_read_raises_never_empty(self):
         self.break_registry()
-        with self.assertRaisesRegex(REG.RegistryUnread, "Your VIPs could not be read"):
+        with self.assertRaisesRegex(REG.RegistryUnread, "The virtual IPs could not be read"):
             REG.registered()
 
     def test_the_default_vip_is_not_the_shared_fallback_when_the_registry_is_unread(self):
         self.break_registry()
-        with self.assertRaisesRegex(REG.RegistryUnread, "Your VIPs could not be read"):
+        with self.assertRaisesRegex(REG.RegistryUnread, "The virtual IPs could not be read"):
             REG.shared_vip()
 
     def test_the_inventory_names_the_registry_unread_and_offers_no_default(self):
@@ -160,7 +160,7 @@ class YourVipsTests(unittest.TestCase):
                 self.assertIsNone(inv["registered_vips"])
                 self.assertIsNone(inv["shared_vip"]["ip"])
                 self.assertIn(REG.UNREAD, inv["unread"])
-                self.assertIn("Your VIPs could not be read", inv["vips_unread"])
+                self.assertIn("The virtual IPs could not be read", inv["vips_unread"])
 
     def test_an_address_is_not_offered_or_accepted_while_the_registry_is_unread(self):
         self.break_registry()
@@ -302,7 +302,7 @@ class VmDisksAndImportsTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "500"):
             VM_CREATE.list_vm_disks()
         # A new VM may not take a disk another VM might hold.
-        with self.assertRaisesRegex(ValueError, "Couldn't check whether another VM uses this disk; try again in a moment"):
+        with self.assertRaisesRegex(ValueError, "could not check whether another VM uses this disk. Try again in a moment"):
             VM_CREATE._disk_consumers()
 
     def test_no_imports_is_an_empty_list(self):

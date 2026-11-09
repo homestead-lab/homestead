@@ -72,7 +72,7 @@ def set_cluster(enabled, by=""):
     return {"ok": True, "enabled": bool(enabled),
             "detail": ("Host consoles are being installed on every host" if enabled
                        else "Host consoles are being removed from every host")
-                      + ", a couple at a time within ten minutes each; login sessions stay open"}
+                      + ", a couple at a time within ten minutes each. Login sessions stay open."}
 
 
 def inventory():
@@ -115,7 +115,7 @@ def start(node, action):
     return ops.start("host-console", f"Host console: {action} on {node}",
                      {"kind": "Node", "name": node}, "/settings?tab=cluster",
                      {"node": node, "uid": found["metadata"]["uid"], "action": action,
-                      "version": VERSION}, "Queued; the current login session stays open")
+                      "version": VERSION}, "Queued. The current login session stays open.")
 
 
 def script(action):
@@ -171,7 +171,7 @@ def _apply(node, uid, action):
         if action == "enable":
             if not enabled or not current:
                 raise ValueError("Installed console did not match the bundled release")
-            detail += "; on its screen now, or after a logout if someone is signed in there"
+            detail += ". It is on its screen now, or after a logout if someone is signed in there"
         saved = {"uid": uid, "enabled": enabled, "native": native,
                  "version": version, "digest": fields.get("digest", ""), "current": current,
                  "checked_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
@@ -194,12 +194,12 @@ def status(item):
     if ref.get("done"):
         return "succeeded", 100, ref["detail"]
     if ref["version"] != VERSION:
-        return "failed", 0, "Homestead changed version while this console job was queued; run it again from Add-ons"
+        return "failed", 0, "Homestead changed version while this console job was queued. Run it again from Add-ons."
     # Host-run uses one helper per node. Serialize console jobs across replicas.
     with _lock:
         node = kget("/api/v1/nodes/" + urllib.parse.quote(ref["node"], safe=""))
         if node["metadata"].get("uid") != ref["uid"]:
-            return "failed", 0, "The original host was replaced; refresh Add-ons"
+            return "failed", 0, "The original host was replaced. Refresh Add-ons."
         try:
             saved = _apply(ref["node"], ref["uid"], ref["action"])
         except Exception as error:

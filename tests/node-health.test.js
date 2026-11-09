@@ -31,7 +31,7 @@ test("nodeHealth works out a host's state once", () => {
   assert.equal(drive.status, "Drive warning"); assert.equal(drive.tone, "warn");
   assert.deepEqual([...drive.issues], ["sda: 24 reallocated sectors"]);
   assert.equal(c.nodeHealth(down).status, "Not ready"); assert.equal(c.nodeHealth(down).tone, "bad");
-  assert.equal(c.nodeHealth({ ...base, schedulable: false }).status, "Cordoned");
+  assert.equal(c.nodeHealth({ ...base, schedulable: false }).status, "Not taking new apps");
 });
 
 test("Nodes and the node's page say Drive warning for a Ready host with a failing drive", () => {

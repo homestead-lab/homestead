@@ -18,7 +18,7 @@ def read(deployment):
     raw = ((deployment or {}).get("metadata", {}).get("annotations") or {}).get(ANNOTATION, "{}")
     value = json.loads(raw)
     if not isinstance(value, dict) or any(not isinstance(value.get(key, {}), dict) for key in ("suspended", "pending", "restore_failures")):
-        raise ValueError("SMB recovery state is invalid; mounts were left unchanged")
+        raise ValueError("The SMB recovery state is invalid, so the mounts were not changed")
     return value
 
 
@@ -45,14 +45,14 @@ def observe(rows, get, namespace):
         volumes = {v["metadata"]["name"]: v for v in items(prefix + "/volumes")}
         replicas = items(prefix + "/replicas")
     except Exception:
-        return {}, "Storage availability could not be verified; existing SMB exclusions and mounts are retained."
+        return {}, "Homestead could not confirm that the storage is available. The existing SMB exclusions and mounts are kept."
     ready = {n["metadata"]["name"] for n in nodes if not n["metadata"].get("deletionTimestamp") and
              any(c.get("type") == "Ready" and c.get("status") == "True" for c in (n.get("status") or {}).get("conditions", []))}
     result = {}
     for claim in sorted(claims):
         pvc = pvcs.get(claim)
         if pvc is None:
-            result[claim] = ("unavailable", "The configured PVC is missing; no replacement volume will be created.")
+            result[claim] = ("unavailable", "The configured volume claim is missing, and no replacement volume is created.")
             continue
         if (pvc.get("status") or {}).get("phase") != "Bound":
             continue  # New/unbound claims may still be provisioning.
@@ -62,7 +62,7 @@ def observe(rows, get, namespace):
             continue
         status = volume.get("status") or {}
         if status.get("robustness") == "faulted":
-            result[claim] = ("unavailable", "Longhorn reports a faulted volume; repair its data replicas before restoring this share.")
+            result[claim] = ("unavailable", "Longhorn reports a faulted volume. Repair its volume copies before restoring this share.")
             continue
         copies = [r for r in replicas if (r.get("spec") or {}).get("volumeName") == volume_name and
                   not r.get("metadata", {}).get("deletionTimestamp")]
@@ -73,11 +73,11 @@ def observe(rows, get, namespace):
         if reachable and (status.get("robustness") in ("healthy", "degraded") or status.get("state") == "detached"):
             result[claim] = ("available", "A previously healthy data replica is on a Ready node.")
         elif good and all((r.get("spec") or {}).get("nodeID") and (r.get("spec") or {}).get("nodeID") not in ready for r in good):
-            result[claim] = ("unavailable", "All known usable data replicas are on unavailable nodes; waiting for the original data to return.")
+            result[claim] = ("unavailable", "Every known usable volume copy is on an unavailable host. Waiting for the original data to return.")
         # Zero/new/rebuilding replicas or ambiguous health: leave unchanged.
     unknown = sorted(claims - result.keys())
     return result, ("Storage recovery is unverified for " + ", ".join(unknown) +
-                    "; automatic exclusions are unchanged for these volumes." if unknown else "")
+                    ". Automatic exclusions are not changed for these volumes." if unknown else "")
 
 
 def plan(previous, rows, observed, warning, now):

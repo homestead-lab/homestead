@@ -212,7 +212,7 @@ turns that off for other VMs; with an older KubeVirt, the log says so and
 where to look instead.
 
 Interrupted or failed creation keeps partial VMs, disks and Secrets. Open the
-job's **Inspect outcome** action to compare recorded creation receipts with the
+job's **Check outcome** action to compare recorded creation receipts with the
 current resources. An administrator can resolve tracking after inspecting the
 resources and typing the batch name. This does not delete resources, resend a
 request, cancel an upstream operation or prove that the guest cluster is ready.
@@ -461,7 +461,7 @@ by this transfer flow. The source's device settings are unchanged.
 on your [Network shares](Network-shares) - copy installers there from your PC
 over SMB. **＋ Folder** chooses a share, then a folder on it; nothing else is
 set up. A CD-ROM cannot read one file on a shared volume, so each ISO is made
-ready once: **Make ready** copies it into a volume of its own, on a storage
+ready once: **Prepare** copies it into a volume of its own, on a storage
 class every node can mount where there is one, so one copy serves every VM on
 any node. Its progress shows in the library; a file replaced by a new one of
 another size is copied again under a new name.
@@ -476,7 +476,7 @@ ejected is not affected.
 
 Copies are kept only while wanted: one no VM has in a drive is removed after
 the days set at the foot of the library (7 by default, **0** keeps them), and
-the library says how long each has left. It comes back with **Make ready**.
+the library says how long each has left. It comes back with **Prepare**.
 
 A ready ISO is offered as a CD-ROM's contents in **Edit → Disks → ＋ CD-ROM**,
 attached read-only, and **Detach** ejects it. A new VM can **Install from an

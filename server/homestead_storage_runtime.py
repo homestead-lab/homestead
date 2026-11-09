@@ -25,11 +25,11 @@ def _records(directory):
     except FileNotFoundError:
         return {}
     except (OSError, ValueError):
-        raise Held("Homestead replica capabilities could not be read; restore shared data access before moving storage") from None
+        raise Held("The Homestead copies' capabilities could not be read. Restore access to the shared data before moving storage.") from None
     if not isinstance(data, dict) or data.get("format") != 1 or not isinstance(data.get("members"), dict):
-        raise Held("Homestead replica capabilities are invalid; inspect shared data before moving storage")
+        raise Held("The Homestead copies reported invalid capabilities. Check the shared data before moving storage.")
     if any(not isinstance(row, dict) for row in data["members"].values()):
-        raise Held("Homestead replica capabilities are invalid; inspect shared data before moving storage")
+        raise Held("The Homestead copies reported invalid capabilities. Check the shared data before moving storage.")
     return data["members"]
 
 
@@ -55,7 +55,7 @@ def _identity(pod, container):
               "container_id": statuses[0].get("containerID"), "image_id": statuses[0].get("imageID"),
               "image": container.get("image")}
     if any(not isinstance(v, str) or not v for v in result.values()):
-        raise Held("Homestead replica runtime identity is incomplete; wait for the rollout to finish")
+        raise Held("Not every Homestead copy has reported. Wait for the rollout to finish.")
     return result
 
 
@@ -111,13 +111,13 @@ def require(ops, read, namespace, pod_name, container_name, version, data_mount=
     listing = read(f"/api/v1/namespaces/{namespace}/pods")
     if (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)
             or listing.get("metadata", {}).get("continue")):
-        raise Held("Homestead replica inventory is incomplete; refresh before moving storage")
+        raise Held("The list of Homestead copies is incomplete. Refresh before moving storage.")
     with ops.transaction():
         members = _records(ops.DATA_DIR)
     seen = set()
     for pod in listing["items"]:
         if not isinstance(pod, dict) or not pod.get("metadata", {}).get("uid"):
-            raise Held("Homestead replica inventory is invalid; refresh before moving storage")
+            raise Held("The list of Homestead copies is invalid. Refresh before moving storage.")
         if pod.get("status", {}).get("phase") in ("Succeeded", "Failed"):
             continue
         volume_names = {v.get("name") for v in pod.get("spec", {}).get("volumes", [])
@@ -130,7 +130,7 @@ def require(ops, read, namespace, pod_name, container_name, version, data_mount=
             row = members.get(key, {})
             expected = {**identity, "namespace": namespace, "claim": claim, "version": version, "protocol": PROTOCOL}
             if {k: v for k, v in row.items() if k != "self_data"} != expected:
-                raise Held("Finish upgrading all Homestead replicas before moving storage; a process sharing its data is older, unverified, or restarting")
+                raise Held("Finish upgrading every Homestead copy before moving storage. A process that shares its data is older, not confirmed, or restarting.")
             seen.add(key)
     if own_identity["pod_uid"] + "/" + container_name not in seen:
         raise Held("Homestead's current process is missing from the verified replica inventory")
@@ -149,7 +149,7 @@ def require_self_data(ops, pods, namespace, container_name, version, claim, *, o
     now, own_mount = clock(), mounted_data(data_mount)
     for pod in pods:
         if pod.get("metadata", {}).get("namespace") != namespace or pod.get("metadata", {}).get("deletionTimestamp"):
-            raise Held("A reviewed Homestead replica is changing; refresh the move review")
+            raise Held("A reviewed Homestead copy is changing. Refresh the move review.")
         container = _container(pod, container_name)
         require_app_readiness(pod["spec"], container_name)
         mounts = [m for m in container.get("volumeMounts", []) if m.get("mountPath", "").rstrip("/") == data_mount.rstrip("/")]
@@ -166,14 +166,14 @@ def require_self_data(ops, pods, namespace, container_name, version, claim, *, o
                 or capability.get("directory") != data_mount
                 or type(checked) not in (int, float) or not 0 <= now - checked <= 60
                 or not isinstance(mount, dict) or set(mount) != {"mount_id", "device", "inode", "root", "filesystem"}):
-            raise Held("Wait for every Homestead replica to report current data-move support; finish any upgrade first")
+            raise Held("Wait for every Homestead copy to report that it supports data moves. Finish any upgrade first.")
         if identity["pod_uid"] == own_uid and mount != own_mount:
-            raise Held("This process's data mount changed; wait for a fresh runtime report")
+            raise Held("This process's data volume changed. Wait for a new report.")
         names = {v.get("name") for v in pod["spec"].get("volumes", []) if v.get("persistentVolumeClaim", {}).get("claimName") == claim}
         for key in ("containers", "ephemeralContainers"):
             if any(c.get("name") != container_name and any(m.get("name") in names and not m.get("readOnly")
                    for m in c.get("volumeMounts", [])) for c in pod["spec"].get(key, [])):
-                raise Held("Another container can write Homestead's data; remove it before moving the volume")
+                raise Held("Another container can write Homestead's data. Remove it before moving the volume.")
         # Completed initializers will be recreated after cutover. Only the
         # shipped root ownership adjustment is understood by this protocol.
         for init in pod["spec"].get("initContainers", []):
@@ -187,7 +187,7 @@ def require_self_data(ops, pods, namespace, container_name, version, claim, *, o
                     or any(writable_mounts[0].get(k) for k in ("subPath", "subPathExpr"))
                     or data_mount != "/data" or len(statuses) != 1
                     or statuses[0].get("state", {}).get("terminated", {}).get("exitCode") != 0):
-                raise Held("A data initializer is active or customized; its restart behavior needs review before moving data")
+                raise Held("A data initializer is running or customised. Review how it restarts before moving data.")
         result.append({**identity, "mount": mount, "protocol": SELF_DATA_PROTOCOL})
     if not result or own_uid not in {r["pod_uid"] for r in result}:
         raise Held("The current process is missing from the source data-move review")

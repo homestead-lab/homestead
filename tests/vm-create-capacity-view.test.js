@@ -86,7 +86,7 @@ test("isolated create review needs no MAC and never opens VIP setup",async()=>{
     return result;
   };
   await t.ctx.vmCreateReview({name:'offline',namespace:'lab',isolated:true},{serviceMode:'manual',selectedVip:'192.0.2.10'});
-  assert.match(t.fields['#mbody'].innerHTML,/Isolated: no virtual network cards/);
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated, with no virtual network cards/);
   assert.doesNotMatch(t.fields['#mbody'].innerHTML,/MAC undefined/);
   t.fields['#vmCreateApprove'].checked=true;
   await t.ctx.vmCreateReviewedApply();

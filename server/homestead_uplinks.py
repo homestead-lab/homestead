@@ -214,7 +214,7 @@ def preview(cfg, probes=None):
                 refusals.append("a cluster network name is 1 to 12 lower-case letters, digits or hyphens, so its bridge "
                                 f"({cn or 'name'}-br) fits Linux's 15-character limit")
             elif cn in networks:
-                refusals.append(f"Harvester already has a cluster network {cn}; add an uplink to it instead")
+                refusals.append(f"Harvester already has a cluster network {cn}. Add an uplink to it instead.")
         elif cn not in networks:
             refusals.append(f"Harvester has no cluster network {cn or '(none chosen)'}")
         known = set(inv["hosts"]) | {n for net in inv["networks"] for c in net["configs"] for n in c["nodes"]} | \
@@ -226,7 +226,7 @@ def preview(cfg, probes=None):
                 refusals.append(f"there is no host {node}")
             other = next((c for c in (networks.get(cn) or {}).get("configs", []) if node in c["nodes"]), None)
             if other:
-                refusals.append(f"{node} already has an uplink for {cn} ({other['name']}); change that one instead")
+                refusals.append(f"{node} already has an uplink for {cn} ({other['name']}). Change that one instead.")
     if action == "remove":
         vms = _vms_in_the_way(cn, nodes)
         if vms:
@@ -256,9 +256,9 @@ def preview(cfg, probes=None):
         refusals.append("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, "
                         "which works on any switch")
     if mtu and not 576 <= mtu <= 9000:
-        refusals.append(f"an MTU of {mtu} is outside 576 to 9000; leave it empty for Harvester's default (1500)")
+        refusals.append(f"An MTU of {mtu} is outside 576 to 9000. Leave it empty for Harvester's default (1500).")
     if mode != "active-backup" and len(nics) > 1:
-        warnings.append(f"{mode} spreads traffic over the NICs and needs the switch to agree; active-backup does not")
+        warnings.append(f"{mode} spreads traffic over the NICs and needs the switch to agree. Active-backup does not.")
     for node in nodes:
         have = {n["name"]: n for n in inv["hosts"].get(node) or []}
         if not have:
@@ -273,9 +273,9 @@ def preview(cfg, probes=None):
                 refusals.append(f"{nic} on {node} already carries {row['used_by']}"
                                 + (": mgmt's NICs are Harvester's own" if row["used_by"] == "mgmt" else ""))
             if row["link"] != "up" and not cfg.get("allow_down"):
-                refusals.append(f"{nic} on {node} has no link: plug it in, or confirm you want it in the bond anyway")
+                refusals.append(f"{nic} on {node} has no link. Plug it in, or confirm that it belongs in the bond anyway.")
             elif row["link"] != "up":
-                warnings.append(f"{nic} on {node} has no link; the bond starts without it")
+                warnings.append(f"{nic} on {node} has no link. The bond starts without it.")
         speeds = {have[n]["speed_mbps"] for n in nics if n in have and have[n]["speed_mbps"] and have[n]["link"] == "up"}
         if len(speeds) > 1:
             warnings.append(f"on {node} the NICs run at different speeds ({', '.join(f'{s} Mb/s' for s in sorted(speeds))})")
@@ -340,7 +340,7 @@ def apply(cfg, ops, probes=None):
     title = f"{verb} {cn}'s uplink on {', '.join(nodes)}" + (f": {what}" if what else "")
     ref = {"action": plan["action"], "cluster_network": cn, "configs": names, "nodes": nodes, "since": time.time()}
     return ops.start(KIND, title, {"kind": "VlanConfig", "name": names[0]}, "/networking", ref,
-                     f"Sent to Harvester; waiting for {', '.join(nodes)} to report {cn}'s uplink")
+                     f"Sent to Harvester. Waiting for {', '.join(nodes)} to report {cn}'s uplink.")
 
 
 def status(item, now=None):
@@ -368,7 +368,7 @@ def status(item, now=None):
     if elapsed > WAIT:
         return ("failed", 100, f"{', '.join(waiting)} did not report {ref['cluster_network']}'s uplink ready in "
                 f"{WAIT // 60} minutes" + (f" ({said})" if said else "") +
-                ". Harvester keeps trying; check the NICs and the VlanStatus in Harvester's dashboard")
+                ". Harvester keeps trying. Check the NICs and the VlanStatus in Harvester's dashboard.")
     progress = 10 + int(80 * len(ready) / max(1, len(nodes)))
     return "running", progress, f"Waiting for {', '.join(waiting)}" + (f": {said}" if said else "")
 
@@ -376,7 +376,7 @@ def status(item, now=None):
 def _apply_route(request):
     op = apply(request.body, OPS, node_probes())
     homestead_routes.forget("ports", "network")
-    return {"ok": True, "operation": op, "detail": "Sent to Harvester; follow each host under Jobs"}
+    return {"ok": True, "operation": op, "detail": "Sent to Harvester. Follow each host under Jobs."}
 
 
 # Its routes and who may use them (homestead_routes.py).

@@ -21,7 +21,7 @@ async function viewFirewall() {
     ${summaryLine("firewall", [`<b>${data.policies.length}</b> ${data.policies.length === 1 ? "policy" : "policies"}`,
       data.provider.found === false ? "no policy controller found" : `${esc(data.provider.name)} found · enforcement not tested`])}
     ${data.provider.found === false ? UI.callout("warn", "No policy controller found: these policies may not filter traffic",
-      "Policies only take effect when your network provider enforces Kubernetes NetworkPolicy.") : ""}
+      "Policies take effect only when the cluster's network plugin enforces Kubernetes NetworkPolicy.") : ""}
     ${UI.guide("How workload firewall policies work", `<p>${esc(data.provider.detail)}</p>
       <p>A policy selects a workload's pods. Restrict inbound or outbound traffic, then add the connections it needs.
       An empty restricted direction allows no connections in that direction through this policy. Reply traffic is handled by the network provider.</p>
@@ -103,7 +103,7 @@ window.firewallEdit = async (ns, name) => {
     const data = await api("/api/firewall");
     STATE.data.firewall = data;
     const existing = name ? data.policies.find(p => p.namespace === ns && p.name === name) : null;
-    if (name && !existing?.config) throw new Error("This policy cannot be edited here; refresh and inspect it.");
+    if (name && !existing?.config) throw new Error("This policy cannot be edited here. Refresh and check it.");
     const available = data.targets.filter(row => !row.blocked);
     if (!available.length) throw new Error("No supported workloads found. Host-network, platform, and LAN-only VM traffic needs a separate firewall.");
     const config = existing?.config || {target:available[0], name:`homestead-fw-${available[0].name}`.slice(0,63).replace(/[-.]$/, ""),
@@ -190,7 +190,7 @@ window.firewallRemove = (ns, name) => {
   if (!row?.managed) return;
   FIREWALL_EDITOR = {removing:row};
   modal("Remove firewall policy", '<div id="fw_delete">' + UI.lead(`Remove <b>${esc(ns)}/${esc(name)}</b>?`) +
-    UI.callout("warn", "Connectivity will change", "Remaining policies still apply. Removing the last policy for a direction allows all traffic in that direction; removing an allow policy can also block connections allowed only by it.") +
+    UI.callout("warn", "Connectivity will change", "The remaining policies still apply. Removing the last policy for a direction allows all traffic in that direction. Removing an allow policy can also block connections that only it allowed.") +
     UI.actions(UI.cancel() + UI.button("Remove policy", "firewallDeleteConfirmed()", {kind:"danger", attrs:'data-need="admin"'})) + '</div>');
 };
 window.firewallDeleteConfirmed = async () => {

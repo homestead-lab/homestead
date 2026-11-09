@@ -94,12 +94,12 @@ def cancel_plan(item):
         return {"mode": "stop", "action": "Finish ending the import and keep its disks", "severity": "low", "needs": "operator",
                 "undo": ["Removes its copy Job and Secret: the copy is over"] +
                         (["Clears CDI's temporary storage: the disks are finished"] if ref["phase"] == "clearing" else []),
-                "keeps": [f"The disks ({disks}) are kept, with what CDI has of them: this doesn't remove them",
+                "keeps": [f"The disks ({disks}) are kept, with what CDI has of them. This does not remove them.",
                           f"The VM on {where} is unchanged"]}
     return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
             "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
             "keeps": [f"The VM on {where} is unchanged",
-                      "A volume on a class that keeps released data (Retain) stays under Volumes until you remove it"]}
+                      "A volume on a class that keeps released data (Retain) stays under Volumes until it is removed"]}
 
 
 def cancel_run(item, _options):
@@ -107,13 +107,13 @@ def cancel_run(item, _options):
     if ref.get("phase") == "leaving":
         state, _, detail = CDI_CLEANUP.leave(item, kget, ksend)
         if state == "running":
-            raise ValueError("its copy Job can't be removed yet, and the job keeps trying. Its disks are kept")
+            raise ValueError("its copy Job cannot be removed yet, and the job keeps trying. Its disks are kept.")
         return detail
     if ref.get("phase") == "clearing":
         # A job being cancelled refuses checkpoints, and the store saves this one when it ends.
         state, _, detail = _clear_finished(ref, item, checkpoint=lambda _: None)
         if state == "running":
-            raise ValueError("its temporary storage can't be cleared yet, and the job keeps trying. Its disks are kept")
+            raise ValueError("its temporary storage cannot be cleared yet, and the job keeps trying. Its disks are kept.")
         return detail
     ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
     paths = []
@@ -133,8 +133,8 @@ def cancel_run(item, _options):
         CDI_CLEANUP.RESOURCES.delete(kget, ksend, path, found)
         removed += 1
     ref.update(phase="failed", retain_resources=False)
-    note = (f"; {', '.join(foreign)} belong to another import and were left" if foreign else "")
-    return f"Stopped; removed {removed} of the import's objects and their temporary storage{note}. The VM on {_where(ref)} is unchanged"
+    note = (f". {', '.join(foreign)} belong to another import and were left" if foreign else "")
+    return f"Stopped. Removed {removed} of the import's objects and their temporary storage{note}. The VM on {_where(ref)} is not changed."
 
 
 # ------------------------------------------------------------ reading Unraid
@@ -375,8 +375,8 @@ def storage_room(disks, storage_class=""):
            "level": "unknown", "blockers": [], "warnings": []}
 
     def unknown(why):
-        return {**out, "warnings": [f"{why}, so Homestead cannot check it has room for {_gib(needed)} GiB; "
-                                    "make sure it does before importing"]}
+        return {**out, "warnings": [f"{why}, so Homestead cannot check that it has room for {_gib(needed)} GiB. "
+                                    "Make sure it does before importing."]}
     try:
         rows = storage_classes() if storage_classes else None
     except Exception:
@@ -409,9 +409,9 @@ def storage_room(disks, storage_class=""):
     usable = sum(1 for n in nodes if n)
     if usable < copies:
         out["blockers"].append(f"Not enough room on {name}: it keeps {copies} copies of a disk, each on a different "
-                               f"node, and {usable} node{'' if usable == 1 else 's'} {'has' if usable == 1 else 'have'} "
-                               f"room for one. These disks need {_gib(needed)} GiB{with_copies}; free some space "
-                               "or add a disk first")
+                               f"host, and {usable} host{'' if usable == 1 else 's'} {'has' if usable == 1 else 'have'} "
+                               f"room for one. These disks need {_gib(needed)} GiB{with_copies}. Free some space "
+                               "or add a disk first.")
     elif needed > free + 0.05:
         out["blockers"].append(f"Not enough room on {name}: these disks need {_gib(needed)} GiB{with_copies}, and "
                                f"it can still place {_gib(free)} GiB. Free some space, add a disk, or leave a disk out")
@@ -471,25 +471,25 @@ def plan(dom, facts):
     for cd in dom["cdroms"]:
         if cd["path"]:
             dropped.append({"what": "CD-ROM", "detail": cd["path"].rsplit("/", 1)[-1],
-                            "reason": "an ISO is only needed to install; add one in Edit VM if you still need it"})
+                            "reason": "an ISO is only needed to install. Add one in Edit VM if it is still needed."})
     for dev in dom["hostdevs"]:
         dropped.append({"what": "GPU or PCI device" if dev["type"] == "pci" else "USB device" if dev["type"] == "usb" else "Device",
                         "detail": dev["id"], "hardware": True,
-                        "reason": "passthrough is tied to Unraid's hardware; add it from Homestead's hardware devices in Edit VM"})
+                        "reason": "passthrough is tied to Unraid's hardware. Add it from Homestead's hardware devices in Edit VM."})
     for extra in dom["nics"][1:]:
         dropped.append({"what": "Second network card", "detail": extra["bridge"] + " " + extra["mac"],
                         "reason": "a Homestead VM starts with one network card"})
     if dom["pinned"]:
         dropped.append({"what": "CPU pinning", "detail": "vcpupin",
-                        "reason": "Unraid's own tuning for its cores; the core count comes across"})
+                        "reason": "Unraid's own tuning for its cores. The number of cores is kept."})
     machine = dom["machine"]
     notes = []
     if dom["tpm"]:
-        notes.append("its TPM comes across as a new one - Unraid keeps the old one's contents - so BitLocker, "
-                     "if it is on, asks once for its recovery key")
+        notes.append("its TPM is created new, because Unraid keeps the contents of the old one. If BitLocker "
+                     "is on, it asks once for its recovery key")
     if machine and "q35" not in machine:
-        notes.append(f"{machine} becomes q35, the only machine type KubeVirt runs; Linux doesn't mind, "
-                     "and Windows finds its devices again on first boot")
+        notes.append(f"{machine} becomes q35, the only machine type KubeVirt runs. Linux is not affected, "
+                     "and Windows finds its devices again when it first starts")
     nic = dom["nics"][0] if dom["nics"] else {}
     unraid_state = dom.get("state", "")
     return {
@@ -539,7 +539,7 @@ def listing(source):
     if not found["virsh"]:
         return {"source": source, "kind": src.get("kind"), "virsh": False, "proxmox": found["qm"], "vms": []}
     if not found["complete"]:
-        raise ValueError("Unraid's VM list was cut short; try again")
+        raise ValueError("Unraid's VM list was incomplete. Try again.")
     vms = []
     for name, state, xml in found["domains"]:
         try:
@@ -571,9 +571,9 @@ def shutdown(source, vm):
     src = _source(source)
     if src.get("kind") == "proxmox":
         IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, PROXMOX.shutdown_command(found["vmid"])), src, timeout=70)
-        return {"ok": True, "message": f"Asked {source} to shut {found['name']} down; it shows as stopped once the guest has stopped"}
+        return {"ok": True, "message": f"Asked {source} to shut {found['name']} down. It shows as stopped once the guest has stopped."}
     IMP.run_probe(f"vm-off-{source}", IMP._ssh_script(src, "virsh shutdown --domain " + shlex.quote(vm)), src, timeout=60)
-    return {"ok": True, "message": f"Asked {source} to shut {vm} down; it shows as shut off once the guest has stopped"}
+    return {"ok": True, "message": f"Asked {source} to shut {vm} down. It shows as shut off once the guest has stopped."}
 
 
 # ------------------------------------------------------------ importing
@@ -586,7 +586,7 @@ def _upload_url():
         rows = []
     namespace = (rows[0].get("metadata") or {}).get("namespace", "cdi") if rows else ""
     if not namespace:
-        raise ValueError("CDI's upload proxy was not found; the containerized data importer (CDI) is needed to import VM disks")
+        raise ValueError("CDI's upload proxy was not found. The containerized data importer (CDI) is needed to import VM disks.")
     return f"https://cdi-uploadproxy.{namespace}.svc/v1beta1/upload", namespace
 
 
@@ -680,10 +680,10 @@ def copy_script(src, vm, path, size):
     ssh = lambda remote: IMP._ssh_script(src, remote)
     if src.get("kind") == "proxmox":
         check = [f"state=$({ssh(PROXMOX.status_command(vm))})",
-                 "[ \"$state\" = 'stopped' ] || { echo \"HSVM-FAILED VM $vm is ${state:-unknown} on Proxmox again; its disk was not copied\"; exit 5; }"]
+                 "[ \"$state\" = 'stopped' ] || { echo \"HSVM-FAILED VM $vm is ${state:-unknown} on Proxmox again. Its disk was not copied\"; exit 5; }"]
     else:
         check = [f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
-                 "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }"]
+                 "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again. Its disk was not copied\"; exit 5; }"]
     return "\n".join([
         "set -eu", "set -o pipefail",
         # The name is Unraid's free text: a shell variable, never part of a command.
@@ -698,7 +698,7 @@ def copy_script(src, vm, path, size):
         f"if {IMP.SOURCE_SSH.command(src, 'cat -- ' + shlex.quote(path), compress=True)} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
         "-H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/octet-stream' \"$UPLOAD_URL\"",
         "then echo HSVM-DONE",
-        "else code=$?; echo \"HSVM-FAILED Disk stream or CDI upload exited with status $code; see the disk copy output\"; exit \"$code\"; fi",
+        "else code=$?; echo \"HSVM-FAILED Disk stream or CDI upload exited with status $code. See the disk copy output\"; exit \"$code\"; fi",
     ])
 
 
@@ -831,7 +831,7 @@ def copy_output(source, disk):
         if rate is not None:
             parts.append(f"{rate / 1024 ** 2:.1f} MiB/s")
         if sample["percent"] >= 100:
-            parts.append("Stream transferred; waiting for CDI to finish")
+            parts.append("Data sent. Waiting for CDI to finish.")
         elif eta is not None:
             parts.append(f"ETA {eta // 3600}h {(eta % 3600) // 60}m {eta % 60}s")
         elif sample["coarse"]:
@@ -844,11 +844,11 @@ def copy_output(source, disk):
         result["progress"] = {key: samples[-1][key] for key in ("percent", "bytes", "total_bytes", "bytes_per_second", "eta_seconds", "coarse")}
         if samples[-1]["coarse"]:
             result["note"] = " ".join(filter(None, [source.get("note"),
-                "This older job reports whole percentages. Repeated values do not confirm a stalled copy; speed and ETA cannot be measured from this output."]))
+                "This older job reports whole percentages. Repeated values do not mean the copy has stalled. Speed and time left cannot be measured from this output."]))
     return result
 
 
-def failure_reason(log, fallback="the copy stopped; inspect its disk copy output"):
+def failure_reason(log, fallback="the copy stopped. Check its disk copy output"):
     """A percentage is progress, never an error. Keep the actual transport error."""
     lines = [line.strip() for line in str(log or "").splitlines() if line.strip()
              and not _copy_sample(line, 1) and line.strip() != "HSVM-DONE"]
@@ -939,12 +939,12 @@ def _fail(ref, message, item=None):
     _save_output(ref)
     if ref.get("cdi_cleanup"):
         ref.update(phase="cleanup", cleanup_outcome="failed",
-                   cleanup_detail=message + f"; the VM on {_where(ref)} is unchanged")
+                   cleanup_detail=message + f". The VM on {_where(ref)} is not changed.")
         return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
     # Older jobs lack identity receipts. Never delete a retry's disks by name.
     ref["phase"] = "failed"
-    return "failed", 100, (message + "; this older import has no cleanup receipt; review its disconnected volumes. "
-                           f"The VM on {_where(ref)} is unchanged")
+    return "failed", 100, (message + ". This older import has no cleanup record, so review its disconnected volumes. "
+                           f"The VM on {_where(ref)} is not changed.")
 
 
 # How long CDI may keep an import waiting. Ready to receive takes a claim and a
@@ -955,7 +955,7 @@ def _fail(ref, message, item=None):
 READY_LIMIT = 30 * 60
 FINISH_LIMIT = 6 * 60 * 60
 MESSAGE_LIMIT = 500   # what the job list keeps of a message
-REMOVE_THERE = "An admin can remove what you don't want under Import > Disk images."
+REMOVE_THERE = "An admin can remove anything not wanted under Import > Disk images."
 CLEAR_LIMIT = 30 * 60   # for clearing finished disks' temporary storage, which no VM waits on
 _clock = time.time   # a seam for the tests
 
@@ -977,9 +977,9 @@ def _fit(named, counted):
 
 def _what_then(ref):
     # Import's Create VM takes one disk, and nothing attaches another to a VM yet.
-    return ("make the VM from it under Import and check it boots: its bus, MAC and TPM aren't carried over. If not, "
+    return ("create the VM from it under Import and check that it starts, because its bus, MAC and TPM are not carried over. If it does not, "
             "import again under another name" if len(ref["disks"]) == 1 else
-            "a VM can be made from one disk under Import, and Homestead can't attach the others yet; otherwise import "
+            "a VM can be created from one disk under Import, but not with the others yet. Otherwise, import "
             "again under another name")
 
 
@@ -1023,8 +1023,8 @@ def _copy_job_gone(ref, item, gone, phases):
     one = len(gone) == 1
 
     def head(jobs):
-        return (f"{jobs}, so Homestead can't tell how {'that copy' if one else 'those copies'} ended. No VM was made. "
-                f"The VM on {_where(ref)} is unchanged. ")
+        return (f"{jobs}, so Homestead cannot tell how {'that copy' if one else 'those copies'} ended. No VM was created. "
+                f"The VM on {_where(ref)} is not changed. ")
     unfinished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase != "Succeeded"]
     finished = [d["dv"] for d, phase in zip(ref["disks"], phases) if phase == "Succeeded"]
     if unfinished:
@@ -1038,7 +1038,7 @@ def _copy_job_gone(ref, item, gone, phases):
     single = len(ref["disks"]) == 1
     named = "it" if single else "them" if len(gone) == len(ref["disks"]) else ", ".join(finished)
     then = _what_then(ref)
-    what = head(_gone_words(gone)) + (f"CDI reports {named} finished, but that doesn't prove all the data arrived. "
+    what = head(_gone_words(gone)) + (f"CDI reports {named} finished, but that does not prove all the data arrived. "
              f"{'It is kept and holds its' if single else 'They are kept and hold their'} storage. "
              f"{then[0].upper()}{then[1:]}. Or an admin can remove {'it' if single else 'them'} under Import > Disk images")
     work = ref.get("cdi_cleanup")
@@ -1097,10 +1097,10 @@ def status(item):
         try:
             for index, disk in enumerate(ref["disks"]):
                 if disk.get("job"):
-                    return _fail(ref, "Copy setup was interrupted", item)
+                    return _fail(ref, "The copy setup was interrupted", item)
                 disk["job"], _ = _job(ref, disk, index, _token(ns, disk["dv"]), ca, item)
         except Exception:
-            return _fail(ref, "Could not start the disk copy", item)
+            return _fail(ref, "Homestead could not start the disk copy", item)
         ref["phase"] = "copy"
         return "running", 3, "Copying from " + ref["source"]
     if ref["phase"] == "copy":
@@ -1123,7 +1123,7 @@ def status(item):
                 log = _job_logs(ns, disk["job"])
                 reason = next((c.get("message") or c.get("reason") for c in st.get("conditions") or []
                                if c.get("type") == "Failed" and c.get("status") == "True"), "")
-                failed = failure_reason(log, reason or "the copy stopped; inspect its disk copy output")
+                failed = failure_reason(log, reason or "the copy stopped. Check its disk copy output")
                 break
             if st.get("succeeded"):
                 disk.update(pct=100, copied=True)
@@ -1163,7 +1163,7 @@ def status(item):
         except ValueError as error:
             # The disks are whole: keep them, and say how to finish by hand.
             detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
-                      f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
+                      f"{', '.join(d['dv'] for d in ref['disks'])}. Create the VM from them under Import.")
             if ref.get("cdi_cleanup"):
                 ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
                 return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)

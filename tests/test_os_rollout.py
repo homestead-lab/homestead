@@ -509,7 +509,7 @@ class RolloutTests(unittest.TestCase):
 
     def test_only_one_rollout_at_a_time_and_harvester_is_left_alone(self):
         ROLLOUT.start(now=1000)
-        with self.assertRaisesRegex(ValueError, "running already"):
+        with self.assertRaisesRegex(ValueError, "already running"):
             ROLLOUT.start(now=1000)
         ROLLOUT.bind(lambda path: {"items": []}, lambda force=False: {"harvester": True, "distribution": "rke2"},
                      self.hosts, None, None, None, lambda: "", self.data)

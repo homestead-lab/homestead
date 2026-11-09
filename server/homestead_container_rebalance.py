@@ -500,7 +500,7 @@ def _restart_landing(app, hosts, requested, usable, back):
     template = ((app["dep"].get("spec") or {}).get("template") or {}).get("spec") or {}
     own, here = PLACE.balance_preference(app["dep"]), app["host"]     # Balance's own goes in the restart's patch
     if any(not PLACE.one_host(term) for term in PLACE.host_terms(template)):
-        return None, "its host preference isn't for one host, so a restart may not move it"
+        return None, "its host preference is not for one host, so a restart may not move it"
     wanted = PLACE.preferred_host(template, ignoring=own)
     if wanted == here:
         return None, f"its host preference keeps it on {here}, so a restart would not move it"
@@ -714,7 +714,7 @@ def reviewed(moves, exclude, token, role=None):
     if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
         raise ValueError("Review the containers to move again")
     if not _token_ok(moves, exclude, token):
-        raise ValueError("This review is out of date; review again. The moves differ from it, it is more than "
+        raise ValueError("This review is out of date. Review again. The moves differ from it, it is more than "
                          "ten minutes old, or a container was edited since")
     hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
@@ -725,9 +725,9 @@ def reviewed(moves, exclude, token, role=None):
         if app and app["why"] == ADMIN_ONLY:
             raise PermissionError(f"{m['id']}: {ADMIN_ONLY}")
         if not app or app["why"] or app["host"] != m["from"] or m["id"] in set(exclude or ()):
-            raise ValueError(f"{m['id']} changed since the review; review again")
+            raise ValueError(f"{m['id']} changed since the review. Review again.")
         if not host or not host["takes"] or not satisfies(summary.get(m["to"], host["node"]), requirements(app["dep"]))[0]:
-            raise ValueError(f"{m['to']} cannot take {m['id']} now; review again")
+            raise ValueError(f"{m['to']} cannot take {m['id']} now. Review again.")
         out.append({**{k: m[k] for k in keys}, "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2),
                     "near": bool(app["near"] and m["to"] in app["near"])})
     generations = {row[0]: row[2] for row in _versions(moves)}
@@ -939,7 +939,7 @@ def _send_restart(ref, move, dep, role, skip, progress, i, total, now):
     _cooldown(ref, move, now)
     if written:
         _watch(ref, move, written, now)
-    return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}); it should start on {move['to']}"
+    return "running", progress, f"Restarting {move['id']} ({i + 1} of {total}). It should start on {move['to']}."
 
 
 def _watch(ref, move, value, now):
@@ -1058,7 +1058,7 @@ def status(item):
             moved = [r["id"] for r in ref.get("results") or [] if r["result"] == "moved"]
             return "running", progress, (f"{i + 1} of {len(moves)}: " + (f"moved {', '.join(moved)}; " if moved else "")
                                          + f"moving {move['id']} to {move['to']}")
-        return "running", progress, f"Moving {move['id']} to {move['to']} ({i + 1} of {len(moves)}); it restarts there"
+        return "running", progress, f"Moving {move['id']} to {move['to']} ({i + 1} of {len(moves)}). It restarts there."
     if stage == "pulling":
         import homestead_host_move as HOST_MOVE
         pulls = ref.get("pulls") or []
@@ -1084,11 +1084,11 @@ def status(item):
             # Nothing is gained by waiting: it runs, on the host it was to leave.
             rolled = int((seen["dep"].get("metadata") or {}).get("generation") or 0) > ref.get("sent_generation", 0)
             if rolled:
-                return "failed", progress, (f"{move['id']} restarted on {move['from']}, not {move['to']}; the rest were not moved. "
-                                            f"Moved {done} before it")
+                return "failed", progress, (f"{move['id']} restarted on {move['from']}, not {move['to']}. The rest were not moved. "
+                                            f"Moved {done} before it.")
             if ref.get("send_error"):
-                return "failed", progress, (f"{move['id']} could not be restarted, as far as Homestead can see ({ref['send_error']}); "
-                                            f"the rest were not moved. Moved {done} before it")
+                return "failed", progress, (f"{move['id']} could not be restarted, as far as Homestead can see ({ref['send_error']}). "
+                                            f"The rest were not moved. Moved {done} before it.")
         if now - ref.get("started", now) > 600:
             # Stop rather than restart more: one that did not come up is looked at first.
             if ref.get("stop_on_failure"):
@@ -1097,11 +1097,11 @@ def status(item):
                 where = f"{move['id']} restarted on {move['from']}, not {move['to']}"
                 if ref.get("stop_on_failure"):
                     return _halt(ref, i, move, where.split(" ", 1)[1])
-                return "failed", progress, f"{where}; the rest were not moved. Moved {done} before it"
-            return "failed", progress, (f"{move['id']} did not start on {move['to']} within 10 minutes; the rest were not moved. "
-                                        f"Moved {done} before it. Check its events in Containers")
+                return "failed", progress, f"{where}. The rest were not moved. Moved {done} before it."
+            return "failed", progress, (f"{move['id']} did not start on {move['to']} within 10 minutes. The rest were not moved. "
+                                        f"Moved {done} before it. Check its events in Containers.")
         return "running", progress, f"Waiting for {move['id']} to start on {move['to']} ({i + 1} of {len(moves)})"
-    return "failed", progress, "Unknown step; the rest were not moved"
+    return "failed", progress, "Unknown step. The rest were not moved."
 
 
 def cancel_plan(item):
@@ -1137,7 +1137,7 @@ def cancel_run(work, chosen):
     note = ""
     if left:
         names = ", ".join(left[:-1]) + " and " + left[-1] if len(left) > 1 else left[0]
-        note = f"; {names} could not be stopped: delete {'them' if len(left) > 1 else 'it'} under Image cache"
+        note = f". {names} could not be stopped. Delete {'them' if len(left) > 1 else 'it'} under Image cache"
     if ref.get("stop_on_failure"):
         # The one moving now finishes its restart; the rest are not reached.
         first = ref.get("index", 0) + (1 if ref.get("stage") == "starting" else 0)
@@ -1155,9 +1155,9 @@ def start_run(request):
     running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
-        return ROUTER.Reply(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
+        return ROUTER.Reply(409, {"error": "A container rebalance is already running. Follow it in Jobs.", "operation": running})
     if b.get("restart") is not True:
-        return ROUTER.Reply(409, {"error": "Moving a container restarts it; confirm the restarts"})
+        return ROUTER.Reply(409, {"error": "Moving a container restarts it. Confirm the restarts."})
     role = request.role
     if b.get("picks") is not None:
         try:
@@ -1168,7 +1168,7 @@ def start_run(request):
             return ROUTER.Reply(409, {"error": str(error)})
         if not now["moves"] or not _token_ok(now["moves"], [], b.get("review_token")):
             return ROUTER.Reply(409, {"error": "The containers or hosts changed since the review, or it is more than ten "
-                                               "minutes old; review again", "plan": now})
+                                               "minutes old. Review again.", "plan": now})
         generations = {row[0]: row[2] for row in _versions(now["moves"])}
         moves = [{**m, "generation": generations.get(m["id"], 0)} for m in now["moves"]]
         return ROUTER.Reply(202, {"operation": start({"moves": moves, "excluded": [], "stop_on_failure": True}, role=role)})
@@ -1185,7 +1185,7 @@ def start_run(request):
     else:
         chosen = plan(b.get("exclude") or [], avoid=standby(), role=role)
         if chosen["review_token"] != b.get("review_token"):
-            return ROUTER.Reply(409, {"error": "Container load changed since the review; review again", "plan": chosen})
+            return ROUTER.Reply(409, {"error": "The container load changed since the review. Review again.", "plan": chosen})
     if not chosen["moves"]:
         return ROUTER.Reply(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": chosen})
     return ROUTER.Reply(202, {"operation": start(chosen, role=role)})

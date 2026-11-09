@@ -17,8 +17,8 @@ function guideCopy(value) {
 function guideScreens(g) {
   // Each screen's answer in a few words; the why is on hover (design.md, Verbosity budget).
   const role = g.management_count < 3
-    ? `<b>Default Role</b> ${tip(`This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"}; Harvester promotes new hosts to management until there are three.`)}`
-    : `<b>Default Role</b>: it joins as a worker ${tip("With three management hosts already, a new one joins as a worker. Worker Role says so outright.")}`;
+    ? `<b>Default Role</b> ${tip(`This cluster has ${g.management_count} management host${g.management_count === 1 ? "" : "s"}. Harvester makes new hosts management hosts until there are three.`)}`
+    : `<b>Default Role</b>. It joins as a worker. ${tip("With three management hosts already, a new host joins as a worker. Choosing Worker Role does the same.")}`;
   const rows = [
     ["Installation mode", "<b>Join an existing Harvester cluster</b>"],
     ["Node role", role],
@@ -28,13 +28,13 @@ function guideScreens(g) {
     ["Persistent size", "The default (150 GiB)."],
     ["Hostname", g.hostname ? `${guideCopy(g.hostname)} <span class="dim xs">- the next free name</span>`
       : "A unique lowercase name."],
-    ["Management network", `The card on your LAN; active-backup, MTU 1500 ${tip("The installer shows which cards have a link; add a second for a bond if you cabled two. VLAN: none, unless your other hosts use one. IPv4: DHCP with a reservation on your router, or Static with an address outside the DHCP range.")}`],
-    ["DNS servers", "Your router, for a static address."],
-    ["Management address", g.vip ? `${guideCopy(g.vip)} <span class="dim xs">- this cluster's VIP</span>` : "This cluster's VIP (Homestead could not read it)."],
+    ["Management network", `The network card on the LAN, active-backup, MTU 1500 ${tip("The installer shows which network cards have a link. Add a second card for a bond if two are connected. VLAN: none, unless the other hosts use one. IPv4: DHCP with a reservation on the router, or Static with an address outside the DHCP range.")}`],
+    ["DNS servers", "The router's address, for a static address."],
+    ["Management address", g.vip ? `${guideCopy(g.vip)} <span class="dim xs">(this cluster's virtual IP)</span>` : "This cluster's virtual IP (Homestead could not read it)."],
     ["Cluster token", "The token from step 2."],
     ["NTP servers", g.ntp.length ? guideCopy(g.ntp.join(",")) : "The default."],
     ["Proxy address", g.proxy ? guideCopy(g.proxy) : "Empty."],
-    ["SSH keys", "Optional: <span class=\"mono\">https://github.com/&lt;you&gt;.keys</span>."],
+    ["SSH keys", "Optional: <span class=\"mono\">https://github.com/&lt;user&gt;.keys</span>."],
     ["Remote config URL", "Empty."],
     ["Confirm", "Install. It takes 10-20 minutes, then reboots and joins."],
   ];
@@ -54,20 +54,20 @@ window.clusterOnboarding = async () => {
   $("#mbody").innerHTML = `
     <p class="muted small">Install Harvester on the new host, then join this cluster using the settings below.</p>
     <section class="guide-step"><h4><span>1</span>Boot the installer</h4>
-      ${g.iso ? `<p>This cluster runs <b>Harvester v${esc(g.version)}</b>; the new host needs the same release.</p>
+      ${g.iso ? `<p>This cluster runs <b>Harvester v${esc(g.version)}</b>. The new host needs the same release.</p>
         <div class="row"><a class="btn sm pri" href="${safeHref(g.iso)}" target="_blank" rel="noopener">Harvester v${esc(g.version)} ISO (${esc(g.arch)})</a>
           <a class="btn sm" href="${safeHref(g.checksums)}" target="_blank" rel="noopener">Checksums</a></div>`
-        : '<p>Homestead could not read this cluster\'s Harvester version - use the ISO matching the version on the Cluster page.</p>'}
+        : '<p>Homestead could not read this cluster\'s Harvester version. Use the ISO that matches the version on the Cluster page.</p>'}
       <p class="dim xs">Write it to a USB stick with Rufus (in DD mode) or balenaEtcher, or mount it as virtual media from the
-        server's BMC (iDRAC, iLO, IPMI). Boot from it and choose <b>Harvester Installer</b>.</p></section>
+        server's management controller (iDRAC, iLO, IPMI). Start from it and choose <b>Harvester Installer</b>.</p></section>
     <section class="guide-step"><h4><span>2</span>Read the cluster token</h4>
-      <p>It is on every management host. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed:</p>
+      <p>It is stored on every management host. Sign in as <span class="mono">rancher</span>, with the password set when that host was installed, and run:</p>
       ${guideCopy(`ssh rancher@${g.token_host || "<management-node>"}`)}
       ${guideCopy(g.token_command)}
-      <p class="dim xs">Copy the value after <span class="mono">token:</span>. Anyone holding it can join a machine to this cluster,
-        so keep it out of chats and notes.${g.token_host ? "" : ` Management nodes: ${esc(g.nodes.filter(n => n.management).map(n => n.name).join(", ") || "none found")}.`}</p></section>
+      <p class="dim xs">Copy the value after <span class="mono">token:</span>. Anyone with it can join a machine to this cluster,
+        so keep it out of chats and notes.${g.token_host ? "" : ` Management hosts: ${esc(g.nodes.filter(n => n.management).map(n => n.name).join(", ") || "none found")}.`}</p></section>
     <section class="guide-step"><h4><span>3</span>Answer the installer</h4>
-      <p class="dim xs">In the order Harvester asks; some releases put the password or role a screen earlier.</p>
+      <p class="dim xs">In the order Harvester asks. Some releases ask for the password or role one screen earlier.</p>
       ${guideScreens(g)}</section>
     <section class="guide-step"><h4><span>4</span>Watch it join</h4><div id="guideWatch"></div></section>`;
   const sections = [...document.querySelectorAll("#mbody .guide-step")];
@@ -85,10 +85,10 @@ async function guideWatch() {
   if (!$("#guideWatch")) return;
   const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
   // Unread hosts are not "waiting for a new host"; it keeps trying (#620).
-  host.innerHTML = unread ? UI.callout("warn", "Could not read the hosts", `${esc(unread)} · trying again every 10 seconds`) : fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
+  host.innerHTML = unread ? UI.callout("warn", "The hosts could not be read", `${esc(unread)} Homestead tries again every 10 seconds.`) : fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
       <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
       <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
-    : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here as soon as Harvester registers it, about a minute after it reboots.</div>';
+    : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here when Harvester registers it, about a minute after it restarts.</div>';
   ONBOARD.timer = setTimeout(guideWatch, 10000);
 }
 
@@ -101,14 +101,14 @@ async function removalLeftovers() {
   if (!$("#rm_left")) return;
   // Unread is not "the cluster is clean" (#620).
   if (report.unread) {
-    host.innerHTML = `${UI.callout("warn", "Could not read what is left over", esc(report.unread))}
+    host.innerHTML = `${UI.callout("warn", "The leftovers could not be read", esc(report.unread))}
       <button class="btn sm" style="margin-top:6px" onclick="removalLeftovers()">Try again</button>`;
     return;
   }
   const rows = cleanupRows(report, false);
   host.innerHTML = rows.length ? `<div class="card flat cleanup-card">${rows.join("")}</div>
-      <div class="dim xs" style="margin-top:6px">Replica records can take a few minutes to rebuild elsewhere before Longhorn's record of the host can go.</div>`
-    : '<div class="note good">Nothing is left over: the cluster is clean.</div>';
+      <div class="dim xs" style="margin-top:6px">Volume copies can take a few minutes to rebuild on other hosts before Longhorn's record of the host can be removed.</div>`
+    : '<div class="note good">Nothing is left over.</div>';
   if (window.applyRole) window.applyRole();
 }
 window.removalLeftovers = removalLeftovers;
@@ -122,20 +122,20 @@ function cleanupRows(report, withDead = true) {
       <button class="btn sm danger" data-need="admin" onclick="nodeRemoval(${jsq(n.name)})">Remove…</button></div>`),
     ...report.stale_machines.map(m => `<div class="cleanup-row"><div><b>Leftover machine ${esc(m.name)}</b>
       <span>${m.stuck ? `Being deleted, but waiting on ${esc(m.node || "its host")}, which will not answer`
-        : `Cluster API still lists it${m.node ? ` for ${esc(m.node)}, which is gone` : ` (${esc(m.phase)})`}`}</span></div>
+        : `Cluster API still lists it${m.node ? ` for ${esc(m.node)}, which has been removed` : ` (${esc(m.phase)})`}`}</span></div>
       <button class="btn sm ${m.stuck ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('machine',${jsq(m.name)},${m.stuck})">${m.stuck ? "Force" : "Delete"}</button></div>`),
     ...report.stale_longhorn.map(n => `<div class="cleanup-row"><div><b>Longhorn still lists ${esc(n.name)}</b>
-      <span>${n.replicas ? `${n.replicas} replica${n.replicas === 1 ? "" : "s"} still recorded there. They rebuild elsewhere on their own; force it if the host is gone for good` : "No replicas left; safe to delete"}</span></div>
+      <span>${n.replicas ? `${n.replicas} volume cop${n.replicas === 1 ? "y is" : "ies are"} still recorded there. They are rebuilt on other hosts automatically. Force the removal if the host is gone for good.` : "No volume copies are left, so it is safe to delete."}</span></div>
       <button class="btn sm ${n.replicas ? "danger" : ""}" data-need="admin" onclick="clusterCleanup('longhorn',${jsq(n.name)},${!!n.replicas})">${n.replicas ? "Force" : "Delete"}</button></div>`),
-    ...(report.passwords || []).map(s => `<div class="cleanup-row"><div><b>${esc(s.node)}'s node password</b>
-      <span>A Secret k3s/RKE2 keeps for a host that is gone. While it is there, a rebuilt host called ${esc(s.node)} cannot join</span></div>
+    ...(report.passwords || []).map(s => `<div class="cleanup-row"><div><b>${esc(s.node)}'s host password</b>
+      <span>A Secret that k3s or RKE2 keeps for a host that has been removed. While it exists, a rebuilt host called ${esc(s.node)} cannot join.</span></div>
       <button class="btn sm" data-need="admin" onclick="clusterCleanup('password',${jsq(s.name)})">Delete</button></div>`),
-    ...(report.pinned_workloads || []).map(w => `<div class="cleanup-row"><div><b>${esc(w.name)} is pinned to ${esc(w.node)}</b>
-      <span>That host is gone, so ${esc(w.name)} waits for it. Unpinning lets it run on any host that suits it</span></div>
+    ...(report.pinned_workloads || []).map(w => `<div class="cleanup-row"><div><b>${esc(w.name)} is tied to ${esc(w.node)}</b>
+      <span>That host has been removed, so ${esc(w.name)} waits for it. Letting it run anywhere allows it to start on any suitable host.</span></div>
       <button class="btn sm" data-need="admin" onclick="clusterCleanup('pin',${jsq(`${w.namespace}/${w.name}`)})">Unpin</button></div>`),
     ...(report.pinned_volumes || []).map(v => `<div class="cleanup-row bad"><div><b>${esc(`${v.namespace}/${v.claim}`)} was kept on ${esc(v.node)}</b>
-      <span>Its data went with that host${v.users?.length ? `, so ${esc(v.users.join(", "))} cannot start` : ""}. Making it again empty lets ${v.users?.length === 1 ? "it" : "them"} start elsewhere</span></div>
-      <button class="btn sm danger" data-need="admin" onclick="clusterCleanup('pinned-volume',${jsq(`${v.namespace}/${v.claim}`)},true)">Make it empty</button></div>`),
+      <span>Its data was lost with that host${v.users?.length ? `, so ${esc(v.users.join(", "))} cannot start` : ""}. Recreating it empty lets ${v.users?.length === 1 ? "the app" : "the apps"} start on another host.</span></div>
+      <button class="btn sm danger" data-need="admin" onclick="clusterCleanup('pinned-volume',${jsq(`${v.namespace}/${v.claim}`)},true)">Recreate empty</button></div>`),
     ...(report.attachments || []).map(a => `<div class="cleanup-row"><div><b>A volume is still attached to ${esc(a.node)}</b>
       <span>${esc(a.name)} - that host is gone, so the volume cannot attach anywhere else until it is released</span></div>
       <button class="btn sm" data-need="admin" onclick="clusterCleanup('attachment',${jsq(a.name)})">Release</button></div>`),
@@ -152,39 +152,39 @@ window.clusterCleanupPaint = async () => {
   if (report.unread) {
     STATE.data.cleanupHtml = "";
     host.innerHTML = `<div class="sec">Hosts coming and going</div>
-      ${UI.callout("warn", "Could not read what hosts left behind", esc(report.unread))}`;
+      ${UI.callout("warn", "What removed hosts left behind could not be read", esc(report.unread))}`;
     return;
   }
   const rows = cleanupRows(report);
   // Kept, so the next refresh draws it straight away instead of the page
   // shrinking while it is fetched again and growing back when it arrives.
-  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a host that stopped reporting, a Cluster API machine with no host, a Longhorn node record with no host, a k3s/RKE2 node password, apps and volumes tied to a host that is gone, a volume still attached there.")}</div>
-    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to tidy</b><span>Every host is ready and nothing is left over.</span></div></div>'}</div>`;
+  STATE.data.cleanupHtml = `<div class="sec">Hosts coming and going ${tip("What a removed host can leave behind: a host that stopped reporting, a Cluster API machine without a host, a Longhorn record without a host, a k3s or RKE2 host password, apps and volumes tied to a removed host, and volumes still attached to it.")}</div>
+    <div class="card flat cleanup-card">${rows.join("") || '<div class="cleanup-row"><div><b>Nothing to clean up</b><span>Every host is ready and nothing is left over.</span></div></div>'}</div>`;
   host.innerHTML = STATE.data.cleanupHtml;
   if (window.applyRole) window.applyRole();
 };
 
 /* Each cleanup's title and button: what it does, in a few words. */
 const SETUP_CLEANUP_TITLES = {
-  password: ["Delete node password", "Delete password"],
-  pin: ["Let it run anywhere", "Unpin"],
-  attachment: ["Release the volume", "Release"],
-  "pinned-volume": ["Make the volume again, empty", "Make it again"],
+  password: ["Delete host password", "Delete password"],
+  pin: ["Let it run anywhere", "Let it run anywhere"],
+  attachment: ["Release the volume", "Release volume"],
+  "pinned-volume": ["Recreate the volume empty", "Recreate empty"],
 };
 window.clusterCleanup = async (kind, name, force = false) => {
   const asks = {
-    password: `Delete the node password ${name}?\n\nA host rebuilt under that name can then join the cluster.`,
-    pin: `Let ${name} run on any host?\n\nIts pin to a host that is gone is taken off.`,
+    password: `Delete the host password ${name}?\n\nA host rebuilt with that name can then join the cluster.`,
+    pin: `Let ${name} run on any host?\n\nIts tie to the removed host is taken off.`,
     attachment: `Release ${name}?\n\nIts volume can then attach on another host.`,
-    "pinned-volume": `Make ${name} again, empty?\n\nIts data was on a host that is gone and cannot be read back. The claim is made again under the same name, empty, so its app can start on another host.`,
+    "pinned-volume": `Recreate ${name} empty?\n\nIts data was on a removed host and cannot be recovered. The volume is created again with the same name, empty, so that its app can start on another host.`,
   };
   if (asks[kind]) {
     if (!(await ask(asks[kind], { title: SETUP_CLEANUP_TITLES[kind][0], ok: SETUP_CLEANUP_TITLES[kind][1], danger: kind !== "pin" }))) return;
   } else {
     const what = kind === "machine" ? `the leftover Cluster API machine ${name}` : `Longhorn's record of ${name}`;
     const forced = kind === "machine"
-      ? "\n\nIts deletion is waiting on a host that will not answer. Forcing clears the finalizers holding it; only do this if the host is gone for good."
-      : "\n\nThe replica records Longhorn keeps there are deleted too, and it rebuilds them from the remaining copies. Only do this if the host is gone for good.";
+      ? "\n\nIts deletion is waiting for a host that will not respond. Forcing it clears what holds it. Only do this if the host is gone for good."
+      : "\n\nLonghorn's records of volume copies there are also deleted, and the copies are rebuilt from the remaining ones. Only do this if the host is gone for good.";
     if (!(await ask(`${force ? "Force-delete" : "Delete"} ${what}?${force ? forced : ""}`, { title: force ? "Force-delete" : "Delete", ok: force ? "Force-delete" : "Delete", danger: true }))) return;
   }
   try {
@@ -200,23 +200,23 @@ window.clusterCleanup = async (kind, name, force = false) => {
    been down. A host still running is shown, but has to be stopped first -
    a running node registers itself again. */
 window.clusterRemovePick = async () => {
-  modal("Remove a host", '<div class="empty"><span class="spin2"></span>reading the hosts</div>', true);
+  modal("Remove a host", '<div class="empty"><span class="spin2"></span>Reading the hosts</div>', true);
   let nodes;
   try { nodes = await api("/api/nodes"); }
   catch (e) {
     // Hosts that could not be read are not hosts that are all Ready (#620).
-    $("#mbody").innerHTML = `<div class="empty"><b>Could not read the hosts</b><br><span class="dim small">${esc(e.message)}</span></div>
+    $("#mbody").innerHTML = `<div class="empty"><b>The hosts could not be read</b><br><span class="dim small">${esc(e.message)}</span></div>
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`;
     return;
   }
   const down = nodes.filter(n => n.status !== "Ready"), up = nodes.filter(n => n.status === "Ready");
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned apps and VMs before confirming.</p>
+    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Check the servers needed to run the cluster, the volume copies, and the apps and VMs tied to the host before confirming.</p>
     ${down.length ? `<div class="sec">Not ready</div><div class="cleanup-card card flat">${down.map(n => `<div class="cleanup-row bad"><div>
         <b>${esc(n.name)}</b><span>${esc((n.roles || []).join(" · ") || "worker")} · ${esc(n.status || "not ready")}</span></div>
         <button class="btn sm danger" onclick="nodeRemoval(${jsq(n.name)})">Check and remove…</button></div>`).join("")}</div>`
-      : '<div class="note good">Every host is Ready: none has failed.</div>'}
-    ${up.length ? `<div class="sec">Running ${tip("A running host re-registers itself, so it cannot simply be deleted. Drain it, stop Kubernetes on it (or uninstall it), power it off, and it shows here as Not ready.")}</div>
+      : '<div class="note good">Every host is ready. None has failed.</div>'}
+    ${up.length ? `<div class="sec">Running ${tip("A running host registers itself again, so it cannot simply be deleted. Move its apps off, stop or uninstall Kubernetes on it, and turn it off. It is then shown here as not ready.")}</div>
       <div class="cleanup-card card flat">${up.map(n => `<div class="cleanup-row"><div><b>${esc(n.name)}</b>
         <span>${esc((n.roles || []).join(" · ") || "worker")} · Ready - stop it first to retire it</span></div>
         <button class="btn sm" onclick="nodeRemoval(${jsq(n.name)})">What it takes…</button></div>`).join("")}</div>` : ""}
@@ -228,20 +228,20 @@ window.nodeRemoval = async name => {
   childModal(`Remove · ${name}`, '<div class="empty"><span class="spin2"></span>checking what removing it would do</div>', true);
   let plan;
   try { plan = await api(`/api/cluster/removal?node=${encodeURIComponent(name)}`); }
-  catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>Could not check</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
+  catch (e) { $("#mbody").innerHTML = `<div class="empty"><b>The host could not be checked</b><br><span class="dim small">${esc(e.message)}</span></div>`; return; }
   $("#mbody").innerHTML = `
     ${plan.blockers.length ? `${UI.callout("bad", { html: `Not now.` }, `<ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)}` : ""}
-    ${plan.warnings.length ? `${UI.callout("warn", { html: `Worth knowing first.` }, `<ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`)}` : ""}
-    ${plan.ok && (plan.disk_jobs || []).length ? `${UI.callout("bad", { html: `Saved disk ${plan.disk_jobs.length === 1 ? "job" : "jobs"} on ${esc(name)}.` }, `${tip("These jobs hold this host's disks. Most can't be cancelled once started; a disk retire can be rolled back early. A host that may come back keeps them so they can resume; removing a host gone for good leaves them with nothing to finish on.")}
+    ${plan.warnings.length ? `${UI.callout("warn", { html: `Check these first.` }, `<ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>`)}` : ""}
+    ${plan.ok && (plan.disk_jobs || []).length ? `${UI.callout("bad", { html: `Saved disk ${plan.disk_jobs.length === 1 ? "job" : "jobs"} on ${esc(name)}.` }, `${tip("These jobs use this host's disks. Most cannot be cancelled once started, but retiring a disk can be undone early on. A host that may come back keeps them so that they can continue. Removing a host for good leaves them unable to finish.")}
       <ul>${plan.disk_jobs.map(j => `<li>${esc(j.text)}</li>`).join("")}</ul><span id="rm_jobs_hint"></span>`)}` : ""}
     ${plan.ok ? `<div class="sec">Is it coming back?</div>
     <div class="removal-modes">
       <label class="removal-mode"><input type="radio" name="rm_mode" value="standard" checked onchange="nodeRemovalMode()">
-        <div><b>It might</b><span>Remove it the standard way. Pods, VMs and volumes still bound to it are left to
-          Kubernetes, Longhorn and KubeVirt, which move them once they give up on it.</span></div></label>
+        <div><b>It might</b><span>Remove it the standard way. Apps, VMs and volumes still tied to it are left to
+          Kubernetes, Longhorn and KubeVirt, which move them when they stop waiting for it.</span></div></label>
       <label class="removal-mode"><input type="radio" name="rm_mode" value="gone" onchange="nodeRemovalMode()">
-        <div><b>It is gone for good</b><span>Dead and not coming back. Also let go of what it still holds, so
-          nothing waits on a host that will never answer.</span></div></label>
+        <div><b>It is gone for good</b><span>It has failed and will not come back. Also release what it still holds, so
+          that nothing waits for a host that will never respond.</span></div></label>
     </div>
     ${plan.stuck && (plan.stuck.pods || plan.stuck.vms.length || plan.stuck.attachments || plan.stuck.replicas) ? `
       <div class="removal-stuck">Still bound to ${esc(name)}:
@@ -252,12 +252,12 @@ window.nodeRemoval = async name => {
     ${removalLosses(plan)}
     <div class="sec">What happens</div>
     <ol class="removal-steps" id="rm_steps">${plan.steps.map(s => `<li>${esc(s)}</li>`).join("")}</ol>
-    <p class="muted small">Homestead cannot reach a dead host to wipe it. If it comes back, reinstall it before it
-      rejoins; a host that still has its old install will try to register again.</p>
+    <p class="muted small">Homestead cannot reach a failed host to wipe it. If it comes back, reinstall it before it
+      joins again, because a host with its old installation tries to register again.</p>
     ${(plan.lost_volumes.length || (plan.pinned_volumes || []).length) && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_loss"
       onchange="nodeRemovalMode()"> <span id="rm_loss_text"></span></label>` : ""}
     ${(plan.disk_jobs || []).length && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_jobs"
-      onchange="nodeRemovalMode()"> <span>Remove it anyway. ${esc(plan.disk_jobs_stay || "")}</span></label>` : ""}
+      onchange="nodeRemovalMode()"> <span>Remove the host anyway. ${esc(plan.disk_jobs_stay || "")}</span></label>` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
       ${plan.ok ? `<button class="btn danger" id="rm_go" data-need="admin"
         onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}`)}`;
@@ -273,15 +273,15 @@ function removalLosses(plan) {
   const lost = plan.lost_detail || [];
   const pinned = plan.pinned_volumes || [], apps = plan.pinned_workloads || [];
   if (!lost.length && !pinned.length && !apps.length) {
-    return plan.ok ? '<div class="note good" style="margin-top:10px"><b>No data is lost.</b> Every volume it held has a healthy copy elsewhere, and nothing is tied to it.</div>' : "";
+    return plan.ok ? '<div class="note good" style="margin-top:10px"><b>No data is lost.</b> Every volume on it has a healthy copy on another host, and nothing is tied to it.</div>' : "";
   }
-  return `<div class="sec">What is lost</div><div class="removal-losses">
-    ${lost.length ? `${UI.callout("bad", { html: `${lost.length} volume${lost.length === 1 ? "" : "s"} with no other copy.` }, `${tip("Longhorn kept every healthy copy of these on this host. Removing it gives up on that data; a backup is the way back - restore it under Data protection afterwards.")}
+  return `<div class="sec">Data that is lost</div><div class="removal-losses">
+    ${lost.length ? `${UI.callout("bad", { html: `${lost.length} volume${lost.length === 1 ? "" : "s"} with no other copy.` }, `${tip("Every healthy copy of these volumes is on this host. Removing it gives up that data. To get it back, restore a backup under Data protection afterwards.")}
       <ul>${lost.map(v => `<li><span class="mono">${esc(v.claim ? `${v.namespace}/${v.claim}` : v.volume)}</span>${who(v.users)}</li>`).join("")}</ul>`)}` : ""}
-    ${pinned.length ? `${UI.callout("bad", { html: `${pinned.length} volume${pinned.length === 1 ? " was" : "s were"} kept on the host itself.` }, `${tip("Volumes like k3s's local-path live on one host's disk, so their data went with it. Gone for good makes each again under the same name, empty, so its app can start on another host.")}
+    ${pinned.length ? `${UI.callout("bad", { html: `${pinned.length} volume${pinned.length === 1 ? " was" : "s were"} stored on the host itself.` }, `${tip("Volumes such as k3s's local-path are stored on one host's disk, so their data is lost with it. Gone for good recreates each one empty with the same name, so that its app can start on another host.")}
       <ul>${pinned.map(v => `<li><span class="mono">${esc(`${v.namespace}/${v.claim}`)}</span> <span class="dim xs">${esc(v.class)} · ${esc(v.size)}</span>${who(v.users)}</li>`).join("")}</ul>`)}` : ""}
     ${apps.length ? `${UI.callout("warn", { html: `${apps.length} app${apps.length === 1 ? " is" : "s are"} pinned to it and would wait for it` }, `
-      ${tip("They were told to run only on this host - by a Pin in Edit, or for hardware it had. Gone for good takes the pin off, so they start on another host if one suits them.")}
+      ${tip("They are set to run only on this host, either by a host choice in Edit or because of its hardware. Gone for good removes that setting, so they start on another host if one is suitable.")}
       <ul>${apps.map(w => `<li>${esc(w.name)} <span class="dim xs">${esc(w.namespace)}</span></li>`).join("")}</ul>`)}` : ""}
   </div>`;
 }
@@ -316,8 +316,8 @@ window.nodeRemovalMode = () => {
   const jobs = (plan.disk_jobs || []).length, jobBox = $("#rm_jobs"), hint = $("#rm_jobs_hint");
   if (jobBox) jobBox.closest("label").hidden = !gone;
   // What leaving them means depends on their kinds; the server words it (disk_jobs_stay).
-  if (hint) hint.textContent = gone ? `${jobs === 1 ? "Gone for good leaves it as it is." : "Gone for good leaves them as they are."} ${plan.disk_jobs_stay || ""}`
-    : "The standard way waits for them: open each job first, or choose It is gone for good.";
+  if (hint) hint.textContent = gone ? `${jobs === 1 ? "Gone for good leaves the job as it is." : "Gone for good leaves the jobs as they are."} ${plan.disk_jobs_stay || ""}`
+    : "The standard way waits for them. Open each job first, or choose It is gone for good.";
   if (button) button.disabled = !!(box && !box.closest("label").hidden && !box.checked)
     || !!jobs && !(gone && jobBox?.checked);
 };
@@ -325,7 +325,7 @@ window.nodeRemovalMode = () => {
 window.nodeRemove = async name => {
   const gone = $('input[name="rm_mode"]:checked')?.value === "gone";
   if (!(await ask(gone
-    ? `Remove ${name} for good?\n\nIts pods and VMs are force-stopped so they start elsewhere, its volume attachments and replica records are let go, and its machine is deleted even if something still waits on it. This cannot be undone from Homestead.`
+    ? `Remove ${name} for good?\n\nIts apps and VMs are forced to stop so that they start on other hosts, its volumes and Longhorn records are released, and its machine is deleted even if something still waits for it. This cannot be undone from Homestead.`
     : `Remove ${name} from the cluster?\n\nThis cannot be undone from Homestead.`, { title: "Remove host", ok: gone ? "Remove for good" : "Remove host", danger: true }))) return;
   const button = $("#rm_go");
   if (button) { button.disabled = true; button.innerHTML = '<span class="spin2"></span> removing'; }
@@ -336,7 +336,7 @@ window.nodeRemove = async name => {
         accept_jobs: gone && $("#rm_jobs")?.checked ? (window.__removalPlan?.disk_jobs || []).map(j => j.id) : [] }) });
     $("#mbody").innerHTML = `${UI.callout("ok", { html: `${esc(name)} is out of the cluster.` }, ``)}
       <ol class="removal-steps done">${result.log.map(l => `<li>${esc(l)}</li>`).join("")}</ol>
-      <div class="sec">Anything left over</div><div id="rm_left"><div class="dim small"><span class="spin2"></span> checking</div></div>
+      <div class="sec">Anything left over</div><div id="rm_left"><div class="dim small"><span class="spin2"></span> Checking</div></div>
       ${UI.actions(`<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal(); if (STATE.view === 'cluster') { resetPaint(); viewCluster(); }">Done</button>`)}`;
     removalLeftovers();
   } catch (e) {

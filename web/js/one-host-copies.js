@@ -11,13 +11,13 @@ async function oneHostCopiesReview() {
   try { facts = await api("/api/longhorn/one-host-copies"); }
   catch (e) {
     oneHostCopiesShown = null;
-    return modal("Match copies to hosts", UI.callout("bad", "Could not read volume copies", esc(e.message)) + UI.actions(UI.cancel("Close")));
+    return modal("Match copies to hosts", UI.callout("bad", "The volume copies could not be read", esc(e.message)) + UI.actions(UI.cancel("Close")));
   }
   const raise = facts.state === "raise", rows = facts.volumes || [];
   oneHostCopiesShown = rows.length && ["lower", "raise"].includes(facts.state) ? facts : null;
   const title = raise ? "Put copies back" : "Match copies to hosts";
   if (!oneHostCopiesShown) {
-    const why = facts.state === "unknown" ? UI.callout("warn", "Could not read volume copies", esc(facts.error || "")) :
+    const why = facts.state === "unknown" ? UI.callout("warn", "The volume copies could not be read", esc(facts.error || "")) :
       UI.empty(facts.state === "n/a" ? "Nothing to change on this cluster: Homestead does not match Longhorn copies here."
         : "Nothing to change: every volume's copies fit the hosts.");
     return modal(title, why + UI.actions(UI.cancel("Close")));

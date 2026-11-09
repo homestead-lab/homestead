@@ -41,7 +41,7 @@ test("its warnings are one summary bar that counts them and opens to each in ful
 
 test("a blocker blocks: no tick and nothing to press but Cancel", () => {
   const html = update({ issues: [["bad", "No host can take it"], ["warn", "Projected RAM is high"]] });
-  assert.match(html, /ui-callout bad[\s\S]*<b class="ui-notice-head">Can&#39;t go ahead<\/b>/);
+  assert.match(html, /ui-callout bad[\s\S]*<b class="ui-notice-head">This cannot go ahead<\/b>/);
   assert.doesNotMatch(html, /id="approve"|id="apply"/);
   assert.match(html, />Cancel<\/button>/);
 });

@@ -96,7 +96,7 @@ def status(item, read, *, limit=2700, now=None):
     health = ref["guest_health"]
     nodes = health.get("nodes") or []
     if health.get("version") != 1 or [row["name"] for row in nodes] != [row["name"] for row in ref["nodes"]] or not nodes:
-        return "failed", item.get("progress", 10), "Guest verification contract is unavailable; inspect the retained batch"
+        return "failed", item.get("progress", 10), "The guest check settings are unavailable. Check the kept batch."
     pending = ""
     for row in nodes:
         name, ns = row["name"], ref["namespace"]
@@ -105,17 +105,17 @@ def status(item, read, *, limit=2700, now=None):
             path = f"/apis/kubevirt.io/v1/namespaces/{urllib.parse.quote(ns, safe='')}/"
             vm = read(path + "virtualmachines/" + urllib.parse.quote(name, safe=""))
             if not _identity(vm, "VirtualMachine", ns, name, receipt["uid"]):
-                return "failed", item.get("progress", 10), f"{name}'s VM identity changed or is deleting; resources are retained"
+                return "failed", item.get("progress", 10), f"{name}'s VM changed or is being deleted. The resources are kept."
             if not _matches(vm.get("spec", {}).get("template", {}).get("spec", {}), row):
-                return "failed", item.get("progress", 10), f"{name}'s reviewed verification settings changed; resources are retained"
+                return "failed", item.get("progress", 10), f"{name}'s reviewed check settings changed. The resources are kept."
             seed_resource = {"apiVersion": "v1", "kind": "Secret", "namespace": ns, "name": row["seed"]["name"]}
             seed_writes = [entry for entry in ref["writes"] if entry["resource"] == seed_resource]
             if not seed_writes or seed_writes[-1]["phase"] != "accepted":
-                return "failed", item.get("progress", 10), f"{name} has no confirmed bootstrap Secret receipt; resources are retained"
+                return "failed", item.get("progress", 10), f"{name} has no confirmed record of its start-up Secret. The resources are kept."
             seed = read(f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/secrets/" + urllib.parse.quote(row["seed"]["name"], safe=""))
             if (not _identity(seed, "Secret", ns, row["seed"]["name"], seed_writes[-1]["identity"]["uid"])
                     or digest(seed.get("data")) != row["seed"]["digest"]):
-                return "failed", item.get("progress", 10), f"{name}'s bootstrap Secret changed; resources are retained"
+                return "failed", item.get("progress", 10), f"{name}'s start-up Secret changed. The resources are kept."
             vmi = read(path + "virtualmachineinstances/" + urllib.parse.quote(name, safe=""))
             if not (_identity(vmi, "VirtualMachineInstance", ns, name) and
                     any(owner.get("controller") is True and owner.get("apiVersion") == "kubevirt.io/v1"
@@ -138,11 +138,11 @@ def status(item, read, *, limit=2700, now=None):
         except Exception:
             # API errors may contain seed data. Neither raw errors nor credentials
             # belong in public jobs. Unknown/missing observations are never ready.
-            pending = f"Waiting for verified observations of {name}; check its console and /var/log/homestead-k3s.log"
+            pending = f"Waiting for {name} to be confirmed. Check its console and /var/log/homestead-k3s.log"
     if ready == len(nodes):
         ref.update(phase="verified-ready", retain_resources=False,
                    guest_observation={"at": now, "instances": observations})
-        return "succeeded", 100, "Guest bootstrap checks passed for the expected nodes and requested components; guest services and server APIs are ready. Ongoing cluster health and failover need separate monitoring."
+        return "succeeded", 100, "The start-up checks passed for the expected hosts and requested parts. The guest services and server APIs are ready. Cluster health and failover need their own monitoring."
     if now - float(ref.get("started") or now) > limit:
-        return "failed", item.get("progress", 10), f"Guest verification timed out ({ready}/{len(nodes)} ready). {pending}. Resources are retained; inspect the batch outcome."
+        return "failed", item.get("progress", 10), f"The guest check timed out ({ready} of {len(nodes)} ready). {pending}. The resources are kept. Check the batch outcome."
     return "running", 10 + int(80 * ready / len(nodes)), f"Guest checks: {ready}/{len(nodes)} ready. {pending}"

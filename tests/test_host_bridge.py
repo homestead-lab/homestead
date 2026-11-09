@@ -166,7 +166,7 @@ class HostLeaseTests(unittest.TestCase):
         BRIDGE.register(BRIDGE.OPS)  # its canceller is added by register (#622)
         plan, run = BRIDGE.OPS.CANCELLERS["host-bridge"]
         self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
-        self.assertIn("other changes on k3s can start", run(item, {}))
+        self.assertIn("Other changes on k3s can start", run(item, {}))
         self.assertEqual([("k3s", "this-replica/1")], host.let_go_of)
 
     def test_another_change_on_the_host_refuses_the_move_before_anything_changes(self):
@@ -236,7 +236,7 @@ class TimedOutStartTests(unittest.TestCase):
         _, ops, _, _ = self.start_timed_out()
         keeps = " ".join(BRIDGE.cancel_plan({"kind": "host-bridge", "ref": ops.started[0]})["keeps"])
         self.assertIn("cannot tell how far the change got on k3s", keeps)
-        self.assertIn("check its network first", keeps)
+        self.assertIn("Check its network first", keeps)
         self.assertNotIn("carries on", keeps)
 
     def test_a_restart_that_times_out_may_have_been_scheduled_and_is_not_asked_again(self):

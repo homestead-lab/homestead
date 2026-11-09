@@ -23,7 +23,7 @@ def plans(vm, read, extra=(), downloads=()):
             defaults = [row["metadata"]["name"] for row in classes["items"]
                         if (row.get("metadata", {}).get("annotations") or {}).get("storageclass.kubernetes.io/is-default-class") == "true"]
             if len(defaults) != 1:
-                raise ValueError("Choose an explicit VM storage class; no single default could be verified")
+                raise ValueError("Choose a VM storage class, because no single default could be confirmed")
             klass = defaults[0]
         storage_class = read("/apis/storage.k8s.io/v1/storageclasses/" + quote(klass, safe=""))
         metadata = storage_class.get("metadata") or {}
@@ -40,7 +40,7 @@ def plans(vm, read, extra=(), downloads=()):
             properties = (profile.get("status") or {}).get("claimPropertySets") or (profile.get("spec") or {}).get("claimPropertySets") or []
             choices = [row for row in properties if not volume_mode or row.get("volumeMode") == volume_mode]
             if not choices or not choices[0].get("accessModes"):
-                raise ValueError(f"VM disk {name} access mode is unresolved; choose a storage class with a usable CDI profile")
+                raise ValueError(f"VM disk {name} has no known access mode. Choose a storage class with a usable CDI profile.")
             modes = choices[0]["accessModes"]
             volume_mode = choices[0].get("volumeMode")
         if len(modes) != 1 or modes[0] not in ("ReadWriteOnce", "ReadWriteOncePod", "ReadWriteMany", "ReadOnlyMany"):

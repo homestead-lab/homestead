@@ -47,7 +47,7 @@ try {
     assert.equal(await page.locator("#setupReturn").isVisible(), false);
     await page.evaluate(() => setupOpen("lan"));
     await page.getByText("Configuration found", { exact: true }).waitFor();
-    assert.match(await page.locator("#setupStep").innerText(), /does not test host interfaces/);
+    assert.match(await page.locator("#setupStep").innerText(), /does not test host network cards/);
     await stepAction("Configure LAN networks");
     await page.locator("#netVmNets .vip-own").waitFor();
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
@@ -62,8 +62,8 @@ try {
     await page.screenshot({ path: `release-assets/setup/lan-${width}.png`, fullPage: true });
     await page.evaluate(() => setupOpen("appearance"));
     await stepAction("Mark as done on this device");
-    await page.getByText("Confirmed by you", { exact: true }).waitFor();
-    await stepAction("Undo my confirmation");
+    await page.getByText("Confirmed", { exact: true }).waitFor();
+    await stepAction("Undo confirmation");
     await page.locator("#setupStep button", { hasText: "Mark as done on this device" }).waitFor({ state: "attached" });
     await page.getByRole("button", { name: "Skip this step", exact: true }).click();
     await page.getByText("Skipped by choice", { exact: true }).waitFor();
@@ -73,7 +73,7 @@ try {
     await page.evaluate(() => setupOpen("https"));
     await page.getByRole("button", { name: "Set up a Cloudflare Tunnel", exact: true }).click();
     await page.locator('[data-cloudflare-stage="0"]').waitFor();
-    assert.match(await page.locator("#setupStep").innerText(), /domain you own/);
+    assert.match(await page.locator("#setupStep").innerText(), /Cloudflare account and a domain/);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Cloudflare prerequisites fit the viewport");
     await page.screenshot({ path: `release-assets/setup/cloudflare-account-${width}.png`, fullPage: true });
     await page.getByRole("button", { name: "Next: Create the tunnel", exact: true }).click();
@@ -93,14 +93,14 @@ try {
     await page.getByRole("button", { name: "Return to setup", exact: true }).click();
     await page.locator('[data-cloudflare-stage="2"]').waitFor();
     await page.getByRole("button", { name: "Next: Control access", exact: true }).click();
-    assert.match(await page.locator("#setupStep").innerText(), /specific email addresses/);
+    assert.match(await page.locator("#setupStep").innerText(), /email addresses that may sign in/);
     await page.getByRole("button", { name: "Next: Publish the hostname", exact: true }).click();
     const origin = await page.evaluate(() => STATE.data.setup.steps.address.service_url);
     assert.ok(origin);
     assert.ok((await page.locator("#setupStep").innerText()).includes(origin), "route uses the cluster's reported Service and port");
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "Cloudflare route fits the viewport");
     await page.screenshot({ path: `release-assets/setup/cloudflare-route-${width}.png`, fullPage: true });
-    await page.getByRole("button", { name: "Next: Test in your browser", exact: true }).click();
+    await page.getByRole("button", { name: "Next: Test in a browser", exact: true }).click();
     await page.getByRole("button", { name: "Return to HTTPS overview", exact: true }).click();
     await page.getByRole("button", { name: "Set up a Cloudflare Tunnel", exact: true }).waitFor();
     assert.equal(await page.evaluate(() => STATE.data.setup.steps.https.done), false);

@@ -49,7 +49,7 @@ try {
       await page.waitForFunction(() => document.querySelector('#cmp_manage_status').textContent.includes('Host inspection failed'));
       assert.equal(await button.isEnabled(), true); assert.equal(await ack.isEnabled(), true);
       assert.equal(await page.locator('#cmp_manage_status example').count(), 0, 'errors are escaped');
-      assert.match(await page.locator('#cmp_manage_status').innerText(), /Could not enable upgrades/);
+      assert.match(await page.locator('#cmp_manage_status').innerText(), /Upgrades could not be turned on/);
       if (screenshots) await page.screenshot({path:`${screenshots}/${width}-${theme}-error.png`});
       await Promise.all([page.waitForRequest('**/api/cluster/components/manage-operator'), button.click()]);
       managed = true;

@@ -183,10 +183,10 @@ class TheCurrentVolumeIsNeverDeleted(Case):
         self.assertRefused(lambda o: o["lh-old"]["status"].update(state="attached", currentNodeID="node-2"), why="fully detached")
 
     def test_a_pv_of_another_claim_is_refused(self):
-        self.assertRefused(lambda o: o["old"]["spec"]["claimRef"].update(name="other"), why="was not that claim's")
+        self.assertRefused(lambda o: o["old"]["spec"]["claimRef"].update(name="other"), why="did not belong to that claim")
 
     def test_a_pv_on_another_longhorn_volume_is_refused(self):
-        self.assertRefused(lambda o: o["old"]["spec"]["csi"].update(volumeHandle="pvc-other"), why="not that Longhorn volume's")
+        self.assertRefused(lambda o: o["old"]["spec"]["csi"].update(volumeHandle="pvc-other"), why="does not belong to that Longhorn volume")
 
     def test_a_longhorn_volume_last_bound_to_another_pv_is_refused(self):
         self.assertRefused(lambda o: o["lh-old"]["status"]["kubernetesStatus"].update(pvName="pvc-new"), why="another persistent volume")
@@ -195,7 +195,7 @@ class TheCurrentVolumeIsNeverDeleted(Case):
         self.assertRefused(lambda o: o["lh-old"]["status"]["kubernetesStatus"].update(pvcName="other"), why="another claim")
 
     def test_a_longhorn_volume_that_is_gone_is_refused_plainly(self):
-        self.assertRefused(lambda o: o.update(**{"lh-old": None}), why="refresh the list")
+        self.assertRefused(lambda o: o.update(**{"lh-old": None}), why="Refresh the list")
 
     def test_a_forged_plan_naming_the_current_pv_is_never_written(self):
         """delete_orphan checks again, whatever the plan says."""

@@ -29,7 +29,7 @@ def preview(body, actor, ops, *, runtime_check=None):
         runtime_check()
     cfg, result, context = _initial_review(body, actor, ops)
     return {key: value for key, value in result.items() if not key.startswith("_")} | {
-        "warnings": result["warnings"] + ["If a step cannot be verified, the move pauses for review. Data is kept; there is no automatic retry or rollback."],
+        "warnings": result["warnings"] + ["If a step cannot be confirmed, the move pauses for review. The data is kept, and nothing is retried or rolled back automatically."],
         "capacity_token": RC.REVIEW.issue(cfg, context)}
 
 
@@ -51,9 +51,9 @@ def start_reviewed(body, actor, ops, *, runtime_check=None):
 def check(item):
     ref = item.get("ref", {})
     if item.get("kind") != "reclass" or ref.get("storage_protocol") != PROTOCOL:
-        raise JOURNAL.Held("This older storage job requires its existing recovery procedure; it cannot enter the new handoff")
+        raise JOURNAL.Held("This older storage job needs its own recovery steps, so it cannot use the new handover")
     if ref.get("handoff_phase") not in PHASES:
-        raise JOURNAL.Held("Storage move phase is invalid; inspect the job history")
+        raise JOURNAL.Held("The storage move step is invalid. Check the job history.")
 
 
 def _decision(role, objects, result):
@@ -93,7 +93,7 @@ def _stage(item, checkpoint, helper_admission, restart_admission, *, inspecting=
     check(item)
     ref, phase = item["ref"], item["ref"]["handoff_phase"]
     if ref.get("storage_hold") and not inspecting:
-        raise JOURNAL.Held("Storage move is held; review it before continuing")
+        raise JOURNAL.Held("The storage move is held. Review it before continuing.")
     if runtime_check is not None and phase not in ("done", "rolled-back"):
         runtime_check()
     def journal_factory(work, read, send, save):
@@ -106,7 +106,7 @@ def _stage(item, checkpoint, helper_admission, restart_admission, *, inspecting=
         if decisions is not None:
             decisions.append(decision)
         if result.get("blocked") is not False:
-            raise JOURNAL.Held("Current placement or storage constraints block this step; review capacity before continuing")
+            raise JOURNAL.Held("The current placement or storage limits block this step. Review the capacity before continuing.")
         if not inspecting and not _approved(item, decision):
             raise JOURNAL.Held("Review the current capacity warnings before continuing this storage move")
         return result
@@ -116,11 +116,11 @@ def _stage(item, checkpoint, helper_admission, restart_admission, *, inspecting=
         if not ref.get("storage_writes"):
             review = RC.plan(ref["namespace"], ref["claim"], ref["target"], capture=True)
             if not review["ok"] or review["_fences"] != ref.get("review_fences"):
-                raise JOURNAL.Held("Volume use or identity changed before stopping; review the move again")
+                raise JOURNAL.Held("The volume or what uses it changed before stopping. Review the move again.")
         RC.journaled_stop(item, checkpoint, journal_factory=journal_factory)
         ref["handoff_phase"] = "copy"
         checkpoint(item)
-        return "running", 5, "Workload stop requests confirmed; waiting before copying"
+        return "running", 5, "The apps' stop requests are confirmed. Waiting before copying."
     if phase == "copy":
         result = HANDOFF.copy_stage(item, checkpoint, helper, journal_factory=journal_factory)
         if ref.get("copy_verified"):
@@ -138,8 +138,8 @@ def _stage(item, checkpoint, helper_admission, restart_admission, *, inspecting=
     if phase == "rollback":
         return HANDOFF.rollback_stage(item, checkpoint, restart, journal_factory=journal_factory)
     if phase == "rolled-back":
-        return "cancelled", 100, "Move rolled back; workloads run on the original volume"
-    return "succeeded", 100, "Storage move completed; the original copy is retained"
+        return "cancelled", 100, "Move rolled back. The apps run on the original volume."
+    return "succeeded", 100, "Storage move finished. The original copy is kept."
 
 
 def resolve(item, checkpoint, helper_admission, restart_admission, *, runtime_check=None):
@@ -181,7 +181,7 @@ def inspect(item, helper_admission, restart_admission, *, runtime_check=None):
     except JOURNAL.NextWrite as proposed:
         result.update(next_write=proposed.plan, message="The next step is ready for review")
     except Exception as error:
-        result["blockers"].append(str(error) if isinstance(error, JOURNAL.Held) else "Current storage state could not be verified; check cluster access and retained resources")
+        result["blockers"].append(str(error) if isinstance(error, JOURNAL.Held) else "The current storage state could not be confirmed. Check access to the cluster and the kept resources.")
     result["blocked"] = bool(result["blockers"])
     result["job_digest"] = before
     result["phase"] = work["ref"]["handoff_phase"]

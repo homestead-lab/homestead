@@ -234,7 +234,7 @@ def _host_problem(facts, shape):
         return "the host has no IPv4 default route to follow"
     if not facts.get("netplan") or not facts.get("networkd") or facts.get("nm") or any(
             f.get("renderer") not in ("", "networkd") for f in (facts.get("files") or {}).values()):
-        return "Homestead changes hosts whose network netplan sets up through systemd-networkd (Ubuntu Server's way); this one differs"
+        return "Homestead changes only hosts whose network netplan sets up through systemd-networkd, as Ubuntu Server does. This host is set up differently."
     if not facts.get("pyyaml") or not facts.get("systemd_run"):
         return "the host lacks python3-yaml or systemd-run, which the change needs"
     if any(f.get("bad") for f in (facts.get("files") or {}).values()):
@@ -242,7 +242,7 @@ def _host_problem(facts, shape):
     if facts.get("armed"):
         return "a network change on this host is still waiting to be checked"
     if shape["shape"] == "other":
-        return f"{facts['iface']} is not a NIC, a bridge over one NIC, or a bond; Homestead does not change it"
+        return f"{facts['iface']} is not a NIC, a bridge over one NIC, or a bond, so Homestead does not change it"
     if not shape["file"]:
         return f"{facts['iface']} is not set up in /etc/netplan"
     if not facts.get("address") or not facts.get("gateway"):
@@ -282,7 +282,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
         elif shape["shape"] not in ("nic", "bridge"):
             pass
         elif facts.get("bond_exists") and not facts.get("bond_empty"):
-            refusals.append(f"{node} has a {BOND} already, not carrying its address; Homestead does not reuse it")
+            refusals.append(f"{node} already has a {BOND} that does not carry its address. Homestead does not reuse it.")
     elif action in ("change", "remove") and not shape["bond"]:
         refusals.append(f"{node} has no bond to {action}")
     members = [str(m) for m in dict.fromkeys(req.get("members") or ([] if action != "remove" else current))]
@@ -290,7 +290,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
         members.insert(0, shape["carrier_nic"])
     mode = str(req.get("mode") or shape["mode"] or "active-backup")
     if mode not in MODES:
-        refusals.append(f"{mode} is not a bond mode Homestead sets up; choose active-backup or 802.3ad")
+        refusals.append(f"{mode} is not a bond mode that Homestead sets up. Choose active-backup or 802.3ad.")
     keep = ""
     if action == "remove":
         up = [m for m in current if (nics.get(m) or {}).get("carrier")]
@@ -320,35 +320,35 @@ def plan(node, req, facts, busy=None, servers_ready=None):
                                 "and the checks afterwards say whether it has link")
             elif not nic["carrier"] and m not in current:
                 if req.get("allow_down"):
-                    warnings.append(f"{m} has no link; the bond starts without it")
+                    warnings.append(f"{m} has no link. The bond starts without it.")
                 else:
-                    refusals.append(f"{m} has no link: plug it in, or confirm you want it in the bond anyway")
+                    refusals.append(f"{m} has no link. Plug it in, or confirm that it belongs in the bond anyway.")
         if not any((nics.get(m) or {}).get("carrier") for m in members):
             refusals.append("none of these NICs has link: the host would go quiet")
         dropped = [m for m in current if m not in members]
         active = (facts.get("bond") or {}).get("active", "")
         if active and active in dropped:
-            refusals.append(f"{active} is the member carrying traffic now; take it out on its own after another becomes active")
+            refusals.append(f"{active} is the member carrying traffic now. Take it out on its own after another becomes active.")
         if mode == "802.3ad" and not req.get("lacp_confirmed"):
             refusals.append("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, "
                             "which works on any switch")
         speeds = {nics[m]["speed"] for m in members if m in nics and nics[m]["carrier"] and nics[m]["speed"]}
         if len(speeds) > 1:
-            warnings.append(f"the NICs run at different speeds ({', '.join(f'{s} Mb/s' for s in sorted(speeds))}); "
-                            "the bond is as fast as the one carrying traffic")
+            warnings.append(f"The NICs run at different speeds ({', '.join(f'{s} Mb/s' for s in sorted(speeds))}). "
+                            "The bond is as fast as the one carrying traffic.")
     primary = str(req.get("primary") or (shape["carrier_nic"] if action == "create" else "") or
                   (members[0] if members else ""))
     if mode == "active-backup" and primary and primary not in members:
         refusals.append(f"{primary} is not one of the members")
     renamed = action == "create" and shape["shape"] == "nic" or action == "remove" and shape["shape"] == "bond"
     if renamed and facts.get("flannel_iface"):
-        refusals.append(f"k3s or RKE2 is set to a flannel interface by name; the host's interface becomes "
-                        f"{bond if action == 'create' else keep}, so change flannel-iface by hand first")
+        refusals.append(f"k3s or RKE2 is set to a flannel interface by name. The host's interface becomes "
+                        f"{bond if action == 'create' else keep}, so change flannel-iface manually first.")
     if renamed and len(facts.get("services") or []):
         warnings.append(f"the host's address moves to {bond if action == 'create' else keep}. kube-vip restarts there, "
                         f"and on a cluster of several hosts {facts['services'][0]} restarts so flannel follows. Containers keep running")
     if any(f.get("cloud_init") for f in (facts.get("files") or {}).values()):
-        warnings.append("cloud-init wrote this host's netplan; it is told not to write it again at boot")
+        warnings.append("cloud-init wrote this host's netplan. It is told not to write it again at start-up.")
     carrier_mac = (nics.get(shape["carrier_nic"] or primary) or {}).get("mac", "")
     spec = {"action": action, "shape": shape["shape"], "file": shape["file"], "bond": bond, "members": members,
             "params": _params(mode, primary if mode == "active-backup" else ""), "mac": carrier_mac,
@@ -535,7 +535,7 @@ def start(node, req, ops, busy=None, servers_ready=None):
            "services": facts.get("services") or [], "stage": "applied", "since": time.time(),
            "change": what, "lease": lease}
     return ops.start(KIND, what, {"kind": "Node", "name": node}, f"/nodes?node={node}&section=network", ref,
-                     f"Applied; checking {node} - it puts its old network back in {ROLLBACK_SECONDS // 60} minutes unless confirmed")
+                     f"Applied. Checking {node}, which restores its old network in {ROLLBACK_SECONDS // 60} minutes unless the change is confirmed.")
 
 
 class _Spec(NETWORK_JOB.Spec):
@@ -576,7 +576,7 @@ class _Spec(NETWORK_JOB.Spec):
         if ref["action"] == "remove" or ref["mode"] != "802.3ad" or "PARTNER" in words:
             return None
         if elapsed < LACP_WAIT + 15:
-            return "running", 40, f"{node} is up on {ref['bond']}; waiting for the switch to answer LACP"
+            return "running", 40, f"{node} is up on {ref['bond']}. Waiting for the switch to answer LACP."
         hostrun.run(node, ROLLBACK_NOW, timeout=30, **NETWORK_JOB.held(self, ref))
         ref.update(stage="rolled-back", since=now)
         return ("running", 60, f"The switch did not answer LACP on {ref['bond']} in {LACP_WAIT} seconds, so {node} "
@@ -594,8 +594,8 @@ class _Spec(NETWORK_JOB.Spec):
 
     def confirmed(self, ref, lines):
         down = [m for m in ref["members"] if f"UP {m}" not in lines] if ref["action"] != "remove" else []
-        note = f"; {', '.join(down)} has no link yet" if down else ""
-        return f"{ref['node']} carries {ref['address']} on {ref['carries_on']}; the rollback is disarmed{note}"
+        note = f". {', '.join(down)} has no link yet" if down else ""
+        return f"{ref['node']} carries {ref['address']} on {ref['carries_on']}. The rollback is turned off{note}."
 
     def restarts(self, ref):
         return bool(ref.get("renamed"))
@@ -737,8 +737,8 @@ def change(body):
         op = start(node, body, OPS, busy, servers)
     ROUTER.forget("ports", "network")
     if op.get("unconfirmed"):
-        return {"ok": False, "operation": op, "detail": f"{node}'s network change needs attention; see its job under Jobs"}
-    return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it under Jobs"}
+        return {"ok": False, "operation": op, "detail": f"{node}'s network change needs attention. See its job under Jobs."}
+    return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing. Follow it under Jobs."}
 
 
 ROUTES = {
@@ -757,7 +757,7 @@ def cancel_plan(item):
         # Its script ran past its limit and its helper was removed: how far it
         # got, and whether a rollback was armed, is not known.
         return {"mode": "forget", "needs": "admin",
-                "keeps": [f"Homestead cannot tell how far the change got on {node}; check its network first",
+                "keeps": [f"Homestead cannot tell how far the change got on {node}. Check its network first.",
                           f"Other changes on {node} can start again at once"]}
     if item["ref"].get("stage") == "confirmed":
         # Its rollback is disarmed; the job alone was going to do what is left.
@@ -769,7 +769,7 @@ def cancel_plan(item):
 
 def cancel_run(item, options):
     NETWORK_JOB.let_go(hostrun, item["ref"])
-    return f"Stopped tracking it; other changes on {item['ref']['node']} can start again"
+    return f"Stopped tracking it. Other changes on {item['ref']['node']} can start again."
 
 
 

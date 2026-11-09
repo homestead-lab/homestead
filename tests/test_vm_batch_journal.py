@@ -103,7 +103,7 @@ class VMBatchJournalTests(unittest.TestCase):
             if value["kind"] == "VirtualMachine" and value["metadata"]["name"].endswith("agent-1"):
                 raise TimeoutError("test-private")
         self.after_send = fail
-        with self.assertRaisesRegex(ValueError, "Resources are retained") as error:
+        with self.assertRaisesRegex(ValueError, "The resources are kept") as error:
             self.dispatch()
         self.assertNotIn("test-private", str(error.exception))
         return ops.stored()[0]["id"]
@@ -176,7 +176,7 @@ class VMBatchJournalTests(unittest.TestCase):
         self.dispatch()
         items = ops.stored()
         item = items[0]
-        ops._finish(item, "failed", 10, "Guest verification timed out (0/2 ready). Resources are retained; inspect the batch outcome.")
+        ops._finish(item, "failed", 10, "Guest verification timed out (0/2 ready). The resources are kept; inspect the batch outcome.")
         put(ops, items)
         before, sent = copy.deepcopy(self.objects), list(self.sent)
         with mock.patch.object(ops, "_refresh", side_effect=AssertionError("inspection must not advance jobs")):
@@ -317,4 +317,4 @@ class VMBatchJournalTests(unittest.TestCase):
         with mock.patch.object(cluster, "kget", side_effect=read), mock.patch.object(cluster, "_answers", return_value=True):
             status, _, message = cluster.status(item)
         self.assertEqual("running", status)
-        self.assertIn("quorum are not verified", message)
+        self.assertIn("quorum are not checked", message)

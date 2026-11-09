@@ -89,13 +89,13 @@ class SettingTests(Fixture):
         self.put("lab", "app-3", stored(("lab", "app-1", 80)))
         self.assertEqual("a cycle: app-1 → app-2 → app-3 → app-1",
                          self.refused("lab", "app-1", {"after": [{"ns": "lab", "app": "app-2"}]}))
-        self.assertEqual("an app can't start after itself",
+        self.assertEqual("An app cannot start after itself",
                          self.refused("lab", "app-1", {"after": [{"ns": "lab", "app": "app-1"}]}))
 
     def test_homestead_and_system_apps_are_never_gated(self):
         for ns, name in (("homestead", "homestead"), ("kube-system", "coredns")):
             with self.subTest(app=name):
-                self.assertEqual("Homestead and system apps can't wait for other apps",
+                self.assertEqual("Homestead and system apps cannot wait for other apps",
                                  self.refused(ns, name, {"after": [{"ns": "lab", "app": "app-2"}]}))
         got = self.clean("lab", "app-1", {"after": [{"ns": "homestead", "app": "homestead"}]})
         self.assertEqual([{"ns": "homestead", "app": "homestead", "service": "homestead", "port": 8080}], got["after"])
@@ -131,8 +131,8 @@ class SettingTests(Fixture):
 
     def test_host_network_without_cluster_dns_is_refused(self):
         self.deps[0] = deployment("lab", "app-1", host_network=True)
-        self.assertEqual("app-1 uses the host's network without cluster DNS; set dnsPolicy to "
-                         "ClusterFirstWithHostNet so it can find app-2",
+        self.assertEqual("app-1 uses the host's network without cluster DNS. Set dnsPolicy to "
+                         "ClusterFirstWithHostNet so it can find app-2.",
                          self.refused("lab", "app-1", {"after": [{"ns": "lab", "app": "app-2"}]}))
         self.deps[0] = deployment("lab", "app-1", host_network=True, dns_policy="ClusterFirstWithHostNet")
         self.assertTrue(self.clean("lab", "app-1", {"after": [{"ns": "lab", "app": "app-2"}]}))
@@ -141,8 +141,8 @@ class SettingTests(Fixture):
         for policy in ("Default", "None"):
             with self.subTest(policy=policy):
                 self.deps[0] = deployment("lab", "app-1", dns_policy=policy)
-                self.assertEqual(f"app-1 does not use cluster DNS (dnsPolicy {policy}), so it can't find app-2; "
-                                 "set dnsPolicy to ClusterFirst",
+                self.assertEqual(f"app-1 does not use cluster DNS (dnsPolicy {policy}), so it cannot find app-2. "
+                                 "Set dnsPolicy to ClusterFirst.",
                                  self.refused("lab", "app-1", {"after": [{"ns": "lab", "app": "app-2"}]}))
         self.deps[0] = deployment("lab", "app-1", dns_policy="ClusterFirst")
         self.assertTrue(self.clean("lab", "app-1", {"after": [{"ns": "lab", "app": "app-2"}]}))
@@ -164,7 +164,7 @@ class SettingTests(Fixture):
     def test_the_unreadable_marker_is_never_saved(self):
         """{"unreadable": True} is what Edit's form shows for a hand-edited
         annotation: sent back, it must not read as "remove it"."""
-        self.assertEqual("Starts after can't be read on app-1; set it again or clear it",
+        self.assertEqual("Starts after cannot be read on app-1. Set it again or clear it.",
                          self.refused("lab", "app-1", {"unreadable": True}))
 
     def test_timeout_and_count_limits(self):
@@ -382,7 +382,7 @@ class SaveTests(Fixture):
         self.assertIn("homestead.io/starts-after:", got.body["git"])
         self.assertIn("name: homestead-start-gate", got.body["git"])
         self.assertIn(START.GATE_IMAGE, got.body["git"])
-        self.assertEqual("flux-app's start order is set where Flux applies it; commit the lines Homestead shows",
+        self.assertEqual("flux-app's start order is set where Flux applies it. Commit the lines Homestead shows.",
                          got.body["error"])
         self.assertEqual([], self.kube.writes)
         self.prepull.assert_not_called()
@@ -472,7 +472,7 @@ class SaveTests(Fixture):
         request = lambda body: ROUTER.Request("POST", "/api/edit", {}, body, "admin", "admin")
         with self.assertRaises(ValueError) as caught:
             WORKLOADS.edit(request({"ns": "lab", "name": "flux-app", "starts_after": {"after": [{"ns": "lab", "app": "app-2"}]}}))
-        self.assertEqual("flux-app's start order is set where Flux applies it; commit the lines Homestead shows",
+        self.assertEqual("flux-app's start order is set where Flux applies it. Commit the lines Homestead shows.",
                          str(caught.exception))
         with self.assertRaises(Reached) as passed:
             WORKLOADS.edit(request({"ns": "lab", "name": "flux-app", "starts_after": {"after": []}}))
@@ -580,7 +580,7 @@ class GuardTests(SaveTests):
                         START.save({"ns": "homestead", "name": "homestead-nfs", "after": [{"ns": "lab", "app": "app-2"}]})
                 else:
                     self.clean("homestead", "homestead-nfs", {"after": [{"ns": "lab", "app": "app-2"}]})
-            self.assertEqual("Homestead and system apps can't wait for other apps", str(caught.exception))
+            self.assertEqual("Homestead and system apps cannot wait for other apps", str(caught.exception))
         self.assertEqual([], self.kube.writes)
 
     def test_an_ordinary_app_still_works(self):
@@ -767,7 +767,7 @@ class StateTests(Fixture):
         cycle = next(f for f in facts if f["key"].startswith("starts-after:cycle:"))
         self.assertEqual("starts-after:cycle:lab/app-1,lab/app-2", cycle["key"])
         self.assertEqual("app-1 and app-2 wait for each other", cycle["title"])
-        self.assertIn("with Keep waiting neither starts; set one of them to Start anyway", cycle["body"])
+        self.assertIn("with Keep waiting neither starts. Set one of them to Start anyway", cycle["body"])
 
     def test_a_gate_that_differs_or_is_not_committed_is_info(self):
         self.dep("lab", "app-1")["spec"]["template"]["spec"]["initContainers"][0]["env"][0]["value"] = "x.lab.svc:1"
@@ -778,7 +778,7 @@ class StateTests(Fixture):
         self.assertEqual(("info", "app-1's start gate does not match its setting"), (differs["severity"], differs["title"]))
         # Advice that works: the same setting saved again is no change, so it
         # names Edit's button, which sends restore_gate (SaveTests.test_restore_gate_puts_the_gate_back).
-        self.assertIn("use Put the start gate back in Edit → Placement; that restarts it once", differs["body"])
+        self.assertIn("use Put the start gate back in Edit → Placement, which restarts it once", differs["body"])
         self.assertNotIn("save Starts after in Edit", differs["body"])
         flux = facts["starts-after:differs:lab/app-3"]
         self.assertIn("commit the lines Edit → Placement shows", flux["body"])

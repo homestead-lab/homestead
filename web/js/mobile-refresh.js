@@ -25,7 +25,7 @@
 
   async function manualRefresh() {
     if (blocked()) {
-      if (STATE.settingsDirty?.size) toast("Save or discard your settings before refreshing", "bad");
+      if (STATE.settingsDirty?.size) toast("Save or discard the settings before refreshing", "bad");
       else if (editing()) toast("Finish editing before refreshing this page", "bad");
       return false;
     }
@@ -42,7 +42,7 @@
       } else hide();
       return updated;
     } catch (e) {
-      hide(); toast(e.message || "Could not refresh this page", "bad"); return false;
+      hide(); toast(e.message || "This page could not be refreshed", "bad"); return false;
     } finally {
       running = false;
       button.disabled = false;

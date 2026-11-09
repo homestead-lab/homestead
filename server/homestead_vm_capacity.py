@@ -51,7 +51,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
             context[path] = VMRES.identity(obj) if obj else None
             if not obj:
                 if planned:
-                    warnings.append(f"{label} is planned; provisioning, import completion and free storage are not guaranteed")
+                    warnings.append(f"{label} is planned. Its creation, import and free storage are not guaranteed.")
                 else:
                     blockers.append(f"{label} does not exist")
             elif (obj.get("metadata") or {}).get("deletionTimestamp"):
@@ -60,7 +60,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
                 blockers.append(f"{label} identity/version is unavailable")
             return obj
         except Exception:
-            blockers.append(f"{label} could not be checked; refresh permissions/connectivity before continuing")
+            blockers.append(f"{label} could not be checked. Check permissions and connections before continuing.")
             return None
     for volume in spec.get("volumes") or []:
         dv_name = (volume.get("dataVolume") or {}).get("name")
@@ -82,7 +82,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
                 # RWX permits attachment, not concurrent guest filesystem writers.
                 # Only the exact reviewed resident/restarting VM's UID-owned pods
                 # were excluded by the caller; names/labels never waive this check.
-                blockers.append(f"VM disk {claim} is still used by another pod; shared attachment does not make concurrent disk writers safe")
+                blockers.append(f"VM disk {claim} is still used by another pod. A shared attachment does not make two writers on one disk safe.")
                 context["consumers:" + claim] = [VMRES.identity(pod) for pod in consumers]
         proposed = (planned_claims or {}).get(claim)
         pvc = check(f"/api/v1/namespaces/{quote(namespace, safe='')}/persistentvolumeclaims/{quote(claim, safe='')}",
@@ -96,7 +96,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
                 sc = check("/apis/storage.k8s.io/v1/storageclasses/" + quote(klass, safe=""),
                            f"storage class {klass}") if klass else None
                 if phase == "Pending" and sc and (sc.get("volumeBindingMode") == "WaitForFirstConsumer"):
-                    warnings.append(f"VM disk {claim} waits for first-consumer placement; provisioning capacity is unverified")
+                    warnings.append(f"VM disk {claim} waits for its first user to be placed. The storage capacity is not checked.")
                 else:
                     blockers.append(f"VM disk {claim} is not Bound ({phase or 'unknown'})")
         if dv_name:
@@ -117,7 +117,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
         nad = check(f"/apis/k8s.cni.cncf.io/v1/namespaces/{quote(parts[0], safe='')}/network-attachment-definitions/{quote(parts[1], safe='')}",
                     f"LAN network {name}")
         if nad:
-            warnings.append(f"LAN network {name} exists; host bridge, plugin and physical link readiness must also be verified")
+            warnings.append(f"LAN network {name} exists. The host bridge, plugin and physical link must also be ready.")
     return {"blockers": blockers, "warnings": warnings, "context": context}
 
 
@@ -153,7 +153,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         pods = _items(read, "/api/v1/pods")
     except Exception:
         pods = None
-        warnings.append("pod inventory is incomplete; launcher ownership and reservations are unknown")
+        warnings.append("The pod list is incomplete, so the launcher's owner and reservations are unknown")
     vmi, owned, ownership_known = None, [], False
     if (current or vm).get("metadata", {}).get("uid"):
         try:
@@ -166,12 +166,12 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                 if not all(VMRES.identity(vmi).values()):
                     blockers.append("current VMI identity/version is incomplete")
                 if (vmi.get("metadata") or {}).get("deletionTimestamp"):
-                    blockers.append("current VMI is terminating; wait for it to finish")
+                    blockers.append("The current VM instance is stopping. Wait for it to finish.")
                 migration = (vmi.get("status") or {}).get("migrationState") or {}
                 if migration and not (migration.get("completed") or migration.get("failed")):
-                    blockers.append("current VMI is migrating; wait for migration to finish")
+                    blockers.append("The current VM instance is migrating. Wait for the migration to finish.")
         except Exception:
-            blockers.append("current VMI state is unavailable; power/placement cannot be checked")
+            blockers.append("The current VM instance state is unavailable, so power and placement cannot be checked")
     context["launchers"] = [CAPACITY_REVIEW.review_identity(pod) for pod in owned]
     manifest = model["manifest"]
     resident_node = None
@@ -193,7 +193,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             model["memory_estimate_bytes"] = max(model["memory_estimate_bytes"], RESOURCES.memory_estimate(launcher["spec"])[0])
             pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") != launcher["metadata"]["uid"]]
             dependency_pods = pods
-            warnings.append("Unpause reuses the current launcher; its live RAM is already included in the host metric")
+            warnings.append("Unpause reuses the current launcher, and its RAM in use is already counted for the host")
         except ValueError as error:
             blockers.append(str(error))
     elif action in ("restart", "edit") and owned and ownership_known:
@@ -201,7 +201,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         dependency_pods = [pod for pod in pods if pod.get("metadata", {}).get("uid") not in owned_uids]
         if action == "restart":
             pods = dependency_pods
-            warnings.append("post-stop placement assumes owned launchers fully terminate and release disks/devices; this is not guaranteed")
+            warnings.append("Placement after the stop assumes its launchers release their disks and devices. This is not guaranteed.")
             warnings.append("live RAM includes the old VM. It is not subtracted from the conservative restart projection")
         else:
             # Save is not Stop. LiveUpdate may resize or migrate; never credit
@@ -212,15 +212,15 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                 node = launcher["spec"]["nodeName"]
                 selector = manifest["spec"]["template"]["spec"].setdefault("nodeSelector", {})
                 if selector.get("kubernetes.io/hostname") not in (None, node):
-                    blockers.append("Stop the running VM before editing its pinned host; Save does not move its current instance")
+                    blockers.append("Stop the running VM before editing its pinned host. Save does not move its current instance.")
                 selector["kubernetes.io/hostname"] = node
                 edit_launcher = launcher
             except ValueError as error:
                 blockers.append("Live edit requires a stable, verified resident launcher: " + str(error))
             warnings.append("Save does not guarantee a live resize or migration. Live edit keeps the current launcher reservations "
-                            "and checks the proposed VM on its current host too; stop the VM and review again if this overlap cannot fit.")
+                            "and checks the proposed VM on its current host too. Stop the VM and review again if both cannot fit.")
     elif action == "start" and vmi and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
-        blockers.append("VM already has an active instance; refresh and use its appropriate power action")
+        blockers.append("The VM already has a running instance. Refresh and use the right power action.")
     blockers.extend(model["blockers"])
     warnings.extend(model["warnings"])
     dependency_vm = copy.deepcopy(vm)
@@ -242,7 +242,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         if action == "unpause" and resident_node and not any(
                 (row.get("persistentVolumeClaim") or {}).get("claimName") == claim
                 for row in manifest["spec"]["template"]["spec"].get("volumes") or []):
-            blockers.append("The current launcher does not mount its verified persistent state PVC; inspect it before resuming")
+            blockers.append("The current launcher does not mount its checked state volume. Check it before resuming.")
         for target in (manifest["spec"]["template"]["spec"], dependency_vm["spec"]["template"]["spec"]):
             volumes = target.setdefault("volumes", [])
             if not any((row.get("persistentVolumeClaim") or {}).get("claimName") == claim for row in volumes):
@@ -278,7 +278,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         warnings.extend(usage["blockers"])
         if usage["holders"] or usage["pending"]:
             warnings.append("Passthrough is also used by " + ", ".join(sorted({h["label"] for h in usage["holders"] + usage["pending"]}))
-                            + ". This stopped configuration can be saved; exclusive device availability is checked again at Start.")
+                            + ". These settings can be saved while it is stopped. Whether exclusive devices are free is checked again at Start.")
     else:
         blockers.extend(usage["blockers"])
         pods = usage["pods"]
@@ -324,7 +324,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         result["resource_slots"] = sum(1 for candidate in result["candidates"] if candidate["eligible"])
         if not result["resource_slots"]:
             result["blocked"] = True
-            blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+            blockers.append("NUMA guest placement needs confirmed local CPU and hugepage allocations. The physical layout alone cannot allow a start.")
     context["device_nodes"] = [c["name"] for c in result["candidates"] if c["eligible"]]
     result["warnings"] = sorted(set(result["warnings"] + warnings))
     result["blockers"] = sorted(set(blockers))

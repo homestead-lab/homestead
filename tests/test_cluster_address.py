@@ -139,7 +139,7 @@ class ClusterAddressTests(unittest.TestCase):
         self.cluster([self.flux("homestead-vip-192-0-2-242")], shared="192.0.2.242")
         with patch.object(PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": True, "vip_service_election": True}):
             self.assertEqual("", INV.address_problem("192.0.2.242"), "not held against it: it shares")
-            with self.assertRaisesRegex(ValueError, "common kube-vip lease in the same namespace"):
+            with self.assertRaisesRegex(ValueError, "shared kube-vip lease in the same namespace"):
                 plan("manual", "192.0.2.242", 9000)
 
     def test_one_election_for_every_service_shares_every_address(self):

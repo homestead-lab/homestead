@@ -27,7 +27,7 @@ test('allocation preview preserves siblings and distinguishes LVM free space fro
   const t=setup();await t.c.diskAllocationOpen('host-1');
   const html=t.fields['#allocationPreview'].innerHTML;
   assert.match(html,/80.0 GiB/);assert.match(html,/48.0 GiB/);assert.match(html,/128.0 GiB/);
-  assert.match(html,/do not show physical partition positions/);assert.match(t.fields['#allocationBody'].innerHTML,/not available here/);
+  assert.match(html,/do not show where the partitions are on the disk/);assert.match(t.fields['#allocationBody'].innerHTML,/not available here/);
   assert.equal(t.sent.length,1);
 });
 test('no free extents or invalid size disables growth',async()=>{

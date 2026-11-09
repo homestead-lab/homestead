@@ -161,7 +161,7 @@ def replicas_now():
     try:
         data = data_volume(dep)
     except Exception as error:
-        data = {"pvc": "", "shareable": False, "reason": f"could not read the data claim: {str(error)[:120]}", "candidates": []}
+        data = {"pvc": "", "shareable": False, "reason": f"Homestead could not read the data claim: {str(error)[:120]}", "candidates": []}
     return {"desired": int(dep["spec"].get("replicas", 1) or 0), "pods": sorted(rows, key=lambda row: row["name"]),
             "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS, "data": data}
 

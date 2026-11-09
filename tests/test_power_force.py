@@ -42,7 +42,7 @@ class ForcedPlanTests(unittest.TestCase):
         power.quorum = ONE_NODE
         forced = power.plan("node1", "reboot", force=True)
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
-        with self.assertRaisesRegex(ValueError, "identity changed"):
+        with self.assertRaisesRegex(ValueError, "host changed since the review"):
             power.recheck_forced(forced)
 
 

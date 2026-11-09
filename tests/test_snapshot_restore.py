@@ -67,7 +67,7 @@ class RestoreTests(unittest.TestCase):
         plan = R.restore_plan(self.body())
         self.assertTrue(plan['ready'])
         self.assertEqual(['grafana'], plan['in_use'])
-        self.assertEqual("grafana is running and using this volume; it sees these files change while it runs. "
+        self.assertEqual("grafana is running and using this volume, so it sees these files change while it runs. "
                          "For a database, stop it first.", plan['warning'])
         self.users = (['grafana'], ['ReadWriteOncePod'])
         plan = R.restore_plan(self.body())
@@ -122,14 +122,14 @@ class RestoreTests(unittest.TestCase):
             for call in (lambda: R.restore_plan(self.body()), lambda: R.restore(self.body(review_token=token))):
                 with self.assertRaises(ValueError) as caught:
                     call()
-                self.assertEqual("this snapshot's browsing session ended; open it again", str(caught.exception))
+                self.assertEqual("This snapshot's browsing session ended. Open it again.", str(caught.exception))
         self.assertEqual([], self.launched)
 
     def test_session_about_to_end_is_a_blocker(self):
         self.state['expires'] = time.time() + 120
         plan = R.restore_plan(self.body())
         self.assertFalse(plan['ready'])
-        self.assertIn('open it again', plan['blockers'][0])
+        self.assertIn('Open it again', plan['blockers'][0])
 
     def test_second_restore_into_the_claim_is_409(self):
         token = R.restore_plan(self.body())['review_token']
@@ -191,7 +191,7 @@ class RestoreTests(unittest.TestCase):
         self.walk[0]['size'] = 20 * 1024 ** 3
         plan = R.restore_plan(self.body())
         self.assertFalse(plan['ready'])
-        self.assertIn('open it again', plan['blockers'][0])
+        self.assertIn('Open it again', plan['blockers'][0])
 
     def test_restore_routes_are_admin(self):
         import homestead_storage_server as STORAGE

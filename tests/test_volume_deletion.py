@@ -127,7 +127,7 @@ class VolumeDeletionTests(unittest.TestCase):
 
     def test_stale_preview_and_inexact_confirmation_are_refused(self):
         self.claim()
-        with self.assertRaisesRegex(ValueError, "changed after preview"):
+        with self.assertRaisesRegex(ValueError, "changed after the preview"):
             volumes.delete({"namespace": "lab", "name": "media", "uid": "old",
                             "action": "delete_data", "confirmation": "media"})
         with self.assertRaisesRegex(ValueError, "exactly"):
@@ -258,7 +258,7 @@ class VolumeDeletionTests(unittest.TestCase):
         self.claim()
         self.objects["/apis/batch/v1/namespaces/lab/cronjobs"] = None   # unreadable
         plan = volumes.deletion_plan("lab", "media")
-        self.assertIn("workload dependency inventory is incomplete", plan["blocking_reasons"])
+        self.assertIn("the app dependency list is incomplete", plan["blocking_reasons"])
 
 
 if __name__ == "__main__":

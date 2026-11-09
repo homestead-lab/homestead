@@ -37,7 +37,7 @@ test('Finished jobs do not start polling and failed copies have no live ETA',asy
   assert.match(t.fields['#oplogBody'].innerHTML,/Copy stopped/);
   assert.doesNotMatch(t.ctx.operationCopyProgress({percent:20,eta_seconds:80},false),/ETA/);
   assert.match(t.ctx.operationCopyProgress({percent:100},true),/waiting for CDI/);
-  assert.match(t.ctx.operationCopyProgress({percent:3,eta_seconds:null},true),/ETA estimating/);
+  assert.match(t.ctx.operationCopyProgress({percent:3,eta_seconds:null},true),/Estimating time left/);
 });
 test('whole-percentage progress cannot imply measured zero speed or an accurate ETA',()=>{
   const {ctx}=setup();
@@ -45,7 +45,7 @@ test('whole-percentage progress cannot imply measured zero speed or an accurate 
   const html=ctx.operationCopyProgress(progress,true);
   assert.match(html,/~36\.0%/);
   assert.match(html,/~0\.3 \/ 0\.9 GiB/, "360 of 1000 million bytes is 0.3 of 0.9 GiB");
-  assert.match(html,/Speed \/ ETA unavailable \(1% progress\)/);
+  assert.match(html,/Speed and time left unavailable \(progress in 1% steps\)/);
   assert.doesNotMatch(html,/MB\/s|ETA 1m/);
   assert.match(ctx.operationCopyProgress({...progress,percent:100},true),/waiting for CDI/);
   assert.match(ctx.operationCopyProgress(progress,false),/Copy stopped/);

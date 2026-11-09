@@ -3,7 +3,7 @@
    nor the passphrase. Settings › About. */
 
 function configCardHtml() {
-  return `${UI.moduleHeader(`Configuration backup`, `Settings, users, VIPs, IP addresses, shares and the rest, in a file encrypted with a passphrase you choose.
+  return `${UI.moduleHeader(`Configuration backup`, `Settings, users, virtual IPs, IP addresses, shares and the rest, in a file encrypted with a passphrase you choose.
         Apps, VMs and their data are not in it: volume backups under Data protection hold those.`, `${UI.button("Restore", "configRestore()", { attrs: 'data-need="admin"' })}
         ${UI.button("Back up", "configBackup()", { kind: "pri", attrs: 'data-need="admin"' })}`)}`;
 }
@@ -38,9 +38,9 @@ window.configBackup = async () => {
   modal("Back up configuration", '<div class="empty"><span class="spin2"></span> Reading what is set up…</div>', true);
   let parts;
   try { parts = await api("/api/config/parts"); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "Could not read the configuration.", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The configuration could not be read.", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.lead("Saves the parts you choose to a file on this device, encrypted with a passphrase. Keep the passphrase: without it the file cannot be read, by anyone.")}
+    ${UI.lead("Saves the chosen parts to a file on this device, encrypted with a passphrase. Keep the passphrase safe. Without it, nobody can read the file.")}
     <ul class="cfg-parts compact">${parts.map(p => configPartRow(p, { checked: p.present, disabled: !p.present,
       chip: p.present ? "" : ` ${UI.chip("nothing set up")}` })).join("")}</ul>
     ${UI.fields(
@@ -80,7 +80,7 @@ window.configBackupGo = async () => {
 window.configRestore = () => {
   window.__configRestore = null;
   modal("Restore configuration", `<div class="ui-stack">
-    ${UI.lead("Choose a configuration backup and its passphrase. Nothing changes until you pick the parts to restore.")}
+    ${UI.lead("Choose a configuration backup and its passphrase. Nothing changes until the parts to restore are chosen.")}
     ${UI.fields(
       UI.field("Backup file", '<input id="cfgFile" type="file" accept=".json,application/json">', { wide: true }),
       UI.field("Passphrase", '<input id="cfgPass" type="password" autocomplete="current-password">', { wide: true }))}
@@ -130,7 +130,7 @@ window.configRestoreGo = async () => {
   const parts = configChosen(), state = window.__configRestore;
   if (!parts.length || !state?.doc) return;
   if (parts.includes("users") && !(await ask("Restore users and roles?" + String.fromCharCode(10, 10)
-      + "Every account and password becomes the backup's, and everyone - you too - signs in again with those.", { title: "Restore users and roles", ok: "Restore users", danger: true }))) return;
+      + "Every account and password is replaced with the backup's, and everyone, including the current user, signs in again with those.", { title: "Restore users and roles", ok: "Restore users", danger: true }))) return;
   const go = $("#cfgGo");
   go.disabled = true; go.textContent = "Restoring…";
   try {

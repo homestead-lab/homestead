@@ -204,7 +204,7 @@ class JournalTests(unittest.TestCase):
     def test_a_user_resource_whose_version_moved_is_still_refused(self):
         store = self.store; before = journal.identity(store.obj)
         store.obj["metadata"]["resourceVersion"] = "2"
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             store.writer().write("delete", "DELETE", store.path, expected=before)
         self.assertEqual([], store.sent)
 
@@ -387,7 +387,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
     def test_a_spec_change_after_the_review_still_holds_and_sends_nothing(self):
         _, expected = self.reviewed(self.PV)
         self.kube("PATCH", self.PV, {"spec": {"persistentVolumeReclaimPolicy": "Recycle"}}, ctype="application/merge-patch+json")
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             self.retain(expected)
         self.assertEqual([], self.sent("PATCH", self.PV))
         self.assertEqual("Recycle", self.kube.object(self.PV)["spec"]["persistentVolumeReclaimPolicy"])
@@ -401,7 +401,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
                 self.setUp()
                 _, expected = self.reviewed(self.PV)
                 self.kube("PATCH", self.PV, edit, ctype="application/merge-patch+json")
-                with self.assertRaisesRegex(journal.Held, "changed after review"):
+                with self.assertRaisesRegex(journal.Held, "changed after the review"):
                     self.retain(expected)
                 self.assertEqual([], self.sent("PATCH", self.PV))
 
@@ -438,7 +438,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
         _, expected = self.reviewed(self.PV)
         self.replace()
         self.assertNotEqual(expected["uid"], self.kube.object(self.PV)["metadata"]["uid"])
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             self.retain(expected)
         self.assertEqual([], self.retains())
 
@@ -483,14 +483,14 @@ class ForeignStatusRaceTests(unittest.TestCase):
     def test_without_a_settled_review_a_moved_version_still_holds(self):
         obj, _ = self.reviewed(self.PV)
         self.status(self.PV, phase="Released")
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             self.retain(journal.identity(obj))
         self.assertEqual([], self.sent("PATCH", self.PV))
 
     def test_deletes_of_user_data_keep_the_full_check(self):
         obj, expected = self.reviewed(self.PV)
         self.status(self.PV, phase="Released")
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             self.writer().write("delete", "DELETE", self.PV, expected=expected)
         self.assertEqual([], self.sent("DELETE", self.PV))
 
@@ -521,7 +521,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
         old, _ = self.reviewed(self.PV)
         self.kube("PATCH", self.PV, {"spec": {"persistentVolumeReclaimPolicy": "Recycle"}}, ctype="application/merge-patch+json")
         expected = {**journal.identity(self.K.kget(self.PV)), "settled": journal.settled(old)}
-        with self.assertRaisesRegex(journal.Held, "changed after review"):
+        with self.assertRaisesRegex(journal.Held, "changed after the review"):
             self.retain(expected)
         self.assertEqual([], self.sent("PATCH", self.PV))
 
@@ -530,7 +530,7 @@ class ForeignStatusRaceTests(unittest.TestCase):
         self.status(self.PV, phase="Released")
         for partial in ({"uid": expected["uid"], "settled": expected["settled"]},
                         {"uid": expected["uid"], "resourceVersion": None, "settled": expected["settled"]}):
-            with self.subTest(partial), self.assertRaisesRegex(journal.Held, "changed after review"):
+            with self.subTest(partial), self.assertRaisesRegex(journal.Held, "changed after the review"):
                 self.retain(partial)
         self.assertEqual([], self.sent("PATCH", self.PV))
 

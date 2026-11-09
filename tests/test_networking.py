@@ -55,13 +55,13 @@ class NetworkingTests(unittest.TestCase):
     def test_changed_default_cannot_silently_replace_reviewed_address(self):
         cfg = self.edit_service_config()
         cfg.update(vip_mode="shared", reviewed_vip="192.0.2.243")
-        with self.assertRaisesRegex(ValueError, "changed since review"):
+        with self.assertRaisesRegex(ValueError, "changed since the review"):
             SVC.create_service(cfg)
         self.assertFalse(self.sent)
 
     def test_vip_edit_rejects_stale_identity_and_foreign_workload(self):
         cfg = self.edit_service_config()
-        for change in ({"uid": "replacement"}, {"resource_version": "6"}, {"workload": "pihole"}):
+        for change in ({"uid": "replacing it"}, {"resource_version": "6"}, {"workload": "pihole"}):
             with self.assertRaises(ValueError):
                 SVC.service_plan({**cfg, **change})
         self.assertFalse(self.sent)
@@ -69,7 +69,7 @@ class NetworkingTests(unittest.TestCase):
     def test_vip_edit_never_recreates_to_change_class(self):
         cfg = self.edit_service_config()
         with patch.object(PLATFORM, "vip_spec", return_value={"loadBalancerClass": "new-class"}):
-            with self.assertRaisesRegex(ValueError, "replacement"):
+            with self.assertRaisesRegex(ValueError, "replacing it"):
                 SVC.create_service(cfg)
         self.assertFalse(self.sent)
 
@@ -334,7 +334,7 @@ class NetworkingTests(unittest.TestCase):
         """With no Services seen, every VIP looked free and 192.0.2.242, which
         homestead answers on, was handed out again (#615)."""
         self.failing("/api/v1/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was changed"):
             SVC.service_plan({"namespace": "lab", "name": "pihole", "vip_mode": "automatic",
                                      "ports": [{"port": 53, "target_port": 53, "protocol": "UDP"}]})
 
@@ -348,7 +348,7 @@ class NetworkingTests(unittest.TestCase):
 
     def test_a_failed_read_of_its_services_changes_no_ports(self):
         self.failing("/api/v1/namespaces/lab/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was changed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was changed"):
             SVC.sync_workload_ports("lab", "homestead", [
                 {"name": "web", "container": 8088, "host": 9090, "protocol": "TCP", "expose": True}])
         self.assertEqual([], self.sent)
@@ -372,7 +372,7 @@ class NetworkingTests(unittest.TestCase):
     def test_a_deployments_read_that_fails_does_not_make_an_apps_service_look_orphaned(self):
         """Every Service's targets were empty, so deleting one needed no force."""
         self.failing("/apis/apps/v1/deployments")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments; nothing was deleted"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments, so nothing was deleted"):
             SVC.delete_service("lab", "homestead")
         self.assertEqual([], self.sent)
 
@@ -381,7 +381,7 @@ class NetworkingTests(unittest.TestCase):
             "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
             "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
         self.failing("/api/v1/nodes")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes; nothing was added"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Nodes, so nothing was added"):
             REG.add_vips({"ip": "192.0.2.210"})
         self.assertEqual([], self.sent)
 
@@ -391,7 +391,7 @@ class NetworkingTests(unittest.TestCase):
             "metadata": {"name": "homestead-vips", "namespace": "lab", "resourceVersion": "1"},
             "data": {"vips.json": '[{"ip": "192.0.2.242"}]'}}
         self.failing("/api/v1/services")
-        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services; nothing was removed"):
+        with self.assertRaisesRegex(ValueError, "could not read the cluster's Services, so nothing was removed"):
             REG.remove_vip("192.0.2.242")
         self.assertEqual([], self.sent)
 

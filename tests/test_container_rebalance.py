@@ -320,7 +320,7 @@ class PlanTests(unittest.TestCase):
         c = Hosts(self); bind(c)
         plan = C.plan()
         forged = [dict(plan["moves"][0], to="k2")]
-        with self.assertRaisesRegex(ValueError, "out of date; review again. The moves differ from it"):
+        with self.assertRaisesRegex(ValueError, "out of date. Review again. The moves differ from it"):
             C.reviewed(forged, [], plan["review_token"])
         c.edit_pod("frigate", lambda p: p["spec"].update(nodeName="k3"))   # frigate moved meanwhile
         with self.assertRaisesRegex(ValueError, "changed since the review"):
@@ -347,13 +347,13 @@ class SignedReviewTests(unittest.TestCase):
         token = self.plan["review_token"]
         self.assertRegex(token, r"^\d+\.[0-9a-f]{64}$")
         with mock.patch("time.time", return_value=time.time() + C.CAPACITY_REVIEW.TTL + 5):
-            with self.assertRaisesRegex(ValueError, "review again"):
+            with self.assertRaisesRegex(ValueError, "Review again"):
                 C.reviewed(self.plan["moves"], [], token)
 
     def test_an_edit_to_an_app_after_the_review_needs_a_new_review(self):
         app = self.plan["moves"][0]["name"]
         self.c.edit_dep(app, lambda dep: dep["metadata"].update(generation=2))
-        with self.assertRaisesRegex(ValueError, "review again"):
+        with self.assertRaisesRegex(ValueError, "Review again"):
             C.reviewed(self.plan["moves"], [], self.plan["review_token"])
 
     def test_reviewed_moves_carry_the_generation_reviewed(self):
@@ -455,7 +455,7 @@ class JobTests(unittest.TestCase):
         self.item["ref"]["started"] = time.time() - 700
         state, _, message = C.status(self.item)
         self.assertEqual("failed", state)
-        self.assertIn("the rest were not moved", message)
+        self.assertIn("The rest were not moved", message)
 
     def test_one_moved_since_the_review_is_skipped(self):
         self.c.edit_pod("frigate", lambda p: p["spec"].update(nodeName="k3"))

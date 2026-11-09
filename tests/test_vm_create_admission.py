@@ -163,7 +163,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
                 mock.patch.object(server.IPAM, "save_record", side_effect=OSError("unavailable")):
             result = server.VM_REVIEW.reviewed_vm_create(body)
         self.assertIn("Secret ownership", result["warning"])
-        self.assertIn("IP-address record", result["warning"])
+        self.assertIn("IP address record", result["warning"])
 
     def test_mutated_memory_mac_password_or_source_cannot_reuse_approval(self):
         body = self.reviewed()
@@ -293,7 +293,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
         self.objects["/apis/kubevirt.io/v1/virtualmachines"]["metadata"] = {"continue": "next-page"}
         result, writes, _ = self.call("/api/vm/create/preview", self.body)
         self.assertEqual(400, result[0], result)
-        self.assertRegex(result[1]["error"], "ownership inventory is incomplete|Couldn't check whether another VM uses this disk")
+        self.assertRegex(result[1]["error"], "ownership inventory is incomplete|could not check whether another VM uses this disk")
         writes.assert_not_called()
 
     def test_borrowed_disk_claimed_by_stopped_vm_after_review_is_not_reused(self):

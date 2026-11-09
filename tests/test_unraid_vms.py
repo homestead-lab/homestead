@@ -294,7 +294,7 @@ class ImportTests(unittest.TestCase):
         self.assertNotIn("MiB/s", source["text"])
         self.assertIsNone(source["progress"]["bytes_per_second"])
         self.assertIsNone(source["progress"]["eta_seconds"])
-        self.assertIn("Repeated values do not confirm a stalled copy", source["note"])
+        self.assertIn("Repeated values do not mean the copy has stalled", source["note"])
         self.assertTrue(source["note"].startswith("Running"))
 
     def test_byte_samples_measure_sub_percent_progress_even_after_legacy_samples(self):
@@ -310,7 +310,7 @@ class ImportTests(unittest.TestCase):
         self.assertIsNone(source["progress"]["eta_seconds"])
         complete = UVMS.copy_output({"text": "30.0 1000\n"}, {"bytes": 1000})
         self.assertIn("100.0%", complete["text"])
-        self.assertIn("waiting for CDI", complete["text"])
+        self.assertIn("Waiting for CDI", complete["text"])
 
     def test_retained_old_logs_are_readable_without_reading_retry_pods(self):
         ref = {"disks": [{"dv": "desktop-disk", "bytes": 1000}], "diagnostics": [
@@ -352,7 +352,7 @@ class ImportTests(unittest.TestCase):
         with mock.patch.object(UVMS, "log_sources", return_value=evidence):
             state, _, message = UVMS._fail(ref, "Upload failed")
         self.assertEqual("failed", state)
-        self.assertIn("no cleanup receipt", message)
+        self.assertIn("no cleanup record", message)
         self.assertEqual([], self.sent)
         self.assertLessEqual(len(ref["diagnostics"][0]["text"]), 20000)
         self.assertEqual(ref["diagnostics"], UVMS.log_sources({"ref": ref}))
@@ -425,8 +425,8 @@ class ImportTests(unittest.TestCase):
             self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"]["status"] = {"phase": "Failed"}
         state, _, message = UVMS.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("VM on Unraid is unchanged", message)
-        self.assertIn("temporary import storage cleared", message)
+        self.assertIn("VM on Unraid is not changed", message)
+        self.assertIn("temporary storage was cleared", message)
         self.assertNotIn("disks were removed", message)
         deleted = [path for method, path, body in self.sent if method == "DELETE"]
         self.assertIn(f"{UVMS.CDI_API}/namespaces/lab/datavolumes/win11-disk", deleted)
@@ -490,7 +490,7 @@ class RoomTests(unittest.TestCase):
         self.cap = lh_nodes(1000)
         room = self.room()
         self.assertEqual("bad", room["level"])
-        self.assertIn("keeps 2 copies of a disk, each on a different node, and 1 node has room", room["blockers"][0])
+        self.assertIn("keeps 2 copies of a disk, each on a different host, and 1 host has room", room["blockers"][0])
 
     def test_a_disk_too_big_for_any_one_longhorn_disk_is_blocked(self):
         # 270 GiB in all is enough by sum, but the 106 GiB disk fits on no node's disk.
@@ -521,7 +521,7 @@ class RoomTests(unittest.TestCase):
     def test_a_class_that_is_not_longhorn_or_unreadable_warns_without_blocking(self):
         room = self.room("local-path")
         self.assertEqual(("unknown", []), (room["level"], room["blockers"]))
-        self.assertIn("local-path is not Longhorn, so Homestead cannot check it has room for 190.8 GiB", room["warnings"][0])
+        self.assertIn("local-path is not Longhorn, so Homestead cannot check that it has room for 190.8 GiB", room["warnings"][0])
         with mock.patch.object(UVMS, "lh_capacity", mock.Mock(side_effect=RuntimeError("down"))):
             room = self.room()
         self.assertEqual(("unknown", []), (room["level"], room["blockers"]))

@@ -56,7 +56,7 @@ def target(cfg):
         wanted = ident(cfg["pod"])
         pods = [p for p in pods if p["metadata"]["name"] == wanted]
         if not pods:
-            raise ValueError("the selected pod no longer belongs to this workload; refresh diagnostics")
+            raise ValueError("The chosen pod no longer belongs to this app. Refresh diagnostics.")
     return dep, pods
 
 
@@ -118,7 +118,7 @@ def report(cfg):
               "pods": rows, "pods_truncated": len(pods) > 10, "note": NOTE,
               "restart_history": restart_history(cfg["ns"], cfg["name"], dep["metadata"]["uid"])}
     if not pods:
-        answer["message"] = "No pod exists. Start the app to collect new evidence; Kubernetes has no retained pod to inspect."
+        answer["message"] = "No pod exists. Start the app to collect new information. Kubernetes has kept no pod to check."
         return answer
     pod = pods[0]
     # Default to the first application container; init containers can be selected.
@@ -141,7 +141,7 @@ def command_plan(cfg):
     if ns in WORKLOADS.SYS_NS:
         raise ValueError("commands in system namespaces are not available here")
     if not pods or pods[0]["metadata"].get("deletionTimestamp"):
-        raise ValueError("there is no current pod; start the app and refresh diagnostics")
+        raise ValueError("There is no current pod. Start the app and refresh diagnostics.")
     pod = pods[0]
     container = container_for(pod, cfg.get("container", ""))
     argv = cfg.get("argv")
@@ -163,7 +163,7 @@ def command_plan(cfg):
                "target_fingerprint": hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest(),
                "host_access": sorted(HOSTACCESS.grants(pod)),
                "effect": "Runs with the container's permissions and can change or delete its data. Output can contain secrets.",
-               "limit": "Requires timeout in the image. Timeout sends TERM, then KILL after 2 seconds; detached children may survive."}
+               "limit": "Needs timeout in the image. Timeout sends TERM, then KILL after 2 seconds. Detached child processes may keep running."}
     return normalized, context, summary, pod
 
 
@@ -216,7 +216,7 @@ def capture(ns, pod, container, argv, seconds):
                     result["error"] = clean(status.get("message", "Command failed"), 600)
                 break
     except (TimeoutError, socket.timeout):
-        result.update(timed_out=True, error="Stopped waiting for output; check diagnostics before retrying a command that changes data.")
+        result.update(timed_out=True, error="Stopped waiting for output. Check diagnostics before running a command that changes data again.")
     except (EOFError, OSError, ValueError) as error:
         result["error"] = clean(str(error), 600)
     finally:
@@ -224,7 +224,7 @@ def capture(ns, pod, container, argv, seconds):
     if result["exit_code"] in (124, 137):
         result["timed_out"] = True
     if result["exit_code"] is None and "error" not in result:
-        result["error"] = "The connection closed without an exit status; completion is unknown."
+        result["error"] = "The connection closed without an exit status, so whether it finished is unknown."
     return {**result, "stdout": clean(output[1].decode("utf-8", "replace")),
             "stderr": clean(output[2].decode("utf-8", "replace")), "note": NOTE}
 
@@ -233,10 +233,10 @@ def execute(cfg, user):
     normalized, context, summary, pod = command_plan(cfg)
     checked = {**normalized, "capacity_token": cfg.get("review_token")}
     if cfg.get("confirm") is not True or not REVIEW.valid(checked, {"purpose": "container-command", "user": user, **context}):
-        raise ValueError("the command or target changed, or its review expired; review it again")
+        raise ValueError("The command or target changed, or its review expired. Review it again.")
     status = next((s for s in pod.get("status", {}).get("containerStatuses", []) if s["name"] == normalized["container"]), {})
     if not status.get("state", {}).get("running"):
-        raise ValueError("the selected container is not running; wait for it to start and review again")
+        raise ValueError("The chosen container is not running. Wait for it to start and review again.")
     directory = os.path.join(WORKLOADS.DATA_DIR, "container-command-reviews")
     token = str(cfg["review_token"])
     marker = os.path.join(directory, token.split(".", 1)[0] + "-" + hashlib.sha256(token.encode()).hexdigest())
@@ -251,7 +251,7 @@ def execute(cfg, user):
         try:
             os.close(os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
         except FileExistsError:
-            raise ValueError("this command review has already been used; inspect the result before reviewing another run") from None
+            raise ValueError("This command review has already been used. Check the result before reviewing another run.") from None
     audit = {"user": user, "namespace": normalized["ns"], "pod": normalized["pod"],
              "container": normalized["container"], "command_sha256": hashlib.sha256(json.dumps(normalized["argv"]).encode()).hexdigest()}
     CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-start"})
@@ -259,7 +259,7 @@ def execute(cfg, user):
         result = capture(normalized["ns"], normalized["pod"], normalized["container"], normalized["argv"], normalized["timeout_seconds"])
     except Exception as error:
         CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-failed"})
-        raise ValueError("Command connection failed; inspect the app before retrying: " + clean(str(error), 500)) from None
+        raise ValueError("The command connection failed. Check the app before trying again: " + clean(str(error), 500)) from None
     CONSOLE.audit(WORKLOADS.DATA_DIR, {**audit, "event": "command-end", "exit_code": result["exit_code"], "timed_out": result["timed_out"]})
     return {"ns": normalized["ns"], "name": normalized["name"], "pod": normalized["pod"], "container": normalized["container"], **result}
 

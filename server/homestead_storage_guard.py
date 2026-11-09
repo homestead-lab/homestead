@@ -19,7 +19,7 @@ _JOB = re.compile(r"^/apis/batch/v1/namespaces/([^/]+)/jobs(?:/([^/]+))?$" )
 _SNAPSHOT = re.compile(r"^/apis/longhorn.io/[^/]+/namespaces/([^/]+)/snapshots(?:/([^/]+))?$" )
 _DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([^/]+)/deployments(?:/([^/]+)(?:/scale)?)?$")
 
-PROTECTED = "Storage is protected by an active or interrupted move; review that job before changing or deleting this data"
+PROTECTED = "This storage is protected by a running or interrupted move. Review that job before changing or deleting this data."
 
 
 @contextlib.contextmanager
@@ -61,9 +61,9 @@ def _matches(item, namespace="", claim="", pv="", handle="", job=""):
 def _objects(read, path):
     data = read(path)
     if not isinstance(data, dict) or not isinstance(data.get("items"), list) or data.get("metadata", {}).get("continue"):
-        raise ValueError("Storage protection inventory is incomplete; nothing was changed")
+        raise ValueError("The storage protection information is incomplete, so nothing was changed")
     if any(not isinstance(obj, dict) or not obj.get("metadata", {}).get("name") for obj in data["items"]):
-        raise ValueError("Storage protection inventory is invalid; nothing was changed")
+        raise ValueError("The storage protection information is invalid, so nothing was changed")
     return data["items"]
 
 
@@ -111,7 +111,7 @@ def review(plan, ops, read):
 def volume(ops, read, handle):
     """Fence the whole snapshot workflow, including stops and Longhorn REST calls."""
     if not handle:
-        raise ValueError("Backing volume identity is missing; nothing was changed")
+        raise ValueError("The volume behind it could not be identified, so nothing was changed")
     with ops.transaction():
         if reasons(ops.stored(), handle=handle, read=read):
             raise ValueError(PROTECTED)
@@ -146,7 +146,7 @@ def send(method, path, body, dispatch, ops, read, own_controller=None):
             obj = body if method == "POST" else read(path_only)
             handle = (obj.get("spec") or {}).get("volume") if isinstance(obj, dict) else None
             if not handle:
-                raise ValueError("Snapshot backing volume cannot be verified; nothing was changed")
+                raise ValueError("The snapshot's volume cannot be confirmed, so nothing was changed")
         if not any((claim, volume, handle, job)):
             # Collection deletes cannot omit individually protected names.
             blocked = [i["id"] for i in _active(items) if not (pvc or job_match) or i["ref"].get("namespace") == namespace]

@@ -230,16 +230,16 @@ def _wipe_reasons(facts, pvs):
     reasons = []
     for holder in facts["holders"]:
         if holder["kind"] not in ("multipath", "LVM"):
-            reasons.append(f"{holder['kind']} ({holder['name']}) holds it; take it out of that on the host first")
+            reasons.append(f"{holder['kind']} ({holder['name']}) holds it, so take it out of that on the host first")
     for group in facts["lvm"]:
         vg = group["vg"] or group["uuid"]
         if group["root"]:
             reasons.append(f"volume group {vg} is the one this host's running system is on")
         if group["elsewhere"]:
-            reasons.append(f"volume group {vg} also uses {', '.join(group['elsewhere'])}; wiping this disk would break it there")
+            reasons.append(f"volume group {vg} also uses {', '.join(group['elsewhere'])}, so wiping this disk would break it there")
         for lv in group["lvs"]:
             if lv["open"]:
-                reasons.append(f"{vg}/{lv['name']} is open - something on this host is using it")
+                reasons.append(f"{vg}/{lv['name']} is open, because something on this host is using it")
     lvm_held = [h["name"] for h in facts["holders"] if h["kind"] == "LVM"]
     if lvm_held and not facts["lvm"]:
         reasons.append(f"LVM holds it ({', '.join(lvm_held)}), but "
@@ -296,7 +296,7 @@ def release_script(maps):
     lines.append("multipathd reconfigure >/dev/null 2>&1 || systemctl restart multipathd 2>/dev/null || true")
     lines += [f"multipath -f {row['name']} >/dev/null 2>&1 || true" for row in maps]
     lines.append('B=${D##*/}; ls /sys/block/$B/holders/ 2>/dev/null | grep -q . && '
-                 '{ echo "ERR multipathd still holds $D after releasing it; see multipath -ll on the host"; exit 1; }')
+                 '{ echo "ERR multipathd still holds $D after releasing it. See multipath -ll on the host"; exit 1; }')
     return "\n".join(lines) + "\n"
 
 
@@ -324,7 +324,7 @@ def wipe_script(device, facts):
         'blockdev --rereadpt "$D" 2>/dev/null || partx -d "$D" 2>/dev/null || true',
         "udevadm settle 2>/dev/null || true",
         'L=$(lsblk -rno NAME "$D" 2>/dev/null | sed 1d | tr "\\n" " ")',
-        '[ -z "$L" ] || { echo "ERR $D still shows $L after the wipe; restart the host and look again"; exit 1; }',
+        '[ -z "$L" ] || { echo "ERR $D still shows $L after the wipe. Restart the host and check again"; exit 1; }',
         'S=$(blkid -p -s TYPE -o value "$D" 2>/dev/null || true)',
         '[ -z "$S" ] || { echo "ERR $D still has a $S signature after the wipe"; exit 1; }',
         "echo WIPED",
@@ -338,7 +338,7 @@ def wipe(node, device, facts):
     if facts["state"] not in ("lvm", "partitioned", "data", "longhorn"):
         raise ValueError(refusal(facts, "wipe"))
     if "wipefs" not in facts["tools"]:
-        raise ValueError(f"{node} has no wipefs; install util-linux there")
+        raise ValueError(f"{node} has no wipefs. Install util-linux there.")
     out, err = hostrun.run(node, wipe_script(device, facts), timeout=300, change=f"Erase {device} on {node}")
     if "WIPED" not in out.split():
         problem = next((line[4:] for line in out.splitlines() if line.startswith("ERR ")), "") or (err or out)[-300:]
@@ -387,7 +387,7 @@ def setup(node, device, mode, fstype="ext4", confirm=""):
     if mode in ("format", "erase", "wipe") and confirm.strip() != device:
         raise ValueError(f"type {device} to confirm: formatting erases it")
     if mode in ("format", "erase", "wipe") and f"mkfs.{fstype}" not in facts["tools"]:
-        raise ValueError(f"{node} has no mkfs.{fstype}; install {'xfsprogs' if fstype == 'xfs' else 'e2fsprogs'} there, or choose the other filesystem")
+        raise ValueError(f"{node} has no mkfs.{fstype}. Install {'xfsprogs' if fstype == 'xfs' else 'e2fsprogs'} there, or choose the other filesystem.")
     if mode in ("erase", "wipe"):
         # Back to blank first - old LVM, partitions and all - then formatted
         # as a blank disk is.
@@ -536,7 +536,7 @@ def os_space_problem(facts, engine="v1"):
         if tool not in facts["tools"]:
             return f"the host has no {tool}"
     if facts["usable_gb"] < 5:
-        return (f"{facts['vg']} has {facts['free_gb']} GiB free; {facts['reserve_gb']} GiB of that is kept for the "
+        return (f"{facts['vg']} has {facts['free_gb']} GiB free, and {facts['reserve_gb']} GiB of that is kept for the "
                 "system, which leaves too little for Longhorn")
     return ""
 
@@ -596,7 +596,7 @@ def region_plan(region, size_gb):
     want = _size(size_gb) * 1024 ** 3 // sector // align * align
     length = min(want, room)
     if length * sector < 5 * 1024 ** 3:
-        raise ValueError("that leaves less than 5 GiB; choose a larger size")
+        raise ValueError("That leaves less than 5 GiB. Choose a larger size.")
     return first, length
 
 
@@ -634,7 +634,7 @@ def use_region(node, disk, start, size_gb, engine="v1", confirm=""):
     facts = os_space(node)
     region = next((r for r in facts["regions"] if r["disk"] == disk and r["start"] == int(start)), None)
     if region is None:
-        raise ValueError(f"that free space on {disk} is not there any more; look again")
+        raise ValueError(f"That free space on {disk} is no longer there. Check again.")
     # Longhorn's V2 engine may keep a raw device here with a stale GPT header
     # still readable: writing a table would overwrite its data.
     claimed = inspect(node, f"/dev/{disk}")
@@ -666,10 +666,10 @@ def refusal(facts, mode):
     if state == "missing":
         return f"{device} is not there: {facts['error']}"
     if state == "system":
-        return f"{device} is this host's system disk ({', '.join(facts['mounts'])}); Longhorn keeps its default disk there already"
+        return f"{device} is this host's system disk ({', '.join(facts['mounts'])}). Longhorn already keeps its default disk there."
     if state == "longhorn-v2":
-        return (f"Longhorn's V2 engine keeps data on {device} ({', '.join(facts['longhorn_block'])}); "
-                "move its replicas off and remove it from Longhorn first")
+        return (f"Longhorn's V2 engine keeps data on {device} ({', '.join(facts['longhorn_block'])}). "
+                "Move its volume copies off and remove it from Longhorn first.")
     if state == "held":
         what = ", ".join(f"{h['kind']} ({h['name']})" for h in facts["holders"] if h["kind"] != "multipath")
         reasons = "; ".join(facts.get("reasons") or []) or "take it out of that on the host first"
@@ -679,11 +679,11 @@ def refusal(facts, mode):
         points = [m for m in facts["mounts"] if m.upper() != "[SWAP]"]
         return (f"{device} is in use: " + "; ".join(
             ([f"mounted at {', '.join(points)}"] if points else []) + (["used as swap"] if swap else []))
-                + "; unmount it (swapoff for swap) first, or give Longhorn a mounted folder with Add a folder")
+                + ". Unmount it first (swapoff for swap), or give Longhorn a mounted folder with Add a folder.")
     if mode == "import":
         return f"{device} holds no Longhorn data to keep"
     if mode == "format":
-        return f"{device} is not blank ({facts['fstype'] or 'partitioned'}); erasing it needs its own confirmation"
+        return f"{device} is not blank ({facts['fstype'] or 'partitioned'}), so erasing it needs its own confirmation"
     if mode == "wipe" and state == "blank":
-        return f"{device} is blank already; format it instead"
+        return f"{device} is already blank. Format it instead."
     return f"{device} cannot be set up that way"

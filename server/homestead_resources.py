@@ -513,7 +513,7 @@ def save_object(group, version, resource, namespace, name, text):
     obj = _parse(text)
     meta = obj.setdefault("metadata", {})
     if meta.get("name") != name or (kind["namespaced"] and (meta.get("namespace") or namespace) != namespace):
-        raise ValueError("the name and namespace cannot change here; create a new object instead")
+        raise ValueError("The name and namespace cannot change here. Create a new object instead.")
     if kind["kind"] == "Secret" and any(v == "(hidden)" for v in (obj.get("data") or {}).values()):
         raise ValueError("reveal the secret's values before editing it, or they would be saved as '(hidden)'")
     if MASKS.has_stripped({key: value for key, value in obj.items() if key not in ("apiVersion", "kind")}):

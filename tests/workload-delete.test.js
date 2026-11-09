@@ -28,7 +28,7 @@ test("a failed Services read says so and offers no delete", async () => {
   assert.match(html, /could not be read/);
   assert.doesNotMatch(html, /Services removed<\/span>\s*<b>none/);
   assert.doesNotMatch(html, /wlDeleteNow/);
-  assert.match(html, /Retry/);
+  assert.match(html, /Try again/);
 });
 
 test("a failed volumes read says so and offers no delete", async () => {

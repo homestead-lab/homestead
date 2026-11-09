@@ -55,7 +55,7 @@ class PreparationArchiveTests(unittest.TestCase):
             self.assertEqual(1, len(OPS.stored()))
         self.assertEqual(0, OPS.dismiss_finished()["remaining"])
         self.assertEqual(1, len(OPS.stored()))
-        self.assertIn("volumes and receipts retained", OPS.stored()[0]["history"][-1]["m"])
+        self.assertIn("volumes and records are kept", OPS.stored()[0]["history"][-1]["m"])
         with self.assertRaises(Held): self.archive(self.confirmed(review), start=True)
 
     def test_archiving_a_legacy_preparation_preserves_its_original_store_and_log(self):
@@ -90,7 +90,7 @@ class PreparationArchiveTests(unittest.TestCase):
             with self.assertRaises(Held): self.archive(changed, start=True)
         with self.assertRaises(Held): self.archive(body, start=True, actor="another-admin")
         with self.assertRaises(Held): self.archive(body, start=True, namespace="other")
-        job = copy.deepcopy(self.job); job["ref"]["source"]["uid"] = "replacement"
+        job = copy.deepcopy(self.job); job["ref"]["source"]["uid"] = "replacing it"
         put(OPS, [job])
         with self.assertRaises(Held): self.archive(body, start=True)
         self.assertEqual([job], OPS.stored())

@@ -126,7 +126,7 @@ class RelayOverHttpTests(unittest.TestCase):
     def test_the_far_cluster_applies_its_own_rules_to_the_role(self):
         status, answer, _ = self.ask("/api/fleet/address", body={"url": "http://10.0.0.2:8088"})
         self.assertEqual(403, status)
-        self.assertIn("admin required", answer["error"])
+        self.assertIn("needs the admin role", answer["error"])
 
     def test_a_body_arrives_as_it_was_sent_and_signed(self):
         status, answer, _ = self.ask("/api/fleet/address", role="admin", body={"url": "http://10.0.0.2:8088"})

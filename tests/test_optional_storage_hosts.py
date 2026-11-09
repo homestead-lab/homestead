@@ -94,7 +94,7 @@ class StorageHostReadTests(unittest.TestCase):
 
     def test_lhv2_setup_reads_harvesters_setting_as_optional_and_its_lists_strictly(self):
         reader = Paths(CUT_SHORT, **{"/settings/v2-data-engine": {"value": "true"}, LHV2.CAP.HARVESTER_V2: http_error(404)})
-        with self.assertRaisesRegex(ValueError, r"^V2 setup inventory is incomplete; check again$"):
+        with self.assertRaisesRegex(ValueError, r"^The V2 setup information is incomplete. Check again.$"):
             self.lhv2_plan(reader)
         self.assertIn(LHV2.CAP.HARVESTER_V2, reader.paths)
         reader = Paths(CUT_SHORT, **{"/settings/v2-data-engine": {"value": "true"}, LHV2.CAP.HARVESTER_V2: http_error(500)})

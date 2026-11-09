@@ -118,7 +118,7 @@ def _users(claim):
         pods = kget(f"/api/v1/namespaces/{_namespace()}/pods").get("items", [])
     except Exception as error:
         # Unknown is not "unused": a volume moved while written would arrive torn.
-        raise ValueError(f"could not tell whether {claim} is in use: {str(error)[:120]}") from error
+        raise ValueError(f"Homestead could not tell whether {claim} is in use: {str(error)[:120]}") from error
     return sorted(pod["metadata"]["name"] for pod in pods
                   if (pod.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
                   and any((v.get("persistentVolumeClaim") or {}).get("claimName") == claim
@@ -222,13 +222,13 @@ def _services_for(pod_labels):
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise ValueError(f"The Services in {_namespace()} could not be read, so which ones belong to it "
-                             f"is not known; nothing was changed. Try again in a moment ({str(error)[:120]})") from error
+                             f"is not known. Nothing was changed. Try again in a moment ({str(error)[:120]}).") from error
         services = []           # a 404 listing a namespace's Services: there are none
     except Exception as error:
         # Unread is not "no Service": the move would arrive without one, and
         # the source cleanup would leave its Service behind.
         raise ValueError(f"The Services in {_namespace()} could not be read, so which ones belong to it "
-                         f"is not known; nothing was changed. Try again in a moment ({str(error)[:120]})") from error
+                         f"is not known. Nothing was changed. Try again in a moment ({str(error)[:120]}).") from error
     found = []
     for service in services:
         selector = (service.get("spec", {}) or {}).get("selector") or {}
@@ -272,10 +272,10 @@ def _owner(obj, transfer_id="", expected_uid=""):
     if transfer_id and not re.fullmatch(r"[0-9a-f]{12}", transfer_id):
         raise ValueError("Invalid copy request identity")
     if expected_uid and obj.get("metadata", {}).get("uid") != expected_uid:
-        raise ValueError("The source workload was replaced; review the copy again")
+        raise ValueError("The source app was replaced. Review the copy again.")
     owner = NAMES.read(_annotations(obj), OWNER)
     if (owner and owner != transfer_id) or (transfer_id and _origin(obj) and owner != transfer_id):
-        raise ValueError("The source is held by another transfer; finish or put back that transfer first. "
+        raise ValueError("The source is held by another transfer. Finish or undo that transfer first. "
                          "If no cluster lists it any more, release it here in Settings, Linked clusters, under Held here for transfers")
 
 
@@ -315,7 +315,7 @@ def definition(kind, name):
                     if secret_name:
                         secret = KUBE.get_optional(f"/api/v1/namespaces/{_namespace()}/secrets/{secret_name}", read=kget)
                         if not secret:
-                            raise ValueError(f"Cloud-init Secret {secret_name} is missing on the source; restore it before transferring this VM")
+                            raise ValueError(f"Cloud-init Secret {secret_name} is missing on the source. Restore it before moving this VM.")
                         secrets.append({"apiVersion": "v1", "kind": "Secret",
                                         "type": secret.get("type", "Opaque"),
                                         "metadata": _clean_metadata(secret.get("metadata")),
@@ -383,11 +383,11 @@ def quiesce(kind, name, transfer_id="", expected_uid="", expected_version="", li
     _owner(obj, transfer_id, expected_uid)
     if transfer_id:
         if NAMES.read(_annotations(obj), RELEASED) == transfer_id:
-            raise ValueError("This copy's source was already released; review a new copy")
+            raise ValueError("This copy's source was already released. Review a new copy.")
         if not obj.get("metadata", {}).get("resourceVersion") or not expected_version:
-            raise ValueError("Could not verify the source version; review the copy again")
+            raise ValueError("Homestead could not confirm the source version. Review the copy again.")
         if NAMES.read(_annotations(obj), OWNER) != transfer_id and obj["metadata"]["resourceVersion"] != expected_version:
-            raise ValueError("The source changed before stopping; review the copy again")
+            raise ValueError("The source changed before it stopped. Review the copy again.")
     origin = _origin(obj)
     if not origin:
         origin = _run_state(kind, obj)
@@ -402,8 +402,8 @@ def quiesce(kind, name, transfer_id="", expected_uid="", expected_version="", li
     if kind == "volume":
         users = _users(name)
         if users:
-            raise ValueError(f"{name} is in use by {', '.join(users[:3])}; stop what uses it, "
-                             "or move that app or VM instead, which brings the volume with it")
+            raise ValueError(f"{name} is in use by {', '.join(users[:3])}. Stop what uses it, "
+                             "or move that app or VM instead, which brings the volume with it.")
     patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): json.dumps(origin)}}}
     if transfer_id:
         patch["metadata"]["annotations"][NAMES.key(OWNER)] = transfer_id
@@ -471,11 +471,11 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
         raise ValueError(f"{name} has not been stopped for a move")
     live = kind == "vm" and bool(transfer_id) and bool(_origin(obj).get("_copy_live"))
     if not live and _remaining(kind, obj):
-        raise ValueError(f"{name} is still running; its data is not at rest yet")
+        raise ValueError(f"{name} is still running, so its data is not at rest yet")
     if transfer_id and not live:
         for claim in _claims_of(kind, obj):
             if _users(claim):
-                raise ValueError(f"Volume {claim} is still in use; stop its other users before copying")
+                raise ValueError(f"Volume {claim} is still in use. Stop whatever else uses it before copying.")
     recorded = _recorded_backups(obj)
     states = {row["claim"]: row for row in status(kind, name)["backups"]} if recorded else {}
     def save():
@@ -615,7 +615,7 @@ def status(kind, name):
             snap = KUBE.get_optional(f"{LH_API}/namespaces/{LHNS}/snapshots/{row['snapshot']}", read=kget) if row.get("snapshot") else None
             problem = move_snapshot_error(snap)
             if not row.get("snapshot"):
-                problem = "Recorded backup no longer exists; retry the move to take a fresh snapshot"
+                problem = "The recorded backup no longer exists. Retry the move to take a new snapshot."
             found = {"state": "Error" if problem else "Pending", "error": problem}
         image_state = {}
         if row.get("backing_image"):
@@ -702,7 +702,7 @@ def remove(kind, name, volumes=False, claims=None):
     if not _origin(obj):
         raise ValueError(f"{name} was not stopped for a move, so it is not this move's to remove")
     if _remaining(kind, obj):
-        raise ValueError(f"{name} is running again; it will not be removed while in use")
+        raise ValueError(f"{name} is running again, so it is not removed while in use")
     if kind == "volume":
         ksend("DELETE", _path(kind, name))
         return {"ok": True, "removed": [f"volume {name}"], "detail": f"removed volume {name}"}
@@ -743,8 +743,8 @@ def target():
     """
     current = LH.backup_target()
     if not current.get("configured"):
-        raise ValueError("this cluster has no Longhorn backup target; set up backup "
-                         "storage under Data protection first")
+        raise ValueError("This cluster has no Longhorn backup target. Set up backup "
+                         "storage under Data protection first.")
     credentials = {}
     if current.get("secret"):
         secret = KUBE.get_optional(f"/api/v1/namespaces/{LHNS}/secrets/{current['secret']}", read=kget) or {}

@@ -641,14 +641,14 @@ class FixTests(JobTests):
 
     def test_drain_messages_do_not_mention_power(self):
         def slow(n, progress=None, **k):
-            progress("draining", 10, "Waiting for drained pods to leave: lab/db-0; power has not been sent")
-            raise ValueError("Host remains cordoned; drain timed out after 2 minutes. Pods have not left the host: lab/db-0. "
-                             "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
+            progress("draining", 10, "Waiting for drained pods to leave: lab/db-0. Nothing has been sent to the host yet")
+            raise ValueError("The host stays cordoned. The drain timed out after 2 minutes. Pods have not left the host: lab/db-0. "
+                             "Nothing was sent. Check the Longhorn volumes, disruption budgets and pod events")
         with mock.patch.object(NODE_ACTIONS, "drain", slow):
             item = self.started()
         text = " ".join(m for _, m in self.ops.phases)
-        self.assertNotIn("ower", text)
-        self.assertNotIn("remains cordoned", text)
+        self.assertNotIn("sent", text)
+        self.assertNotIn("stays cordoned", text)
         self.assertIn("lab/db-0", item["message"])
 
     def test_a_missing_longhorn_node_is_reported(self):

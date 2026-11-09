@@ -29,23 +29,23 @@ def _load(path):
     except FileNotFoundError:
         return _MISSING
     except (OSError, ValueError) as error:
-        raise ValueError("VM approval history cannot be read; recover the ledger before changing VMs") from error
+        raise ValueError("The VM approval history cannot be read. Recover the record before changing VMs.") from error
 
 
 def _read(directory):
     marker = _load(os.path.join(directory, MARKER))
     if marker is not _MISSING and marker != {"version": 1}:
-        raise ValueError("VM approval history marker is invalid; recover the ledger before changing VMs")
+        raise ValueError("The VM approval history marker is invalid. Recover the record before changing VMs.")
     value = _load(os.path.join(directory, STORE))
     if value is _MISSING:
         if marker is not _MISSING:
-            raise ValueError("VM approval history is missing; recover the ledger before changing VMs")
+            raise ValueError("The VM approval history is missing. Recover the record before changing VMs.")
         return {}, False
     if (not isinstance(value, dict) or value.get("version") != 1 or not isinstance(value.get("receipts"), dict)
             or any(not re.fullmatch(r"[0-9a-f]{64}", digest) or not isinstance(ident, str)
                    or not re.fullmatch(r"[0-9a-f]{24}", ident)
                    for digest, ident in value["receipts"].items())):
-        raise ValueError("VM approval history is invalid; recover the ledger before changing VMs")
+        raise ValueError("The VM approval history is invalid. Recover the record before changing VMs.")
     return value["receipts"], marker is not _MISSING
 
 
@@ -63,9 +63,9 @@ def remember(directory, items):
     for item in pending:
         digest, ident = item.get("ref", {}).get("review_digest"), item["id"]
         if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or not re.fullmatch(r"[0-9a-f]{24}", ident):
-            raise ValueError("VM job has an invalid approval receipt; recover history before changing jobs")
+            raise ValueError("The VM job has an invalid approval record. Recover the history before changing jobs.")
         if digest in receipts and receipts[digest] != ident:
-            raise ValueError("VM approval belongs to another job; recover history before changing jobs")
+            raise ValueError("The VM approval belongs to another job. Recover the history before changing jobs.")
         if digest not in receipts:
             receipts[digest] = ident
             changed = True

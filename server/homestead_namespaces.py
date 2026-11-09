@@ -161,17 +161,17 @@ def delete(name, confirm=""):
     if not namespace:
         raise ValueError(f"there is no namespace called {name}")
     if is_system(namespace):
-        raise ValueError(f"{name} belongs to the platform, not to you")
+        raise ValueError(f"{name} belongs to the platform and cannot be deleted here")
     reason = _protected(name)
     if reason:
         raise ValueError(f"{name} cannot be removed: {reason}")
     contents, unread = _contents(name)
     if unread:
-        raise ValueError(f"could not check {', '.join(unread)} in {name}, so nothing was deleted; try again")
+        raise ValueError(f"Homestead could not check {', '.join(unread)} in {name}, so nothing was deleted. Try again.")
     held = [f"{contents[key]} {one if contents[key] == 1 else many}"
             for key, _path, _keep, one, many in KINDS if contents[key]]
     if held:
-        raise ValueError(f"{name} still holds {', '.join(held)} - move or delete them first")
+        raise ValueError(f"{name} still holds {', '.join(held)}. Move or delete them first.")
     if confirm != name:
         raise ValueError(f"type {name} to confirm")
     ksend("DELETE", f"/api/v1/namespaces/{name}")

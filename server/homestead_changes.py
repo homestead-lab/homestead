@@ -645,7 +645,7 @@ def undo(body):
     homestead_routes.forget("wl")
     CHECKS.refresh_soon(ns, name)
     return {"ok": True, "changes": rows,
-            "detail": f"{name} is back to its settings from before that change; its pods are being replaced"}
+            "detail": f"{name} is back to its settings from before that change. Its pods are being replaced."}
 
 
 # Its routes and who may use them (homestead_routes.py).

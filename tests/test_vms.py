@@ -294,7 +294,7 @@ class VmTests(unittest.TestCase):
         self.assertEqual("Always", c.vm["spec"]["runStrategy"])
         self.assertNotIn("field.cattle.io/description", c.vm["metadata"]["annotations"])
         self.assertTrue(c.sent[-1][1].endswith("/restart"))
-        self.assertIn("restarting now", result["detail"])
+        self.assertIn("Restarting now", result["detail"])
         for bad in ({"cores": 0}, {"memory": "lots"}, {"run_strategy": "Sometimes"}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 VM_EDIT.edit("default", "win11", bad)

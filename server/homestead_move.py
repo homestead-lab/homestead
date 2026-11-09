@@ -102,8 +102,8 @@ def _workload_row(deployment):
                 # A device - an iGPU, a Coral, a Zigbee stick - is what hardware
                 # features pass through. It travels as it is; the destination
                 # just needs a host that has the same device.
-                warnings.append(f"{mount.get('mountPath', '?')} passes the host's {host} through; "
-                                "the destination needs a host with the same device")
+                warnings.append(f"{mount.get('mountPath', '?')} passes the host's {host} through. "
+                                "The destination needs a host with the same device.")
                 continue
             carried = next((kind for kind in UNMODELLED if kind in source), "")
             if carried:
@@ -159,7 +159,7 @@ def _vm_row(vm, running_names):
                             "Homestead did not create")
     devices = domain.get("devices", {}) or {}
     if devices.get("hostDevices") or devices.get("gpus"):
-        warnings.append("passes host devices through; the destination needs the same hardware")
+        warnings.append("passes host devices through, so the destination needs the same hardware")
     networks = [(n.get("multus") or {}).get("networkName") for n in template.get("networks", []) or []]
     if any(networks):
         warnings.append("uses the " + ", ".join(n for n in networks if n) +
@@ -179,7 +179,7 @@ def inventory():
     try:
         deployments = kget("/apis/apps/v1/deployments").get("items", [])
     except Exception as error:
-        raise ValueError(f"could not read workloads: {str(error)[:120]}") from error
+        raise ValueError(f"Homestead could not read the apps: {str(error)[:120]}") from error
     rows = [_workload_row(d) for d in deployments
             if (d["metadata"].get("namespace") or "") == NS]
     rows.sort(key=lambda row: row["name"])
@@ -238,8 +238,8 @@ def _volume_rows(users):
         running = [row["name"] for row in mounted_by if row.get("running")]
         stopped = [row["name"] for row in mounted_by if not row.get("running")]
         if running:
-            blockers.append(f"in use by {', '.join(running)}; stop it, or move it instead, "
-                            "which brings this volume with it")
+            blockers.append(f"In use by {', '.join(running)}. Stop it, or move it instead, "
+                            "which brings this volume with it.")
         if stopped:
             warnings.append(f"{', '.join(stopped)} uses it and stays here, stopped")
         out.append({"name": name, "namespace": NS, "kind": "volume", "size_gb": _size_gb(claim),
@@ -303,7 +303,7 @@ def _update_clusters(change):
         if rows is None:
             rows = []
         if not isinstance(rows, list):
-            raise ValueError("the clusters registry is not a list; nothing was changed")
+            raise ValueError("The list of clusters is not a list, so nothing was changed")
         return change(rows)
     return KUBE.update_json(f"/api/v1/namespaces/{NS}/configmaps/homestead-clusters", "clusters.json", apply,
                             read=kget, write=ksend, labels={NAMES.key("managed"): "true"}, indent=2)
@@ -344,7 +344,7 @@ def add_cluster(name, url, user, password):
 
 def remove_cluster(name):
     if any(row.get("fleet") and not row.get("alias") and row["name"] == name for row in _stored_clusters() + list_clusters()):
-        raise ValueError(f"{name} is linked; unlink it under Settings → Linked clusters")
+        raise ValueError(f"{name} is linked. Unlink it under Settings → Linked clusters.")
     rows = _update_clusters(lambda rows: [row for row in rows if row["name"] != name])
     _tokens.pop(name, None)
     try:
@@ -516,8 +516,8 @@ def remote(name, path, body=None):
                 # Refused straight after it accepted a fresh sign-in: that
                 # Homestead is restarting, or its sessions are not shared
                 # yet. Credentials it refuses fail in _token, not here.
-                raise Unreachable(f"{name}: {reason or 'not signed in'} straight after signing in; "
-                                  "it may be restarting") from error
+                raise Unreachable(f"{name}: {reason or 'not signed in'} straight after signing in. "
+                                  "It may be restarting.") from error
             if error.code == 403:
                 raise ValueError(f"{name}: {reason or 'the account there lacks the access this needs'}"
                                  ) from error
@@ -692,7 +692,7 @@ def transfers(name, allow=None, size_gb=100, lb_ip="", vip_mode="", port=0):
                                                            "lb_ip": str(lb_ip or ""), "vip_mode": str(vip_mode or ""),
                                                            **({"port": int(port)} if port else {})})
     except Missing as error:
-        raise ValueError(f"{name} runs a Homestead too old to turn moves out on and off; update it first") from error
+        raise ValueError(f"{name} runs a Homestead too old to turn moves out on and off. Update it first.") from error
 
 
 def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
@@ -719,7 +719,7 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
     where = result.get("endpoint") or ""
     if (result.get("longhorn") or {}).get("pending"):
         return {"ok": True, "pending": True, "endpoint": where,
-                "detail": f"backup storage is starting on {name}; Homestead will point Longhorn at it when ready"}
+                "detail": f"Backup storage is starting on {name}. Homestead points Longhorn at it when it is ready."}
     wanted = str(lb_ip or "").strip()
     # Releases before 2.8.110 gave Longhorn the keys but never its target, so
     # a move still found "no backup target". It is set here too, through a
@@ -739,10 +739,10 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
         endpoint = ""
     if wanted and wanted not in endpoint:
         raise ValueError(f"{name} did not take the address: its backups still go to {endpoint or 'nothing'}. "
-                         "Its Homestead may be too old to set one - update it and try again.")
+                         "Its Homestead may be too old to set one. Update it and try again.")
     if port and endpoint and not endpoint.rstrip("/").endswith(f":{int(port)}"):
         raise ValueError(f"{name} did not take port {port}: its backups still go to {endpoint}. "
-                         "Its Homestead may be too old to choose one - update it and try again.")
+                         "Its Homestead may be too old to choose one. Update it and try again.")
     reachable = False
     for _ in range(6):
         if answers(endpoint):
@@ -751,11 +751,11 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
         time.sleep(3)
     if endpoint and not reachable:
         return {"ok": True, "endpoint": endpoint, "answers": False,
-                "detail": f"{name}'s backups now go to {endpoint}, but this cluster cannot reach it yet - "
-                          "the store may still be starting, or the address may be taken or firewalled. The card re-checks."}
+                "detail": f"{name}'s backups now go to {endpoint}, but this cluster cannot reach it yet. "
+                          "The store may still be starting, or the address may be in use or blocked by a firewall. The card checks again."}
     return {"ok": True, "endpoint": where,
-            "detail": f"backup storage is starting on {name}" + (f" at {where}" if where else "")
-                      + "; its first start can take a minute while the image downloads"}
+            "detail": f"Backup storage is starting on {name}" + (f" at {where}" if where else "")
+                      + ". Its first start can take a minute while the image downloads."}
 
 
 def answer(call):

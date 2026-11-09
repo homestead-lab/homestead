@@ -86,7 +86,7 @@ test("each row offers what it can: Update…, Restart… or nothing", async () =
   const a = row(t.html(), "node-a"), b = row(t.html(), "node-b"), c = row(t.html(), "node-c");
   assert.match(a, />Update…</);
   assert.match(a, /osUpdatesReview\(\[&quot;node-a&quot;\]\)/);
-  assert.match(b, />Restart…</);
+  assert.match(b, />Restart host…</);
   assert.match(b, /nodePowerReview\(&quot;node-b&quot;,&quot;reboot&quot;\)/, "the Host actions review");
   assert.doesNotMatch(c, /class="btn/, "nothing to do");
   assert.doesNotMatch(row(t.html(), "node-d"), /class="btn/, "already installing");
@@ -109,7 +109,7 @@ test("a viewer's controls are the ones the role hides; the table and links stay"
   const a = row(t.html(), "node-a");
   assert.match(a, /<label[^>]*data-need="admin"[^>]*><input[^>]*data-osu-pick/);
   assert.match(a, /<button[^>]*data-need="admin"[^>]*>Update…/);
-  assert.match(row(t.html(), "node-b"), /<button[^>]*data-need="admin"[^>]*>Restart…/);
+  assert.match(row(t.html(), "node-b"), /<button[^>]*data-need="admin"[^>]*>Restart host…/);
   assert.match(button(t.html(), "osu_picked"), /data-need="admin"/);
   assert.match(a, /nodeDetail/);
   assert.doesNotMatch(a.match(/<button type="button" class="linkish"[^>]*>/)[0], /data-need/);
@@ -144,7 +144,7 @@ test("a run keeps the rows up to date as it follows", async () => {
   assert.match(row(t.fields["#osu_hosts"].innerHTML, "node-c"), /updating now/);
   state = report({ rollout: { ...running, status: "succeeded", index: 2, results: [] } });
   await t.timers.pop()();
-  assert.match(row(t.fields["#osu_hosts"].innerHTML, "node-b"), />Restart…</, "the buttons are back");
+  assert.match(row(t.fields["#osu_hosts"].innerHTML, "node-b"), />Restart host…</, "the buttons are back");
 });
 
 test("the Settings card's table stays a table", async () => {
@@ -195,10 +195,10 @@ test("one host's review says what installs and what the checks say today", async
 test("a restart the checks would refuse: the review offers no restart, and says the row will", async () => {
   const t = await reviewed(preview([previewHost("node-a", { restart_refusal: "Something would keep this host from draining: 3 orphan records." })]));
   const html = t.html();
-  assert.match(html, /will not do it by itself/);
+  assert.match(html, /will not restart it automatically/);
   assert.match(html, /3 orphan records\./);
   assert.doesNotMatch(html, /3 orphan records\.\./);
-  assert.match(html, /waits for you to choose Restart…/);
+  assert.match(html, /waits for an admin to choose Restart host…/);
   assert.doesNotMatch(html, /nodePowerReview|nodeActions/, "a restart before installing would be the wrong order");
   assert.equal((html.match(/<button/g) || []).length, 2, "go and cancel");
   assert.doesNotMatch(button(html, "osu_review_go"), /\bdisabled\b/, "the update itself goes ahead");
@@ -209,7 +209,7 @@ test("what may clear by itself says it may wait first, not that it won't restart
   const t = await reviewed(preview(hosts));
   assert.match(t.html(), /may wait up to 15 minutes first/);
   assert.match(t.html(), /engines still listed/);
-  assert.doesNotMatch(t.html(), /will not do it by itself/);
+  assert.doesNotMatch(t.html(), /will not restart it automatically/);
   const several = await reviewed(preview([...hosts, previewHost("node-b")]));
   assert.match(several.html(), /may wait up to 15 minutes first/);
 });
@@ -217,11 +217,11 @@ test("what may clear by itself says it may wait first, not that it won't restart
 test("a window that may still run says so; one that was lost says skipped", async () => {
   const blip = { why: "Homestead could not start it (HTTP 503)", first: 1, last_try: 1, blip: true };
   const t = await opened({ state: { window_skip: blip } });
-  assert.match(t.html(), /Window not started yet: Homestead could not start it \(HTTP 503\)/);
-  assert.match(t.html(), /looks again/);
+  assert.match(t.html(), /The window has not started yet, because Homestead could not start it \(HTTP 503\)/);
+  assert.match(t.html(), /checks again/);
   assert.doesNotMatch(t.html(), /Window skipped/);
   const lost = await opened({ state: { window_skip: { ...blip, blip: false } } });
-  assert.match(lost.html(), /Window skipped because Homestead could not start it/);
+  assert.match(lost.html(), /The window was skipped because Homestead could not start it/);
 });
 
 test("checks that could not be read are not called a refusal", async () => {
@@ -234,12 +234,12 @@ test("checks that could not be read are not called a refusal", async () => {
 test("Homestead's own host is allowed, with the note", async () => {
   const one = await reviewed(preview([previewHost("node-a", { homestead_here: true })]));
   assert.match(one.html(), /runs on this host/);
-  assert.match(one.html(), /stop this page answering for a few minutes/);
-  assert.match(one.html(), /carries on/);
-  assert.doesNotMatch(one.html(), /goes last/);
+  assert.match(one.html(), /stop this page from responding for a few minutes/);
+  assert.match(one.html(), /the update continues/);
+  assert.doesNotMatch(one.html(), /It is updated last/);
   assert.doesNotMatch(button(one.html(), "osu_review_go"), /\bdisabled\b/);
   const two = await reviewed(preview([previewHost("node-b"), previewHost("node-a", { homestead_here: true })]));
-  assert.match(two.html(), /goes last/);
+  assert.match(two.html(), /It is updated last/);
 });
 
 test("the restart choice starts from the setting and is sent for this run", async () => {
@@ -361,10 +361,10 @@ test("a host with updates and a restart waiting offers both", async () => {
   const t = await opened({ state: { hosts, rollout: r } });
   const a = row(t.html(), "node-a");
   assert.match(a, />Update…</);
-  assert.match(a, />Restart…</);
+  assert.match(a, />Restart host…</);
   assert.match(a, /nodePowerReview\(&quot;node-a&quot;/);
   assert.match(a, /no other host/);
-  assert.doesNotMatch(row((await opened({ state: { hosts, rollout: running } })).html(), "node-a"), />Restart…</, "not during a run");
+  assert.doesNotMatch(row((await opened({ state: { hosts, rollout: running } })).html(), "node-a"), />Restart host…</, "not during a run");
 });
 
 test("Update every host's confirm says a host may wait", async () => {
@@ -372,7 +372,7 @@ test("Update every host's confirm says a host may wait", async () => {
   let said = "";
   t.c.ask = async text => { said = text; return false; };
   await t.c.window.osUpdatesStart();
-  assert.match(said, /keeps its updates and waits for you/);
+  assert.match(said, /keeps its updates and waits for an admin/);
   assert.equal(t.sent.length, 0);
 });
 
@@ -401,7 +401,7 @@ test("a refused restart's reason shows under the host, and the row offers Restar
   const b = row(t.html(), "node-b");
   assert.match(b, /Something would keep this host from draining: 3 orphan records/);
   assert.doesNotMatch(b, /updates installed; restart not done/);
-  assert.match(b, />Restart…</);
+  assert.match(b, />Restart host…</);
 });
 
 test("a reason from the last run goes once the host has been restarted", async () => {
@@ -423,16 +423,16 @@ test("a skipped window is said beside Last run, or alone; not over a run going",
   const window_skip = { why: "Prepare disk is in the way (Finish disk preparation)", first: 1, last_try: 1 };
   const last = { id: "os-2", status: "succeeded", reason: "asked", nodes: ["node-a"], message: "1 host done", results: [] };
   const beside = await opened({ state: { window_skip, rollout: last } });
-  assert.match(beside.html(), /Last run succeeded[\s\S]*Window skipped because Prepare disk is in the way \(Finish disk preparation\)/);
+  assert.match(beside.html(), /Last run succeeded[\s\S]*The window was skipped because Prepare disk is in the way \(Finish disk preparation\)/);
   assert.equal((beside.html().match(/class="(?:note|ui-callout) /g) || []).length, 1, "one notice");
   const alone = await opened({ state: { window_skip } });
-  assert.match(alone.html(), /Window skipped because/);
+  assert.match(alone.html(), /The window was skipped because/);
   const going = await opened({ state: { window_skip, rollout: running } });
   assert.doesNotMatch(going.html(), /Window skipped/);
   for (const rollout of [last, null]) {
     const card = setup({ report: report({ window_skip, rollout }) });
     await card.c.window.osUpdatesCardPaint();
-    assert.match(card.fields["#settingsHostUpdates"].innerHTML, /Window skipped because Prepare disk/);
+    assert.match(card.fields["#settingsHostUpdates"].innerHTML, /The window was skipped because Prepare disk/);
   }
 });
 
@@ -440,24 +440,24 @@ test("while a host waits for its restart, Stop is offered, a run of one included
   const one = { ...running, nodes: ["node-a"] };
   const waiting = { ...one, node: { name: "node-a", waiting: true } };
   const t = await opened({ state: { rollout: waiting } });
-  assert.match(t.html(), /Stop and leave this host to me/);
+  assert.match(t.html(), /Stop and leave this host/);
   let state = report({ rollout: one });
   const f = setup({ report: () => state });
   await f.c.window.osUpdates();
   assert.doesNotMatch(f.html(), /Stop/);
   state = report({ rollout: waiting });
   await f.timers.pop()();
-  assert.match(f.fields["#osu_run"].innerHTML, /Stop and leave this host to me/, "appears as the wait starts");
+  assert.match(f.fields["#osu_run"].innerHTML, /Stop and leave this host/, "appears as the wait starts");
 });
 
 test("once the wait is over and the restart is under way, the wait's Stop has gone", async () => {
   // The node as test_os_rollout_hosts' test_a_cleared_wait_leaves_no_trace_in_restarting pins it.
   const node = { name: "node-a", attempts: 1, copies_since: 1000, cordoned_before: false, op: "op-node-a", security: 0, since: 1020, updates: 2 };
   const one = await opened({ state: { rollout: { ...running, nodes: ["node-a"], phase: "restarting", node } } });
-  assert.doesNotMatch(one.html(), /Stop and leave this host to me/);
+  assert.doesNotMatch(one.html(), /Stop and leave this host/);
   assert.doesNotMatch(one.html(), /Stop after this host/, "a run of one has nothing to stop after");
   const two = await opened({ state: { rollout: { ...running, phase: "restarting", node } } });
-  assert.doesNotMatch(two.html(), /Stop and leave this host to me/);
+  assert.doesNotMatch(two.html(), /Stop and leave this host/);
   assert.match(two.html(), /Stop after this host/);
   let state = report({ rollout: { ...running, nodes: ["node-a"], node: { ...node, waiting: true } } });
   const f = setup({ report: () => state });

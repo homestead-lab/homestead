@@ -110,7 +110,7 @@ class VMWriteTests(unittest.TestCase):
             with self.subTest(response=response):
                 events = []
                 writer = writes.ResourceWriter(mock.Mock(return_value=response), events.append)
-                with self.assertRaisesRegex(writes.WriteFailure, "could not be verified"):
+                with self.assertRaisesRegex(writes.WriteFailure, "could not be confirmed"):
                     writer("POST", self.path, self.body)
                 self.assertEqual("unverified", events[-1]["phase"])
                 self.assertNotIn("identity", events[-1])

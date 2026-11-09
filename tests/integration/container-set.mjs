@@ -82,7 +82,7 @@ try {
     await page.locator('#e_save').click();
     await page.waitForFunction(() => document.querySelector('#mtitle').textContent === 'Review app changes');
     assert.match(await page.locator('#mbody').innerText(), /Containers added: metrics/);
-    assert.match(await page.locator('#mbody').innerText(), /persistent volumes and data are kept/);
+    assert.match(await page.locator('#mbody').innerText(), /Volumes and data are kept/);
     const edited = await page.evaluate(() => containerRequests.find(r => r.url === '/api/edit/preview').body);
     assert.deepEqual(edited.remove_containers, [originals[1].name]);
     const helper = edited.containers.find(c => c.new);
@@ -108,15 +108,15 @@ try {
     });
     await page.locator('#editCapacityConfirm').check();
     await page.getByRole('button', {name:'Save changes',exact:true}).click();
-    await page.getByRole('button', {name:'Reload saved app',exact:true}).waitFor();
+    await page.getByRole('button', {name:'Reload saved settings',exact:true}).waitFor();
     assert.equal(await page.locator('#editGo').isDisabled(),true);
     assert.match(await page.locator('#mbody').innerText(), /Some changes may already be saved/);
-    assert.match(await page.locator('#mbody').innerText(), /does not need a new name/);
+    assert.match(await page.locator('#mbody').innerText(), /discards the unsaved changes/);
     const beforeRetry = await page.evaluate(()=>containerRequests.length);
     await page.evaluate(()=>editReview({ns:'lab',name:'home-assistant',containers:[{new:true,name:'metrics'}]}));
     assert.equal(await page.evaluate(()=>containerRequests.length),beforeRetry,'stale additions cannot be reviewed again');
     await page.screenshot({path:`${output}/edit-uncertain-${width}-${theme}.png`});
-    await page.getByRole('button',{name:'Reload saved app',exact:true}).click();
+    await page.getByRole('button',{name:'Reload saved settings',exact:true}).click();
     await page.locator('#e_workload_name').waitFor();
     assert.equal(await page.locator('#e_workload_name').inputValue(),'home-assistant');
     assert.equal(await page.locator('#e_basics_containers .edit-container[data-new="1"]').count(),0);

@@ -71,7 +71,7 @@ def resident(vm, vmi, pods):
             status.get("phase") != "Running" or (pod.get("status") or {}).get("phase") != "Running" or
             not node or status.get("nodeName") != node or
             (migration and not (migration.get("completed") or migration.get("failed")))):
-        raise ValueError("VM launcher is changing, migrating or not running; refresh before continuing")
+        raise ValueError("The VM launcher is changing, migrating or not running. Refresh before continuing.")
     for obj in (vm, vmi, pod):
         if not all(identity(obj).values()):
             raise ValueError("VM launcher identity/version is incomplete")
@@ -105,7 +105,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         blockers.append("VM instance type/preferences must be expanded before resource and hardware checks")
     config = configuration or {}
     if configuration is None:
-        warnings.append("KubeVirt configuration is unavailable; CPU allocation and emulation defaults are unverified")
+        warnings.append("The KubeVirt settings are unavailable. The CPU allocation and emulation defaults are not checked.")
         blockers.append("KubeVirt emulation/device configuration must be readable before checking host eligibility")
     domain = spec.get("domain") or {}
     cpu, memory, devices = (domain.get(key) or {} for key in ("cpu", "memory", "devices"))
@@ -159,9 +159,9 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
         projected_requests["hugepages-" + str(huge)] = str(guest)
         # Hugepage guest memory is not also an ordinary-memory request.
         projected_requests["memory"] = "0"
-        warnings.append("Hugepage RAM and ordinary launcher overhead are separate; a capacity review is not a kubelet allocation guarantee")
+        warnings.append("Hugepage RAM and the normal launcher overhead are separate. A capacity review does not guarantee what the kubelet allocates.")
     if resources.get("overcommitGuestOverhead"):
-        warnings.append("guest overhead is overcommitted; scheduler reservations do not cover its physical RAM")
+        warnings.append("The guest overhead is overcommitted, so the reservations do not cover its physical RAM")
     for resource in set(requests) | set(limits):
         if resource not in ("cpu", "memory"):
             amount = RESOURCES.quantity(requests.get(resource, limits.get(resource)), resource)
@@ -199,7 +199,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
                 term.setdefault("matchExpressions", []).append({"key": "cpu-feature.node.kubevirt.io/" + feature["name"],
                                                                  "operator": "DoesNotExist"})
     if config.get("developerConfiguration", {}).get("useEmulation") is True:
-        warnings.append("software emulation is enabled; CPU performance and nested virtualization are not guaranteed")
+        warnings.append("Software emulation is on, so CPU performance and nested virtualisation are not guaranteed")
     elif configuration is not None:
         projected_requests["devices.kubevirt.io/kvm"] = "1"
     for resource, count in network["requests"].items():
@@ -227,7 +227,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     for resource, count in device_counts.items():
         projected_requests[resource] = str(max(count, int(projected_requests.get(resource, "0"))))
     if spec.get("resourceClaims"):
-        blockers.append("Dynamic resource claims are not supported by VM admission yet; resolved device allocation must be verified before starting")
+        blockers.append("Dynamic resource claims are not supported for VMs yet. The device allocation must be confirmed before starting.")
     if domain.get("ioThreadsPolicy") and not cpu_model["io_threads"]:
         warnings.append("IO-thread topology adds runtime overhead beyond this planning estimate")
     extra = support["extra_memory"]
@@ -246,9 +246,9 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
             pod["volumes"].append({"name": volume["name"], "hostPath": {"path": volume["hostDisk"].get("path")}})
             warnings.append("VM host disk contents and available space must be verified on the chosen host")
         elif volume.get("containerDisk"):
-            warnings.append("container-disk helper resources are included; image-download storage and admission changes remain unverified")
+            warnings.append("The container-disk helper resources are included. The storage for the image download and changes at the final check are not checked.")
         elif volume.get("emptyDisk"):
-            warnings.append("ephemeral VM disk consumes node storage; free space must be checked")
+            warnings.append("An ephemeral VM disk uses host storage, so the free space must be checked")
     # Do not copy VM template annotations: they can contain credentials or
     # Harvester claim templates with source URLs. Labels support pod affinity.
     template = {"metadata": {"labels": copy.deepcopy((outer.get("template", {}).get("metadata") or {}).get("labels") or {})}, "spec": pod}

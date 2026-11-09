@@ -79,7 +79,7 @@ function appFormPlacement(prefix, p, w, nodes, containers, { startsHtml = "", mi
         : `${UI.chip(names[0] || w.name || "This app", "neutral")} is this pod's only container.`}</div></div>
     <div class="place-level"><div class="place-title">Copies of this app</div>
       <div class="place-grid">
-        <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="${id("rep")}" value="${w.start_replicas ?? w.replicas ?? 1}" min="${minCopies}" max="5" ${w.autostart === false ? "disabled" : ""}></div>
+        <div class="f"><label>Copies ${tip("How many copies of this app run at once. Kubernetes calls them replicas. Most home apps need one. Volume copies in Longhorn are separate.")}</label><input type="number" id="${id("rep")}" value="${w.start_replicas ?? w.replicas ?? 1}" min="${minCopies}" max="5" ${w.autostart === false ? "disabled" : ""}></div>
         <div class="f"><label>Spread copies ${tip("Puts this app's copies on different hosts, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
           <select id="${id("spread")}" onchange="placementChanged(${jsq(prefix)})"><option value="">no preference</option>
             <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different hosts</option>
@@ -132,7 +132,7 @@ window.placementChanged = (prefix = "e") => {
   if (p.spread && replicas > 1 && singleNode)
     warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across hosts cannot all mount it.");
   const names = [...p.with, ...p.apart].map(row => `${row.ns}/${row.name}`);
-  if (names.length !== new Set(names).size) warnings.push("An app is named twice; each can be kept either with this one or apart from it.");
+  if (names.length !== new Set(names).size) warnings.push("An app is listed twice. Each app can be kept either with this one or apart from it.");
   if (p.with.some(row => row.mode === "require")) warnings.push("Required: this app waits for the one it runs with, and stops being schedulable if that one stops.");
   note.hidden = !warnings.length;
   note.innerHTML = warnings.map(esc).join("<br>");

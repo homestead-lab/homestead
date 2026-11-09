@@ -110,7 +110,7 @@ class DeviceAdmissionTests(unittest.TestCase):
             with self.subTest(action=action):
                 configuration = self.plan(action=action)
                 self.assertFalse(configuration["blocked"], configuration)
-                self.assertIn("stopped configuration can be saved", " ".join(configuration["warnings"]))
+                self.assertIn("saved while it is stopped", " ".join(configuration["warnings"]))
         self.vm["spec"]["runStrategy"] = "Always"
         self.assertTrue(self.plan(action="edit")["blocked"])
 

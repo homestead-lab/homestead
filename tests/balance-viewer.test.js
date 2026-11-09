@@ -11,7 +11,7 @@ const VOLUMES = { apps: ["lab/ha"], moves: [{ app: "lab/ha", claim: "ha-config",
 const LINE = "Operators can change and apply this plan.";
 // The lines that tell a person to act, which a viewer can't (#1084 review).
 const HINTS = [/Untick a container to leave it where it is/, /Untick an app to leave its volumes where they are/,
-  /Starts what is below, as jobs you can follow and stop in Jobs\./];
+  /Starts the moves below as jobs, which can be followed and stopped in Jobs\./];
 const PLAIN = "The plan as Homestead suggests it.";
 
 async function open(role) {
@@ -52,7 +52,7 @@ test("a viewer is not told to untick or start anything: the plan is described pl
   const t = await open("viewer");
   for (const hint of HINTS) assert.doesNotMatch(t.panes(), hint);
   assert.match(t.panes(), new RegExp(PLAIN.replace(".", "\\.")));
-  assert.match(t.panes(), /So it reads its data locally there/, "the follow switch keeps its explanation");
+  assert.match(t.panes(), /The container then reads its data locally/, "the follow switch keeps its explanation");
 });
 
 test("a viewer's switch, tick or follow change is refused by its handler too", async () => {

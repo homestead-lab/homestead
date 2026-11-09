@@ -385,7 +385,7 @@ def report(force=False):
         external = _operator_chart_owner(chart) if chart else ""
         managed = bool(chart and not external)
         state = ({"how": "harvester", "note": harvester_note} if p.get("harvester") else
-                 {"how": "manual", "note": f"Managed by {external}; upgrade it through that manager."} if external else
+                 {"how": "manual", "note": f"Managed by {external}. Upgrade it through that manager."} if external else
                  {"how": "helmchart", "note": ""} if managed else OPERATOR_MANIFESTS.state(component, kget, p))
         rows.append(_row(component, label, installed, component, state["how"], state["note"],
                          {"phase": phase, "can_manage": state.get("can_manage", False)}))
@@ -413,7 +413,7 @@ def _component(component):
     if found["how"] == "harvester":
         raise ValueError(f"{found['name']} comes with Harvester and is upgraded with it")
     if found["how"] not in ("helmchart", "suc", "manifests"):
-        raise ValueError(f"{found['name']} was installed outside Homestead; upgrade it the way it was installed")
+        raise ValueError(f"{found['name']} was installed outside Homestead. Upgrade it the way it was installed.")
     if not found["next"]:
         raise ValueError(f"{found['name']} {found['installed']} is the newest there is")
     return found
@@ -424,13 +424,13 @@ def upgrade(component, target, options=None):
     skipping a minor is what these projects warn against."""
     found = _component(component)
     if target != found["next"]:
-        raise ValueError(f"{found['name']} goes from {found['installed']} to {found['next']} next; "
+        raise ValueError(f"{found['name']} goes from {found['installed']} to {found['next']} next, so "
                          f"{target} would skip a step")
     # Outside what the project supports, or a known break: the review shows
     # why, and goes ahead only with its tick (the table can be out of date).
     if (found.get("check") or {}).get("verdict") == "blocked" and (options or {}).get("accept_check") is not True:
         first = next(f for f in found["check"]["findings"] if f["level"] == "block")
-        raise ValueError(f"{first['title']}. Review the upgrade and tick that you have read what it breaks")
+        raise ValueError(f"{first['title']}. Review the upgrade and confirm that what it breaks has been read")
     held = []
     if component == "cluster":
         held = cordoned()
@@ -446,7 +446,7 @@ def upgrade(component, target, options=None):
         if mode == "offline" and parse(found["installed"])[:3] >= (1, 13, 0):
             V2._set(V2.AUTO, "false")
         helm_upgrade({"namespace": "longhorn-system", "name": CHARTS["longhorn"], "version": target.lstrip("v")})
-        detail = f"Upgrading Longhorn managers to {target}; V2 instance managers use the {mode} upgrade method"
+        detail = f"Upgrading the Longhorn managers to {target}. The V2 instance managers use the {mode} upgrade method."
     elif component == "macvtap":
         import homestead_macvtap as MACVTAP
         detail = MACVTAP.upgrade(target)
@@ -476,7 +476,7 @@ def _start_operator(component, target):
     def still_ours(found):
         owner = _operator_chart_owner(found)
         if owner:
-            raise ValueError(f"{component} is managed by {owner}; upgrade it through that manager")
+            raise ValueError(f"{component} is managed by {owner}. Upgrade it through that manager.")
     still_ours(chart)
     base = addons.KUBEVIRT if component == "kubevirt" else addons.CDI
     manifest = addons.fetch(f"{base}/download/{target}/{'kubevirt' if component == 'kubevirt' else 'cdi'}-operator.yaml")[0]
@@ -486,7 +486,7 @@ def _start_operator(component, target):
     KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{HELM_NS}/helmcharts/{CHARTS[component]}", chart, kget, ksend,
                          still_ours)
     label = "KubeVirt" if component == "kubevirt" else "CDI"
-    return f"{label} is moving to {target}; running VMs carry on while its operator rolls the update out"
+    return f"{label} is moving to {target}. Running VMs continue while its operator rolls out the update."
 
 
 def _plans_ready():
@@ -500,11 +500,11 @@ def _plans_ready():
 def _start_cluster(target):
     if not _plans_ready():
         _install_controller()
-        return (f"Installing Rancher's system-upgrade-controller first; then the servers move to {target} "
-                "one at a time, and the agents after them")
+        return (f"Installing Rancher's system-upgrade-controller first. Then the servers move to {target} "
+                "one at a time, and the agents after them.")
     if not _helmchart(SUC_CHART):
-        raise ValueError("system-upgrade-controller is managed outside Homestead; use its owner to upgrade "
-                         "k3s or RKE2 instead of creating competing Plans")
+        raise ValueError("system-upgrade-controller is managed outside Homestead. Use what manages it to upgrade "
+                         "k3s or RKE2, so that the upgrade Plans do not compete.")
     _write_plans(target)
     return f"The servers move to {target} one at a time, then the agents"
 
@@ -546,7 +546,7 @@ def plan_bodies(distribution, target):
 
 def _write_plans(target):
     if not _helmchart(SUC_CHART):
-        raise ValueError("system-upgrade-controller is no longer managed by Homestead; no upgrade Plans were changed")
+        raise ValueError("Homestead no longer manages system-upgrade-controller. No upgrade Plans were changed.")
     distribution = (platform(False) or {}).get("distribution", "")
     bodies = plan_bodies(distribution, target)
     current_plans = {body["metadata"]["name"]: _get(f"{PLANS}/{body['metadata']['name']}") for body in bodies}
@@ -1006,7 +1006,7 @@ def _network_upgrade_status(item):
         if release and release_chart.get("name") != (chart.get("spec") or {}).get("chart"):
             raise ValueError("release chart mismatch")
     except Exception:
-        return "running", 20, f"Cannot verify {name}'s deployed Helm release; inspect the release and API access"
+        return "running", 20, f"Homestead cannot confirm {name}'s deployed Helm release. Check the release and API access."
     metadata = ((release or {}).get("chart") or {}).get("metadata") or {}
     now = metadata.get("version") or "unknown"
     state = ((release or {}).get("info") or {}).get("status", "")
@@ -1015,10 +1015,10 @@ def _network_upgrade_status(item):
         job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/{job_name}") or {}
         job_status = job.get("status") or {}
         if now.lstrip("v") == target.lstrip("v") and state == "failed" and not job_status.get("active"):
-            return "failed", 50, f"Helm could not deploy {name} chart {target}; inspect its Helm release and install job"
+            return "failed", 50, f"Helm could not deploy {name} chart {target}. Check its Helm release and install job."
         if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
-            return "failed", 50, f"Helm could not apply {name} chart {target}; inspect {job_name} in {HELM_NS}"
-        return "running", 50 if job_status.get("active") else 20, f"{name} chart {now} → {target}; waiting for Helm deployment"
+            return "failed", 50, f"Helm could not apply {name} chart {target}. Check {job_name} in {HELM_NS}."
+        return "running", 50 if job_status.get("active") else 20, f"{name} chart {now} → {target}. Waiting for Helm to deploy it."
     paths = next(paths for key, _, paths in NETWORK_PARTS if key == component)
     agents = []
     try:
@@ -1035,7 +1035,7 @@ def _network_upgrade_status(item):
         if component == "multus":
             kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions")
     except Exception:
-        return "running", 70, f"{name} chart {target} deployed; waiting to verify network agents and APIs"
+        return "running", 70, f"{name} chart {target} deployed. Waiting to check the network agents and APIs."
     desired = sum((ds.get("status") or {}).get("desiredNumberScheduled", 0) for ds in agents)
     available = sum((ds.get("status") or {}).get("numberAvailable", 0) for ds in agents)
     ready = bool(agents) and desired > 0 and all(
@@ -1047,8 +1047,8 @@ def _network_upgrade_status(item):
     app = metadata.get("appVersion") or ""
     version = f"{name} chart {target}" + (f" ({app})" if app else "")
     if ready:
-        return "succeeded", 100, f"{version} deployed; available on all {desired} scheduled nodes"
-    return "running", 75, f"{version} deployed; agents available on {available}/{desired} scheduled nodes; rollout pending"
+        return "succeeded", 100, f"{version} deployed. It is available on all {desired} hosts."
+    return "running", 75, f"{version} deployed. Agents are available on {available} of {desired} hosts. The rollout is pending."
 
 
 def status(item):
@@ -1061,7 +1061,7 @@ def status(item):
         if ref.get("phase") == "controller":
             if not _plans_ready():
                 if _elapsed(item) > CONTROLLER_WAIT:
-                    return "failed", 5, "the system-upgrade-controller did not start; its Helm job in kube-system says why"
+                    return "failed", 5, "The system-upgrade-controller did not start. Its Helm job in kube-system says why."
                 return "running", 3, "Installing the system-upgrade-controller"
             try:
                 _write_plans(target)
@@ -1089,7 +1089,7 @@ def status(item):
             finishing = _upgrade_jobs_running()
             since = time.time() - ref.setdefault("versions_at", time.time())
             if finishing and since < JOB_FINISH_WAIT:
-                return "running", 98, f"Every node runs {target}; waiting for the upgrade job on {', '.join(finishing[:3])} to finish"
+                return "running", 98, f"Every host runs {target}. Waiting for the upgrade job on {', '.join(finishing[:3])} to finish."
             return _end(item, ("succeeded", 100, f"Every node runs {target}"))
         failed = _failed_upgrade_job()
         if failed:
@@ -1097,18 +1097,18 @@ def status(item):
         waiting = sorted(name for name, v in versions.items() if v != target)
         if stalled:
             return _end(item, ("failed", 5 + int(90 * done / max(1, len(versions))),
-                               f"No further node reached {target} in {NODE_WAIT // 60} minutes; "
+                               f"No further host reached {target} in {NODE_WAIT // 60} minutes. "
                                f"{', '.join(waiting[:3])} did not, {_mid_upgrade()}. "
                                f"kubectl -n {SUC_NS} get jobs,pods shows where it stopped"))
         return ("running", 5 + int(90 * done / max(1, len(versions))),
-                f"{done} of {len(versions)} nodes on {target}; next {', '.join(waiting[:3])}")
+                f"{done} of {len(versions)} hosts on {target}. Next: {', '.join(waiting[:3])}")
     if component in CHART_INDEX:
         return _network_upgrade_status(item)
     if component == "longhorn":
         if ref.get("v2_mode"):
             job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-longhorn") or {}
             if (job.get("status") or {}).get("failed") and not (job.get("status") or {}).get("active") and _elapsed(item) > 120:
-                return "failed", 20, "Helm could not apply Longhorn; inspect its install job in kube-system"
+                return "failed", 20, "Helm could not apply Longhorn. Check its install job in kube-system."
             import homestead_lhv2_upgrade as V2
             return V2.progress(item)
         now = longhorn_version()
@@ -1121,21 +1121,21 @@ def status(item):
     elif component == "cdi":
         now, phase = cdi_version()
     else:
-        return "failed", 100, "Unknown platform component; inspect this upgrade before retrying"
+        return "failed", 100, "Unknown platform component. Check this upgrade before trying again."
     if ref.get("how") == "manifests":
         if now == target and phase == "Deployed":
             return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
         if phase in ("Failed", "Error"):
-            return "failed", 50, f"{ref.get('name', component)} reports {phase}; inspect its operator before retrying"
+            return "failed", 50, f"{ref.get('name', component)} reports {phase}. Check its operator before trying again."
         if _elapsed(item) > 30 * 60:
-            return "failed", 50, f"Timed out waiting for {ref.get('name', component)} {target}; its operator may still be updating"
+            return "failed", 50, f"Timed out waiting for {ref.get('name', component)} {target}. Its operator may still be updating."
         return "running", 50, f"{ref.get('name', component)} {now or '…'} → {target}; {phase or 'waiting for operator status'}"
     if now == target:
         return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
     job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-{CHARTS.get(component, component)}") or {}
     job_status = job.get("status") or {}
     if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
-        return "failed", 50, f"Helm could not apply it; the helm-install-{CHARTS.get(component)} job's log in kube-system says why"
+        return "failed", 50, f"Helm could not apply it. The log of the helm-install-{CHARTS.get(component)} job in kube-system says why."
     return "running", 50 if job_status.get("active") else 20, f"{ref.get('name', component)} {now or '…'} → {target}"
 
 
@@ -1147,12 +1147,12 @@ def cancel_plan(item):
     if item["ref"].get("component") == "cluster":
         return {"mode": "stop", "undo": ["The upgrade Plans are removed, so no further node is upgraded",
                                          "Hosts this upgrade cordoned are uncordoned once they are Ready"],
-                "keeps": ["Nodes already upgraded stay on the new version; a node part-way through finishes",
-                          "A host still restarting, or that another job is working on, stays cordoned; "
-                          "the job says which"],
+                "keeps": ["Hosts already upgraded stay on the new version, and a host part-way through finishes",
+                          "A host still restarting, or that another job is working on, stays cordoned. "
+                          "The job says which."],
                 "severity": "low", "needs": "admin"}
-    return {"mode": "forget", "keeps": ["The new version is already being rolled out by its operator or Helm; "
-                                        "it carries on and only stops showing here"]}
+    return {"mode": "forget", "keeps": ["The new version is already being rolled out by its operator or Helm. "
+                                        "It continues and only stops showing here."]}
 
 
 def _remove_saved_plans(item, plans):
@@ -1178,7 +1178,7 @@ def cancel_run(item, _options):
                 item["ref"]["v2_pause_sent"] = True
                 OPS.keep_cancel_ref(item)
                 V2._set(V2.AUTO, "false")
-        return "Paused before the next V2 host; the manager and current host upgrade can still finish"
+        return "Paused before the next V2 host. The manager and the current host's upgrade can still finish."
     if item["ref"].get("component") == "cluster":
         # Before anything goes: run again, a Plan made since is a later upgrade's.
         plans = [f"{PLANS}/{name}" for name in PLAN_NAMES]
@@ -1202,7 +1202,7 @@ def start_harvester(version, offered):
     Upgrade button makes. Harvester checks it before it begins."""
     names = {row["version"] for row in offered}
     if version not in names:
-        raise ValueError(f"Harvester does not offer {version}; it offers {', '.join(sorted(names)) or 'nothing now'}")
+        raise ValueError(f"Harvester does not offer {version}. It offers {', '.join(sorted(names)) or 'nothing now'}.")
     body = {"apiVersion": "harvesterhci.io/v1beta1", "kind": "Upgrade",
             "metadata": {"generateName": "hvst-upgrade-", "namespace": "harvester-system"},
             "spec": {"version": version}}
@@ -1250,7 +1250,7 @@ def _manage_operator_route(request):
         raise ValueError("Review and confirm enabling Homestead operator upgrades")
     p = platform(True) or {}
     if _helmchart(CHARTS[component]):
-        raise ValueError("This operator already has a HelmChart; manage its existing release")
+        raise ValueError("This operator already has a HelmChart. Manage its existing release.")
     version, _ = kubevirt_version() if component == "kubevirt" else cdi_version()
     OPERATOR_MANIFESTS.enable(component, version, kget, ksend, p, addons)
     homestead_routes.forget("components")

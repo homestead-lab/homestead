@@ -36,10 +36,10 @@ test("the card is laid out as UniFi is: the broker, its facts, then power contro
   assert.match(html, /MQTT broker\|<span class="ui-chip ok">publishing/);
   assert.match(html, /Broker: <span class="mono">192\.0\.2\.177:1883/);
   assert.match(html, /Power control from Home Assistant\|<span class="ui-chip ok">on · 2/);
-  assert.deepEqual(actions.map(a => a.label).sort(), ["Choose", "Edit", "Turn off", "What is published"]);
+  assert.deepEqual(actions.map(a => a.label).sort(), ["Choose apps", "Edit settings", "Turn off", "What is published"]);
   assert.deepEqual(actions.filter(a => a.need).map(a => a.need), ["admin", "admin", "admin"]);
   // control on a broker with no sign-in and no TLS: a warning
-  assert.deepEqual(callouts, [["warn", "Anyone who can publish to this broker can switch these"]]);
+  assert.deepEqual(callouts, [["warn", "Anyone who can publish to this broker can control these"]]);
 });
 
 test("with no broker it offers to connect one, and no power control yet", () => {
@@ -60,5 +60,5 @@ test("the chooser lists VMs and containers, and what cannot be picked says why",
   assert.match(html, /value="vm:vms\/win11" checked/);
   assert.match(html, /value="app:lab\/homestead" {2}disabled>/);
   assert.match(html, /it is part of Homestead/);
-  assert.match(ctx.mqttControlList([], new Set()), /No containers or VMs yet/);
+  assert.match(ctx.mqttControlList([], new Set()), /There are no containers or VMs yet/);
 });

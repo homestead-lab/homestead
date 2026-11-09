@@ -76,18 +76,18 @@ window.viewIpam = viewIpam;
 
 function ipamSeen(row) {
   const bits = [];
-  if (row.scan && row.scan.up) bits.push(UI.chip("up", "ok", { size: "slim", tip: `Answered the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}` }));
-  if (row.unifi?.reserved) bits.push(UI.chip("DHCP reservation", "info", { size: "slim", tip: "UniFi holds this address for this device" }));
+  if (row.scan && row.scan.up) bits.push(UI.chip("up", "ok", { size: "slim", tip: `Responded to the last scan${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}` }));
+  if (row.unifi?.reserved) bits.push(UI.chip("DHCP reservation", "info", { size: "slim", tip: "UniFi reserves this address for this device" }));
   if (row.unifi) bits.push(UI.chip("UniFi", row.unifi.online === false ? "neutral" : "info", { size: "slim",
-    tip: row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation; the client is offline" : `UniFi ${row.unifi.type || "client"}` }));
+    tip: row.unifi.type === "device" ? `UniFi device${row.unifi.model ? ` · ${row.unifi.model}` : ""}` : row.unifi.online === false ? "UniFi reservation. The client is offline." : `UniFi ${row.unifi.type || "client"}` }));
   return bits.join(" ") || '<span class="dim">—</span>';
 }
 
 function ipamKind(row) {
   if (row.cluster === "node") return UI.chip("cluster host", "info");
-  if (row.cluster === "vip") return UI.chip("cluster VIP", "info", { tip: (row.services || []).join(", ") });
+  if (row.cluster === "vip") return UI.chip("cluster virtual IP", "info", { tip: (row.services || []).join(", ") });
   if (row.gateway) return UI.chip("gateway", "neutral");
-  if (!row.kind) return row.pool ? UI.chip("VIP pool", "neutral", { tip: `Inside Harvester's ${row.pool} VIP pool` }) : '<span class="dim">undocumented</span>';
+  if (!row.kind) return row.pool ? UI.chip("Virtual IP pool", "neutral", { tip: `Inside Harvester's ${row.pool} virtual IP pool` }) : '<span class="dim">Undocumented</span>';
   return UI.chip(IPAM_KIND_LABELS[row.kind] || row.kind, row.kind === "static" ? "ok" : row.kind === "reservation" ? "info" : "neutral");
 }
 
@@ -143,11 +143,11 @@ function renderIpam() {
       { title: "DHCP range", value: subnet.dhcp_size || "—",
         bodyHtml: `<div class="csub mono">${subnet.dhcp_start ? `${esc(subnet.dhcp_start)} – ${esc(subnet.dhcp_end)}` : "not set: add it under Subnets"}</div>` },
       { title: "Free for static use", value: subnet.free_static,
-        bodyHtml: `<div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<button type="button" class="linkish mono" onclick="ipamCopy(${jsq(ip)})" title="Copy">${esc(ip)}</button>`).join(", ")}` : "none outside DHCP and the VIP pools"}</div>` },
+        bodyHtml: `<div class="csub">${subnet.next_free.length ? `next: ${subnet.next_free.slice(0, 3).map(ip => `<button type="button" class="linkish mono" onclick="ipamCopy(${jsq(ip)})" title="Copy">${esc(ip)}</button>`).join(", ")}` : "None outside DHCP and the virtual IP pools"}</div>` },
       { title: "Last scan", value: scanning ? `${subnet.scan.progress}%` : subnet.scan.at ? fmtAgo(Date.now() / 1000 - subnet.scan.at) : "never",
         sub: u.configured && u.last_sync ? `UniFi synced ${fmtAgo(Date.now() / 1000 - u.last_sync)}` : "" },
     ])}</div>
-    ${(subnet.pool_clash || []).length ? `${UI.callout("bad", { html: `Harvester's ${esc(subnet.pool_clash.join(", "))} VIP pool overlaps the DHCP range.` }, `A VIP it hands out may already be leased to a device; move the pool or shrink the DHCP range.`)}` : ""}
+    ${(subnet.pool_clash || []).length ? `${UI.callout("bad", { html: `Harvester's ${esc(subnet.pool_clash.join(", "))} virtual IP pool overlaps the DHCP range.` }, `A virtual IP it assigns may already be leased to a device. Move the pool or shrink the DHCP range.`)}` : ""}
     ${u.configured && u.last_error ? `<div class="note">UniFi: ${esc(u.last_error)}</div>` : ""}
     <div class="between ipam-tools"><div class="row">
       <select aria-label="Show" onchange="ipamFilter(this.value)">${[["", "Every address"], ["static", "Static"], ["reservation", "DHCP reservations"], ["dhcp", "DHCP"],
@@ -171,7 +171,7 @@ function renderIpam() {
         ${rows.some(r => !r.cluster) && rows.filter(r => !r.cluster).every(r => ipamPicks().has(r.ip)) ? "checked" : ""}></th>
       <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead>
       ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
-        : `<tbody><tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
+        : `<tbody><tr><td colspan="7" class="empty">There are no addresses yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
       </table></div></div></div>`, { actions, actionsClass: "ipam-head-acts" });
   if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
 }
@@ -181,13 +181,13 @@ const ipNum = ip => ip.split(".").reduce((n, o) => n * 256 + +o, 0);
 const ipStr = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
 
 /* A row in two short lines: the name, then one line of what else it is
-   called - UniFi's hostname, reverse DNS, or the Services on a VIP. */
+   called - UniFi's hostname, reverse DNS, or the Services on a virtual IP. */
 function ipamRow(row) {
   const second = row.cluster === "vip" ? (row.services || []).join(", ")
     : [row.name && row.unifi?.name && row.unifi.name !== row.name ? row.unifi.name : "", row.unifi?.hostname, row.scan?.rdns && row.scan.rdns !== row.name ? row.scan.rdns : ""]
       .filter(Boolean).join(" · ");
   const name = row.name ? `<b>${esc(row.name)}</b>`
-    : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="UniFi's name; give it your own to replace it here">${esc(row.unifi.name)}</span>` : "";
+    : row.unifi?.name ? `<span class="ipam-unifi-name" data-tip="The name from UniFi. Enter another name to replace it here.">${esc(row.unifi.name)}</span>` : "";
   const note = [row.note, row.owner ? `owner: ${row.owner}` : ""].filter(Boolean).join(" · ");
   const notes = row.flags.map(f => `<span class="ipam-flag ${f.level}" role="img" tabindex="0" aria-label="${esc(`${f.level === "warn" ? "Warning" : "Note"}: ${f.text}`)}" data-tip="${esc(f.text)}">${f.level === "warn" ? "⚠" : "ℹ"}</span>`).join("")
     + (row.tags || []).map(t => UI.chip(t, "neutral")).join("") + (note ? `<span class="ipam-note" data-tip="${esc(note)}">${esc(note)}</span>` : "");
@@ -270,17 +270,17 @@ const ipamPost = (path, body) => api(path, { method: "POST", headers: { "Content
 /* What removing addresses does: the list forgets them - name, notes and the
    last scan's answer - and anything still on the network is found again. */
 const ipamRemoveQuestion = count => `Remove ${count === 1 ? "this address" : `${count} addresses`} from the list? ` +
-  `Its name, notes and tags are deleted. A device still using ${count === 1 ? "it" : "one"} shows up again after the next scan${ipamUnifiOn() ? " or UniFi sync" : ""}.`;
+  `Its name, notes and tags are deleted. A device still using ${count === 1 ? "it" : "one"} appears again after the next scan${ipamUnifiOn() ? " or UniFi sync" : ""}.`;
 window.ipamBulk = async (forget = false) => {
   const ips = [...ipamPicks()];
-  if (forget && !(await ask(ipamRemoveQuestion(ips.length), { title: "Remove addresses", ok: "Remove", danger: true }))) return;
+  if (forget && !(await ask(ipamRemoveQuestion(ips.length), { title: "Remove addresses", ok: "Remove addresses", danger: true }))) return;
   const changes = forget ? { forget: true } : {};
   if (!forget) {
     if ($("#ipamBulkKind").value) changes.kind = $("#ipamBulkKind").value;
     if ($("#ipamBulkCategory").value) changes.category = $("#ipamBulkCategory").value;
     if ($("#ipamBulkTag").value.trim()) changes.tags_add = [$("#ipamBulkTag").value.trim()];
     if ($("#ipamBulkOwner").value.trim()) changes.owner = $("#ipamBulkOwner").value.trim();
-    if (!Object.keys(changes).length) return toast("Choose a category, a kind, a tag or an owner to set", "bad");
+    if (!Object.keys(changes).length) return toast("Choose a category, kind, tag or owner to set", "bad");
   }
   try {
     const r = await ipamPost("/api/ipam/bulk", { ips, changes }); toast(r.detail, "ok");
@@ -296,7 +296,7 @@ window.ipamEdit = (ip = "") => {
   const data = STATE.data.ipam, subnet = ipamSubnetPick(data.subnets);
   const row = ipamRows(subnet).find(r => r.ip === ip) || { ip: ip || subnet.next_free[0] || "", tags: [] };
   if (row.cluster) {
-    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster host's address, read from Kubernetes." : `A cluster VIP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
+    return modal(ip, `<p class="muted small">${row.cluster === "node" ? "A cluster host's address, read from Kubernetes." : `A cluster virtual IP, used by ${esc((row.services || []).join(", "))}.`} It is shown here so nothing else is given it, and is changed where it is set, not here.</p>`);
   }
   modal(ip ? `Address · ${ip}` : "Document an address", `
     <div class="f2"><div class="f"><label>Address</label><input id="ia_ip" class="mono" value="${esc(row.ip)}" ${ip ? "readonly" : "data-ipam"}></div>
@@ -307,15 +307,15 @@ window.ipamEdit = (ip = "") => {
     <div class="f2"><div class="f"><label>Category</label><select id="ia_category">${ipamCategoryOptions(row.category || "")}</select></div>
       <div class="f"><label>Owner</label><input id="ia_owner" value="${esc(row.owner || "")}" maxlength="60"></div></div>
     <div class="f"><label>Tags</label><input id="ia_tags" value="${esc((row.tags || []).join(", "))}" placeholder="iot, office"></div>
-    ${row.unifi && (row.unifi.name || row.unifi.hostname) ? `<div class="dim xs" style="margin:-4px 0 10px">UniFi calls it ${esc([row.unifi.name, row.unifi.hostname].filter(Boolean).join(" · "))}; your name here is kept apart and a sync never changes it.</div>` : ""}
+    ${row.unifi && (row.unifi.name || row.unifi.hostname) ? `<div class="dim xs" style="margin:-4px 0 10px">UniFi calls it ${esc([row.unifi.name, row.unifi.hostname].filter(Boolean).join(" · "))}. The name entered here is stored separately, and a sync never changes it.</div>` : ""}
     <div class="f"><label>Notes</label><textarea id="ia_note" rows="3" maxlength="300">${esc(row.note || "")}</textarea></div>
     ${UI.notices((row.flags || []).map(f => [f.level === "warn" ? "bad" : "info", f.text]))}
-    ${row.scan?.up ? `<div class="dim xs">Last scan: answering${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}${row.scan.rdns ? ` · ${esc(row.scan.rdns)}` : ""}</div>` : ""}
+    ${row.scan?.up ? `<div class="dim xs">Last scan: responding${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}${row.scan.rdns ? ` · ${esc(row.scan.rdns)}` : ""}</div>` : ""}
     ${UI.actions(`<button class="btn pri" onclick="ipamSave()">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}`)}`);
 };
 window.ipamRemove = async ip => {
-  if (!(await ask(ipamRemoveQuestion(1), { title: "Remove address", ok: "Remove", danger: true }))) return;
+  if (!(await ask(ipamRemoveQuestion(1), { title: "Remove address", ok: "Remove address", danger: true }))) return;
   try { const r = await ipamPost("/api/ipam/bulk", { ips: [ip], changes: { forget: true } }); toast(r.detail, "ok"); ipamPicks().delete(ip); closeModal(); viewIpam(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -387,7 +387,7 @@ window.ipamUnifi = async () => {
     await ipamUnifiRead();
     if (!$("#mbody .spin2")) return;            // closed while it was read
     if (STATE.data.ipamUnread) {
-      if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Could not read the UniFi connection", `${esc(STATE.data.ipamUnread)} · nothing can be saved over it until it is read.`)
+      if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "The UniFi connection could not be read", `${esc(STATE.data.ipamUnread)} · Nothing can be saved over it until it is read.`)
         + UI.actions(UI.cancel("Close") + UI.button("Try again", "ipamUnifi()", { kind: "pri" }));
       return;
     }
@@ -397,7 +397,7 @@ window.ipamUnifi = async () => {
     <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
     <div class="f2"><div class="f"><label>API key</label><input id="uf_key" type="password" autocomplete="off" placeholder="${u.has_key ? "saved · leave blank to keep" : "paste the key"}"></div>
       <div class="f"><label>Site</label><input id="uf_site" value="${esc(u.site || "default")}"></div></div>
-    <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
+    <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles come with a self-signed certificate, so this is off unless the console has a trusted certificate.")}</label>
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
     ${u.last_error ? `${UI.callout("bad", "", `${esc(u.last_error)}`)}` : ""}
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
@@ -415,7 +415,7 @@ window.ipamUnifiSave = async sync => {
   } catch (e) { toast(e.message, "bad"); }
 };
 window.ipamUnifiForget = async () => {
-  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing what UniFi knows. Nothing on the controller changes.", { title: "Disconnect UniFi", ok: "Disconnect", danger: true }))) return;
+  if (!(await ask("Disconnect UniFi? Its key is deleted, and the IP addresses page stops showing information from UniFi. Nothing on the controller changes.", { title: "Disconnect UniFi", ok: "Disconnect UniFi", danger: true }))) return;
   try { await ipamPost("/api/ipam/unifi", { forget: true }); toast("UniFi disconnected", "ok"); closeModal(); ipamAfterUnifi(); }
   catch (e) { toast(e.message, "bad"); }
 };
@@ -433,8 +433,8 @@ const UNIFI_STALE = 24 * 3600;
 function ipamUnifiCard(now = Date.now() / 1000) {
   // Not read yet, or not read at all: never "not connected" on a guess (#620).
   const unread = STATE.data.ipamUnread;
-  if (!STATE.data.ipam) return UI.settingsCard(`${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
-    ${unread ? UI.callout("bad", "Could not read the UniFi connection", esc(unread)) + UI.button("Try again", "unifiCardLoad()")
+  if (!STATE.data.ipam) return UI.settingsCard(`${UI.moduleHeader(`UniFi Network`, `Shows its clients, devices, reserved addresses, networks and names on the IP addresses page`, ``)}
+    ${unread ? UI.callout("bad", "The UniFi connection could not be read", esc(unread)) + UI.button("Try again", "unifiCardLoad()")
       : '<div class="empty small"><span class="spin2"></span> Reading the UniFi connection…</div>'}`, {tab:`connections`, id:`unifiCard`});
   const u = ((STATE.data.ipam || {}).unifi) || {};
   const age = u.last_sync ? now - u.last_sync : null;
@@ -444,19 +444,19 @@ function ipamUnifiCard(now = Date.now() / 1000) {
   const when = t => fmtAt(t, { weekday: true });
   const facts = u.configured ? UI.facts([
     ["Controller", `<span class="mono">${esc(u.url)}</span>${u.site_name ? ` <span class="dim xs">· ${esc(u.site_name)}</span>` : ""}`],
-    ["Last sync", u.last_sync ? `<span data-tip="${esc(when(u.last_sync))}">${esc(fmtAgo(age))}</span> <span class="dim xs">· every hour while connected</span>` : "not yet"],
+    ["Last sync", u.last_sync ? `<span data-tip="${esc(when(u.last_sync))}">${esc(fmtAgo(age))}</span> <span class="dim xs">· every hour while connected</span>` : "Not yet"],
     ...(u.last_error && u.last_attempt ? [["Last attempt", `${esc(fmtAgo(now - u.last_attempt))} <span class="dim xs">· failed</span>`]] : [])]) : "";
   return `${UI.settingsCard(`
-    ${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
+    ${UI.moduleHeader(`UniFi Network`, `Shows its clients, devices, reserved addresses, networks and names on the IP addresses page`, ``)}
     ${serviceRow(u.configured ? "UniFi controller" : "No controller", state,
-      u.configured ? "" : "Optional: without it, IP addresses works from scans and what you write",
+      u.configured ? "" : "Optional. Without it, the IP addresses page uses scans and the details entered there.",
       actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator", pri: true } : null,
         { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
     ${facts}
-    ${unread ? UI.callout("warn", "Could not read the UniFi connection just now", `${esc(unread)} · this is the connection as last read.`) : ""}
+    ${unread ? UI.callout("warn", "The UniFi connection could not be read just now", `${esc(unread)} · This is the connection as last read.`) : ""}
     ${u.configured && u.last_error ? UI.callout("bad", "The last sync failed", esc(u.last_error)) : ""}
     ${u.configured && !u.last_error && stale ? UI.callout("warn", u.last_sync ? `Last synced ${fmtAgo(age)}` : "Not synced yet",
-      "Addresses and names may have changed since. Sync to refresh.") : ""}`, {tab:`connections`, id:`unifiCard`})}`;
+      "Addresses and names may have changed since then. Sync to refresh them.") : ""}`, {tab:`connections`, id:`unifiCard`})}`;
 }
 window.ipamUnifiCard = ipamUnifiCard;
 

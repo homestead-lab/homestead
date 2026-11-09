@@ -115,7 +115,7 @@ test("a blocked disk has no send button, and says why, one per line", async () =
   const { ctx, elements } = load({ plan: { ...OPEN, blocking: ["web uses it", "Pod <reader> uses it"] } });
   await ctx.vmDiskRemove("lab", "guest-disk");
   const html = elements.mbody.innerHTML;
-  assert.match(html, /This disk can&#39;t be removed/);
+  assert.match(html, /This disk cannot be removed/);
   assert.match(html, /web uses it/);
   assert.match(html, /Pod &lt;reader&gt; uses it/, "escaped");
   assert.doesNotMatch(html, /vmDiskRemoveGo/);
@@ -133,7 +133,7 @@ test("a stale review (409 or 400) leaves no write behind", async () => {
     element("vmDiskRemoveName").value = "guest-disk";
     ctx.typed = true;
     await ctx.vmDiskRemoveSend();
-    assert.match(elements.mbody.innerHTML, /review it again/);
+    assert.match(elements.mbody.innerHTML, /then review again/);
     assert.doesNotMatch(elements.mbody.innerHTML, /id="vmDiskRemoveGo"/, "no way to resend it");
     assert.equal(requests.filter(([path]) => path === "/api/vm-disks/remove").length, 1, "not repeated");
     assert.ok(!modals.includes("closed"), "the reason stays on screen");

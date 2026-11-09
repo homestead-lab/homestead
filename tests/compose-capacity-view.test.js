@@ -77,7 +77,7 @@ test("Partial creation is retained, named, and cannot be blindly replayed", asyn
   await t.c.window.composeConfirm();
   assert.equal(t.sent.length, 1);
   assert.match(t.fields["#composeApplyResult"].innerHTML, /Already created: one/);
-  assert.match(t.fields["#composeApplyResult"].innerHTML, /Volumes created before an error are retained/);
+  assert.match(t.fields["#composeApplyResult"].innerHTML, /Volumes created before the error are kept/);
   assert.equal(t.fields["#composeApply"].disabled, true);
 });
 

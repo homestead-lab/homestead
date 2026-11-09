@@ -279,7 +279,7 @@ class RevertStopTests(unittest.TestCase):
         self.assertEqual("failed", status, message)
         self.assertEqual(0, self.replicas("app-a"))
         self.assertIn(("app-a", 2), self.admitted, "admitted at the count it ran before")
-        self.assertIn("doesn't fit on the hosts", message)
+        self.assertIn("does not fit on the hosts", message)
 
     def test_an_app_that_cannot_be_read_is_not_taken_as_gone_when_starting(self):
         self.stop()

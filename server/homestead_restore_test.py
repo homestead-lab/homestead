@@ -279,7 +279,7 @@ def resolve(item, checkpoint, now=None):
         forget_plans()
         if left:
             return "running", item.get("progress", 0), "Cancelling: could not remove " + ", ".join(left) + " yet; trying again"
-        return "cancelled", 100, "Cancelled; the test's copy and its restored volumes were removed"
+        return "cancelled", 100, "Cancelled. The test's copy and its restored volumes were removed."
 
     if phase == "plan":
         dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
@@ -319,7 +319,7 @@ def resolve(item, checkpoint, now=None):
             except Exception:
                 pass
             to("starting", restored_at=now)
-            return "running", 60, "Backups restored; starting a copy of the app on them"
+            return "running", 60, "Backups restored. Starting a copy of the app on them."
         if now > ref["deadline"]:
             return _finish(item, to, False, "the backups did not finish restoring in time")
         progress = min(s[1] for s in states) if states else 0
@@ -332,7 +332,7 @@ def resolve(item, checkpoint, now=None):
         why, final = _make_copy(item, ns, dep)
         if why:
             return _not_made(item, to, why, final, now)
-        return "running", 70, "Copy started, cut off from the network; waiting for it to be ready"
+        return "running", 70, "Copy started without network access. Waiting for it to be ready."
     if phase == "checking":
         if not KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{_copy_name(item)}", read=kget):
             # Saved as checking, then stopped before the copy was made: make it now.
@@ -361,7 +361,7 @@ def resolve(item, checkpoint, now=None):
         if now - ref["ready_at"] > ANSWER_WAIT:
             return _finish(item, to, False, f"the copy became ready but did not answer on {', '.join(str(p) for p in ref['ports'][:4])}"
                                            f" ({result.get('error') or 'no answer'})")
-        return "running", 90, "Ready; waiting for it to answer"
+        return "running", 90, "Ready. Waiting for it to answer."
     if phase == "cleanup":
         return _finish(item, to, ref.get("ok"), ref.get("why", ""))
     return "failed", item.get("progress", 0), f"Unknown step {phase}"
@@ -443,8 +443,8 @@ def cancel_run(item, chosen):
     left = _remove_made(item, saved=True)
     forget_plans()
     if left:
-        raise ValueError("could not remove " + ", ".join(left) + "; try again or remove them by hand")
-    return "Cancelled; the test's copy and its restored volumes were removed"
+        raise ValueError("Homestead could not remove " + ", ".join(left) + ". Try again, or remove them manually.")
+    return "Cancelled. The test's copy and its restored volumes were removed."
 
 
 def _finish(item, to, ok, why):
@@ -461,9 +461,9 @@ def _finish(item, to, ok, why):
     message = (("Restore test passed: " if ok else "Restore test failed: ") + why
                + (f". Restored {said}." if said else ".")
                + (" Not tested: " + "; ".join(f"{w['claim']} ({w['why']})" for w in skipped) + "." if skipped else "")
-               + (" The copy ran privileged, as the app does, so it could reach the host's devices; it had no network"
+               + (" The copy ran privileged, as the app does, so it could reach the host's devices. It had no network"
                   " and none of the app's shares or host folders." if ref.get("privileged") else "")
-               + (" Could not remove " + ", ".join(left) + "; remove them by hand." if left else ""))
+               + (" Homestead could not remove " + ", ".join(left) + ". Remove them manually." if left else ""))
     try:
         ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
               {"metadata": {"annotations": {names.key(RESULT): json.dumps(
@@ -550,7 +550,7 @@ def run_now(b):
     """Test one app now; one test runs at a time."""
     ns, name = dns_name(b.get("ns"), "namespace"), dns_name(b.get("name"), "workload name")
     if any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.snapshot()):
-        raise ValueError("a restore test is already running; one runs at a time")
+        raise ValueError("A restore test is already running. Only one runs at a time.")
     return {"ok": True, "operation": start_test(ns, name)}
 
 

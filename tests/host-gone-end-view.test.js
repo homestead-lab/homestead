@@ -30,7 +30,7 @@ const job=extra=>({id:"job",kind:"disk-v2-convert",title:"Prepare /dev/sdb",stat
 test("the card offers the end, to admins, only for a job flagged endable",()=>{
   const t=setup();
   const card=t.ctx.operationCard(job({host_gone_endable:true}));
-  assert.match(card,/<button class="btn sm" data-need="admin"[^>]*onclick="hostGoneReview\((&quot;|")job(&quot;|")\)">End: host removed<\/button>/);
+  assert.match(card,/<button class="btn sm" data-need="admin"[^>]*onclick="hostGoneReview\((&quot;|")job(&quot;|")\)">End job for removed host<\/button>/);
   assert.doesNotMatch(t.ctx.operationCard(job({host_gone_endable:false})),/hostGoneReview/);
   assert.doesNotMatch(t.ctx.operationCard(job({})),/hostGoneReview/);
 });
@@ -43,7 +43,7 @@ test("the review lists what is left, escaped, and needs the host name and the ti
   assert.match(html,/homestead-allocation-x/);
   assert.match(html,/Longhorn upgrades, cluster shutdown and OS rollouts/);
   assert.match(html,/Nothing on the host is changed/);
-  assert.match(html,/which is gone, so it can.t finish/);
+  assert.match(html,/which has been removed, so it cannot finish/);
   assert.match(html,/id="hostGoneName"[^>]*data-typed-expect="node-a"/);
   await t.ctx.hostGoneResolve();assert.equal(t.sent.length,1,"nothing without the name and the tick");
   t.fields["#hostGoneAck"].checked=true;t.fields["#hostGoneName"].value="node-b";
@@ -65,8 +65,8 @@ test("a blocked or tokenless review never sends the end",async()=>{
   const blocked=setup({plan:{...PLAN,blocked:true,blockers:["node-a is still in the cluster with the same identity"]},token:null});
   await blocked.ctx.hostGoneReview("job");
   assert.match(blocked.fields["#mbody"].innerHTML,/still in the cluster with the same identity/);
-  assert.match(blocked.fields["#mbody"].innerHTML,/Homestead checks whether that host is gone/);
-  assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/which is gone, so it can.t finish/,"a blocked review does not claim the host is gone");
+  assert.match(blocked.fields["#mbody"].innerHTML,/Homestead checks that the host has been removed/);
+  assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/which has been removed, so it cannot finish/,"a blocked review does not claim the host is gone");
   assert.doesNotMatch(blocked.fields["#mbody"].innerHTML,/id="hostGoneName"/);
 });
 

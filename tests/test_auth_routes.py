@@ -243,7 +243,7 @@ class SignInAndSessions(Routes):
     def test_setup_is_refused_through_the_tunnel(self):
         with mock.patch.object(SETUP_CODE, "first_admin") as first:
             a = self.send("POST", "/api/auth/setup", {"username": "ada", "password": "p"}, headers={"Cf-Ray": "r1"})
-        self.assertEqual((403, {"error": "finish setting Homestead up from your LAN; "
+        self.assertEqual((403, {"error": "Finish setting Homestead up from the LAN. "
                                          "setup is not offered through the tunnel"}, []), (a.status, a.body, a.cookies))
         first.assert_not_called()
         self.assertEqual([], self.history())
@@ -498,7 +498,7 @@ class KeysAndAccounts(Routes):
                          "/api/auth/role", "/api/auth/users/delete"):
                 with self.subTest(role=role, path=path):
                     a = self.send("POST", path, {"username": "robin"}, token=token)
-                    self.assertEqual((403, {"error": f"your role ({role}) cannot do this — admin required",
+                    self.assertEqual((403, {"error": f"This needs the admin role, and the {role} role cannot do it",
                                             "role": role, "needed": "admin"}), (a.status, a.body))
         a = self.send("POST", "/api/auth/users", {"username": "robin"}, token="nobody")
         self.assertEqual((401, {"error": "not signed in", "auth": False}), (a.status, a.body))

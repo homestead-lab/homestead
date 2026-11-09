@@ -30,7 +30,7 @@ test("a redirected API call is a lapsed sign-in: say so once, then reload throug
   await assert.rejects(t.ctx.fetch("/api/workloads"), err => err.signIn === true);
   await assert.rejects(t.ctx.fetch("/api/nodes"), err => err.signIn === true);
   assert.equal(t.appended.length, 1, "one bar, however many calls fail");
-  assert.match(t.appended[0].innerHTML, /Signing you in again/);
+  assert.match(t.appended[0].innerHTML, /Signing in again/);
   assert.equal(t.answers[0][1].redirect, "manual", "API calls do not follow redirects");
   t.timers.forEach(fn => fn());
   assert.deepEqual(t.replaced, ["https://homestead.example.com/containers"]);

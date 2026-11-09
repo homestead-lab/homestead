@@ -86,7 +86,7 @@ class PlanTests(unittest.TestCase):
         p = BONDS.plan("h1", {"members": ["enp2s0"]}, facts(bond_exists=True, bond_empty=True))
         self.assertEqual([], p["refusals"])
         self.assertTrue(p["spec"]["recreate"])
-        self.assertIn("not carrying its address", " ".join(BONDS.plan("h1", {"members": ["enp2s0"]}, facts(bond_exists=True))["refusals"]))
+        self.assertIn("does not carry its address", " ".join(BONDS.plan("h1", {"members": ["enp2s0"]}, facts(bond_exists=True))["refusals"]))
 
     def test_a_switched_off_spare_is_allowed_and_said(self):
         nics = [nic("enp1s0"), dict(nic("enp2s0"), carrier=None, speed=None)]
@@ -288,7 +288,7 @@ class HostLeaseTests(unittest.TestCase):
         BONDS.register(BONDS.OPS)  # its canceller is added by register (#622)
         plan, run = BONDS.OPS.CANCELLERS[BONDS.KIND]
         self.assertTrue(any("puts its old network back" in line for line in plan(item)["keeps"]))
-        self.assertIn("other changes on h1 can start", run(item, {}))
+        self.assertIn("Other changes on h1 can start", run(item, {}))
         self.assertEqual([("h1", "this-replica/1")], host.let_go_of)
         self.assertNotIn("lease", item["ref"])
 
@@ -396,8 +396,8 @@ class TimedOutStartTests(unittest.TestCase):
         _, ops, _, _ = self.start_timed_out()
         keeps = " ".join(BONDS.cancel_plan({"kind": BONDS.KIND, "ref": ops.started[0][2]})["keeps"])
         self.assertIn("cannot tell how far the change got on h1", keeps)
-        self.assertIn("check its network first", keeps)
-        self.assertNotIn("carries on", keeps)
+        self.assertIn("Check its network first", keeps)
+        self.assertNotIn("continues", keeps)
         self.assertNotIn("puts its old network back by itself", keeps)
 
     def test_a_restart_that_times_out_may_have_been_scheduled_and_is_not_asked_again(self):
@@ -449,7 +449,7 @@ class JobTests(unittest.TestCase):
         item = {"ref": ref}
         self.assertEqual("running", BONDS.status(item, now=ref["since"] + 5)[0])
         status, _, message = BONDS.status(item, now=ref["since"] + 30)
-        self.assertIn("rollback is disarmed", message)
+        self.assertIn("rollback is turned off", message)
         self.assertIn(BONDS.CONFIRM_SCRIPT, host.ran)
         self.assertIn("Restarting k3s", BONDS.status(item, now=ref["since"] + 31)[2])
         self.assertEqual("running", BONDS.status(item, now=ref["since"] + 45)[0], "not until its kubelet is heard from")
@@ -469,7 +469,7 @@ class JobTests(unittest.TestCase):
         up = "ADDR\nROUTE\nGATEWAY\nIN enp1s0\nIN enp2s0\nARMED\nEND\n"
         host, (_, _, ref) = self.start(up, {"members": ["enp2s0"], "mode": "802.3ad", "lacp_confirmed": True})
         item = {"ref": ref}
-        self.assertIn("waiting for the switch", BONDS.status(item, now=ref["since"] + 30)[2])
+        self.assertIn("Waiting for the switch", BONDS.status(item, now=ref["since"] + 30)[2])
         self.assertIn("putting its old network back now", BONDS.status(item, now=ref["since"] + BONDS.LACP_WAIT + 20)[2])
         self.assertIn(BONDS.ROLLBACK_NOW, host.ran)
         self.assertNotIn(BONDS.CONFIRM_SCRIPT, host.ran)

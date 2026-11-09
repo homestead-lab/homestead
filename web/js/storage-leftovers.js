@@ -11,7 +11,7 @@ const leftoverAge = at => { const t = Date.parse(at); return Number.isFinite(t) 
 
 async function leftoverFacts(title) {
   try { return await api("/api/storage/leftovers"); }
-  catch (e) { modal(title, UI.callout("bad", "Could not read storage", esc(e.message)) + UI.actions(UI.cancel("Close"))); return null; }
+  catch (e) { modal(title, UI.callout("bad", "The storage could not be read", esc(e.message)) + UI.actions(UI.cancel("Close"))); return null; }
 }
 
 // Of one app's claims (filter {namespace, claims}), or all of them.
@@ -23,7 +23,7 @@ async function releasedVolumesReview(filter = null) {
   if (!facts) return;
   const r = facts.released || {}, rows = releasedOfApp(r.volumes || [], filter);
   releasedVolumesShown = rows; releasedVolumesFilter = filter;
-  if (r.state === "unknown") return modal(title, UI.callout("warn", "Could not read Released volumes", esc(r.error || "")) + UI.actions(UI.cancel("Close")));
+  if (r.state === "unknown") return modal(title, UI.callout("warn", "Released volumes could not be read", esc(r.error || "")) + UI.actions(UI.cancel("Close")));
   if (!rows.length) return modal(title, UI.empty("No Released volumes: every kept volume has a claim.") + UI.actions(UI.cancel("Close")));
   const n = rows.length, total = leftoverGiB(rows.reduce((sum, v) => sum + (v.allocated_bytes || 0), 0));
   // Each delete is asked for by its PV: when the claim name is in use
@@ -31,7 +31,7 @@ async function releasedVolumesReview(filter = null) {
   const action = (v, i) => v.old_copy
     ? UI.button("Remove old copy", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
     : v.longhorn ? UI.button("Review delete", `releasedVolumeDelete(${i})`, { kind: "danger", attrs: 'data-need="admin"' })
-    : '<span class="dim xs">Use your storage\'s own tools</span>';
+    : '<span class="dim xs">Use the storage system\'s own tools</span>';
   const table = UI.table([{ label: "Volume" }, { label: "Class" }, { label: "Holds", className: "mono" }, { label: "Released" }, { label: "" }],
     rows.map((v, i) => [
       `${esc(v.namespace && v.claim ? `${v.namespace}/${v.claim}` : v.pv)}<span class="sub mono">${esc(v.pv)}${v.old_copy ? " · old copy of a class change" : ""}</span>` +

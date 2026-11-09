@@ -174,11 +174,11 @@ def reconcile():
     try:
         me = identity()
     except Exception as error:
-        return _note({"state": "unknown", "detail": f"could not tell what Homestead runs as: {str(error)[:120]}"})
+        return _note({"state": "unknown", "detail": f"Homestead could not tell what it runs as: {str(error)[:120]}"})
     role = bound_role(me["account"])
     if not role:
         return _note({"state": "manual", "account": me["account"],
-                      "detail": "Homestead cannot see its own permissions; run the command once"})
+                      "detail": "Homestead cannot see its own permissions. Run the command once."})
     try:
         live = kget(_role_path(role))
     except Exception as error:

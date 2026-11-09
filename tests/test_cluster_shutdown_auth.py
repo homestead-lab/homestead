@@ -97,7 +97,7 @@ class ShutdownAuthenticationTests(unittest.TestCase):
                 ("PUT", "/api/v1/namespaces/lab/secrets/homestead-auth", self.body()),
                 ("PUT", "/api/v1/namespaces/lab/secrets/another-secret", self.body()),
                 ("PATCH", "/apis/apps/v1/namespaces/lab/deployments/app", {})):
-            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "shutdown is active"):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "shutdown is running"):
                 server.KUBE_HELPERS.ksend(method, path, body)
         self.network.assert_not_called()
 

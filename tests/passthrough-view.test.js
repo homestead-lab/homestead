@@ -61,7 +61,7 @@ test("empty device inventory explains host setup and read failure is distinct", 
   assert.match(empty, /IOMMU.*vBIOS setup/);
   assert.match(empty, /Hardware → Devices for VMs/);
   assert.match(empty, /target="_blank"/);
-  assert.match(t.ctx.vmDevicesPane({}, {resources: [], error: "<unavailable>"}), /Devices could not be loaded.*&lt;unavailable>/);
+  assert.match(t.ctx.vmDevicesPane({}, {resources: [], error: "<unavailable>"}), /The devices could not be loaded.*&lt;unavailable>/);
 });
 
 
@@ -80,7 +80,7 @@ test("reopening the host restores a retained inspection and groups every compani
   assert.match(t.body.innerHTML, /2 devices move together.*1 PCI bridge stays/);
   for (const name of ["Named GPU", "GPU audio", "PCI bridge", "IOMMU group 0"]) assert.ok(t.body.innerHTML.includes(name));
   assert.match(t.body.innerHTML, /Refresh devices/);
-  assert.match(t.body.innerHTML, /Last inspected/);
+  assert.match(t.body.innerHTML, /Last checked/);
   assert.equal((t.body.innerHTML.match(/Capture vBIOS/g) || []).length, 2, "capture is offered for GPUs only");
   await t.ctx.nodeDevicesPaint("node1");
   assert.equal(t.requests.length, 1, "reopening does not rerun a host helper or hide inventory");
@@ -97,7 +97,7 @@ test("overlapping configurations stay selectable and escaped holder names explai
   const html = t.ctx.vmDevicesPane({}, inventory);
   assert.match(html, /in use by lab\/&lt;holder>/);
   assert.match(html, /GPU is set up on lab\/&lt;holder>, lab\/stopped/);
-  assert.match(html, /Configurations may overlap; Start checks/);
+  assert.match(html, /Start checks that enough devices are free/);
   assert.ok(!html.includes("<holder>"));
   t.ctx.vmAddHostDevice();
   assert.match(t.fields.added, /example.test\/gpu/);
@@ -148,7 +148,7 @@ test("failed refresh retains the inventory and offers retry", async () => {
   await t.ctx.nodeDevicesPaint("node1");
   t.answers["/api/passthrough/inspect"] = () => { throw new Error("host unavailable"); };
   await t.ctx.nodeDevicesLook("node1");
-  assert.match(t.body.innerHTML, /Refresh failed, so this is the last inspection/);
+  assert.match(t.body.innerHTML, /The refresh failed, so the last check is shown/);
   assert.match(t.body.innerHTML, /Named GPU/);
   assert.match(t.body.innerHTML, /Refresh devices/);
 });
@@ -226,6 +226,6 @@ test("a GPU's vBIOS can be captured from its host in Edit and is sent with the s
   // A refusal says why, and nothing is sent.
   t.answers["/api/passthrough/vbios/capture"] = () => { throw new Error("Stop VM win11 before capturing this GPU's vBIOS"); };
   await t.ctx.vmCaptureRom(button, "hostdev-0");
-  assert.match(state.textContent, /Not captured: Stop VM win11/);
+  assert.match(state.textContent, /Not captured\. Stop VM win11/);
   assert.equal(box.dataset.captured, undefined);
 });

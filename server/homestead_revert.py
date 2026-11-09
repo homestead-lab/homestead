@@ -151,10 +151,10 @@ def plan(volume, snapshot):
     blockers = []
     for user in users:
         if user["kind"] == "DaemonSet":
-            blockers.append(f"{user['name']} is a DaemonSet, which cannot be stopped for this; remove its claim first")
+            blockers.append(f"{user['name']} is a DaemonSet, which cannot be stopped for this. Remove its volume claim first.")
         if user.get("deletes_claims_on_scale_down"):
-            blockers.append(f"StatefulSet {user['name']} can delete its volumes when stopped; change its scale-down "
-                            "retention policy (whenScaled) to Retain before rolling back")
+            blockers.append(f"StatefulSet {user['name']} can delete its volumes when stopped. Change its scale-down "
+                            "retention policy (whenScaled) to Retain before rolling back.")
         if is_self(ns, user["name"]):
             blockers.append("this is Homestead's own data: rolling it back would stop Homestead part-way")
     known = {user["name"] for user in users}
@@ -162,7 +162,7 @@ def plan(volume, snapshot):
              if not any(pod["metadata"]["name"].startswith(name) for name in known)]
     if loose:
         blockers.append(f"{', '.join(loose[:3])} use{'s' if len(loose) == 1 else ''} it and belong{'s' if len(loose) == 1 else ''} "
-                        "to nothing Homestead can stop and start again; stop it first")
+                        "to nothing Homestead can stop and start again. Stop it first.")
     status = snap.get("status") or {}
     return {"volume": volume, "snapshot": snapshot, "namespace": ns, "claim": claim,
             "created": status.get("creationTime", ""), "consumers": users, "blockers": blockers,
@@ -208,16 +208,16 @@ def _reviewed(token):
 def _as_reviewed(p, token):
     """Refuse when what uses the claim isn't what the person reviewed: nothing
     has been written yet, and none of it is."""
-    again = "open the rollback again. Nothing was changed"
+    again = "open the rollback again. Nothing was changed."
     seen = _reviewed(token)
     if seen is None:
-        raise ValueError(f"This request doesn't say what was reviewed; reload the page and {again}")
+        raise ValueError(f"This request does not say what was reviewed. Reload the page and {again}")
     now = {(c["kind"], c["name"]): (c.get("uid"), c.get("generation")) for c in p["consumers"]}
     for key, value in now.items():
         if key not in seen:
-            raise ValueError(f"{key[1]} began using {p['claim']} after this rollback was reviewed; {again}")
+            raise ValueError(f"{key[1]} began using {p['claim']} after this rollback was reviewed. {again[:1].upper()}{again[1:]}")
         if seen[key] != value:
-            raise ValueError(f"{key[1]} changed after this rollback was reviewed; {again}")
+            raise ValueError(f"{key[1]} changed after this rollback was reviewed. {again[:1].upper()}{again[1:]}")
     for key in seen:
         if key not in now:
             raise ValueError(f"{key[1]} no longer uses {p['claim']}; {again}")
@@ -242,9 +242,9 @@ def _hold_all(ns, claim, consumers):
         obj = KUBE.get_optional(_path(ns, c), read=kget)
         meta = (obj or {}).get("metadata") or {}
         if not meta.get("uid"):
-            raise ValueError(f"{c['name']} is no longer there; open the rollback again. Nothing was changed")
+            raise ValueError(f"{c['name']} is no longer there. Open the rollback again. Nothing was changed.")
         if (meta.get("uid"), meta.get("generation")) != (c.get("uid"), c.get("generation")):
-            raise ValueError(f"{c['name']} changed after this rollback was reviewed; open the rollback again. Nothing was changed")
+            raise ValueError(f"{c['name']} changed after this rollback was reviewed. Open the rollback again. Nothing was changed.")
         mark = (meta.get("annotations") or {}).get(HOLD.HELD_BY)
         if mark:
             raise ValueError(f"{c['name']} is held by {_holder(mark)}. Nothing was changed")
@@ -256,7 +256,7 @@ def _hold_all(ns, claim, consumers):
     pvc = KUBE.get_optional(_claim_path(ns, claim), read=kget)
     uid = ((pvc or {}).get("metadata") or {}).get("uid")
     if not uid:
-        raise ValueError(f"the claim {claim} is no longer there; open the rollback again. Nothing was changed")
+        raise ValueError(f"The volume claim {claim} is no longer there. Open the rollback again. Nothing was changed.")
     return uid
 
 
@@ -437,7 +437,7 @@ def _let_go(ref):
 
 
 def _held(ref, stuck):
-    return (f". Homestead could not let go of {ref['volume']} ({stuck}): until the Longhorn attachment ticket "
+    return (f". Homestead could not release {ref['volume']} ({stuck}). Until the Longhorn attachment ticket "
             f"{ATTACHMENT} on it is removed, its app cannot start (see What Homestead changes)") if stuck else ""
 
 
@@ -456,7 +456,7 @@ def _how(c):
     if c["kind"] == "VirtualMachine":
         return f"Virtual machines → {c['name']} → Start"
     # Homestead shows a paused schedule but has no control to resume one.
-    return (f"Scheduled jobs shows {c['name']} as paused; resume it by setting its spec.suspend back to false "
+    return (f"Scheduled jobs shows {c['name']} as paused. Resume it by setting its spec.suspend back to false "
             f"(kubectl, or the Git source it comes from)")
 
 
@@ -727,15 +727,15 @@ def _not_marked(ref, c, record, meta, left, key):
 def _left(ref, left):
     """What a person reads about apps left stopped: each, why, and how to start it."""
     rows = {(c["kind"], c["name"]): c for c in ref.get("consumers") or []}
-    return "; ".join(f"{key[1]} was left stopped: {why}. Once that is resolved: {_how(rows[key])}"
+    return ". ".join(f"{key[1]} was left stopped: {why}. Once that is resolved: {_how(rows[key])}"
                      for key, why in left.items())
 
 
 def _gone(ref):
     consumers = ref.get("consumers") or []
     gone = [c["name"] for c in consumers if c.get("gone")]
-    text = f"; {', '.join(gone)} {'was' if len(gone) == 1 else 'were'} no longer there, and {'is' if len(gone) == 1 else 'are'} not made again" if gone else ""
-    return text + "".join(f"; {c['refused']}" for c in consumers if c.get("refused"))
+    text = f". {', '.join(gone)} {'was' if len(gone) == 1 else 'were'} no longer there, and {'is' if len(gone) == 1 else 'are'} not created again" if gone else ""
+    return text + "".join(f". {c['refused']}" for c in consumers if c.get("refused"))
 
 
 def _put_back(ref, why, stuck="", final=False):
@@ -761,21 +761,21 @@ def _put_back_end(ref, left):
     why, stuck = ref["put_back"]["why"], ref["put_back"]["stuck"]
     stopped = any((c.get("stopped") or c.get("sent")) and not c.get("gone") and not c.get("refused")
                   for c in ref.get("consumers") or [])
-    started = "; " + _left(ref, left) if left else "; everything that was running is starting again" if stopped else ""
+    started = ". " + _left(ref, left) if left else ". Everything that was running is starting again" if stopped else ""
     started += _gone(ref)
     if ref.get("reverting"):
         changed = (f"Longhorn may have rolled it back before failing: the state before is kept as snapshot "
                    f"{ref.get('kept', '')}, to roll back to if needed")
     elif ref.get("kept"):
-        changed = f"Nothing was rolled back; the state it is in is also kept as snapshot {ref['kept']}"
+        changed = f"Nothing was rolled back. Its current state is also kept as snapshot {ref['kept']}"
     elif ref.get("keep") and ref.get("keep_refused", 0) != ref.get("keep_tries", 1):
         # Only when every try is known never to have gone out is it certain none was made.
-        changed = f"Nothing was rolled back; a snapshot named {ref['keep']} may have been made, of the state it is in"
+        changed = f"Nothing was rolled back. A snapshot named {ref['keep']} may have been made of its current state"
     elif any((c.get("stopped") or c.get("sent")) and not c.get("gone") for c in ref.get("consumers") or []):
         changed = "The volume was not changed"
     else:
         changed = "Nothing was changed"
-    return "failed", 100, f"{why}. {changed}{started}{_held(ref, stuck)}"
+    return "failed", 100, f"{why}. {changed}{started}{_held(ref, stuck)}."
 
 
 def _attach(ref, volume):
@@ -816,7 +816,7 @@ def _reverted(ref):
     stuck, error = _let_go(ref)
     if stuck and not _again(ref, "detach", error):     # else tried again while detaching
         ref["stuck"] = stuck
-    return "running", 70, f"Rolled back to {ref['snapshot']}; the state before is kept as {ref.get('kept', '')}"
+    return "running", 70, f"Rolled back to {ref['snapshot']}. The state before is kept as {ref.get('kept', '')}."
 
 
 def _let_marks_go(ref):
@@ -867,7 +867,7 @@ def _resolve(item):
         if unstopped:
             if _late(ref):
                 return _put_back(ref, unstopped)
-            return "running", 10, f"Stopping what uses {ref['claim'] or volume}: {unstopped}; trying again"
+            return "running", 10, f"Stopping what uses {ref['claim'] or volume}: {unstopped}. Trying again."
         using = reclass._using_pods(ns, ref["claim"], helpers=True) if ns and ref.get("claim") else []
         if using or _state(volume) != "detached":
             if _late(ref):
@@ -885,7 +885,7 @@ def _resolve(item):
                 # Longhorn may hold it already; the same ticket is asked for again.
                 ref.update(attached=True, reattach=True)
                 _phase(ref, "attaching")
-                return "running", 25, f"Longhorn's API did not answer ({_why(error)}); trying again"
+                return "running", 25, f"Longhorn's API did not answer ({_why(error)}). Trying again."
             # Longhorn may have taken the ticket before failing: drop it
             # through Kubernetes, which needs no answer from Longhorn's API.
             return _put_back(ref, f"Longhorn's API did not attach {volume} for the rollback: {_why(error)}",
@@ -901,7 +901,7 @@ def _resolve(item):
                 _attach(ref, volume)
             except Exception as error:
                 if _again(ref, "attach", error):
-                    return "running", 25, f"Longhorn's API did not answer ({_why(error)}); trying again"
+                    return "running", 25, f"Longhorn's API did not answer ({_why(error)}). Trying again."
                 ref["attached"] = False         # its API is not answering: let go through Kubernetes
                 return _put_back(ref, f"Longhorn's API did not attach {volume} for the rollback: {_why(error)}",
                                  _drop_ticket(ref))
@@ -925,7 +925,7 @@ def _resolve(item):
                     if not _snapshot_made(volume, keep):
                         ref["keep_refused"] = ref.get("keep_refused", 0) + _never_sent(error)
                         if _again(ref, "snapshotCreate", error):
-                            return "running", 40, f"Longhorn's API did not answer ({_why(error)}); trying again"
+                            return "running", 40, f"Longhorn's API did not answer ({_why(error)}). Trying again."
                         return _put_back(ref, f"Longhorn's API did not keep the present state of {volume}: {_why(error)}")
                 ref["kept"] = keep
         if _claim_going(ns, ref):                       # the last moment to look: a policy flip can take the claim
@@ -942,7 +942,7 @@ def _resolve(item):
             # go of the volume, or start what uses it, until that is known.
             ref["revert_error"] = _why(error)
             _phase(ref, "confirming")
-            return "running", 60, f"Longhorn's API did not answer the rollback ({_why(error)}); checking whether it happened"
+            return "running", 60, f"Longhorn's API did not answer the rollback ({_why(error)}). Checking whether it happened."
         return _reverted(ref)
     if phase == "confirming":
         parent = _head_parent(volume, ref.get("kept", ""))
@@ -956,9 +956,9 @@ def _resolve(item):
             return _put_back(ref, f"{why}, and Longhorn did not roll {volume} back")
         return ("failed", 100, f"{why}, and whether {volume} was rolled back cannot be told. To keep its data "
                                f"consistent it stays attached in maintenance mode and {_names(ref)} stay stopped. "
-                               f"Check its snapshots in Longhorn; the state before is kept as snapshot "
+                               f"Check its snapshots in Longhorn. The state before is kept as snapshot "
                                f"{ref.get('kept', '')}. Then remove the Longhorn attachment ticket {ATTACHMENT} on "
-                               f"it (see What Homestead changes) and start {_names(ref)} again")
+                               f"it (see What Homestead changes) and start {_names(ref)} again.")
     if phase == "detaching":
         if ref.get("attached") and not ref.get("stuck"):
             if _pausing(ref) and not _late(ref):
@@ -979,8 +979,8 @@ def _resolve(item):
         if not _late(ref):
             (_, name), why = next(iter(left.items()))
             return "running", 82, f"Waiting to start {name} again: {why}"
-        return ("failed", 100, f"Rolled back to {ref['snapshot']}; the state before is kept as snapshot "
-                               f"{ref.get('kept', '')}. {_left(ref, left)}{_gone(ref)}{_held(ref, ref.get('stuck', ''))}")
+        return ("failed", 100, f"Rolled back to {ref['snapshot']}. The state before is kept as snapshot "
+                               f"{ref.get('kept', '')}. {_left(ref, left)}{_gone(ref)}{_held(ref, ref.get('stuck', ''))}.")
     if phase == "starting":
         running = [c for c in ref.get("consumers") or [] if not c.get("gone") and not c.get("refused")]
         waiting = reclass._started(ns, {**ref, "consumers": running}) if ns else []
@@ -993,14 +993,14 @@ def _resolve(item):
     return "failed", 100, f"unknown step {phase}"
 
 
-CONFIRMING = "The rollback is being confirmed; Homestead will finish or stop it safely"
+CONFIRMING = "The rollback is being confirmed. Homestead finishes or stops it safely."
 
 
 def _uncancellable(ref):
     if ref.get("phase") == "putting-back":
         return "Homestead is putting everything back already"
     if ref.get("reverted"):
-        return "The volume is rolled back already; what is left is starting things again"
+        return "The volume is already rolled back. What is left is starting things again."
     if ref.get("reverting") or ref.get("revert_sent") or ref.get("phase") == "confirming":
         return CONFIRMING           # Longhorn may still be reverting: letting go now could corrupt it
     return ""

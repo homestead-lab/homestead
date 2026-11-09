@@ -61,7 +61,7 @@ def status():
     return {"installed": True, "enabled": enabled, "managed": bool(directory), "directory": directory,
             "image": next((row.get("image", "") for row in containers if row.get("name") == CONTAINER), ""),
             "uid": meta["uid"], "resource_version": meta["resourceVersion"],
-            "detail": "Collector configured; ready probe pods and verified policy are still required" if enabled else "Allocation collector is disabled"}
+            "detail": "Collector set up. Ready probe pods and a checked policy are still needed." if enabled else "Allocation collector is disabled"}
 
 
 def _key(obj):
@@ -81,9 +81,9 @@ def _key(obj):
             write("POST", f"/api/v1/namespaces/{NS}/secrets", body)
         except urllib.error.HTTPError as conflict:
             if conflict.code != 409:
-                raise ValueError("Allocation authentication creation was not confirmed; reload before trying again") from None
+                raise ValueError("Creating the allocation credentials was not confirmed. Reload before trying again.") from None
         except Exception:
-            raise ValueError("Allocation authentication creation was not confirmed; reload before trying again") from None
+            raise ValueError("Creating the allocation credentials was not confirmed. Reload before trying again.") from None
         try:
             secret = read(path)
         except Exception:
@@ -94,12 +94,12 @@ def _key(obj):
     owners = sm.get("ownerReferences") or []
     if sm.get("deletionTimestamp") or not sm.get("uid") or sm.get("labels", {}).get(MANAGED) != "true" or not any(
             row.get("uid") == meta["uid"] and row.get("name") == meta["name"] and row.get("kind") == "DaemonSet" and row.get("apiVersion") == "apps/v1" for row in owners):
-        raise ValueError("Allocation authentication belongs to another probe; it was not replaced")
+        raise ValueError("The allocation credentials belong to another probe, so they were not replaced")
     try:
         key = base64.b64decode(secret["data"]["key"], validate=True).decode("ascii")
         AUTH.key_bytes(key)
     except Exception:
-        raise ValueError("Allocation authentication is invalid; it was not replaced") from None
+        raise ValueError("The allocation credentials are invalid, so they were not replaced") from None
     return sm["uid"]
 
 
@@ -113,21 +113,21 @@ def configure(body, version, *, preview=False):
     try:
         obj = read(_path())
     except Exception:
-        raise ValueError("Node probe configuration could not be read; nothing was changed") from None
+        raise ValueError("The host probe settings could not be read, so nothing was changed") from None
     meta = obj.get("metadata") or {}
     if meta.get("name") != NAMES.NODEPROBE or meta.get("namespace") != NS or not meta.get("uid") or not meta.get("resourceVersion") or meta.get("deletionTimestamp") or (
             body.get("uid"), body.get("resource_version")) != (meta["uid"], meta["resourceVersion"]):
-        raise ValueError("Node probe changed; reload its configuration before saving")
+        raise ValueError("The host probe changed. Reload its settings before saving.")
     template = copy.deepcopy(obj["spec"]["template"])
     spec = template["spec"]
     annotations = template.setdefault("metadata", {}).setdefault("annotations", {})
     old = [row for row in spec.get("containers", []) if row.get("name") == CONTAINER]
     occupied = [row for row in spec.get("volumes", []) if row.get("name") in VOLUMES]
     if (old or occupied) and not annotations.get(ANNOTATION):
-        raise ValueError("Unmanaged allocation resources already exist; nothing was replaced")
+        raise ValueError("Allocation resources that Homestead does not manage already exist, so nothing was replaced")
     for row in spec.get("containers", []) + spec.get("initContainers", []) + spec.get("ephemeralContainers", []):
         if row.get("name") != CONTAINER and any(mount.get("name") in VOLUMES for mount in row.get("volumeMounts", [])):
-            raise ValueError("Another container uses allocation mounts; nothing was changed")
+            raise ValueError("Another container uses the allocation mounts, so nothing was changed")
     # Copy only this optional sidecar and its uniquely named volumes. Preserve
     # every other container, scheduling constraint, volume and annotation.
     spec["containers"] = [row for row in spec["containers"] if row.get("name") != CONTAINER]
@@ -157,14 +157,14 @@ def configure(body, version, *, preview=False):
             # policy, and never pass the helper an API credential.
             {"name": VOLUMES[3], "emptyDir": {"medium": "Memory", "sizeLimit": "64Ki"}}])
         if capacity_check is None:
-            raise ValueError("Node capacity checks are unavailable; nothing was changed")
+            raise ValueError("Host capacity checks are unavailable, so nothing was changed")
         check = capacity_check(obj, template)
         if preview:
             return check
         if check["blocked"]:
             raise ValueError("; ".join(check["blockers"]))
         if check["warnings"] and (body.get("confirm_capacity") is not True or body.get("capacity_review") != check["fingerprint"]):
-            raise ValueError("Capacity warnings need a fresh review; reopen VM placement checks")
+            raise ValueError("The capacity warnings need a new review. Open the VM placement checks again.")
         annotations["homestead.io/allocation-key-uid"] = _key(obj)
     patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
              {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
@@ -172,8 +172,8 @@ def configure(body, version, *, preview=False):
     try:
         write("PATCH", _path(), patch, ctype="application/json-patch+json")
     except Exception:
-        raise ValueError("Probe update was not confirmed; reload configuration before another change. No automatic retry or cleanup was performed") from None
-    return {"enabled": enabled, "detail": "Allocation collector configuration saved; probe pods are restarting. Workloads were not changed"}
+        raise ValueError("The probe update was not confirmed. Reload the settings before another change. Nothing was retried or cleaned up automatically.") from None
+    return {"enabled": enabled, "detail": "Allocation collector settings saved. The probe pods are restarting. Apps were not changed."}
 
 
 def reconcile(version):
@@ -193,7 +193,7 @@ def reconcile(version):
         return {"state": "unmanaged", "detail": "Custom VM placement helper image was preserved"}
     meta = obj["metadata"]
     if not meta.get("uid") or not meta.get("resourceVersion") or meta.get("deletionTimestamp"):
-        raise ValueError("Probe identity changed; helper was not updated")
+        raise ValueError("The probe changed, so the helper was not updated")
     state = obj.get("status") or {}
     if state.get("observedGeneration") != meta.get("generation") or state.get("numberReady") != state.get("desiredNumberScheduled"):
         return {"state": "waiting", "detail": "Waiting for node monitoring to finish restarting before updating VM placement checks"}
@@ -205,7 +205,7 @@ def reconcile(version):
         {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
         {"op": "replace", "path": f"/spec/template/spec/containers/{index}/image", "value": desired}],
         ctype="application/json-patch+json")
-    return {"state": "updated", "detail": "VM placement helper image updated; probe pods are restarting"}
+    return {"state": "updated", "detail": "VM placement helper image updated. The probe pods are restarting."}
 
 
 def overview():

@@ -69,7 +69,7 @@ def publish_pointer(directory, anchor):
         except FileNotFoundError:
             pass
         else:
-            raise Held("A local data handoff receipt already exists; it will not be overwritten or adopted")
+            raise Held("A local handover record already exists, and it is not overwritten or taken over")
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=descriptor)
         created = True
         with os.fdopen(fd, "wb") as output:
@@ -92,7 +92,7 @@ def publish_pointer(directory, anchor):
     except Held:
         raise
     except Exception:
-        raise Held("The local data handoff receipt was not confirmed; inspect the retained data and control record. Nothing was retried") from None
+        raise Held("The local handover record was not confirmed. Check the kept data and control record. Nothing was retried.") from None
     finally:
         if descriptor is not None:
             # Only our private temporary name may be removed. A published marker

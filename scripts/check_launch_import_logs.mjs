@@ -61,7 +61,7 @@ try {
     await page.waitForTimeout(3200);
     assert.equal(await bottom(),true,'refresh keeps latest step visible');
     assert.ok(await page.locator('.oplog-copy').evaluate(el=>el.clientHeight<=120));
-    assert.match(await page.locator('.oplog-copy-progress').innerText(),/20\.0%.*18\.6 \/ 93\.1 GiB.*95\.4 MiB\/s.*ETA 13m 20s/s);
+    assert.match(await page.locator('.oplog-copy-progress').innerText(),/20\.0%.*18\.6 \/ 93\.1 GiB.*95\.4 MiB\/s.*13m 20s left/s);
     await page.locator('#oplogFollow').uncheck();
     await page.evaluate(()=>{
       document.querySelector('.oplog-steps').scrollTop=30;

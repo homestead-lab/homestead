@@ -123,7 +123,7 @@ def _integer(value):
             raise ValueError()
         return int(number)
     except (InvalidOperation, TypeError, ValueError, OverflowError):
-        raise ValueError('Storage sizes are incomplete; no change is available') from None
+        raise ValueError('The storage sizes are incomplete, so no change can be made') from None
 
 
 def _section(text, name, end=None):
@@ -211,7 +211,7 @@ def _host(node):
     if not re.fullmatch(r'[a-z0-9][a-z0-9.-]{0,251}', str(node or '')):
         raise ValueError('Choose a host')
     if platform(True).get('harvester'):
-        raise ValueError('Harvester owns host allocation; use its disk management')
+        raise ValueError('Harvester manages host storage. Use its disk management.')
     obj = kget('/api/v1/nodes/' + node)
     if (not isinstance(obj, dict) or obj.get('metadata', {}).get('deletionTimestamp')
             or not any(c.get('type') == 'Ready' and c.get('status') == 'True' for c in obj.get('status', {}).get('conditions', []))):
@@ -225,7 +225,7 @@ def inspect(node):
     host = _host(node)
     out, _ = HOST.run(node, INSPECT, timeout=90)
     facts = parse(out)
-    if _host(node) != host: raise ValueError('The host restarted during inspection; check again')
+    if _host(node) != host: raise ValueError('The host restarted during the check. Check again.')
     return {**facts, **host, 'node':node}
 
 
@@ -261,7 +261,7 @@ def review(body):
         raise ValueError('Enter the new total size as whole GiB')
     target = ((size_gib * GiB + facts['extent_bytes'] - 1) // facts['extent_bytes']) * facts['extent_bytes']
     if target <= area['size_bytes']:
-        raise ValueError('Online adjustment only grows a filesystem. Reducing the OS needs offline maintenance; reclaiming Longhorn space needs evacuation and recreation.')
+        raise ValueError('A change while running can only grow a filesystem. Shrinking the OS needs offline maintenance. Taking space back from Longhorn needs its copies moved off and the disk created again.')
     if target - area['size_bytes'] > facts['free_bytes']:
         raise ValueError('There is not enough unallocated space in this volume group. Existing OS or Longhorn space is not reclaimed automatically.')
     request_id = secrets.token_hex(12)
@@ -295,7 +295,7 @@ def start(body):
         ref = {**facts, 'area':area, 'role':cfg['role'], 'target_bytes':target, 'phase':'queued', 'request_id':cfg['request_id'],
                'approval':cfg['capacity_token'], 'job':'homestead-allocation-' + cfg['request_id'], 'namespace':NS}
         item = ops.start(KIND, 'Grow ' + area['name'] + ' on ' + cfg['node'], {'kind':'Node', 'name':cfg['node']},
-                         '/nodes?node=' + cfg['node'] + '&section=storage', ref, 'Allocation approved; no filesystem has changed yet')
+                         '/nodes?node=' + cfg['node'] + '&section=storage', ref, 'Change approved. No filesystem has changed yet.')
         return public(_saved(item['id']))
 
 
@@ -401,7 +401,7 @@ def _job(ref, create=False):
         obj = None
     expected = _job_body(ref)
     if obj is None:
-        if not create: raise HelperMissing('The helper is missing. Growth is not repeated automatically; recheck its saved outcome.')
+        if not create: raise HelperMissing('The helper is missing. Growing is not repeated automatically. Check its saved outcome again.')
         try: obj = ksend('POST', path.rsplit('/',1)[0], expected)
         except urllib.error.HTTPError as error:
             if error.code != 409: raise
@@ -415,7 +415,7 @@ def _job(ref, create=False):
             or len(actual.get('containers', [])) != 1 or actual.get('initContainers') or actual.get('volumes')
             or any(actual['containers'][0].get(key) != target['containers'][0][key] for key in ('name','image','command','securityContext'))
             or any(actual['containers'][0].get(key) for key in ('args','env','envFrom','volumeMounts'))):
-        raise ValueError('Helper identity or configuration changed; no work is repeated')
+        raise ValueError('The helper or its settings changed, so no work is repeated')
     ref['job_uid'] = meta['uid']
     return obj
 
@@ -437,16 +437,16 @@ def _ended(ref):
 
 def _verify_result(ref, facts):
     if facts['node_uid'] != ref['node_uid'] or facts['vg_uuid'] != ref['vg_uuid'] or facts['pv_uuid'] != ref['pv_uuid']:
-        raise ValueError('Host or volume group identity changed; inspect before continuing')
+        raise ValueError('The host or volume group changed. Check it before continuing.')
     area = next((a for a in facts['areas'] if a['lv_uuid'] == ref['area']['lv_uuid']), None)
     if not area or any(area[key] != ref['area'][key] for key in ('fs_uuid','filesystem','mountpoint','role','stable_device','block_bytes')):
         raise ValueError('The resized filesystem identity changed')
     old = {v['lv_uuid']:v for v in ref['volumes']}
     new = {v['lv_uuid']:v for v in facts['volumes']}
     if old.keys() != new.keys() or any(new[uid] != before for uid, before in old.items() if uid != area['lv_uuid']):
-        raise ValueError('Other logical volumes changed; inspect the allocation before continuing')
+        raise ValueError('Other logical volumes changed. Check the change before continuing.')
     if area['size_bytes'] not in (ref['area']['size_bytes'], ref['target_bytes']):
-        raise ValueError('The logical volume has an unexpected size; no automatic recovery is available')
+        raise ValueError('The logical volume has an unexpected size, and it cannot be recovered automatically')
     return area
 
 
@@ -456,7 +456,7 @@ def progress(item):
         if ref['phase'] == 'complete': return 'succeeded', 100, 'Logical volume and filesystem reached the approved size'
         if ref['phase'] == 'queued':
             if _context(inspect(ref['node'])) != _context(inspect_keys(ref)):
-                raise ValueError('Storage changed since review; no growth was dispatched')
+                raise ValueError('The storage changed since the review, so nothing was grown')
             ref['phase'] = 'dispatching'; ops.checkpoint(item)
         if ref['phase'] == 'dispatching':
             # Save intent first; a lost helper is never recreated by progress.
@@ -469,13 +469,13 @@ def progress(item):
             # Kubernetes has removed it.
             ref['helper_end'] = {'job':ref['job'], 'job_uid':ref['job_uid'],
                                  'outcome':'failed' if status.get('failed') else 'succeeded'}
-        if status.get('failed'): raise ValueError('Growth stopped. The logical volume may already be larger; recheck this job before any further allocation.')
-        if not status.get('succeeded'): return 'running', 50, 'Growing the logical volume and mounted filesystem; existing files are retained'
+        if status.get('failed'): raise ValueError('Growing stopped. The logical volume may already be larger. Check this job again before any further change.')
+        if not status.get('succeeded'): return 'running', 50, 'Growing the logical volume and mounted filesystem. Existing files are kept.'
         facts = inspect(ref['node']); area = _verify_result(ref, facts)
         if area['size_bytes'] != ref['target_bytes'] or area['fs_bytes'] != ref['target_bytes']:
             raise ValueError('Growth is incomplete. Recheck this job to inspect the logical volume and filesystem separately.')
         ref['phase'] = 'complete'; ops.checkpoint(item)
-        return 'succeeded', 100, 'Logical volume and filesystem reached the approved size; no restart was required'
+        return 'succeeded', 100, 'The logical volume and filesystem reached the approved size. No restart was needed.'
     except (ValueError, urllib.error.HTTPError) as error:
         return 'failed', item.get('progress', 0), str(error)
 
@@ -504,7 +504,7 @@ def recheck(operation_id):
         try: ended = _ended(ref)
         except ValueError:
             # An absent or altered helper cannot be assumed stopped.
-            raise ValueError('The original helper cannot be verified. Inspect it and the host receipt before recovery; automatic recovery is blocked.') from None
+            raise ValueError('The original helper cannot be confirmed. Check it and the host record before recovering. It is not recovered automatically.') from None
         if not ended:
             raise ValueError('The original helper may still be running')
         facts = inspect(ref['node']); area = _verify_result(ref, facts)
@@ -540,7 +540,7 @@ def finish(body):
         ref.update(facts, area=area, request_id=cfg['request_id'], approval=cfg['capacity_token'], filesystem_only=True,
                    job='homestead-allocation-' + cfg['request_id'], phase='queued')
         ref.pop('job_uid', None)
-        item.update(status='queued', progress=0, message='Finishing filesystem growth; no additional extents will be allocated')
+        item.update(status='queued', progress=0, message='Finishing growing the filesystem. No more space is added.')
         ops.checkpoint(item)
         return public(item)
 

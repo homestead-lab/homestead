@@ -315,7 +315,7 @@ def _audit(since, now, role, unread):
                           f"{len(refused)} request{'s were' if len(refused) != 1 else ' was'} refused"))
     if cut:
         unread.append({"source": "audit", "label": "Audit log",
-                       "reason": f"the newest {_size(AUDIT_READ)} of the audit log were read; older lines are not shown"})
+                       "reason": f"the newest {_size(AUDIT_READ)} of the audit log were read, and older lines are not shown"})
     return out
 
 
@@ -336,7 +336,7 @@ def timeline(user, role, since=None, now=None):
     try:
         last = last_here(user, now)
     except SHARED.Unreadable as error:
-        unread.append({"source": "last-here", "label": "When you were last here", "reason": str(error)[:300]})
+        unread.append({"source": "last-here", "label": "Since the last visit", "reason": str(error)[:300]})
     if since is None:
         since = last if last is not None else now - FIRST_LOOK
     since = min(int(since), now)

@@ -16,7 +16,7 @@ test("Settings › Monitoring explains in tips, says amber, and says Recommended
   const src = read("web/js/views-settings.js");
   assert.doesNotMatch(src, /changes the metric and node card to yellow/);
   assert.doesNotMatch(src, /<div class="note[^"]*"><b>Device differences are preserved\.<\/b>/);
-  assert.match(src, /Warning turns a bar amber, critical red/);
+  assert.match(src, /Warning turns a bar amber, and critical turns it red/);
   assert.equal((src.match(/Recommended: 1/g) || []).length, 1);
 });
 
@@ -29,7 +29,7 @@ test("the Longhorn storage card keeps its live figure and puts the consequence i
 test("Data Protection explains restore tests in a guide and says when testing is off", () => {
   const src = read("web/js/views-protect.js");
   assert.match(src, /UI\.guide\("How restore tests work"/);
-  assert.match(src, /Off · tests run only when you click Test now/);
+  assert.match(src, /Off · tests run only when Test now is chosen/);
 });
 
 test("the NFS server's recovery detail is in UI.more, like the SMB card", () => {

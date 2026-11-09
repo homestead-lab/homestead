@@ -85,7 +85,7 @@ class PullWatchDrainTests(unittest.TestCase):
             mutate(pod)
             with self.subTest(mutation=mutate):
                 self.assertFalse(pull.disposable(pod))
-                self.assertIn("unmanaged pod", " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
+                self.assertIn("no controller to create it again", " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
 
     def test_watcher_still_obeys_disruption_budgets(self):
         pod = watcher()
@@ -97,10 +97,10 @@ class PullWatchDrainTests(unittest.TestCase):
     def test_replacement_watcher_invalidates_review_before_eviction(self):
         pod = watcher()
         snapshot = maintenance.pod_snapshot([pod])
-        pod["metadata"]["uid"] = "replacement"
+        pod["metadata"]["uid"] = "replacing it"
         with mock.patch.object(lifecycle, "kget", return_value={"items": [pod]}), \
                 mock.patch.object(lifecycle, "ksend") as send:
-            with self.assertRaisesRegex(ValueError, "changed after review"):
+            with self.assertRaisesRegex(ValueError, "changed after the review"):
                 NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
         send.assert_not_called()
 
@@ -157,13 +157,13 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
     def test_changed_scan_command_does_not_gain_a_drain_exception(self):
         pod = self.scan()
         pod["spec"]["containers"][0]["command"][2] += "; rm -rf /host"
-        self.assertIn("unmanaged pod", " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
+        self.assertIn("no controller to create it again", " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
 
     def test_active_sessions_and_mutations_block_even_with_a_job_controller(self):
-        for task, phrase in (("host-run", "host command"), ("node-shell", "close its sessions"),
-                ("files", "close the volume browser"), ("probe", "source inspection"),
-                ("image-cleanup", "cleanup"), ("import", "import/copy"), ("chown", "ownership"),
-                ("reclass", "migration"), ("restructure", "restructuring"), ("vm-import", "VM import"), ("iso-copy", "ISO copy"),
+        for task, phrase in (("host-run", "host command"), ("node-shell", "Close its sessions"),
+                ("files", "Close the volume browser"), ("probe", "source check"),
+                ("image-cleanup", "cleanup"), ("import", "an import or copy"), ("chown", "volume owners"),
+                ("reclass", "moving to another storage class"), ("restructure", "being reorganised"), ("vm-import", "VM import"), ("iso-copy", "an ISO is being copied"),
                 ("node-power", "power helper"), ("cluster-shutdown", "saved progress")):
             pod = watcher()
             pod["metadata"]["labels"] = names.labels(task)
@@ -172,9 +172,9 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
                 self.assertIn(phrase, " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
                 pod["status"]["phase"] = "Succeeded"
                 self.assertEqual([], maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"])
-        for label, phrase in (("self-data-copy", "data handoff"), ("data-preparation", "data handoff"),
-                             ("handoff-worker", "data handoff"), ("longhorn-v2-setup", "host preparation"),
-                             ("snapshot-files", "temporary mounts")):
+        for label, phrase in (("self-data-copy", "data handover"), ("data-preparation", "data handover"),
+                             ("handoff-worker", "data handover"), ("longhorn-v2-setup", "host preparation"),
+                             ("snapshot-files", "temporary volumes")):
             pod = watcher()
             pod["metadata"]["labels"] = {names.key(label): "operation"}
             self.assertIn(phrase, " ".join(maintenance.inventory(lambda _: {"items": []}, [pod])["blockers"]))
@@ -187,7 +187,7 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
         cluster.pods.append(pod)
         review = cluster.s.review()
         self.assertFalse(review["ready"])
-        self.assertIn("import/copy", " ".join(review["blockers"]))
+        self.assertIn("an import or copy", " ".join(review["blockers"]))
         self.assertEqual([], cluster.calls)
 
     def test_image_scans_skip_cordoned_hosts(self):

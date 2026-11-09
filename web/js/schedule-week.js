@@ -13,7 +13,7 @@
 (function () {
   const DAY = 86400000, WEEK = 7 * DAY, FREQUENT = 6;
   const DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-  const LABELS = { lh: "Longhorn's recurring jobs and Homestead's weekly trim", crons: "CronJobs", power: "power schedules",
+  const LABELS = { lh: "Longhorn's schedules and Homestead's weekly trim", crons: "CronJobs", power: "power schedules",
     os: "host OS update settings", settings: "the maintenance window", workloads: "the apps list", copies: "volume copies" };
   const TASK_WORDS = { backup: "backup", "backup-force-create": "backup", snapshot: "snapshot", "snapshot-force-create": "snapshot",
     "snapshot-cleanup": "snapshot cleanup", "snapshot-delete": "snapshot delete", "filesystem-trim": "trim" };
@@ -350,8 +350,8 @@
   }
 
   function missingLines(week) {
-    return [week.unread.length && `Could not read ${week.unread.join(", ")}: those schedules are missing from this week. Reload to try again.`,
-      week.unreadable.length && `Could not read the schedule of ${week.unreadable.join(", ")}, so ${week.unreadable.length === 1 ? "it is" : "they are"} not in this list.`,
+    return [week.unread.length && `Homestead could not read ${week.unread.join(", ")}, so those schedules are missing from this week. Reload to try again.`,
+      week.unreadable.length && `Homestead could not read the schedule of ${week.unreadable.join(", ")}, so ${week.unreadable.length === 1 ? "it is" : "they are"} not in this list.`,
       // A window that may be missing makes the unread apps list a missing schedule: its one line goes here.
       week.windowUnknown && unnamedText(week, "the apps list")]
       .filter(Boolean).map(line => `<p>${esc(line)}</p>`).join("");
@@ -370,7 +370,7 @@
     // A check not done is not a quiet week (re-review): with the stops unchecked it says "No clash found".
     const unchecked = (week.effects?.["the apps list"] || []).includes(STOP_UNCHECKED);
     const quiet = week.checked ? `<div class="card flat week-summary"><b>${unchecked ? "No clash found" : "No clashes this week"}</b>
-      <div class="ui-help">No trim or backup starts with a backup on the same volume${closeList ? "; these may get in each other's way" : ""}.</div>${closeList}</div>` : "";
+      <div class="ui-help">No trim or backup starts with a backup on the same volume${closeList ? ". These may get in each other's way." : ""}.</div>${closeList}</div>` : "";
     return (missing ? UI.callout("warn", "Some schedules are missing", missing) : "") + quiet;
   }
 
@@ -385,10 +385,10 @@
   /* A source that only names what runs touch, unread (review, #919): every run
      is still listed, without those names - said as such, not as missing schedules. */
   // One line per source, with everything it costs (re-review, #919).
-  const unnamedText = (week, label) => `Could not read ${label}: ${(week.effects?.[label] || ["some runs name nothing"]).join("; ")}.`;
+  const unnamedText = (week, label) => `Homestead could not read ${label}: ${(week.effects?.[label] || ["some runs name nothing"]).join("; ")}.`;
   const unnamedLines = week => (week.unnamed || []).filter(label => !(week.windowUnknown && label === "the apps list"))
     .map(label => `<div class="dim small">${esc(unnamedText(week, label))}</div>`).join("");
-  const UNSEEN_TIP = "Homestead can't see which app this touches (another namespace)";
+  const UNSEEN_TIP = "Homestead cannot see which app this affects (another namespace)";
   /* An App filter hides the runs of other namespaces, whose app cannot be seen: said, never silent. */
   // weight: how many runs a row stands for (an all-day job, about perDay a day); its count is then "about".
   function unseenLine(rows, f, one, many, weight = () => 1) {
@@ -396,8 +396,8 @@
     const hidden = rows.filter(r => r.unseen && matches(r, { ...f, app: "" }) && !matches(r, f));
     const n = hidden.reduce((sum, r) => sum + weight(r), 0), about = hidden.some(r => weight(r) !== 1) ? "About " : "";
     if (!n) return "";
-    return `<div class="dim small">${n === 1 ? `1 ${one} in another namespace may touch it: Homestead can't see which app it touches`
-      : `${about}${n} ${many} in other namespaces may touch it: Homestead can't see which app they touch`}.</div>`;
+    return `<div class="dim small">${n === 1 ? `1 ${one} in another namespace may affect it, but Homestead cannot see which app it affects`
+      : `${about}${n} ${many} in other namespaces may affect it, but Homestead cannot see which apps they affect`}.</div>`;
   }
 
   const open = href => href ? `<button type="button" class="btn sm" onclick="openOperation(${jsq(href)})">Open</button>` : "";
@@ -422,7 +422,7 @@
     const shown = rows.filter(r => matches(r, f));
     const rangeSeg = `<div class="seg" role="group" aria-label="Range">${Object.entries(RANGES).map(([key, label]) =>
       `<button type="button" class="${range === key ? "on" : ""}" aria-pressed="${range === key}" onclick="weekRange(${jsq(key)})">${esc(label)}</button>`).join("")}</div>`;
-    paint(`${UI.pageHeader("This week", `Everything scheduled from now until ${fmtNext(week.until)}, in your time zone (${esc(yourZone())})`,
+    paint(`${UI.pageHeader("This week", `Everything scheduled from now until ${fmtNext(week.until)}, in this browser's time zone (${esc(yourZone())})`,
         `${rangeSeg} ${UI.button("Schedules", "go('schedules')")}`)}
       ${attention(week, volumeName)}
       ${summaryLine(week, shown, range)}${unnamedLines(week)}${unseenLine(rows, f, "run", "runs", r => r.perDay ? r.perDay * (range === "today" ? 1 : 7) : 1)}

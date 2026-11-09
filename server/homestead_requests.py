@@ -136,8 +136,8 @@ def plan(chosen=None, role=None):
         owner = managed_by(dep)
         if changes and owner:
             where = f" ({owner['source']})" if owner.get("source") else ""
-            why = (f"{owner['by']} applies it{where} and would undo the change at its next sync; commit this instead"
-                   if owner.get("detected") else f"marked as updated by {owner['by']}; set it there - this is the change")
+            why = (f"{owner['by']} applies it{where} and would undo the change at its next sync. Commit this there instead."
+                   if owner.get("detected") else f"Marked as updated by {owner['by']}. Make this change there.")
             skipped.append({"id": app_id, "why": why, "yaml": _yaml(dep, changes)})
             continue
         if changes:
@@ -187,9 +187,9 @@ def reviewed(apps, token, role=None):
         # must still be a reservation Kubernetes can read.
         for c in app["changes"]:
             if not _quantity(c["cpu"], "cpu") or not _quantity(c["memory"], "memory"):
-                raise ValueError(f"{app['id']}: {c['container']} has no readable reservation; review again")
+                raise ValueError(f"{app['id']}: {c['container']} has no readable reservation. Review again.")
     if review_token(apps) != token:
-        raise ValueError("The reservations differ from the review; review again")
+        raise ValueError("The reservations differ from the review. Review them again.")
     out = []
     for app in apps:
         ns, name = app["id"].split("/", 1)
@@ -236,15 +236,15 @@ def check(ns, name, changes, role=None, fit=True):
         for r in ("cpu", "memory"):
             if limit.get(r) and _quantity(change[r], r) > _quantity(limit[r], r):
                 raise ValueError(f"{app_id}: {change['container']}'s {'CPU' if r == 'cpu' else 'memory'} limit is now "
-                                 f"{limit[r]}, below the new reservation {change[r]}; review again")
+                                 f"{limit[r]}, below the new reservation {change[r]}. Review again.")
     if fit:
         spec = dep.get("spec") or {}
         # One already rolling out, failing or paused would not settle, and the
         # new reservation would be blamed for it: it is left, saying why.
         if spec.get("paused"):
-            raise ValueError(f"{app_id} is paused; resume it, then review again")
+            raise ValueError(f"{app_id} is paused. Resume it, then review again.")
         if not _settled(ns, name):
-            raise ValueError(f"{app_id} is not running as it should now (rolling out, or not ready); left alone")
+            raise ValueError(f"{app_id} is not running as it should now (rolling out, or not ready). It was left as it is.")
         # A stopped app takes its new reservation when it next starts; it
         # needs no room now.
         if int(spec.get("replicas") or 0):
@@ -311,8 +311,8 @@ def room(dep, changes):
         best = max(best, free["memory"])
     if not allowed:
         raise ValueError("no host it may run on takes apps now. Its pins, selectors or the hosts' taints rule them out")
-    raise ValueError(f"no host it may run on has room for its new reservation ({need['memory'] // 2 ** 20} MiB; "
-                     f"the most any of them has free is {max(0, best) // 2 ** 20} MiB)")
+    raise ValueError(f"no host it can run on has room for its new reservation of {need['memory'] // 2 ** 20} MiB. "
+                     f"The most any of them has free is {max(0, best) // 2 ** 20} MiB.")
 
 
 # --------------------------------------------------------------- the job
@@ -362,7 +362,7 @@ def status(item):
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {app['id']}: {why[:160]}"
         ref.update(stage="rolling", started=now)
-        return "running", progress, f"Setting {app['id']} ({i + 1} of {len(apps)}); it restarts"
+        return "running", progress, f"Setting {app['id']} ({i + 1} of {len(apps)}). It restarts."
     if stage == "rolling":
         if _settled(app["ns"], app["name"]):
             ref.update(index=i + 1, stage="apply", done=done + 1)
@@ -371,11 +371,11 @@ def status(item):
             # Stop rather than restart more: one that did not come back is
             # looked at first. It keeps its new reservation, so what it had
             # is said, to set back in Edit if that is the cause.
-            return "failed", progress, (f"{app['id']} did not come back within 10 minutes; the rest were not changed. "
-                                        f"Set {done} before it. It reserved {_before(app)} before; check its events "
-                                        f"in Containers, and set that back in Edit if the new reservation is why")
+            return "failed", progress, (f"{app['id']} did not come back within 10 minutes. The rest were not changed. "
+                                        f"Set {done} before it. It reserved {_before(app)} before. Check its events "
+                                        f"in Containers, and set that back in Edit if the new reservation is the cause.")
         return "running", progress, f"Waiting for {app['id']} to restart ({i + 1} of {len(apps)})"
-    return "failed", progress, "Unknown step; the rest were not changed"
+    return "failed", progress, "Unknown step. The rest were not changed."
 
 
 def _refused(error):
@@ -413,9 +413,9 @@ def start(body, role=None):
     running = next((i for i in operations.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in operations.TERMINAL), None)
     if running:
-        raise ValueError("Reservations are already being set; follow it in Jobs")
+        raise ValueError("Reservations are already being set. Follow it in Jobs.")
     if (body or {}).get("restart") is not True:
-        raise ValueError("A new reservation restarts each app; confirm the restarts")
+        raise ValueError("A new reservation restarts each app. Confirm the restarts.")
     apps = reviewed(body.get("apps"), body.get("review_token"), role)
     return {"operation": operations.start(KIND, f"Set reservations on {len(apps)} app{'' if len(apps) == 1 else 's'}",
                                           {"kind": "Deployment", "name": "reservations"}, "/containers",
