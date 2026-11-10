@@ -671,7 +671,9 @@ def _send_power(request):
     if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
         return ROUTER.Reply(409, {"error": "Confirm the whole-cluster outage before restarting or shutting down the host",
                                   "plan": power_plan})
-    power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], b.get("choices") or {})
+    # Forced, nothing is stopped or moved first (hold=None): what has no option is not asked to choose.
+    power_plan["choices"] = HOLD.choose([i for i in power_plan.get("hold") or [] if i["options"] or not force],
+                                        b.get("choices") or {})
     stranded = {(w["ns"], w["name"]) for w in power_plan["stranded"]}
     if any((i["ns"], i["name"]) in stranded and power_plan["choices"].get(i["id"]) == "move"
            for i in power_plan.get("hold") or []) and not b.get("allow_stranded"):

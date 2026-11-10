@@ -107,7 +107,7 @@ def candidates(node, pods, vmis, replicasets, ready_hosts, eligible=None, single
         why = "" if can_move else "the only host" if single_host else "no other host it can run on"
         if kind == "StatefulSet" and (ns, name) in deletes and "wait" in options:
             options = [o for o in options if o != "wait"]
-            why = "it can delete its volumes when stopped"
+            why = why if options else "it can delete its volumes when stopped"
         items.append({"id": f"{kind}/{ns}/{name}", "kind": kind, "ns": ns, "name": name,
                       "here": row["here"], "elsewhere": row["elsewhere"], "hosts": hosts,
                       "options": options, "default": "" if not options else "move" if can_move or "wait" not in options else "wait",
@@ -157,6 +157,13 @@ def _strategy(vm):
     return "running" if spec.get("running") else "Halted"
 
 
+def _fence(item, meta):
+    """A StatefulSet's stop goes out only on the version whose policy was read:
+    a policy changed in between makes it fail (409) instead of deleting claims."""
+    version = meta.get("resourceVersion")
+    return {"resourceVersion": version} if item["kind"] == "StatefulSet" and version else {}
+
+
 def stop(item, job):
     """Stop one app or VM to wait for its host, marking what it was."""
     obj = kget(_path(item["kind"], item["ns"], item["name"]))
@@ -178,7 +185,7 @@ def stop(item, job):
     replicas = int((obj.get("spec") or {}).get("replicas", 1) or 0)
     was = (meta.get("annotations") or {}).get(HELD_AS) if mark == job else str(replicas)
     ksend("PATCH", _path(item["kind"], item["ns"], item["name"]),
-          {"metadata": {"annotations": {HELD_BY: job, HELD_AS: was}}, "spec": {"replicas": 0}},
+          {"metadata": {"annotations": {HELD_BY: job, HELD_AS: was}, **_fence(item, meta)}, "spec": {"replicas": 0}},
           ctype="application/merge-patch+json")
     return {**item, "was": was}
 

@@ -92,7 +92,8 @@ class CandidateTests(unittest.TestCase):
         deletes = [statefulset("db", "Delete")]
         items = self.items(statefulsets=deletes)
         self.assertEqual(["move"], items["StatefulSet/lab/db"]["options"])
-        with self.assertRaisesRegex(ValueError, "db cannot wait here: it can delete its volumes when stopped"):
+        self.assertEqual("", items["StatefulSet/lab/db"]["why"], "it simply moves")
+        with self.assertRaisesRegex(ValueError, "db cannot wait here"):
             HOLD.choose([i for i in items.values() if i["options"]], {"StatefulSet/lab/db": "wait"})
         self.assertEqual(["move", "wait"], self.items(statefulsets=[statefulset("db", "Retain")])["StatefulSet/lab/db"]["options"])
         self.assertEqual(["move", "wait"], self.items(statefulsets=[statefulset("db")])["StatefulSet/lab/db"]["options"],
@@ -192,9 +193,14 @@ class StopRestoreTests(unittest.TestCase):
         self.assertEqual(1, self.k.objects[sts]["spec"]["replicas"])
         # Retain: stopped and marked as any other app, and its claim stays.
         self.k.objects[sts] = statefulset("db", "Retain")
+        self.k.objects[sts]["metadata"]["resourceVersion"] = "7"
         HOLD.stop({"kind": "StatefulSet", "ns": "lab", "name": "db"}, "job-1")
         self.assertEqual((0, "1"), (self.k.objects[sts]["spec"]["replicas"], self.k.objects[sts]["metadata"]["annotations"][HOLD.HELD_AS]))
         self.assertIn(claim, self.k.objects)
+        self.assertEqual("7", self.k.sent[-1][2]["metadata"]["resourceVersion"],
+                         "fenced on the version whose policy was read: a change in between fails the stop")
+        HOLD.stop(self.items[0], "job-1")
+        self.assertNotIn("resourceVersion", self.k.sent[-1][2]["metadata"], "a Deployment has no such policy")
 
     def test_the_simulated_controller_deletes_claims_as_kubernetes_does(self):
         # Keeps the fake honest: without the check, this is what a stop did.
@@ -225,6 +231,31 @@ class OwnPodTests(unittest.TestCase):
             self.assertEqual([], items)
         finally:
             HOLD.OWN_POD = ""
+
+
+class ForcedSendTests(unittest.TestCase):
+    def test_a_forced_send_goes_through_and_stops_nothing(self):
+        # A StatefulSet that would delete its volumes has no option on the only
+        # host. Force stops nothing first (hold=None), so it is not asked to choose.
+        import types
+        import homestead_power_jobs as JOBS
+        db = {"id": "StatefulSet/lab/db", "kind": "StatefulSet", "ns": "lab", "name": "db",
+              "options": [], "default": "", "why": "it can delete its volumes when stopped"}
+        plan = {"ready": True, "review_token": "t", "planned_outage": False, "hold": [db], "stranded": [],
+                "requires_data_ack": False, "drain_blockers": []}
+        sent = []
+        body = {"node": "k1", "confirm": "k1", "action": "reboot", "force": True, "review_token": "t", "choices": {}}
+        with mock.patch.object(JOBS, "active_power_job", return_value=None), \
+                mock.patch.object(POWER, "plan", lambda *a, **k: copy.deepcopy(plan)), \
+                mock.patch.object(HOLD, "stop", side_effect=AssertionError("a forced job stops nothing")), \
+                mock.patch.object(JOBS, "send_reviewed_power", lambda p, force, background=False: sent.append((p, force)) or {"id": "op"}):
+            reply = JOBS._send_power(types.SimpleNamespace(body=body, query={}, path="/api/node/power"))
+        self.assertEqual(202, reply.code)
+        self.assertEqual(True, sent[0][1])
+        self.assertEqual({}, sent[0][0]["choices"])
+        # Not forced, the same item is still refused when chosen.
+        with self.assertRaisesRegex(ValueError, "db cannot"):
+            HOLD.choose([db], {})
 
 
 class OrderTests(unittest.TestCase):
