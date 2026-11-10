@@ -1016,7 +1016,8 @@ def _network_upgrade_status(item):
         job_status = job.get("status") or {}
         if now.lstrip("v") == target.lstrip("v") and state == "failed" and not job_status.get("active"):
             return "failed", 50, f"Helm could not deploy {name} chart {target}. Check its Helm release and install job."
-        if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
+        # A lost pod counts as failed until its replacement starts: only the Job's own end does (#1307).
+        if HELM.job_failed(job):
             return "failed", 50, f"Helm could not apply {name} chart {target}. Check {job_name} in {HELM_NS}."
         return "running", 50 if job_status.get("active") else 20, f"{name} chart {now} → {target}. Waiting for Helm to deploy it."
     paths = next(paths for key, _, paths in NETWORK_PARTS if key == component)
@@ -1107,7 +1108,7 @@ def status(item):
     if component == "longhorn":
         if ref.get("v2_mode"):
             job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-longhorn") or {}
-            if (job.get("status") or {}).get("failed") and not (job.get("status") or {}).get("active") and _elapsed(item) > 120:
+            if HELM.job_failed(job):
                 return "failed", 20, "Helm could not apply Longhorn. Check its install job in kube-system."
             import homestead_lhv2_upgrade as V2
             return V2.progress(item)
@@ -1134,7 +1135,7 @@ def status(item):
         return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
     job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-{CHARTS.get(component, component)}") or {}
     job_status = job.get("status") or {}
-    if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
+    if HELM.job_failed(job):
         return "failed", 50, f"Helm could not apply it. The log of the helm-install-{CHARTS.get(component)} job in kube-system says why."
     return "running", 50 if job_status.get("active") else 20, f"{ref.get('name', component)} {now or '…'} → {target}"
 

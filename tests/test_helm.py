@@ -618,6 +618,51 @@ class HelmJobTests(unittest.TestCase):
         self.assertTrue(job["cleanable"])
         self.assertEqual("Helm failed. The log of the helm-install-grafana job in kube-system says why.", job["message"])
 
+    # #1307: the controller's Jobs restart a failing container in its own pod
+    # (restartPolicy OnFailure), so the Job reads active for days; only the pod counts.
+    def pod(self, restarts, owner=None, exit_code=1):
+        job = self.kube.object(self.JOB_PATH)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": "kube-system", "name": "helm-install-grafana-x7k2p",
+            "labels": {"job-name": "helm-install-grafana", "batch.kubernetes.io/job-name": "helm-install-grafana"},
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "helm-install-grafana",
+                                 "uid": owner or job["metadata"]["uid"], "controller": True}]},
+            "status": {"phase": "Running", "containerStatuses": [{
+                "name": "helm", "restartCount": restarts, "ready": False,
+                "state": {"waiting": {"reason": "CrashLoopBackOff"}},
+                "lastState": {"terminated": {"exitCode": exit_code, "reason": "Error"}}}]}})
+
+    JOB_PATH = "/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana"
+
+    def test_a_chart_that_keeps_failing_says_so_while_it_runs(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(4)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], "Kubernetes is still trying it")
+        self.assertEqual("Helm keeps failing: 5 tries so far, and Kubernetes keeps trying. "
+                         "The log of the helm-install-grafana job in kube-system says why.", job["message"])
+
+    def test_one_restart_is_not_called_failing(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(1)
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_a_pod_of_another_job_is_not_read_as_this_ones(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(9, owner="uid-of-an-older-job")
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_pods_that_cannot_be_read_leave_it_running(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(4)
+        self.kube.fail("/api/v1/namespaces/kube-system/pods", 500, times=5)
+        job = self.look(ident)
+        self.assertEqual(("running", "Helm is running"), (job["status"], job["message"]))
+
     def test_a_failed_condition_that_is_false_does_not_end_it(self):
         ident = self.upgraded()
         conditions = self.POD_LOST["conditions"] + [{"type": "Failed", "status": "False"}]

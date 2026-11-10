@@ -513,13 +513,41 @@ def _no_job(item, ref, earlier=False):
                          "following it. Check that the controller is running. The Helm page shows what is installed.")
 
 
-def _job_failed(job):
+def job_failed(job):
     """Whether the Job itself has ended failed. Its `failed` count does not say: it
     counts lost pods, and the Job goes on making new ones. The controller's Jobs
     restart a failing container in its own pod, so a chart that fails adds nothing to
-    that count; only this condition covers both."""
+    that count; only this condition covers both. Platform upgrades read it too."""
     return any(condition.get("type") == "Failed" and condition.get("status") == "True"
                for condition in (job.get("status") or {}).get("conditions") or [])
+
+
+# Container restarts in the Job's own pod that read as a chart that keeps failing,
+# not a single slip: the kubelet's back-off makes these minutes apart.
+FAILING_RESTARTS = 3
+
+
+def _restarts(ref, job):
+    """How many times the Job's container has failed in its pod, or 0. The Job writes
+    Failed only at its backoffLimit (1000 restarts, about 3.5 days at the kubelet's
+    5-minute cap), so only the pod shows a chart that keeps failing. A pod of another
+    Job of that name does not count, and a pod read that fails says nothing."""
+    uid = (job.get("metadata") or {}).get("uid")
+    selector = urllib.parse.quote(f"job-name={ref['name']}", safe="")
+    try:
+        pods = kget(f"/api/v1/namespaces/{ref['namespace']}/pods?labelSelector={selector}").get("items") or []
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return 0
+    most = 0
+    for pod in pods:
+        owners = (pod.get("metadata") or {}).get("ownerReferences") or []
+        if not uid or not any(owner.get("uid") == uid for owner in owners):
+            continue
+        for container in (pod.get("status") or {}).get("containerStatuses") or []:
+            ended = (container.get("lastState") or {}).get("terminated") or {}
+            if ended.get("exitCode"):
+                most = max(most, int(container.get("restartCount") or 0))
+    return most
 
 
 def job_status(item):
@@ -542,9 +570,13 @@ def job_status(item):
     status = job.get("status") or {}
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
-    if _job_failed(job):
+    if job_failed(job):
         return "failed", 100, f"Helm failed. The log of the {ref['name']} job in {ref['namespace']} says why."
     if status.get("active"):
+        restarts = _restarts(ref, job)
+        if restarts >= FAILING_RESTARTS:
+            return "running", 40, (f"Helm keeps failing: {restarts + 1} tries so far, and Kubernetes keeps trying. "
+                                   f"The log of the {ref['name']} job in {ref['namespace']} says why.")
         return "running", 40, "Helm is running"
     if status.get("failed"):
         return "running", 10, "A Helm pod failed and Kubernetes is trying again"

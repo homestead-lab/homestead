@@ -280,7 +280,9 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
         chart = self.cluster.kube.object(CHART + self.component)
         chart["status"] = {"jobName": "helm-install-network"}
         self.cluster.kube.add(chart)
-        self.cluster.kube.add(job("helm-install-network", {"failed": 1}))
+        # A Job that has ended failed (#1307: a failed count alone is a lost pod being replaced).
+        self.cluster.kube.add(job("helm-install-network", {"failed": 1, "conditions": [
+            {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}))
         with patch.object(C, "_elapsed", return_value=121):
             state, _, message = C.status(self.item)
         self.assertEqual("failed", state)
