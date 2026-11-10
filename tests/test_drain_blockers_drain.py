@@ -370,6 +370,106 @@ class RefusalTests(unittest.TestCase):
         with Kube():
             self.assertEqual("", BLOCKERS.stall_reason(NODE))
 
+    def test_a_budget_kubernetes_cannot_update_is_not_passing(self):
+        # Its status is the last one written before the sync failed, which
+        # here looks like a budget behind an eviction (2 healthy, needs 1,
+        # none allowed): waiting would wait for nothing.
+        pod, pdb = workload(), sync_failed(budget("keep-one", expected=2, healthy=2, desired=1, allowed=0))
+        with Kube(pdb):
+            said = BLOCKERS.refusal(too_many_requests("eviction", pdb), pod)
+        self.assertEqual({"budget": "lab/keep-one", "passing": False},
+                         {k: said[k] for k in ("budget", "passing")})
+        self.assertIn("Kubernetes cannot update it", said["why"])
+        self.assertIn(SYNC_ERROR, said["why"])
+
+    def test_a_429_with_no_budget_cause_is_plain(self):
+        pod = workload()
+        with Kube():
+            said = BLOCKERS.refusal(throttled("eviction"), pod)
+        self.assertEqual({"budget": None, "passing": False, "plain": True},
+                         {k: said.get(k) for k in ("budget", "passing", "plain")})
+        pdb = budget("keep-ready")
+        with Kube():   # a budget's refusal whose budget cannot be read, or no body, is not plain
+            self.assertFalse(BLOCKERS.refusal(too_many_requests("eviction", pdb), pod).get("plain"))
+            self.assertFalse(BLOCKERS.refusal(too_many_requests("eviction", pdb, body=False), pod).get("plain"))
+
+
+SYNC_ERROR = 'found no controllers for pod "app-a"'
+
+
+def sync_failed(pdb):
+    """The budget as the disruption controller's failSafe leaves it
+    (pkg/controller/disruption/disruption.go): disruptionsAllowed 0 and a
+    DisruptionAllowed condition with reason SyncFailed; the other counts are
+    not touched."""
+    pdb["status"]["disruptionsAllowed"] = 0
+    pdb["status"]["conditions"] = [{"type": "DisruptionAllowed", "status": "False", "reason": "SyncFailed",
+                                    "message": SYNC_ERROR, "observedGeneration": 1,
+                                    "lastTransitionTime": "2026-11-01T12:00:00Z"}]
+    return pdb
+
+
+def throttled(path):
+    """A 429 that is not a budget's: the API server's own Status with no
+    DisruptionBudget cause, such as API priority and fairness sends."""
+    status = {"kind": "Status", "apiVersion": "v1", "metadata": {}, "status": "Failure",
+              "message": "Too many requests, please try again later.", "reason": "TooManyRequests",
+              "code": 429, "details": {"retryAfterSeconds": 1}}
+    return urllib.error.HTTPError(path, 429, "Too Many Requests", {}, io.BytesIO(json.dumps(status).encode()))
+
+
+class SyncFailedAndPlainDrainTests(unittest.TestCase):
+    """Through the same drain as DrainNamesItsBlockerTests."""
+    setUp = DrainNamesItsBlockerTests.setUp
+    run_drain = DrainNamesItsBlockerTests.run_drain
+    refuse = DrainNamesItsBlockerTests.refuse
+
+    def throttle(self, kube, pod, times):
+        asked = []
+
+        def respond(method, path, sent):
+            asked.append(path)
+            if len(asked) <= times:
+                raise throttled(path)
+            return None
+        kube.react("POST", eviction(pod), respond)
+        return asked
+
+    def test_a_budget_kubernetes_cannot_update_fails_at_once_naming_it(self):
+        pod = workload()
+        pdb = sync_failed(budget("keep-one", expected=2, healthy=2, desired=1, allowed=0))
+        with Kube(pod, pdb) as kube:
+            self.refuse(kube, pod, pdb, times=10_000)
+            with self.assertRaises(ValueError) as caught:
+                self.run_drain(kube, power=True)
+        message = str(caught.exception)
+        self.assertEqual(0, self.clock.now, "not the five-minute wait")
+        self.assertIn("lab/keep-one", message)
+        self.assertIn(SYNC_ERROR, message)
+        self.assertFalse(self.sent)
+
+    def test_a_plain_429_is_tried_again(self):
+        pod = workload()
+        with Kube(pod) as kube:
+            asked = self.throttle(kube, pod, 3)
+            result = self.run_drain(kube)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(["lab/app-a"], result["evicted"])
+        self.assertEqual(4, len(asked))
+
+    def test_a_plain_429_that_does_not_stop_ends_with_the_drains_own_wait(self):
+        pod = workload()
+        with Kube(pod) as kube:
+            self.throttle(kube, pod, 10_000)
+            with self.assertRaises(ValueError) as caught:
+                self.run_drain(kube, power=True)
+        message = str(caught.exception)
+        self.assertGreaterEqual(self.clock.now, 120)
+        self.assertLess(self.clock.now, BLOCKERS.BUDGET_WAIT)
+        self.assertIn("The drain timed out after 2 minutes", message)
+        self.assertIn("lab/app-a", message)
+        self.assertFalse(self.sent)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -126,6 +126,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
                     if why["passing"]:
                         retrying.append(identity)
                         budgets[identity] = [budgets.get(identity, [None])[0], why]
+                    elif why.get("plain"):
+                        pass    # the API server's own 429: tried again, within the drain's two minutes
                     else:
                         skipped.append(f"{identity} (HTTP 429: {why['why']})")
                 elif wait and e.code == 404:
