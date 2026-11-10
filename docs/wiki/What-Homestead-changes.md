@@ -213,6 +213,9 @@ Homestead also changes and deletes existing objects when you ask:
 - an app's own `Secret` (`<app>-env`) when you save it: environment values
   that look secret move there - by name, a password or token in the value, or
   a value it already held under a variable you renamed;
+- the app, `Service` and copy `Job` of a failed or cancelled import when you
+  remove it, only those carrying the import's stamp, each by its UID; a volume
+  the import created only if you tick it in the review;
 - a `Node` when you cordon, drain, label or remove a host, and the Cluster
   API `Machine` behind it, where there is one;
 - a `PersistentVolume`'s reclaim policy and claim while a volume moves to

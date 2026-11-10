@@ -357,6 +357,90 @@ class ImportJobTests(unittest.TestCase):
         send.assert_not_called()
         return handler._send.call_args.args, cleanup
 
+    # Remove for a failed or cancelled import (#1301): only what carries the import's stamp,
+    # and volumes only when ticked.
+    svc_path = "/api/v1/namespaces/lab/services/app"
+
+    def failed_import(self, status="failed"):
+        self.start(); self.complete(failed=True); self.poll()
+        self.assertEqual("failed", self.item()["status"])
+        if status != "failed":
+            with ops.transaction() as t:
+                t.items[0]["status"] = status
+                t.save(t.items)
+        self.sent.clear()
+
+    def remove(self, volumes=()):
+        return CONTAINER_IMPORT.delete_import("homestead-import-app", volumes=volumes)
+
+    def deleted(self):
+        return sorted(path for method, path, _ in self.sent if method == "DELETE")
+
+    def test_removing_a_failed_import_deletes_its_stamped_app_service_and_job_and_keeps_the_volume(self):
+        self.failed_import()
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")
+        self.assertEqual((True, "app", ["app"], [{"name": "data", "created": True}]),
+                         (plan["removable"], plan["workload"], plan["services"], plan["volumes"]))
+        result = self.remove()
+        self.assertEqual(sorted([self.dep_path, self.svc_path, self.job_path]), self.deleted())
+        self.assertIn(self.pvc_path, self.objects, "a volume not ticked is kept")
+        self.assertIn("Kept volumes: data", result["message"])
+        self.assertFalse(self.item()["ref"]["retain_resources"])
+
+    def test_a_cancelled_import_is_removed_the_same_way(self):
+        self.failed_import("cancelled")
+        self.remove()
+        self.assertEqual(sorted([self.dep_path, self.svc_path, self.job_path]), self.deleted())
+
+    def test_an_object_without_the_import_s_stamp_is_never_deleted(self):
+        self.failed_import()
+        self.objects[self.svc_path]["metadata"]["annotations"] = {}      # made by hand, under the same name
+        self.objects[self.dep_path]["metadata"]["annotations"] = {}      # replaced by an app of the same name
+        self.objects[self.job_path]["metadata"]["annotations"] = {}
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")
+        self.assertEqual(("", []), (plan["workload"], plan["services"]))
+        self.remove()
+        self.assertEqual([], self.deleted())
+        for path in (self.dep_path, self.svc_path, self.job_path, self.pvc_path):
+            self.assertIn(path, self.objects)
+
+    def test_a_ticked_volume_this_import_created_is_deleted_and_an_unticked_one_is_not(self):
+        self.failed_import()
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/other"] = {"metadata": {"uid": "x", "name": "other"}}
+        self.remove(volumes=["data"])
+        self.assertIn(self.pvc_path, self.deleted())
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/other", self.objects)
+
+    def test_a_volume_this_import_did_not_create_is_refused_even_when_ticked(self):
+        self.borrowed(); self.start(); self.complete(failed=True); self.poll(); self.sent.clear()
+        before = copy.deepcopy(self.objects[self.pvc_path])
+        with self.assertRaisesRegex(ValueError, "did not create data"):
+            self.remove(volumes=["data"])
+        self.assertEqual([], self.deleted())
+        self.assertEqual(before, self.objects[self.pvc_path])
+
+    def test_a_volume_replaced_after_the_import_is_not_deleted(self):
+        self.failed_import()
+        self.objects[self.pvc_path]["metadata"]["uid"] = "someone-else"
+        with self.assertRaisesRegex(ValueError, "replaced"):
+            self.remove(volumes=["data"])
+        self.assertIn(self.pvc_path, self.objects)
+
+    def test_a_running_import_cannot_be_removed_this_way(self):
+        self.start()
+        self.assertFalse(CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")["removable"])
+        with self.assertRaises(ValueError):
+            self.remove()
+        self.assertEqual([], [r for r in self.sent if r[0] == "DELETE"])
+
+    def test_the_api_removes_a_failed_import_and_passes_only_the_named_volumes(self):
+        self.failed_import()
+        request = mock.Mock(body={"name": "homestead-import-app", "namespace": "lab", "remove_volumes": ["data"]})
+        with mock.patch.object(imports, "guard_managed_smb"):
+            result = imports._delete_import(request)
+        self.assertIn(self.pvc_path, self.deleted())
+        self.assertEqual([], result["releasing"])
+
     def test_cleanup_api_refuses_volume_or_workload_deletion_for_journalled_import(self):
         response, cleanup = self.cleanup_api({"journalled": True}, {})
         self.assertEqual(400, response[0])

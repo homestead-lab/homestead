@@ -80,6 +80,8 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
         if (receipt["uid"], receipt["volume"]) != (reviewed.get("uid"), reviewed.get("spec", {}).get("volumeName", "")):
             raise ValueError("Borrowed volume changed after review")
     ref = {"namespace": ns, "name": name, "planned": targets, "writes": [], "dispatch_protocol": 1,
+           # The claims this import creates, so a removal can tell them from borrowed ones.
+           "created": [v["name"] for v in prepared["volumes"] if v["create"]],
            "phase": "prepared", "retain_resources": True, "claims": {v["name"]: initial.get(v["name"]) for v in prepared["volumes"]},
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0])}
@@ -115,6 +117,8 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                 ENVSEC.externalize(ns, obj, read, writer)
                 dep = writer("POST", IDENT.base(ns), obj)
             if prepared["service"]:
+                # The import's stamp, so a removal can tell this Service from one made by hand.
+                prepared["service"]["metadata"].setdefault("annotations", {})[GUARD.DISPATCH] = ident
                 writer("POST", f"/api/v1/namespaces/{ns}/services", prepared["service"])
             if prepared["job"]:
                 obj = prepared["job"]
@@ -168,6 +172,104 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
             except Exception:
                 pass
             raise ValueError(f"The import setup needs to be checked in Recent jobs ({ident}). The resources were kept. Nothing was retried, rolled back or deleted.") from None
+
+
+REMOVABLE = ("failed", "cancelled")
+
+
+def _item(ns, name, job, ops):
+    """The import's journal entry: by the stamp on its Job, else by the Job it planned."""
+    ident = (job.get("metadata") or {}).get("annotations", {}).get(GUARD.DISPATCH) if job else None
+    with ops.transaction() as t:
+        return next((i for i in t.items if i.get("kind") == KIND and (i["id"] == ident or (not ident and any(
+            r.get("kind") == "Job" and (r.get("namespace"), r.get("name")) == (ns, name)
+            for r in i.get("ref", {}).get("planned", []))))), None)
+
+
+def _stamped(obj, ident, ref):
+    """Whether this import made the object: it carries the import's stamp. A name alone is not proof."""
+    notes = (obj.get("metadata") or {}).get("annotations") or {}
+    return notes.get(GUARD.DISPATCH) == ident or bool(ref.get("job_uid") and notes.get(GUARD.JOB_UID) == ref["job_uid"])
+
+
+def _find(path, read):
+    try:
+        return read(path)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+
+
+def cleanup_plan(ns, name, job, read, ops):
+    """What removing a failed or cancelled import deletes, for its Remove review.
+    Only objects carrying the import's stamp. Volumes are listed apart, and only
+    those this import created."""
+    plan = {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True,
+            "journalled": True, "removable": False, "services": []}
+    item = _item(ns, name, job, ops)
+    if not item or item.get("status") not in REMOVABLE:
+        return plan
+    ref, ident = item["ref"], item["id"]
+    plan["removable"] = True
+    app = _find(IDENT.base(ns) + "/" + ref["name"], read)
+    if app and _stamped(app, ident, ref):
+        plan["workload"] = ref["name"]
+    svc = _find(f"/api/v1/namespaces/{ns}/services/{ref['name']}", read)
+    if svc and _stamped(svc, ident, ref):
+        plan["services"] = [ref["name"]]
+    for claim in ref.get("created", []):
+        pinned = (ref.get("claims") or {}).get(claim) or {}
+        found = _find(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read)
+        if found and pinned.get("uid") and IDENT.identity(found)["uid"] == pinned["uid"]:
+            plan["volumes"].append({"name": claim, "created": True})
+    return plan
+
+
+def remove_failed(ns, name, job, read, send, ops, volumes=()):
+    """Remove a failed or cancelled import: its stamped app, Service and copy Job,
+    each by UID. Volumes only when named and this import's own (same UID it made).
+    Anything without the stamp, or replaced since, is left alone."""
+    item = _item(ns, name, job, ops)
+    if not item or item.get("status") not in REMOVABLE:
+        raise ValueError("Only a failed or cancelled import can be removed here. Check Recent jobs. All data is kept.")
+    ident = item["id"]
+    with LOCKS.worker_lock(ident, ops, timeout=0), ops.transaction() as t:
+        item = next(i for i in t.items if i["id"] == ident)
+        ref, removed = item["ref"], []
+        wanted = [str(v) for v in volumes]
+        pinned = ref.get("claims") or {}
+        for claim in wanted:
+            if claim not in ref.get("created", []) or not (pinned.get(claim) or {}).get("uid"):
+                raise ValueError(f"This import did not create {claim}, so it is not deleted here.")
+        def drop(path, label):
+            found = _find(path, read)
+            if found is None:
+                return None
+            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": IDENT.identity(found)["uid"]},
+                                  "propagationPolicy": "Background"})
+            removed.append(label)
+        app = _find(IDENT.base(ns) + "/" + ref["name"], read)
+        if app and _stamped(app, ident, ref):
+            drop(IDENT.base(ns) + "/" + ref["name"], f"app {ref['name']}")
+        svc = _find(f"/api/v1/namespaces/{ns}/services/{ref['name']}", read)
+        if svc and _stamped(svc, ident, ref):
+            drop(f"/api/v1/namespaces/{ns}/services/{ref['name']}", f"service {ref['name']}")
+        copy_job = _find(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", read)
+        if copy_job and _stamped(copy_job, ident, ref):
+            drop(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", f"copy job {name}")
+        for claim in wanted:
+            found = _find(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read)
+            if found is None:
+                continue
+            if IDENT.identity(found)["uid"] != pinned[claim]["uid"]:
+                raise ValueError(f"{claim} was replaced after this import, so it is not deleted.")
+            drop(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", f"volume {claim}")
+        ref.update(retain_resources=False, helper_removed=True)
+        t.save(t.items)
+    kept = [c for c in ref.get("created", []) if c not in wanted]
+    return {"ok": True, "journalled": True, "name": name, "removed": removed, "pods_removed": [], "prepulls_removed": [],
+            "message": "Import removed." + (f" Kept volumes: {', '.join(kept)}." if kept else "")}
 
 
 def status(item, read):

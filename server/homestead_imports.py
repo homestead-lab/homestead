@@ -587,8 +587,16 @@ def _delete_import(request):
     """An import's record, and what it made that the request also names."""
     b = request.body
     plan = CONTAINER_IMPORT.import_cleanup_plan(b.get("name"), b.get("namespace"))
-    if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
+    if plan.get("journalled") and not plan.get("removable") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
         raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
+    if plan.get("removable"):
+        # A failed or cancelled import: its stamped objects go, and the volumes it created only when named.
+        if plan["workload"]:
+            guard_managed_smb(plan["namespace"], plan["workload"])
+        wanted = [str(claim) for claim in (b.get("remove_volumes") or [])]
+        result = CONTAINER_IMPORT.delete_import(b.get("name"), b.get("namespace"), volumes=wanted)
+        homestead_routes.forget("wl", "ov", "network")
+        return {**result, "releasing": []}
     made = {row["name"] for row in plan["volumes"] if row["created"]}
     # The request names claims; asking for all of them is the old
     # boolean, which an import with one volume still sends.

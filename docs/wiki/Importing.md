@@ -118,7 +118,11 @@ For new journalled imports, **Remove completed Job** removes only the verified,
 successfully finished helper, using its UID as a deletion precondition. It first
 preserves completion on the matching workload. The application, Services and every
 volume remain, including newly created and borrowed claims. Manage unwanted resources
-separately after inspection. Incomplete imports cannot use this cleanup shortcut.
+separately after inspection. A running or uncertain import cannot use this shortcut.
+A failed or cancelled import has its own **Remove**. It deletes the app, its address
+and the copy Job, but only those carrying the import's stamp, so an object of the same
+name made by hand stays. Each volume the import created is listed in the review and is
+deleted only if ticked. A volume the import borrowed is never offered.
 The tracking receipt stays protected from history clearing until the helper is removed.
 Older imports retain their legacy cleanup choices; borrowed claims are never offered
 for deletion there. Do not delete Jobs or remove holds to bypass verification.
