@@ -10,6 +10,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_addons as ADDONS
 import homestead_components as COMPONENTS
+import homestead_helm as HELM
 import homestead_kube as K
 import homestead_macvtap as MACVTAP
 from fakes.kube import Kube
@@ -288,6 +289,33 @@ class OperatorUpgrade(Writes):
     def test_a_chart_no_longer_ours_is_not_upgraded_on_the_second_try(self):
         disown(self)
         self.assertIn("managed by", self.refused())
+
+
+class HelmPageUpgrade(Writes):
+    """The Helm page's Upgrade (#1309). It keeps the settings it replaces in an
+    annotation for Cancel, so put_past_status, which keeps the fresh metadata,
+    would drop them: it reads the chart again and writes the upgrade once more."""
+    NAME = "grafana"
+    CHANGED = "version"
+
+    def objects(self):
+        return [chart(self.NAME, version="8.0.0")]
+
+    def bind(self):
+        self.enterContext(mock.patch.multiple(HELM, kget=K.kget, ksend=K.ksend))
+
+    def write(self):
+        return HELM.upgrade({"namespace": "kube-system", "name": self.NAME, "version": "8.1.0"})
+
+    def test_the_second_try_keeps_the_settings_to_go_back_to(self):
+        self.on_put(self.STATUS)
+        result = self.write()
+        saved = self.kube.object(self.path)
+        self.assertEqual(2, self.puts(), "it took the second try")
+        self.assertEqual("8.1.0", saved["spec"]["version"])
+        self.assertEqual({"version": "8.0.0"}, HELM.previous_spec(saved), "Cancel can still put it back")
+        self.assertEqual(saved["metadata"]["generation"], result["chart"]["chart_generation"],
+                         "the job records the chart as the second try left it")
 
 
 if __name__ == "__main__":

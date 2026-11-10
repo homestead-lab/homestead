@@ -303,6 +303,44 @@ def _helmchart(namespace, name):
 def upgrade(cfg):
     namespace, name = str(cfg.get("namespace") or ""), str(cfg.get("name") or "")
     item = _helmchart(namespace, name)
+    meta = item.get("metadata") or {}
+    path = f"/apis/helm.cattle.io/v1/namespaces/{meta.get('namespace')}/helmcharts/{name}"
+    first = (meta.get("uid"), meta.get("generation"))
+    try:
+        return _upgrade(cfg, name, item, path)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+    # The Helm controller's status writes move the resourceVersion between the read and
+    # the write, and change nothing anyone decided: read again and write once more, on
+    # the same chart at the same generation only. Not KUBE.put_past_status: it keeps
+    # the fresh read's metadata, and so would drop the settings kept for Cancel.
+    try:
+        fresh = kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        error.close()
+        raise ValueError(f"{name} is gone, so nothing was written") from None
+    now = fresh.get("metadata") or {}
+    if now.get("deletionTimestamp"):
+        raise ValueError(f"{name} is being deleted, so nothing was written")
+    # What cannot be read is not taken as unchanged.
+    if not all(first) or (now.get("uid"), now.get("generation")) != first:
+        raise ValueError(f"{name} changed while this upgrade was being saved, so nothing was written. "
+                         "Check it and try again.")
+    try:
+        return _upgrade(cfg, name, fresh, path)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+    raise ValueError(f"{name} kept being updated while this upgrade was being saved, so nothing was written. "
+                     "Try again in a moment.")
+
+
+def _upgrade(cfg, name, item, path):
     # The dialog sends the generation it read, so an upgrade never puts back
     # a version or values changed since it opened (by another admin, kubectl
     # or GitOps). Not resourceVersion: the Helm controller's status writes
@@ -333,7 +371,7 @@ def upgrade(cfg):
     # back. It holds nothing the chart's own spec does not already show.
     item.setdefault("metadata", {}).setdefault("annotations", {})[PREVIOUS_SPEC] = json.dumps(before, separators=(",", ":"))
     earlier = _earlier_job(home, f"helm-install-{name}")
-    written = (ksend("PUT", f"/apis/helm.cattle.io/v1/namespaces/{home}/helmcharts/{name}", item) or {}).get("metadata") or {}
+    written = (ksend("PUT", path, item) or {}).get("metadata") or {}
     # Which chart this upgrade wrote, for the job: what it may put back later is
     # this one, as this upgrade left it. Only spec changes move the generation.
     return {"ok": True, "detail": f"{name} is being upgraded by the Helm controller",

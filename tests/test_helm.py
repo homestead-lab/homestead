@@ -743,6 +743,104 @@ class HelmJobTests(unittest.TestCase):
         self.assertEqual("forget", plan["mode"])
         self.assertNotIn("review_title", plan)
 
+    # #1309: a put-back on a chart that is fine, a raw 409, and "is going back" with nothing written.
+    JOB = "/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana"
+
+    def test_no_put_back_is_offered_once_helm_has_finished_the_upgrade_after_all(self):
+        ident = self.failed_upgrade()            # the controller did not replace its Job within the wait
+        self.job_object({"succeeded": 1})        # and then did, and Helm finished
+        self.refused(ident, "Helm has since finished")
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
+    def test_no_put_back_is_offered_once_a_job_made_again_has_finished(self):
+        ident = self.upgraded()
+        self.job_object(self.JOB_FAILED)
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.kube.discard(self.JOB)               # deleted, and made again by the controller
+        self.job_object({"succeeded": 1})
+        self.kube.writes.clear()
+        self.refused(ident, "Helm has since finished")
+
+    def test_a_job_made_again_that_failed_again_still_offers_the_put_back(self):
+        ident = self.upgraded()
+        self.job_object(self.JOB_FAILED)
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.kube.discard(self.JOB)
+        self.job_object(self.JOB_FAILED)
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+
+    def test_the_job_from_before_the_upgrade_is_no_sign_that_it_finished(self):
+        ident = self.failed_upgrade()            # the Complete Job from before is still there
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+
+    def on_chart_put(self, *changes):
+        """Each PUT of the chart finds one of these written just before it (the controller's status)."""
+        left = list(changes)
+
+        def answer(method, path, body):
+            if left:
+                self.kube("PATCH", self.CHART, left.pop(0), ctype="application/merge-patch+json")
+        self.kube.react("PUT", self.CHART, answer)
+
+    def test_a_put_back_crossed_by_a_status_write_is_written_again(self):
+        ident = self.failed_upgrade()
+        self.on_chart_put({"status": {"jobName": "helm-install-grafana"}})
+        OPS.cancel(ident)
+        chart = self.kube.object(self.CHART)
+        self.assertNotIn("version", chart["spec"], "as it was before the upgrade")
+        self.assertIsNone(HELM.previous_spec(chart))
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertNotIn("409", job["message"])
+        self.assertIn("is going back", job["message"])
+
+    def test_a_running_upgrades_cancel_crossed_by_a_status_write_is_written_again(self):
+        ident = self.upgraded()
+        self.on_chart_put({"status": {"jobName": "helm-install-grafana"}})
+        OPS.cancel(ident)
+        self.assertNotIn("version", self.kube.object(self.CHART)["spec"])
+        self.assertIn("is going back", self.look(ident)["message"])
+
+    def test_status_writes_that_keep_coming_leave_the_failed_job_as_it_was(self):
+        ident = self.failed_upgrade()
+        self.on_chart_put({"status": {"jobName": "a"}}, {"status": {"jobName": "b"}})
+        with self.assertRaises(ValueError) as caught:
+            OPS.cancel(ident)
+        self.assertIn("kept being updated", str(caught.exception))
+        self.assertIn("Nothing was put back", str(caught.exception))
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertNotIn("409", job["message"])
+        self.assertTrue(job["cleanable"], "it can be asked again")
+
+    def test_a_running_upgrade_whose_kept_settings_cannot_be_read_offers_no_put_back(self):
+        ident = self.upgraded()
+        self.kube("PATCH", self.CHART, {"metadata": {"annotations": {HELM.PREVIOUS_SPEC: "not json"}}},
+                  ctype="application/merge-patch+json")
+        plan = OPS.cancel_plan(ident)
+        self.assertEqual("forget", plan["mode"])
+        self.assertIn("cannot be read", " ".join(plan["keeps"]))
+        self.kube.writes.clear()
+        OPS.cancel(ident)
+        self.assertEqual([], self.kube.writes)
+
+    def test_kept_settings_unreadable_by_the_time_it_runs_are_not_called_going_back(self):
+        ident = self.upgraded()
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        mark = OPS._mark_cancelling
+
+        def broken_now(match, *rest):
+            self.kube("PATCH", self.CHART, {"metadata": {"annotations": {HELM.PREVIOUS_SPEC: "not json"}}},
+                      ctype="application/merge-patch+json")
+            return mark(match, *rest)
+        with mock.patch.object(OPS, "_mark_cancelling", broken_now):
+            OPS.cancel(ident)
+        message = self.look(ident)["message"]
+        self.assertNotIn("is going back", message)
+        self.assertIn("Nothing was put back", message)
+        self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
+
     def test_a_failed_install_does_not_offer_to_delete_its_chart(self):
         self.cancelling()
         ident = self.start()
