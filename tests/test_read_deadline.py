@@ -739,7 +739,25 @@ class AnswerThatEndsTheConnectionTests(unittest.TestCase):
             K._request("GET", "/api/v1/pods", None, {}, 10)
         self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
 
+    def test_a_capped_read_of_a_cut_short_answer_is_a_dropped_connection_with_a_deadline(self):
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=100)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
+    def test_a_capped_read_of_a_cut_short_answer_is_a_dropped_connection_without_a_deadline(self):
+        DEADLINE.end()
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=100)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
     def test_an_answer_read_only_to_its_first_bytes_is_not_short(self):
+        self.answers.append((200, b'0123456789', {}))
+        self.assertEqual(b'0123', K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=3))
+
+    def test_an_answer_read_only_to_its_first_bytes_is_not_short_without_a_deadline(self):
+        DEADLINE.end()
         self.answers.append((200, b'0123456789', {}))
         self.assertEqual(b'0123', K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=3))
 
