@@ -237,7 +237,9 @@ def _holder(mark):
 def _hold_all(ns, claim, consumers):
     """Which objects are about to be stopped, how each runs, and which claim:
     saved with the job before anything is changed, so only these are ever
-    started again. A mark found now is another job's: this one doesn't exist yet."""
+    started again. A mark found now is another job's: this one doesn't exist yet.
+    hold() decides on it (one a person's Start left behind, of a job that has
+    ended, is set aside); a refusal names that job."""
     for c in consumers:
         obj = KUBE.get_optional(_path(ns, c), read=kget)
         meta = (obj or {}).get("metadata") or {}
@@ -246,11 +248,11 @@ def _hold_all(ns, claim, consumers):
         if (meta.get("uid"), meta.get("generation")) != (c.get("uid"), c.get("generation")):
             raise ValueError(f"{c['name']} changed after this rollback was reviewed. Open the rollback again. Nothing was changed.")
         mark = (meta.get("annotations") or {}).get(HOLD.HELD_BY)
-        if mark:
-            raise ValueError(f"{c['name']} is held by {_holder(mark)}. Nothing was changed")
         try:
             record = HOLD.hold({**obj, "kind": c["kind"]}, KIND, "")
         except HOLD.Refused as refused:
+            if mark:
+                raise ValueError(f"{c['name']} is held by {_holder(mark)}. Nothing was changed") from None
             raise ValueError(f"{refused}. Nothing was changed") from None
         c["hold"] = record._asdict()
     pvc = KUBE.get_optional(_claim_path(ns, claim), read=kget)
@@ -305,7 +307,12 @@ def _look(ref, c, obj):
         c["stopped"] = _as_left(c, spec)        # its stop landed: a reply was lost
         return "" if c["stopped"] else f"{name} was changed while it was stopped, and was left as it is now"
     if mark:
-        return f"{left} it is held by {_holder(mark)}"
+        # Only hold() may set it aside: one a person's Start left behind, of a
+        # job that has ended. Checked here, before the rest, so a refusal names the job.
+        try:
+            HOLD.hold({**obj, "kind": c["kind"]}, KIND, ref.get("job"))
+        except HOLD.Refused:
+            return f"{left} it is held by {_holder(mark)}"
     record = _record_of(c)
     if record is None:                          # a job from before this version
         if (spec.get("persistentVolumeClaimRetentionPolicy") or {}).get("whenScaled", "Retain") != "Retain":
