@@ -987,6 +987,19 @@ class WindowSkippedTests(Runs):
         self.assertEqual("schedule", self.rollout()["reason"])
         self.assertEqual("", self.line())
 
+    def test_a_window_with_a_job_on_a_host_is_skipped_and_tried_again(self):
+        """_in_the_way does not know a host's own job (a smart test): start() refuses it."""
+        ROLLOUT.OPS._write([])
+        self.job("smart-test", "node-b")
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual({}, self.rollout(), "not started")
+        self.assertIn("node-b has a job running", self.line())
+        self.assertEqual([], self.hosts.holds)
+        ROLLOUT.OPS._write([])
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertEqual("schedule", self.rollout()["reason"], "tried again, and runs")
+        self.assertEqual("", self.line())
+
     def test_the_line_names_whichever_job_is_in_the_way_now(self):
         ROLLOUT.tick(now=SUNDAY)
         ROLLOUT.OPS._write([])
