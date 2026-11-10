@@ -166,6 +166,8 @@ test("the demo's uptime agrees with itself: a planned reboot is inside maintenan
     }
   }
   assert.ok(Object.values(uptime.nodes).some(u => u.maintenance.length), "the demo shows a maintenance");
+  const recent = Object.values(uptime.nodes).some(u => u.days.slice(-30).some(d => d.maintenance));
+  assert.ok(recent, "a maintenance falls inside the 30 days a host card shows");
 });
 
 test("the demo timeline is a weekend away; a source it cannot read lists none of its entries (#748)", async () => {

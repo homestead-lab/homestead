@@ -62,3 +62,9 @@ test("a filter is kept while the same navigation refreshes, and starts over on a
   await T.view();
   assert.equal(T.state.filter.host, "", "opening the page again starts unfiltered");
 });
+
+test("a null counts shows the bar with every kind at nothing, not a throw", () => {
+  const { ctx, T } = setup();
+  const html = T.filterBar({ entries: DATA.entries, counts: null, filter: { kind: "", app: "", host: "" } });
+  assert.match(html, /tl-filters/);
+});

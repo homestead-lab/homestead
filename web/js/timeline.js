@@ -31,8 +31,9 @@ const Timeline = (() => {
      is for any page whose rows carry a kind, an app and a host (#919): it
      calls the global named `call` as call(key, value). It is called at run
      time, so nothing depends on which script loaded first. */
-  function filterBar({ entries, counts = {}, filter: f, kinds = KINDS, call = "timelineFilter",
+  function filterBar({ entries, counts, filter: f, kinds = KINDS, call = "timelineFilter",
     menus = [["app", "App", "All apps"], ["host", "Host", "All hosts"]] }) {
+    counts = counts || {};    // a default covers undefined only; the page may hand null
     // A choice the window no longer has stays listed, so the menu says what is filtered.
     const values = key => [...new Set([...entries.map(e => e[key]), f[key]].filter(Boolean))].sort();
     // A menu with nothing to choose besides "All" is left out (#871).

@@ -3877,7 +3877,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
   display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;border:1px solid var(--line2);
   background:var(--surf2);color:var(--tx);box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:13.5px;max-width:calc(100vw - 32px)}
 
-/* Filling up: the storage forecast on Volumes (views-storage.js). */
+/* Filling up: the storage forecast on Volumes (views-storage-volumes.js). */
 .forecast-card{margin-bottom:14px}.forecast-list{display:grid;gap:8px;margin-top:10px}
 .forecast-row{display:flex;align-items:center;gap:12px;min-width:0}.forecast-row .ui-chip{flex:none}
 .forecast-name{display:grid;min-width:0}.forecast-name b,.forecast-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3934,7 +3934,7 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .answer-port select{width:auto;max-width:100%}
 @media (max-width:560px){.monitoring-row{flex-wrap:wrap}.monitoring-row .monitoring-port,.monitoring-row .monitoring-port select{width:100%;max-width:none}}
 
-/* Groups dialog: filter, keep ticks, a section per group (views-workloads.js). */
+/* Groups dialog: filter, keep ticks, a section per group (views-workloads-groups.js). */
 .wg-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.wg-tools select{width:auto;max-width:220px}
 .wg-selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wg-selbar b{margin-right:auto;font-size:13px}
 .wg-group{border:1px solid var(--line2);border-radius:10px;padding:4px}

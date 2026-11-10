@@ -70,7 +70,7 @@ test("each part's Node export names the top-level names it declares, and no two 
     ctx.module = { exports: {} };
     vm.runInContext(CORE.text(file), ctx);
     const exported = Object.keys(ctx.module.exports);
-    const declared = [...CORE.text(file).matchAll(/^(?:async function|function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
+    const declared = [...CORE.text(file).matchAll(/^(?:async function|function|const|let|var|class)\s+([A-Za-z_$][\w$]*(?:\s*,\s*[A-Za-z_$][\w$]*)*)/gm)].flatMap(m => m[1].split(/\s*,\s*/));
     assert.deepEqual(exported, declared, file);
     for (const name of exported) {
       assert.equal(owner[name], undefined, `${name} is declared in ${owner[name]} and ${file}`);

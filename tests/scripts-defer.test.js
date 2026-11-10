@@ -29,3 +29,8 @@ test("every web/js file has a deferred tag, demo.js included", () => {
 test("the page has no inline handlers: a click before the scripts run calls nothing undefined", () => {
   assert.deepEqual([...html.matchAll(/\son[a-z]+="/g)].map(m => m[0].trim()), []);
 });
+
+test("every script tag carries the same ?v= version, so a stale one is caught", () => {
+  const versions = new Set([...html.matchAll(/<script src="\/js\/[a-z0-9-]+\.js\?v=([^"]+)" defer>/g)].map(m => m[1]));
+  assert.equal(versions.size, 1, `script tags carry ${[...versions].join(", ")}`);
+});

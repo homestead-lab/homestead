@@ -11,7 +11,7 @@ Homestead uses are kept, because the full distribution is 14 MB:
 
 Everything else (other language services, translations, the diff and standalone
 extras) is deliberately absent. The editor is loaded only when a file is opened,
-never on page load, and `web/js/views-storage.js` falls back to a plain textarea
+never on page load, and `web/js/views-storage-volumes.js` falls back to a plain textarea
 if it fails to load at all.
 
 Upstream: https://github.com/microsoft/monaco-editor — MIT, see LICENSE.
