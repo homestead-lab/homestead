@@ -171,8 +171,8 @@ def _left_by_ended_job(obj, item, mark):
     which owns it; a mark this module writes is a bare job id, a power job's."""
     try:
         field = APP_HOLD.FIELD[item["kind"]]
-        return (APP_HOLD._started_by_hand({**obj, "kind": item["kind"]}, field)
-                and APP_HOLD._ended(mark if ":" in mark else f"node-power:{mark}"))
+        return (APP_HOLD.started_by_hand({**obj, "kind": item["kind"]}, field)
+                and APP_HOLD.job_ended(mark if ":" in mark else f"node-power:{mark}"))
     except Exception:
         return False
 
