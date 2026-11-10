@@ -109,6 +109,9 @@ test("Image updates: an app Flux updates offers its image line to copy", async (
   t.c.STATE = { data: { imageUpdates: { workloads: [
     { ns: "monitoring", name: "loki", available: true, managed: FLUX, yaml: "kind: Deployment\nimage: grafana/loki:3.5.0", images: [] },
     { ns: "lab", name: "web", available: true, managed: {}, yaml: "", images: [] }] } } };
+  t.fields["#modal"] = { classList: { contains: () => false } };
+  t.fields["#imageUpdatesLoading"] = {};
+  t.c.loadImageUpdates = async () => t.c.STATE.data.imageUpdates;
   await t.c.window.imageUpdateCenter();
   const rows = t.html().split("update-center-row").slice(1);
   assert.match(rows.find(r => r.includes("loki")), /Copy as YAML for git/);

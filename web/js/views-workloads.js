@@ -233,11 +233,13 @@ function updateVersions(w) {
 }
 
 window.imageUpdateCenter = async () => {
-  let report = STATE.data.imageUpdates;
-  if (!report) {
-    modal("Image updates", '<div class="empty"><span class="spin2"></span>checking registries…</div>');
-    report = await loadImageUpdates(false, true);
-  }
+  // A closed rollout stops its monitor. Ask for the current server report
+  // each time this dialog opens, even when this page already has a report.
+  const opening = {};
+  window.__imageUpdateCenterOpening = opening;
+  modal("Image updates", '<div id="imageUpdatesLoading" class="empty"><span class="spin2"></span>reading image updates…</div>');
+  const report = await loadImageUpdates(false, true);
+  if (window.__imageUpdateCenterOpening !== opening || !$("#imageUpdatesLoading") || $("#modal").classList.contains("hidden")) return;
   if (!report) {
     // A quiet load says nothing when it fails, so this dialog has to.
     if (!$("#modal").classList.contains("hidden")) $("#mbody").innerHTML = `<div class="empty"><b>The registries could not be checked</b>
