@@ -356,7 +356,7 @@ class LegacyMoveTests(unittest.TestCase):
                 OPS.dismiss(job["id"])
 
     def test_the_claim_created_here_carries_this_jobs_stamp(self):
-        ref = self.create()
+        self.create()
         ident = next(job["id"] for job in OPS.list_operations() if job["title"] == "Move data to fast")
         self.assertEqual(ident, self.kube.object(TEMP)["metadata"]["annotations"][RC.TEMP_STAMP])
 
