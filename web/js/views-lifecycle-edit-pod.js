@@ -191,9 +191,14 @@ const FAILOVER_HELP = {
   move: "Starts on another host about 15 seconds after its host stops answering.",
   wait: "Waits for its host to come back. For apps tied to that host's hardware.",
   default: "Kubernetes moves it after five minutes.",
+  custom: "A time set outside Homestead. It is kept until another choice is saved.",
 };
-function failoverSelect(id, current, extra = "", label = "If its host fails") {
-  return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(FAILOVER_WORDS).map(([value, label]) =>
+// A time Homestead does not offer (#1308), as the app has it: "custom", kept.
+const failoverAfter = seconds => seconds == null ? "Set outside Homestead"
+  : `Moves after ${seconds >= 120 && seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`}`;
+function failoverSelect(id, current, extra = "", label = "If its host fails", seconds = null) {
+  const words = current === "custom" ? { custom: failoverAfter(seconds), ...FAILOVER_WORDS } : FAILOVER_WORDS;
+  return `<select id="${id}" aria-label="${esc(label)}" ${extra}>${Object.entries(words).map(([value, label]) =>
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 }
 window.FAILOVER_WORDS = FAILOVER_WORDS;
@@ -775,7 +780,7 @@ window.doMove = async (ns, name) => {
 if (typeof module === "object" && module.exports) module.exports = {
   editEnvRow, editPortRow, EDIT_STORAGE, editVolumeRow, editVolumePicker, editContainerPanel, editCpuWords,
   editSpan, editUsageWords, editSuggestionChange, editUsageSuggestion, EDIT_CONTAINER_NEXT, EDIT_REMOVED_PANELS,
-  EDIT_SAVE_UNCERTAIN, nodes0, editAddressNow, FAILOVER_WORDS, FAILOVER_HELP, failoverSelect, PRIORITY_HELP,
+  EDIT_SAVE_UNCERTAIN, nodes0, editAddressNow, FAILOVER_WORDS, FAILOVER_HELP, failoverAfter, failoverSelect, PRIORITY_HELP,
   prioritySelect, priorityGroupLabel, priorityGroupHelp, priorityFixed, STARTS_HELP, EDIT_STARTS, startsKey,
   startsAfterRow, startsAfterPorts, startsAfterBlock, startsAfterValue, startsAfterRows, readStartsAfter,
   startsAfterProblem, startsAfterManagedNote, startsAfterStopped, startsAfterReviewLine, startsAfterRefusal,

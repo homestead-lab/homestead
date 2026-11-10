@@ -48,6 +48,15 @@ class AppTests(unittest.TestCase):
         r = self.outcome(self.run_preview([app("web", failover="default")]), "web")
         self.assertIn("5 minutes", r["why"])
 
+    def test_an_app_with_a_time_of_its_own_moves_after_that_time(self):
+        # #1308: an app with 120 s was said to move after five minutes.
+        r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=120)]), "web")
+        self.assertIn("about 2 minutes after the host stops answering", r["why"])
+        r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=45)]), "web")
+        self.assertIn("about 45 seconds after the host stops answering", r["why"])
+        r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=None)]), "web")
+        self.assertEqual("waits", r["outcome"], "a time of its own that never runs out")
+
     def test_an_app_set_to_wait_waits(self):
         self.assertEqual("waits", self.outcome(self.run_preview([app("db", failover="wait")]), "db")["outcome"])
 

@@ -100,7 +100,7 @@ function appFormPlacement(prefix, p, w, nodes, containers, { startsHtml = "", mi
     ${startsHtml}
     <div class="place-level"><div class="place-title">If its host fails</div>
       <div class="place-grid failover"><div class="f">${failoverSelect(id("failover"), w.failover || "default",
-          `onchange="$(${jsq("#" + id("failover_help"))}).textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
+          `onchange="$(${jsq("#" + id("failover_help"))}).textContent = FAILOVER_HELP[this.value] || ''"`, "If its host fails", w.failover_seconds)}</div>
         <div class="dim small" id="${id("failover_help")}">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="place-level"><div class="place-title">When the cluster is short of room</div>
       <div class="place-grid failover"><div class="f">${priorityFixed(w)
