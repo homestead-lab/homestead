@@ -476,6 +476,37 @@ class ImportWaitTests(unittest.TestCase):
         self.look()
         self.imp.commit_vm.assert_called_once()
 
+    def finished_disks(self):
+        self.to_convert()
+        self.look()
+        self.phase("Succeeded")
+        self.imp.prepare_vm = lambda cfg, platform, source: cfg
+        self.imp._recheck_vm_creation = lambda prepared: None
+        self.imp.commit_vm = mock.Mock()
+
+    def test_a_platform_that_cannot_be_read_waits_and_does_not_fail_the_import(self):
+        # #1329: right after a restart, with no cached answer and the API unreachable,
+        # reading the platform raises ValueError. That says nothing about the VM.
+        self.finished_disks()
+
+        def unread():
+            raise ValueError("Homestead could not read the cluster's platform")
+        with mock.patch.object(UVMS, "platform", unread):
+            job = self.look()
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertEqual("convert", self.ref()["phase"])
+        self.imp.commit_vm.assert_not_called()
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+        self.look()
+        self.imp.commit_vm.assert_called_once()
+
+    def test_a_refused_vm_says_it_could_not_be_created(self):
+        self.finished_disks()
+        self.imp.commit_vm = mock.Mock(side_effect=ValueError("Kubernetes refused it (HTTP 422)"))
+        job = self.look(3)
+        self.assertIn("The disks arrived, but the VM could not be created: Kubernetes refused it (HTTP 422).",
+                      job["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

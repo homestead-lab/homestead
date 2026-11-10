@@ -1147,8 +1147,15 @@ def status(item):
             if _waited(ref, "finish_since", FINISH_LIMIT):
                 return _stop_following(ref, item, phases)
             return "running", 96, "CDI is finishing the disk"
+        # A platform that cannot be read (just after a restart, the API not
+        # answering) says nothing about the VM: the round is asked again, as any
+        # failed read is (homestead_job_errors), and the disks wait (#1329).
         try:
-            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
+            found = platform() or {}
+        except ValueError as error:
+            raise RuntimeError(f"The cluster's platform could not be read, so the VM is not created yet ({error})") from None
+        try:
+            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), found, "")
             IMP._recheck_vm_creation(prepared)
             try:
                 IMP.commit_vm(prepared, send=ksend)
@@ -1162,7 +1169,7 @@ def status(item):
                 raise ValueError(f"Kubernetes refused it (HTTP {error.code})") from None
         except ValueError as error:
             # The disks are whole: keep them, and say how to finish by hand.
-            detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
+            detail = (f"The disks arrived, but the VM could not be created: {error}. They are kept as "
                       f"{', '.join(d['dv'] for d in ref['disks'])}. Create the VM from them under Import.")
             if ref.get("cdi_cleanup"):
                 ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
