@@ -248,6 +248,7 @@ def start(reason="asked", now=None, only=None, restart=None):
             missing = [name for name in only if name not in ready]
             if missing:
                 raise ValueError("Not Ready, so left alone: " + ", ".join(missing))
+        if reason != "schedule":    # the window looks for itself (_in_the_way) and retries
             why = _busy_cluster() or next(filter(None, (_busy_host(name) for name in names)), "")
             if why:
                 raise ValueError(why)
