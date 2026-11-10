@@ -397,7 +397,7 @@ class HelmJobTests(unittest.TestCase):
         chart = self.kube.object(self.CHART)
         chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = "not json"
         self.kube.add(chart)
-        self.refused(ident, "No earlier settings")
+        self.refused(ident, "The earlier settings kept on grafana cannot be read")
         self.assertNotIn("Cleaned up", self.look(ident)["message"])
 
     def assert_closed_as_gone_back(self, ident):
@@ -585,7 +585,7 @@ class HelmJobTests(unittest.TestCase):
         chart = self.kube.object(self.CHART)
         chart["metadata"]["annotations"][HELM.PREVIOUS_SPEC] = "[1]"
         self.kube.add(chart)
-        self.refused(ident, "No earlier settings")
+        self.refused(ident, "cannot be read")
         self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
 
     # A lost pod is not the end of the Job: the controller goes on.
@@ -808,6 +808,9 @@ class HelmJobTests(unittest.TestCase):
             OPS.cancel(ident)
         self.assertIn("kept being updated", str(caught.exception))
         self.assertIn("Nothing was put back", str(caught.exception))
+        first = str(caught.exception).split(": ", 1)[1].split(". ")[0]
+        self.assertNotIn("being put back", first, "says what was being done, not the outcome twice")
+        self.assertLess(len(first) + 30 - len("grafana"), 90, "a summary that stands alone, for names up to 30")
         self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
         job = self.look(ident)
         self.assertEqual("failed", job["status"])

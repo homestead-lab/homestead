@@ -317,6 +317,20 @@ class HelmPageUpgrade(Writes):
         self.assertEqual(saved["metadata"]["generation"], result["chart"]["chart_generation"],
                          "the job records the chart as the second try left it")
 
+    def summary_fits(self, *changes):
+        """The refusal's first sentence stands alone under 90 characters for names up to 30."""
+        self.on_put(*changes)
+        with self.assertRaises(ValueError) as caught:
+            self.write()
+        first = str(caught.exception).split(". ")[0]
+        self.assertLess(len(first) + 30 - len(self.NAME), 90, first)
+
+    def test_a_change_in_between_is_refused_in_a_short_summary(self):
+        self.summary_fits({"spec": {"version": "9.9.9"}})
+
+    def test_status_writes_that_keep_coming_are_refused_in_a_short_summary(self):
+        self.summary_fits(self.STATUS, {"status": {"jobName": "again"}})
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -328,16 +328,14 @@ def upgrade(cfg):
         raise ValueError(f"{name} is being deleted, so nothing was written")
     # What cannot be read is not taken as unchanged.
     if not all(first) or (now.get("uid"), now.get("generation")) != first:
-        raise ValueError(f"{name} changed while this upgrade was being saved, so nothing was written. "
-                         "Check it and try again.")
+        raise ValueError(f"{name} changed during the upgrade, so nothing was written. Check it and try again.")
     try:
         return _upgrade(cfg, name, fresh, path)
     except urllib.error.HTTPError as error:
         if error.code != 409:
             raise
         error.close()
-    raise ValueError(f"{name} kept being updated while this upgrade was being saved, so nothing was written. "
-                     "Try again in a moment.")
+    raise ValueError(f"{name} kept being updated during the upgrade. Nothing was written. Try again in a moment.")
 
 
 def _upgrade(cfg, name, item, path):

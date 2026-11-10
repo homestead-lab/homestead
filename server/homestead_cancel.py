@@ -766,6 +766,8 @@ def _no_put_back(item, action, name, chart):
         return f"{name}'s chart is gone, so there is nothing to put back"
     kept = HELM.previous_spec(chart)
     if kept is None:
+        if ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
+            return f"The earlier settings kept on {name} cannot be read, so there is nothing to put back"
         return f"No earlier settings of {name} were kept to go back to"
     if not ref.get("chart_uid"):
         return f"This upgrade is from an older Homestead and kept no record of the chart it wrote, so {name} is not put back from here"
@@ -898,7 +900,7 @@ def helm_cancel(item, options):
         if error.code != 409:
             raise
         error.close()
-    raise ValueError(f"{item['resource'].get('name', '')} kept being updated while it was being put back. "
+    raise ValueError(f"{item['resource'].get('name', '')} kept being updated while its settings were restored. "
                      "Nothing was put back. Try again in a moment.")
 
 
