@@ -10,6 +10,7 @@ replaced since, and one the job cannot read or change.
 Through the routes and the job's own record, on the fake API server: the real
 review, cordon, job store and history file. Only the drain's answer is given
 (a refusal, as a disruption budget gives)."""
+import ast
 import sys
 import tempfile
 import types
@@ -105,6 +106,7 @@ class OwnCordonTests(Case):
         self.assertNotIn("stays cordoned", item["message"])
         self.assertNotIn("still cordoned", item["message"])
         self.assertIn("The drain was refused for kubevirt/virt-api-1", item["message"])
+        self.assertTrue(item["message"].endswith("before trying again."), item["message"])
         self.assertTrue(item["ref"]["uncordoned"])
         self.assertFalse(JOBS._plan(req(node="node-a", action="reboot"))["cordoned"],
                          "a second attempt starts clean: the host is not cordoned before it")
@@ -193,6 +195,41 @@ class OtherCordonTests(Case):
         item = self.send(drain=lambda *a, **k: {"evicted": [], "skipped": []})
         self.assertIn("uncertain", item["message"])
         self.assertTrue(self.cordoned())
+
+
+def _raised_texts(module):
+    """The words of every message module raises: a string, the constant parts
+    of an f-string, or the strings of a + of them."""
+    def text(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return (text(node.left) or "") + (text(node.right) or "")
+        return None
+    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call) and node.exc.args:
+            words = text(node.exc.args[0])
+            if words:
+                yield words
+
+
+class CordonWordsTests(unittest.TestCase):
+    def test_every_cordon_sentence_the_drain_and_rechecks_raise_is_taken_out(self):
+        """The job says what became of the cordon itself, so each "stays
+        cordoned" sentence the drain or a recheck raises must be one
+        _CORDON_WORDS removes. Reworded there, this fails, instead of a job
+        saying "was uncordoned" and "stays cordoned" at once."""
+        found = [t for module in (NODE_ACTIONS, POWER) for t in _raised_texts(module) if "stays cordoned" in t]
+        self.assertGreaterEqual(len(found), 7, "the drain's and the rechecks' messages were found")
+        for words in found:
+            cleaned = words
+            for old, new in JOBS._CORDON_WORDS:
+                cleaned = cleaned.replace(old, new)
+            self.assertNotIn("stays cordoned", cleaned, words)
+            self.assertNotIn("othing was sent", cleaned, words)
 
 
 if __name__ == "__main__":

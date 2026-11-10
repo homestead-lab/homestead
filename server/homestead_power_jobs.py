@@ -209,8 +209,9 @@ def _held_by(operation_id):
 
 def _start_what_was_held(operation_id, message):
     """What this job stopped starts again. The message says so, and the second
-    answer is what the job's record gets."""
+    answer is what the job's record gets. The message ends with one full stop."""
     restored = {}
+    message = message.rstrip(" .")
     held = _held_by(operation_id)
     if held:
         try:
@@ -220,7 +221,7 @@ def _start_what_was_held(operation_id, message):
             message += (". Left as they are: " + ", ".join(left)) if left else ""
         except Exception as error:
             message += f". What was stopped could not be started again ({str(error)[:120]}). Start it manually"
-    return message, restored
+    return message + ".", restored
 
 
 # The words of the steps it shares with a reboot, for a job that sends no power.
