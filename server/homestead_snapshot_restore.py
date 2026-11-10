@@ -41,14 +41,15 @@ _HOLDERS = {}   # (namespace, pvc) -> this copy's hold on the volume's restore L
 ELSEWHERE = ("Another copy of Homestead is restoring files into this volume. Try again when it finishes. "
              "If that copy stopped, the volume is free again within a minute.")
 NOT_HELD = "Homestead could not keep this volume for the restore, so it did not start. Try again."
-LOST = ("Homestead could not keep this volume for the whole restore, so another restore may have "
-        "written into it at the same time. Check the restored files.")
+LOST = "Another restore may have written into this volume at the same time. Check the restored files."
 # The Lease is short and renewed while the restore runs: a copy of Homestead
 # that stopped mid-restore frees the volume within CLAIM_SECONDS. It is lost
 # only when no renewal has reached the API server for CLAIM_SECONDS, or
 # another copy holds it (a 409).
 CLAIM_SECONDS = 60
 RENEW_EVERY = 15
+RENEW_GRACE = 5   # a renewal later than RENEW_EVERY + this has failed at least once
+_clock = time.monotonic
 
 
 def _claim_path(name=""):
@@ -129,19 +130,18 @@ def _renew(namespace, pvc, holder):
 def _keep(namespace, pvc, hold):
     """Renew the Lease every RENEW_EVERY seconds until hold["stop"]. When it
     is lost, mark the hold and stop renewing: the restore says so."""
-    last = time.monotonic()
     while not hold["stop"].wait(RENEW_EVERY):
         renewed = _renew(namespace, pvc, hold["holder"])
         if renewed:
-            last = time.monotonic()
-        elif renewed is False or time.monotonic() - last >= CLAIM_SECONDS:
+            hold["renewed"] = _clock()
+        elif renewed is False or _clock() - hold["renewed"] >= CLAIM_SECONDS:
             hold["lost"] = True
             return
 
 
 def _hold(namespace, pvc, holder):
     """Keep holder's Lease renewed from now until _let_go."""
-    hold = {"holder": holder, "stop": threading.Event(), "lost": False}
+    hold = {"holder": holder, "stop": threading.Event(), "lost": False, "renewed": _clock()}
     hold["thread"] = threading.Thread(target=_keep, args=(namespace, pvc, hold), name="snapshot-restore-claim", daemon=True)
     hold["thread"].start()
     return hold
@@ -426,6 +426,10 @@ def _launch(job, namespace, session, dst_ns, dst_pod, folder, reader):
             # A copy cut off mid-file is worse than one that finishes, so a
             # lost claim does not stop the copy: the job says what happened.
             hold = _HOLDERS.get((dst_ns, job["to"]))
+            if hold and not hold["lost"] and _clock() - hold["renewed"] > RENEW_EVERY + RENEW_GRACE:
+                # Renewals were failing: another copy may have taken the claim
+                # since the last one. One more look before calling it done.
+                hold["lost"] = _renew(dst_ns, job["to"], hold["holder"]) is not True
             if hold and hold["lost"]:
                 job.update(status="failed", error=f"{LOST} {job['error']}".strip())
         finally:

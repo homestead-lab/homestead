@@ -300,6 +300,27 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual('done', job['status'])
         self.assertEqual('', job['error'])
 
+    def test_renewals_failing_for_60_seconds_lose_the_claim(self):
+        path = f'/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases/{R._claim_name("lab", "data")}'
+        self.kube.fail(path, 500, times=10 ** 6, method='PUT')
+        clock = iter(range(0, 10 ** 6, 10))   # each look at the clock is 10 s later
+        with mock.patch.object(R, '_clock', side_effect=lambda: next(clock)):
+            job = self.run_copy(lambda job: self.wait(lambda: R._HOLDERS[('lab', 'data')]['lost']))
+        self.assertEqual('failed', job['status'])
+        self.assertEqual(R.LOST, job['error'])
+
+    def test_a_take_over_after_the_last_renewal_is_still_reported(self):
+        # No renewal runs during this copy, and it ends long after the last
+        # one: Homestead checks the claim once more before calling it done.
+        now = [0]
+        def during(job):
+            self.take_over()
+            now[0] = R.RENEW_EVERY + 60
+        with mock.patch.object(R, 'RENEW_EVERY', 1000), mock.patch.object(R, '_clock', side_effect=lambda: now[0]):
+            job = self.run_copy(during)
+        self.assertEqual('failed', job['status'])
+        self.assertEqual(R.LOST, job['error'])
+
     def take_over(self):
         """Another copy of Homestead takes the claim (this one's renewals did
         not reach the API server in time)."""
@@ -314,6 +335,7 @@ class RestoreTests(unittest.TestCase):
         job = self.run_copy(during)
         self.assertEqual('failed', job['status'])
         self.assertEqual(R.LOST, job['error'])
+        self.assertEqual('Another restore may have written into this volume at the same time. Check the restored files.', R.LOST)
         self.assertEqual('homestead-b/0000', self.claim()['spec']['holderIdentity'])   # not taken from the other copy
 
     def test_a_claim_lost_before_the_copy_starts_stops_the_restore(self):
