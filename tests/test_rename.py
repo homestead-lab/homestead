@@ -620,7 +620,8 @@ class RenameTests(unittest.TestCase):
         self.assertIn(words, text)
         self.assertNotIn("did not confirm", text)
         for method in ("PATCH", "DELETE", "POST", "409", "422"):
-            self.assertNotIn(method, text)
+            # As a word: the job id in the text is random hex and can contain "409".
+            self.assertNotRegex(text, rf"\b{method}\b")
         self.assertEqual(phase, ops.stored()[0]["ref"]["writes"][-1]["phase"])
 
     def test_a_refused_stop_says_it_was_refused_not_unconfirmed(self):
