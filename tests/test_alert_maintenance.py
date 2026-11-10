@@ -110,6 +110,29 @@ class DeclaredAlertTests(unittest.TestCase):
         self.assertEqual([("maintenance-ran-out:node1", "raised")], [(e["key"], e["phase"]) for e in raised],
                          "raised on the first look")
 
+    def ran_out_facts(self, went_down):
+        """The window ran out one hour ago; the host's Ready condition changed at went_down (an offset from now)."""
+        self.declare(self.now - 3600)
+        node = {"name": "node1", "ready_since": self.now + went_down}
+        return [f for f in A.health_facts({"health_issues": [NOT_READY], "nodes": [node]}) if "key" in f]
+
+    def test_a_host_that_went_down_after_the_window_ran_out_is_worded_so(self):
+        fact = self.ran_out_facts(-600)[0]
+        self.assertEqual("maintenance-ran-out:node1", fact["key"], "still the one loud alert")
+        self.assertEqual("Host node1 went down after its maintenance ran out", fact["title"])
+        self.assertIn("ran out while the host was ready", fact["body"])
+        self.assertNotIn("with the host down", fact["title"])
+        self.assertEqual((True, "critical"), (fact["urgent"], fact["severity"]))
+
+    def test_a_host_that_was_already_down_when_the_window_ran_out_keeps_the_words(self):
+        fact = self.ran_out_facts(-7200)[0]
+        self.assertEqual("Maintenance on node1 ran out with the host down", fact["title"])
+
+    def test_without_a_record_of_when_it_went_down_the_words_stay(self):
+        self.declare(self.now - 3600)
+        fact = [f for f in self.facts(NOT_READY) if "key" in f][0]
+        self.assertEqual("Maintenance on node1 ran out with the host down", fact["title"])
+
     def test_it_stays_loud_after_the_recent_window(self):
         self.declare(self.now - HISTORY.OVERRAN_RECENT - 60)
         self.assertEqual(["maintenance-ran-out:node1"], [f.get("key") for f in self.facts(NOT_READY)])
@@ -196,3 +219,15 @@ class DeclaredAlertTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReadySinceTests(unittest.TestCase):
+    """The host's record of when Ready last changed, which words the ran-out alert (#1316)."""
+
+    def test_it_reads_the_ready_conditions_transition_time(self):
+        import homestead_nodes as NODES
+        node = {"status": {"conditions": [{"type": "DiskPressure", "lastTransitionTime": "2026-01-01T00:00:00Z"},
+                                          {"type": "Ready", "status": "False", "lastTransitionTime": "2026-01-01T12:00:00Z"}]}}
+        self.assertEqual(1767268800, NODES._transition_time(node, "Ready"))
+        self.assertIsNone(NODES._transition_time({"status": {"conditions": [{"type": "Ready"}]}}, "Ready"))
+        self.assertIsNone(NODES._transition_time({}, "Ready"))

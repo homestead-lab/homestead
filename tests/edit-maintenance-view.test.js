@@ -254,6 +254,17 @@ test('a host power job shows its steps, the current one, and how it ended', () =
   assert.match(markup('draining', 'running', false, true), /Stop new apps starting on the host/);
 });
 
+test('a declared maintenance job lists its steps and never a power command', () => {
+  const t = setup(review);
+  const markup = (phase, status = 'running') =>
+    t.c.nodePowerProgressMarkup({ status, progress: 12, message: 'Evicting pods: 3 left', power: { phase, action: 'maintenance', direct: false } });
+  const states = html => [...html.matchAll(/<li class="(\w+)">/g)].map(m => m[1]);
+  assert.deepEqual(states(markup('draining')), ['ok', 'run', 'todo', 'todo']);
+  assert.doesNotMatch(markup('draining'), /Send the|command|restart|turn off/i);
+  assert.match(markup('draining'), /Mark the host in maintenance/);
+  assert.deepEqual(states(markup('maintained', 'succeeded')), ['ok', 'ok', 'ok', 'ok']);
+});
+
 test('a stopped host power job marks the step it stopped at, and says why once', () => {
   const t = setup(review);
   const html = t.c.nodePowerProgressMarkup({ status: 'failed', progress: 10, message: 'Longhorn still prevents eviction',
