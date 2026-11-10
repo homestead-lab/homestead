@@ -217,10 +217,11 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-a"], restart="never")
         done = self.run_it()
         self.assertEqual([], self.sent)
-        self.assertEqual("updates installed, but the restart was not done: this run does not restart hosts",
+        self.assertEqual("Updates installed. It needs a restart, which this run does not do.",
                          done["results"][0]["note"])
         self.assertTrue(done["results"][0]["restart_needed"])
-        self.assertIn("needing a restart: node-a (node-a: this run does not restart hosts)", done["message"])
+        self.assertIn("needing a restart: node-a (this run does not restart hosts)", done["message"])
+        self.assertEqual(1, done["message"].count("node-a"), "the host is named once")
         self.assertEqual("when-needed", ROLLOUT.settings()["reboot"], "the setting is not touched")
 
     def test_this_runs_answer_can_restart_when_the_setting_says_never(self):
@@ -244,9 +245,9 @@ class ChosenHostsTests(Runs):
         done = self.run_it()
         self.assertEqual([], self.sent)
         row = done["results"][0]
-        self.assertEqual("up to date, but the restart was not done: this run does not restart hosts", row["note"])
+        self.assertEqual("Up to date. It needs a restart, which this run does not do.", row["note"])
         self.assertTrue(row["restart_needed"])
-        self.assertIn("needing a restart: node-b", done["message"])
+        self.assertIn("needing a restart: node-b (this run does not restart hosts)", done["message"])
 
     def test_the_leaders_host_goes_last_whichever_replica_answers(self):
         # #1319: the order followed the pod that answered, not the leader.

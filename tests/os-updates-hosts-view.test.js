@@ -245,6 +245,8 @@ test("checks that could not be read are not called a refusal", async () => {
 test("Homestead's own host is allowed, with the note", async () => {
   const one = await reviewed(preview([previewHost("node-a", { homestead_here: true })]));
   assert.match(one.html(), /runs on this host/);
+  // #1319: it marks the leader's host, so it says so; another copy's host is not marked.
+  assert.match(one.html(), /Homestead(&#39;|&#x27;|')s leader/);
   assert.match(one.html(), /stop this page from responding for a few minutes/);
   assert.match(one.html(), /the update continues/);
   assert.doesNotMatch(one.html(), /It is updated last/);

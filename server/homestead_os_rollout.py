@@ -384,8 +384,9 @@ def _alert(fact):
         print(f"OS updates: the alert was not raised: {str(error)[:120]}", flush=True)
 
 
-# Why a host that needs a restart was not restarted, with restarts off
-# (the setting, or this run's own answer).
+# A host that needs a restart, with restarts off (the setting, or this run's
+# own answer): its note, and the reason the summary gives.
+NEEDS_RESTART = "It needs a restart, which this run does not do."
 NOT_RESTARTING = "this run does not restart hosts"
 
 
@@ -470,7 +471,7 @@ def step(state, now=None):
         elif facts.get("reboot") and config["reboot"] == "when-needed":
             rollout["phase"], rollout["message"] = "restart", f"{name}: up to date, and needs a restart"
         elif facts.get("reboot"):
-            _result(rollout, True, "up to date, but the restart was not done: " + NOT_RESTARTING, restart_needed=True)
+            _result(rollout, True, "Up to date. " + NEEDS_RESTART, restart_needed=True)
         else:
             _result(rollout, True, "up to date")
         return True
@@ -502,7 +503,7 @@ def step(state, now=None):
         if facts.get("reboot") and config["reboot"] == "when-needed":
             rollout["phase"], rollout["message"] = "restart", f"{name}: updates installed. Restarting it."
         elif facts.get("reboot"):
-            _result(rollout, True, "updates installed, but the restart was not done: " + NOT_RESTARTING, restart_needed=True)
+            _result(rollout, True, "Updates installed. " + NEEDS_RESTART, restart_needed=True)
         else:
             _result(rollout, True, "updates installed")
         return True
@@ -618,9 +619,11 @@ def _finish(state, rollout, now):
         # Why the first was not restarted - the review's reason - so the job
         # says what to fix, not only who waits.
         note = waiting[0]["note"]
-        why = next((note.split(marker, 1)[1] for marker in ("restart was not done: ", "restart was not done. ", "restart not done: ")
-                    if marker in note), note)
-        words.append("needing a restart: " + ", ".join(r["node"] for r in waiting) + f" ({waiting[0]['node']}: {why})")
+        why = NOT_RESTARTING if note.endswith(NEEDS_RESTART) else next(
+            (note.split(marker, 1)[1] for marker in ("restart was not done: ", "restart was not done. ", "restart not done: ")
+             if marker in note), note)
+        named = ", ".join(r["node"] for r in waiting)
+        words.append(f"needing a restart: {named} ({why if len(waiting) == 1 else waiting[0]['node'] + ': ' + why})")
     failed = [r for r in results if not r["ok"]]
     if failed:
         words.append(f"{failed[-1]['node']}: {failed[-1]['note']}")

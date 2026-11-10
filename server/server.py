@@ -179,7 +179,7 @@ DEPLOY_ROUTES.bind_routes(_late(*DEPLOY_ROUTES.ROUTE_NEEDS), **{name: globals()[
 import homestead_self_data_server as SELF_DATA_ROUTES
 from homestead_self_data_server import (
     _reconcile_permissions, _replace_own_pod, fit_own_strategy, fleet_address, homestead_running_on,
-    own_node, self_data_file_scope, self_stop_warning,
+    self_data_file_scope, self_stop_warning,
 )
 MOVED.update(dict.fromkeys(("_require_no_data_handoff", "_self_data_helper_image", "homestead_data_volume"), SELF_DATA_ROUTES))
 SELF_DATA_ROUTES.bind_routes(_late(*SELF_DATA_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in SELF_DATA_ROUTES.VALUES})
