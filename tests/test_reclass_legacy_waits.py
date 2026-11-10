@@ -38,6 +38,13 @@ def claim(name, volume, finalizers=()):
             "spec": {"volumeName": volume, "storageClassName": "fast"}, "status": {"phase": "Bound"}}
 
 
+def temp_claim(volume):
+    """The move's temporary claim as it creates it: with the move's labels."""
+    made = claim("data-reclass", volume)
+    made["metadata"]["labels"] = RC.NAMES.labels("reclass", "data")
+    return made
+
+
 def pod(name):
     return {"apiVersion": "v1", "kind": "Pod", "metadata": {"namespace": "lab", "name": name},
             "spec": {"volumes": [{"name": "d", "persistentVolumeClaim": {"claimName": "data"}}]},
@@ -122,7 +129,7 @@ class LegacyMoveTests(unittest.TestCase):
     def test_an_original_that_is_never_released_stops_and_carries_on_when_asked(self):
         self.kube.discard(CLAIM)
         self.kube.add(claim("data", "old-pv", finalizers=("example.com/hold",)))
-        self.kube.add(claim("data-reclass", "new-pv"))
+        self.kube.add(temp_claim("new-pv"))
         ident = self.start("swap")
         self.assertIn("data", self.look(ident, 3)["message"])
         self.assertTrue(self.kube.object(CLAIM)["metadata"].get("deletionTimestamp"), "it is being deleted, and held")
@@ -251,7 +258,7 @@ class LegacyMoveTests(unittest.TestCase):
         job = self.look(ident)
         self.assertEqual("failed", job["status"])
         self.assertTrue(self.kube.object(TEMP))
-        self.assertIn("did not make", job["message"])
+        self.assertIn("did not create", job["message"])
 
     def test_rolling_back_removes_the_claim_it_made(self):
         made = {**claim("data-reclass", ""), "spec": {}}
@@ -286,9 +293,51 @@ class LegacyMoveTests(unittest.TestCase):
         ref = self.create()
         self.assertEqual(self.kube.object(TEMP)["metadata"]["uid"], ref["temp_uid"])
 
-    def test_but_not_one_it_lost_a_race_for(self):
+    def test_a_claim_of_its_temporary_name_it_did_not_create_stops_the_move(self):
         self.foreign_temp()
-        self.assertNotIn("temp_uid", self.create())
+        ref = self.create()
+        self.assertNotIn("temp_uid", ref)
+        job = next(job for job in OPS.list_operations() if job["title"] == "Move data to fast")
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("A volume named data-reclass is there that this move did not create, so the move stopped. "
+                         "Nothing changed: everything started again on the original.", job["message"])
+        self.assertEqual("someone-elses-pv", self.kube.object(TEMP)["spec"]["volumeName"], "left as it was")
+        self.assertIsNone(self.kube.object(JOB), "no copy started into it")
+        self.assertEqual(2, self.replicas())
+
+    def test_a_claim_of_its_own_from_a_lost_reply_is_carried_on_with(self):
+        mine = {**claim("data-reclass", ""), "spec": {}}
+        mine["metadata"]["labels"] = RC.NAMES.labels("reclass", "data")
+        self.kube.add(mine)
+        ref = self.create()
+        self.assertEqual("copy", ref["phase"])
+        self.assertEqual(self.kube.object(TEMP)["metadata"]["uid"], ref["temp_uid"], "its uid is kept from here")
+
+    def swapping(self, temp):
+        self.kube.add(temp)
+        uid = self.kube.object(TEMP)["metadata"]["uid"]
+        return self.start("swap", new_pv="new-pv", temp_uid=uid), uid
+
+    def test_the_swap_deletes_its_temporary_claim_by_uid(self):
+        mine = {**claim("data-reclass", "new-pv")}
+        mine["metadata"] = {**mine["metadata"], "labels": RC.NAMES.labels("reclass", "data")}
+        ident, uid = self.swapping(mine)
+        self.look(ident)
+        self.assertIsNone(self.kube.object(TEMP))
+        deletes = [body for method, path, body, _ in self.kube.writes if method == "DELETE" and path == TEMP]
+        self.assertEqual([{"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid}}], deletes)
+
+    def test_the_swap_leaves_a_claim_of_its_temporary_name_it_did_not_create(self):
+        ident, uid = self.swapping(claim("data-reclass", "someone-elses-pv"))
+        job = self.look(ident)
+        self.assertEqual(uid, self.kube.object(TEMP)["metadata"]["uid"], "not deleted")
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("A volume named data-reclass is there that this move did not create, so the move stopped at "
+                         "'swap'. Nothing is lost. The original volume and the copy are both kept. Delete data-reclass "
+                         "if nothing needs it. Resume job then continues from this step.", job["message"])
+        self.assertTrue(job["resumable"])
+        self.assertEqual(0, self.replicas(), "half-way through a swap nothing is started on either volume")
+        self.assertEqual("old-pv", self.kube.object(CLAIM)["spec"]["volumeName"], "the original is kept")
 
     def test_a_rollback_that_cannot_finish_can_only_carry_on_rolling_back(self):
         self.kube.add(pod("app-1"))
@@ -447,7 +496,7 @@ class LegacyMoveTests(unittest.TestCase):
         self.assertEqual(2, self.replicas())
 
     def test_a_crash_mid_swap_keeps_the_new_volume_and_carries_on(self):
-        bound = claim("data-reclass", "new-pv")
+        bound = temp_claim("new-pv")
         self.kube.add(bound)
         ident = self.start("swap", job="")
         self.crashes(ident, "DELETE", "persistentvolumeclaims/data-reclass")
@@ -580,7 +629,7 @@ class LegacyMoveTests(unittest.TestCase):
         ident = self.start("copy", job="", copy_since=self.now)
         out = OPS.cancel(ident)
         self.assertTrue(self.kube.object(TEMP))
-        self.assertIn("did not make", out["detail"])
+        self.assertIn("did not create", out["detail"])
         self.assertNotIn("was removed", out["detail"])
 
     def test_cancel_from_the_copy_says_it_removed_the_new_volume(self):
@@ -679,7 +728,7 @@ class LegacyMoveTests(unittest.TestCase):
         kept = self.kube.object(TEMP)
         self.assertNotEqual(mine, kept["metadata"]["uid"])
         self.assertEqual("someone-elses-pv", kept["spec"]["volumeName"])
-        self.assertIn("did not make", job["message"])
+        self.assertIn("did not create", job["message"])
         self.assertEqual(2, self.replicas())
 
     def test_a_claim_gone_just_before_the_delete_counts_as_removed(self):
