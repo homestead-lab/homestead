@@ -835,14 +835,15 @@ def helm_plan(item):
         # The settings kept are from before the latest upgrade, not this one's: going back
         # to them would undo that. A cancel of a failed job's put-back has its own path.
         if not _was_failed(item) and _moved_since_written(item, chart):
-            # A run cut off may have landed its write, so it can't say nothing was changed.
-            if item.get("cancel_record"):
+            # A put-back cut off may have landed its write, so it can't say nothing was changed.
+            # A stop cut off writes nothing: the leader's look runs it again (#1334).
+            if item.get("cancel_record") and _reviewed(item) != "forget":
                 return {"can": False, "needs": "admin",
                         "why_not": f"{name} has changed since this upgrade was written, so it was not put back"}
             # Cancel is the job's only button: refused, a chart that keeps failing read as
             # running until the job's own time limit. It stops following instead (#1334).
             return {"mode": "forget", "needs": "admin", "keeps": [
-                f"{name} has changed since this upgrade, so nothing is put back and the later changes stay."]}
+                f"{name} changed since this upgrade, so nothing is put back. The later changes stay."]}
         plan = {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _chart_seen(chart),
                 "undo": [f"Restores {name}'s chart version and values from before the upgrade, "
                          "and Helm runs again with them"],

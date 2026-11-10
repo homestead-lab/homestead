@@ -309,7 +309,8 @@ class HelmJobTests(unittest.TestCase):
         plan = OPS.cancel_plan(ident)
         self.assertTrue(plan["can"], plan.get("why_not"))
         self.assertEqual("forget", plan["mode"])
-        self.assertIn("has changed since this upgrade, so nothing is put back", " ".join(plan["keeps"]))
+        self.assertEqual(["grafana changed since this upgrade, so nothing is put back. The later changes stay."],
+                         plan["keeps"])
         before = self.kube.object(self.CHART)
         self.kube.writes.clear()
         OPS.cancel(ident)
@@ -346,13 +347,20 @@ class HelmJobTests(unittest.TestCase):
     def test_a_leader_running_a_stop_again_writes_nothing(self):
         ident = self.upgraded()
         self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        self.assertEqual("forget", OPS.cancel_plan(ident)["mode"])
+        # The server stopped while the stop ran: the job stays marked, and that mark goes stale.
         items = OPS._read()
         match = next(item for item in items if item["id"] == ident)
         OPS._mark_cancelling(match, {"action": "Stop tracking it", "mode": "forget"}, {}, "")
-        match["cancel_record"]["reruns"] = 1
+        match["cancel_started"] = 1
+        OPS._write(items)
         self.kube.writes.clear()
-        self.assertEqual("Stopped following it. The later changes to grafana stay.", CANCEL.helm_cancel(match, {}))
+        OPS._resume_cancel(ident)          # the leader's round: it asks the plan again, then runs it
         self.assertEqual([], self.kube.writes)
+        job = self.look(ident)
+        self.assertEqual("cancelled", job["status"])
+        self.assertIn("Stopped following it. The later changes to grafana stay.", job["message"])
+        self.assertNotIn("put back", job["message"])
 
     def test_a_change_between_a_put_back_review_and_its_run_is_still_refused(self):
         # The person asked for a put-back, not to stop following: that stays theirs to choose.
