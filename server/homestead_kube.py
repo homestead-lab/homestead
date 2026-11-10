@@ -744,6 +744,12 @@ def _body(connection, response, max_bytes=None):
         pieces.append(piece)
         size += len(piece)
     payload = b"".join(pieces)
+    # read1 gives b"" when the server ends the connection early, where read()
+    # raises: an answer short of its Content-Length is a dropped connection,
+    # never a partial page (#1313). http.client counts length down to 0.
+    short = getattr(response, "length", None)
+    if isinstance(short, int) and short > 0 and (max_bytes is None or size <= max_bytes):
+        raise http.client.IncompleteRead(payload, short)
     return payload if max_bytes is None else payload[:max_bytes + 1]
 
 
