@@ -94,6 +94,23 @@ def _gb(value):
     return round((value or 0) / GiB, 1)
 
 
+# ---- a stop that deletes volumes ---------------------------------------------------
+
+def deletes_volumes_when_stopped(spec):
+    """Whether scaling this StatefulSet to none makes Kubernetes delete its
+    claims: whenScaled: Delete (#1222). Every stop that sends replicas 0 asks
+    this - a storage move, a snapshot rollback, a host power job - so they stay
+    in step."""
+    policy = (spec or {}).get("persistentVolumeClaimRetentionPolicy") or {}
+    return policy.get("whenScaled", "Retain") != "Retain"
+
+
+def stop_blocker(name, before):
+    """What stops the stop, in one set of words: `before` is what it was for."""
+    return (f"StatefulSet {name} can delete its volumes when stopped. Change its scale-down "
+            f"retention policy (whenScaled) to Retain before {before}.")
+
+
 # ---- who uses the claim ----------------------------------------------------------
 
 def _claims_in(podspec):
@@ -127,7 +144,7 @@ def consumers(ns, claim, fences=None):
             if kind in ("Deployment", "StatefulSet"):
                 row["replicas"] = int(obj["spec"].get("replicas", 1) if obj["spec"].get("replicas") is not None else 1)
                 row["running"] = int((obj.get("status") or {}).get("readyReplicas", 0) or 0) > 0
-                if kind == "StatefulSet" and obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+                if kind == "StatefulSet" and deletes_volumes_when_stopped(obj["spec"]):
                     row["deletes_claims_on_scale_down"] = True
             elif kind == "CronJob":
                 row["suspend"] = bool(obj["spec"].get("suspend"))
@@ -305,7 +322,7 @@ def plan(ns, claim, target, *, capture=False):
         if c["kind"] == "Deployment" and ns == OWN_NS and c["name"] == NAMES.BRAND:
             blockers.append("This is Homestead's own data. Move it from Settings › Redundancy instead.")
         if c.get("deletes_claims_on_scale_down"):
-            blockers.append(f"StatefulSet {c['name']} can delete its volumes when stopped. Change its scale-down retention policy to Retain before moving storage.")
+            blockers.append(stop_blocker(c["name"], "moving storage"))
     known = {(c["kind"], c["name"]) for c in used}
     claim_pods = [p for p in _items(f"/api/v1/namespaces/{ns}/pods") if claim in _claims_in(p.get("spec"))]
     for pod in claim_pods:
@@ -561,7 +578,7 @@ def journaled_stop(item, checkpoint, *, journal_factory=JOURNAL.Journal):
     for consumer in ref["consumers"]:
         if consumer["kind"] == "StatefulSet":
             obj = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/statefulsets/{consumer['name']}")
-            if obj["spec"].get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
+            if deletes_volumes_when_stopped(obj["spec"]):
                 raise JOURNAL.Held("A StatefulSet can delete its volumes when stopped. Change its retention policy and review again.")
     def send(method, path, body=None, **kw):
         expected = ref.get("review_fences", {}).get(path)

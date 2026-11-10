@@ -16,12 +16,15 @@ even if the job's record is lost.
 import urllib.error
 import urllib.parse
 
+from homestead_reclass import deletes_volumes_when_stopped, stop_blocker
+
 HELD_BY = "homestead.io/held-for-power"
 HELD_AS = "homestead.io/held-as"
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 SYSTEM_NS = {"kube-system", "longhorn-system", "kubevirt", "cdi", "system-upgrade", "local"}
 SUB = "/apis/subresources.kubevirt.io/v1"
 VM_API = "/apis/kubevirt.io/v1"
+BEFORE = "the host goes down"   # what a StatefulSet's retention policy must change before
 
 kget = ksend = None
 OWN = ("", "")          # Homestead's own namespace and Deployment: never stopped
@@ -62,12 +65,16 @@ def _workload(pod, replicasets):
     return None
 
 
-def candidates(node, pods, vmis, replicasets, ready_hosts, eligible=None, single_host=False):
+def candidates(node, pods, vmis, replicasets, ready_hosts, eligible=None, single_host=False, statefulsets=()):
     """Each app and VM on the host, what it may do, and what it does by default.
 
     eligible: Homestead's placement view, {(ns, name): [hosts]} for the
-    Deployments it knows; anything else may move if another host is Ready."""
+    Deployments it knows; anything else may move if another host is Ready.
+    statefulsets: the StatefulSets running here. One that deletes its volumes
+    when stopped never waits: moving drains it, which keeps its claims."""
     eligible = eligible or {}
+    deletes = {((s.get("metadata") or {}).get("namespace"), (s.get("metadata") or {}).get("name"))
+               for s in statefulsets or () if deletes_volumes_when_stopped(s.get("spec"))}
     others = sorted(h for h in ready_hosts if h != node)
     running = [p for p in pods if (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
                and not (p.get("metadata") or {}).get("deletionTimestamp")]
@@ -97,10 +104,14 @@ def candidates(node, pods, vmis, replicasets, ready_hosts, eligible=None, single
         options = (["move"] if can_move else []) + (["wait"] if not row["elsewhere"] else [])
         if not options:
             options = ["move"]
+        why = "" if can_move else "the only host" if single_host else "no other host it can run on"
+        if kind == "StatefulSet" and (ns, name) in deletes and "wait" in options:
+            options = [o for o in options if o != "wait"]
+            why = "it can delete its volumes when stopped"
         items.append({"id": f"{kind}/{ns}/{name}", "kind": kind, "ns": ns, "name": name,
                       "here": row["here"], "elsewhere": row["elsewhere"], "hosts": hosts,
-                      "options": options, "default": "move" if can_move or "wait" not in options else "wait",
-                      "why": "" if can_move else "the only host" if single_host else "no other host it can run on"})
+                      "options": options, "default": "" if not options else "move" if can_move or "wait" not in options else "wait",
+                      "why": why})
     for vmi in vmis:
         meta, status = vmi.get("metadata") or {}, vmi.get("status") or {}
         if status.get("nodeName") != node or status.get("phase") in ("Succeeded", "Failed"):
@@ -161,6 +172,9 @@ def stop(item, job):
             # Shut down from inside: the guest's own ACPI shutdown, within its grace period.
             ksend("PUT", f"{SUB}/namespaces/{_q(item['ns'])}/virtualmachines/{_q(item['name'])}/stop", {})
         return {**item, "was": was}
+    if item["kind"] == "StatefulSet" and deletes_volumes_when_stopped(obj.get("spec")):
+        # Changed since the review, which offered it no wait: nothing is written.
+        raise ValueError(stop_blocker(f"{item['ns']}/{item['name']}", BEFORE))
     replicas = int((obj.get("spec") or {}).get("replicas", 1) or 0)
     was = (meta.get("annotations") or {}).get(HELD_AS) if mark == job else str(replicas)
     ksend("PATCH", _path(item["kind"], item["ns"], item["name"]),

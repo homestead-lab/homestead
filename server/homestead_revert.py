@@ -61,6 +61,7 @@ import homestead_import_guard as IMPORT
 import homestead_operations as OPS
 import homestead_self as SELF
 import homestead_storage_guard as STORAGE_GUARD
+from homestead_reclass import deletes_volumes_when_stopped, stop_blocker
 
 KIND = "snapshot-revert"
 LHNS = "longhorn-system"
@@ -153,8 +154,7 @@ def plan(volume, snapshot):
         if user["kind"] == "DaemonSet":
             blockers.append(f"{user['name']} is a DaemonSet, which cannot be stopped for this. Remove its volume claim first.")
         if user.get("deletes_claims_on_scale_down"):
-            blockers.append(f"StatefulSet {user['name']} can delete its volumes when stopped. Change its scale-down "
-                            "retention policy (whenScaled) to Retain before rolling back.")
+            blockers.append(stop_blocker(user["name"], "rolling back"))
         if is_self(ns, user["name"]):
             blockers.append("this is Homestead's own data: rolling it back would stop Homestead part-way")
     known = {user["name"] for user in users}
@@ -308,7 +308,7 @@ def _look(ref, c, obj):
         return f"{left} it is held by {_holder(mark)}"
     record = _record_of(c)
     if record is None:                          # a job from before this version
-        if (spec.get("persistentVolumeClaimRetentionPolicy") or {}).get("whenScaled", "Retain") != "Retain":
+        if deletes_volumes_when_stopped(spec):
             return f"{left} it now deletes its volumes when stopped"
         if _as_left(c, spec) and not _as_before(c, spec):
             c["stopped"] = True                 # its plain stop landed; it has no record

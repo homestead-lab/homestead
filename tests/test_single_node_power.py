@@ -92,6 +92,24 @@ class SingleNodePowerTests(unittest.TestCase):
                 if case == "not-ready": self.objects["/api/v1/nodes/node1"]["status"]["conditions"] = []
                 self.assertFalse(power.plan("node1", "poweroff")["ready"])
 
+    def test_a_statefulset_that_deletes_its_volumes_when_stopped_blocks_the_outage(self):
+        # On the only host everything waits, stopped at 0 first; with
+        # whenScaled: Delete that stop deletes its claims (#1222).
+        self.objects["/api/v1/pods"]["items"].append(
+            {"metadata": {"namespace": "lab", "name": "db-0", "ownerReferences": [{"kind": "StatefulSet", "name": "db", "controller": True}]},
+             "spec": {"nodeName": "node1"}, "status": {"phase": "Running"}})
+        for when_scaled, ready in (("Delete", False), ("Retain", True)):
+            with self.subTest(when_scaled=when_scaled):
+                self.objects["/apis/apps/v1/statefulsets"] = {"items": [
+                    {"metadata": {"namespace": "lab", "name": "db"},
+                     "spec": {"persistentVolumeClaimRetentionPolicy": {"whenScaled": when_scaled}}}]}
+                plan = power.plan("node1", "reboot")
+                self.assertEqual(ready, plan["ready"], plan["blockers"])
+                said = [b for b in plan["blockers"] if "lab/db" in b]
+                self.assertEqual([] if ready else [
+                    "StatefulSet lab/db can delete its volumes when stopped. Change its scale-down retention policy "
+                    "(whenScaled) to Retain before the host goes down."], said)
+
     def test_a_changed_review_cannot_send_the_planned_outage(self):
         for case in ("new-host", "new-pod", "new-boot", "new-uid", "new-volume-risk"):
             with self.subTest(case=case):
