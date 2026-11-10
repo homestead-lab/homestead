@@ -90,11 +90,10 @@ class SharedReadThreadTests(unittest.TestCase):
         self.kube = self.enterContext(Kube(store_secret(STORE)))
         self.wire = Wire(self.kube)
         self.enterContext(mock.patch.object(K, "transport", self.wire))
-        # Short timeouts, so a held read gives up in test time.
-        for module, name in ((K, "OBJECT_TIMEOUT"), (AUTH, "WAIT_IN_REQUEST")):
-            self.enterContext(mock.patch.object(module, name, 2))
-        for module, name in ((K, "LIST_TIMEOUT"), (AUTH, "WAIT_OTHERWISE")):
-            self.enterContext(mock.patch.object(module, name, 3))
+        # Short timeouts, so a held read gives up in test time. A request
+        # waiting on another's read takes the same bounds from homestead_kube.
+        self.enterContext(mock.patch.object(K, "OBJECT_TIMEOUT", 2))
+        self.enterContext(mock.patch.object(K, "LIST_TIMEOUT", 3))
         self.enterContext(mock.patch.object(AUTH, "RETRY", 0.3))
         AUTH.kget, AUTH.ksend = K.kget, K.ksend
         AUTH.SECRET_NAME = lambda: "homestead-auth"
@@ -177,7 +176,7 @@ class SharedReadThreadTests(unittest.TestCase):
         self.finish(leader, *waiters)
         for r in (leader, *waiters):
             self.assertIsInstance(r.answer, AUTH.StoreUnavailable)
-            self.assertLess(r.took, AUTH.WAIT_IN_REQUEST + 0.5)
+            self.assertLess(r.took, K.OBJECT_TIMEOUT + 0.5)
         self.assertEqual(1, self.wire.reads)
 
     def test_a_leader_out_of_its_own_time_does_not_fail_the_requests_waiting_on_it(self):
@@ -221,8 +220,10 @@ class SharedReadThreadTests(unittest.TestCase):
         self.assertEqual(1, self.wire.reads)
 
     def test_a_waiter_stops_at_its_own_bound_behind_a_read_with_no_deadline(self):
+        # Its bound is the timeout its own read would get (homestead_kube's,
+        # named rather than copied, #1302), not the background loop's 3 s.
         self.cold()
-        self.enterContext(mock.patch.object(AUTH, "WAIT_IN_REQUEST", 0.3))
+        self.enterContext(mock.patch.object(K, "OBJECT_TIMEOUT", 0.3))
         leader = self.held_read(deadline=None)    # a background loop asked first, with 3 s
         waiter = Request(lambda: AUTH.verify_token(self.token))   # a page request with its full 15 s
         waiter.start()

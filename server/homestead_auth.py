@@ -87,11 +87,6 @@ MAX_STALE_SECONDS = 30
 # again, for this long - and never past MAX_STALE_SECONDS. A restarting API
 # server would otherwise hold every request for its own timeout.
 RETRY = 3
-# How long a request waits for a read another request began: as long as its own
-# read would be given (homestead_kube.OBJECT_TIMEOUT in a request, LIST_TIMEOUT
-# otherwise), and never past the request's own deadline (homestead_read_deadline).
-WAIT_IN_REQUEST = 5
-WAIT_OTHERWISE = 10
 _store_reads = threading.Lock()
 _store_read = None      # the read under way, which requests that find the copy expired wait for
 _rate_lock = threading.RLock()
@@ -150,6 +145,17 @@ class StoreConflict(ValueError):
     """The accounts changed on another replica between reading and saving."""
 
 
+def _wait_bound(in_request):
+    """How long a request waits for a read another request began: as long as its
+    own read would be given, and never past its own deadline (homestead_read_deadline)."""
+    import homestead_kube as KUBE   # it imports this module, so not at the top
+    return KUBE.OBJECT_TIMEOUT if in_request else KUBE.LIST_TIMEOUT
+
+
+# Reads, saves and forgetting are put in order (as_of, a read's started) on
+# time.monotonic(), which never goes back: on the wall clock, a step back (an
+# NTP correction) kept every read from filling the copy for as long as the step
+# (#1302). How old the copy is ("at", "failed_at") stays on the wall clock.
 class _Read:
     """One read of the Secret, shared by everyone who asked while it ran."""
     def __init__(self, started):
@@ -162,7 +168,7 @@ def invalidate():
     already under way are both forgotten (a restored configuration)."""
     global _store_read
     with _store_reads:
-        _store_cache.update(at=0, as_of=max(time.time(), _store_cache.get("as_of", 0)))
+        _store_cache.update(at=0, as_of=max(time.monotonic(), _store_cache.get("as_of", 0)))
         _store_read = None
 
 
@@ -182,7 +188,7 @@ def _cached(max_age, allow_stale):
 def _load(force=False, max_age=10, allow_stale=True):
     global _store_read
     left = DEADLINE.remaining()
-    wanted = WAIT_IN_REQUEST if left is not None else WAIT_OTHERWISE
+    wanted = _wait_bound(left is not None)
     cut = left is not None and left < wanted
     until = DEADLINE.clock() + wanted
     while True:
@@ -196,9 +202,9 @@ def _load(force=False, max_age=10, allow_stale=True):
             # one older than RETRY may be hung, so it gets a second read. A
             # forced read never takes one: it must see what is there now.
             joined = (not force and read is not None
-                      and time.time() - read.started < min(max_age, RETRY))
+                      and time.monotonic() - read.started < min(max_age, RETRY))
             if not joined:
-                read = _store_read = _Read(time.time())
+                read = _store_read = _Read(time.monotonic())
         if not joined:
             return _lead(read, allow_stale)
         if not DEADLINE.wait(read.done, max(0, until - DEADLINE.clock())):
@@ -276,13 +282,13 @@ def _save(data):
     except urllib.error.HTTPError as e:
         if e.code == 409:
             with _store_reads:
-                _store_cache.update(at=0, data=None, as_of=max(time.time(), _store_cache.get("as_of", 0)))
+                _store_cache.update(at=0, data=None, as_of=max(time.monotonic(), _store_cache.get("as_of", 0)))
             raise StoreConflict("The accounts were changed elsewhere at the same moment. Try again.") from None
         raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
     with _store_reads:
         _store_cache.update(at=time.time(), data=data, failed_at=0,
-                            as_of=max(time.time(), _store_cache.get("as_of", 0)))
+                            as_of=max(time.monotonic(), _store_cache.get("as_of", 0)))
 
 
 def _signing_key(data=None):
