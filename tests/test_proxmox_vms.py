@@ -311,6 +311,8 @@ class StuckImportTests(unittest.TestCase):
             "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/test-disk": {"metadata": {"name": "test-disk", "uid": "u1", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "w1"}}},
             "/apis/batch/v1/namespaces/lab/jobs/homestead-vmimport-test-w1-1": {"metadata": {"name": "j", "uid": "u2", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "w1"}}},
             "/api/v1/namespaces/lab/secrets/homestead-vmimport-test-w1-1-upload": {"metadata": {"name": "s", "uid": "u3", "resourceVersion": "1", "annotations": {"homestead.io/cdi-import-id": "other"}}},
+            # Cancel reads who uses the disks first (#1312); the namespace has no pods.
+            "/api/v1/namespaces/lab/pods": {"metadata": {}, "items": []},
         }
         self.deleted = []
 
@@ -341,6 +343,13 @@ class StuckImportTests(unittest.TestCase):
                           "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/test-disk"], self.deleted)
         self.assertIn("belong to another import", message)
         self.assertEqual("failed", self.item["ref"]["phase"])
+
+    def test_a_disk_a_vm_uses_is_kept(self):
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"] = {"metadata": {}, "items": [
+            {"metadata": {"name": "win11"}, "spec": {"template": {"spec": {"volumes": [{"dataVolume": {"name": "test-disk"}}]}}}}]}
+        message = self.UVMS.cancel_run(self.item, {})
+        self.assertEqual(["/apis/batch/v1/namespaces/lab/jobs/homestead-vmimport-test-w1-1"], self.deleted)
+        self.assertIn("VM win11 uses test-disk, so it is kept.", message)
 
     def test_another_cdi_job_is_still_not_cancellable(self):
         other = {**self.item, "kind": "vm-disk-import"}

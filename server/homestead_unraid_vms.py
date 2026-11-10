@@ -89,17 +89,58 @@ def cancel_plan(item):
         return {"can": False, "why_not": "This older import kept no record of what it made: review its volumes under Volumes"}
     where = _where(ref)
     disks = ", ".join(d["dv"] for d in ref.get("disks") or [])
-    if ref.get("phase") in ("leaving", "clearing"):
+    if ref.get("phase") in ("leaving", "clearing") or _cleanup_keeps_disks(ref):
         # The copy is over and the job has told the person these disks are kept.
         return {"mode": "stop", "action": "Finish ending the import and keep its disks", "severity": "low", "needs": "operator",
                 "undo": ["Removes its copy Job and Secret: the copy is over"] +
-                        (["Clears CDI's temporary storage: the disks are finished"] if ref["phase"] == "clearing" else []),
-                "keeps": [f"The disks ({disks}) are kept, with what CDI has of them. This does not remove them.",
+                        (["Clears CDI's temporary storage: the disks are finished"] if ref["phase"] != "leaving" else []),
+                "keeps": [f"The disks ({disks}) are kept" + ("" if _cleanup_keeps_disks(ref) else ", with what CDI has of them")
+                          + ". This does not remove them.",
                           f"The VM on {where} is unchanged"]}
     return {"mode": "stop", "action": "Stop the import and remove its disks", "severity": "medium", "needs": "operator",
             "undo": [f"Stops the copy from {where}", f"Removes the disks it was making ({disks}) and their temporary storage"],
-            "keeps": [f"The VM on {where} is unchanged",
+            "keeps": ["A disk that a VM or an app uses is kept, with its storage",
+                      f"The VM on {where} is unchanged",
                       "A volume on a class that keeps released data (Retain) stays under Volumes until it is removed"]}
+
+
+def _cleanup_keeps_disks(ref):
+    """The clean-up after the disks arrived: the VM is made from them, or the job said they are kept."""
+    return ref.get("phase") == "cleanup" and ref.get("cleanup_keep_disks", ref.get("cleanup_outcome") == "succeeded")
+
+
+def _in_use(ns, work, names):
+    """{disk: [who uses it]}: a VM or VMI naming it, or a pod mounting its claim. CDI's
+    own workers are owned by a claim and are not users. A list that can't be read
+    raises: unread isn't unused."""
+    pods = [pod for pod in CDI_CLEANUP.RESOURCES.items(kget, f"/api/v1/namespaces/{ns}/pods")
+            if not any(row.get("kind") == "PersistentVolumeClaim"
+                       for row in pod["metadata"].get("ownerReferences") or [])]
+    users = {}
+    for name in names:
+        who = [f"VM {vm}" for vm in CDI_CLEANUP.vm_users(kget, ns, {name})]
+        who += [f"pod {pod}" for pod, _ in CDI_CLEANUP.other_pods(pods, work, {name})]
+        if who:
+            users[name] = who
+    return users
+
+
+def _kept_words(users):
+    """'VM x uses a, so it is kept.', one sentence per set of users, cause first. A disk
+    whose last check went unanswered has no users listed."""
+    by_users = {}
+    for name, who in users.items():
+        by_users.setdefault(" and ".join(who), []).append(name)
+    words = []
+    for who, names in by_users.items():
+        one = len(names) == 1
+        if not who:
+            words.append(f"Kubernetes did not say whether a VM uses {', '.join(names)}, "
+                         f"so {'it is' if one else 'they are'} kept.")
+            continue
+        words.append(f"{who[0].upper()}{who[1:]} {'use' if ' and ' in who else 'uses'} {', '.join(names)}, "
+                     f"so {'it is' if one else 'they are'} kept.")
+    return " ".join(words)
 
 
 def cancel_run(item, _options):
@@ -115,26 +156,55 @@ def cancel_run(item, _options):
         if state == "running":
             raise ValueError("its temporary storage cannot be cleared yet, and the job keeps trying. Its disks are kept.")
         return detail
+    if _cleanup_keeps_disks(ref):
+        # The VM is made from these disks, or the job said they are kept: finish the
+        # clean-up that keeps them, as the clearing above does.
+        state, _, detail = CDI_CLEANUP.finish(item, kget, ksend, lambda _: None)
+        if state == "running":
+            raise ValueError("its temporary storage cannot be cleared yet, and the job keeps trying. Its disks are kept.")
+        return detail
     ns, stamp = ref["namespace"], ref["cdi_cleanup"]["id"]
+    try:
+        users = _in_use(ns, {"disks": ref["cdi_cleanup"].get("disks") or {}}, [d["dv"] for d in ref.get("disks") or []])
+    except Exception:
+        raise ValueError("Kubernetes did not say whether a VM or an app uses the import's disks, "
+                         "so nothing was removed and the disks are kept. Press Cancel again.") from None
     paths = []
     for disk in ref.get("disks") or []:
         if disk.get("job"):
             paths += [f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}",
                       f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload"]
-        paths.append(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
+        if disk["dv"] not in users:
+            paths.append(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
     removed, foreign = 0, []
     for path in paths:
         found = CDI_CLEANUP.RESOURCES.optional(kget, path)
         if not found:
             continue
+        name = path.rsplit("/", 1)[-1]
         if ((found.get("metadata") or {}).get("annotations") or {}).get(CDI_CLEANUP.STAMP) != stamp:
-            foreign.append(path.rsplit("/", 1)[-1])
+            foreign.append(name)
             continue
+        if path.startswith(CDI_API):
+            # Asked again just before the delete: this narrows the gap since the first
+            # check, but cannot close it (making a VM does not change the DataVolume).
+            try:
+                late = [f"VM {vm}" for vm in CDI_CLEANUP.vm_users(kget, ns, {name})]
+            except Exception:
+                late = []
+                users[name] = late
+            if late:
+                users[name] = late
+            if name in users:
+                continue
         CDI_CLEANUP.RESOURCES.delete(kget, ksend, path, found)
         removed += 1
     ref.update(phase="failed", retain_resources=False)
-    note = (f". {', '.join(foreign)} belong to another import and were left" if foreign else "")
-    return f"Stopped. Removed {removed} of the import's objects and their temporary storage{note}. The VM on {_where(ref)} is not changed."
+    note = (f". {', '.join(foreign)} belong to another import and are kept" if foreign else "")
+    storage = " and their temporary storage" if len(users) < len(ref.get("disks") or []) else ""
+    kept = f"{_kept_words(users)} " if users else ""
+    return (f"Stopped. {kept}Removed {removed} of the import's objects{storage}{note}. "
+            f"The VM on {_where(ref)} is not changed.")
 
 
 # ------------------------------------------------------------ reading Unraid
