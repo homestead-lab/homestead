@@ -1,6 +1,6 @@
 "use strict";
 const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
-function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
+function setup({blocked=false,missing=false,fail=false,stateInit=false,warnings=["high RAM"]}={}) {
   const fields={"#vmEditLoading":{},"#vmEditApprove":{checked:false},"#vmEditApply":{},"#mbody":{innerHTML:"",insertAdjacentHTML(_where,html){this.innerHTML=html+this.innerHTML;}}};
   const sent=[],restarts=[];
   const ctx={console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
@@ -10,7 +10,7 @@ function setup({blocked=false,missing=false,fail=false,stateInit=false}={}) {
     api:async(path,options)=>{
       const body=JSON.parse(options.body);sent.push({path,body});
       if(path.endsWith("/preview"))return {capacity_token:missing ? null : "signed-edit",volumes:[],
-        capacity:{blocked,warnings:["high RAM"],blockers:blocked ? ["missing KVM"] : [],
+        capacity:{blocked,warnings,blockers:blocked ? ["missing KVM"] : [],
           vm:{admission_needed:true,policy_before:"Halted",policy_after:"Always",state_initialization:stateInit ? {name:"guest",reason:"Fresh state is not recovery"} : null}}};
       if(fail)throw new Error("connection lost");
       return {ok:true,detail:"saved"};
@@ -135,4 +135,13 @@ test("isolation change is explicit in the edit review",async()=>{
   assert.match(t.fields['#mbody'].innerHTML,/Isolated:/);
   assert.match(t.fields['#mbody'].innerHTML,/all virtual network cards are removed/);
   assert.match(t.fields['#mbody'].innerHTML,/at the next start/);
+});
+
+test("a tickbox drawn only for routine warnings must still be ticked before Save (#1317)",async()=>{
+  const t=setup({warnings:["RAM projection includes the VM launcher"]});
+  await t.ctx.vmEditReview({ns:"lab",name:"guest",memory:"6Gi"});
+  assert.match(t.fields["#mbody"].innerHTML,/id="vmEditApprove"/,"the tickbox is drawn");
+  assert.equal(t.ctx.vmEditReviewReady(),false,"Save waits for the tick");
+  t.fields["#vmEditApprove"].checked=true;
+  assert.equal(t.ctx.vmEditReviewReady(),true);
 });

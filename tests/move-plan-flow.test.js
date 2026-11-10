@@ -108,7 +108,7 @@ async function aSendingWithBOpen() {
 test("a dialog opened during a send waits on the spinner with Start off, and reads nothing yet", async () => {
   const { w } = await aSendingWithBOpen();
   assert.equal(plans(w).length, 1, "only A's plan so far");
-  assert.match(w.fields["#mv_plan"].innerHTML, /Waiting for the transfer being sent/, "it says what it waits for (#1317)");
+  assert.match(w.fields["#mv_plan"].innerHTML, /Waiting while the transfer is sent/, "it says what it waits for (#1317)");
   assert.equal(w.fields["#mv_go"].disabled, true);
 });
 test("after a refused start, a dialog opened during the send plans and starts its own transfer", async () => {

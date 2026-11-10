@@ -721,7 +721,7 @@ const VM_EDIT = UI.reviewFlow({
   },
   // The tickbox is there only when there is something to accept.
   blocked: review => review.capacity.blocked, ack: "vmEditApprove",
-  ackWhen: review => review.capacity.vm?.admission_needed ? startReviewAsks(review.capacity) : (review.capacity.warnings || []).length > 0, button: "vmEditApply",
+  ackWhen: review => review.capacity.vm?.admission_needed ? startReviewAsks(review.capacity, review.capacity.warnings || []) : (review.capacity.warnings || []).length > 0, button: "vmEditApply",
   check: review => vmStateInitReady(review.capacity, "vmEdit"),
   apply: async review => {
     const button = $("#vmEditApply");

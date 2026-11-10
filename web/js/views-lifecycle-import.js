@@ -1240,7 +1240,7 @@ window.movePlan = (cluster, kind, name) => {
   // Nothing is read while a start is being sent. The dialog waits on the spinner and says why: a refused start's
   // after() reads its plan, and an accepted one closes it. A lost reply keeps it waiting, as a new start would be a
   // second transfer.
-  if (MOVE_PLAN.busy) return moveLoading({ host, go }, "Waiting for the transfer being sent…");
+  if (MOVE_PLAN.busy) return moveLoading({ host, go }, "Waiting while the transfer is sent…");
   return MOVE_PLAN.open({ cluster, kind, name, host, go });
 };
 
@@ -1473,7 +1473,7 @@ const IMPORT_REVIEW = UI.reviewFlow({
   blocked: review => review.capacity.blocked, ack: "importConfirm",
   apply: async review => {
     const go = $("#importGo");
-    go.disabled = true;
+    if (go) go.disabled = true;
     try {
       const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
