@@ -384,6 +384,11 @@ def _alert(fact):
         print(f"OS updates: the alert was not raised: {str(error)[:120]}", flush=True)
 
 
+# Why a host that needs a restart was not restarted, with restarts off
+# (the setting, or this run's own answer).
+NOT_RESTARTING = "this run does not restart hosts"
+
+
 def _result(rollout, ok, note, **extra):
     node = rollout.get("node") or {}
     rollout["results"].append({"node": node.get("name", ""), "ok": ok, "note": note,
@@ -464,6 +469,8 @@ def step(state, now=None):
             rollout["message"] = f"{name}: installing {node['updates']} update{'s' if node['updates'] != 1 else ''}"
         elif facts.get("reboot") and config["reboot"] == "when-needed":
             rollout["phase"], rollout["message"] = "restart", f"{name}: up to date, and needs a restart"
+        elif facts.get("reboot"):
+            _result(rollout, True, "up to date, but the restart was not done: " + NOT_RESTARTING, restart_needed=True)
         else:
             _result(rollout, True, "up to date")
         return True
@@ -494,8 +501,10 @@ def step(state, now=None):
         facts = host_os.read(name)
         if facts.get("reboot") and config["reboot"] == "when-needed":
             rollout["phase"], rollout["message"] = "restart", f"{name}: updates installed. Restarting it."
+        elif facts.get("reboot"):
+            _result(rollout, True, "updates installed, but the restart was not done: " + NOT_RESTARTING, restart_needed=True)
         else:
-            _result(rollout, True, "updates installed" + ("; needs a restart" if facts.get("reboot") else ""))
+            _result(rollout, True, "updates installed")
         return True
     if phase == "restart":
         # The restart runs its drain from here, and Homestead itself may be

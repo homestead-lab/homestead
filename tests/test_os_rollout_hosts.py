@@ -216,7 +216,10 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-a"], restart="never")
         done = self.run_it()
         self.assertEqual([], self.sent)
-        self.assertIn("needs a restart", done["results"][0]["note"])
+        self.assertEqual("updates installed, but the restart was not done: this run does not restart hosts",
+                         done["results"][0]["note"])
+        self.assertTrue(done["results"][0]["restart_needed"])
+        self.assertIn("needing a restart: node-a (node-a: this run does not restart hosts)", done["message"])
         self.assertEqual("when-needed", ROLLOUT.settings()["reboot"], "the setting is not touched")
 
     def test_this_runs_answer_can_restart_when_the_setting_says_never(self):
@@ -231,6 +234,19 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-a"])
         self.run_it()
         self.assertEqual([], self.sent)
+
+    def test_a_host_with_nothing_to_install_that_needs_a_restart_is_not_called_up_to_date(self):
+        # #1319: with restarts off it was "up to date", and the summary left it out.
+        self.hosts.facts["node-b"] = host_facts([], reboot=True)
+        ROLLOUT.save_settings({"reboot": "never"})
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        done = self.run_it()
+        self.assertEqual([], self.sent)
+        row = done["results"][0]
+        self.assertEqual("up to date, but the restart was not done: this run does not restart hosts", row["note"])
+        self.assertTrue(row["restart_needed"])
+        self.assertIn("needing a restart: node-b", done["message"])
+
 
     def test_only_the_two_answers_are_taken(self):
         with self.assertRaises(ValueError):
