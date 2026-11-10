@@ -276,6 +276,8 @@ const DIALOGS = [
   ["resource-open", "resources", "click:resOpen"],
   ["resource-create", "resources", "resCreate()"],
   ["samba-remove", "settings", "sambaRemove()"],
+  ["kubevirt-remove-review", "settings", "window.__demoKubevirtInUse=false;kubevirtRemoveReview()"],
+  ["kubevirt-remove-blocked", "settings", "window.__demoKubevirtInUse=true;kubevirtRemoveReview()"],
   ["nfs-remove", "settings", "nfsRemove()"],
   ["volume-create", "storage", "volumeCreate()"],
   ["volume-edit", "storage", "click:volumeEdit"],

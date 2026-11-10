@@ -177,12 +177,15 @@ window.addonsPaint = async () => {
           : "Hardware virtualisation (/dev/kvm) is required."}</div>` : "";
     const emulationButton = key === "kubevirt" && state.installed && !state.emulation && !s.kvm_everywhere && can("admin")
       ? '<button class="btn sm" onclick="kubevirtEmulation(true)">Allow software emulation</button>' : "";
+    // Removing what Homestead installed (#1336): the review says what goes and what refuses it.
+    const removeButton = key === "kubevirt" && state.installed && can("admin")
+      ? '<button class="btn sm" onclick="kubevirtRemoveReview()">Remove virtual machines</button>' : "";
     return `<div class="addon-row"><div><b>${esc(a.name)}</b> ${pill}<div class="dim small">${esc(a.what)}</div>
         ${state.installed ? "" : `<div class="dim xs" style="margin-top:4px">${esc(a.needs)}</div>`}
         ${key === "kubevirt" ? `<div class="xs" style="margin-top:4px">${kvmLine}</div>${emulation}` : ""}
         ${key === "multus" && state.ready ? `<div class="dim xs">${esc(state.detail)}</div>` : ""}
         ${diagnostic}</div>
-      <div class="row">${button}${emulationButton}</div></div>`;
+      <div class="row">${button}${emulationButton}${removeButton}</div></div>`;
   };
   const probePill = health.unread ? unknown : !probe.installed ? UI.chip("not installed", "neutral")
     : probe.ready < probe.desired || probe.reporting < probe.desired ? UI.chip(`${probe.ready || 0}/${probe.desired || 0} ready`, "neutral")
@@ -261,6 +264,37 @@ window.hostConsoleSet = async on => {
   try {
     const r = await api("/api/host-console", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) });
     toast(r.detail, "ok");
+    addonsPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+/* Remove virtual machines (#1336): a review first. It lists what goes and
+   what stays, and refuses while a VM, a VM disk or a VM job is there. */
+window.kubevirtRemoveReview = async () => {
+  let found;
+  try {
+    found = await api("/api/addons/kubevirt/remove/review", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  } catch (e) {
+    return modal("Remove virtual machines", UI.error(e, { title: "The removal could not be reviewed", retry: "kubevirtRemoveReview()", dialog: true }));
+  }
+  const list = rows => `<ul class="ui-list">${(rows || []).map(row => `<li>${esc(row)}</li>`).join("")}</ul>`;
+  UI.openDialog("Remove virtual machines", { shape: "review",
+    subject: { kind: "Add-on", name: "KubeVirt and CDI" },
+    lead: found.can ? "Virtual machines are removed from the cluster, and their pages leave the menu." : "",
+    issues: (found.blockers || []).map(said => ["bad", said]),
+    issuesTitle: found.can ? "" : "Virtual machines cannot be removed yet",
+    body: found.can ? `${UI.section("What is removed", list(found.removes))}${UI.section("What stays", list(found.keeps))}
+      ${UI.typedConfirm({ id: "kubevirt_remove_confirm", expect: "kubevirt", button: "kubevirt_remove_go" })}` : "",
+    actions: { primary: { label: "Remove virtual machines", onclick: "kubevirtRemoveGo()", danger: true,
+                          id: "kubevirt_remove_go", disabled: true } } });
+};
+window.kubevirtRemoveGo = async () => {
+  if (!typedConfirmMatches("kubevirt_remove_confirm")) return;
+  try {
+    const result = await api("/api/addons/kubevirt/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: $("#kubevirt_remove_confirm").value.trim() }) });
+    closeModal(); toast(result.detail, "ok");
+    if (window.refreshOperations) refreshOperations(true);
     addonsPaint();
   } catch (e) { toast(e.message, "bad"); }
 };

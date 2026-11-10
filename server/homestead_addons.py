@@ -22,6 +22,7 @@ import time
 import calendar
 import urllib.error
 
+import homestead_addon_removal as REMOVAL
 import homestead_fetch as FETCH
 import homestead_kube as KUBE
 import homestead_names as NAMES
@@ -71,6 +72,11 @@ def bind(_kget, _ksend, _platform, _probes, _fetch_fn=None):
     global kget, ksend, platform, probes, fetch
     kget, ksend, platform, probes = _kget, _ksend, _platform, _probes
     fetch = _fetch_fn or _fetch
+    # Removing an add-on (#1336) reads and writes through the same client.
+    REMOVAL.kget = _kget
+    REMOVAL.ksend = _ksend
+    REMOVAL.platform = _platform
+    REMOVAL.snapshot = lambda: __import__("homestead_operations").snapshot()
 
 
 def _helmcharts():
@@ -670,9 +676,12 @@ ROUTES = {
     ("POST", "/api/addons/kube-vip"): ("admin", _install("kube-vip")),
     ("POST", "/api/addons/kubevirt/emulation"): ("admin", _emulation),
     ("GET", "/api/addons"): ("viewer", lambda request: status()),
+    # Removing virtual machines (#1336): its review and its job.
+    **REMOVAL.REMOVAL_ROUTES,
 }
 
 
 def register(ops):
-    """The job store's entry for installing Multus (#622)."""
+    """The job store's entries for installing Multus (#622) and removing an add-on (#1336)."""
     ops.RESOLVERS["multus"] = homestead_routes.drops_when_ended(multus_progress, "helm")
+    REMOVAL.register(ops)

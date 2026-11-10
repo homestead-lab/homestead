@@ -48,6 +48,7 @@ LAST_EVERY = 60
 
 # kind -> why failing it after its limit lets go of nothing still in motion.
 FAILS = {
+    "addon-remove": "each step stands alone: what was removed stays removed, and the rest stays as it is",
     "cluster-cleanup": "it holds nothing once it has started",
     "deployment": "it only follows a rollout Kubernetes runs",
     "harvester-upgrade": "Harvester runs and follows its own upgrade",

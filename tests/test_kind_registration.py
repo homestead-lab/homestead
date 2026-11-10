@@ -78,7 +78,7 @@ REST = [
     (DISK_V2, {DISK_V2.KIND}, {DISK_V2.KIND}),
     (DISKS, {"disk-retire"}, set()),
     (HELM, {"helm"}, set()),
-    (ADDONS, {"multus"}, set()),
+    (ADDONS, {"multus", "addon-remove"}, {"addon-remove"}),
     (AUTOUPDATE, {AUTOUPDATE.KIND}, set()),
     (RESTORE_TEST, {RESTORE_TEST.KIND}, {RESTORE_TEST.KIND}),
     (WEEKLY_TRIM, {WEEKLY_TRIM.KIND}, set()),

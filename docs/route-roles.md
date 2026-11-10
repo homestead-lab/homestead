@@ -29,6 +29,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/addons/kubevirt` | admin |  | homestead_addons |
 | GET | `/api/addons/kubevirt/emulation` | admin |  | homestead_route_policy |
 | POST | `/api/addons/kubevirt/emulation` | admin |  | homestead_addons |
+| POST | `/api/addons/kubevirt/remove` | admin |  | homestead_addons |
+| POST | `/api/addons/kubevirt/remove/review` | admin |  | homestead_addons |
 | GET | `/api/addons/longhorn` | admin |  | homestead_route_policy |
 | POST | `/api/addons/longhorn` | admin |  | homestead_addons |
 | GET | `/api/addons/multus` | admin |  | homestead_route_policy |

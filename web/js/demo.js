@@ -2422,6 +2422,20 @@ ssh_pwauth: true
       detail: "kube-vip is being installed, announcing on eth0. Add the addresses it may hand out under Networking > Virtual IPs" },
     "/api/addons/multus": { ok: true, name: "multus", job: "helm-install-multus",
       detail: "Multus is being installed on every host. Pods already running are left as they are. LAN networks can be created once it is running." },
+    "/api/addons/kubevirt/remove/review": () => window.__demoKubevirtInUse
+      ? { can: false, title: "Remove virtual machines", removes: [], keeps: [],
+          blockers: ["1 virtual machine (lab/ubuntu-vm) still exists. Delete it first.",
+                     "1 VM disk (lab/ubuntu-vm-disk) still exists. Delete it under Import > Disk images first."] }
+      : { can: true, title: "Remove virtual machines", blockers: [],
+          removes: ["The KubeVirt and CDI settings. Their operators then remove the VM services they run.",
+                    "The charts homestead-macvtap, homestead-kubevirt, homestead-cdi, with the operators and the kubevirt and cdi namespaces they created.",
+                    "The KubeVirt and CDI resource types those charts carried, once nothing of those types is left."],
+          keeps: ["Volumes, storage classes and everything else not listed here are not changed.",
+                  "Anything Homestead did not create is kept, even under the same name.",
+                  "Install under Cluster > Add-ons offers virtual machines again."] },
+    "/api/addons/kubevirt/remove": { ok: true, operation: { id: "demo-addon-remove", kind: "addon-remove", status: "running",
+      title: "Remove virtual machines", message: "Removing virtual machines" },
+      detail: "Virtual machines are being removed. Follow it under Jobs." },
     "/api/addons/kubevirt": { ok: true, name: "homestead-kubevirt", job: "helm-install-homestead-kubevirt",
       kubevirt: "v1.9.0", cdi: "v1.62.0", emulation: false, detail: "KubeVirt v1.9.0 and CDI v1.62.0 are being installed" },
     "/api/vm/create-options": demoPlatform === "harvester"
