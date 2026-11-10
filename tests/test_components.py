@@ -809,9 +809,43 @@ class LostHelmPodTests(unittest.TestCase):
         self.enterContext(mock.patch.object(C, "kget", K.kget))
         self.enterContext(mock.patch.object(C, "HELM_NS", "kube-system"))
 
-    def job(self, name, status):
-        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": {"namespace": "kube-system", "name": name},
-                       "status": status})
+    def job(self, name, status, created=None):
+        meta = {"namespace": "kube-system", "name": name}
+        if created is not None:
+            meta["creationTimestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(created))
+        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": meta, "status": status})
+        return self.kube.object(f"/apis/batch/v1/namespaces/kube-system/jobs/{name}")
+
+    # A Failed Job left from an earlier attempt, read before the controller replaces it.
+    def test_a_failed_job_from_before_the_upgrade_does_not_fail_it(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        self.job(f"helm-install-{C.CHARTS['kubevirt']}", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("kubevirt"))[0])
+
+    def test_a_failed_job_from_before_does_not_fail_a_network_chart_upgrade(self):
+        self.network_chart()
+        self.job("helm-install-kube-vip", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("kube-vip"))[0])
+
+    def test_a_failed_job_from_before_does_not_fail_a_longhorn_v2_upgrade(self):
+        self.enterContext(mock.patch.object(V2, "progress", lambda item: ("running", 30, "V2 going")))
+        self.job("helm-install-longhorn", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("longhorn", v2_mode="live"))[0])
+
+    def test_a_platform_chart_that_keeps_failing_says_so(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        name = f"helm-install-{C.CHARTS['kubevirt']}"
+        job = self.job(name, {"active": 1})
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": "kube-system", "name": f"{name}-x7k2p", "labels": {"job-name": name},
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": name,
+                                 "uid": job["metadata"]["uid"], "controller": True}]},
+            "status": {"containerStatuses": [{"name": "helm", "restartCount": 4,
+                                              "lastState": {"terminated": {"exitCode": 1}}}]}})
+        status, _, message = C.status(self.item("kubevirt"))
+        self.assertEqual("running", status)
+        self.assertEqual(f"Helm keeps failing: 4 tries so far, and Kubernetes keeps trying. "
+                         f"The log of the {name} job in kube-system says why.", message)
 
     def item(self, component, **ref):
         return {"ref": {"component": component, "to": "v1.2.0", "started": time.time() - 600, **ref}}

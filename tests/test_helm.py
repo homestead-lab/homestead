@@ -640,8 +640,29 @@ class HelmJobTests(unittest.TestCase):
         self.pod(4)
         job = self.look(ident)
         self.assertEqual("running", job["status"], "Kubernetes is still trying it")
-        self.assertEqual("Helm keeps failing: 5 tries so far, and Kubernetes keeps trying. "
+        self.assertEqual("Helm keeps failing: 4 tries so far, and Kubernetes keeps trying. "
                          "The log of the helm-install-grafana job in kube-system says why.", job["message"])
+        self.assertFalse(job["cleanable"], "nothing to put back while it is still trying")
+
+    def test_a_chart_that_failed_five_times_ends_failed_and_offers_the_put_back(self):
+        # Andreas, 10 Nov: after 5 failed tries the job ends as failed; the Job itself keeps trying.
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(5)
+        self.kube.writes.clear()
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("Helm failed 5 times, so Homestead stopped waiting for it. Kubernetes keeps trying it. "
+                         "The log of the helm-install-grafana job in kube-system says why.", job["message"])
+        self.assertTrue(job["cleanable"], "its earlier settings can be put back")
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        self.assertEqual([], self.kube.writes, "the Job is left alone")
+        self.assertIsNotNone(self.kube.object(self.JOB_PATH))
+
+    def test_a_pod_of_the_job_from_before_the_upgrade_does_not_end_it(self):
+        ident = self.upgraded()                  # the Complete Job from before is still there
+        self.pod(9)                              # and a pod of it once failed many times
+        self.assertEqual("running", self.look(ident)["status"])
 
     def test_one_restart_is_not_called_failing(self):
         ident = self.upgraded()
