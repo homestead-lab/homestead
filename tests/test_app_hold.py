@@ -3,6 +3,7 @@ ran before stopping it, stops it with one fenced write, and starts it again
 only once that is provably safe - Wait for what can pass, KeptStopped (with
 how a person starts it) for what can't."""
 import base64
+import contextlib
 import json
 import sys
 import unittest
@@ -91,6 +92,86 @@ class AppHoldTest(unittest.TestCase):
                 with self.assertRaisesRegex(HOLD.Refused, f"held by {mark}"):
                     HOLD.hold(kube.object(WEB), "node-power", "j1")
                 self.assertEqual(kube.writes, [])
+
+    def history(self, *jobs):
+        """The job history hold() reads to tell whether a mark's job has ended."""
+        import homestead_operations as OPS
+        return self.enterContext(mock.patch.object(OPS, "stored", mock.Mock(return_value=list(jobs))))
+
+    def test_a_mark_left_by_an_ended_job_on_an_app_started_by_hand_is_set_aside(self):
+        # A person started the app by hand after that job: the mark stayed. A
+        # later job holds it as it runs now (here 1, scaled down on purpose,
+        # never the old held-as 2) and starts it again so.
+        for mark, job in (("snapshot-revert:j2", {"id": "j2", "kind": "snapshot-revert", "status": "succeeded"}),
+                          ("j2", {"id": "j2", "kind": "node-power", "status": "failed"}),
+                          ("node-power:j2", {"id": "j2", "kind": "node-power", "status": "cancelled"})):
+            with self.subTest(mark), Kube(web(1, annotations={HOLD.HELD_BY: mark, HOLD.HELD_AS: "2"})) as kube:
+                self.history(job)
+                record = HOLD.hold(kube.object(WEB), "snapshot-revert", "j1")
+                self.assertEqual(record.earlier, {"replicas": 1})
+                HOLD.stop(record, "snapshot-revert", "j1")
+                now = kube.object(WEB)
+                notes = now["metadata"]["annotations"]
+                self.assertEqual((notes[HOLD.HELD_BY], notes[HOLD.HELD_AS]), ("snapshot-revert:j1", "1"))
+                self.assertEqual(now["spec"]["replicas"], 0)
+                self.assertEqual(HOLD.restart(record, "snapshot-revert", "j1", wait_seconds=0), HOLD.Started("1"))
+                now = kube.object(WEB)
+                self.assertEqual(now["spec"]["replicas"], 1)
+                self.assertNotIn(HOLD.HELD_BY, now["metadata"].get("annotations") or {})
+
+    def test_a_mark_whose_job_may_still_act_or_whose_app_is_still_stopped_still_refuses(self):
+        import homestead_operations as OPS
+        ended = {"id": "j2", "kind": "snapshot-revert", "status": "succeeded"}
+        failed = {"id": "j2", "kind": "snapshot-revert", "status": "failed"}
+        cases = (
+            ("running job", "snapshot-revert:j2", [{**ended, "status": "running"}], 4, {}),
+            ("ended, app still stopped", "snapshot-revert:j2", [ended], 0, {}),
+            ("failed, resumable, app running", "snapshot-revert:j2", [failed], 4,
+             {"RESUMABLE": {"snapshot-revert": lambda item: ""}}),
+            ("failed, resumable, app stopped", "snapshot-revert:j2", [failed], 0,
+             {"RESUMABLE": {"snapshot-revert": lambda item: ""}}),
+            ("failed, resumable check raises", "snapshot-revert:j2", [failed], 4,
+             {"RESUMABLE": {"snapshot-revert": mock.Mock(side_effect=KeyError("ref"))}}),
+            ("failed, clean-up left", "snapshot-revert:j2", [failed], 4, {"CLEANUPS": {"snapshot-revert"}}),
+            ("failed, recovery needed", "k3s-cluster:j2", [{**failed, "kind": "k3s-cluster"}], 4, {}),
+            ("succeeded, storage left unresolved", "snapshot-revert:j2",
+             [{**ended, "ref": {"retain_resources": True}}], 4, {}),
+            ("power job, holds not restored", "j2",
+             [{"id": "j2", "kind": "node-power", "status": "failed", "ref": {"held": [{"name": "web"}]}}], 4, {}),
+            ("not in the history", "cluster-shutdown:run9",
+             [{"id": "run9", "kind": "node-power", "status": "failed"}], 4, {}),
+            ("another kind", "node-power:j2", [ended], 4, {}),
+            ("another id", "j3", [ended], 4, {}),
+            ("history unreadable", "snapshot-revert:j2", OSError("history unreadable"), 4, {}),
+        )
+        for label, mark, stored, replicas, registry in cases:
+            with self.subTest(label), mock.patch.multiple(OPS, **registry) if registry else contextlib.nullcontext(), \
+                    Kube(web(replicas, annotations={HOLD.HELD_BY: mark, HOLD.HELD_AS: "2"})) as kube:
+                history = self.history()
+                if isinstance(stored, Exception):
+                    history.side_effect = stored
+                else:
+                    history.return_value = stored
+                with self.assertRaisesRegex(HOLD.Refused, f"held by {mark}"):
+                    HOLD.hold(kube.object(WEB), "snapshot-revert", "j1")
+                self.assertEqual(kube.writes, [])
+
+    def test_a_vm_with_an_ended_jobs_mark_is_set_aside_only_while_its_instance_runs(self):
+        # Manual, Once and RerunOnFailure say nothing of whether it runs; only
+        # its instance does.
+        self.history({"id": "j2", "kind": "node-power", "status": "succeeded"})
+        for strategy in ("Manual", "Once", "RerunOnFailure"):
+            for running in (True, False):
+                vm, objects = self.manual_vm(running=running)
+                vm["spec"]["runStrategy"] = strategy
+                vm["metadata"]["annotations"] = {HOLD.HELD_BY: "j2", HOLD.HELD_AS: "Always"}
+                with self.subTest(strategy=strategy, running=running), Kube(*objects) as kube:
+                    row = kube.object(kube.path_of(vm))
+                    if running:
+                        self.assertEqual(HOLD.hold(row, "snapshot-revert", "j1").earlier, {"runStrategy": strategy})
+                    else:
+                        with self.assertRaisesRegex(HOLD.Refused, "held by j2"):
+                            HOLD.hold(row, "snapshot-revert", "j1")
 
     def test_hold_reads_its_own_mark_old_and_new(self):
         # Asked again after its own stop (a job resumed): what it ran before
