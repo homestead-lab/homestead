@@ -1193,8 +1193,9 @@ window.restartReadyNotice = r => {
 async function viewNodes() {
   const page = new URLSearchParams(location.search).get("node");
   if (page) return nodePage(page);
-  const [n, up, ready] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(e => ({ unread: e.message })),
-    api("/api/nodes/restart-ready").catch(e => ({ unread: e.message })), loadHardwareFeatures()]);
+  // Read beside the page, never waited for: it can take a few cluster-wide lists.
+  const ready = api("/api/nodes/restart-ready").catch(e => ({ unread: e.message }));
+  const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(e => ({ unread: e.message })), loadHardwareFeatures()]);
   STATE.data.nodes = n;
   noteNodeUptime(up);
   const layout = viewLayout("nodes");
@@ -1205,8 +1206,9 @@ async function viewNodes() {
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}
       ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move apps and volume copies so that hosts carry similar loads.">${icon("layers")}Balance hosts…</button>` : ""}`)}
-   ${restartReadyNotice(ready)}
+   <div id="restartReady"></div>
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
+  ready.then(answer => { const slot = $("#restartReady"); if (slot) slot.innerHTML = restartReadyNotice(answer); });
 }
 
 /* ---------------- a node's own terminal ----------------

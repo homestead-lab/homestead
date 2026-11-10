@@ -204,7 +204,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     warnings = []
     if not force and not planned_outage:
         warnings.extend(maintenance.get("waiting", []))
-    if not after_drain and not planned_outage:
+    if action == "reboot" and not after_drain and not planned_outage:
         # The last host restart not settled yet (#1290): said, never a block.
         try:
             settled = RESTART_READY.warning(RESTART_READY.state(kget, OPS.stored(), volumes=volumes, vmis=vmis))

@@ -40,7 +40,8 @@ def restart_job(host="node-a", ended_ago=600, status="succeeded", action="reboot
             "vms": ["lab/vm1"]}
     return {"id": f"op-{host}-{ended_ago}", "kind": "node-power", "title": f"{action} {host}", "status": status,
             "finished_at": stamp(ended_ago) if status in OPS.TERMINAL else "",
-            "ref": {"node": host, "action": action, "plan": plan,
+            # Power was sent: the job is past its last step before the send.
+            "ref": {"node": host, "action": action, "plan": plan, "phase": "observing",
                     "held": [{"id": "StatefulSet/lab/db", "kind": "StatefulSet", "ns": "lab", "name": "db", "was": 1}],
                     "restored": {"started": ["lab/db"], "left": [], "at": time.time()}, **ref}}
 
@@ -91,6 +92,9 @@ class RestartReadyTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube(node("node-a"), node("node-b")))
         self.enterContext(mock.patch.object(NODES, "kget", K.kget))
+        ready_module = sys.modules.get("homestead_restart_ready")
+        if hasattr(ready_module, "_first_ready"):  # when Homestead first saw each restart settled: none yet
+            self.enterContext(mock.patch.dict(ready_module._first_ready, clear=True))
         # The route keeps its answer 15 s; each read here is a fresh one.
         self.enterContext(mock.patch.object(NODES.ROUTER, "cached", lambda _key, _seconds, fn: fn()))
         self.jobs = [restart_job()]
@@ -145,6 +149,28 @@ class RestartReadyTests(unittest.TestCase):
                 self.jobs[:] = jobs
                 self.assertEqual({"node": None}, self.ready())
 
+    def test_a_restart_that_ended_before_power_was_sent_moved_nothing_and_is_not_the_last(self):
+        # Failed at the drain, or cancelled while holding: nothing restarted, nothing moved.
+        for ref in ({"phase": "failed", "failed_phase": "draining"}, {"phase": "holding"}, {"phase": "reviewed"}):
+            with self.subTest(ref=ref):
+                self.jobs[:] = [restart_job("node-b", ended_ago=3000), restart_job("node-a", ended_ago=60, status="failed", **ref)]
+                self.assertEqual("node-b", self.ready()["node"])
+        self.jobs[:] = [restart_job("node-a", ended_ago=60, status="failed", phase="failed", failed_phase="observing")]
+        self.assertEqual("node-a", self.ready()["node"], "one that failed after sending power did restart")
+
+    def test_ready_is_said_for_a_short_while_then_no_more(self):
+        self.cluster.tick(); self.cluster.tick()
+        with mock.patch("homestead_restart_ready.clock", lambda: time.time()):
+            self.assertIs(True, self.ready()["ready"])
+        with mock.patch("homestead_restart_ready.clock", lambda: time.time() + 14 * 60):
+            self.assertIs(True, self.ready()["ready"], "still said 14 minutes after it was first seen ready")
+        with mock.patch("homestead_restart_ready.clock", lambda: time.time() + 16 * 60):
+            self.assertEqual({"node": None}, self.ready(), "not a day of green")
+
+    def test_not_ready_is_said_for_as_long_as_it_lasts(self):
+        with mock.patch("homestead_restart_ready.clock", lambda: time.time() + 20 * 3600):
+            self.assertIs(False, self.ready()["ready"])
+
 
 class RestartReviewWarnsTests(unittest.TestCase):
     """The restart review of the next host warns while the last one has not
@@ -172,6 +198,13 @@ class RestartReviewWarnsTests(unittest.TestCase):
         settled = POWER.plan("node-b", "reboot")
         self.assertEqual([], self.warning(settled))
         self.assertEqual(blocked, settled["blockers"], "the warning never blocks")
+
+    def test_only_a_restart_review_warns(self):
+        # Shut down and maintenance are not "the next host restart".
+        for action in ("poweroff", "maintenance"):
+            with self.subTest(action):
+                self.assertEqual([], self.warning(POWER.plan("node-b", action)))
+        self.assertEqual(1, len(self.warning(POWER.plan("node-b", "reboot"))))
 
     def test_the_first_sentence_stands_alone_under_90_characters(self):
         [said] = self.warning(POWER.plan("node-b", "reboot"))

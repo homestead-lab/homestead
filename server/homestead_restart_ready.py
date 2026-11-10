@@ -8,7 +8,10 @@ short of copies; the next restart's review warns while that is not true. It
 is a warning, never a block.
 
 "The last restart": the newest host restart job (node-power, reboot) that has
-ended, within the last RECENT seconds; older, and nothing is said. What it
+ended after it sent power, within the last RECENT seconds; older, and nothing
+is said. One that failed or was cancelled before sending power moved nothing.
+"Ready" is said for SHOW_READY seconds from when this Homestead first saw it
+ready, then no more: not a day of green after every restart. What it
 moved is what its job recorded: the apps its review found on the host
 (plan.workloads), what it stopped to wait for the host (held), and the VMs that
 ran there (plan.vms). Pods it drained that belong to nothing it recorded are not
@@ -20,6 +23,11 @@ import urllib.error
 import homestead_operations as OPS
 
 RECENT = 24 * 3600
+SHOW_READY = 15 * 60
+clock = time.time
+# job id -> when this replica first saw its restart settled. Each replica
+# keeps its own; one that sees it later says ready a little longer.
+_first_ready = {}
 APPS = "/apis/apps/v1"
 VMS = "/apis/kubevirt.io/v1"
 LONGHORN_VOLUMES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes"
@@ -34,12 +42,19 @@ def _ended(item):
         return None
 
 
+def _sent_power(ref):
+    """Whether the job got past its last step before sending power."""
+    import homestead_power as POWER  # it imports this module
+    phase = ref.get("failed_phase") if ref.get("phase") == "failed" else ref.get("phase")
+    return bool(phase) and phase not in POWER.BEFORE_SEND
+
+
 def last_restart(jobs, now=None):
     """The newest ended host restart within RECENT, or None."""
-    now = time.time() if now is None else now
+    now = clock() if now is None else now
     ended = [(_ended(item), item) for item in jobs
              if item.get("kind") == "node-power" and (item.get("ref") or {}).get("action") == "reboot"
-             and item.get("status") in OPS.TERMINAL]
+             and item.get("status") in OPS.TERMINAL and _sent_power(item.get("ref") or {})]
     ended = [(at, item) for at, item in ended if at is not None and now - at <= RECENT]
     return max(ended, key=lambda row: row[0])[1] if ended else None
 
@@ -124,11 +139,18 @@ def state(read, jobs, now=None, volumes=None, vmis=None):
     """{"node": None} with no recent host restart, else the host it restarted,
     what it moved that is not running yet, the volumes short of copies, and
     whether the cluster is ready for the next one."""
+    now = clock() if now is None else now
     item = last_restart(jobs, now)
     if item is None:
         return {"node": None}
     waiting = not_running(moved(item), read, vmis)
     short = short_of_copies(read, volumes)
+    if not waiting and not short:
+        first = _first_ready.setdefault(item.get("id"), now)
+        for old in [key for key in _first_ready if key != item.get("id")]:
+            _first_ready.pop(old, None)  # only the last restart's is ever asked for
+        if now - first > SHOW_READY:
+            return {"node": None}
     return {"node": (item.get("ref") or {}).get("node"), "finished_at": item.get("finished_at"),
             "not_running": waiting, "short_of_copies": short, "ready": not waiting and not short}
 

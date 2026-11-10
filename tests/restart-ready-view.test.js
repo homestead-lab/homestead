@@ -2,20 +2,21 @@
 // #1290: after a host restart, Hosts says when the cluster is ready for the next one.
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 function setup(answer) {
-  let html = "";
+  let html = "", slot = "";
   const c = { console, Set, Map, Promise, URLSearchParams, location: { search: "" }, document: { addEventListener() {} },
     STATE: { data: {} }, localStorage: { getItem: () => null, setItem() {} },
     // The rest of the page, beside the point here.
     loadHardwareFeatures: async () => [], viewLayout: () => "cards", paint: v => { html = v; }, metricsNotice: () => "",
     layoutSwitch: () => "", moreMenu: () => "", icon: () => "", nodeComparison: () => "",
-    $: () => ({ set innerHTML(v) { html = v; }, get innerHTML() { return html; } }), $$: () => [],
+    $: sel => sel === "#restartReady" ? (html.includes('id="restartReady"') ? { set innerHTML(v) { slot = v; }, get innerHTML() { return slot; } } : null)
+      : ({ set innerHTML(v) { html = v; }, get innerHTML() { return html; } }), $$: () => [],
     esc: v => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"), toast() {},
-    api: async path => path === "/api/nodes/restart-ready" ? (answer instanceof Error ? Promise.reject(answer) : answer)
+    api: async path => path === "/api/nodes/restart-ready" ? (answer instanceof Error ? Promise.reject(answer) : await answer)
       : path === "/api/nodes" ? [] : path === "/api/nodes/uptime" ? { nodes: {} } : [] };
   c.window = c; vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
   for (const f of ["web/js/ui.js", "web/js/views-overview.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
-  return { c, html: () => html };
+  return { c, html: () => html, slot: () => slot };
 }
 const settling = { node: "node-a", ready: false, not_running: ["lab/db", "lab/web"], short_of_copies: ["lab/data"] };
 
@@ -45,11 +46,20 @@ test("names are escaped", () => {
   assert.doesNotMatch(notice, /<b>/);
 });
 
-test("the Hosts page reads it and shows it under the header", async () => {
-  const t = setup(settling);
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test("the Hosts page is drawn first, and the notice fills in when its answer arrives", async () => {
+  let answer;
+  const t = setup(new Promise(resolve => { answer = resolve; }));
   await t.c.viewNodes();
-  assert.match(t.html(), /Not ready for the next host restart/);
+  assert.match(t.html(), /Hosts/, "drawn without waiting for the answer");
+  assert.match(t.html(), /id="restartReady"/);
+  assert.equal("", t.slot());
+  answer(settling);
+  await settle();
+  assert.match(t.slot(), /Not ready for the next host restart/);
   const failed = setup(new Error("unreadable"));
   await failed.c.viewNodes();
-  assert.doesNotMatch(failed.html(), /next host restart/, "a failed read leaves the page as it was");
+  await settle();
+  assert.doesNotMatch(failed.html() + failed.slot(), /next host restart/, "a failed read leaves the page as it was");
 });
