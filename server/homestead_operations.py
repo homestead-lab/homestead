@@ -452,6 +452,11 @@ def _public(item):
     fields = VIEWS.get(item.get("kind"))
     if fields:
         fields(item, out)
+    ref = item.get("ref") or {}
+    if item.get("status") == "running" and ((ref.get("held") and ref.get("restored") is None) or ref.get("phase") == "rolling-back"):
+        # Apps stopped for it and not started again, or undoing itself: alerts raise it
+        # when it stays at this step for long (#1311).
+        out["stalled_step"] = ref.get("phase") or "running"
     if item.get("kind") in STORAGE_CONFLICTS.HOST_GONE_KINDS:
         # Its host may have been removed: a person can review ending it (homestead_host_gone).
         out["host_gone_endable"] = STORAGE_CONFLICTS.unresolved(item)

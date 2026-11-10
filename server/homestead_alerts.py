@@ -497,8 +497,25 @@ def longhorn_facts(overview):
              "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 
+# A job that holds apps, or is undoing itself, and stays at one step this long, is news.
+JOB_STALLED = 30 * 60
+
+
+def _stalled_job_fact(op):
+    title, step = op.get("title") or "Unnamed job", op["stalled_step"]
+    way_out = ("Choose Cancel on the job to end it." if op.get("cancellable") else
+               "Cancel is not offered for this job. Open it for the way out.")
+    # One alert per job and step: the hold below counts from when the job first showed this step.
+    return {"key": f"jobs-stalled:{op['id']}:{step}", "category": "jobs", "severity": "degraded",
+            "title": f"Job needs attention: {title}", "hold": JOB_STALLED, "signals": {"condition": 1},
+            "resolved": f"Job no longer needs attention: {title}",
+            "body": f"This job has stayed at the step {step} for 30 minutes. Apps may stay stopped until it ends. {way_out}",
+            "href": f"/?job={op['id']}"}
+
+
 def job_facts(operations):
-    return [{"key": f"jobs:{op['id']}", "category": "jobs", "severity": "degraded", "event": True,
+    stalled = [_stalled_job_fact(op) for op in operations if op.get("stalled_step") and op.get("status") == "running"]
+    return stalled + [{"key": f"jobs:{op['id']}", "category": "jobs", "severity": "degraded", "event": True,
              "title": f"Job failed: {op.get('title', 'Unnamed job')}", "body": op.get("message", ""),
              # The job itself, with its error - not the page its work is about.
              "href": f"/?job={op['id']}"}
