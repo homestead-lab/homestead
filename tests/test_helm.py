@@ -303,21 +303,25 @@ class HelmJobTests(unittest.TestCase):
         first = self.upgraded()
         return first, self.route("upgrade", version="9.0.0")
 
-    def refused_while_running(self, ident):
+    def stops_following(self, ident):
+        """#1334: a put-back would undo the later change, so Cancel offers to stop
+        following instead: the job ends and nothing on the cluster is written."""
         plan = OPS.cancel_plan(ident)
-        self.assertFalse(plan["can"])
-        self.assertIn("has changed since", plan["why_not"])
+        self.assertTrue(plan["can"], plan.get("why_not"))
+        self.assertEqual("forget", plan["mode"])
+        self.assertIn("has changed since this upgrade, so nothing is put back", " ".join(plan["keeps"]))
         before = self.kube.object(self.CHART)
         self.kube.writes.clear()
-        with self.assertRaises(ValueError):
-            OPS.cancel(ident)
+        OPS.cancel(ident)
         self.assertEqual([], self.kube.writes)
         self.assertEqual(before, self.kube.object(self.CHART))
-        self.assertEqual("running", self.look(ident)["status"])
+        job = self.look(ident)
+        self.assertEqual("cancelled", job["status"])
+        self.assertEqual("Stopped following it. The later changes to grafana stay.", job["message"])
 
     def test_cancelling_a_running_upgrade_leaves_a_later_upgrade(self):
         first, _ = self.second_upgrade()
-        self.refused_while_running(first)
+        self.stops_following(first)
         chart = self.kube.object(self.CHART)
         self.assertEqual("9.0.0", chart["spec"]["version"])
         self.assertEqual("8.0.0", HELM.previous_spec(chart)["version"], "its settings to go back to are kept")
@@ -333,19 +337,45 @@ class HelmJobTests(unittest.TestCase):
         self.assertEqual([], self.kube.writes)
         self.assertEqual("8.0.0", self.kube.object(self.CHART)["spec"]["version"])
 
-    def test_a_change_by_hand_leaves_a_running_upgrades_cancel_refused(self):
+    def test_a_change_by_hand_leaves_a_running_upgrade_to_stop_following(self):
         ident = self.upgraded()
         self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
-        self.refused_while_running(ident)
+        self.stops_following(ident)
         self.assertEqual("9.0.0", self.kube.object(self.CHART)["spec"]["version"])
 
-    def test_a_refused_cancel_still_ends_when_its_job_does(self):
-        # Cancel is refused and no other button ends it, so the Job's own end has to.
+    def test_a_leader_running_a_stop_again_writes_nothing(self):
+        ident = self.upgraded()
+        self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+        items = OPS._read()
+        match = next(item for item in items if item["id"] == ident)
+        OPS._mark_cancelling(match, {"action": "Stop tracking it", "mode": "forget"}, {}, "")
+        match["cancel_record"]["reruns"] = 1
+        self.kube.writes.clear()
+        self.assertEqual("Stopped following it. The later changes to grafana stay.", CANCEL.helm_cancel(match, {}))
+        self.assertEqual([], self.kube.writes)
+
+    def test_a_change_between_a_put_back_review_and_its_run_is_still_refused(self):
+        # The person asked for a put-back, not to stop following: that stays theirs to choose.
+        ident = self.upgraded()
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        mark = OPS._mark_cancelling
+
+        def changed_now(match, *rest):
+            self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
+            return mark(match, *rest)
+        with mock.patch.object(OPS, "_mark_cancelling", changed_now), self.assertRaisesRegex(ValueError, "changed since"):
+            OPS.cancel(ident)
+        self.assertEqual("running", self.look(ident)["status"])
+        plan = OPS.cancel_plan(ident)
+        self.assertEqual((True, "forget"), (plan["can"], plan["mode"]), "and the next review offers to stop following")
+
+    def test_a_job_left_running_still_ends_when_its_job_does(self):
         ident = self.upgraded()
         self.kube("PATCH", self.CHART, {"spec": {"version": "9.0.0"}}, ctype="application/merge-patch+json")
         self.job_object({"active": 1})
         self.assertEqual("Helm is running", self.look(ident)["message"])
-        self.refused_while_running(ident)
+        plan = OPS.cancel_plan(ident)
+        self.assertEqual((True, "forget"), (plan["can"], plan["mode"]), "a way to stop following it")
         self.job_object({"failed": 1, "conditions": [{"type": "Failed", "status": "True"}]})
         self.assertEqual("failed", self.look(ident)["status"])
         self.assertIn("changed since", OPS.cancel_plan(ident)["why_not"], "and its put-back stays refused")
@@ -356,7 +386,7 @@ class HelmJobTests(unittest.TestCase):
         self.kube.discard(self.CHART)
         chart["metadata"]["uid"] = "another-uid"
         self.kube.add(chart)
-        self.refused_while_running(ident)
+        self.stops_following(ident)
 
     def test_a_status_write_does_not_stop_a_running_upgrades_cancel(self):
         # As in test_the_controllers_own_writes_do_not_take_the_offer_away: neither moves the generation.
