@@ -1073,17 +1073,21 @@ const moveBody = (cluster, kind, name) => ({
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
   source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES, stop_source: MOVE_STOP_SOURCE });
 
+// The request being sent keeps the choices it was made with, so a change now would be shown and not sent (#1317).
+// The dialog is drawn again from the kept choices if the send is refused.
+const moveChoiceLocked = () => {
+  if (!MOVE_PLAN.busy) return false;
+  toast("A transfer is being sent. Change the choice after it has been accepted or refused.", "bad");
+  return true;
+};
 window.moveStopSource = (cluster, kind, name, stop) => {
-  // The request being sent keeps the choice it was made with, so a flip now would be shown and not sent (#1317).
-  if (MOVE_PLAN.busy) {
-    if ($("#mv_stop")) $("#mv_stop").checked = MOVE_STOP_SOURCE;
-    return toast("A transfer is being sent. Change the choice after it has been accepted or refused.", "bad");
-  }
+  if (moveChoiceLocked()) { if ($("#mv_stop")) $("#mv_stop").checked = MOVE_STOP_SOURCE; return; }
   MOVE_STOP_SOURCE = stop === true;
   if ($("#mv_go")) $("#mv_go").disabled = true;
   movePlan(cluster, kind, name);
 };
 window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
+  if (moveChoiceLocked()) return;
   MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), [field]: value };
   if (field === "rom") delete MOVE_ROM_NAMES[device];
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1091,7 +1095,7 @@ window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
 };
 window.moveDeviceRom = async (cluster, kind, name, device, input) => {
   const file = input.files?.[0];
-  if (!file) return;
+  if (!file || moveChoiceLocked()) return;
   invalidateMovePlan();
   const edit = MOVE_PLAN_EDITS;
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1128,6 +1132,7 @@ function moveDevicesTable(plan, cluster, kind, name) {
 
 /* One volume's choice changed: remembered, and the move checked again. */
 window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
+  if (moveChoiceLocked()) return;
   MOVE_VOLUMES[claim] = { ...(MOVE_VOLUMES[claim] || {}), [field]: value };
   if (field === "action") { delete MOVE_VOLUMES[claim].storage_class; delete MOVE_VOLUMES[claim].size_gb; }
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1187,7 +1192,7 @@ const MOVE_PLAN = UI.reviewFlow({
       const selected = classes.value || plan.storage_class;
       classes.innerHTML = plan.storage_classes.map(c => `<option value="${esc(c)}" ${c === selected ? "selected" : ""}>${esc(c)}</option>`).join("");
       classes.disabled = !plan.storage_classes.length;
-      classes.onchange = () => { if (go) go.disabled = true; window.movePlan(cluster, kind, name); };
+      classes.onchange = () => { if (moveChoiceLocked()) return; if (go) go.disabled = true; window.movePlan(cluster, kind, name); };
       // A cluster without Homestead's old default can still choose another
       // valid class. Review the actual selection before enabling Start.
       if (classes.value && classes.value !== plan.storage_class) return window.movePlan(cluster, kind, name);
@@ -1228,8 +1233,12 @@ const MOVE_PLAN = UI.reviewFlow({
   },
   after: () => {
     const again = MOVE_REPLAN && MOVE_TARGET; MOVE_REPLAN = false;
-    // Only while the dialog is still open: a plan read for a closed one would be drawn nowhere (#1317).
-    if (again && $("#mv_plan")) window.movePlan(again.cluster, again.kind, again.name);
+    if (!again) return;
+    // Only for a dialog that is on screen: a closed one keeps its hidden plan, and a plan read for it would be wasted (#1317).
+    if ($("#mv_plan") && !$("#modal")?.classList?.contains("hidden")) return window.movePlan(again.cluster, again.kind, again.name);
+    // Under a child dialog, its waiting line would stay once that closes: the plan is read again when it comes back.
+    const under = (typeof MODAL_STACK !== "undefined" ? MODAL_STACK : []).find(frame => frame.fragment?.querySelector("#mv_plan"));
+    if (under) under.onReturn = () => window.movePlan(again.cluster, again.kind, again.name);
   },
 });
 let MOVE_STARTING = null, MOVE_REPLAN = false;
@@ -1603,6 +1612,6 @@ if (typeof module === "object" && module.exports) module.exports = {
   SOURCE_LEADS, SOURCE_KEY, importMappingRows, importFolderName, importMappingRow, importVolumeRow,
   importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS,
   clusterVolumesHtml, MOVE_PLAN_EDITS, invalidateMovePlan, MOVE_VOLUMES, MOVE_TRANSFER_MODE,
-  MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, moveDevicesTable, MOVE_VOLUME_ACTIONS,
+  MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, moveChoiceLocked, moveDevicesTable, MOVE_VOLUME_ACTIONS,
   moveVolumesTable, moveLoading, MOVE_PLAN, MOVE_STARTING, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };
