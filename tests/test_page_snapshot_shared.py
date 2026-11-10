@@ -226,6 +226,33 @@ class WhoIsWrittenForTests(Shared):
         self.assertLess(self.PAGES.REFRESH, self.PAGES.STALE_AFTER)
 
 
+class NoPathStatTests(Shared):
+    """On NFS stat() of a path answers from the attribute cache for seconds (#1320): the
+    readers open the file and fstat the handle, which asks the server. With stat() of
+    a path refused, they still see another replica's change."""
+
+    def refuse_stat(self):
+        return mock.patch.object(os, "stat", side_effect=OSError("answered from the attribute cache"))
+
+    def test_the_leader_sees_a_follower_s_ask(self):
+        with self.refuse_stat():
+            asked = self.PAGES._asked(100)
+        self.assertTrue(asked)
+
+    def test_a_follower_takes_in_the_leader_s_parts(self):
+        self.write_parts({"wl": [time.time(), [{"name": "web"}]]})
+        with self.refuse_stat():
+            self.PAGES.tick(FOLLOWER, {}, self.builders)
+            held = self.PAGES.read("wl")
+        self.assertEqual([{"name": "web"}], held[1])
+
+    def test_a_follower_hears_another_replica_s_forget(self):
+        SHARED.write_json(os.path.join(self.tmp.name, self.PAGES.FORGETS), {"forgets": {"wl": time.time()}})
+        with self.refuse_stat():
+            self.PAGES.hear()
+        self.assertIn("wl", self.PAGES._told["known"])
+
+
 class FollowerReadsTests(Shared):
     def test_another_replica_serves_the_leader_s_parts(self):
         self.lead_one_cycle()

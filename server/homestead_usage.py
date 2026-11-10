@@ -179,7 +179,8 @@ def _mebibytes(text):
 def _snapshot():
     """The file as last written, read again only when it changed."""
     try:
-        stamp = (_path(), os.stat(_path()).st_mtime_ns)
+        with open(_path(), "rb") as handle:     # an open, not stat(): NFS answers stat() from its cache (#1320)
+            stamp = (_path(), os.fstat(handle.fileno()).st_mtime_ns)
     except OSError:
         return {"series": {}}
     if _cache["stamp"] != stamp:

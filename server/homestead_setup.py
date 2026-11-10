@@ -74,7 +74,8 @@ def stamp():
     shows at once through every other, whose cache would otherwise answer
     with the view from before it for half a minute."""
     try:
-        return os.stat(_path()).st_mtime_ns
+        with open(_path(), "rb") as handle:     # an open, not stat(): NFS answers stat() from its cache (#1320)
+            return os.fstat(handle.fileno()).st_mtime_ns
     except OSError:
         return 0
 
