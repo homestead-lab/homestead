@@ -1001,6 +1001,27 @@ def _stop_following(ref, item, phases):
         words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")))
 
 
+# The waits with a limit, by phase: a pause there counts toward it (#1329).
+PAUSE_LIMITS = {"disks": ("ready_since", READY_LIMIT), "convert": ("finish_since", FINISH_LIMIT)}
+
+
+def _paused(ref, item, hold):
+    """The import cannot check its temporary storage (CDI_CLEANUP.track). In a
+    wait with a limit, that time counts toward it, so a refusal that lasts ends
+    the import there instead of pausing it for ever. What it cannot check, it
+    does not remove: the import ends keeping the disks."""
+    wait = PAUSE_LIMITS.get(ref["phase"])
+    if not wait or not _waited(ref, *wait):
+        return hold
+    limit = wait[1]
+    how_long = f"{limit // 3600} hours" if limit >= 3600 else f"{limit // 60} minutes"
+    reason = hold[2].removeprefix("Import paused: ")[:160]
+    return _end_keeping_disks(ref, item, (
+        f"Homestead could not check the import's temporary storage for {how_long} ({reason}), so this import has "
+        f"stopped and no VM was created. The VM on {_where(ref)} is unchanged. Nothing of the disks was removed. "
+        f"{REMOVE_THERE}"))
+
+
 def _end_keeping_disks(ref, item, detail):
     """End the import and let go of its name, removing only its own copy Job and Secret."""
     if not ref.get("cdi_cleanup"):
@@ -1077,7 +1098,7 @@ def status(item):
             return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
         hold = CDI_CLEANUP.track(item, kget, OPS.checkpoint)
         if hold:
-            return hold
+            return _paused(ref, item, hold)
     if ref.get("cdi_cleanup"):
         dvs = [CDI_CLEANUP.RESOURCES.optional(kget, f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
         if any(dv is None for dv in dvs):

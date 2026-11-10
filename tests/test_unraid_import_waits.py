@@ -507,6 +507,48 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIn("The disks arrived, but the VM could not be created: Kubernetes refused it (HTTP 422).",
                       job["message"])
 
+    def walk(self, seconds, every=4 * 60):
+        """Time passes with the jobs loop looking every few minutes."""
+        while seconds > every:
+            self.now += every
+            seconds -= every
+            self.look()
+        self.now += seconds
+
+    def refused(self):
+        def observe(read, ns, work):
+            raise ValueError("a temporary claim of the import is owned by something else")
+        return mock.patch.object(UVMS.CDI_CLEANUP, "observe", observe)
+
+    def test_a_lasting_refusal_while_cdi_finishes_counts_toward_its_limit(self):
+        self.to_convert()
+        self.look()
+        with self.refused():
+            self.assertTrue(self.look()["message"].startswith("Import paused: "))
+            self.walk(CONVERT_LIMIT - 1)
+            self.assertEqual("running", self.look()["status"])
+            self.walk(1)
+            job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertTrue(job["message"].startswith(
+            "Homestead could not check the import's temporary storage for 6 hours (a temporary claim of the import is "
+            "owned by something else), so this import has stopped and no VM was created."), job["message"])
+        self.assertTrue(job["message"].endswith(UVMS.REMOVE_THERE), job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "nothing of the disks is removed")
+        self.assertFalse(self.ref()["retain_resources"], "the job lets go of the name")
+
+    def test_a_lasting_refusal_before_cdi_is_ready_counts_toward_its_limit(self):
+        self.phase("UploadScheduled")
+        self.look()
+        with self.refused():
+            self.walk(DISKS_LIMIT - 1)
+            self.assertEqual("running", self.look()["status"])
+            self.walk(1)
+            job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("for 30 minutes", job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "what it cannot check, it does not remove")
+
 
 if __name__ == "__main__":
     unittest.main()
