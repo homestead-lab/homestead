@@ -69,6 +69,27 @@ def node_lease(name, renewed):
             "spec": {"holderIdentity": name, "leaseDurationSeconds": 40, "renewTime": stamp(renewed, micro=True)}}
 
 
+LEASE_PREFIX = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"
+
+
+def kubelets(test, *names):
+    """Simulated kubelets on names, renewing their node Leases as test.now
+    moves: each is read 3 s after its last renewal (a real one renews about
+    every 10 s). A kubelet that stopped is a stopped_kubelet the test adds:
+    its fixed renewTime falls behind, and it answers in place of this one."""
+    for name in names:
+        test.kube.react("GET", LEASE_PREFIX + name, lambda method, where, body, name=name:
+                        None if test.kube.object(where) else node_lease(name, renewed=test.now - 3))
+
+
+def stopped_kubelet(name, renewed):
+    """name's node Lease, last renewed at renewed. It names no owner, so the
+    fake's garbage collection keeps it whatever the Node's uid."""
+    lease = node_lease(name, renewed)
+    del lease["metadata"]["ownerReferences"]
+    return lease
+
+
 def bond_ref(name="node-a"):
     return {"node": name, "action": "create", "bond": "bond0", "members": ["enp1s0", "enp2s0"],
             "mode": "active-backup", "carries_on": "bond0", "address": "192.0.2.10/24", "renamed": True,
@@ -88,6 +109,8 @@ class RestartDeadlineTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube(node("node-a", ready=False), node("node-b", ready=True, server=True)))
         keep_bound(self, BONDS, BRIDGE)
+        self.now = SINCE
+        kubelets(self, "node-b")
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
 
@@ -211,6 +234,8 @@ class HostBaselineTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube(node("node-b", ready=True, server=True)))
         keep_bound(self, BONDS, BRIDGE)
+        self.now = SINCE
+        kubelets(self, "node-b")
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
 
@@ -299,6 +324,7 @@ class GuardBase(unittest.TestCase):
         BONDS.bind(None, K.kget, K.ksend)
         BRIDGE.bind(None, K.kget, K.ksend)
         self.now = SINCE
+        kubelets(self, "node-b", "node-c")
         clock = lambda: self.now
         fake_time = types.SimpleNamespace(time=clock, strftime=time.strftime)
         self.enterContext(mock.patch.object(BONDS, "time", fake_time))
@@ -370,7 +396,8 @@ class BridgeGuardTests(BridgeBase):
 
     def test_a_bridge_waits_while_another_server_is_not_ready(self):
         self.kube.add(node("node-c", ready=False, server=True))
-        self.refused("1 of the other servers is not Ready: if node-b went quiet too, the cluster could lose its quorum")
+        self.refused("1 other server is not Ready or has sent no heartbeat in the last 20 seconds. If node-b stops answering "
+                     "too, the cluster could lose its quorum. Try again when every server is Ready")
 
     def test_a_bridge_on_a_quiet_cluster_goes_ahead(self):
         self.assertEqual("", BRIDGE.look("node-b")["problem"])
@@ -426,6 +453,11 @@ class StartingTogetherTests(BridgeBase):
 
     def test_a_claim_left_by_a_replica_that_stopped_is_taken_over(self):
         self.kube.add(claim("gone-replica/1", minutes_ago=11))
+        seen = [0.0]
+        self.enterContext(mock.patch.object(BONDS, "claim_clock", lambda: seen[0]))
+        with self.assertRaisesRegex(ValueError, f"node-b: {self.STARTING}"):
+            BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
+        seen[0] += BONDS.CLAIM_SECONDS + 1    # seen unchanged for longer than it lasts
         BRIDGE.convert({"node": "node-b", "confirm": "node-b"})
         self.assertEqual(["host-bridge"], [row["kind"] for row in OPS._read()])
         self.assertEqual("", self.holder())

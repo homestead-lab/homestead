@@ -202,8 +202,33 @@ def _restart_kube_vip(read, send, node, ref):
     return True
 
 
-def other_servers(nodes, node):
-    """The cluster's other control-plane servers: (their names, those not Ready)."""
+# A server counts as up only while it is Ready and its kubelet renews its node
+# Lease: Ready alone stays True about 40 s after the kubelet goes quiet (#1318).
+# The kubelet renews about every 10 s, so a renewal SERVER_HEARD seconds old
+# means at least one was missed. Its stamp is on the server's clock and the age
+# on Homestead's, so a stamp more than SERVER_AHEAD seconds ahead proves nothing
+# either: when unsure, the server counts as down and the change waits.
+SERVER_HEARD = 20
+SERVER_AHEAD = 5
+
+
+def _heard_lately(read, name, now):
+    """Whether name's kubelet renewed its node Lease in the last SERVER_HEARD
+    seconds. A Lease not found is no proof; any other failure to read it is
+    the caller's, as a failure to read the hosts is."""
+    try:
+        renewed = kube_time((read(NODE_LEASE.format(name)).get("spec") or {}).get("renewTime"))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return False
+        raise
+    return renewed is not None and -SERVER_AHEAD <= now - renewed < SERVER_HEARD
+
+
+def other_servers(nodes, node, read, now):
+    """The cluster's other control-plane servers: (their names, those down).
+    A server is down when it is not Ready or its kubelet was not heard from
+    lately (read: the Kubernetes reader; now: Homestead's clock)."""
     names, down = [], []
     for found in nodes:
         meta = found.get("metadata") or {}
@@ -211,34 +236,43 @@ def other_servers(nodes, node):
             continue
         names.append(meta["name"])
         if not any(c.get("type") == "Ready" and c.get("status") == "True"
-                   for c in (found.get("status") or {}).get("conditions") or []):
+                   for c in (found.get("status") or {}).get("conditions") or []) \
+                or not _heard_lately(read, meta["name"], now):
             down.append(meta["name"])
     return names, down
 
 
+def _servers_down(node, count, names=()):
+    """Why the other servers being down holds a change on node back."""
+    who = f"{count} other server{'s' if count != 1 else ''}" + (f" ({', '.join(names)})" if names else "")
+    are, have = ("is", "has") if count == 1 else ("are", "have")
+    return (f"{who} {are} not Ready or {have} sent no heartbeat in the last {SERVER_HEARD} seconds. "
+            f"If {node} stops answering too, the cluster could lose its quorum.")
+
+
 def guard_refusals(node, busy, servers_ready):
     """Why network_guard holds a change on node back: the same words for a
-    bond and a bridge, since both go quiet for a moment and restart k3s or
-    RKE2 there."""
+    bond and a bridge, since both take the host off the network for a moment
+    and restart k3s or RKE2 there."""
     refusals = []
     if busy:
         refusals.append(f"another host's network is changing ({busy}): one host at a time")
     if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
-        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
-                        "the cluster could lose its quorum. Wait until they are Ready")
+        refusals.append(f"{_servers_down(node, servers_ready[1] - servers_ready[0])} Try again when every server is Ready")
     return refusals
 
 
-def _before_restart(read, node):
+def _before_restart(read, node, now):
     """What the restart of k3s or RKE2 on node goes by, read fresh each round:
-    (hosts, why the list has no answer, the other servers not Ready). Restarting
-    takes node quiet as the change did, so it waits for what network_guard does. The
-    host itself is in the list, so an empty one is no answer."""
+    (hosts, why the list has no answer, the other servers down). Restarting
+    takes node off the network as the change did, so it waits for what
+    network_guard does. The host itself is in the list, so an empty one is no answer."""
     try:
         nodes = read("/api/v1/nodes").get("items", [])
+        down = other_servers(nodes, node, read, now)[1]
     except Exception as error:
         return None, _said(error), []
-    return (len(nodes), "", other_servers(nodes, node)[1]) if nodes else (None, "the list came back empty", [])
+    return (len(nodes), "", down) if nodes else (None, "the list came back empty", [])
 
 
 def _restart_undone(node, service, unread, down, refused):
@@ -249,9 +283,8 @@ def _restart_undone(node, service, unread, down, refused):
                       "and flannel may still carry pod traffic by the old interface. If the cluster has other hosts, run "
                       f"`systemctl restart {service}` on {node}.")
     if down:
-        words = guard_refusals(node, "", (0, len(down)))[0]
         undone.append(f"Homestead did not restart {service} on {node}, and flannel may still carry pod traffic by the old interface. "
-                      f"{words} ({', '.join(down)}), then run `systemctl restart {service}` on {node}.")
+                      f"{_servers_down(node, len(down), down)} When every server is Ready, run `systemctl restart {service}` on {node}.")
     if refused:
         undone.append(f"{node} did not schedule the restart of {service} ({refused}), so it did not restart, and flannel may still "
                       f"carry pod traffic by the old interface. Run `systemctl restart {service}` on {node}.")
@@ -408,7 +441,7 @@ def _confirmed(spec, ref, node, elapsed, now):
     # kube-vip finds its interface when it starts: its pod here starts again.
     vip = _restart_kube_vip(kget, ksend, node, ref)
     service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-    hosts, unread, down = _before_restart(kget, node) if service else (1, "", [])
+    hosts, unread, down = _before_restart(kget, node, now) if service else (1, "", [])
     refused = ""
     if hosts and hosts > 1 and not down:
         try:
