@@ -585,6 +585,44 @@ class EndedRestorePairTests(unittest.TestCase):
         self.sweep()
         self.assertEqual([], self.pairs())
 
+    def test_a_restore_resumed_while_the_sweep_runs_keeps_its_pair(self):
+        """The sweep read the job as failed; a person resumes it before the
+        pair is deleted. The resumed restore reuses that pair (its name comes
+        from the restore id), so deleting it would leave its claim on a gone
+        snapshot."""
+        ident = self.lost_race()
+        self.kube.discard(self.CLAIMS + "/example-data")    # the other claim went: a resume can carry on
+        resumed = []
+
+        def resume_first(*_):
+            if not resumed:
+                resumed.append(OPS.resume(ident))
+            return None
+        self.kube.react("GET", CSI.API + "/volumesnapshotcontents", resume_first)
+        self.sweep()
+        self.assertTrue(resumed)
+        self.assertEqual("running", OPS.stored()[0]["status"])
+        self.assertEqual(2, len(self.pairs()), "the resumed restore's pair is kept")
+        self.assertFalse(any(m == "DELETE" and "volumesnapshot" in p for m, p, *_ in self.kube.writes))
+
+    def test_a_pair_that_cannot_be_removed_is_not_looked_for_every_minute(self):
+        """Not this job's pair after all (its snapshot pairs with other
+        content): left, and not listed again each minute."""
+        self.lost_race()
+        snapshot = CSI.API + "/namespaces/lab/volumesnapshots/" + self.pairs()[0]
+        obj = self.kube.object(snapshot)
+        obj["spec"]["source"]["volumeSnapshotContentName"] = "homestead-restore-other"
+        self.kube.discard(snapshot)
+        self.kube.add(obj)
+        self.sweep()
+        self.assertEqual(2, len(self.pairs()))
+
+        def listed():
+            return len([path for path, _ in self.kube.reads if "volumesnapshotcontents?" in path])
+        before = listed()
+        self.sweep()
+        self.assertEqual(before, listed())
+
     def test_a_running_restore_keeps_its_pair(self):
         """It made its pair and has not made its claim yet."""
         self.kube.fail(self.CLAIMS, 500, method="POST")

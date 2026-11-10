@@ -297,12 +297,15 @@ def discard(namespace, pvc_name, snapshot_name=None):
     return removed
 
 
-def discard_ended(restore_ids, budget=50):
+def discard_ended(restore_ids, budget=50, guard=None):
     """Remove the pair each of these ended restore jobs made, found by the
     restore id it stamped on it, as discard() does: kept while a live claim
-    of its name restores from it. (removed names, the ids a pair of is still
-    there); None when the snapshot API is not served. A pair with no stamp
-    (made before it) is never touched."""
+    of its name restores from it. guard(restore_id, remove), when given, runs
+    remove() only while that job is still ended (a resumed restore reuses its
+    pair) and answers None otherwise. (removed names, the ids a pair of is
+    still there and may go later); None when the snapshot API is not served.
+    A pair that is not that job's after all is left and not counted. A pair
+    with no stamp (made before it) is never touched."""
     if KUBE.get_optional(API, read=kget) is None:
         return None
     removed, left = [], set()
@@ -313,12 +316,28 @@ def discard_ended(restore_ids, budget=50):
         namespace, pvc_name = annotations.get("homestead.io/restore-namespace"), annotations.get("homestead.io/restore-pvc")
         if restore_id not in restore_ids or not _owned(content) or not namespace or not pvc_name:
             continue
-        gone = discard(namespace, pvc_name, meta.get("name")) if len(removed) < budget else []
+        if len(removed) >= budget:
+            left.add(restore_id)
+            continue
+        def remove():
+            return discard(namespace, pvc_name, meta.get("name"))
+        gone = guard(restore_id, remove) if guard else remove()
         if gone:
             removed += gone
-        else:
+        elif gone is None or _restored_from(namespace, pvc_name, content):
             left.add(restore_id)
     return removed, left
+
+
+def _restored_from(namespace, pvc_name, content):
+    """A live claim of that name restores from this content's snapshot."""
+    claim = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=kget)
+    if not claim or (claim.get("metadata") or {}).get("deletionTimestamp"):
+        return False
+    source = (claim.get("spec") or {}).get("dataSource") or {}
+    ref = (content.get("spec") or {}).get("volumeSnapshotRef") or {}
+    return (source.get("apiGroup") == "snapshot.storage.k8s.io" and source.get("kind") == "VolumeSnapshot"
+            and bool(ref.get("name")) and source.get("name") == ref.get("name"))
 
 
 def _delete(path, obj, version=False):

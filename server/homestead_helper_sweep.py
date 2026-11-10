@@ -143,8 +143,8 @@ def _restore_pairs(items, budget):
     only once a claim restoring from it binds, and a restore that lost the
     race for its claim name never gets one. Only a pair stamped with that
     job's restore id, and kept while a live claim of its name restores from
-    it. The jobs are read again just before, so a restore resumed since keeps
-    its pair. Looked for until none of the job's is left, then not again
+    it. Each delete runs under the jobs' lock, with the job read again
+    there, so a restore resumed since keeps its pair: a resume reuses it. Looked for until none of the job's is left, then not again
     until the job ends again (a resumed restore makes its pair again)."""
     if budget <= 0:
         return []
@@ -162,7 +162,7 @@ def _restore_pairs(items, budget):
     if not ended:
         return []
     try:
-        found = CSI_RESTORE.discard_ended(set(ended), budget)
+        found = CSI_RESTORE.discard_ended(set(ended), budget, _while_ended(ended))
     except Exception as error:
         print(f"restore snapshots not removed: {str(error)[:160]}", flush=True)
         return []
@@ -173,6 +173,20 @@ def _restore_pairs(items, budget):
         if restore_id not in left:
             _marked([ident], "pair_checked", finished)
     return removed
+
+
+def _while_ended(ended):
+    """guard for discard_ended: remove() under the jobs' lock, only while the
+    job is still failed or cancelled with the end time read before. A resume
+    takes the same lock, so it cannot slip in between."""
+    def guard(restore_id, remove):
+        ident, finished = ended[restore_id]
+        with OPS.transaction() as t:
+            item = next((row for row in t.items if isinstance(row, dict) and row.get("id") == ident), None)
+            if not item or item.get("status") not in ("failed", "cancelled") or item.get("finished_at") != finished:
+                return None
+            return remove()
+    return guard
 
 
 BROWSE = "/apis/snapshot.storage.k8s.io/v1/volumesnapshotcontents?labelSelector=" + urllib.parse.quote(
@@ -219,7 +233,7 @@ def _marked(idents, key, value=True):
             if changed:
                 t.save(items)
     except Exception as error:
-        print(f"jobs {', '.join(idents)} not updated: {str(error)[:160]}", flush=True)
+        print(f"backup or restore jobs {', '.join(idents)} not updated: {str(error)[:160]}", flush=True)
 
 
 def _words(value):
