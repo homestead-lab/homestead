@@ -86,6 +86,30 @@ class CandidateTests(unittest.TestCase):
         picks = HOLD.choose([i for i in items if i["options"]], {"Deployment/lab/app": "wait"})
         self.assertEqual(("wait", "move"), (picks["Deployment/lab/app"], picks["VirtualMachine/vms/win"]))
 
+    def test_a_statefulset_that_deletes_its_volumes_when_stopped_never_waits(self):
+        # #1222: scaled to none with whenScaled: Delete, Kubernetes deletes its
+        # claims. Moving drains it instead, and a drain keeps them.
+        deletes = [statefulset("db", "Delete")]
+        items = self.items(statefulsets=deletes)
+        self.assertEqual(["move"], items["StatefulSet/lab/db"]["options"])
+        self.assertEqual("", items["StatefulSet/lab/db"]["why"], "it simply moves")
+        with self.assertRaisesRegex(ValueError, "db cannot wait here"):
+            HOLD.choose([i for i in items.values() if i["options"]], {"StatefulSet/lab/db": "wait"})
+        self.assertEqual(["move", "wait"], self.items(statefulsets=[statefulset("db", "Retain")])["StatefulSet/lab/db"]["options"])
+        self.assertEqual(["move", "wait"], self.items(statefulsets=[statefulset("db")])["StatefulSet/lab/db"]["options"],
+                         "no policy is Retain")
+        self.pods = [p for p in self.pods if p["spec"]["nodeName"] == "k1"]
+        alone = self.items(single_host=True, statefulsets=deletes)["StatefulSet/lab/db"]
+        self.assertEqual(([], "it can delete its volumes when stopped"), (alone["options"], alone["why"]),
+                         "on the only host it can neither move nor wait")
+
+
+def statefulset(name, when_scaled=None, replicas=1):
+    spec = {"replicas": replicas}
+    if when_scaled:
+        spec["persistentVolumeClaimRetentionPolicy"] = {"whenScaled": when_scaled, "whenDeleted": "Retain"}
+    return {"metadata": {"namespace": "lab", "name": name}, "spec": spec}
+
 
 class Objects:
     def __init__(self, objects):
@@ -106,8 +130,20 @@ class Objects:
                     notes.pop(key, None)
                 else:
                     notes[key] = value
+            before = int(obj.get("spec", {}).get("replicas", 1))
             obj.setdefault("spec", {}).update(body.get("spec") or {})
+            self._scaled(path, obj, before)
         return {}
+
+    def _scaled(self, path, obj, before):
+        """The StatefulSet controller, as #1222 saw it: scaled down with
+        whenScaled: Delete, the claims of the ordinals it stops are deleted."""
+        policy = (obj["spec"].get("persistentVolumeClaimRetentionPolicy") or {}).get("whenScaled", "Retain")
+        if "/statefulsets/" not in path or policy != "Delete":
+            return
+        ns, name = path.split("/")[5], path.rsplit("/", 1)[1]
+        for ordinal in range(int(obj["spec"]["replicas"]), before):
+            self.objects.pop(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/data-{name}-{ordinal}", None)
 
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/plex"
@@ -145,6 +181,34 @@ class StopRestoreTests(unittest.TestCase):
         self.assertEqual(([], ["lab/plex (changed since)"]), HOLD.restore(held, "job-1"))
         self.assertEqual(1, self.k.objects[DEP]["spec"]["replicas"])
 
+    def test_a_statefulset_that_deletes_its_volumes_when_stopped_is_left_running(self):
+        # A policy changed after the review: the stop itself checks again.
+        sts, claim = "/apis/apps/v1/namespaces/lab/statefulsets/db", "/api/v1/namespaces/lab/persistentvolumeclaims/data-db-0"
+        self.k.objects.update({sts: statefulset("db", "Delete"), claim: {"metadata": {"name": "data-db-0"}}})
+        with self.assertRaisesRegex(ValueError, r"^StatefulSet lab/db can delete its volumes when stopped\. "
+                                                r"Change its scale-down retention policy \(whenScaled\) to Retain before "):
+            HOLD.stop({"kind": "StatefulSet", "ns": "lab", "name": "db"}, "job-1")
+        self.assertEqual([], self.k.sent, "nothing is written, not even the mark")
+        self.assertIn(claim, self.k.objects, "its claim is still there")
+        self.assertEqual(1, self.k.objects[sts]["spec"]["replicas"])
+        # Retain: stopped and marked as any other app, and its claim stays.
+        self.k.objects[sts] = statefulset("db", "Retain")
+        self.k.objects[sts]["metadata"]["resourceVersion"] = "7"
+        HOLD.stop({"kind": "StatefulSet", "ns": "lab", "name": "db"}, "job-1")
+        self.assertEqual((0, "1"), (self.k.objects[sts]["spec"]["replicas"], self.k.objects[sts]["metadata"]["annotations"][HOLD.HELD_AS]))
+        self.assertIn(claim, self.k.objects)
+        self.assertEqual("7", self.k.sent[-1][2]["metadata"]["resourceVersion"],
+                         "fenced on the version whose policy was read: a change in between fails the stop")
+        HOLD.stop(self.items[0], "job-1")
+        self.assertNotIn("resourceVersion", self.k.sent[-1][2]["metadata"], "a Deployment has no such policy")
+
+    def test_the_simulated_controller_deletes_claims_as_kubernetes_does(self):
+        # Keeps the fake honest: without the check, this is what a stop did.
+        sts, claim = "/apis/apps/v1/namespaces/lab/statefulsets/db", "/api/v1/namespaces/lab/persistentvolumeclaims/data-db-0"
+        self.k.objects.update({sts: statefulset("db", "Delete"), claim: {"metadata": {"name": "data-db-0"}}})
+        self.k.send("PATCH", sts, {"spec": {"replicas": 0}})
+        self.assertNotIn(claim, self.k.objects)
+
     def test_another_jobs_hold_is_not_taken_over(self):
         HOLD.stop(self.items[0], "job-1")
         with self.assertRaisesRegex(ValueError, "held by another job"):
@@ -167,6 +231,31 @@ class OwnPodTests(unittest.TestCase):
             self.assertEqual([], items)
         finally:
             HOLD.OWN_POD = ""
+
+
+class ForcedSendTests(unittest.TestCase):
+    def test_a_forced_send_goes_through_and_stops_nothing(self):
+        # A StatefulSet that would delete its volumes has no option on the only
+        # host. Force stops nothing first (hold=None), so it is not asked to choose.
+        import types
+        import homestead_power_jobs as JOBS
+        db = {"id": "StatefulSet/lab/db", "kind": "StatefulSet", "ns": "lab", "name": "db",
+              "options": [], "default": "", "why": "it can delete its volumes when stopped"}
+        plan = {"ready": True, "review_token": "t", "planned_outage": False, "hold": [db], "stranded": [],
+                "requires_data_ack": False, "drain_blockers": []}
+        sent = []
+        body = {"node": "k1", "confirm": "k1", "action": "reboot", "force": True, "review_token": "t", "choices": {}}
+        with mock.patch.object(JOBS, "active_power_job", return_value=None), \
+                mock.patch.object(POWER, "plan", lambda *a, **k: copy.deepcopy(plan)), \
+                mock.patch.object(HOLD, "stop", side_effect=AssertionError("a forced job stops nothing")), \
+                mock.patch.object(JOBS, "send_reviewed_power", lambda p, force, background=False: sent.append((p, force)) or {"id": "op"}):
+            reply = JOBS._send_power(types.SimpleNamespace(body=body, query={}, path="/api/node/power"))
+        self.assertEqual(202, reply.code)
+        self.assertEqual(True, sent[0][1])
+        self.assertEqual({}, sent[0][0]["choices"])
+        # Not forced, the same item is still refused when chosen.
+        with self.assertRaisesRegex(ValueError, "db cannot"):
+            HOLD.choose([db], {})
 
 
 class OrderTests(unittest.TestCase):

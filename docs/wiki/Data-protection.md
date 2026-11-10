@@ -453,8 +453,14 @@ on the volume: that one is left stopped, named in the job. Homestead's own data 
 back from Homestead, as that would stop it part-way.
 
 A StatefulSet whose `persistentVolumeClaimRetentionPolicy` has `whenScaled:
-Delete` can't be rolled back until that is `Retain`: stopping it would delete
-the claim being rolled back.
+Delete` cannot be rolled back until that is `Retain`: stopping it would delete
+the claim being rolled back. Every other stop Homestead makes of a StatefulSet
+checks the same setting. A storage move refuses such an app, as a rollback
+does. A host restart, shutdown or maintenance never stops it to wait for the
+host: it moves to another host, which keeps its volumes. When there is no other
+host, the restart or shutdown is refused until the setting is `Retain`. Force
+still sends it: a forced restart stops nothing first, so the app goes down with
+the host and keeps its volumes.
 
 Something that uses the volume and is already gone when the rollback stops
 it (Flux or Helm removed it) is left gone, and the rollback carries on with

@@ -12,6 +12,7 @@ import homestead_rollout_capacity as ROLLOUT
 import homestead_vm_batch as VM_BATCH
 import homestead_storage_journal as JOURNAL
 import homestead_reclass_handoff as HANDOFF
+from homestead_reclass import deletes_volumes_when_stopped, stop_blocker
 
 
 def _count(value, default=1):
@@ -110,8 +111,8 @@ def plan(item, proposals, read, nodes, threshold):
             add("Deployment/" + name, template, deficit(owned, count, template))
         elif kind == "StatefulSet":
             spec = obj["spec"]
-            if spec.get("persistentVolumeClaimRetentionPolicy", {}).get("whenScaled", "Retain") != "Retain":
-                raise ValueError("Scaling the StatefulSet can delete its volumes. Change its retention policy before moving storage.")
+            if deletes_volumes_when_stopped(spec):
+                raise ValueError(stop_blocker(name, "moving storage"))
             count, start = _count(spec.get("replicas")), _nonnegative(spec.get("ordinals", {}).get("start"))
             for ordinal in range(start, start + count):
                 pod_name = f"{name}-{ordinal}"

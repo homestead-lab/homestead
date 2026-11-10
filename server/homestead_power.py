@@ -71,12 +71,16 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                       control.get("members", []) in ([], [node]))
     ready_hosts = {n.get("metadata", {}).get("name") for n in nodes if _ready(n)}
     vmis = _items("/apis/kubevirt.io/v1/virtualmachineinstances", absent_ok=True) or []
+    # Whether a StatefulSet here may wait depends on its retention policy: read them when one runs here.
+    stateful = any(o.get("kind") == "StatefulSet" for p in pods if (p.get("spec") or {}).get("nodeName") == node
+                   for o in (p.get("metadata") or {}).get("ownerReferences") or [])
     hold = HOLD.candidates(node, pods, vmis,
                            {((r.get("metadata") or {}).get("namespace"), (r.get("metadata") or {}).get("name")): r
                             for r in _items("/apis/apps/v1/replicasets", absent_ok=True) or []},
                            ready_hosts, {(w.get("ns"), w.get("name")): w.get("eligible") or []
                                          for w in place.get("workloads", [])},
-                           single_host=planned_outage)
+                           single_host=planned_outage,
+                           statefulsets=_items("/apis/apps/v1/statefulsets") if stateful else ())
     if maintain and planned_outage:
         hold = []
     storage_unknown = replicas is None or volumes is None
@@ -164,6 +168,9 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     if loose:
         soft.append("Running VMs are on this host that no VirtualMachine manages, so Homestead can neither move nor "
                     "stop them: " + ", ".join(loose) + ". Stop them by hand and review again")
+    # One that can neither move nor wait: stopping it would delete its volumes (#1222).
+    soft.extend(HOLD.stop_blocker(f"{i['ns']}/{i['name']}", HOLD.BEFORE)
+                for i in hold if i["kind"] == "StatefulSet" and not i["options"])
     if storage_unknown:
         soft.append("The list of volume copies is unavailable, so the effect on volumes cannot be checked")
     # Before a drain only: one that finished had Longhorn's agreement. A
