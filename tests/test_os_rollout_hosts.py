@@ -27,6 +27,7 @@ import homestead_alerts as ALERTS
 import homestead_drain_blockers as BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as K
+import homestead_leader as LEADER
 import homestead_os_rollout as ROLLOUT
 import homestead_power as power
 import homestead_power_jobs as POWER_JOBS
@@ -247,6 +248,33 @@ class ChosenHostsTests(Runs):
         self.assertTrue(row["restart_needed"])
         self.assertIn("needing a restart: node-b", done["message"])
 
+    def test_the_leaders_host_goes_last_whichever_replica_answers(self):
+        # #1319: the order followed the pod that answered, not the leader.
+        self.kube.add(pod("homestead-0", ns=LEADER.NS, node="node-a", phase="Running", claim="homestead-data"))
+        self.kube.add(pod("homestead-1", ns=LEADER.NS, node="node-c", phase="Running", claim="homestead-data"))
+        keep_bound(self, LEADER)
+        LEADER.bind(K.kget, K.ksend, LEADER.NS)
+        self.addCleanup(LEADER._state.update, dict(LEADER._state))
+        LEADER._state.update(leader=False, holder="homestead-1")   # this replica, on node-a, does not lead
+        self.own = "node-a"
+        self.bind()
+        mock.patch.object(ROLLOUT, "own_node", LEADER.leader_node).start()
+        self.addCleanup(mock.patch.stopall)
+        self.assertEqual(["node-a", "node-b", "node-c"], ROLLOUT.start("asked-hosts", only=["node-a", "node-b", "node-c"])["nodes"])
+        self.assertEqual([False, False, True], [h["homestead_here"] for h in ROLLOUT.preview(["node-a", "node-b", "node-c"])["hosts"]])
+
+    def test_with_no_leader_known_no_host_is_called_homesteads(self):
+        keep_bound(self, LEADER)
+        LEADER.bind(K.kget, K.ksend, LEADER.NS)
+        self.addCleanup(LEADER._state.update, dict(LEADER._state))
+        LEADER._state.update(leader=False, holder="")
+        self.assertEqual("", LEADER.leader_node())
+
+    def test_server_binds_the_leaders_host(self):
+        import ast
+        tree = ast.parse((Path(server.__file__)).read_text())
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "OS_ROLLOUT.bind")
+        self.assertEqual("LEADER.leader_node", ast.unparse(call.args[6]))
 
     def test_only_the_two_answers_are_taken(self):
         with self.assertRaises(ValueError):

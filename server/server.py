@@ -694,7 +694,7 @@ SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"
                   follow_fleet=lambda: _follow_fleet_address())
 
 BASELINE.vip_setup = installer_vip
-OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, NODE_ACTIONS.set_cordon, own_node, DATA_DIR,
+OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, NODE_ACTIONS.set_cordon, LEADER.leader_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", OS_ROLLOUT.title(rollout),
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
