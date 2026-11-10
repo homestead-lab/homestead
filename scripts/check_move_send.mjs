@@ -29,7 +29,7 @@ try {
 
   let { page, errors } = await open();
   await page.evaluate(() => closeModal());
-  await refuse(page); await page.waitForTimeout(300);
+  await refuse(page);      // the refused start has settled, and any plan request it made has been sent
   assert.equal(await page.evaluate(() => window.__plans), 1, "a refusal after the dialog was closed reads no plan");
   assert.deepEqual(errors, []);
 
@@ -37,7 +37,7 @@ try {
   await page.evaluate(() => movePlan("dr-b", "container", "web"));
   assert.match(await page.locator("#mv_plan").innerText(), /Waiting while the transfer is sent/);
   await page.evaluate(() => childModal("Backup storage · dr-b", "<div>child</div>"));
-  await refuse(page); await page.waitForTimeout(300);
+  await refuse(page);
   await page.evaluate(() => modalBack());
   await page.waitForFunction(() => /Ready to move/.test(document.querySelector("#mv_plan")?.textContent || ""));
   assert.doesNotMatch(await page.locator("#mv_plan").innerText(), /Waiting/);

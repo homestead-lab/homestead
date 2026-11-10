@@ -157,12 +157,14 @@ test("a waiting line under a child dialog is replaced by the plan when that dial
   const w = world(); w.ctx.moveReview("source", "container", "A"); w.answer(PLAN); await settle();
   const send = w.ctx.moveStart("source", "container", "A"); await settle();
   w.ctx.movePlan("source", "container", "A");
-  const frame = { fragment: { querySelector: sel => sel === "#mv_plan" ? {} : null }, onReturn: null };
+  let earlier = 0;
+  const frame = { fragment: { querySelector: sel => sel === "#mv_plan" ? {} : null }, onReturn: () => earlier++ };
   w.ctx.MODAL_STACK = [frame]; const host = w.fields["#mv_plan"]; delete w.fields["#mv_plan"];   // a child dialog is on top
   w.answer(null, "refused"); await send; await settle();
   assert.equal(plans(w).length, 1, "nothing is read while the dialog is out of sight");
   assert.equal(typeof frame.onReturn, "function", "it will be read when the dialog comes back");
   w.fields["#mv_plan"] = host; frame.onReturn(); await settle();
+  assert.equal(earlier, 1, "what was to run on return still runs");
   assert.equal(plans(w).length, 2); w.answer(PLAN); await settle();
   assert.doesNotMatch(host.innerHTML, /Waiting while/);
 });
@@ -177,4 +179,16 @@ test("volume and passthrough choices cannot change while the transfer is sent, a
   while (w.replies.length) w.answer({}); await send;
   assert.deepEqual(lastBody(w, "/api/move/start").volumes, {}, "what was sent is what was reviewed");
   assert.deepEqual(lastBody(w, "/api/move/start").host_devices, {});
+});
+
+test("a blocked change puts the dropdown back to what was sent, and a plan read again uses it (#1317)", async () => {
+  const w = world(); w.ctx.moveReview("source", "container", "A"); w.answer(PLAN); await settle();
+  const volume = { value: "move", type: "select-one" };
+  w.fields["#mv_plan"].querySelectorAll = () => [volume];
+  const send = w.ctx.moveStart("source", "container", "A"); await settle();
+  volume.value = "blank"; w.ctx.moveVolumeSet("source", "container", "A", "app-data", "action", "blank", volume);
+  w.fields["#mv_sc"].value = "longhorn-r2"; w.fields["#mv_sc"].onchange();
+  assert.equal(volume.value, "move"); assert.equal(w.fields["#mv_sc"].value, "fast");
+  w.answer(null, "refused"); await send; await settle();
+  assert.equal(lastBody(w, "/api/move/plan").storage_class, "fast", "the plan read again asks for the class that was sent");
 });
