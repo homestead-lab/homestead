@@ -80,10 +80,11 @@ hours, through the same short-lived helper disk set-up uses, and the node's
 - whether it needs a restart to finish an update, and any failed services;
 - whether its clock is synchronised.
 
-**Install updates** runs the host's own package manager (apt, dnf or zypper)
-detached on the host, followed in the job tray; workloads keep running. A kernel
-update then asks for a restart, which **Host actions** does with its drain
-review. Security updates, a restart needed, failed services and a root
+**Install N updates…** opens the OS updates review for this host, the same one
+as a row's **Update…** in **Nodes → OS updates** (below): it holds automatic
+updates while the run goes, waits while another run is on, and says what the
+restart checks would say. The host's own package manager (apt, dnf or zypper)
+installs the updates, followed in the job tray; workloads keep running. Security updates, a restart needed, failed services and a root
 filesystem over 90% are also [notifications](Settings#notifications), and the node's card shows a
 **host OS** chip.
 

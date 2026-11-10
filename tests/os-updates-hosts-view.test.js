@@ -93,6 +93,17 @@ test("each row offers what it can: Update…, Restart… or nothing", async () =
   assert.match(row(t.html(), "node-d"), /installing now/);
 });
 
+test("the Host page's Install opens the OS updates review for that host (#1319)", async () => {
+  const t = setup({ report: report(), previews: preview([previewHost("node-a")]) });
+  const body = t.c.hostOsBody("node-a", { ...HOSTS["node-a"], at: 1 });
+  const install = (body.match(/<button[^>]*>Install 2 updates…<\/button>/) || [""])[0];
+  assert.match(install, /onclick="osUpdatesReview\(\[&quot;node-a&quot;\]\)"/, "the review, with its holds and run check");
+  assert.equal(t.c.window.hostOsUpgrade, undefined, "no install path of its own");
+  vm.runInContext(install.match(/onclick="([^"]*)"/)[1].replaceAll("&quot;", '"'), t.c);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(t.reads.some(path => path.startsWith("/api/os-updates/preview") && path.includes("node=node-a")), t.reads.join(", "));
+});
+
 test("a host's name links to its page", async () => {
   const t = await opened();
   assert.match(row(t.html(), "node-c"), /<button type="button" class="linkish"[^>]*closeModal\(\);nodeDetail\(&quot;node-c&quot;\)/);
