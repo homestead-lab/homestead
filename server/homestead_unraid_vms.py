@@ -33,6 +33,7 @@ from datetime import datetime
 import urllib.error
 import xml.etree.ElementTree as ET
 
+import homestead_job_errors as ERRORS
 import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_cdi_cleanup as CDI_CLEANUP
@@ -961,8 +962,20 @@ _clock = time.time   # a seam for the tests
 
 
 def _waited(ref, key, limit):
+    """Has this wait lasted limit, with the jobs loop looking throughout? A gap
+    in looking (Homestead down, the clock stepped) says nothing about CDI, so
+    the wait starts again, as for disk retire and failed reads
+    (homestead_job_errors.GAP, #1328). The last look is saved at most once per
+    LAST_EVERY; a wait saved by an older Homestead as one time starts again."""
     now = _clock()
-    return now - ref.setdefault(key, now) >= limit
+    state = ref.get(key) if isinstance(ref.get(key), dict) else {}
+    since, last = state.get("since"), state.get("last")
+    if last is None or since is None or last > now or now - last > ERRORS.GAP:
+        since = last = now
+    elif now - last >= ERRORS.LAST_EVERY:
+        last = now
+    ref[key] = {"since": since, "last": last}
+    return now - since >= limit
 
 
 def _count(disks):

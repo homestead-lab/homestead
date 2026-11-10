@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_joblogs as JOBLOGS
+import homestead_job_errors as ERRORS
 import homestead_kube as K
 import homestead_operations as JOBS
 import homestead_unraid_vms as UVMS
@@ -55,6 +56,8 @@ class ImportWaitTests(unittest.TestCase):
         UVMS.register(JOBS)
         self.now = 1000.0
         self.dvs = DVS
+        # Hours of waits walked in few looks: a gap is an hour here, not 5 minutes.
+        self.enterContext(mock.patch.object(ERRORS, "GAP", 3600))
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now, create=True))
         # server.py binds this to its own cluster reader, so a run that has loaded server.py
         # and then cleared that reader would refuse to make the VM.
@@ -69,6 +72,14 @@ class ImportWaitTests(unittest.TestCase):
             dv = self.kube.object(self.path(name))
             dv["status"] = {"phase": phase}
             self.kube.add(dv)
+
+    def wait(self, seconds, every=50 * 60):
+        """Time passes with the jobs loop looking at least every few minutes, as it does."""
+        while seconds > every:
+            self.now += every
+            seconds -= every
+            self.look()
+        self.now += seconds
 
     def look(self, times=1):
         for _ in range(times):
@@ -133,7 +144,7 @@ class ImportWaitTests(unittest.TestCase):
     def assert_ended_with_everything_of_cdis_left(self, kept):
         copies = self.to_convert()
         self.assertEqual("CDI is finishing the disk", self.look()["message"])
-        self.now += CONVERT_LIMIT - 1
+        self.wait(CONVERT_LIMIT - 1)
         self.assertEqual("running", self.look()["status"], "a moment longer is still a wait")
         self.now += 1
         job = self.look()
@@ -155,7 +166,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_cdi_never_ready_ends_the_import_and_clears_what_it_made(self):
         self.phase("UploadScheduled")
         self.assertEqual("running", self.look()["status"])
-        self.now += DISKS_LIMIT - 1
+        self.wait(DISKS_LIMIT - 1)
         self.assertEqual("running", self.look()["status"])
         self.now += 1
         job = self.look(3)
@@ -164,12 +175,38 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIsNone(self.kube.object(self.path(DVS[0])), "what it made goes, so a retry can run")
         UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
 
+    def test_time_not_watched_does_not_count_toward_the_ready_limit(self):
+        self.phase("UploadScheduled")
+        self.look()
+        self.wait(DISKS_LIMIT - 60)
+        self.look()
+        self.now += 2 * 3600      # Homestead was down, or the clock stepped
+        self.assertEqual("running", self.look()["status"], "the wait starts again after a gap")
+        self.wait(DISKS_LIMIT - 1)
+        self.assertEqual("running", self.look()["status"])
+        self.wait(1)
+        self.assertEqual("failed", self.look(3)["status"])
+
+    def test_time_not_watched_does_not_count_toward_the_finish_limit(self):
+        self.to_convert()
+        self.look()
+        self.wait(CONVERT_LIMIT - 60)
+        self.look()
+        self.now += 8 * 3600
+        self.assertEqual("running", self.look()["status"], "the wait starts again after a gap")
+        self.now -= 3600          # a clock stepped back is a gap too
+        self.assertEqual("running", self.look()["status"])
+        self.wait(CONVERT_LIMIT - 1)
+        self.assertEqual("running", self.look()["status"])
+        self.wait(1)
+        self.assertEqual("failed", self.look()["status"])
+
     def test_clearing_takes_cdis_populator_claims_and_leaves_a_lookalike_alone(self):
         self.phase("UploadScheduled")
         made = self.populator_disk(DVS[0])
         self.claim("win11-disk-backup", [], volume="pv-mine")
         self.look()
-        self.now += DISKS_LIMIT
+        self.wait(DISKS_LIMIT)
         self.look(3)
         for path in made + [self.path(DVS[0])]:
             self.assertIsNone(self.kube.object(path), path)
@@ -192,10 +229,10 @@ class ImportWaitTests(unittest.TestCase):
     def test_the_finish_limit_counts_from_the_end_of_the_copy(self):
         self.phase("UploadScheduled")
         self.look()
-        self.now += DISKS_LIMIT - 1   # slow to be ready, then a long copy
+        self.wait(DISKS_LIMIT - 1)   # slow to be ready, then a long copy
         self.phase("UploadReady")
         self.look()
-        self.now += 2 * CONVERT_LIMIT
+        self.wait(2 * CONVERT_LIMIT)
         self.assertEqual("running", self.look()["status"], "a copy has no limit here")
         for disk in self.ref()["disks"]:
             job = self.kube.object(JOB_API + disk["job"])
@@ -204,7 +241,7 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("running", self.look()["status"])
         self.assertEqual("convert", self.ref()["phase"])
         self.assertEqual("running", self.look()["status"], "time spent before this wait doesn't count towards it")
-        self.now += CONVERT_LIMIT - 1
+        self.wait(CONVERT_LIMIT - 1)
         self.assertEqual("running", self.look()["status"])
         self.now += 1
         self.assertEqual("failed", self.look()["status"])
@@ -212,7 +249,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_the_copy_output_is_kept_when_its_job_goes(self):
         self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.look()
         self.assertTrue(any("copy" in row["title"] for row in self.ref()["diagnostics"]), self.ref().get("diagnostics"))
 
@@ -222,7 +259,7 @@ class ImportWaitTests(unittest.TestCase):
         dv["status"] = {"phase": "Succeeded"}
         self.kube.add(dv)
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         job = self.look()
         self.assertEqual("failed", job["status"])
         self.assertIn(f"CDI has not finished {DVS[1]} after", job["message"])
@@ -241,7 +278,7 @@ class ImportWaitTests(unittest.TestCase):
             dv["status"] = {"phase": "Succeeded"}
             self.kube.add(dv)
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
         return job["message"]
@@ -281,7 +318,7 @@ class ImportWaitTests(unittest.TestCase):
         job["metadata"]["finalizers"] = ["example.com/held"]
         self.kube.add(job)
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         seen = self.look(2)
         self.assertEqual("running", seen["status"], "the delete was accepted, but the Job is still there")
         self.assertIn("Still removing", seen["message"])
@@ -295,7 +332,7 @@ class ImportWaitTests(unittest.TestCase):
         copies = self.to_convert()
         self.kube.discard(copies[0][0])   # its time to live is an hour
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.assertEqual("failed", self.look()["status"])
         self.assertIsNone(self.kube.object(copies[0][1]))
 
@@ -305,7 +342,7 @@ class ImportWaitTests(unittest.TestCase):
         secret["metadata"]["annotations"] = {}
         self.kube.add(secret)
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.assertEqual("failed", self.look()["status"])
         self.assertTrue(self.kube.object(copies[0][1]))
         self.assertIsNone(self.kube.object(copies[1][1]))
@@ -313,7 +350,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_a_copy_job_that_cant_be_removed_yet_is_retried_and_the_job_says_so(self):
         copies = self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.kube.fail(copies[0][0], 500, method="DELETE")
         job = self.look()
         self.assertEqual("running", job["status"])
@@ -333,7 +370,7 @@ class ImportWaitTests(unittest.TestCase):
         copies = self.to_convert()
         kept = self.populator_disk(DVS[0])
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.kube.fail(copies[0][0], 500, times=times, method="DELETE")
         job = self.look()
         self.assertEqual("running", job["status"])
@@ -381,7 +418,7 @@ class ImportWaitTests(unittest.TestCase):
         self.dvs = ("single-disk",)
         self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         message = self.look()["message"]
         for words in ("create the VM from it under Import", "check that it starts", "bus, MAC and TPM", "under another name"):
             self.assertIn(words, message)
@@ -391,7 +428,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_several_disks_are_not_promised_a_vm_with_all_of_them(self):
         self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         message = self.look()["message"]
         for words in ("from one disk", "not with the others", "under another name"):
             self.assertIn(words, message)
@@ -404,7 +441,7 @@ class ImportWaitTests(unittest.TestCase):
     def ended_after_six_hours(self):
         self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         self.assertEqual("failed", self.look()["status"])
 
     def test_a_retry_after_it_says_what_is_in_the_way(self):
@@ -440,7 +477,7 @@ class ImportWaitTests(unittest.TestCase):
         self.phase("UploadScheduled")
         self.set_ref(cdi_cleanup=None)
         self.look()
-        self.now += DISKS_LIMIT
+        self.wait(DISKS_LIMIT)
         job = self.look()
         self.assertEqual("failed", job["status"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
@@ -449,7 +486,7 @@ class ImportWaitTests(unittest.TestCase):
         self.phase("UploadReady")
         self.set_ref(cdi_cleanup=None, phase="convert")
         self.look()
-        self.now += CONVERT_LIMIT
+        self.wait(CONVERT_LIMIT)
         job = self.look()
         self.assertEqual("failed", job["status"])
         self.assertIn("not finished", job["message"])
@@ -458,7 +495,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_disks_that_become_ready_in_time_are_not_failed(self):
         self.phase("UploadScheduled")
         self.look()
-        self.now += DISKS_LIMIT - 1
+        self.wait(DISKS_LIMIT - 1)
         self.phase("UploadReady")
         self.now += 1
         self.assertNotEqual("failed", self.look()["status"])
@@ -467,7 +504,7 @@ class ImportWaitTests(unittest.TestCase):
     def test_a_disk_that_finishes_in_time_makes_the_vm(self):
         self.to_convert()
         self.look()
-        self.now += CONVERT_LIMIT - 1
+        self.wait(CONVERT_LIMIT - 1)
         self.phase("Succeeded")
         self.imp.prepare_vm = lambda cfg, platform, source: cfg
         self.imp._recheck_vm_creation = lambda prepared: None

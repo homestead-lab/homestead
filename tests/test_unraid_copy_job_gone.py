@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_job_errors as ERRORS
 import homestead_kube as K
 import homestead_operations as JOBS
 import homestead_unraid_vms as UVMS
@@ -50,6 +51,8 @@ class CopyJobGoneTests(unittest.TestCase):
         self.enterContext(mock.patch.dict(JOBS.CANCELLERS, {}))
         UVMS.register(JOBS)
         self.now = 1000.0
+        # Hours of waits walked in few looks: a gap is an hour here, not 5 minutes.
+        self.enterContext(mock.patch.object(ERRORS, "GAP", 3600))
         self.enterContext(mock.patch.object(UVMS, "_clock", lambda: self.now))
         # server.py binds this to its own cluster reader, so a run that has loaded server.py
         # and then cleared that reader would refuse to make the VM.
@@ -72,6 +75,14 @@ class CopyJobGoneTests(unittest.TestCase):
             dv = self.kube.object(self.path(name))
             dv["status"] = {"phase": phase}
             self.kube.add(dv)
+
+    def wait(self, seconds, every=50 * 60):
+        """Time passes with the jobs loop looking at least every few minutes, as it does."""
+        while seconds > every:
+            self.now += every
+            seconds -= every
+            self.look()
+        self.now += seconds
 
     def look(self):
         return next(job for job in JOBS.list_operations() if job["id"] == self.ident)
@@ -321,7 +332,7 @@ class CopyJobGoneTests(unittest.TestCase):
         job = self.look()
         self.assertEqual("running", job["status"], job["message"])
         self.assertEqual("clearing", self.ref()["phase"])
-        self.now += CLEAR_LIMIT - 1
+        self.wait(CLEAR_LIMIT - 1)
         self.assertEqual("running", self.look()["status"])
         self.now += 1
         job = self.look()
@@ -330,6 +341,18 @@ class CopyJobGoneTests(unittest.TestCase):
         for path in kept:
             self.assertTrue(self.kube.object(path), path)
         self.assert_kept_and_let_go(jobs)
+
+    def test_time_not_watched_does_not_count_toward_the_clearing_limit(self):
+        self.finished_and_gone(prime_status="Bound")
+        self.look()
+        self.wait(CLEAR_LIMIT - 60)
+        self.look()
+        self.now += 2 * 3600
+        self.assertEqual("running", self.look()["status"], "the wait starts again after a gap")
+        self.wait(CLEAR_LIMIT - 1)
+        self.assertEqual("running", self.look()["status"])
+        self.wait(1)
+        self.assertEqual("failed", self.look()["status"])
 
     def vm_on_the_disk(self, disk):
         self.kube.add({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"namespace": NS, "name": "by-hand"},
@@ -366,7 +389,7 @@ class CopyJobGoneTests(unittest.TestCase):
         self.assertEqual("clearing", self.ref()["phase"])
         for path in kept + [self.path(name) for name in DVS]:
             self.assertTrue(self.kube.object(path), path)
-        self.now += CLEAR_LIMIT
+        self.wait(CLEAR_LIMIT)
         self.assertEqual("failed", self.look()["status"])
         self.assertTrue(self.kube.object(self.path(DVS[0])))
 

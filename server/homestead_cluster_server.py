@@ -47,6 +47,7 @@ import homestead_updates as UPDATES
 import homestead_update_rollouts as ROLLOUTS
 import homestead_update_checks as CHECKS
 import homestead_upgrades as UPGRADES
+import homestead_job_errors as ERRORS
 import homestead_uptime as UPTIME
 import homestead_workloads as WORKLOADS
 
@@ -422,6 +423,23 @@ UPGRADE_MISSING_LIMIT = 15 * 60
 _clock = time.time
 
 
+def _watched_for(ref, key):
+    """How long a wait has lasted with the jobs loop looking throughout. A gap
+    in looking (Homestead down, the clock stepped) says nothing about Harvester,
+    so the wait starts again, as for disk retire and failed reads
+    (homestead_job_errors.GAP, #1328). The last look is saved at most once per
+    LAST_EVERY; a wait saved by an older Homestead as one time starts again."""
+    now = _clock()
+    state = ref.get(key) if isinstance(ref.get(key), dict) else {}
+    since, last = state.get("since"), state.get("last")
+    if last is None or since is None or last > now or now - last > ERRORS.GAP:
+        since = last = now
+    elif now - last >= ERRORS.LAST_EVERY:
+        last = now
+    ref[key] = {"since": since, "last": last}
+    return now - since
+
+
 def _harvester_upgrade_status(item):
     """A Harvester upgrade Homestead started, followed as the Cluster page
     follows any: Harvester's own steps, then each node."""
@@ -429,10 +447,10 @@ def _harvester_upgrade_status(item):
     name = ref.get("upgrade", "")
     row = next((row for row in UPGRADES.upgrades() if row["name"] == name), None)
     if not row:
-        # Timed from when it was first missing, over Homestead restarts too. A
-        # read that failed raises above, so it does not count as missing.
-        now = _clock()
-        if now - ref.setdefault("missing_since", now) >= UPGRADE_MISSING_LIMIT:
+        # Timed from when it was first missing, over Homestead restarts too, by
+        # the time Homestead watched (_watched_for). A read that failed raises
+        # above, so it does not count as missing.
+        if _watched_for(ref, "missing_since") >= UPGRADE_MISSING_LIMIT:
             return "failed", 1, (f"Harvester has no upgrade named {name} after {UPGRADE_MISSING_LIMIT // 60} minutes: "
                                  "It was deleted, or Harvester never took it. Homestead has stopped following it. "
                                  "Harvester's own dashboard shows whether anything is upgrading.")
