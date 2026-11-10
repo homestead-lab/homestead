@@ -140,12 +140,15 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                 sizes = [int(v["size_gb"]) if v.get("size_gb") else None for v in prepared["volumes"]]
                 gib = None if None in sizes else sum(sizes)
                 obj["spec"]["activeDeadlineSeconds"] = COPY.deadline(gib)
+                # The Job's name is recorded before it is sent, and its identity as soon as it exists, so a
+                # failure on the password Secret that follows still leaves a record to find and stop the copy.
+                ops.record_phase(ident, "writing", 28, "Creating the copy Job", job=obj["metadata"]["name"])
                 job = writer("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", obj)
+                ops.record_phase(ident, "writing", 30, "Copy Job identity confirmed", job=job["metadata"]["name"],
+                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]), copy_gib=gib)
                 if prepared.get("source_secret"):
                     # The copy waits for its password, then starts.
                     writer("POST", f"/api/v1/namespaces/{ns}/secrets", source_copy(prepared["source_secret"], ns, job, read))
-                ops.record_phase(ident, "writing", 30, "Copy Job identity confirmed", job=job["metadata"]["name"],
-                    job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]), copy_gib=gib)
                 if dep:
                     current = read(IDENT.base(ns) + "/" + name)
                     if IDENT.identity(current)["uid"] != dep["metadata"]["uid"] or current["spec"] != dep["spec"]:

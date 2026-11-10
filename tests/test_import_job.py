@@ -357,6 +357,20 @@ class ImportJobTests(unittest.TestCase):
         send.assert_not_called()
         return handler._send.call_args.args, cleanup
 
+    def test_a_failure_on_the_password_secret_leaves_the_copy_job_recorded(self):
+        """The Job is POSTed before its Secret; the record must not wait for the Secret (#1301)."""
+        self.prepared["source_secret"] = {"namespace": "lab", "name": "source-pass", "copy": "app-source-pass"}
+        self.objects["/api/v1/namespaces/lab/secrets/source-pass"] = {"metadata": {"name": "source-pass"}, "data": {"password": "c2VjcmV0"}}
+        def refuse(method, path, body):
+            if method == "POST" and path.endswith("/secrets") and body["metadata"]["name"] == "app-source-pass":
+                raise urllib.error.HTTPError(path, 500, "refused", {}, None)
+        self.before_send = refuse
+        with self.assertRaises(ValueError):
+            self.start()
+        ref = self.item()["ref"]
+        self.assertEqual(("homestead-import-app", "Job-uid"), (ref.get("job"), ref.get("job_uid")))
+        self.assertIn(self.job_path, self.objects, "the copy Job exists, and the record names it")
+
     # Remove for a failed or cancelled import (#1301): only what carries the import's stamp,
     # and volumes only when ticked.
     svc_path = "/api/v1/namespaces/lab/services/app"
