@@ -606,6 +606,43 @@ class RenameTests(unittest.TestCase):
         self.dispatch()
         self.assertNotIn(rename.IMPORT.JOB, self.objects["new"]["metadata"]["annotations"])
 
+    def refuse(self, nth_method, code, only=lambda payload: True):
+        """A send that the API server refuses (a definite answer: nothing was written) for one kind of write."""
+        def refusing(method, path, payload, **kwargs):
+            if method == nth_method and only(payload):
+                self.sent.append((method, path, copy.deepcopy(payload)))
+                raise urllib.error.HTTPError(path, code, "refused", {}, None)
+            return self.send(method, path, payload, **kwargs)
+        return refusing
+
+    def assert_said_refused(self, caught, words, phase):
+        text = str(caught.exception)
+        self.assertIn(words, text)
+        self.assertNotIn("did not confirm", text)
+        for method in ("PATCH", "DELETE", "POST", "409", "422"):
+            self.assertNotIn(method, text)
+        self.assertEqual(phase, ops.stored()[0]["ref"]["writes"][-1]["phase"])
+
+    def test_a_refused_stop_says_it_was_refused_not_unconfirmed(self):
+        with self.assertRaises(ValueError) as caught:
+            self.dispatch(send=self.refuse("PATCH", 409, lambda payload: payload[2]["value"] == 0))
+        self.assert_said_refused(caught, "Kubernetes refused the change to old, so old was not changed.", "refused")
+
+    def test_a_refused_start_of_the_replacement_says_it_was_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            self.dispatch(send=self.refuse("PATCH", 422, lambda payload: payload[2]["value"] == 1))
+        self.assert_said_refused(caught, "Kubernetes refused the change to new, so new was not changed.", "refused")
+
+    def test_a_refused_removal_of_the_original_says_it_was_refused(self):
+        with self.assertRaises(ValueError) as caught:
+            self.dispatch(send=self.refuse("DELETE", 409))
+        self.assert_said_refused(caught, "Kubernetes refused the removal of old, so old was not changed.", "refused")
+
+    def test_a_refused_write_is_not_tried_again(self):
+        with self.assertRaises(ValueError):
+            self.dispatch(send=self.refuse("DELETE", 409))
+        self.assertEqual(["POST", "PATCH", "PATCH", "DELETE"], [row[0] for row in self.sent])
+
     def test_rename_refuses_other_edits_and_existing_target(self):
         self.body["containers"] = []
         with self.assertRaisesRegex(ValueError, "separately"):
@@ -619,7 +656,7 @@ class RenameTests(unittest.TestCase):
         def lost(method, path, payload, **kwargs):
             self.send(method, path, payload, **kwargs)
             raise TimeoutError("do-not-journal private API response")
-        with self.assertRaisesRegex(ValueError, "could not be confirmed") as caught:
+        with self.assertRaisesRegex(ValueError, "Kubernetes did not confirm the creation of new, so it may have taken effect") as caught:
             self.dispatch(send=lost)
         self.assertNotIn("do-not-journal", str(caught.exception))
         self.assertEqual(1, len(self.sent))
