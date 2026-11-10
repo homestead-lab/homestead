@@ -245,29 +245,28 @@ def remove_failed(ns, name, job, read, send, ops, volumes=()):
         for claim in wanted:
             if claim not in ref.get("created", []) or not (pinned.get(claim) or {}).get("uid"):
                 raise ValueError(f"This import did not create {claim}, so it is not deleted here.")
-        def drop(path, label):
-            found = _find(path, read)
-            if found is None:
-                return None
-            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": IDENT.identity(found)["uid"]},
+        def drop(path, label, uid):
+            """Delete with the UID of the object already checked, never one read again here: a
+            replacement made after the check then fails the precondition instead of being deleted."""
+            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid},
                                   "propagationPolicy": "Background"})
             removed.append(label)
         app = _find(IDENT.base(ns) + "/" + ref["name"], read)
         if app and _stamped(app, ident, ref):
-            drop(IDENT.base(ns) + "/" + ref["name"], f"app {ref['name']}")
+            drop(IDENT.base(ns) + "/" + ref["name"], f"app {ref['name']}", IDENT.identity(app)["uid"])
         svc = _find(f"/api/v1/namespaces/{ns}/services/{ref['name']}", read)
         if svc and _stamped(svc, ident, ref):
-            drop(f"/api/v1/namespaces/{ns}/services/{ref['name']}", f"service {ref['name']}")
+            drop(f"/api/v1/namespaces/{ns}/services/{ref['name']}", f"service {ref['name']}", IDENT.identity(svc)["uid"])
         copy_job = _find(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", read)
         if copy_job and _stamped(copy_job, ident, ref):
-            drop(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", f"copy job {name}")
+            drop(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", f"copy job {name}", IDENT.identity(copy_job)["uid"])
         for claim in wanted:
             found = _find(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read)
             if found is None:
                 continue
             if IDENT.identity(found)["uid"] != pinned[claim]["uid"]:
                 raise ValueError(f"{claim} was replaced after this import, so it is not deleted.")
-            drop(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", f"volume {claim}")
+            drop(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", f"volume {claim}", pinned[claim]["uid"])
         ref.update(retain_resources=False, helper_removed=True)
         t.save(t.items)
     kept = [c for c in ref.get("created", []) if c not in wanted]

@@ -58,7 +58,9 @@ class ImportJobTests(unittest.TestCase):
         if path == "/api/v1/pods":
             return {"items": copy.deepcopy(self.pods)}
         if path in self.objects:
-            return copy.deepcopy(self.objects[path])
+            found = copy.deepcopy(self.objects[path])
+            getattr(self, "after_read", lambda target: None)(path)
+            return found
         raise urllib.error.HTTPError(path, 404, "private API error", {}, None)
 
     def send(self, method, path, body, **kwargs):
@@ -72,7 +74,8 @@ class ImportJobTests(unittest.TestCase):
             path += "/" + body["metadata"]["name"]
             self.assertNotIn(path, self.objects)
         if method == "DELETE":
-            self.assertEqual(self.objects[path]["metadata"]["uid"], body["preconditions"]["uid"])
+            if self.objects[path]["metadata"]["uid"] != body["preconditions"]["uid"]:
+                raise urllib.error.HTTPError(path, 409, "the object has a different UID", {}, None)
             return self.objects.pop(path)
         result = copy.deepcopy(body)
         result["metadata"].update(uid=result["metadata"].get("uid", result["kind"] + "-uid"), resourceVersion=str(len(self.sent)), namespace="lab")
@@ -400,6 +403,40 @@ class ImportJobTests(unittest.TestCase):
         self.assertIn(self.pvc_path, self.objects, "a volume not ticked is kept")
         self.assertIn("Kept volumes: data", result["message"])
         self.assertFalse(self.item()["ref"]["retain_resources"])
+
+    def swap_after_first_read(self, path, replacement):
+        """Deleted and recreated, unstamped, right after the stamp check read it."""
+        seen = []
+        def hook(target):
+            if target == path and not seen and self.armed:
+                seen.append(target)
+                self.objects[target] = replacement
+        self.after_read = hook
+
+    def swapped_before_delete(self, path, replacement):
+        self.failed_import()
+        self.swap_after_first_read(path, replacement)
+        real = flow.remove_failed
+        def armed(*args, **kwargs):
+            self.armed = True        # from here on: the reads that decide what to delete
+            return real(*args, **kwargs)
+        with mock.patch.object(flow, "remove_failed", armed), self.assertRaises(urllib.error.HTTPError):
+            self.remove(volumes=["data"])
+        self.assertEqual(replacement["metadata"]["uid"], self.objects[path]["metadata"]["uid"], "the replacement survives")
+
+    armed = False
+
+    def test_an_app_swapped_after_the_stamp_check_is_not_deleted(self):
+        self.swapped_before_delete(self.dep_path, {"metadata": {"name": "app", "uid": "new", "annotations": {}}})
+
+    def test_a_service_swapped_after_the_stamp_check_is_not_deleted(self):
+        self.swapped_before_delete(self.svc_path, {"metadata": {"name": "app", "uid": "new", "annotations": {}}})
+
+    def test_a_job_swapped_after_the_stamp_check_is_not_deleted(self):
+        self.swapped_before_delete(self.job_path, {"metadata": {"name": "x", "uid": "new", "annotations": {}}})
+
+    def test_a_volume_swapped_after_the_check_is_not_deleted(self):
+        self.swapped_before_delete(self.pvc_path, {"metadata": {"name": "data", "uid": "new"}})
 
     def test_a_cancelled_import_is_removed_the_same_way(self):
         self.failed_import("cancelled")
