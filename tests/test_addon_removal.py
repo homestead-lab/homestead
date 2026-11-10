@@ -15,6 +15,7 @@ import homestead_addons as ADDONS
 import homestead_kube as K
 import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_routes as ROUTES
 from fakes.kube import Kube
 
 CHARTS = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/"
@@ -53,9 +54,24 @@ def cdi_cr(release="homestead-cdi"):
     return released(obj, release) if release else obj
 
 
-def crd(name, plural, group):
+def crd(name, plural, group, kind="", version="v1"):
     return {"apiVersion": "apiextensions.k8s.io/v1", "kind": "CustomResourceDefinition", "metadata": {"name": name},
-            "spec": {"group": group, "names": {"plural": plural}, "versions": [{"name": "v1", "served": True}]}}
+            "spec": {"group": group, "names": {"plural": plural, "kind": kind or plural.title()},
+                     "versions": [{"name": version, "served": True}]}}
+
+
+# The types KubeVirt and CDI serve, as their CRDs say (a few of the ~30).
+TYPES = [crd("kubevirts.kubevirt.io", "kubevirts", "kubevirt.io", "KubeVirt"),
+         crd("cdis.cdi.kubevirt.io", "cdis", "cdi.kubevirt.io", "CDI"),
+         crd("virtualmachines.kubevirt.io", "virtualmachines", "kubevirt.io", "VirtualMachine"),
+         crd("virtualmachineinstances.kubevirt.io", "virtualmachineinstances", "kubevirt.io", "VirtualMachineInstance"),
+         crd("datavolumes.cdi.kubevirt.io", "datavolumes", "cdi.kubevirt.io", "DataVolume", "v1beta1"),
+         crd("storageprofiles.cdi.kubevirt.io", "storageprofiles", "cdi.kubevirt.io", "StorageProfile", "v1beta1"),
+         crd("cdiconfigs.cdi.kubevirt.io", "cdiconfigs", "cdi.kubevirt.io", "CDIConfig", "v1beta1"),
+         crd("virtualmachinesnapshots.snapshot.kubevirt.io", "virtualmachinesnapshots", "snapshot.kubevirt.io",
+             "VirtualMachineSnapshot", "v1beta1"),
+         crd("virtualmachineclusterinstancetypes.instancetype.kubevirt.io", "virtualmachineclusterinstancetypes",
+             "instancetype.kubevirt.io", "VirtualMachineClusterInstancetype", "v1beta1")]
 
 
 def vm(name, ns="lab"):
@@ -67,9 +83,9 @@ class Removal(unittest.TestCase):
         self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
         self.kube = self.enterContext(Kube(
             chart("homestead-kubevirt", ["kubevirts.kubevirt.io"]), chart("homestead-cdi", ["cdis.cdi.kubevirt.io"]),
-            chart("homestead-macvtap"), kubevirt_cr(), cdi_cr(),
-            crd("kubevirts.kubevirt.io", "kubevirts", "kubevirt.io"), crd("cdis.cdi.kubevirt.io", "cdis", "cdi.kubevirt.io"),
-            groups=("kubevirt.io", "cdi.kubevirt.io", "helm.cattle.io", "apiextensions.k8s.io")))
+            chart("homestead-macvtap"), kubevirt_cr(), cdi_cr(), *TYPES,
+            groups=("kubevirt.io", "cdi.kubevirt.io", "snapshot.kubevirt.io", "instancetype.kubevirt.io",
+                    "helm.cattle.io", "apiextensions.k8s.io")))
         for name in ("kget", "ksend", "platform", "snapshot"):
             self.addCleanup(setattr, REMOVAL, name, getattr(REMOVAL, name))
         self.platform = {"kubevirt": True}
@@ -80,8 +96,15 @@ class Removal(unittest.TestCase):
         self.now = 1000.0
         self.enterContext(mock.patch.object(REMOVAL, "_clock", lambda: self.now))
 
+    def route(self, path, body):
+        """Through the route an admin's request reaches."""
+        return ROUTES.find("POST", path).handler(ROUTES.Request("POST", path, {}, body, "ada", "admin"))
+
+    def review(self):
+        return self.route("/api/addons/kubevirt/remove/review", {})
+
     def remove(self):
-        return REMOVAL._remove(type("Request", (), {"body": {"confirm": "kubevirt"}})())
+        return self.route("/api/addons/kubevirt/remove", {"confirm": "kubevirt"})
 
     def job(self, ident):
         return next(row for row in OPS.list_operations() if row["id"] == ident)
@@ -100,17 +123,17 @@ class Removal(unittest.TestCase):
 
 class ReviewTests(Removal):
     def test_it_lists_what_goes_and_what_stays(self):
-        found = REMOVAL.review("kubevirt")
+        found = self.review()
         self.assertTrue(found["can"], found["blockers"])
         said = " ".join(found["removes"])
         for words in ("KubeVirt and CDI settings", "homestead-macvtap, homestead-kubevirt, homestead-cdi",
-                      "resource types"):
+                      "including anything a person put there", "kubevirts.kubevirt.io and cdis.cdi.kubevirt.io"):
             self.assertIn(words, said)
         self.assertIn("Anything Homestead did not create is kept, even under the same name.", found["keeps"])
 
     def test_it_refuses_with_a_vm_present_and_names_it(self):
         self.kube.add(vm("web"))
-        found = REMOVAL.review("kubevirt")
+        found = self.review()
         self.assertFalse(found["can"])
         self.assertIn("1 virtual machine (lab/web) still exists. Delete it first.", found["blockers"])
         with self.assertRaisesRegex(ValueError, "lab/web"):
@@ -122,24 +145,58 @@ class ReviewTests(Removal):
         self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume", "metadata": {"name": "disk", "namespace": "lab"}})
         self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
                        "metadata": {"name": "old-disk", "namespace": "lab", "annotations": {"cdi.kubevirt.io/storage.import.endpoint": "x"}}})
-        said = " ".join(REMOVAL.review("kubevirt")["blockers"])
+        said = " ".join(self.review()["blockers"])
         self.assertIn("1 VM disk (lab/disk)", said)
         self.assertIn("1 volume (lab/old-disk) holds a VM disk image. Delete it first", said)
 
+    def test_a_vm_snapshot_present_refuses_and_nothing_is_deleted(self):
+        # Deleting the settings lets virt-operator remove the snapshot type, and the
+        # snapshots with it (and the VolumeSnapshots, disk backups, they own).
+        self.kube.add({"apiVersion": "snapshot.kubevirt.io/v1beta1", "kind": "VirtualMachineSnapshot",
+                       "metadata": {"name": "before-upgrade", "namespace": "lab"}})
+        found = self.review()
+        self.assertFalse(found["can"])
+        self.assertIn("1 VirtualMachineSnapshot (lab/before-upgrade) still exists. Delete it first, or keep virtual machines.",
+                      found["blockers"])
+        with self.assertRaisesRegex(ValueError, "lab/before-upgrade"):
+            self.remove()
+        self.assertEqual([], self.deletes())
+
+    def test_what_an_operator_created_by_default_does_not_refuse_but_a_persons_own_does(self):
+        cluster_type = {"apiVersion": "instancetype.kubevirt.io/v1beta1", "kind": "VirtualMachineClusterInstancetype"}
+        self.kube.add({**cluster_type, "metadata": {"name": "u1.small",
+                                                    "labels": {"app.kubernetes.io/managed-by": "virt-operator"}}})
+        self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "StorageProfile", "metadata": {"name": "longhorn"},
+                       "spec": {}})
+        self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "CDIConfig", "metadata": {
+            "name": "config", "ownerReferences": [{"kind": "CDI", "name": "cdi", "uid": "x"}]}})
+        self.assertEqual([], self.review()["blockers"])
+        self.kube.add({**cluster_type, "metadata": {"name": "my-size"}})
+        self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "StorageProfile", "metadata": {"name": "local-path"},
+                       "spec": {"claimPropertySets": [{"accessModes": ["ReadWriteOnce"]}]}})
+        said = " ".join(self.review()["blockers"])
+        self.assertIn("1 VirtualMachineClusterInstancetype (my-size)", said)
+        self.assertIn("1 StorageProfile (local-path)", said)
+
+    def test_the_types_it_cannot_read_refuse(self):
+        self.kube.fail("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", 500, times=5)
+        self.assertEqual(["Homestead could not read which VM types the cluster serves (HTTP 500), so nothing is removed."],
+                         self.review()["blockers"])
+
     def test_a_list_it_cannot_read_refuses(self):
         self.kube.fail("/apis/kubevirt.io/v1/virtualmachines", 500, times=5)
-        found = REMOVAL.review("kubevirt")
+        found = self.review()
         self.assertFalse(found["can"])
-        self.assertIn("Homestead could not check the virtual machines (HTTP 500), so nothing is removed.", found["blockers"])
+        self.assertIn("Homestead could not check the VirtualMachine objects (HTTP 500), so nothing is removed.", found["blockers"])
 
     def test_harvester_and_a_kubevirt_homestead_did_not_install_are_refused(self):
         self.platform = {"kubevirt": True, "harvester": True}
-        self.assertEqual(["Harvester manages KubeVirt, so Homestead does not remove it."], REMOVAL.review("kubevirt")["blockers"])
+        self.assertEqual(["Harvester manages KubeVirt, so Homestead does not remove it."], self.review()["blockers"])
         self.platform = {"kubevirt": True}
         for name in ("homestead-kubevirt", "homestead-cdi", "homestead-macvtap"):
             self.kube.add(chart(name, ours=False))
         self.assertIn("KubeVirt was not installed by Homestead, so Homestead does not remove it.",
-                      REMOVAL.review("kubevirt")["blockers"])
+                      self.review()["blockers"])
 
 
 class JobTests(Removal):
@@ -156,9 +213,10 @@ class JobTests(Removal):
     def test_it_waits_for_an_operator_to_let_go(self):
         self.kube.add(kubevirt_cr(finalizers=["kubevirt.io/virtOperatorFinalizer"]))
         ident = self.remove()["operation"]["id"]
-        self.assertEqual("Removing the KubeVirt settings", self.job(ident)["message"])
+        self.assertEqual("Removing the KubeVirt settings object", self.job(ident)["message"])
         self.now += 60
-        self.assertEqual("Waiting for KubeVirt settings to be removed", self.job(ident)["message"])
+        self.assertEqual("Waiting for the KubeVirt settings object to be removed. It still carries the finalizer "
+                         "kubevirt.io/virtOperatorFinalizer.", self.job(ident)["message"])
         self.assertIsNotNone(self.kube.object(CHARTS + "homestead-kubevirt"), "the chart stays until the operator is done")
         obj = self.kube.object(KUBEVIRT)
         obj["metadata"]["finalizers"] = []
@@ -172,7 +230,9 @@ class JobTests(Removal):
             self.now += 60
             row = self.job(ident)
         self.assertEqual("failed", row["status"])
-        self.assertIn("KubeVirt settings was not gone 30 minutes after", row["message"])
+        self.assertIn("The KubeVirt settings object (kubevirt/kubevirt) was not gone 30 minutes after it was asked to go, "
+                      "so the removal stopped. It still carries the finalizer kubevirt.io/virtOperatorFinalizer.", row["message"])
+        self.assertIn("Removing the finalizer by hand lets the object go", row["message"])
         self.assertIn("Nothing was removed.", row["message"])
         self.assertIsNotNone(self.kube.object(CHARTS + "homestead-kubevirt"))
 
@@ -180,7 +240,7 @@ class JobTests(Removal):
         self.kube.add(kubevirt_cr(release=None))
         row = self.run_out(self.remove()["operation"]["id"])
         self.assertEqual("failed", row["status"])
-        self.assertIn("were not created by Homestead's chart", row["message"])
+        self.assertIn("was not created by Homestead's chart", row["message"])
         self.assertEqual([], self.deletes())
 
     def test_an_object_swapped_in_between_the_check_and_the_delete_survives(self):
@@ -221,10 +281,18 @@ class JobTests(Removal):
         self.assertIsNotNone(self.kube.object(CRD + "cdis.cdi.kubevirt.io"))
         self.assertIn("cdis.cdi.kubevirt.io (still in use)", row["message"])
 
-    def test_a_resource_type_the_chart_did_not_carry_is_kept(self):
-        self.kube.add(crd("virtualmachines.kubevirt.io", "virtualmachines", "kubevirt.io"))
+    def test_only_the_two_settings_types_are_removed(self):
         self.run_out(self.remove()["operation"]["id"])
-        self.assertIsNotNone(self.kube.object(CRD + "virtualmachines.kubevirt.io"))
+        crds = {path.rsplit("/", 1)[-1] for path, _ in self.deletes() if path.startswith(CRD)}
+        self.assertEqual({"kubevirts.kubevirt.io", "cdis.cdi.kubevirt.io"}, crds)
+        self.assertIsNotNone(self.kube.object(CRD + "virtualmachines.kubevirt.io"), "its operator's to remove")
+
+    def test_a_removal_run_again_waits_on_one_already_going_and_names_what_holds_it(self):
+        self.kube.add(kubevirt_cr(finalizers=["kubevirt.io/virtOperatorFinalizer"], deletionTimestamp="2026-11-10T10:00:00Z"))
+        ident = self.remove()["operation"]["id"]
+        self.assertEqual("Waiting for the KubeVirt settings object to be removed. It still carries the finalizer "
+                         "kubevirt.io/virtOperatorFinalizer.", self.job(ident)["message"])
+        self.assertEqual([], self.deletes())
 
     def test_cancel_stops_between_steps_and_says_what_was_removed(self):
         self.kube.add(kubevirt_cr(finalizers=["kubevirt.io/virtOperatorFinalizer"]))

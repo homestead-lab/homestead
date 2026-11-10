@@ -11,19 +11,14 @@ what Homestead installed, one step at a time:
 2. Homestead's HelmCharts (labelled as Homestead's), the same way. The Helm
    controller then uninstalls each release: its operators and the namespaces
    it created.
-3. Last, the resource types (CRDs) that Homestead's chart carried, each only
-   when no object of that type is left. A CRD carries no stamp of its own, so
-   its proof is that the chart Homestead created listed it (read before the
-   charts go) and that no other Helm release claims it.
+3. Last, exactly two resource types (CRDs): kubevirts.kubevirt.io and
+   cdis.cdi.kubevirt.io, the settings types, each only when no object of it is
+   left. Every other KubeVirt and CDI type is its operator's to remove.
 
 What is not Homestead's is kept and named, whatever its name. Its words follow
 docs/design.md (house style). REMOVALS keeps the add-on's facts apart from the
 steps, so Multus and kube-vip can use the same steps later.
 """
-import base64
-import io
-import re
-import tarfile
 import time
 import urllib.error
 
@@ -47,10 +42,13 @@ REMOVALS = {
         "name": "virtual machines",
         "title": "Remove virtual machines",
         # The settings objects, in order, and the chart whose release created each.
-        "resources": [("KubeVirt settings", "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt",
+        "resources": [("KubeVirt settings object", "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt",
                        "homestead-kubevirt"),
-                      ("CDI settings", "/apis/cdi.kubevirt.io/v1beta1/cdis/cdi", "homestead-cdi")],
+                      ("CDI settings object", "/apis/cdi.kubevirt.io/v1beta1/cdis/cdi", "homestead-cdi")],
         "charts": ["homestead-macvtap", "homestead-kubevirt", "homestead-cdi"],
+        # The settings types, removed last and only when no object of theirs is
+        # left. Never more: every other KubeVirt and CDI type is its operator's.
+        "crds": ["kubevirts.kubevirt.io", "cdis.cdi.kubevirt.io"],
     },
 }
 
@@ -94,45 +92,89 @@ def _is_vm_job(row):
     return kind.startswith("vm-") or kind in ("unraid-vm-import", "k3s-cluster")
 
 
+# Every type KubeVirt and CDI serve goes when their operators remove their CRDs,
+# with every object in it: VM snapshots (which own VolumeSnapshots, disk
+# backups), exports, clones, restores, pools, instance types, data sources,
+# import crons and the rest. So any object of any of their types refuses the
+# removal, read from the CRDs of the groups kubevirt.io and *.kubevirt.io at
+# the time (a newer release's new types too). Not counted: the settings objects
+# this removal deletes itself (SETTINGS), and what an operator created by
+# default (_made_by_operator).
+SETTINGS = {("kubevirt.io", "KubeVirt"), ("cdi.kubevirt.io", "CDI")}
+OPERATORS = ("virt-operator", "cdi-operator", "cdi-controller")
+# Kinds with words of their own; any other is named by its kind.
+WORDS = {"VirtualMachine": ("virtual machine", "Delete {it} first."),
+         "VirtualMachineInstance": ("running VM", "Stop and delete {it} first."),
+         "DataVolume": ("VM disk", "Delete {it} under Import > Disk images first.")}
+
+
+def _ours_group(group):
+    return group == "kubevirt.io" or group.endswith(".kubevirt.io")
+
+
+def _made_by_operator(obj):
+    """What an operator created by default, and removes with its settings: it
+    carries the operator's managed-by label, or the settings object owns it
+    (CDI's CDIConfig). CDI creates a StorageProfile for every storage class
+    with an empty spec; one with a spec set is a person's change."""
+    meta = obj.get("metadata") or {}
+    if (meta.get("labels") or {}).get("app.kubernetes.io/managed-by") in OPERATORS:
+        return True
+    if any(owner.get("kind") in ("KubeVirt", "CDI") for owner in meta.get("ownerReferences") or []):
+        return True
+    return obj.get("kind") == "StorageProfile" and not obj.get("spec")
+
+
+def _types():
+    """(group, version, plural, kind) of every type KubeVirt and CDI serve now."""
+    out = []
+    for row in _items(CRDS):
+        spec = row.get("spec") or {}
+        group, names = spec.get("group") or "", spec.get("names") or {}
+        version = next((v.get("name") for v in spec.get("versions") or [] if v.get("served")), "")
+        if _ours_group(group) and version and (group, names.get("kind")) not in SETTINGS:
+            out.append((group, version, names.get("plural"), names.get("kind") or names.get("plural")))
+    return sorted(out)
+
+
+def _said(error):
+    return f"HTTP {error.code}" if isinstance(error, urllib.error.HTTPError) else (str(error)[:120] or type(error).__name__)
+
+
 def blockers(what):
     """What stops the removal now, in words; an empty list when nothing does.
     What cannot be read is a reason too: nothing is removed on a guess."""
     if what != "kubevirt":
         raise ValueError("Homestead removes only virtual machines for now")
     found = []
-    def one(rows, singular, plural):
-        return singular if len(rows) == 1 else plural
-    checks = (("virtual machines", "/apis/kubevirt.io/v1/virtualmachines",
-               lambda rows: f"{_named(rows, 'virtual machine')} {one(rows, 'still exists', 'still exist')}. "
-                            f"Delete {one(rows, 'it', 'them')} first."),
-              ("running VMs", "/apis/kubevirt.io/v1/virtualmachineinstances",
-               lambda rows: f"{_named(rows, 'VM')} {one(rows, 'still runs', 'still run')}. "
-                            f"Stop and delete {one(rows, 'it', 'them')} first."),
-              ("VM disks", "/apis/cdi.kubevirt.io/v1beta1/datavolumes",
-               lambda rows: f"{_named(rows, 'VM disk')} {one(rows, 'still exists', 'still exist')}. "
-                            f"Delete {one(rows, 'it', 'them')} under Import > Disk images first."))
-    for noun, path, words in checks:
+    try:
+        types = _types()
+    except Exception as error:
+        return [f"Homestead could not read which VM types the cluster serves ({_said(error)}), so nothing is removed."]
+    for group, version, plural, kind in types:
         try:
-            rows = [_where(row) for row in _items(path)]
+            rows = [_where(row) for row in _items(f"/apis/{group}/{version}/{plural}") if not _made_by_operator(row)]
         except urllib.error.HTTPError as error:
-            if error.code == 404:   # the type is not served: none of them
+            if error.code == 404:   # gone since the CRDs were read: none of them
                 continue
-            found.append(f"Homestead could not check the {noun} (HTTP {error.code}), so nothing is removed.")
+            found.append(f"Homestead could not check the {kind} objects ({_said(error)}), so nothing is removed.")
             continue
         except Exception as error:
-            found.append(f"Homestead could not check the {noun} ({str(error)[:120] or type(error).__name__}), "
-                         "so nothing is removed.")
+            found.append(f"Homestead could not check the {kind} objects ({_said(error)}), so nothing is removed.")
             continue
-        if rows:
-            found.append(words(rows))
+        if not rows:
+            continue
+        one = len(rows) == 1
+        noun, way = WORDS.get(kind, (kind, "Delete {it} first, or keep virtual machines."))
+        verb = ("still runs" if one else "still run") if kind == "VirtualMachineInstance" else ("still exists" if one else "still exist")
+        found.append(f"{_named(rows, noun)} {verb}. {way.format(it='it' if one else 'them')}")
     try:
         volumes = [_where(c) for c in _items("/api/v1/persistentvolumeclaims") if _cdi_volume(c)]
         if volumes:
             found.append(f"{_named(volumes, 'volume')} {'holds a VM disk image' if len(volumes) == 1 else 'hold VM disk images'}. "
                          f"Delete {'it' if len(volumes) == 1 else 'them'} first, or keep virtual machines.")
     except Exception as error:
-        found.append(f"Homestead could not check the volumes ({str(error)[:120] or type(error).__name__}), "
-                     "so nothing is removed.")
+        found.append(f"Homestead could not check the volumes ({_said(error)}), so nothing is removed.")
     jobs = [row.get("title") or row.get("kind") for row in snapshot()
             if _is_vm_job(row) and row.get("status") not in ("succeeded", "failed", "cancelled")]
     if jobs:
@@ -160,25 +202,6 @@ def _released_by(obj, release):
     return annotations.get(RELEASE) == release and annotations.get(RELEASE_NS) == CONTROLLER_NS
 
 
-def chart_crds(chart):
-    """The CRD names the chart Homestead created carries (its crds folder)."""
-    content = (chart.get("spec") or {}).get("chartContent") or ""
-    if not content:
-        return []
-    names = []
-    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(content)), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            if not member.name.endswith("/crds/crds.yaml"):
-                continue
-            text = tar.extractfile(member).read().decode("utf-8", "replace")
-            for doc in re.split(r"^---\s*$", text, flags=re.M):
-                if re.search(r"^kind:\s*CustomResourceDefinition\s*$", doc, re.M):
-                    match = re.search(r"^metadata:\s*\n(?:[ \t]+.*\n)*?[ \t]+name:\s*['\"]?([\w.-]+)", doc, re.M)
-                    if match:
-                        names.append(match.group(1))
-    return names
-
-
 def review(what):
     """What the removal would do, and what refuses it, before anything changes."""
     spec = REMOVALS.get(what)
@@ -204,7 +227,8 @@ def review(what):
             "removes": ["The KubeVirt and CDI settings. Their operators then remove the VM services they run.",
                         f"The charts {', '.join(ours) or 'Homestead installed'}, with the operators and the "
                         "kubevirt and cdi namespaces they created.",
-                        "The KubeVirt and CDI resource types those charts carried, once nothing of those types is left."]}
+                        "Everything in the kubevirt and cdi namespaces goes with them, including anything a person put there.",
+                        "The KubeVirt and CDI settings types (kubevirts.kubevirt.io and cdis.cdi.kubevirt.io), once nothing of those types is left."]}
 
 
 # ------------------------------------------------------------------ the job
@@ -246,28 +270,35 @@ def _delete(path, found):
 
 def _gone_or_waiting(ref, label, path, found):
     """A step whose object was sent away: done once it is gone; until then it
-    waits, within WAIT_LIMIT."""
+    waits, within WAIT_LIMIT, naming what holds it."""
     if found is None:
         ref.setdefault("removed", []).append(label)
         _next(ref)
         return None
+    held = ", ".join((found.get("metadata") or {}).get("finalizers") or [])
+    by = f" It still carries the finalizer {held}." if held else ""
     if _waited(ref) >= WAIT_LIMIT:
-        return _stopped(ref, f"{label} was not gone {WAIT_LIMIT // 60} minutes after it was asked to go, so the "
-                             "removal stopped. Check what holds it on the Helm page or with its operator.")
-    return "running", 10 + 20 * (ref.get("index", 0)), f"Waiting for {label} to be removed"
+        return _stopped(ref, (
+            f"The {label} ({_where(found)}) was not gone {WAIT_LIMIT // 60} minutes after it was asked to go, so the "
+            f"removal stopped.{by} The operator or controller that set it has not finished. Check its logs. Removing "
+            "the finalizer by hand lets the object go, but leaves behind whatever that operator did not clean up. "
+            "Remove virtual machines again once it is gone."))
+    return "running", 10 + 20 * (ref.get("index", 0)), f"Waiting for the {label} to be removed.{by}"
 
 
 def _resource_step(spec, ref):
     label, path, release = spec["resources"][ref["index"]]
     found = _optional(path)
-    if ref.get("sent"):
+    if ref.get("sent") or (found and (found.get("metadata") or {}).get("deletionTimestamp")):
+        # Sent by this job, or already going (an earlier removal): wait on it.
+        ref["sent"] = True
         return _gone_or_waiting(ref, label, path, found)
     if found is None:
         _next(ref)
         return None
     if not _released_by(found, release):
         ref.setdefault("kept", []).append(label)
-        return _stopped(ref, f"The {label} were not created by Homestead's chart, so the removal stopped before it.")
+        return _stopped(ref, f"The {label} was not created by Homestead's chart, so the removal stopped before it.")
     # Checked again right before the first write: a VM made since the review stops it.
     stop = blockers(ref["addon"])
     if stop:
@@ -282,7 +313,7 @@ def _chart_step(spec, ref):
     path = f"{HELMCHARTS}/{name}"
     found = _optional(path)
     if ref.get("sent"):
-        return _gone_or_waiting(ref, f"the chart {name}", path, found)
+        return _gone_or_waiting(ref, f"chart {name}", path, found)
     if found is None:
         _next(ref)
         return None
@@ -290,28 +321,19 @@ def _chart_step(spec, ref):
         ref.setdefault("kept", []).append(name)
         _next(ref)
         return None
-    for crd in chart_crds(found):   # read before the chart goes: the proof for step 3
-        if crd not in ref.setdefault("crds", []):
-            ref["crds"].append(crd)
     _delete(path, found)
     ref["sent"] = True
     return "running", 50, f"Removing the chart {name}"
 
 
-def _crd_step(ref):
-    name = ref["crds"][ref["index"]]
+def _crd_step(spec_, ref):
+    name = spec_["crds"][ref["index"]]
     found = _optional(f"{CRDS}/{name}")
     if found is None:
         _next(ref)
         return None
-    annotations = (found.get("metadata") or {}).get("annotations") or {}
     spec = found.get("spec") or {}
     version = next((v.get("name") for v in spec.get("versions") or [] if v.get("served")), "")
-    owner = annotations.get(RELEASE)
-    if owner and not owner.startswith("homestead-"):
-        ref.setdefault("kept", []).append(name)
-        _next(ref)
-        return None
     try:
         left = _items(f"/apis/{spec.get('group')}/{version}/{(spec.get('names') or {}).get('plural')}") if version else [1]
     except urllib.error.HTTPError as error:
@@ -355,14 +377,14 @@ def status(item):
                 continue
             result = _chart_step(spec, ref)
         else:
-            if ref.get("index", 0) >= len(ref.get("crds") or []):
+            if ref.get("index", 0) >= len(spec["crds"]):
                 ref["stage"] = "done"
                 homestead_routes.forget("helm", "platform")
                 kept = ref.get("kept") or []
                 return ("succeeded", 100, f"Virtual machines were removed. {_done_words(ref)}"
                         + (f" Kept: {', '.join(kept)}." if kept else "")
                         + " Install under Cluster > Add-ons offers them again.")
-            result = _crd_step(ref)
+            result = _crd_step(spec, ref)
         if result:
             return result
     return "running", item.get("progress", 10), item.get("message", "")
