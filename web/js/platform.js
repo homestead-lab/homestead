@@ -283,8 +283,10 @@ window.kubevirtRemoveReview = async () => {
     lead: found.can ? "Virtual machines are removed from the cluster, and their pages leave the menu." : "",
     issues: (found.blockers || []).map(said => ["bad", said]),
     issuesTitle: found.can ? "" : "Virtual machines cannot be removed yet",
-    body: found.can ? `${UI.section("What is removed", list(found.removes))}${UI.section("What stays", list(found.keeps))}
+    body: found.can ? `${UI.section("What is removed", list(found.removes))}
       ${UI.typedConfirm({ id: "kubevirt_remove_confirm", expect: "kubevirt", button: "kubevirt_remove_go" })}` : "",
+    // What stays is the reassurance, folded away so the review stays short.
+    details: found.can ? [{ summary: "What stays", html: list(found.keeps) }] : null,
     actions: { primary: { label: "Remove virtual machines", onclick: "kubevirtRemoveGo()", danger: true,
                           id: "kubevirt_remove_go", disabled: true } } });
 };
