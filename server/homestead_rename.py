@@ -22,6 +22,10 @@ class StopTimedOut(Stopped):
     """The original's pods outlasted the stop wait: the only failure that may put it back."""
 
 
+# What a refused write was, in words for a person (no request method names).
+ACTIONS = {"PATCH": "change to", "POST": "creation of", "DELETE": "removal of"}
+
+
 class Refused(Stopped):
     """The API server refused a guarded write (409/422, a test op that did not hold): nothing was written."""
 
@@ -137,7 +141,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 error.close()
                 entry["phase"] = "refused"
                 phase("writing", percent, f"{method} {label}: refused, nothing was written", writes=copy.deepcopy(writes))
-                raise Refused(f"The {method} for {label} was refused") from None
+                raise Refused(f"Kubernetes refused the {ACTIONS.get(method, 'change to')} {label}, so {label} was not changed") from None
             entry["phase"] = "uncertain"
             # If storage itself failed, the preceding durable intent remains
             # authoritative. Never perform another cluster write to undo it.
@@ -145,7 +149,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 phase("uncertain", percent, f"{label}: response not confirmed. Nothing was retried.", writes=copy.deepcopy(writes))
             except Exception:
                 pass
-            raise Stopped(f"The {method} response for {label} could not be confirmed") from None
+            raise Stopped(f"Kubernetes did not confirm the {ACTIONS.get(method, 'change to')} {label}, so it may have taken effect") from None
 
     def current(path, expected):
         obj = read(path)
@@ -337,7 +341,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             phase("stopping", 25, f"Stopping {old}. Its volumes and service addresses are kept.", target=target_id,
                   before_rename={"replicas": before, "uid": identity(source)["uid"], "new_uid": target_id["uid"]})
             guards(source, new, read)
-            source = scale(source, 0, 30)
+            source = scale(source, 0, 30, refusable=True)
             stopped_id, stopped_spec = identity(source), copy.deepcopy(source["spec"])
             restore = before or None
             deadline = time.monotonic() + timeout
@@ -369,7 +373,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 # From here the replacement may start: never start the original
                 # again beside it.
                 restore = None
-                target = scale(target, desired, 65)
+                target = scale(target, desired, 65, refusable=True)
                 target_spec = copy.deepcopy(target["spec"])
                 deadline = time.monotonic() + timeout
                 while True:
@@ -395,7 +399,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             # Deployment must never be garbage-collected as part of a rename.
             # Stopped old ReplicaSets are retained too, not guessed disposable.
             mutation("DELETE", source_path, {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Orphan",
-                     "preconditions": {key: source_id[key] for key in ("uid", "resourceVersion")}}, old, 90, source_id)
+                     "preconditions": {key: source_id[key] for key in ("uid", "resourceVersion")}}, old, 90, source_id, refusable=True)
             # Deletion acknowledgement is not final disappearance.
             deadline = time.monotonic() + timeout
             while KUBE.get_optional(source_path, read=read) is not None:
