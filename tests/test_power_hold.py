@@ -14,6 +14,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power_hold as HOLD
 import homestead_power as POWER
+import homestead_app_hold as APP_HOLD
+import homestead_operations as OPS
 import homestead_power_jobs as JOBS
 import homestead_lifecycle as LC
 import homestead_node_actions as NODE_ACTIONS
@@ -214,6 +216,34 @@ class StopRestoreTests(unittest.TestCase):
         HOLD.stop(self.items[0], "job-1")
         with self.assertRaisesRegex(ValueError, "held by another job"):
             HOLD.stop(self.items[0], "job-2")
+
+    def history(self, *jobs):
+        return self.enterContext(mock.patch.object(OPS, "stored", mock.Mock(return_value=list(jobs))))
+
+    def test_a_mark_left_by_an_ended_job_on_an_app_started_by_hand_is_set_aside(self):
+        # The app was started by hand after job-0 ended: the mark stayed. It is
+        # held as it runs now (1, scaled down on purpose), not at the old 3.
+        self.history({"id": "job-0", "kind": "node-power", "status": "succeeded", "ref": {"held": [], }})
+        self.k.objects[DEP]["metadata"]["annotations"] = {HOLD.HELD_BY: "job-0", HOLD.HELD_AS: "3"}
+        self.k.objects[DEP]["spec"]["replicas"] = 1
+        held = HOLD.stop(self.items[0], "job-1")
+        self.assertEqual("1", held["was"])
+        notes = self.k.objects[DEP]["metadata"]["annotations"]
+        self.assertEqual(("job-1", "1", 0), (notes[HOLD.HELD_BY], notes[HOLD.HELD_AS], self.k.objects[DEP]["spec"]["replicas"]))
+
+    def test_a_mark_whose_job_may_still_act_or_whose_app_is_still_stopped_still_refuses(self):
+        done = {"id": "job-0", "kind": "node-power", "status": "succeeded", "ref": {}}
+        for name, jobs, replicas in (("running job", [{**done, "status": "running"}], 1),
+                                     ("waiting to be started", [{**done, "ref": {"held": [{"kind": "Deployment"}]}}], 1),
+                                     ("app still stopped", [done], 0),
+                                     ("job not in the history", [], 1)):
+            with self.subTest(name):
+                self.history(*jobs)
+                self.k.objects[DEP]["metadata"]["annotations"] = {HOLD.HELD_BY: "job-0", HOLD.HELD_AS: "3"}
+                self.k.objects[DEP]["spec"]["replicas"] = replicas
+                with self.assertRaisesRegex(ValueError, "held by another job"):
+                    HOLD.stop(self.items[0], "job-1")
+                self.assertEqual("job-0", self.k.objects[DEP]["metadata"]["annotations"][HOLD.HELD_BY])
 
     def test_a_manual_vm_is_started_by_asking(self):
         self.k.objects[VM]["spec"]["runStrategy"] = "Manual"
