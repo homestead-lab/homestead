@@ -2428,9 +2428,9 @@ ssh_pwauth: true
                      "1 VM disk (lab/ubuntu-vm-disk) still exists. Delete it under Import > Disk images first."] }
       : { can: true, title: "Remove virtual machines", blockers: [],
           removes: ["The KubeVirt and CDI settings. Their operators then remove the VM services they run.",
-                    "The charts homestead-macvtap, homestead-kubevirt, homestead-cdi, with the operators and the kubevirt and cdi namespaces they created.",
-                    "Everything in the kubevirt and cdi namespaces goes with them, including anything a person put there.",
-                    "The KubeVirt and CDI settings types (kubevirts.kubevirt.io and cdis.cdi.kubevirt.io), once nothing of those types is left."],
+                    "The charts homestead-macvtap, homestead-kubevirt, homestead-cdi, with their operators and the kubevirt and cdi namespaces.",
+                    "Everything in those namespaces, including anything a person put there.",
+                    "The settings types kubevirts.kubevirt.io and cdis.cdi.kubevirt.io, once unused."],
           keeps: ["Volumes, storage classes and everything else not listed here are not changed.",
                   "Anything Homestead did not create is kept, even under the same name.",
                   "Install under Cluster > Add-ons offers virtual machines again."] },

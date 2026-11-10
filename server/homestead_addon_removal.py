@@ -225,10 +225,10 @@ def review(what):
     keeps.append("Install under Cluster > Add-ons offers virtual machines again.")
     return {"can": not stop, "title": spec["title"], "blockers": stop, "keeps": keeps,
             "removes": ["The KubeVirt and CDI settings. Their operators then remove the VM services they run.",
-                        f"The charts {', '.join(ours) or 'Homestead installed'}, with the operators and the "
-                        "kubevirt and cdi namespaces they created.",
-                        "Everything in the kubevirt and cdi namespaces goes with them, including anything a person put there.",
-                        "The KubeVirt and CDI settings types (kubevirts.kubevirt.io and cdis.cdi.kubevirt.io), once nothing of those types is left."]}
+                        f"The charts {', '.join(ours) or 'Homestead installed'}, with their operators and the "
+                        "kubevirt and cdi namespaces.",
+                        "Everything in those namespaces, including anything a person put there.",
+                        "The settings types kubevirts.kubevirt.io and cdis.cdi.kubevirt.io, once unused."]}
 
 
 # ------------------------------------------------------------------ the job
