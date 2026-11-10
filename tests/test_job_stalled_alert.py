@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_alerts as A
 import homestead_operations as OPS
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rebind import keep_bound
 
@@ -19,9 +20,9 @@ def item(ref, status="running", kind="node-power", **extra):
     return {"id": "op-1", "kind": kind, "title": "Restart host node1", "status": status, "ref": ref, **extra}
 
 
-class PublicJobTests(unittest.TestCase):
+class StoredJobTests(unittest.TestCase):
     def step(self, ref, status="running", kind="node-power"):
-        return OPS._public(item(ref, status, kind)).get("stalled_step")
+        return A._stalled_step(item(ref, status, kind)) or None
 
     def test_a_job_holding_apps_that_are_not_started_again_is_at_a_step(self):
         self.assertEqual("draining", self.step({"held": ["Deployment/lab/web"], "restored": None, "phase": "draining"}))
@@ -54,11 +55,14 @@ class StalledJobAlertTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         keep_bound(self, A)
         A.bind(self.tmp.name)
+        self.stored = []
+        self.enterContext(mock.patch.object(OPS, "stored", lambda: self.stored))
 
     def look(self, now, step="draining", cancellable=True, status="running"):
+        """The page's view of the job (no steps in it), and the stored job at `step` ("" for none held)."""
         op = {"id": "op-1", "title": "Restart host node1", "status": status, "cancellable": cancellable}
-        if step:
-            op["stalled_step"] = step
+        ref = {"held": ["Deployment/lab/web"], "restored": None, "phase": step} if step else {}
+        self.stored = [item(ref, status, kind="storage-class-move")]
         return A.observe({"jobs": A.job_facts([op])}, now)
 
     def test_nothing_is_raised_before_thirty_minutes(self):
@@ -102,14 +106,24 @@ class StalledJobAlertTests(unittest.TestCase):
         counted from when the step first showed, not from the last update."""
         raised = []
         for minute in range(0, 40):
+            self.stored = [item({"phase": "rolling-back"}, kind="reclass")]
             op = {"id": "op-1", "title": "Move volume data", "status": "running", "cancellable": True,
-                  "stalled_step": "rolling-back", "updated_at": f"2026-11-10T10:{minute:02d}:00Z"}
+                  "updated_at": f"2026-11-10T10:{minute:02d}:00Z"}
             raised += [(minute, e["phase"]) for e in A.observe({"jobs": A.job_facts([op])}, T0 + minute * 60)]
         self.assertEqual([(30, "raised")], raised, "once, at 30 minutes")
 
     def test_a_job_that_failed_is_the_failed_alert_only(self):
-        facts = A.job_facts([{"id": "op-1", "title": "Restart host node1", "status": "failed", "message": "no", "stalled_step": "draining"}])
+        self.stored = [item({"held": ["Deployment/lab/web"], "restored": None, "phase": "draining"}, "failed")]
+        facts = A.job_facts([{"id": "op-1", "title": "Restart host node1", "status": "failed", "message": "no"}])
         self.assertEqual(["jobs:op-1"], [f["key"] for f in facts])
+
+    def test_an_unreadable_store_neither_fails_nor_resolves_a_raised_alert(self):
+        self.look(T0)
+        self.look(T0 + STALL)
+        with mock.patch.object(OPS, "stored", side_effect=OSError("disk")):
+            for minute in range(1, 20):
+                self.assertEqual([], A.observe({"jobs": A.job_facts([{"id": "op-1", "title": "T", "status": "running"}])}, T0 + STALL + minute * 120))
+        self.assertEqual([], self.look(T0 + STALL + 3000), "still the same alert: not resolved and raised again")
 
 
 if __name__ == "__main__":

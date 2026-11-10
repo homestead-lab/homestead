@@ -425,10 +425,6 @@ def checkpoint(item):
         bases[item["id"]] = json.loads(json.dumps(saved))
 
 
-# The steps of a power job before power is sent (homestead_power.BEFORE_SEND).
-POWER_BEFORE_SEND = ("reviewed", "cordoning", "holding", "draining", "verifying")
-
-
 def _public(item):
     out = {key: value for key, value in item.items()
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request", "cancel_record",
@@ -456,14 +452,6 @@ def _public(item):
     fields = VIEWS.get(item.get("kind"))
     if fields:
         fields(item, out)
-    ref = item.get("ref") or {}
-    # A power job that has sent power waits for the host on purpose, as long as it is off.
-    sent_power = item.get("kind") == "node-power" and ref.get("phase") not in POWER_BEFORE_SEND
-    if (item.get("status") == "running" and not sent_power
-            and ((ref.get("held") and ref.get("restored") is None) or ref.get("phase") == "rolling-back")):
-        # Apps stopped for it and not started again, or undoing itself: alerts raise it
-        # when it stays at this step for long (#1311).
-        out["stalled_step"] = ref.get("phase") or "running"
     if item.get("kind") in STORAGE_CONFLICTS.HOST_GONE_KINDS:
         # Its host may have been removed: a person can review ending it (homestead_host_gone).
         out["host_gone_endable"] = STORAGE_CONFLICTS.unresolved(item)

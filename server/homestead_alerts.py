@@ -510,8 +510,23 @@ def _step_words(step):
     return STEP_WORDS.get(step) or step.replace("-", " ").capitalize()
 
 
-def _stalled_job_fact(op):
-    title, step = op.get("title") or "Unnamed job", op["stalled_step"]
+# The steps of a power job before power is sent (homestead_power.BEFORE_SEND).
+POWER_BEFORE_SEND = ("reviewed", "cordoning", "holding", "draining", "verifying")
+
+
+def _stalled_step(item):
+    """The step a running stored job is at when it holds apps not started again, or is rolling back; "" otherwise.
+    A power job that has sent power waits for the host on purpose, as long as it is off."""
+    ref = item.get("ref") or {}
+    if item.get("status") != "running" or (item.get("kind") == "node-power" and ref.get("phase") not in POWER_BEFORE_SEND):
+        return ""
+    if (ref.get("held") and ref.get("restored") is None) or ref.get("phase") == "rolling-back":
+        return ref.get("phase") or "running"
+    return ""
+
+
+def _stalled_job_fact(op, step):
+    title = op.get("title") or "Unnamed job"
     way_out = ("Choose Cancel on the job to end it." if op.get("cancellable") else
                "Cancel is not offered for this job. Open it for the way out.")
     # One alert per job and step: the hold below counts from when the job first showed this step.
@@ -522,9 +537,19 @@ def _stalled_job_fact(op):
             "href": f"/?job={op['id']}"}
 
 
+def _stalled_job_facts(operations):
+    """From the stored jobs (the page's view leaves out their steps); unread, the open ones are kept as they are."""
+    import homestead_operations as OPS
+    try:
+        stored = {item.get("id"): item for item in OPS.stored()}
+    except Exception:
+        return [{"unknown_prefix": "jobs-stalled:"}]
+    return [_stalled_job_fact(op, step) for op in operations if op.get("status") == "running"
+            for step in [_stalled_step(stored.get(op.get("id")) or {})] if step]
+
+
 def job_facts(operations):
-    stalled = [_stalled_job_fact(op) for op in operations if op.get("stalled_step") and op.get("status") == "running"]
-    return stalled + [{"key": f"jobs:{op['id']}", "category": "jobs", "severity": "degraded", "event": True,
+    return _stalled_job_facts(operations) + [{"key": f"jobs:{op['id']}", "category": "jobs", "severity": "degraded", "event": True,
              "title": f"Job failed: {op.get('title', 'Unnamed job')}", "body": op.get("message", ""),
              # The job itself, with its error - not the page its work is about.
              "href": f"/?job={op['id']}"}
