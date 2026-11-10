@@ -94,12 +94,16 @@ def _kubevirt_findings(kubevirt, kube_minors, add, before):
     every = _listing(sorted(kube_minors)) if kube_minors else "?"
     if pair["status"] == "outside":
         if before["status"] == "outside" and set(pair["fault"]) <= set(before["fault"]):
-            add("warn", f"{name} on Kubernetes {fault} is already outside its support matrix; this upgrade does not change that",
-                pair["detail"], pair["source"])
+            # A newer KubeVirt in the table is already named in the detail; otherwise the way out is to wait for one.
+            way_out = f" Upgrade KubeVirt when a release lists Kubernetes {fault}." if "No KubeVirt release" in pair["detail"] else ""
+            add("already", f"{name} on Kubernetes {fault} is already outside its support matrix; this upgrade does not change that",
+                pair["detail"] + way_out, pair["source"])
         else:
             add("block", f"{name} is not tested on Kubernetes {fault}", pair["detail"], pair["source"])
     elif pair["status"] == "eol":
-        add("warn", f"Kubernetes {fault} {'is' if len(pair['fault']) == 1 else 'are'} past {'its' if len(pair['fault']) == 1 else 'their'} end of life",
+        # Past its end of life before the upgrade, and no more so after it: nothing for the upgrade to answer for.
+        level = "already" if before["status"] == "eol" and set(pair["fault"]) <= set(before["fault"]) else "warn"
+        add(level, f"Kubernetes {fault} {'is' if len(pair['fault']) == 1 else 'are'} past {'its' if len(pair['fault']) == 1 else 'their'} end of life",
             pair["detail"], pair["source"])
     elif pair["status"] == "supported":
         add("info", f"{name} supports Kubernetes {every}", pair["detail"], pair["source"])
@@ -136,6 +140,21 @@ def _longhorn_findings(installed, target, kube_minors, add):
 
 
 # ------------------------------------------------------------------ the check
+def verdict_of(findings):
+    """blocked, check, unchanged (every problem found is already true and the upgrade leaves it as it is),
+    clear, or unchecked."""
+    levels = {f["level"] for f in findings}
+    if "block" in levels:
+        return "blocked"
+    if "warn" in levels:
+        return "check"
+    if levels == {"info"}:
+        return "clear"
+    if "already" in levels:
+        return "unchanged" if levels <= {"already", "info"} else "check"
+    return "check" if "info" in levels else "unchecked"
+
+
 def check(component, installed, target, kube_minors, others):
     """What the table knows about moving `component` from `installed` to
     `target`. kube_minors: every host's Kubernetes (major, minor); others:
@@ -154,10 +173,7 @@ def check(component, installed, target, kube_minors, others):
         _kubevirt_findings(target, kube_minors, add, kubevirt_pair(installed, kube_minors))
     elif component == "longhorn":
         _longhorn_findings(installed, target, kube_minors, add)
-    levels = {f["level"] for f in findings}
-    verdict = ("blocked" if "block" in levels else "check" if "warn" in levels
-               else "clear" if levels == {"info"} else "check" if "info" in levels else "unchecked")
-    return {"to": target, "verdict": verdict, "findings": findings, "checked": KNOWN.CHECKED}
+    return {"to": target, "verdict": verdict_of(findings), "findings": findings, "checked": KNOWN.CHECKED}
 
 
 def annotate(rows, kube_minors):

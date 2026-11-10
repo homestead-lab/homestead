@@ -375,8 +375,8 @@ function upgradesCard(r) {
    source per row. Unknown is "Not checked", never a pass (#620). The pairs
    are what runs now: KubeVirt against the hosts' Kubernetes. */
 const CHECK_VERDICT = { blocked: ["Check first", "bad"], check: ["Worth checking", "warn"],
-  clear: ["No known breaks", "ok"], unchecked: ["Not checked", "neutral"] };
-const CHECK_LEVEL = { block: ["Blocks", "bad"], warn: ["Read first", "warn"], info: ["Checked", "ok"], unknown: ["Not checked", "neutral"] };
+  clear: ["No known breaks", "ok"], unchanged: ["No new problems", "ok"], unchecked: ["Not checked", "neutral"] };
+const CHECK_LEVEL = { block: ["Blocks", "bad"], warn: ["Read first", "warn"], already: ["Already true", "neutral"], info: ["Checked", "ok"], unknown: ["Not checked", "neutral"] };
 const PAIR_STATUS = { supported: ["Supported", "ok"], eol: ["Kubernetes past end of life", "warn"],
   outside: ["Outside its support matrix", "warn"], unchecked: ["Not checked", "neutral"] };
 
@@ -395,7 +395,8 @@ function componentCheckLine(c) {
   if (!r) return "";
   const [label, tone] = CHECK_VERDICT[r.verdict] || CHECK_VERDICT.unchecked;
   const top = ["block", "warn", "unknown"].map(level => (r.findings || []).find(f => f.level === level)).find(Boolean);
-  const said = top ? top.title : r.verdict === "clear" ? `Nothing in Homestead's table breaks ${r.to} here` : `Homestead's table says nothing about ${r.to}`;
+  const said = top ? top.title : r.verdict === "clear" ? `Nothing in Homestead's table breaks ${r.to} here`
+    : r.verdict === "unchanged" ? `Nothing in Homestead's table gets worse with ${String(r.to).split("+")[0]}.` : `Homestead's table says nothing about ${r.to}`;
   return `<div class="component-check">${UI.chip(label, tone, { size: "slim" })}<span class="dim xs">${esc(said)}</span></div>
     ${(r.findings || []).length ? UI.more(`What ${r.to} changes`, componentCheckList(r), false, `component-check-${c.id}`) : ""}`;
 }
