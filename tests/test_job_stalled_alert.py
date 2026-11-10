@@ -86,6 +86,16 @@ class StalledJobAlertTests(unittest.TestCase):
         resolved = self.look(T0 + STALL + 10 + A.HOLD + 1, step=None)
         self.assertEqual(["resolved"], [e["phase"] for e in resolved])
 
+    def test_a_job_retrying_every_minute_still_alerts_after_thirty_minutes_at_the_step(self):
+        """Its updated_at moves each minute while the step stays rolling-back: the time is
+        counted from when the step first showed, not from the last update."""
+        raised = []
+        for minute in range(0, 40):
+            op = {"id": "op-1", "title": "Move volume data", "status": "running", "cancellable": True,
+                  "stalled_step": "rolling-back", "updated_at": f"2026-11-10T10:{minute:02d}:00Z"}
+            raised += [(minute, e["phase"]) for e in A.observe({"jobs": A.job_facts([op])}, T0 + minute * 60)]
+        self.assertEqual([(30, "raised")], raised, "once, at 30 minutes")
+
     def test_a_job_that_failed_is_the_failed_alert_only(self):
         facts = A.job_facts([{"id": "op-1", "title": "Restart host node1", "status": "failed", "message": "no", "stalled_step": "draining"}])
         self.assertEqual(["jobs:op-1"], [f["key"] for f in facts])
