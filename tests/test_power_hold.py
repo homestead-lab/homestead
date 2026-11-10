@@ -14,7 +14,6 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power_hold as HOLD
 import homestead_power as POWER
-import homestead_app_hold as APP_HOLD
 import homestead_operations as OPS
 import homestead_power_jobs as JOBS
 import homestead_lifecycle as LC
