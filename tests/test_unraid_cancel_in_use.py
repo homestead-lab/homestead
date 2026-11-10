@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_operations as JOBS
-import homestead_unraid_vms as UVMS
 import test_unraid_import_waits as waits
 
 DVS, NS, CLAIMS = waits.DVS, waits.NS, waits.CLAIMS
