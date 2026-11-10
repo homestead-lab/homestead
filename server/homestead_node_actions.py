@@ -207,8 +207,11 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         names = ", ".join(sorted(late)[:6])
         if now >= deadline:
             stall = BLOCKERS.stall_reason(node, read=L.kget) or BLOCKERS.GENERAL_ADVICE
+            # An instance-manager can also be held by Longhorn's node drain
+            # policy (such as its last volume copy), which no list shows.
+            also = "Longhorn's node drain policy may also hold it. " if late == storage else ""
             raise ValueError(f"The host stays cordoned. The drain timed out after {limit // 60} minutes. {reason}: {names}. "
-                             f"Nothing was sent. {stall[:1].upper()}{stall[1:]}")
+                             f"Nothing was sent. {also}{stall[:1].upper()}{stall[1:]}")
         if progress:
             if held:
                 said = "Waiting for " + "; ".join(budgets[name][1]["why"] for name in sorted(held)[:3]) + ": "

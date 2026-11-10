@@ -106,6 +106,21 @@ class InstanceManagerTests(Drain):
                     self.run_drain(kube, power=True)
                 self.assertLess(self.clock.now, NODE_ACTIONS.LONGHORN_DRAIN_WAIT)
 
+    def test_an_instance_manager_timeout_names_longhorns_drain_policy_too(self):
+        # Its engines still run here, so nothing stops it early: after five
+        # minutes the drain says what else can hold it.
+        im_pod = DRAIN.manager_pod()
+        im_budget = DRAIN.budget(im_pod["metadata"]["name"], ns="longhorn-system", expected=1, healthy=1, desired=1)
+        with Kube(DRAIN.workload(), im_pod, im_budget, SHAPES.instance_manager(NODE, engines=["vol-a-e-0"]),
+                  SHAPES.engine("vol-a", NODE)) as kube:
+            self.refuse(kube, im_pod, im_budget, times=10_000)
+            with self.assertRaises(ValueError) as caught:
+                self.run_drain(kube, power=True)
+        message = str(caught.exception)
+        self.assertIn("Longhorn still prevents eviction", message)
+        self.assertIn("Nothing was sent. Longhorn's node drain policy may also hold it. ", message)
+        self.assertLess(len(message.split(". ")[0]), 90)
+
     def test_longhorn_is_read_every_ten_seconds_while_the_drain_waits(self):
         im_pod = DRAIN.manager_pod()
         im_budget = DRAIN.budget(im_pod["metadata"]["name"], ns="longhorn-system", expected=1, healthy=1, desired=1)
