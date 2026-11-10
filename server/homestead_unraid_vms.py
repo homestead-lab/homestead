@@ -167,7 +167,7 @@ def cancel_run(item, _options):
     try:
         users = _in_use(ns, {"disks": ref["cdi_cleanup"].get("disks") or {}}, [d["dv"] for d in ref.get("disks") or []])
     except Exception:
-        raise ValueError("Kubernetes did not say which VMs or apps use the import's disks. "
+        raise ValueError("Kubernetes did not say whether a VM or an app uses the import's disks. "
                          "Nothing was removed and the disks are kept. Press Cancel again.") from None
     paths = []
     for disk in ref.get("disks") or []:
