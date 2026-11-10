@@ -25,6 +25,7 @@ JOB = "/apis/batch/v1/namespaces/lab/jobs/copy"
 VM = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/vm1"
 LIMIT = 10 * 60
 RECHECK = 60
+NEEDS_ATTENTION = 30 * 60
 REVIEWED = [{"kind": "Deployment", "name": "app", "replicas": 2}]
 
 
@@ -303,6 +304,52 @@ class LegacyMoveTests(unittest.TestCase):
         self.assertEqual("failed", job["status"])
         self.assertEqual(2, self.replicas())
         self.assertEqual([], [w for w in self.kube.writes if w[0] == "POST"], "no new volume, no copy")
+
+    def patches(self):
+        return len([w for w in self.kube.writes if w[0] == "PATCH" and w[1] == APP])
+
+    def stuck_rolling_back(self):
+        """A move putting things back whose app is refused for good (#1311)."""
+        self.kube.add(pod("app-1"))
+        ident = self.start("stopping")
+        self.look(ident)
+        self.now += LIMIT
+        self.kube.fail(APP, 403, times=10_000, method="PATCH")
+        job = self.look(ident)
+        self.assertTrue(job["message"].startswith("Putting things back: app still down"), job["message"])
+        return ident
+
+    def test_a_rollback_stuck_for_half_an_hour_says_it_needs_attention(self):
+        ident = self.stuck_rolling_back()
+        self.now += NEEDS_ATTENTION - 1
+        self.assertTrue(self.look(ident)["message"].startswith("Putting things back"))
+        self.now += 1
+        job = self.look(ident)
+        self.assertEqual(("running", "rolling-back"), (job["status"], self.raw(ident)["ref"]["phase"]))
+        self.assertTrue(job["message"].startswith(
+            "This move needs attention. app is still down (HTTP Error 403: Failure). Homestead tries to start it again "
+            "once a minute, and the volume stays locked until then. Fix what stops app from starting, and the move ends."),
+            job["message"])
+        self.assertEqual(0, self.replicas())
+
+    def test_after_half_an_hour_it_tries_once_a_minute(self):
+        ident = self.stuck_rolling_back()
+        self.now += NEEDS_ATTENTION
+        self.look(ident)
+        tried = self.patches()
+        for _ in range(5):
+            self.now += 10
+            job = self.look(ident)
+        self.assertEqual(tried, self.patches(), "nothing sent within the minute")
+        self.assertTrue(job["message"].startswith("This move needs attention."), "still says so between tries")
+        self.now += 10
+        self.look(ident)
+        self.assertEqual(tried + 1, self.patches(), "tried again once the minute is up")
+        self.kube.stop_failing()
+        self.now += 60
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], "it ends once the app starts")
+        self.assertEqual(2, self.replicas())
 
     def test_a_stop_that_was_interrupted_still_waits_for_a_person(self):
         # Its apps may be half stopped, and Cancel is what puts them back: a failed
