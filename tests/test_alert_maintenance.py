@@ -120,9 +120,15 @@ class DeclaredAlertTests(unittest.TestCase):
         fact = self.ran_out_facts(-600)[0]
         self.assertEqual("maintenance-ran-out:node1", fact["key"], "still the one loud alert")
         self.assertEqual("Host node1 went down after its maintenance ran out", fact["title"])
-        self.assertIn("ran out while the host was ready", fact["body"])
+        self.assertIn("ready again after the maintenance ran out, and then went down", fact["body"])
         self.assertNotIn("with the host down", fact["title"])
         self.assertEqual((True, "critical"), (fact["urgent"], fact["severity"]))
+
+    def test_the_body_is_true_for_a_host_that_was_down_at_the_end_came_back_and_went_down_again(self):
+        """Ready_since is the last change: later than the end, but the host may have been down at it."""
+        body = self.ran_out_facts(-600)[0]["body"]
+        self.assertNotIn("while the host was ready", body)
+        self.assertIn("ready again after the maintenance ran out", body)
 
     def test_a_host_that_was_already_down_when_the_window_ran_out_keeps_the_words(self):
         fact = self.ran_out_facts(-7200)[0]

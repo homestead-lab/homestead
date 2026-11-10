@@ -85,6 +85,12 @@ test("the review offers Remove leftover records for a blocker that has them, and
   assert.equal(t.shown.modal.at(-1)[0].startsWith("Maintenance · node1"), true, "the Maintenance review is drawn again, not the restart review");
 });
 
+test("a planned outage offers no Remove leftover records, since it drains nothing", async () => {
+  const t = setup({ power: true, answers: { [PLAN]: review({ planned_outage: true, drain_blockers: [ORPHANS] }) } });
+  await t.c.hostMaintenanceReview("node1");
+  assert.doesNotMatch(t.shown.modal.at(-1)[1], /mm_blocker_remove_0|Remove leftover records/);
+});
+
 test("a blocked review offers no way to send", async () => {
   const t = setup({ answers: { [PLAN]: review({ ready: false, blockers: ["This host is already in maintenance"], hard_blockers: ["x"] }) } });
   await t.c.hostMaintenanceReview("node1");

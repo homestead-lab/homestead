@@ -403,7 +403,7 @@ def health_facts(overview):
                               "title": (f"Host {name} went down after its maintenance ran out" if later
                                         else f"Maintenance on {name} ran out with the host down"),
                               "resolved": f"Maintenance on {name} no longer ran out: extended, ended or the host returned",
-                              "body": (f"{ran_out['reason']}. The maintenance ran out while the host was ready, and the host went down later. "
+                              "body": (f"{ran_out['reason']}. The host was ready again after the maintenance ran out, and then went down. "
                                        "Its downtime counts as an outage from when it went down." if later else
                                        f"{ran_out['reason']}. Its downtime counts as an outage from when it ran out."),
                               "signals": signals, "href": f"/nodes?node={name}"})
