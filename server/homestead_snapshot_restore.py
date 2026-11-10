@@ -6,15 +6,24 @@ unchanged. A restore adds and replaces, it never deletes: folders merge, and
 the tar it sends holds exactly the reviewed entries. Links are restored as
 links only when they point inside the volume; links in the live volume are
 never written through.
+
+One restore runs into a volume at a time, across every copy of Homestead:
+the run holds a Lease for the volume while it writes (_claim).
 """
+import datetime
 import hashlib
 import json
+import math
 import posixpath
 import secrets
 import threading
 import time
+import urllib.error
 
 import homestead_files as FILES
+import homestead_kube as KUBE
+import homestead_leader as LEADER
+import homestead_names as NAMES
 import homestead_pod_exec as POD_EXEC
 import homestead_routes as ROUTER
 import homestead_snapshot_files as SNAP
@@ -28,6 +37,79 @@ IN_USE = ("{app} is running and using this volume, so it sees these files change
 MIN_SECONDS_LEFT = 300
 SAFE_RATE = 10 * 1024 * 1024    # bytes a second
 _RUNNING, _LOCK = {}, threading.Lock()   # (namespace, pvc) -> job id, or "planning"
+_HOLDERS = {}   # (namespace, pvc) -> this copy's holder of the volume's restore Lease
+ELSEWHERE = "Another copy of Homestead is restoring files into this volume. It ends within {minutes} minutes. Try again then."
+# The Lease is not renewed: it lasts until the browsing pod is stopped at the
+# session's end (nothing is written after that), plus this margin.
+CLAIM_MARGIN = 60
+
+
+def _claim_path(name=""):
+    base = f"/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases"
+    return f"{base}/{name}" if name else base
+
+
+def _claim_name(namespace, pvc):
+    return "homestead-restore-" + hashlib.sha256(f"{namespace}/{pvc}".encode()).hexdigest()[:20]
+
+
+def _when(value):
+    try:
+        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
+    except ValueError:
+        return None
+
+
+class _Held(Exception):
+    pass
+
+
+def _claim(namespace, pvc, until):
+    """Take the volume's restore Lease until the snapshot session ends.
+    Returns the holder; raises _Held while another copy of Homestead holds
+    it, or wins it at the same moment (a 409)."""
+    holder = f"{LEADER.IDENTITY}/{secrets.token_hex(4)}"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    seconds = max(0, int(until - now.timestamp())) + CLAIM_MARGIN
+    name = _claim_name(namespace, pvc)
+    spec = {"holderIdentity": holder, "leaseDurationSeconds": seconds, "acquireTime": stamp, "renewTime": stamp}
+    lease = KUBE.get_optional(_claim_path(name), read=SNAP.kget)
+    try:
+        if lease is None:
+            SNAP.ksend("POST", _claim_path(), {
+                "apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
+                "metadata": {"name": name, "namespace": LEADER.NS, "labels": NAMES.labels("snapshot-restore"),
+                             "annotations": {NAMES.key("restore-into"): f"{namespace}/{pvc}"}},
+                "spec": dict(spec, leaseTransitions=0)})
+            return holder
+        held = lease.get("spec") or {}
+        renewed = _when(held.get("renewTime")) or _when(held.get("acquireTime"))
+        left = renewed and (renewed - now).total_seconds() + int(held.get("leaseDurationSeconds") or 0)
+        if held.get("holderIdentity") and left and left > 0:
+            raise _Held(ELSEWHERE.format(minutes=math.ceil(left / 60)))
+        lease["spec"] = dict(held, **spec, leaseTransitions=int(held.get("leaseTransitions") or 0) + 1)
+        # resourceVersion is kept: of two taking it at once, one gets a 409.
+        SNAP.ksend("PUT", _claim_path(name), lease)
+        return holder
+    except urllib.error.HTTPError as error:
+        if error.code == 409:
+            # The other copy's Lease lasts at most a whole session.
+            raise _Held(ELSEWHERE.format(minutes=math.ceil((SNAP.TTL + CLAIM_MARGIN) / 60))) from None
+        raise
+
+
+def _release(namespace, pvc, holder):
+    """Give the Lease back if holder still has it. Never raises: one not
+    given back runs out when the session would have ended."""
+    try:
+        path = _claim_path(_claim_name(namespace, pvc))
+        lease = KUBE.get_optional(path, read=SNAP.kget)
+        if lease and (lease.get("spec") or {}).get("holderIdentity") == holder:
+            lease["spec"]["holderIdentity"] = ""
+            SNAP.ksend("PUT", path, lease)
+    except Exception:
+        pass
 
 
 def _session_ready(namespace, session):
@@ -232,6 +314,12 @@ def restore(body):
             return _refuse("What the restore would change has changed. Review it again.", plan, key)
         if not plan["ready"]:
             return _refuse(plan["blockers"][0], plan, key)
+        try:
+            holder = _claim(target_ns, pvc, plan["session_ends_at"])
+        except _Held as held:
+            return _refuse(str(held), plan, key)
+        with _LOCK:
+            _HOLDERS[key] = holder
         dst_ns, dst_pod = FILES._session(target_ns, pvc)
         count = len(send)
         job = {"id": secrets.token_hex(8), "status": "running", "bytes": 0, "error": "", "move": False,
@@ -253,8 +341,12 @@ def restore(body):
             job.update(status="failed", error=str(error)[:300], finished=time.time())
             _finished(job, target_ns, pvc, namespace, session)
         with _LOCK:
-            if _RUNNING.get(key) == "planning":
+            planning = _RUNNING.get(key) == "planning"
+            if planning:
                 del _RUNNING[key]
+                holder = _HOLDERS.pop(key, None)
+        if planning and holder:
+            _release(target_ns, pvc, holder)
         raise
 
 
@@ -280,6 +372,7 @@ def _finished(job, target_ns, pvc, namespace, session):
         if _RUNNING.get((target_ns, pvc)) != job["id"]:
             return
         del _RUNNING[(target_ns, pvc)]
+        holder = _HOLDERS.pop((target_ns, pvc), None)
         FILES.BUSY_CLAIMS.discard((target_ns, pvc))
         SNAP.ACTIVE_RESTORES[(namespace, session)] -= 1
         last = SNAP.ACTIVE_RESTORES[(namespace, session)] <= 0
@@ -288,6 +381,8 @@ def _finished(job, target_ns, pvc, namespace, session):
         close = last and (namespace, session) in SNAP.CLOSE_AFTER_RESTORE
         if close:
             SNAP.CLOSE_AFTER_RESTORE.discard((namespace, session))
+    if holder:
+        _release(target_ns, pvc, holder)
     if close:
         try:
             SNAP.close(namespace, session)

@@ -12,6 +12,10 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes.kube import Kube
+import homestead_kube as K
+import homestead_leader as LEADER
 import homestead_snapshot_files as S
 import homestead_snapshot_restore as R
 import homestead_route_policy as POLICY
@@ -39,7 +43,15 @@ class RestoreTests(unittest.TestCase):
             mock.patch.object(R, '_users', side_effect=lambda ns, pvc: self.users),
             mock.patch.object(R.FILES, '_session', side_effect=lambda ns, pvc: (ns, 'homestead-files-' + pvc)),
             mock.patch.object(R, '_launch', side_effect=lambda *args: self.launched.append(args)),
+            # The restore claim is a Lease, read and written through the
+            # module's bound client, here the fake API server.
+            mock.patch.object(R.SNAP, 'kget', K.kget),
+            mock.patch.object(R.SNAP, 'ksend', K.ksend),
+            mock.patch.object(LEADER, 'IDENTITY', 'homestead-a'),
         ]
+        self.kube = Kube()
+        self.kube.__enter__()
+        self.addCleanup(self.kube.__exit__, None, None, None)
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -82,6 +94,7 @@ class RestoreTests(unittest.TestCase):
         self.assertNotEqual(token, reply.body['plan']['review_token'])
         self.assertEqual([], self.launched)
         self.assertEqual({}, R._RUNNING)
+        self.assertEqual([], self.kube.writes)   # no claim taken for a refused restore
 
     def test_run_replaces_only_reviewed_paths_and_never_deletes(self):
         token = R.restore_plan(self.body())['review_token']
@@ -185,6 +198,91 @@ class RestoreTests(unittest.TestCase):
         self.assertEqual({}, R._RUNNING)
         self.assertEqual(0, S.ACTIVE_RESTORES[('lab', NAME)])
         self.assertNotIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
+        self.assertEqual('', self.claim()['spec']['holderIdentity'])
+
+    def claim(self, pvc='data'):
+        leases = K.kget(f'/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases')['items']
+        mine = [l for l in leases if l['metadata'].get('annotations', {}).get('homestead.io/restore-into') == f'lab/{pvc}']
+        self.assertEqual(1, len(mine), leases)
+        return mine[0]
+
+    def as_another_copy(self):
+        """From here on the calls come from a second copy of Homestead: its own
+        process memory, which knows nothing of the first copy's restore."""
+        R._RUNNING.clear()
+        R.FILES.BUSY_CLAIMS.clear()
+        S.ACTIVE_RESTORES.clear()
+        LEADER.IDENTITY = 'homestead-b'
+
+    def test_a_restore_running_in_another_copy_of_homestead_is_409(self):
+        token = R.restore_plan(self.body())['review_token']
+        self.assertEqual(202, R.restore(self.body(review_token=token)).code)
+        self.as_another_copy()
+        reply = R.restore(self.body(review_token=token))
+        self.assertEqual(409, reply.code)
+        self.assertEqual('Another copy of Homestead is restoring files into this volume. '
+                         'It ends within 21 minutes. Try again then.', reply.body['error'])
+        self.assertEqual(1, len(self.launched))
+        self.assertEqual({}, R._RUNNING)
+        self.assertNotIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
+
+    def test_the_claim_lasts_until_the_snapshot_session_ends(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        spec = self.claim()['spec']
+        self.assertTrue(spec['holderIdentity'].startswith('homestead-a/'))
+        self.assertAlmostEqual(1200 + R.CLAIM_MARGIN, spec['leaseDurationSeconds'], delta=5)
+
+    def test_a_restore_into_another_volume_is_not_held_up(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        self.as_another_copy()
+        other = self.body(target={'namespace': 'lab', 'pvc': 'other', 'folder': 'config'})
+        self.assertEqual(202, R.restore(dict(other, review_token=R.restore_plan(other)['review_token'])).code)
+
+    def test_the_claim_is_given_back_when_the_restore_ends(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        R._finished(self.launched[0][0], 'lab', 'data', 'lab', NAME)
+        self.assertEqual('', self.claim()['spec']['holderIdentity'])
+        self.as_another_copy()
+        self.assertEqual(202, R.restore(self.body(review_token=token)).code)
+
+    def test_a_claim_that_ran_out_is_taken_over(self):
+        token = R.restore_plan(self.body())['review_token']
+        R.restore(self.body(review_token=token))
+        lease = self.claim()
+        lease['spec'].update(renewTime='2020-01-01T00:00:00.000000Z', leaseDurationSeconds=60)
+        K.ksend('PUT', f"/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases/{lease['metadata']['name']}", lease)
+        self.as_another_copy()
+        self.assertEqual(202, R.restore(self.body(review_token=token)).code)
+        self.assertTrue(self.claim()['spec']['holderIdentity'].startswith('homestead-b/'))
+
+    def test_two_copies_taking_the_claim_at_once_start_one_restore(self):
+        token = R.restore_plan(self.body())['review_token']
+        # The other copy created the Lease between this copy's read and its write.
+        self.kube.fail(f'/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases', 409, method='POST')
+        reply = R.restore(self.body(review_token=token))
+        self.assertEqual(409, reply.code)
+        self.assertTrue(reply.body['error'].startswith('Another copy of Homestead is restoring files into this volume.'))
+        self.assertEqual([], self.launched)
+        self.assertEqual({}, R._RUNNING)
+
+    def test_a_restore_whose_helper_pod_did_not_start_gives_the_claim_back(self):
+        token = R.restore_plan(self.body())['review_token']
+        with mock.patch.object(R.FILES, '_session', side_effect=RuntimeError('no helper pod')):
+            with self.assertRaises(RuntimeError):
+                R.restore(self.body(review_token=token))
+        self.assertEqual('', self.claim()['spec']['holderIdentity'])
+        self.assertEqual({}, R._RUNNING)
+
+    def test_a_claim_that_cannot_be_written_stops_the_restore(self):
+        token = R.restore_plan(self.body())['review_token']
+        self.kube.fail(f'/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases', 403, method='POST')
+        with self.assertRaises(Exception):
+            R.restore(self.body(review_token=token))
+        self.assertEqual([], self.launched)
+        self.assertEqual({}, R._RUNNING)
 
     def test_a_restore_too_large_for_the_time_left_is_a_blocker(self):
         self.state['expires'] = time.time() + 900
