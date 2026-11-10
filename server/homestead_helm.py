@@ -552,10 +552,23 @@ def restarts(namespace, job_name, job, read=None):
         if not uid or not any(owner.get("uid") == uid for owner in owners):
             continue
         for container in (pod.get("status") or {}).get("containerStatuses") or []:
-            ended = (container.get("lastState") or {}).get("terminated") or {}
-            if ended.get("exitCode"):
-                most = max(most, int(container.get("restartCount") or 0))
+            most = max(most, _failures(container))
     return most
+
+
+def _failures(container):
+    """Failed tries of one container. Kubernetes counts a restart when the new container
+    starts: while it runs, its restarts are its failures so far; while it waits in
+    back-off after a failure, or has just failed, that failure is one more. Only a
+    non-zero exit is a failure."""
+    count = int(container.get("restartCount") or 0)
+    state = container.get("state") or {}
+    last = (container.get("lastState") or {}).get("terminated") or {}
+    if (state.get("terminated") or {}).get("exitCode"):
+        return count + 1
+    if not last.get("exitCode"):
+        return 0
+    return count + 1 if state.get("waiting") else count
 
 
 def job_status(item):
