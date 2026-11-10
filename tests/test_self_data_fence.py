@@ -1,5 +1,7 @@
 import copy
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -162,6 +164,151 @@ class FenceTests(unittest.TestCase):
         self.c.step()
         self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["containers"][0]["image"] = "later-release"
         self.fence.require_write()
+
+
+# Another replica, as a separate process with its own locks: it enters an
+# activity (described when kind is given) and waits for a line on stdin.
+# "crash" ends it inside the activity with no clean-up; "norecord" makes
+# its record write fail.
+HOLDER = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import homestead_self_data_fence as F
+from contextlib import nullcontext
+directory, kind, user, host, how = sys.argv[2:7]
+if how == "norecord":
+    os.rename = lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+describe = getattr(F, "described", None)  # absent before #1305: the plain activity
+with describe(kind, user=user or None, host=host or None) if kind and describe else nullcontext():
+    with F.WriteBarrier(directory, lambda: None).activity():
+        print("active", flush=True)
+        if how == "crash":
+            os._exit(1)
+        sys.stdin.readline()
+"""
+
+
+@unittest.skipUnless(F.fcntl is not None, "Linux shared locking")
+class HolderRecordTests(unittest.TestCase):
+    """#1305: a data move held back by open activity names what holds it."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.directory = temp.name
+        self.barrier = F.WriteBarrier(self.directory, lambda: None)
+
+    def holder(self, kind="", user="", host="", how=""):
+        proc = subprocess.Popen([sys.executable, "-u", "-c", HOLDER, str(Path(F.__file__).parent), self.directory,
+                                 kind, user, host, how],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def finish():
+            try:
+                proc.communicate("done\n", timeout=10)
+            except (subprocess.TimeoutExpired, ValueError, OSError):
+                proc.kill()
+                proc.communicate()
+        self.addCleanup(finish)
+        self.assertEqual("active", proc.stdout.readline().strip())
+        if how == "crash":
+            proc.wait(timeout=10)
+        return proc
+
+    def refusal(self):
+        with self.assertRaises(Held) as caught:
+            with self.barrier.freeze(timeout=.05): self.fail("froze past an open activity")
+        return str(caught.exception)
+
+    def records(self):
+        return sorted(name for name in os.listdir(self.directory) if name.startswith(".self-data-holder-v1-"))
+
+    def test_a_freeze_names_the_terminal_that_holds_it(self):
+        self.holder("terminal", "alice", "node-a")
+        message = self.refusal()
+        self.assertTrue(message.startswith("Current Homestead activity has not finished. "), message)
+        self.assertRegex(message, r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.")
+        self.assertIn("Close the open sessions, then start the move again.", message)
+        self.assertTrue(message.endswith("No copy or shutdown was authorized"), message)
+
+    def test_other_activity_is_counted_not_named(self):
+        self.holder()
+        self.holder("vm-console", "bob")
+        message = self.refusal()
+        self.assertRegex(message, r"A VM console, opened by bob at [^,]+ UTC, is still open\.")
+        self.assertIn("1 other Homestead task is still running.", message)
+
+    def test_a_crashed_holders_record_is_not_named_and_is_removed(self):
+        self.holder("terminal", "alice", "node-a", how="crash")
+        self.assertEqual(1, len(self.records()), "a crash leaves its record behind")
+        self.holder()
+        message = self.refusal()
+        self.assertNotIn("terminal", message.lower())
+        self.assertIn("1 other Homestead task is still running.", message)
+        self.assertEqual(1, len(self.records()), "only the running holder's record is left")
+
+    def test_a_record_alone_never_refuses(self):
+        self.holder("terminal", "alice", "node-a", how="crash")
+        with self.barrier.freeze(timeout=.05):
+            pass
+
+    def test_with_no_record_to_read_the_refusal_is_the_plain_sentence(self):
+        self.holder("terminal", "alice", "node-a", how="norecord")
+        self.assertEqual([], self.records())
+        self.assertEqual("Current Homestead activity has not finished. No copy or shutdown was authorized",
+                         self.refusal())
+
+    def test_a_record_holds_only_kind_user_host_and_since_and_goes_at_the_end(self):
+        with F.described("terminal", user="alice", host="node-a"):
+            with self.barrier.activity():
+                [name] = self.records()
+                self.assertTrue(name.endswith(".json"), "written to a temporary name, then renamed")
+                record = json.loads(Path(self.directory, name).read_text())
+                self.assertEqual({"kind", "user", "host", "since"}, set(record))
+                self.assertEqual(("terminal", "alice", "node-a"), (record["kind"], record["user"], record["host"]))
+                self.assertEqual([record], self.barrier.holders(), "its own process's record is named too")
+        self.assertEqual([], self.records())
+
+    def test_a_record_goes_when_the_work_inside_fails(self):
+        with self.assertRaises(RuntimeError):
+            with self.barrier.activity():
+                raise RuntimeError("the work failed")
+        self.assertEqual([], self.records())
+        with self.barrier.freeze(timeout=.05):
+            pass
+
+    def test_a_record_that_cannot_be_read_names_nothing(self):
+        bad = Path(self.directory, ".self-data-holder-v1-" + "x" * 24 + ".json")
+        for text in ("not json", json.dumps({"kind": "terminal", "user": "alice", "host": "node-a", "since": 1, "extra": 1}),
+                     json.dumps({"kind": "rm -rf", "user": None, "host": None, "since": 1})):
+            with self.subTest(text):
+                bad.write_text(text)
+                with open(bad) as held:
+                    F.fcntl.flock(held, F.fcntl.LOCK_EX)   # its holder still runs
+                    self.assertEqual([], self.barrier.holders())
+
+    def test_a_bad_host_or_user_is_left_out_not_the_record(self):
+        with F.described("terminal", user="alice\nbob", host="node a; rm"):
+            with self.barrier.activity():
+                [record] = self.barrier.holders()
+        self.assertEqual(("terminal", None, None), (record["kind"], record["user"], record["host"]))
+
+    def test_a_terminal_request_is_described_by_its_host_and_its_signed_in_person(self):
+        import homestead_self_data_server as SD
+        seen = {}
+
+        def method(_handler):
+            seen["records"] = self.barrier.holders()
+
+        handler = mock.Mock(path="/api/node/shell?node=node-a", command="GET")
+        handler._cookies.return_value = {SD.AUTH.COOKIE: "a-token"}
+        with mock.patch.object(SD, "self_data_activity", self.barrier.activity, create=True), \
+                mock.patch.object(SD.AUTH, "verify_token", lambda token: {"user": "alice"} if token == "a-token" else None):
+            SD.request_scope(method, lambda: False)(handler)
+            self.assertEqual([("terminal", "alice", "node-a")], [(r["kind"], r["user"], r["host"]) for r in seen["records"]])
+            handler.path, handler.command = "/api/apps/restart", "POST"
+            SD.request_scope(method, lambda: False)(handler)
+            self.assertEqual([("work", None, None)], [(r["kind"], r["user"], r["host"]) for r in seen["records"]])
+        self.assertEqual([], self.records())
 
 
 if __name__ == "__main__":
