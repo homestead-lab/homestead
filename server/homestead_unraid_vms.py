@@ -1001,6 +1001,86 @@ def _stop_following(ref, item, phases):
         words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")))
 
 
+def _journalled(ref, item):
+    """The VM create's writes, recorded in the job as they go (#1329): each POST
+    is saved as an intent before it is sent, then with the uid Kubernetes
+    answered with, so a restart part way knows what this try created. A DELETE
+    commit_vm sends for a refused VM marks its object removed."""
+    journal = ref["vm_writes"]
+
+    def send(method, path, body=None, **kwargs):
+        if method == "POST" and isinstance(body, dict):
+            entry = {"path": f"{path.partition('?')[0]}/{(body.get('metadata') or {}).get('name', '')}",
+                     "kind": body.get("kind", ""), "phase": "intent"}
+            journal.append(entry)
+            OPS.checkpoint(item)
+            try:
+                answer = ksend(method, path, body, **kwargs)
+            except urllib.error.HTTPError as error:
+                entry["phase"] = "refused" if KUBE.definite_refusal(error.code) else "uncertain"
+                OPS.checkpoint(item)
+                raise
+            except Exception:
+                entry["phase"] = "uncertain"
+                OPS.checkpoint(item)
+                raise
+            entry.update(phase="accepted", uid=((answer or {}).get("metadata") or {}).get("uid", "") if isinstance(answer, dict) else "")
+            OPS.checkpoint(item)
+            return answer
+        answer = ksend(method, path, body, **kwargs)
+        if method == "DELETE":
+            for entry in journal:
+                if entry["path"] == path.partition("?")[0] and entry["phase"] == "accepted":
+                    entry["phase"] = "removed"
+        return answer
+    return send
+
+
+def _named(entry):
+    return entry["path"].rsplit("/", 1)[-1]
+
+
+def _left(ref):
+    """What this try created and is still there, as far as its record shows."""
+    return ", ".join(_named(e) for e in ref.get("vm_writes") or [] if e["phase"] in ("accepted", "intent", "uncertain"))
+
+
+def _after_cut_off(ref, item):
+    """An earlier try of the VM create was cut off part way. Once the VM itself
+    was sent it may have been created, so everything is kept and a person
+    checks it. Before that, what the try created is removed, each by the uid
+    its POST answered with (one created again under the name since is not
+    this one's); one sent with no answer may be there, so it is kept. Raises
+    ValueError, the import's refused ending, when anything is kept."""
+    journal = ref.get("vm_writes")
+    if not journal:
+        return
+    # A VM refused outright made no VM; one sent with any other outcome may have.
+    vm = next((e for e in journal if e["kind"] == "VirtualMachine" and e["phase"] != "refused"), None)
+    if vm:
+        raise ValueError(f"The VM create was cut off after {_named(vm)} was sent, so it may have been created. Check it "
+                         "under Virtual machines. Nothing it created was removed")
+    for entry in journal:
+        if entry["phase"] != "accepted" or not entry.get("uid"):
+            continue
+        try:
+            KUBE.delete_if_present(entry["path"], {"apiVersion": "v1", "kind": "DeleteOptions",
+                                                    "preconditions": {"uid": entry["uid"]}}, send=ksend)
+            entry["phase"] = "removed"
+        except urllib.error.HTTPError as error:
+            if error.code != 409 and not KUBE.definite_refusal(error.code):
+                raise           # not known to be refused: the round is asked again
+            error.close()
+            if error.code == 409:   # created again under the name since: not this try's
+                entry["phase"] = "removed"
+        OPS.checkpoint(item)
+    left = _left(ref)
+    ref.pop("vm_writes", None)
+    if left:
+        raise ValueError(f"The VM create was cut off part way. {left} may be what it created, so "
+                         f"{'it is' if ', ' not in left else 'they are'} kept. Check before creating the VM")
+
+
 # The waits with a limit, by phase: a pause there counts toward it (#1329).
 PAUSE_LIMITS = {"disks": ("ready_since", READY_LIMIT), "convert": ("finish_since", FINISH_LIMIT)}
 
@@ -1176,10 +1256,13 @@ def status(item):
         except ValueError as error:
             raise RuntimeError(f"The cluster's platform could not be read, so the VM is not created yet ({error})") from None
         try:
+            # An earlier try cut off part way (a restart) left a record of what it sent.
+            _after_cut_off(ref, item)
             prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), found, "")
             IMP._recheck_vm_creation(prepared)
+            ref["vm_writes"] = []
             try:
-                IMP.commit_vm(prepared, send=ksend)
+                IMP.commit_vm(prepared, send=_journalled(ref, item))
             except urllib.error.HTTPError as error:
                 # Refused: commit_vm removed what it made for the VM, and the
                 # next round would only make and remove it again. Anything else
@@ -1187,8 +1270,12 @@ def status(item):
                 if not KUBE.definite_refusal(error.code):
                     raise
                 error.close()
-                raise ValueError(f"Kubernetes refused it (HTTP {error.code})") from None
+                left = _left(ref)
+                raise ValueError(f"Kubernetes refused it (HTTP {error.code})"
+                                 + (f". {left} that this try created could not be removed, so "
+                                    f"{'it is' if ', ' not in left else 'they are'} kept" if left else "")) from None
         except ValueError as error:
+            ref.pop("vm_writes", None)
             # The disks are whole: keep them, and say how to finish by hand.
             detail = (f"The disks arrived, but the VM could not be created: {error}. They are kept as "
                       f"{', '.join(d['dv'] for d in ref['disks'])}. Create the VM from them under Import.")
@@ -1197,6 +1284,7 @@ def status(item):
                 return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
             ref["phase"] = "failed"
             return "failed", 100, detail
+        ref.pop("vm_writes", None)
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
                          f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")

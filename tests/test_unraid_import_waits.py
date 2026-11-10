@@ -28,6 +28,10 @@ JOB_API = f"/apis/batch/v1/namespaces/{NS}/jobs/"
 SECRETS = f"/api/v1/namespaces/{NS}/secrets/"
 
 
+class Restart(BaseException):
+    """Homestead going away part way: nothing in the jobs loop catches this."""
+
+
 def owned_by(kind, name, uid):
     return [{"kind": kind, "name": name, "uid": uid, "controller": True}]
 
@@ -548,6 +552,73 @@ class ImportWaitTests(unittest.TestCase):
         self.assertEqual("failed", job["status"], job["message"])
         self.assertIn("for 30 minutes", job["message"])
         self.assertTrue(self.kube.object(self.path(DVS[0])), "what it cannot check, it does not remove")
+
+    SECRET = SECRETS + "win11-cloudinit"
+    VM = f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachines/win11"
+
+    def cut_off_after(self, *bodies):
+        """A VM create that sends these POSTs and is then cut off (Homestead restarting)."""
+        def commit(prepared, send=None):
+            for path, body in bodies:
+                send("POST", path, body)
+            raise Restart()
+        self.imp.commit_vm = commit
+        with self.assertRaises(Restart):
+            self.look()
+
+    def secret_body(self):
+        return (SECRETS.rstrip("/"), {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "win11-cloudinit", "namespace": NS}})
+
+    def test_a_vm_create_cut_off_removes_what_it_created_by_uid_and_tries_again(self):
+        # #1329: commit_vm keeps no record, so a restart part way left what it had created.
+        self.finished_disks()
+        self.cut_off_after(self.secret_body())
+        made = self.kube.object(self.SECRET)["metadata"]["uid"]
+        self.kube.writes.clear()
+        self.imp.commit_vm = mock.Mock()
+        job = self.look()
+        deletes = [(path, body) for method, path, body, _ in self.kube.writes if method == "DELETE" and path == self.SECRET]
+        self.assertEqual([(self.SECRET, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": made}})],
+                         deletes, "removed by the uid its POST answered with")
+        self.assertIsNone(self.kube.object(self.SECRET))
+        self.imp.commit_vm.assert_called_once()
+        self.assertNotEqual("failed", job["status"], job["message"])
+
+    def test_one_created_again_under_the_name_since_is_kept(self):
+        self.finished_disks()
+        self.cut_off_after(self.secret_body())
+        self.kube.discard(self.SECRET)
+        self.kube.add(self.secret_body()[1])      # someone's own, by the same name
+        theirs = self.kube.object(self.SECRET)["metadata"]["uid"]
+        self.imp.commit_vm = mock.Mock()
+        self.look()
+        self.assertEqual(theirs, self.kube.object(self.SECRET)["metadata"]["uid"])
+
+    def test_a_vm_create_cut_off_once_the_vm_was_sent_keeps_everything_and_says_so(self):
+        self.finished_disks()
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.cut_off_after(self.secret_body(), (self.VM.rsplit("/", 1)[0], vm))
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertNotEqual("done", self.ref()["phase"], "the import ends without claiming a VM")
+        self.assertIn("The VM create was cut off after win11 was sent, so it may have been created. Check it under "
+                      "Virtual machines. Nothing it created was removed.", job["message"])
+        self.assertTrue(self.kube.object(self.SECRET))
+        self.assertTrue(self.kube.object(self.VM))
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+
+    def test_a_write_with_no_answer_is_kept_and_named(self):
+        self.finished_disks()
+        self.kube.fail(SECRETS.rstrip("/"), 500, method="POST", applied=True)   # landed, its answer lost
+        self.imp.commit_vm = lambda prepared, send=None: send("POST", *self.secret_body())
+        self.assertEqual("running", self.look()["status"], "no answer is no refusal: asked again")
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertTrue(self.kube.object(self.SECRET), "not known to be this try's: kept")
+        self.assertIn("The VM create was cut off part way. win11-cloudinit may be what it created, so it is kept. "
+                      "Check before creating the VM.", job["message"])
 
 
 if __name__ == "__main__":
