@@ -504,7 +504,10 @@ class ServerHeartbeatTests(Unfinished):
         mixed = said((0, 2, 1))[0]
         self.assertTrue(mixed.startswith("2 other servers are not Ready or have sent no recent heartbeat. The clock of 1 of "
                                          "them disagrees with Homestead's clock."), mixed)
-        for words in (said((1, 2)), said((1, 2, 1)), said((1, 3, 2)), said((0, 2, 1))):
+        mixed = said((0, 3, 2))[0]
+        self.assertTrue(mixed.startswith("3 other servers are not Ready or have sent no recent heartbeat. The clocks of 2 of "
+                                         "them disagree with Homestead's clock."), mixed)
+        for words in (said((1, 2)), said((1, 2, 1)), said((1, 3, 2)), said((0, 2, 1)), said((0, 3, 2))):
             self.assertLess(len("node-a: " + words[0].split(". ")[0] + "."), 90, words)
 
 

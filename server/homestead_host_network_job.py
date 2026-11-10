@@ -274,7 +274,8 @@ def _servers_down(node, count, clocks=0, names=()):
     else:
         cause = f"{who} {'is' if one else 'are'} not Ready or {'has' if one else 'have'} sent no recent heartbeat."
         if clocks:
-            cause += f" The clock of {clocks} of them disagrees with Homestead's clock."
+            cause += (f" The clock of {clocks} of them disagrees with Homestead's clock." if clocks == 1 else
+                      f" The clocks of {clocks} of them disagree with Homestead's clock.")
     return f"{cause} If {node} stops answering too, the cluster could lose its quorum."
 
 
