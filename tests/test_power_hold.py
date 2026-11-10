@@ -279,7 +279,7 @@ class StoppedBeforeRecordedTests(unittest.TestCase):
         self.enterContext(mock.patch.object(JOBS, "kget", lambda path: {"items": []}))   # nothing left on the host
         JOBS.hold_for_power("job-1", plan("plex", "web"), self.progress)   # the first pass stops both
         first = self.recorded
-        stored = self.enterContext(mock.patch.object(JOBS.OPS, "stored", mock.Mock(
+        self.enterContext(mock.patch.object(JOBS.OPS, "stored", mock.Mock(
             return_value=[{"id": "job-1", "ref": {"held": copy.deepcopy(first)}}])))
         self.assertEqual(["lab/plex", "lab/web"], [f"{i['ns']}/{i['name']}" for i in first])
         send = self.k.send
