@@ -75,12 +75,24 @@ class AccountStoreTests(unittest.TestCase):
 
 
 class Clock:
-    """The module's clock, moved by hand; everything else is the real time module."""
-    def __init__(self, now=1_000_000.0):
-        self.now = now
+    """The module's clocks, moved by hand; everything else is the real time
+    module. time() and monotonic() move together, except when the wall clock
+    is stepped (an NTP correction), which monotonic() never sees. They start
+    apart (apart = time() - monotonic()), as on a real host, so ordering by
+    the wrong one shows: a wall-clock as_of stays ahead of every read's start
+    when apart > 0, a wall-clock start stays behind as_of when apart < 0."""
+    def __init__(self, now=1_000_000.0, apart=0.0):
+        self.now, self.stepped = now, apart
 
     def time(self):
         return self.now
+
+    def monotonic(self):
+        return self.now - self.stepped
+
+    def step_wall_clock(self, seconds):
+        self.now += seconds
+        self.stepped += seconds
 
     def __getattr__(self, name):
         return getattr(time, name)
@@ -105,6 +117,7 @@ def reset_store():
 
 
 class StoreReadTests(unittest.TestCase):
+    APART = 995_000.0                   # the wall clock far ahead, as on a real host
     """How often the accounts Secret is read when the copy has expired (#978):
     once for a burst of requests, and while the cluster is failing at most once
     per AUTH.RETRY seconds - never more refusals than before, never fewer."""
@@ -132,7 +145,7 @@ class StoreReadTests(unittest.TestCase):
             return K.kget(path, timeout)
         AUTH.kget, AUTH.ksend = kget, K.ksend
         AUTH.SECRET_NAME = lambda: "homestead-auth"
-        self.clock = Clock()
+        self.clock = Clock(apart=self.APART)
         AUTH.time = self.clock
         self.token = AUTH.issue_token("robin")      # the first read, at the start
         self.reads.clear()
@@ -298,6 +311,45 @@ class StoreReadTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "not valid"):
             API_KEYS.verify(self.KEY, "192.0.2.5")
         self.assertEqual(2, len(self.reads))
+
+    def test_a_wall_clock_stepped_back_does_not_stop_reads_filling_the_copy(self):
+        # Reads and forgetting are ordered on a clock that never goes back
+        # (#1302): after an NTP correction, one read fills the copy again
+        # rather than every request reading the Secret itself.
+        AUTH.invalidate()                       # a restored configuration
+        self.clock.step_wall_clock(-600)
+        for _ in range(5):
+            self.assertEqual("robin", AUTH.verify_token(self.token)["user"])
+        self.assertEqual(1, len(self.reads))
+
+    def test_a_wall_clock_stepped_back_does_not_hold_off_a_conflict_reread(self):
+        # A save refused because another replica changed the accounts empties
+        # the copy; the reads after it fill it again, clock step or not.
+        self.kube.fail(self.path, 409, method="PUT")
+        with self.assertRaises(AUTH.StoreConflict):
+            AUTH.logout_everywhere("robin")
+        self.reads.clear()
+        self.clock.step_wall_clock(-600)
+        for _ in range(5):
+            self.assertEqual("robin", AUTH.verify_token(self.token)["user"])
+        self.assertEqual(1, len(self.reads))
+
+
+    def test_reads_after_a_save_here_fill_the_copy_again(self):
+        # A save here is put in order on the same clock as the reads after it.
+        AUTH.logout_everywhere("robin")
+        self.token = AUTH.issue_token("robin")
+        self.clock.now += 11                    # the saved copy has expired
+        self.reads.clear()
+        for _ in range(5):
+            self.assertEqual("robin", AUTH.verify_token(self.token)["user"])
+        self.assertEqual(1, len(self.reads))
+
+
+class StoreReadTestsMonotonicAhead(StoreReadTests):
+    """Every StoreReadTests case again with the monotonic clock ahead of the
+    wall clock, so a read's start taken from the wall clock shows too."""
+    APART = -995_000.0
 
 
 if __name__ == "__main__":
