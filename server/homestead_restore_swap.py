@@ -444,11 +444,17 @@ def plan(backup, ns="", app="", claim="", new_name="", storage_class="", size_gb
     current_gb = _gib(((spec.get("resources") or {}).get("requests") or {}).get("storage"))
     minimum = int(found.get("minimum_size_gb") or 1)
     size = int(size_gb or max(minimum, current_gb))
-    if size > minimum and chosen_class:
+    # Bytes, as the restore itself compares: 11 GiB is larger than a 10.5 GiB backup though both round to 11.
+    backup_bytes = int(found.get("volume_size_bytes") or minimum * 1024 ** 3)
+    backup_gib = f"{backup_bytes / 1024 ** 3:.1f}".removesuffix(".0")
+    if size < minimum:
+        blockers.append(f"{claim} is {size} GiB, smaller than this backup's {backup_gib} GiB. "
+                        f"Choose a size of at least {minimum} GiB")
+    if size * 1024 ** 3 > backup_bytes and chosen_class:
         sc = KUBE.get_optional(f"/apis/storage.k8s.io/v1/storageclasses/{chosen_class}", read=kget) or {}
         if sc.get("allowVolumeExpansion") is not True:
             blockers.append(f"Choose a class that allows expansion. {claim} is {size} GiB, larger than this backup's "
-                            f"{minimum} GiB, and {chosen_class} cannot grow a restored volume")
+                            f"{backup_gib} GiB, and {chosen_class} cannot grow a restored volume")
     days = keep_days()
     answers = uptime_report().get(f"{ns}/{app}") or {}
     meta = dep.get("metadata") or {}

@@ -203,7 +203,8 @@ class Base(unittest.TestCase):
 
     def fake_restore_plan(self, backup, ns, name):
         taken = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}" in self.kube.objs
-        return {"minimum_size_gb": 10, "storage_class": "longhorn", "storage_classes": ["longhorn"],
+        return {"minimum_size_gb": 10, "volume_size_bytes": getattr(self, "backup_bytes", 10 * 1024 ** 3),
+                "storage_class": "longhorn", "storage_classes": ["longhorn"],
                 "refused_classes": self.refused_classes,
                 "conflict": {"message": f"PVC {ns}/{name} already exists; choose a new name"} if taken else None}
 
@@ -1176,6 +1177,25 @@ class WrapUpTests(Base):
         p = self.plan()
         self.assertFalse(p["ready"])
         self.assertTrue(any("30 GiB" in b for b in p["blockers"]), p["blockers"])
+
+    def test_a_size_above_the_backups_bytes_needs_expansion_even_in_the_same_whole_gib(self):
+        # The backup holds 9.5 GiB, so 10 GiB is the smallest whole size and is still larger than the backup.
+        self.backup_bytes = 9 * 1024 ** 3 + 512 * 1024 ** 2
+        self.kube.objs["/apis/storage.k8s.io/v1/storageclasses/longhorn"]["allowVolumeExpansion"] = False
+        p = self.plan()
+        self.assertFalse(p["ready"])
+        self.assertTrue(any("expansion" in b for b in p["blockers"]), p["blockers"])
+        self.assertTrue(any("is 10 GiB, larger than this backup's 9.5 GiB" in b for b in p["blockers"]), p["blockers"])
+
+    def test_a_size_below_the_backup_is_refused_in_the_review(self):
+        p = self.plan(size_gb=5)
+        self.assertFalse(p["ready"])
+        self.assertTrue(any("is 5 GiB, smaller than this backup's 10 GiB. Choose a size of at least 10 GiB" in b
+                            for b in p["blockers"]), p["blockers"])
+
+    def test_a_size_equal_to_the_backups_bytes_needs_no_expansion(self):
+        self.kube.objs["/apis/storage.k8s.io/v1/storageclasses/longhorn"]["allowVolumeExpansion"] = False
+        self.assertTrue(self.plan()["ready"])
 
     def test_an_access_mode_a_restore_cannot_make_is_refused_in_the_review(self):
         self.kube.objs[OLD]["spec"]["accessModes"] = ["ReadWriteOncePod"]
