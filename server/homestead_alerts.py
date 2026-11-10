@@ -501,6 +501,15 @@ def longhorn_facts(overview):
 JOB_STALLED = 30 * 60
 
 
+STEP_WORDS = {"rolling-back": "Undoing the change", "reviewed": "Waiting to start", "cordoning": "Stopping new apps on the host",
+              "holding": "Stopping what waits for the host", "draining": "Moving apps and VMs off the host",
+              "verifying": "Checking the cluster again", "running": "Running"}
+
+
+def _step_words(step):
+    return STEP_WORDS.get(step) or step.replace("-", " ").capitalize()
+
+
 def _stalled_job_fact(op):
     title, step = op.get("title") or "Unnamed job", op["stalled_step"]
     way_out = ("Choose Cancel on the job to end it." if op.get("cancellable") else
@@ -509,7 +518,7 @@ def _stalled_job_fact(op):
     return {"key": f"jobs-stalled:{op['id']}:{step}", "category": "jobs", "severity": "degraded",
             "title": f"Job needs attention: {title}", "hold": JOB_STALLED, "signals": {"condition": 1},
             "resolved": f"Job no longer needs attention: {title}",
-            "body": f"This job has stayed at the step {step} for 30 minutes. Apps may stay stopped until it ends. {way_out}",
+            "body": f"This job has stayed at the step \"{_step_words(step)}\" for 30 minutes. Apps may stay stopped until it ends. {way_out}",
             "href": f"/?job={op['id']}"}
 
 

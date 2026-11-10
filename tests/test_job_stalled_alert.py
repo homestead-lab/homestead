@@ -15,13 +15,13 @@ T0 = 1_000_000.0
 STALL = 30 * 60
 
 
-def item(ref, status="running", **extra):
-    return {"id": "op-1", "kind": "node-power", "title": "Restart host node1", "status": status, "ref": ref, **extra}
+def item(ref, status="running", kind="node-power", **extra):
+    return {"id": "op-1", "kind": kind, "title": "Restart host node1", "status": status, "ref": ref, **extra}
 
 
 class PublicJobTests(unittest.TestCase):
-    def step(self, ref, status="running"):
-        return OPS._public(item(ref, status)).get("stalled_step")
+    def step(self, ref, status="running", kind="node-power"):
+        return OPS._public(item(ref, status, kind)).get("stalled_step")
 
     def test_a_job_holding_apps_that_are_not_started_again_is_at_a_step(self):
         self.assertEqual("draining", self.step({"held": ["Deployment/lab/web"], "restored": None, "phase": "draining"}))
@@ -33,7 +33,16 @@ class PublicJobTests(unittest.TestCase):
         self.assertIsNone(self.step({"phase": "draining"}))
 
     def test_a_job_undoing_itself_is(self):
-        self.assertEqual("rolling-back", self.step({"phase": "rolling-back"}))
+        self.assertEqual("rolling-back", self.step({"phase": "rolling-back"}, kind="reclass"))
+
+    def test_a_power_job_that_has_sent_power_is_not(self):
+        """A deliberate power-off keeps its apps held while the host is off."""
+        held = {"held": ["Deployment/lab/web"], "restored": None}
+        self.assertIsNone(self.step({**held, "phase": "observing"}))
+        self.assertIsNone(self.step({**held, "phase": "sending"}))
+
+    def test_a_power_job_still_preparing_is(self):
+        self.assertEqual("draining", self.step({"held": ["Deployment/lab/web"], "restored": None, "phase": "draining"}))
 
     def test_a_job_that_ended_is_not(self):
         self.assertIsNone(self.step({"held": ["Deployment/lab/web"], "restored": None, "phase": "draining"}, "failed"))
@@ -64,6 +73,8 @@ class StalledJobAlertTests(unittest.TestCase):
         self.assertEqual(("raised", "degraded"), (entry["phase"], entry["severity"]))
         self.assertIn("Restart host node1", entry["title"])
         self.assertIn("Choose Cancel on the job", entry["body"])
+        self.assertIn('the step "Moving apps and VMs off the host"', entry["body"])
+        self.assertNotIn("draining", entry["body"])
         self.assertLess(len(entry["body"].split(". ")[0]), 90)
         self.assertEqual([], self.look(T0 + STALL + 600), "said once, not again")
 
