@@ -156,6 +156,28 @@ class RemoveTests(unittest.TestCase):
         self.assertEqual([], deletes)
         self.assertEqual(1, len(result["refused"]))
 
+    def test_an_instance_manager_that_cannot_be_read_refuses(self):
+        # The fence on the engine's own instance-manager (#1306): a 500 on it
+        # is not proof that the process left this host.
+        im_name = "instance-manager-9f8e7d6c5b4a39281706f5e4d3c2b1a0"   # the engine fixture's
+        with Kube(*self.orphans, *self.engines) as kube:
+            stored = kube.object(f"{LH}/orphans/{self.orphans[0]['metadata']['name']}")
+            kube.fail(f"{LH}/instancemanagers/{im_name}", 500, times=9)
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(stored)])
+            deletes = self.deletes(kube)
+        self.assertEqual([], deletes)
+        self.assertIn(f"instance-manager {im_name} could not be read", result["refused"][0]["why"])
+
+    def test_an_instance_manager_on_another_host_lets_the_record_go(self):
+        there = instance_manager("node-b")
+        there["metadata"]["name"] = "instance-manager-9f8e7d6c5b4a39281706f5e4d3c2b1a0"
+        with Kube(*self.orphans, *self.engines, there) as kube:
+            stored = kube.object(f"{LH}/orphans/{self.orphans[0]['metadata']['name']}")
+            result = BLOCKERS.remove_engine_orphans("node-a", [record(stored)])
+            deletes = self.deletes(kube)
+        self.assertEqual([stored["metadata"]["name"]], result["removed"])
+        self.assertEqual(1, len(deletes))
+
     def test_the_body_is_checked(self):
         for body in ({}, {"node": "node-a"}, {"node": "node-a", "records": "x"},
                      {"node": "Node A!", "records": []}, {"node": "node-a", "records": [{"name": 3}]}):

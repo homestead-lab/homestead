@@ -101,11 +101,16 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     started = time.monotonic()
     budgets = {}        # identity: [first refused at, refusal] of a budget whose copies are starting
     stale_since = None  # since when only engines that run elsewhere hold the instance-manager
+    state = engines_read = cleans_itself = None     # what holds it, when that was read, Longhorn's own clean-up
+    throttled = {}      # identity: when to ask again, after the API server's own 429
+    now = started       # the clock as last read: once a round, after the evictions
     while targets:
         retrying = []
         for identity, p in targets.items():
             if identity in evicted or (p.get("metadata") or {}).get("deletionTimestamp"):
                 continue
+            if throttled.get(identity, 0) > now:
+                continue    # its Retry-After has not passed; the drain's deadline still applies
             ns, name = p["metadata"]["namespace"], p["metadata"]["name"]
             try:
                 L.ksend("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
@@ -127,7 +132,9 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
                         retrying.append(identity)
                         budgets[identity] = [budgets.get(identity, [None])[0], why]
                     elif why.get("plain"):
-                        pass    # the API server's own 429: tried again, within the drain's two minutes
+                        # The API server's own 429: tried again after its
+                        # Retry-After, within the drain's two minutes.
+                        throttled[identity] = now + why.get("retry_after", 0)
                     else:
                         skipped.append(f"{identity} (HTTP 429: {why['why']})")
                 elif wait and e.code == 404:
@@ -167,9 +174,14 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             # it is refused a moment after its consumers leave: engines it
             # lists that still run here are progress. Once only engines that
             # run elsewhere (or their orphan records) hold it, nothing more
-            # will let go, and the drain says what does.
-            state = BLOCKERS.engines_here(node, read=L.kget)
-            stale = state is not None and not state[0] and state[1]
+            # will let go, and the drain says what does - unless Longhorn
+            # removes those orphan records itself (its auto-deletion setting).
+            # Longhorn is read every ENGINES_EVERY seconds, not every round.
+            if engines_read is None or now >= engines_read + BLOCKERS.ENGINES_EVERY:
+                state, engines_read = BLOCKERS.engines_here(node, read=L.kget), now
+                if cleans_itself is None:
+                    cleans_itself = BLOCKERS.removes_instance_orphans(read=L.kget)
+            stale = state is not None and not state[0] and state[1] and not cleans_itself
             stale_since = (stale_since if stale_since is not None else now) if stale else None
             if stale and now >= stale_since + BLOCKERS.STALE_GRACE:
                 raise ValueError(f"The host stays cordoned. Longhorn still prevents eviction: {', '.join(sorted(storage)[:6])}, "
@@ -183,8 +195,10 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         # but those is left, waiting longer is safe - it never forces
         # anything. A budget whose copies are starting is waited on from its
         # first refusal. Anything else that has not left has two minutes.
-        others = [name for name in targets if name not in waiting]
+        others = [name for name in targets if name not in waiting and name not in throttled]
+        slowed = [name for name in targets if name not in waiting and name in throttled]
         deadlines = ([(started + 120, 120, "Pods have not left the host", others)] if others else []) + \
+            ([(started + 120, 120, BLOCKERS.THROTTLED[:1].upper() + BLOCKERS.THROTTLED[1:], slowed)] if slowed else []) + \
             ([(started + LONGHORN_DRAIN_WAIT, LONGHORN_DRAIN_WAIT, "Longhorn still prevents eviction", storage)]
              if storage else []) + \
             [(budgets[name][0] + BLOCKERS.BUDGET_WAIT, BLOCKERS.BUDGET_WAIT,
