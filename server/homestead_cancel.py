@@ -412,6 +412,13 @@ def restore_cancel(item, _options):
     # name may have made its pair and not yet its claim. A job from before
     # the job kept it names it in the claim it made.
     snapshot = ref.get("snapshot") or (((claim or {}).get("spec") or {}).get("dataSource") or {}).get("name")
+    # The delete is fenced with the uid of the claim checked above, never one read
+    # again: a claim that takes the name in between is someone's data (#1349).
+    # Absent at the check, None is saved, so nothing of that name is deleted.
+    uids = ref.setdefault("cancel_uids", {})
+    if path not in uids:
+        uids[path] = ((claim or {}).get("metadata") or {}).get("uid")
+        OPS.keep_cancel_ref(item)
     gone = _delete_saved(item, path)
     # Its snapshot is removed only once a claim binds: with the claim gone,
     # it is removed here (a backup is never touched).

@@ -341,6 +341,64 @@ class K3sClusterTests(Store):
         self.assertTrue(OPS._public(item)["tracking_only"])
 
 
+class RestoreCancelTests(Store):
+    """#1349: Cancel of a volume restore deletes only the claim it checked. The
+    delete is fenced with the uid of the claim that carried the restore's mark,
+    not with one read again; a claim absent at the check is never deleted."""
+    CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/web-data"
+    MARK = {"homestead.io/restored-from-backup": "backup-1"}
+
+    def setUp(self):
+        super().setUp()
+        CANCEL.register(OPS)
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {"volume-restore": lambda item: ("running", 40, "Restoring")}))
+
+    def claim(self, annotations):
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"namespace": "lab", "name": "web-data", "annotations": dict(annotations)}, "spec": {}})
+        return self.kube.object(self.CLAIM)["metadata"]["uid"]
+
+    def restoring(self):
+        return self.job("volume-restore", {"namespace": "lab", "name": "web-data", "backup": "backup-1"})
+
+    def before_the_delete(self, change):
+        delete = CANCEL._delete_saved
+
+        def changed(item, *paths):
+            change()
+            return delete(item, *paths)
+        self.enterContext(mock.patch.object(CANCEL, "_delete_saved", changed))
+
+    def test_its_own_claim_is_deleted(self):
+        self.claim(self.MARK)
+        OPS.cancel(self.restoring())
+        self.assertIsNone(self.kube.object(self.CLAIM))
+
+    def test_a_claim_swapped_in_between_the_check_and_the_delete_is_kept(self):
+        mine = self.claim(self.MARK)
+        op = self.restoring()
+        theirs = []
+
+        def swap():
+            self.kube.discard(self.CLAIM)
+            theirs.append(self.claim({}))       # a person's claim takes the name
+        self.before_the_delete(swap)
+        OPS.cancel(op)
+        kept = self.kube.object(self.CLAIM)
+        self.assertIsNotNone(kept, "the person's claim is kept")
+        self.assertEqual(theirs[0], kept["metadata"]["uid"])
+        self.assertNotEqual(mine, theirs[0])
+
+    def test_a_claim_absent_at_the_check_and_created_later_is_kept(self):
+        op = self.restoring()
+        created = []
+        self.before_the_delete(lambda: created.append(self.claim({})))
+        OPS.cancel(op)
+        self.assertEqual(created[0], (self.kube.object(self.CLAIM) or {}).get("metadata", {}).get("uid"),
+                         "a claim the check never saw is not deleted")
+        self.assertEqual([], [path for path, _ in self.sent("DELETE") if path == self.CLAIM])
+
+
 class DeploymentTests(Store):
     DEP = "/apis/apps/v1/namespaces/lab/deployments/frigate"
 
