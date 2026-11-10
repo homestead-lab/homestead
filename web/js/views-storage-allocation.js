@@ -60,9 +60,7 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
     <div class="f" style="margin-top:10px"><label>Copies rebuilt at once, per host ${tip("When a host or disk comes back, or a volume is missing a copy, Longhorn rebuilds copies from a healthy one. More at once restores volumes sooner. Fewer leaves more disk and network capacity for everything else. Longhorn's default is 5.")}</label>
       <input id="lh_rebuild" type="number" min="1" max="10" value="${cap.rebuild_limit ?? 5}" ${admin ? "" : "disabled"}></div>
-    ${offline ? `<div class="srows" style="margin-top:10px">${settingRow(`Rebuild copies of detached volumes ${tip(offline.supported
-        ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume automatically until its copies are complete, so that an unused volume is not left with one copy. Nothing else can use the volume in the meantime."
-        : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot rebuild detached volumes. With this on, Homestead attaches a detached volume that is missing copies, one at a time, until its copies are complete. It releases the volume as soon as anything else needs it, and nothing else can use the volume in the meantime.")}`, "",
+    ${offline ? `<div class="srows" style="margin-top:10px">${settingRow(`Rebuild copies of detached volumes ${tip("Longhorn repairs a missing copy only while its volume is attached. With this on, Homestead attaches a detached volume that is missing a copy, with nothing able to use it, until the copy is rebuilt. It releases the volume as soon as an app asks for it, so an app never waits for a rebuild.")}`, "",
       `<label class="toggle"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
       ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}`
       : offlineUnread ? `<div class="dim small" style="margin-top:10px">Homestead could not read whether Longhorn rebuilds copies of detached volumes. ${esc(offlineUnread)}</div>` : ""}
@@ -71,8 +69,14 @@ async function lhSettingsPaint() {
       `<label class="toggle"><input type="checkbox" id="lh_nodedown" data-was="${esc(cap.node_down)}" ${cap.node_down === "delete-both-statefulset-and-deployment-pod" ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>
     ${UI.more("Effects and risks", `<p><b>On:</b> if a host fails, apps set to move restart on another host within a few minutes, with their storage.</p>
       <p><b>Off:</b> those apps stay stopped until the failed host is back online.</p>
-      <p><b>Storage:</b> either way, any volume with a copy on the failed host is left with one copy fewer. After 10 minutes, Longhorn creates a new copy on another host if one has enough space. If none does, the volume runs with fewer copies until the failed host is back. A volume whose only copy is on the failed host is unavailable until then.</p>
+      <p><b>Storage:</b> either way, any volume with a copy on the failed host is left with one copy fewer. After ${esc(lhWaitWords(cap.replenish_wait ?? 600))}, Longhorn creates a new copy on another host if one has enough space. If none does, the volume runs with fewer copies until the failed host is back. A volume whose only copy is on the failed host is unavailable until then.</p>
       <p><b>Risk of turning it on:</b> Homestead cannot tell a host that has failed from one that has only lost its network connection. If the host is still running, its copy of an app may keep running too, and any data that copy writes after the switch-over is lost. Leave this off if the hosts sometimes lose their network connection while still running, or if an app must never run twice.</p>`, false, "lh-nodedown-why")}
+    ${"rwx_fast_failover" in cap ? `<div class="srows" style="margin-top:10px">${settingRow(`Restart network shares quickly after a host failure ${tip("Each network share (SMB or NFS) is served from one host. With this on, Longhorn moves it to another host within about a minute of a failure. When this is off, it moves only after Kubernetes stops waiting for the host, which takes several minutes.")}`, "",
+      `<label class="toggle"><input type="checkbox" id="lh_rwxfast" ${cap.rwx_fast_failover ? "checked" : ""} ${admin ? "" : "disabled"}><span></span></label>`)}</div>` : ""}
+    ${cap.replenish_choices ? `<div class="f" style="margin-top:10px"><label for="lh_replenish">Wait for a failed host before copying its data again</label>
+      <select id="lh_replenish" ${admin ? "" : "disabled"}>${[...new Set([...cap.replenish_choices, cap.replenish_wait])].sort((a, b) => a - b)
+        .map(w => `<option value="${w}" ${w === cap.replenish_wait ? "selected" : ""}>${esc(lhWaitWords(w))}</option>`).join("")}</select>
+      <div class="ui-help">If the host is back within this time, only the changes are copied to it. After that, Longhorn copies its data to other hosts in full. A longer wait means less copying after a reboot or power cut, but volumes have one copy fewer for longer if a host has failed for good.</div></div>` : ""}
     <div id="lh_nodes" class="lh-nodes">${lhNodeRows(cap)}</div>
     <div class="dim xs" style="margin-top:10px">Largest new volume ${tip("Above a host's limit, new volumes start with a copy missing, rebuilds wait and expansions are refused. Nothing already placed is moved.")}</div><div class="row lh-largest" id="lh_largest">${lhLargest(cap)}</div>
     <div class="dim xs" style="margin-top:8px">Only data actually written fills a disk: ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all hosts now.</div>
@@ -103,6 +107,10 @@ window.lhPreview = () => {
   $("#lh_largest").innerHTML = lhLargest(preview);
 };
 
+/* 600 -> "10 minutes", 3600 -> "1 hour", 21600 -> "6 hours". */
+function lhWaitWords(seconds) {
+  return seconds < 3600 ? `${Math.round(seconds / 60)} minutes` : `${Math.round(seconds / 3600)} hour${seconds === 3600 ? "" : "s"}`;
+}
 /* The switch's answer: a policy to save only when it was turned on or off. */
 function lhNodeDownChoice() {
   const box = $("#lh_nodedown");
@@ -112,7 +120,9 @@ function lhNodeDownChoice() {
 }
 window.lhSettingsSave = async () => {
   const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value,
-    node_down: lhNodeDownChoice(), ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
+    node_down: lhNodeDownChoice(), ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}),
+    ...($("#lh_rwxfast") ? { rwx_fast_failover: $("#lh_rwxfast").checked } : {}),
+    ...($("#lh_replenish") ? { replenish_wait: +$("#lh_replenish").value } : {}) };
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const offline = $("#lh_offline"), was = STATE.data.lhOffline;
@@ -124,5 +134,5 @@ window.lhSettingsSave = async () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  lhLevel, lhShort, lhNodeRows, lhLargest, lhCapacityCard, lhSettingsPaint, lhNodeDownChoice
+  lhLevel, lhShort, lhNodeRows, lhLargest, lhCapacityCard, lhSettingsPaint, lhWaitWords, lhNodeDownChoice
 };

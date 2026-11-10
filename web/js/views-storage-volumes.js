@@ -684,7 +684,7 @@ function storageClassCard(classes, v2 = null) {
   ].filter(Boolean).join(" ");
   const kind = row => row.made_for === "image" ? ` ${UI.chip("image", "neutral", { tip: "Harvester created this class for one image. Disks made from that image use it." })}`
     : row.made_for === "restore" ? ` ${UI.chip("restore", "neutral", { tip: "Created to restore a backup. It is kept while volumes use it, so that they can be resized." })}`
-    : row.made_for === "iso" ? ` ${UI.chip("ISO copies", "neutral", { tip: "Copies of ISO files for VM CD-ROM drives. Each has one copy, because the original files are on the shared folders" })}` : "";
+    : row.made_for === "iso" ? ` ${UI.chip("ISO copies", "neutral", { tip: "Copies of ISO files for VM CD-ROM drives. Each has one copy, because the original files are on the network shares" })}` : "";
   return `${UI.moduleHeader(`Storage classes`, `Storage classes set how new volumes are created. A class cannot be changed after it is created, so a change needs a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}${oursLine}
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
       <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Features</th><th>In use</th><th data-nosort></th>

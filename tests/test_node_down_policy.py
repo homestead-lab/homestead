@@ -103,5 +103,47 @@ class HeldTests(unittest.TestCase):
         self.assertNotIn("Allow apps with storage", fact["body"])
 
 
+
+class Settings:
+    """Longhorn settings by name, as the fake API answers them; a name not
+    there answers 404, as an older Longhorn without that setting does."""
+    def __init__(self, **values):
+        self.items, self.sent = {name: {"value": value} for name, value in values.items()}, []
+
+    def read(self, path):
+        import urllib.error
+        name = path.rsplit("/", 1)[1]
+        if name not in self.items:
+            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        return self.items[name]
+
+    def send(self, method, path, body, ctype=None):
+        self.sent.append((path.rsplit("/", 1)[1], body))
+
+
+class RecoveryDefaultsTests(unittest.TestCase):
+    def test_longhorns_defaults_become_homesteads_once_each(self):
+        s = Settings(**{LHCAP.NODE_DOWN: "do-nothing", LHCAP.RWX_FAST: "false", LHCAP.REPLENISH: "600"})
+        self.assertEqual({LHCAP.NODE_DOWN: True, LHCAP.RWX_FAST: True, LHCAP.REPLENISH: True},
+                         LHCAP.ensure_recovery_defaults(s.read, s.send))
+        values = {name: body.get("value") for name, body in s.sent}
+        self.assertEqual({LHCAP.NODE_DOWN: LHCAP.NODE_DOWN_RELEASE, LHCAP.RWX_FAST: "true",
+                          LHCAP.REPLENISH: str(LHCAP.REPLENISH_DEFAULT)}, values)
+        self.assertTrue(all(body["metadata"]["annotations"] for _, body in s.sent), "each is marked")
+
+    def test_a_value_someone_chose_is_kept(self):
+        s = Settings(**{LHCAP.NODE_DOWN: "do-nothing", LHCAP.RWX_FAST: "false", LHCAP.REPLENISH: "1800"})
+        self.assertFalse(LHCAP.ensure_recovery_defaults(s.read, s.send)[LHCAP.REPLENISH])
+        self.assertNotIn("value", dict(s.sent)[LHCAP.REPLENISH])
+
+    def test_a_longhorn_without_a_setting_counts_as_settled(self):
+        s = Settings(**{LHCAP.NODE_DOWN: "do-nothing", LHCAP.REPLENISH: "600"})
+        result = LHCAP.ensure_recovery_defaults(s.read, s.send)
+        self.assertIs(False, result[LHCAP.RWX_FAST])
+        self.assertNotIn(None, result.values())
+
+    def test_wait_words(self):
+        self.assertEqual(["10 minutes", "1 hour", "6 hours", "24 hours"], [LHCAP._wait_words(w) for w in LHCAP.REPLENISH_CHOICES])
+
 if __name__ == "__main__":
     unittest.main()

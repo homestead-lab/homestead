@@ -43,6 +43,28 @@ NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-p
 # the mark on the setting keeps a later choice, do-nothing included, as it is.
 NODE_DOWN_RELEASE = "delete-both-statefulset-and-deployment-pod"
 NODE_DOWN_MARK = "homestead.io/node-down-set"
+# Network shares (SMB and NFS shares on ReadWriteMany volumes) are served by a
+# share-manager pod on one host. Without fast failover, a share whose host
+# fails comes back only after Kubernetes stops waiting for the host - several
+# minutes; with it, Longhorn notices through a lease and moves it in about a
+# minute.
+RWX_FAST = "rwx-volume-fast-failover"
+RWX_FAST_MARK = "homestead.io/rwx-fast-failover-set"
+# How long Longhorn waits for a failed host to come back before it copies that
+# host's data to another host. A host back within the wait keeps its copies and
+# only the changes are copied; after it, every copy there is copied again in
+# full. Longhorn's 10 minutes is shorter than many reboots or a power cut.
+REPLENISH = "replica-replenishment-wait-interval"
+REPLENISH_MARK = "homestead.io/replenish-wait-set"
+REPLENISH_DEFAULT = 3600
+REPLENISH_CHOICES = (600, 3600, 6 * 3600, 24 * 3600)
+# Longhorn's defaults Homestead changes once, so a failed host's apps and
+# shares come back quickly: (setting, Longhorn's default values, Homestead's, mark).
+RECOVERY_DEFAULTS = (
+    (NODE_DOWN, ("do-nothing",), NODE_DOWN_RELEASE, NODE_DOWN_MARK),
+    (RWX_FAST, ("false",), "true", RWX_FAST_MARK),
+    (REPLENISH, ("600",), str(REPLENISH_DEFAULT), REPLENISH_MARK),
+)
 # A down host still holding a volume this long after it stopped answering:
 # past the 15 s failover and Longhorn's own clean-up, so the alert names a
 # stuck volume, not one about to be let go.
@@ -83,24 +105,37 @@ def node_down(read=None):
     return str(value) if value not in (None, "") else "do-nothing"
 
 
-def ensure_node_down(read=None, send=None):
-    """Once per cluster: Longhorn's default policy for a down node becomes
-    NODE_DOWN_RELEASE, so a failed host lets go of its volumes. True when it
-    was changed, False when the setting was marked already or someone had
-    chosen a policy, None when it couldn't be read (Longhorn not installed,
-    say) - tried again later."""
-    read, send = read or kget, send or ksend
+def _settle_default(name, longhorns, ours, mark, read, send):
+    """Once per cluster: a Longhorn setting still at Longhorn's default becomes
+    Homestead's, and the setting is marked so any later choice is kept. True
+    when it was changed, False when it was marked already, someone had chosen
+    a value, or this Longhorn has no such setting; None when it couldn't be
+    read - tried again later."""
     try:
-        item = read(f"{LH}/settings/{NODE_DOWN}") or {}
+        item = read(f"{LH}/settings/{name}") or {}
+    except urllib.error.HTTPError as error:
+        return False if error.code == 404 else None
     except Exception:
         return None
-    if ((item.get("metadata") or {}).get("annotations") or {}).get(NODE_DOWN_MARK):
+    if ((item.get("metadata") or {}).get("annotations") or {}).get(mark):
         return False
     value = item.get("value") if item.get("value") not in (None, "") else item.get("default")
-    change = value in (None, "", "do-nothing")
-    body = {"metadata": {"annotations": {NODE_DOWN_MARK: "1"}}, **({"value": NODE_DOWN_RELEASE} if change else {})}
-    send("PATCH", f"{LH}/settings/{NODE_DOWN}", body, ctype="application/merge-patch+json")
+    change = value in (None, "", *longhorns)
+    body = {"metadata": {"annotations": {mark: "1"}}, **({"value": ours} if change else {})}
+    send("PATCH", f"{LH}/settings/{name}", body, ctype="application/merge-patch+json")
     return change
+
+
+def ensure_node_down(read=None, send=None):
+    """Once per cluster: a failed host lets go of its volumes (NODE_DOWN_RELEASE)."""
+    return _settle_default(NODE_DOWN, ("do-nothing",), NODE_DOWN_RELEASE, NODE_DOWN_MARK, read or kget, send or ksend)
+
+
+def ensure_recovery_defaults(read=None, send=None):
+    """Every RECOVERY_DEFAULTS setting settled once: {setting: True changed,
+    False left as it was, None not read yet}."""
+    return {name: _settle_default(name, longhorns, ours, mark, read or kget, send or ksend)
+            for name, longhorns, ours, mark in RECOVERY_DEFAULTS}
 
 
 def _ready_since(node):
@@ -186,6 +221,8 @@ def settings():
     return {"over_provisioning": _int(_setting(OVER, 100), 100),
             "minimal_available": _int(_setting(MINIMAL, 25), 25),
             "node_down": _setting(NODE_DOWN, "do-nothing"),
+            "rwx_fast_failover": _setting(RWX_FAST, "false").lower() == "true",
+            "replenish_wait": _int(_setting(REPLENISH, 600), 600),
             "rebuild_limit": _int(_setting(REBUILD, 5), 5),
             "v2": v2_status()}
 
@@ -245,6 +282,9 @@ def status():
     out = capacity(cfg)
     out["v2"] = cfg["v2"]
     out["node_down"] = cfg["node_down"]
+    out["rwx_fast_failover"] = cfg["rwx_fast_failover"]
+    out["replenish_wait"] = cfg["replenish_wait"]
+    out["replenish_choices"] = list(REPLENISH_CHOICES)
     return out
 
 
@@ -257,6 +297,20 @@ def _patch_setting(name, value):
         except Exception:
             message = ""
         raise ValueError(f"Longhorn refused {name} = {value}: {message or f'HTTP {error.code}'}")
+
+
+def _wait_words(seconds):
+    return f"{seconds // 60} minutes" if seconds < 3600 else f"{seconds // 3600} hour{'s' if seconds != 3600 else ''}"
+
+
+def _patch_marked(name, value, mark):
+    """A person's choice, marked so _settle_default never changes it."""
+    _patch_setting(name, value)
+    try:
+        ksend("PATCH", f"{LH}/settings/{name}", {"metadata": {"annotations": {mark: "1"}}},
+              ctype="application/merge-patch+json")
+    except Exception:
+        pass        # unmarked: the next save marks it
 
 
 def save(cfg, *, allow_v2_enable=False):
@@ -297,6 +351,16 @@ def save(cfg, *, allow_v2_enable=False):
         except Exception:
             pass        # unmarked: the next save marks it; until then only a do-nothing chosen here could be changed
         done.append("pods on a failed node: " + cfg["node_down"])
+    if "rwx_fast_failover" in cfg and bool(cfg["rwx_fast_failover"]) != current["rwx_fast_failover"]:
+        _patch_marked(RWX_FAST, "true" if cfg["rwx_fast_failover"] else "false", RWX_FAST_MARK)
+        done.append("fast restart of network shares " + ("on" if cfg["rwx_fast_failover"] else "off"))
+    if "replenish_wait" in cfg and cfg["replenish_wait"] not in (None, ""):
+        wait = _int(cfg["replenish_wait"], -1)
+        if wait not in REPLENISH_CHOICES:
+            raise ValueError("the wait for a failed host is one of " + ", ".join(_wait_words(w) for w in REPLENISH_CHOICES))
+        if wait != current["replenish_wait"]:
+            _patch_marked(REPLENISH, wait, REPLENISH_MARK)
+            done.append(f"wait for a failed host {_wait_words(wait)}")
     if "v2" in cfg and bool(cfg["v2"]) != bool(current["v2"].get("enabled")):
         value = "true" if cfg["v2"] else "false"
         if not cfg["v2"]:

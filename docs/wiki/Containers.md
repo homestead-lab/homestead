@@ -1210,10 +1210,15 @@ failed host is back online. While a failed host still has volumes attached, an
 alert lists them.
 
 **Storage:** either way, any volume with a copy on the failed host is left with
-one copy fewer. After 10 minutes, Longhorn creates a new copy on another host
-if one has enough space and the disk tags the volume's storage class requires.
-If none does, the volume runs with fewer copies until the failed host is back,
-when the old copy is brought up to date. A volume whose only copy is on the
+one copy fewer. Longhorn waits for the failed host to come back for the time
+set in **Wait for a failed host before copying its data again** (1 hour by
+default). If the host is back in time, only the changes are copied to it. After
+that, Longhorn creates a new copy on another host if one has enough space and
+the disk tags the volume's storage class requires, copying the data in full. If
+none does, the volume runs with fewer copies until the failed host is back.
+An app never waits for one of these rebuilds: Homestead releases a volume it is
+rebuilding as soon as an app asks for it, and the copy is rebuilt while the app
+runs. A volume whose only copy is on the
 failed host is unavailable until then.
 
 Changing a container's choice restarts it.
