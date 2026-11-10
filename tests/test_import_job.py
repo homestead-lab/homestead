@@ -396,8 +396,8 @@ class ImportJobTests(unittest.TestCase):
     def test_removing_a_failed_import_deletes_its_stamped_app_service_and_job_and_keeps_the_volume(self):
         self.failed_import()
         plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")
-        self.assertEqual((True, "app", ["app"], [{"name": "data", "created": True}]),
-                         (plan["removable"], plan["workload"], plan["services"], plan["volumes"]))
+        self.assertEqual((True, "app", ["app"], [{"name": "data", "created": True}], True),
+                         (plan["removable"], plan["workload"], plan["services"], plan["volumes"], plan["copy_job"]))
         result = self.remove()
         self.assertEqual(sorted([self.dep_path, self.svc_path, self.job_path]), self.deleted())
         self.assertIn(self.pvc_path, self.objects, "a volume not ticked is kept")
@@ -420,23 +420,36 @@ class ImportJobTests(unittest.TestCase):
         def armed(*args, **kwargs):
             self.armed = True        # from here on: the reads that decide what to delete
             return real(*args, **kwargs)
-        with mock.patch.object(flow, "remove_failed", armed), self.assertRaises(urllib.error.HTTPError):
-            self.remove(volumes=["data"])
+        with mock.patch.object(flow, "remove_failed", armed):
+            result = self.remove(volumes=["data"])
         self.assertEqual(replacement["metadata"]["uid"], self.objects[path]["metadata"]["uid"], "the replacement survives")
+        self.assertEqual(1, len(result["kept"]), "and the result says it was kept")
+        self.assertIn("changed during removal", result["message"])
+        self.assertFalse(self.item()["ref"]["retain_resources"], "the rest of the removal was recorded")
 
     armed = False
 
-    def test_an_app_swapped_after_the_stamp_check_is_not_deleted(self):
-        self.swapped_before_delete(self.dep_path, {"metadata": {"name": "app", "uid": "new", "annotations": {}}})
+    def swap(self, name, uid="new"):
+        return {"metadata": {"name": name, "namespace": "lab", "uid": uid, "resourceVersion": "9", "annotations": {}}}
 
-    def test_a_service_swapped_after_the_stamp_check_is_not_deleted(self):
-        self.swapped_before_delete(self.svc_path, {"metadata": {"name": "app", "uid": "new", "annotations": {}}})
+    def test_an_app_swapped_after_the_stamp_check_is_kept(self):
+        self.swapped_before_delete(self.dep_path, self.swap("app"))
 
-    def test_a_job_swapped_after_the_stamp_check_is_not_deleted(self):
-        self.swapped_before_delete(self.job_path, {"metadata": {"name": "x", "uid": "new", "annotations": {}}})
+    def test_a_service_swapped_after_the_stamp_check_is_kept(self):
+        self.swapped_before_delete(self.svc_path, self.swap("app"))
 
-    def test_a_volume_swapped_after_the_check_is_not_deleted(self):
-        self.swapped_before_delete(self.pvc_path, {"metadata": {"name": "data", "uid": "new"}})
+    def test_a_job_swapped_after_the_stamp_check_is_kept(self):
+        self.swapped_before_delete(self.job_path, self.swap("homestead-import-app"))
+
+    def test_a_volume_swapped_after_the_check_is_kept(self):
+        self.swapped_before_delete(self.pvc_path, self.swap("data"))
+
+    def test_a_ticked_volume_that_was_replaced_stops_the_removal_before_anything_is_deleted(self):
+        self.failed_import()
+        self.objects[self.pvc_path]["metadata"]["uid"] = "someone-else"
+        with self.assertRaisesRegex(ValueError, "replaced"):
+            self.remove(volumes=["data"])
+        self.assertEqual([], self.deleted(), "not even the app")
 
     def test_a_cancelled_import_is_removed_the_same_way(self):
         self.failed_import("cancelled")
@@ -449,7 +462,7 @@ class ImportJobTests(unittest.TestCase):
         self.objects[self.dep_path]["metadata"]["annotations"] = {}      # replaced by an app of the same name
         self.objects[self.job_path]["metadata"]["annotations"] = {}
         plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")
-        self.assertEqual(("", []), (plan["workload"], plan["services"]))
+        self.assertEqual(("", [], "app", False), (plan["workload"], plan["services"], plan["kept_app"], plan["copy_job"]))
         self.remove()
         self.assertEqual([], self.deleted())
         for path in (self.dep_path, self.svc_path, self.job_path, self.pvc_path):
@@ -469,13 +482,6 @@ class ImportJobTests(unittest.TestCase):
             self.remove(volumes=["data"])
         self.assertEqual([], self.deleted())
         self.assertEqual(before, self.objects[self.pvc_path])
-
-    def test_a_volume_replaced_after_the_import_is_not_deleted(self):
-        self.failed_import()
-        self.objects[self.pvc_path]["metadata"]["uid"] = "someone-else"
-        with self.assertRaisesRegex(ValueError, "replaced"):
-            self.remove(volumes=["data"])
-        self.assertIn(self.pvc_path, self.objects)
 
     def test_a_running_import_cannot_be_removed_this_way(self):
         self.start()

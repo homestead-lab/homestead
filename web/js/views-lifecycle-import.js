@@ -115,8 +115,9 @@ window.importRemove = async (name, state, namespace = defaultNamespace()) => {
   }
   // A failed or cancelled import (#1301): what it made and stamped goes, volumes only when ticked.
   if (plan.journalled && plan.removable) {
-    const made = [plan.workload && `The app · ${plan.workload}`, ...(plan.services || []).map(n => `Its address · ${n}`), "The copy job"].filter(Boolean);
-    modal(`Remove import · ${name}`, UI.lead("Removes what this import made. Anything else with the same name is left alone.")
+    const made = [plan.workload && `The app · ${plan.workload}`, ...(plan.services || []).map(n => `Its address · ${n}`), plan.copy_job && "The copy job"].filter(Boolean);
+    modal(`Remove import · ${name}`, UI.lead("Removes what this import made. Anything else with the same name is kept.")
+      + (plan.kept_app ? `<p class="ui-help">The app · ${esc(plan.kept_app)} is kept, since it does not carry this import's stamp.</p>` : "")
       + `<ul class="ui-list">${made.map(m => `<li>${esc(m)}</li>`).join("")}</ul>`
       + (plan.volumes?.length ? UI.section("Volumes", `<div class="volume-delete-grid">${plan.volumes.map(claim => `
         <label class="volume-delete-option danger"><input type="checkbox" class="imr-volume" value="${esc(claim.name)}">

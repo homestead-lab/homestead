@@ -209,7 +209,7 @@ def cleanup_plan(ns, name, job, read, ops):
     Only objects carrying the import's stamp. Volumes are listed apart, and only
     those this import created."""
     plan = {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True,
-            "journalled": True, "removable": False, "services": []}
+            "journalled": True, "removable": False, "services": [], "copy_job": False}
     item = _item(ns, name, job, ops)
     if not item or item.get("status") not in REMOVABLE:
         return plan
@@ -218,6 +218,10 @@ def cleanup_plan(ns, name, job, read, ops):
     app = _find(IDENT.base(ns) + "/" + ref["name"], read)
     if app and _stamped(app, ident, ref):
         plan["workload"] = ref["name"]
+    elif app:
+        plan["kept_app"] = ref["name"]      # there, but without the import's stamp: not this import's to remove
+    copy_job = _find(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", read)
+    plan["copy_job"] = bool(copy_job and _stamped(copy_job, ident, ref))
     svc = _find(f"/api/v1/namespaces/{ns}/services/{ref['name']}", read)
     if svc and _stamped(svc, ident, ref):
         plan["services"] = [ref["name"]]
@@ -232,46 +236,58 @@ def cleanup_plan(ns, name, job, read, ops):
 def remove_failed(ns, name, job, read, send, ops, volumes=()):
     """Remove a failed or cancelled import: its stamped app, Service and copy Job,
     each by UID. Volumes only when named and this import's own (same UID it made).
-    Anything without the stamp, or replaced since, is left alone."""
+    Anything without the stamp is not touched. An object that changed after it was
+    checked fails its UID precondition (409) and is kept, and the result says so."""
     item = _item(ns, name, job, ops)
     if not item or item.get("status") not in REMOVABLE:
         raise ValueError("Only a failed or cancelled import can be removed here. Check Recent jobs. All data is kept.")
     ident = item["id"]
     with LOCKS.worker_lock(ident, ops, timeout=0), ops.transaction() as t:
         item = next(i for i in t.items if i["id"] == ident)
-        ref, removed = item["ref"], []
-        wanted = [str(v) for v in volumes]
+        ref, removed, kept_changed = item["ref"], [], []
         pinned = ref.get("claims") or {}
-        for claim in wanted:
+        # Every ticked volume is checked before anything is deleted, so a bad one stops the removal whole.
+        doomed = []
+        for claim in [str(v) for v in volumes]:
             if claim not in ref.get("created", []) or not (pinned.get(claim) or {}).get("uid"):
                 raise ValueError(f"This import did not create {claim}, so it is not deleted here.")
-        def drop(path, label, uid):
-            """Delete with the UID of the object already checked, never one read again here: a
-            replacement made after the check then fails the precondition instead of being deleted."""
-            send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid},
-                                  "propagationPolicy": "Background"})
-            removed.append(label)
-        app = _find(IDENT.base(ns) + "/" + ref["name"], read)
-        if app and _stamped(app, ident, ref):
-            drop(IDENT.base(ns) + "/" + ref["name"], f"app {ref['name']}", IDENT.identity(app)["uid"])
-        svc = _find(f"/api/v1/namespaces/{ns}/services/{ref['name']}", read)
-        if svc and _stamped(svc, ident, ref):
-            drop(f"/api/v1/namespaces/{ns}/services/{ref['name']}", f"service {ref['name']}", IDENT.identity(svc)["uid"])
-        copy_job = _find(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", read)
-        if copy_job and _stamped(copy_job, ident, ref):
-            drop(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", f"copy job {name}", IDENT.identity(copy_job)["uid"])
-        for claim in wanted:
             found = _find(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read)
             if found is None:
                 continue
             if IDENT.identity(found)["uid"] != pinned[claim]["uid"]:
                 raise ValueError(f"{claim} was replaced after this import, so it is not deleted.")
+            doomed.append(claim)
+
+        def drop(path, label, uid):
+            """Delete with the UID of the object already checked, never one read again here: a
+            replacement made after the check fails the precondition and is kept."""
+            try:
+                send("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid},
+                                      "propagationPolicy": "Background"})
+            except urllib.error.HTTPError as error:
+                if error.code != 409:
+                    raise
+                kept_changed.append(label)
+                return
+            removed.append(label)
+        for path, label in ((IDENT.base(ns) + "/" + ref["name"], f"app {ref['name']}"),
+                            (f"/api/v1/namespaces/{ns}/services/{ref['name']}", f"address {ref['name']}"),
+                            (f"/apis/batch/v1/namespaces/{ns}/jobs/{name}", f"copy job {name}")):
+            found = _find(path, read)
+            if found and _stamped(found, ident, ref):
+                drop(path, label, IDENT.identity(found)["uid"])
+        for claim in doomed:
             drop(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", f"volume {claim}", pinned[claim]["uid"])
         ref.update(retain_resources=False, helper_removed=True)
         t.save(t.items)
-    kept = [c for c in ref.get("created", []) if c not in wanted]
-    return {"ok": True, "journalled": True, "name": name, "removed": removed, "pods_removed": [], "prepulls_removed": [],
-            "message": "Import removed." + (f" Kept volumes: {', '.join(kept)}." if kept else "")}
+    kept = [c for c in ref.get("created", []) if c not in doomed]
+    message = "Import removed."
+    if kept_changed:
+        message += f" Kept because it changed during removal: {', '.join(kept_changed)}."
+    if kept:
+        message += f" Kept volumes: {', '.join(kept)}."
+    return {"ok": True, "journalled": True, "name": name, "removed": removed, "kept": kept_changed,
+            "pods_removed": [], "prepulls_removed": [], "message": message}
 
 
 def status(item, read):

@@ -21,7 +21,7 @@ function world(plan) {
   ctx.viewImport = () => {};
   return { ctx, log, boxes };
 }
-const PLAN = { journalled: true, removable: true, known: true, workload: "notes", services: ["notes"],
+const PLAN = { journalled: true, removable: true, known: true, workload: "notes", services: ["notes"], copy_job: true,
   volumes: [{ name: "notes-appdata", created: true }, { name: "notes-extra", created: true }] };
 
 test("the review of a failed import lists what it made, and each volume apart and unticked", async () => {
@@ -42,4 +42,11 @@ test("Remove sends no volume unless it was ticked, and asks before deleting one"
   await w.ctx.importRemoveNow("homestead-import-notes", null, "lab");
   assert.deepEqual(w.log.find(e => e[0] === "api")[2].remove_volumes, ["notes-appdata"]);
   assert.ok(w.log.some(e => e[0] === "ask" && /cannot be undone/.test(e[1])));
+});
+
+test("the copy job is listed only when it exists, and an app without the stamp is said to be kept", async () => {
+  const w = world({ ...PLAN, copy_job: false, workload: "", kept_app: "notes" }); await w.ctx.importRemove("homestead-import-notes", "failed", "lab");
+  const html = w.log.find(e => e[0] === "modal")[2];
+  assert.doesNotMatch(html, /The copy job/);
+  assert.match(html, /The app · notes is kept, since it does not carry this import's stamp/);
 });
