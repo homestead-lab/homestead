@@ -380,9 +380,18 @@ def hold_for_power(operation_id, power_plan, progress):
     moving = [i for i in items if i["kind"] == "VirtualMachine" and picks.get(i["id"]) == "move"]
     if not waiting and not moving:
         return False
-    progress("holding", 8, f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
-             + (f", moving {len(moving)} VM{'' if len(moving) == 1 else 's'}" if moving else "") + ". Nothing has been sent to the host yet")
-    held = [HOLD.stop(item, operation_id) for item in waiting]
+    stopping = (f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
+                + (f", moving {len(moving)} VM{'' if len(moving) == 1 else 's'}" if moving else "") + ". Nothing has been sent to the host yet")
+    progress("holding", 8, stopping)
+    held = []
+    for item in waiting:
+        # Written on the job before the app is touched: a stop that wrote its
+        # mark and scaled to none, then failed (or an app after it that was
+        # refused), would otherwise leave an app at 0 that restore never
+        # lists (#1321). Restore reads how it ran from the mark on the app.
+        held.append({**item, "was": None})
+        progress("holding", 8, stopping, held=held)
+        held[-1] = HOLD.stop(item, operation_id)
     progress("holding", 8, "Waiting for them to stop. Nothing has been sent to the host yet", held=held)
     if moving:
         # A resumed job finds some already moved: only what is still here moves.
