@@ -8,12 +8,12 @@ links only when they point inside the volume; links in the live volume are
 never written through.
 
 One restore runs into a volume at a time, across every copy of Homestead:
-the run holds a Lease for the volume while it writes (_claim).
+the run holds a short Lease for the volume from before its review check until
+the copy ends, renewed while it runs (_claim, _keep).
 """
 import datetime
 import hashlib
 import json
-import math
 import posixpath
 import secrets
 import threading
@@ -37,11 +37,18 @@ IN_USE = ("{app} is running and using this volume, so it sees these files change
 MIN_SECONDS_LEFT = 300
 SAFE_RATE = 10 * 1024 * 1024    # bytes a second
 _RUNNING, _LOCK = {}, threading.Lock()   # (namespace, pvc) -> job id, or "planning"
-_HOLDERS = {}   # (namespace, pvc) -> this copy's holder of the volume's restore Lease
-ELSEWHERE = "Another copy of Homestead is restoring files into this volume. It ends within {minutes} minutes. Try again then."
-# The Lease is not renewed: it lasts until the browsing pod is stopped at the
-# session's end (nothing is written after that), plus this margin.
-CLAIM_MARGIN = 60
+_HOLDERS = {}   # (namespace, pvc) -> this copy's hold on the volume's restore Lease (_hold)
+ELSEWHERE = ("Another copy of Homestead is restoring files into this volume. Try again when it finishes. "
+             "If that copy stopped, the volume is free again within a minute.")
+NOT_HELD = "Homestead could not keep this volume for the restore, so it did not start. Try again."
+LOST = ("Homestead could not keep this volume for the whole restore, so another restore may have "
+        "written into it at the same time. Check the restored files.")
+# The Lease is short and renewed while the restore runs: a copy of Homestead
+# that stopped mid-restore frees the volume within CLAIM_SECONDS. It is lost
+# only when no renewal has reached the API server for CLAIM_SECONDS, or
+# another copy holds it (a 409).
+CLAIM_SECONDS = 60
+RENEW_EVERY = 15
 
 
 def _claim_path(name=""):
@@ -64,16 +71,19 @@ class _Held(Exception):
     pass
 
 
-def _claim(namespace, pvc, until):
-    """Take the volume's restore Lease until the snapshot session ends.
-    Returns the holder; raises _Held while another copy of Homestead holds
-    it, or wins it at the same moment (a 409)."""
+def _stamp(now):
+    return now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _claim(namespace, pvc):
+    """Take the volume's restore Lease for CLAIM_SECONDS. Returns the
+    holder; raises _Held while another copy of Homestead holds it, or wins
+    it at the same moment (a 409)."""
     holder = f"{LEADER.IDENTITY}/{secrets.token_hex(4)}"
     now = datetime.datetime.now(datetime.timezone.utc)
-    stamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    seconds = max(0, int(until - now.timestamp())) + CLAIM_MARGIN
+    stamp = _stamp(now)
     name = _claim_name(namespace, pvc)
-    spec = {"holderIdentity": holder, "leaseDurationSeconds": seconds, "acquireTime": stamp, "renewTime": stamp}
+    spec = {"holderIdentity": holder, "leaseDurationSeconds": CLAIM_SECONDS, "acquireTime": stamp, "renewTime": stamp}
     lease = KUBE.get_optional(_claim_path(name), read=SNAP.kget)
     try:
         if lease is None:
@@ -87,21 +97,67 @@ def _claim(namespace, pvc, until):
         renewed = _when(held.get("renewTime")) or _when(held.get("acquireTime"))
         left = renewed and (renewed - now).total_seconds() + int(held.get("leaseDurationSeconds") or 0)
         if held.get("holderIdentity") and left and left > 0:
-            raise _Held(ELSEWHERE.format(minutes=math.ceil(left / 60)))
+            raise _Held(ELSEWHERE)
         lease["spec"] = dict(held, **spec, leaseTransitions=int(held.get("leaseTransitions") or 0) + 1)
         # resourceVersion is kept: of two taking it at once, one gets a 409.
         SNAP.ksend("PUT", _claim_path(name), lease)
         return holder
     except urllib.error.HTTPError as error:
         if error.code == 409:
-            # The other copy's Lease lasts at most a whole session.
-            raise _Held(ELSEWHERE.format(minutes=math.ceil((SNAP.TTL + CLAIM_MARGIN) / 60))) from None
+            raise _Held(ELSEWHERE) from None
         raise
+
+
+def _renew(namespace, pvc, holder):
+    """True when renewed, False when the Lease is no longer holder's (another
+    copy has it, or a 409), None when the API server did not answer."""
+    path = _claim_path(_claim_name(namespace, pvc))
+    try:
+        lease = KUBE.get_optional(path, read=SNAP.kget)
+        if not lease or (lease.get("spec") or {}).get("holderIdentity") != holder:
+            return False
+        lease["spec"].update(renewTime=_stamp(datetime.datetime.now(datetime.timezone.utc)),
+                             leaseDurationSeconds=CLAIM_SECONDS)
+        SNAP.ksend("PUT", path, lease)
+        return True
+    except urllib.error.HTTPError as error:
+        return False if error.code == 409 else None
+    except Exception:
+        return None
+
+
+def _keep(namespace, pvc, hold):
+    """Renew the Lease every RENEW_EVERY seconds until hold["stop"]. When it
+    is lost, mark the hold and stop renewing: the restore says so."""
+    last = time.monotonic()
+    while not hold["stop"].wait(RENEW_EVERY):
+        renewed = _renew(namespace, pvc, hold["holder"])
+        if renewed:
+            last = time.monotonic()
+        elif renewed is False or time.monotonic() - last >= CLAIM_SECONDS:
+            hold["lost"] = True
+            return
+
+
+def _hold(namespace, pvc, holder):
+    """Keep holder's Lease renewed from now until _let_go."""
+    hold = {"holder": holder, "stop": threading.Event(), "lost": False}
+    hold["thread"] = threading.Thread(target=_keep, args=(namespace, pvc, hold), name="snapshot-restore-claim", daemon=True)
+    hold["thread"].start()
+    return hold
+
+
+def _let_go(namespace, pvc, hold):
+    """Stop renewing, then give the Lease back (unless it was lost)."""
+    hold["stop"].set()
+    hold["thread"].join(5)
+    if not hold["lost"]:
+        _release(namespace, pvc, hold["holder"])
 
 
 def _release(namespace, pvc, holder):
     """Give the Lease back if holder still has it. Never raises: one not
-    given back runs out when the session would have ended."""
+    given back runs out after CLAIM_SECONDS."""
     try:
         path = _claim_path(_claim_name(namespace, pvc))
         lease = KUBE.get_optional(path, read=SNAP.kget)
@@ -309,17 +365,21 @@ def restore(body):
         _RUNNING[key] = "planning"
     job = None
     try:
+        # The claim is taken first, so nothing can change the volume between
+        # the review check and the copy.
+        try:
+            holder = _claim(target_ns, pvc)
+        except _Held as held:
+            return _refuse(str(held), _plan(body)[0], key)
+        with _LOCK:
+            _HOLDERS[key] = _hold(target_ns, pvc, holder)
         plan, send = _plan(body)
         if body.get("review_token") != plan["review_token"]:
             return _refuse("What the restore would change has changed. Review it again.", plan, key)
         if not plan["ready"]:
             return _refuse(plan["blockers"][0], plan, key)
-        try:
-            holder = _claim(target_ns, pvc, plan["session_ends_at"])
-        except _Held as held:
-            return _refuse(str(held), plan, key)
-        with _LOCK:
-            _HOLDERS[key] = holder
+        if _HOLDERS[key]["lost"]:
+            return _refuse(NOT_HELD, plan, key)
         dst_ns, dst_pod = FILES._session(target_ns, pvc)
         count = len(send)
         job = {"id": secrets.token_hex(8), "status": "running", "bytes": 0, "error": "", "move": False,
@@ -344,15 +404,18 @@ def restore(body):
             planning = _RUNNING.get(key) == "planning"
             if planning:
                 del _RUNNING[key]
-                holder = _HOLDERS.pop(key, None)
-        if planning and holder:
-            _release(target_ns, pvc, holder)
+                hold = _HOLDERS.pop(key, None)
+        if planning and hold:
+            _let_go(target_ns, pvc, hold)
         raise
 
 
 def _refuse(error, plan, key):
     with _LOCK:
         _RUNNING.pop(key, None)
+        hold = _HOLDERS.pop(key, None)
+    if hold:
+        _let_go(*key, hold)
     return ROUTER.Reply(409, {"error": error, "plan": plan})
 
 
@@ -360,6 +423,11 @@ def _launch(job, namespace, session, dst_ns, dst_pod, folder, reader):
     def run():
         try:
             FILES._transfer(job, namespace, session, [], dst_ns, dst_pod, folder, reader_argv=reader, touch_source=False)
+            # A copy cut off mid-file is worse than one that finishes, so a
+            # lost claim does not stop the copy: the job says what happened.
+            hold = _HOLDERS.get((dst_ns, job["to"]))
+            if hold and hold["lost"]:
+                job.update(status="failed", error=f"{LOST} {job['error']}".strip())
         finally:
             _finished(job, dst_ns, job["to"], namespace, session)
     threading.Thread(target=run, name="snapshot-restore", daemon=True).start()
@@ -372,7 +440,7 @@ def _finished(job, target_ns, pvc, namespace, session):
         if _RUNNING.get((target_ns, pvc)) != job["id"]:
             return
         del _RUNNING[(target_ns, pvc)]
-        holder = _HOLDERS.pop((target_ns, pvc), None)
+        hold = _HOLDERS.pop((target_ns, pvc), None)
         FILES.BUSY_CLAIMS.discard((target_ns, pvc))
         SNAP.ACTIVE_RESTORES[(namespace, session)] -= 1
         last = SNAP.ACTIVE_RESTORES[(namespace, session)] <= 0
@@ -381,8 +449,8 @@ def _finished(job, target_ns, pvc, namespace, session):
         close = last and (namespace, session) in SNAP.CLOSE_AFTER_RESTORE
         if close:
             SNAP.CLOSE_AFTER_RESTORE.discard((namespace, session))
-    if holder:
-        _release(target_ns, pvc, holder)
+    if hold:
+        _let_go(target_ns, pvc, hold)
     if close:
         try:
             SNAP.close(namespace, session)

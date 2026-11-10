@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -21,6 +22,7 @@ import homestead_snapshot_restore as R
 import homestead_route_policy as POLICY
 
 NAME = S.PREFIX + 'a' * 24
+LAUNCH = R._launch   # the real one: setUp stands a recorder in for it
 
 
 class RestoreTests(unittest.TestCase):
@@ -48,6 +50,7 @@ class RestoreTests(unittest.TestCase):
             mock.patch.object(R.SNAP, 'kget', K.kget),
             mock.patch.object(R.SNAP, 'ksend', K.ksend),
             mock.patch.object(LEADER, 'IDENTITY', 'homestead-a'),
+            mock.patch.object(R, 'RENEW_EVERY', 0.01, create=True),
         ]
         self.kube = Kube()
         self.kube.__enter__()
@@ -59,6 +62,15 @@ class RestoreTests(unittest.TestCase):
         self.addCleanup(S.ACTIVE_RESTORES.clear)
         self.addCleanup(S.CLOSE_AFTER_RESTORE.clear)
         self.addCleanup(R.FILES.BUSY_CLAIMS.clear)
+        self.addCleanup(self.stop_renewing)
+
+    def stop_renewing(self):
+        """Restores the tests leave running keep renewing their claim: stop
+        them before the fake API server goes."""
+        for hold in list(R._HOLDERS.values()):
+            hold['stop'].set()
+            hold['thread'].join(2)
+        R._HOLDERS.clear()
 
     def body(self, **extra):
         return {'namespace': 'lab', 'session': NAME, 'folder': 'config', 'paths': ['config/app.conf', 'config/conf.d'],
@@ -94,7 +106,18 @@ class RestoreTests(unittest.TestCase):
         self.assertNotEqual(token, reply.body['plan']['review_token'])
         self.assertEqual([], self.launched)
         self.assertEqual({}, R._RUNNING)
-        self.assertEqual([], self.kube.writes)   # no claim taken for a refused restore
+        self.assertEqual('', self.claim()['spec']['holderIdentity'])   # the claim is given back
+        self.assertEqual({}, R._HOLDERS)
+
+    def test_the_review_is_checked_while_the_claim_is_held(self):
+        token = R.restore_plan(self.body())['review_token']
+        holders = []
+        def walk(ns, session, folder, names):
+            holders.append(self.claim()['spec']['holderIdentity'])
+            return [dict(r) for r in self.walk], False
+        with mock.patch.object(R, '_walk', side_effect=walk):
+            self.assertEqual(202, R.restore(self.body(review_token=token)).code)
+        self.assertTrue(holders[0].startswith('homestead-a/'), holders)
 
     def test_run_replaces_only_reviewed_paths_and_never_deletes(self):
         token = R.restore_plan(self.body())['review_token']
@@ -220,18 +243,93 @@ class RestoreTests(unittest.TestCase):
         self.as_another_copy()
         reply = R.restore(self.body(review_token=token))
         self.assertEqual(409, reply.code)
-        self.assertEqual('Another copy of Homestead is restoring files into this volume. '
-                         'It ends within 21 minutes. Try again then.', reply.body['error'])
+        self.assertEqual(R.ELSEWHERE, reply.body['error'])
+        self.assertEqual('Another copy of Homestead is restoring files into this volume. Try again when it finishes. '
+                         'If that copy stopped, the volume is free again within a minute.', R.ELSEWHERE)
+        self.assertTrue(reply.body['plan']['ready'])   # the review is still shown with the refusal
         self.assertEqual(1, len(self.launched))
         self.assertEqual({}, R._RUNNING)
         self.assertNotIn(('lab', 'data'), R.FILES.BUSY_CLAIMS)
 
-    def test_the_claim_lasts_until_the_snapshot_session_ends(self):
+    def test_the_claim_is_short_and_frees_soon_after_a_restart(self):
         token = R.restore_plan(self.body())['review_token']
         R.restore(self.body(review_token=token))
         spec = self.claim()['spec']
         self.assertTrue(spec['holderIdentity'].startswith('homestead-a/'))
-        self.assertAlmostEqual(1200 + R.CLAIM_MARGIN, spec['leaseDurationSeconds'], delta=5)
+        self.assertEqual(60, spec['leaseDurationSeconds'])
+
+    def run_copy(self, during):
+        """Start a restore with the real launch; the copy calls during(job)
+        and then ends as the transfer does. Returns the job once it ended."""
+        token = R.restore_plan(self.body())['review_token']
+        def transfer(job, *args, **kwargs):
+            during(job)
+            job.update(status='done', finished=time.time())
+        with mock.patch.object(R, '_launch', LAUNCH), mock.patch.object(R.FILES, '_transfer', side_effect=transfer):
+            reply = R.restore(self.body(review_token=token))
+            self.assertEqual(202, reply.code)
+            # The copy's thread ends after the claim is given back.
+            self.wait(lambda: not any(t.name == 'snapshot-restore' for t in threading.enumerate()))
+        return R.FILES._JOBS[reply.body['job']['id']]
+
+    def wait(self, ready, seconds=3):
+        end = time.time() + seconds
+        while not ready():
+            self.assertLess(time.time(), end, 'timed out')
+            time.sleep(0.01)
+
+    def test_the_claim_is_renewed_while_the_restore_copies(self):
+        first = []
+        def during(job):
+            first.append(self.claim()['spec']['renewTime'])
+            self.wait(lambda: self.claim()['spec']['renewTime'] != first[0])
+        job = self.run_copy(during)
+        self.assertEqual('done', job['status'])
+        self.assertEqual('', self.claim()['spec']['holderIdentity'])
+        writes = len(self.kube.writes)
+        time.sleep(0.1)
+        self.assertEqual(writes, len(self.kube.writes))   # no renewing after the restore ended
+
+    def test_one_failed_renewal_does_not_lose_the_claim(self):
+        path = f'/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases/{R._claim_name("lab", "data")}'
+        def during(job):
+            self.kube.fail(path, 500, method='PUT')
+            puts = lambda: sum(1 for w in self.kube.writes if w[0] == 'PUT')
+            self.wait(lambda: puts() >= 2)
+        job = self.run_copy(during)
+        self.assertEqual('done', job['status'])
+        self.assertEqual('', job['error'])
+
+    def take_over(self):
+        """Another copy of Homestead takes the claim (this one's renewals did
+        not reach the API server in time)."""
+        lease = self.claim()
+        lease['spec']['holderIdentity'] = 'homestead-b/0000'
+        K.ksend('PUT', f"/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases/{lease['metadata']['name']}", lease)
+
+    def test_a_restore_that_loses_the_claim_while_copying_says_so(self):
+        def during(job):
+            self.take_over()
+            self.wait(lambda: R._HOLDERS[('lab', 'data')]['lost'])
+        job = self.run_copy(during)
+        self.assertEqual('failed', job['status'])
+        self.assertEqual(R.LOST, job['error'])
+        self.assertEqual('homestead-b/0000', self.claim()['spec']['holderIdentity'])   # not taken from the other copy
+
+    def test_a_claim_lost_before_the_copy_starts_stops_the_restore(self):
+        token = R.restore_plan(self.body())['review_token']
+        def walk(ns, session, folder, names):
+            if ('lab', 'data') in R._HOLDERS:
+                self.take_over()
+                self.wait(lambda: R._HOLDERS[('lab', 'data')]['lost'])
+            return [dict(r) for r in self.walk], False
+        with mock.patch.object(R, '_walk', side_effect=walk):
+            reply = R.restore(self.body(review_token=token))
+        self.assertEqual(409, reply.code)
+        self.assertEqual(R.NOT_HELD, reply.body['error'])
+        self.assertEqual([], self.launched)
+        self.assertEqual({}, R._RUNNING)
+        self.assertEqual('homestead-b/0000', self.claim()['spec']['holderIdentity'])
 
     def test_a_restore_into_another_volume_is_not_held_up(self):
         token = R.restore_plan(self.body())['review_token']
