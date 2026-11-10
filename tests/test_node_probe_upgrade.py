@@ -174,9 +174,18 @@ class ReconcileTests(unittest.TestCase):
         probe.bind(lambda path: (_ for _ in ()).throw(TimeoutError("timed out")), self._send, "lab")
 
         self.assertEqual("unknown", probe.reconcile("2.8.49")["state"])
-        with self.assertRaisesRegex(ValueError, "could not check"):
+        with self.assertRaises(ValueError) as refused:
             probe.install("2.8.51")
         self.assertEqual([], self.sent)
+        for text in (str(refused.exception), probe.status()["detail"]):
+            self.assertIn("(timed out)", text)
+            self.assertIn("Check Homestead's permissions and try again.", text)
+            self.assertLess(len(text.split(". ")[0]), 90)
+
+    def test_the_error_of_an_unread_probe_is_kept_apart_from_the_404(self):
+        probe.bind(lambda path: (_ for _ in ()).throw(urllib.error.HTTPError("/ds", 403, "Forbidden", {}, None)), self._send, "lab")
+        self.assertIsNone(probe.installed())
+        self.assertIn("(HTTP 403)", probe.unread_reason())
 
     def test_other_keys_in_the_configmap_survive(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(0)" + chr(10) + "",

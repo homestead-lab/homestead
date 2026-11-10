@@ -143,16 +143,36 @@ def status():
     return dict(LAST)
 
 
+UNREAD = [""]    # why installed() last answered None, "" after an answer
+
+
+WAY_OUT = "Check Homestead's permissions and try again."
+
+
+def unread_why():
+    """The error of the last failed read of the probe, "no answer" if none was kept."""
+    return UNREAD[0] or "no answer"
+
+
+def unread_reason():
+    """For a person: the cause, then the error, then the way out."""
+    return f"The node probe could not be checked ({unread_why()}). {WAY_OUT}"
+
+
 def installed():
-    """The probe's name if it is installed, "" only on the API's own 404, None if it could not be read."""
+    """The probe's name if it is installed, "" only on the API's own 404, None if it could not be read
+    (unread_reason() then says why)."""
+    UNREAD[0] = ""
     for name in (NAMES.NODEPROBE,):
         try:
             found = kget("/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + name)
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 continue
+            UNREAD[0] = f"HTTP {error.code}"
             return None
-        except Exception:
+        except Exception as error:
+            UNREAD[0] = (str(error) or type(error).__name__)[:80]
             return None
         if (found.get("metadata", {}) or {}).get("name"):
             return name
@@ -174,7 +194,7 @@ def install(version="dev"):
     """Create the probe for automatic installation or an administrator's retry."""
     there = installed()
     if there is None:
-        raise ValueError("Homestead could not check whether the node probe is installed")
+        raise ValueError(unread_reason())
     if there:
         raise ValueError("the node probe is already installed")
     if not shipped_scripts():
@@ -217,7 +237,7 @@ def reconcile(version=""):
         return _note({"state": "unknown", "detail": "this image carries no probe scripts"})
     name = installed()
     if name is None:
-        return _note({"state": "unknown", "detail": "Homestead could not check whether the node probe is installed"})
+        return _note({"state": "unknown", "detail": unread_reason()})
     if not name:
         # Not installed, and not Homestead's to install unasked: the SMART
         # sidecar is privileged, which is the operator's decision to make.

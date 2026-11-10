@@ -214,7 +214,7 @@ def welcome(role="admin"):
     there = PROBE.installed()
     if there is None:
         steps["probe"] = {"done": _probe_seen[0],
-                          "error": "Homestead could not check whether the node probe is installed."}
+                          "error": f"The node probe did not answer ({PROBE.unread_why()}). {PROBE.WAY_OUT}"}
     else:
         _probe_seen[0] = bool(there)
         steps["probe"] = {"done": _probe_seen[0]}
