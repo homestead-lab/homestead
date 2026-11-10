@@ -25,19 +25,24 @@ from homestead_storage_journal import Held, identity, shape
 
 
 MARKER = ".self-data-handoff-v1.json"
-# Who holds the activity lock (#1305): each activity writes a small record
-# beside the lock - its kind, the person, the host, since when - and holds
-# its own lock on that record while it runs. A refusal names only records
-# whose lock is still held: a crashed holder's record is stale, skipped and
-# removed. A record never refuses anything by itself.
+# Who holds the activity lock (#1305): each session's activity (a terminal,
+# an app console, a VM console) writes a small record beside the lock - its
+# kind, the person, the host, since when - and holds its own lock on that
+# record while it runs. Other activity (a write, a cache) writes none. A
+# refusal names only records whose lock is still held: a crashed holder's
+# record is stale, skipped and removed. A record never refuses anything by itself.
 HOLDER_PREFIX = ".self-data-holder-v1-"
-HOLDER_KINDS = ("terminal", "app-console", "vm-console", "work")
+HOLDER_KINDS = ("terminal", "app-console", "vm-console")
 HOLDER_BYTES = 1024
+HOLDER_TMP_STALE = 300   # seconds: a temporary record left this long was never renamed
 HOLDERS_READ = 64
 HOLDER_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
 _described = threading.local()
 _live_lock = threading.Lock()
-_live = set()   # this process's own records: a lock it holds itself proves nothing on NFS
+# This process's own records, ident -> record. They are never opened again
+# while held: on NFS flock is a POSIX lock, and closing any handle to the
+# file drops it, so another replica would take the record as stale.
+_live = {}
 
 
 @contextmanager
@@ -83,16 +88,13 @@ def _session_words(record):
 
 def holder_words(records, shown=3):
     """The refusal's sentences naming what holds the lock, or "" for none."""
-    sessions = sorted((r for r in records if r["kind"] != "work"), key=lambda r: r["since"])
-    work = len(records) - len(sessions)
+    sessions = sorted(records, key=lambda r: r["since"])
     words = [_session_words(r) for r in sessions[:shown]]
     if len(sessions) > shown:
         more = len(sessions) - shown
         words.append(f"{more} more {'session is' if more == 1 else 'sessions are'} still open.")
-    if work:
-        words.append(f"{work} other Homestead {'task is' if work == 1 else 'tasks are'} still running.")
     if sessions:
-        words.append("Close the open sessions, then start the move again.")
+        words.append(f"Close the open {'session' if len(sessions) == 1 else 'sessions'}, then start the move again.")
     return " ".join(words)
 
 
@@ -186,10 +188,13 @@ class WriteBarrier:
         """Write this activity's holder record, locked before it is visible:
         a temporary file, locked, written, then renamed into place (the lock
         stays with the file). Best effort: a record that cannot be written
-        costs only the name in a refusal. -> (fd, ident) or None."""
+        costs only the name in a refusal. Only a session writes one.
+        -> (fd, ident) or None."""
         value = getattr(_described, "value", None) or {}
+        if value.get("kind") not in HOLDER_KINDS:
+            return None
         user, host = value.get("user"), value.get("host")
-        record = {"kind": value.get("kind") if value.get("kind") in HOLDER_KINDS else "work",
+        record = {"kind": value["kind"],
                   "user": user if _good_user(user) else None, "host": host if _good_host(host) else None,
                   "since": int(time.time())}
         ident, fd = os.urandom(12).hex(), None
@@ -199,12 +204,12 @@ class WriteBarrier:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.write(fd, json.dumps(record, separators=(",", ":")).encode())
             with _live_lock:
-                _live.add(ident)
+                _live[ident] = dict(record)
             os.rename(temporary, self._holder_path(ident))
             return fd, ident
         except OSError:
             with _live_lock:
-                _live.discard(ident)
+                _live.pop(ident, None)
             if fd is not None:
                 os.close(fd)
                 try:
@@ -224,20 +229,27 @@ class WriteBarrier:
             pass  # left behind, it is stale once its lock goes: skipped and removed
         finally:
             with _live_lock:
-                _live.discard(ident)
+                _live.pop(ident, None)
             os.close(fd)
 
     def holders(self):
         """The holder records whose holder still runs, as far as can be read.
-        A record whose lock nobody holds is a crashed holder's: removed."""
+        A record whose lock nobody holds is a crashed holder's: removed.
+        This process's own records come from memory, never from their files;
+        another's is judged only by trying its lock on a handle opened here."""
         try:
-            names = sorted(name for name in os.listdir(self.directory)
-                           if name.startswith(HOLDER_PREFIX) and name.endswith(".json"))[:HOLDERS_READ]
+            names = sorted(name for name in os.listdir(self.directory) if name.startswith(HOLDER_PREFIX))
         except OSError:
             return []
+        self._drop_old_temporaries([name for name in names if name.endswith(".tmp")])
         found = []
-        for name in names:
+        for name in [name for name in names if name.endswith(".json")][:HOLDERS_READ]:
             ident, path = name[len(HOLDER_PREFIX):-len(".json")], os.path.join(self.directory, name)
+            with _live_lock:
+                ours = _live.get(ident)
+            if ours is not None:
+                found.append(dict(ours))
+                continue
             try:
                 fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             except OSError:
@@ -246,20 +258,17 @@ class WriteBarrier:
                 info = os.fstat(fd)
                 if not stat.S_ISREG(info.st_mode) or info.st_size > HOLDER_BYTES:
                     continue
-                with _live_lock:
-                    ours = ident in _live
-                if not ours:
-                    try:
-                        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                    except BlockingIOError:
-                        pass  # its holder still runs
-                    except OSError:
-                        continue
-                    else:
-                        current = os.lstat(path)
-                        if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
-                            os.unlink(path)
-                        continue
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass  # its holder still runs
+                except OSError:
+                    continue
+                else:
+                    current = os.lstat(path)
+                    if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                        os.unlink(path)
+                    continue
                 try:
                     record = _holder_fields(json.loads(os.read(fd, HOLDER_BYTES + 1)))
                 except (ValueError, UnicodeError):
@@ -271,6 +280,21 @@ class WriteBarrier:
             finally:
                 os.close(fd)
         return found
+
+    def _drop_old_temporaries(self, names):
+        """A temporary record is renamed within moments of being written: one
+        left for minutes is a crashed writer's. This process's own are kept."""
+        for name in names:
+            ident = name[len(HOLDER_PREFIX):-len(".tmp")]
+            with _live_lock:
+                if ident in _live:
+                    continue
+            path = os.path.join(self.directory, name)
+            try:
+                if time.time() - os.lstat(path).st_mtime > HOLDER_TMP_STALE:
+                    os.unlink(path)
+            except OSError:
+                continue
 
     def _not_finished(self):
         """The refusal when activity outlasts the freeze: what holds it, when

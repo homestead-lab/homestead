@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -227,23 +228,29 @@ class HolderRecordTests(unittest.TestCase):
         message = self.refusal()
         self.assertTrue(message.startswith("Current Homestead activity has not finished. "), message)
         self.assertRegex(message, r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.")
-        self.assertIn("Close the open sessions, then start the move again.", message)
+        self.assertIn("Close the open session, then start the move again.", message)
         self.assertTrue(message.endswith("No copy or shutdown was authorized"), message)
 
-    def test_other_activity_is_counted_not_named(self):
+    def test_only_sessions_are_named_and_other_activity_writes_no_record(self):
         self.holder()
+        self.assertEqual([], self.records(), "plain activity (a write, a cache) writes no record")
+        self.assertEqual("Current Homestead activity has not finished. No copy or shutdown was authorized",
+                         self.refusal())
         self.holder("vm-console", "bob")
+        self.holder("app-console", "carol")
         message = self.refusal()
         self.assertRegex(message, r"A VM console, opened by bob at [^,]+ UTC, is still open\.")
-        self.assertIn("1 other Homestead task is still running.", message)
+        self.assertRegex(message, r"An app console, opened by carol at [^,]+ UTC, is still open\.")
+        self.assertIn("Close the open sessions, then start the move again.", message)
+        self.assertNotIn("task", message)
 
     def test_a_crashed_holders_record_is_not_named_and_is_removed(self):
         self.holder("terminal", "alice", "node-a", how="crash")
         self.assertEqual(1, len(self.records()), "a crash leaves its record behind")
-        self.holder()
+        self.holder("vm-console", "bob")
         message = self.refusal()
         self.assertNotIn("terminal", message.lower())
-        self.assertIn("1 other Homestead task is still running.", message)
+        self.assertIn("A VM console, opened by bob", message)
         self.assertEqual(1, len(self.records()), "only the running holder's record is left")
 
     def test_a_record_alone_never_refuses(self):
@@ -269,8 +276,9 @@ class HolderRecordTests(unittest.TestCase):
         self.assertEqual([], self.records())
 
     def test_a_record_goes_when_the_work_inside_fails(self):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(RuntimeError), F.described("terminal", user="alice", host="node-a"):
             with self.barrier.activity():
+                self.assertEqual(1, len(self.records()))
                 raise RuntimeError("the work failed")
         self.assertEqual([], self.records())
         with self.barrier.freeze(timeout=.05):
@@ -307,8 +315,35 @@ class HolderRecordTests(unittest.TestCase):
             self.assertEqual([("terminal", "alice", "node-a")], [(r["kind"], r["user"], r["host"]) for r in seen["records"]])
             handler.path, handler.command = "/api/apps/restart", "POST"
             SD.request_scope(method, lambda: False)(handler)
-            self.assertEqual([("work", None, None)], [(r["kind"], r["user"], r["host"]) for r in seen["records"]])
+            self.assertEqual([], seen["records"], "a change is not a session: no record")
         self.assertEqual([], self.records())
+
+    def test_a_holders_read_never_opens_this_processs_own_records(self):
+        # On NFS flock is a POSIX lock, and closing any handle to the file
+        # drops it: a read that opened and closed our own record would let
+        # another replica take a live terminal's record as stale.
+        with F.described("terminal", user="alice", host="node-a"):
+            with self.barrier.activity():
+                [name] = self.records()
+                opened, real_open = [], os.open
+
+                def watched(path, *args, **kwargs):
+                    opened.append(os.path.basename(str(path)))
+                    return real_open(path, *args, **kwargs)
+
+                with mock.patch.object(F.os, "open", watched):
+                    [record] = self.barrier.holders()
+                self.assertEqual("alice", record["user"])
+                self.assertNotIn(name, opened)
+                self.assertEqual([name], self.records(), "still there while it is held")
+
+    def test_a_temporary_record_left_for_minutes_is_removed(self):
+        old = Path(self.directory, ".self-data-holder-v1-" + "a" * 24 + ".tmp")
+        fresh = Path(self.directory, ".self-data-holder-v1-" + "b" * 24 + ".tmp")
+        old.write_text("{}"); fresh.write_text("{}")
+        os.utime(old, (time.time() - 600, time.time() - 600))
+        self.assertEqual([], self.barrier.holders())
+        self.assertEqual([fresh.name], self.records())
 
 
 if __name__ == "__main__":
