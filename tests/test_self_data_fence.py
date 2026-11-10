@@ -1,5 +1,7 @@
 import copy
 import json
+import re
+import threading
 import os
 import subprocess
 import sys
@@ -227,7 +229,7 @@ class HolderRecordTests(unittest.TestCase):
         self.holder("terminal", "alice", "node-a")
         message = self.refusal()
         self.assertTrue(message.startswith("Current Homestead activity has not finished. "), message)
-        self.assertRegex(message, r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.")
+        self.assertTrue(re.search(r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.", message), message)
         self.assertIn("Close the open session, then start the move again.", message)
         self.assertTrue(message.endswith("No copy or shutdown was authorized"), message)
 
@@ -239,8 +241,8 @@ class HolderRecordTests(unittest.TestCase):
         self.holder("vm-console", "bob")
         self.holder("app-console", "carol")
         message = self.refusal()
-        self.assertRegex(message, r"A VM console, opened by bob at [^,]+ UTC, is still open\.")
-        self.assertRegex(message, r"An app console, opened by carol at [^,]+ UTC, is still open\.")
+        self.assertTrue(re.search(r"A VM console, opened by bob at [^,]+ UTC, is still open\.", message), message)
+        self.assertTrue(re.search(r"An app console, opened by carol at [^,]+ UTC, is still open\.", message), message)
         self.assertIn("Close the open sessions, then start the move again.", message)
         self.assertNotIn("task", message)
 
@@ -250,7 +252,7 @@ class HolderRecordTests(unittest.TestCase):
         self.holder("vm-console", "bob")
         message = self.refusal()
         self.assertNotIn("terminal", message.lower())
-        self.assertIn("A VM console, opened by bob", message)
+        self.assertTrue("A VM console, opened by bob" in message, message)
         self.assertEqual(1, len(self.records()), "only the running holder's record is left")
 
     def test_a_record_alone_never_refuses(self):
@@ -344,6 +346,65 @@ class HolderRecordTests(unittest.TestCase):
         os.utime(old, (time.time() - 600, time.time() - 600))
         self.assertEqual([], self.barrier.holders())
         self.assertEqual([fresh.name], self.records())
+
+
+@unittest.skipUnless(F.fcntl is not None, "Linux shared locking")
+class OpenSessionsHoldAMoveBack(unittest.TestCase):
+    """#1305 through what a person does: a terminal opened through the request
+    scope stays open while a data move tries to freeze, and the move's
+    refusal names it. Only entry points older than #1305 are used here."""
+
+    def setUp(self):
+        import homestead_auth as AUTH
+        import homestead_self_data_server as SD
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.directory = temp.name
+        self.session_barrier = F.WriteBarrier(self.directory, lambda: None)
+        self.mover = F.WriteBarrier(self.directory, lambda: None)   # its own lock handle, as a move has
+        self.AUTH, self.SD = AUTH, SD
+        self.enterContext(mock.patch.object(SD, "self_data_activity", self.session_barrier.activity, create=True))
+        self.enterContext(mock.patch.object(AUTH, "verify_token",
+                                            lambda token, force=False: {"user": "alice"} if token == "a-token" else None))
+
+    def open_terminal(self, node="node-a"):
+        """A terminal on node, opened by alice, kept open until the test ends."""
+        opened, close = threading.Event(), threading.Event()
+
+        def session(_handler):
+            opened.set()
+            close.wait(10)
+
+        handler = mock.Mock(path=f"/api/node/shell?node={node}", command="GET")
+        handler._cookies.return_value = {self.AUTH.COOKIE: "a-token"}
+        thread = threading.Thread(target=self.SD.request_scope(session, lambda: False), args=(handler,), daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(close.set)
+        self.assertTrue(opened.wait(10), "the terminal never opened")
+
+    def refusal(self):
+        with self.assertRaises(Held) as caught:
+            with self.mover.freeze(timeout=.05): self.fail("froze past an open terminal")
+        return str(caught.exception)
+
+    def test_the_move_names_the_open_terminal(self):
+        self.open_terminal()
+        message = self.refusal()
+        named = re.search(r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.", message)
+        self.assertTrue(named, message)
+        self.assertTrue("Close the open session, then start the move again." in message, message)
+
+    def test_the_terminal_is_still_named_after_a_refusal_has_read_it(self):
+        self.open_terminal()
+        self.refusal()
+        message = self.refusal()
+        self.assertTrue("A terminal on host node-a, opened by alice" in message, message)
+
+    def test_a_record_left_by_a_crash_never_holds_a_move_back(self):
+        Path(self.directory, ".self-data-holder-v1-" + "c" * 24 + ".json").write_text(
+            json.dumps({"kind": "terminal", "user": "alice", "host": "node-a", "since": int(time.time())}))
+        with self.mover.freeze(timeout=.05):
+            pass
 
 
 if __name__ == "__main__":
