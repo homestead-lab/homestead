@@ -754,13 +754,14 @@ def _backup(item):
     status = obj.get("status", {}) or {}
     state = str(status.get("state", "") or "").lower()
     progress = int(status.get("progress", 0) or 0)
+    # "Back up now"'s local snapshot is not needed once the backup is on the
+    # target, nor once it failed (no restore point either), and keeps its
+    # delta on every replica: the leader's helper sweep removes it once no
+    # job uses it or its volume. A job from before names none.
+    ended = state in ("completed", "error", "failed", "unknown")
+    if ended and ref.get("snapshot") and ref.get("snapshot_uid") and "snapshot_pending" not in ref:
+        ref["snapshot_pending"] = True
     if state == "completed":
-        # "Back up now"'s local snapshot is not needed once the backup is on
-        # the target, and keeps its delta on every replica: the leader's
-        # helper sweep removes it once no job uses it or its volume. A job
-        # from before names none.
-        if ref.get("snapshot") and ref.get("snapshot_uid") and "snapshot_pending" not in ref:
-            ref["snapshot_pending"] = True
         return "succeeded", 100, "Backup complete"
     if state in ("error", "failed", "unknown"):
         return "failed", progress, status.get("error") or f"Longhorn reports this backup as {state} and gave no detail"

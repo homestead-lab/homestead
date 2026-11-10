@@ -440,6 +440,36 @@ class BackUpNowTests(BoundToFake):
         self.sweep()
         self.assertEqual([result["snapshot"]], self.snapshots())
 
+    def test_a_failed_backup_removes_its_local_snapshot_and_no_other(self):
+        """A failed backup is no restore point either, and its snapshot kept
+        its delta on every replica for good (#1303). Only the snapshot this
+        backup took goes: one a person took of the same volume stays."""
+        for state in ("Error", "Unknown"):
+            with self.subTest(state=state):
+                self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+                kube = self.fake()
+                kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Snapshot",
+                          "metadata": {"name": "before-upgrade", "namespace": LHNS}, "spec": {"volume": "vol-a"}})
+                result, item = self.start()
+                self.finish(result, state=state)
+                self.assertEqual("failed", self.resolve(item["id"]))
+                self.sweep()
+                self.assertEqual(["before-upgrade"], self.snapshots())
+                self.assertFalse(self.job(item["id"])["ref"].get("snapshot_pending"), "removed once, not every minute")
+                self.assertEqual("failed", self.job(item["id"])["status"])
+
+    def test_a_failed_backups_snapshot_waits_while_a_revert_to_it_runs(self):
+        self.fake()
+        result, item = self.start()
+        self.finish(result, state="Error")
+        self.resolve(item["id"])
+        revert = self.other("snapshot-revert", self.revert_ref(result["snapshot"]))
+        self.sweep()
+        self.assertEqual([result["snapshot"]], self.snapshots())
+        self.end(revert)
+        self.sweep()
+        self.assertEqual([], self.snapshots())
+
     def test_a_snapshot_made_again_under_the_name_is_kept(self):
         kube = self.fake()
         result, item = self.start()

@@ -16,6 +16,9 @@ CONTROLLER = "homestead-snapshot-controller"
 VERSION = "v8.6.0"
 UPSTREAM = f"https://raw.githubusercontent.com/kubernetes-csi/external-snapshotter/{VERSION}"
 CRDS = ("volumesnapshots", "volumesnapshotcontents", "volumesnapshotclasses")
+# The restore job's id, on the pair its restore made: what lets the leader's
+# sweep remove that pair, and no other, once the job ended (discard_ended).
+STAMP = NAMES.key("restore-id")
 kget = ksend = None
 
 
@@ -117,12 +120,18 @@ def _owned(obj):
     return labels.get(OWNER) == "homestead" and labels.get(LABEL) == "true"
 
 
-def _ensure(path, body):
+def _ensure(path, body, stamp=None):
+    """The object, made with stamp's annotations too when it is not there.
+    stamp is not compared: a pair an older Homestead made has none."""
     name = body["metadata"]["name"]
     existing = KUBE.get_optional(f"{path}/{name}", read=kget)
     if existing is None:
+        made = body
+        if stamp:
+            made = {**body, "metadata": {**body["metadata"], "annotations": {
+                **(body["metadata"].get("annotations") or {}), **stamp}}}
         try:
-            return ksend("POST", path, body)
+            return ksend("POST", path, made)
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 raise
@@ -147,18 +156,21 @@ def import_backup(namespace, name, backup, source_volume, url, volume_mode, atte
     snapshot_name = f"homestead-restore-{digest}"
     labels = {OWNER: "homestead", LABEL: "true"}
     annotations = {"homestead.io/restore-pvc": name, "homestead.io/restore-namespace": namespace}
+    stamp = {}
     if re.fullmatch(r"[0-9a-f]{12}", str(attempt)):
         annotations[NAMES.key("move-id")] = attempt
+    elif attempt:
+        stamp = {STAMP: str(attempt)}
     content = _ensure(f"{API}/volumesnapshotcontents", {
         "apiVersion": "snapshot.storage.k8s.io/v1", "kind": "VolumeSnapshotContent",
         "metadata": {"name": snapshot_name, "labels": labels, "annotations": annotations},
         "spec": {"driver": "driver.longhorn.io", "deletionPolicy": "Retain", "sourceVolumeMode": volume_mode,
                  "source": {"snapshotHandle": f"bak://{source_volume}/{backup}"},
-                 "volumeSnapshotRef": {"name": snapshot_name, "namespace": namespace}}})
+                 "volumeSnapshotRef": {"name": snapshot_name, "namespace": namespace}}}, stamp)
     snapshot = _ensure(f"{API}/namespaces/{namespace}/volumesnapshots", {
         "apiVersion": "snapshot.storage.k8s.io/v1", "kind": "VolumeSnapshot",
         "metadata": {"name": snapshot_name, "namespace": namespace, "labels": labels, "annotations": annotations},
-        "spec": {"source": {"volumeSnapshotContentName": snapshot_name}}})
+        "spec": {"source": {"volumeSnapshotContentName": snapshot_name}}}, stamp)
     bound_uid = (content.get("spec", {}).get("volumeSnapshotRef") or {}).get("uid")
     if bound_uid and bound_uid != snapshot.get("metadata", {}).get("uid"):
         raise ValueError("The restore's snapshot content is bound to an earlier snapshot. Start a new restore.")
@@ -283,6 +295,30 @@ def discard(namespace, pvc_name, snapshot_name=None):
         if _remove_pair(content, namespace, ref):
             removed.append(content["metadata"]["name"])
     return removed
+
+
+def discard_ended(restore_ids, budget=50):
+    """Remove the pair each of these ended restore jobs made, found by the
+    restore id it stamped on it, as discard() does: kept while a live claim
+    of its name restores from it. (removed names, the ids a pair of is still
+    there); None when the snapshot API is not served. A pair with no stamp
+    (made before it) is never touched."""
+    if KUBE.get_optional(API, read=kget) is None:
+        return None
+    removed, left = [], set()
+    for content in _items(f"{API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue"):
+        meta = content.get("metadata") or {}
+        annotations = meta.get("annotations") or {}
+        restore_id = annotations.get(STAMP)
+        namespace, pvc_name = annotations.get("homestead.io/restore-namespace"), annotations.get("homestead.io/restore-pvc")
+        if restore_id not in restore_ids or not _owned(content) or not namespace or not pvc_name:
+            continue
+        gone = discard(namespace, pvc_name, meta.get("name")) if len(removed) < budget else []
+        if gone:
+            removed += gone
+        else:
+            left.add(restore_id)
+    return removed, left
 
 
 def _delete(path, obj, version=False):
