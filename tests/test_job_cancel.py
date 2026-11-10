@@ -21,6 +21,8 @@ import homestead_reclass as RECLASS
 import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_vms as VMS
+import homestead_cdi_cleanup as CDI_CLEANUP
+import homestead_vm_disk_remove as DISK_REMOVE
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rebind import keep_bound
 from fakes.job_store import put, store_writes
@@ -458,6 +460,96 @@ class DeploymentTests(Store):
     def test_a_share_change_is_saved_already_and_only_stops_being_followed(self):
         op = self.job("deployment", {"namespace": "samba", "name": "samba"}, "Create share media")
         self.assertEqual("forget", OPS.cancel_plan(op)["mode"])
+
+
+class UrlDiskImportTests(Store):
+    """#1338: an import from a web address that CDI never finishes ran for ever, as a
+    job with a CDI receipt could not be cancelled. Cancel deletes only what carries
+    the receipt: the DataVolume with its stamp, and the claim that DataVolume owns."""
+    DV = "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/guest-disk"
+    CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/guest-disk"
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(OPS, "CDI_CANCELLABLE", set()))
+        self.enterContext(mock.patch.dict(OPS.VIEWS, {}))
+        self.enterContext(mock.patch.dict(OPS.RESOLVERS, {"vm-disk-import": lambda item: (
+            "running", 15, "Downloading and converting the disk image")}))
+        CANCEL.register(OPS)
+        self.work = CDI_CLEANUP.receipt(["guest-disk"])
+
+    def disk(self, stamp=None, claim_owner=True):
+        annotations = {CDI_CLEANUP.STAMP: stamp} if stamp else {}
+        self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
+                       "metadata": {"namespace": "lab", "name": "guest-disk", "annotations": annotations},
+                       "spec": {}})
+        dv = self.kube.object(self.DV)["metadata"]["uid"]
+        owners = [{"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume", "name": "guest-disk",
+                   "uid": dv, "controller": True}] if claim_owner else []
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"namespace": "lab", "name": "guest-disk", "ownerReferences": owners}, "spec": {}})
+        return dv
+
+    def importing(self, phase="import"):
+        return self.job("vm-disk-import", {"namespace": "lab", "name": "guest-disk", "phase": phase,
+                                           "cdi_cleanup": self.work}, "Import VM disk guest-disk")
+
+    def row(self, op):
+        return next(item for item in OPS.list_operations() if item["id"] == op)
+
+    def test_a_stuck_import_can_be_cancelled_and_deletes_its_own_disk(self):
+        self.work["disks"]["guest-disk"]["dv_uid"] = self.disk(stamp=self.work["id"])
+        op = self.importing()
+        self.assertTrue(self.row(op)["cancellable"])
+        plan = OPS.cancel_plan(op)
+        self.assertTrue(plan["can"], plan.get("why_not"))
+        self.assertEqual(["Stops the download and deletes guest-disk, the disk it was filling"], plan["undo"])
+        OPS.cancel(op)
+        self.assertIsNone(self.kube.object(self.DV))
+        self.assertIsNone(self.kube.object(self.CLAIM))
+        self.assertEqual("cancelled", self.row(op)["status"])
+
+    def test_a_disk_of_that_name_without_the_stamp_survives(self):
+        self.disk(stamp=None)
+        op = self.importing()
+        plan = OPS.cancel_plan(op)
+        self.assertTrue(plan["can"], plan.get("why_not"))
+        self.assertEqual("forget", plan["mode"])
+        self.assertIn("guest-disk was not made by this import, so it is kept", " ".join(plan["keeps"]))
+        self.kube.writes.clear()
+        OPS.cancel(op)
+        self.assertEqual([], self.sent("DELETE"))
+        self.assertIsNotNone(self.kube.object(self.DV))
+        self.assertIsNotNone(self.kube.object(self.CLAIM))
+
+    def test_a_stamp_from_another_import_is_not_this_ones(self):
+        self.disk(stamp="another-import")
+        op = self.importing()
+        self.kube.writes.clear()
+        OPS.cancel(op)
+        self.assertEqual([], self.sent("DELETE"))
+        self.assertIsNotNone(self.kube.object(self.DV))
+
+    def test_a_claim_of_that_name_that_its_disk_does_not_own_survives(self):
+        self.work["disks"]["guest-disk"]["dv_uid"] = self.disk(stamp=self.work["id"], claim_owner=False)
+        op = self.importing()
+        OPS.cancel(op)
+        self.assertIsNone(self.kube.object(self.DV))
+        self.assertIsNotNone(self.kube.object(self.CLAIM), "not this import's: it is kept")
+
+    def test_an_import_clearing_up_is_not_cancelled_into_deleting_its_disk(self):
+        self.work["disks"]["guest-disk"]["dv_uid"] = self.disk(stamp=self.work["id"])
+        op = self.importing(phase="cleanup")
+        plan = OPS.cancel_plan(op)
+        self.assertFalse(plan["can"])
+        self.assertIn("clearing its temporary storage", plan["why_not"])
+        self.assertIsNotNone(self.kube.object(self.DV))
+
+    def test_remove_points_at_cancel_for_it(self):
+        self.disk(stamp=self.work["id"])
+        self.importing()
+        self.assertEqual(["An import is still working on it. Cancel that import or wait for it to end, "
+                          "then review this again"], DISK_REMOVE._holds("lab", "guest-disk"))
 
 
 class RestructureTests(Store):

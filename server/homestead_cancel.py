@@ -31,6 +31,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_cancel_rerun as RERUN
+import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_disks as DISKS
 import homestead_env_secrets as ENV_SECRETS
 import homestead_helm as HELM
@@ -563,8 +564,55 @@ def import_cancel(item, options):
     return "Import cancelled: " + ", ".join(done)
 
 
+def _disk_import_paths(ref):
+    ns, name = _q(ref["namespace"]), _q(ref["name"])
+    # The DataVolume first: while it exists it would make the claim again.
+    return (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{name}",
+            f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+
+
+def _disk_import_found(item):
+    """What is there under the import's name now: [(path, object, whether it is this
+    import's)]. With a receipt (#1338), only what carries it is this import's: the
+    DataVolume with its stamp, and the claim the receipt recorded or that DataVolume
+    owns. An older import kept no receipt and goes by name, as it always did."""
+    ref = item["ref"]
+    work = ref.get("cdi_cleanup") or {}
+    disk = (work.get("disks") or {}).get(ref["name"]) or {}
+    found, dv_uid = [], disk.get("dv_uid")
+    for path in _disk_import_paths(ref):
+        obj = KUBE.get_optional(path, read=kget)
+        if not obj:
+            continue
+        meta = obj.get("metadata") or {}
+        if not work.get("id"):
+            ours = True
+        elif "/datavolumes/" in path:
+            ours = (meta.get("annotations") or {}).get(CDI_CLEANUP.STAMP) == work["id"]
+            dv_uid = dv_uid or (meta.get("uid") if ours else None)
+        else:
+            ours = bool(meta.get("uid")) and (meta["uid"] == disk.get("target_uid") or bool(
+                dv_uid and CDI_CLEANUP.owner(obj, "DataVolume", dv_uid)))
+        found.append((path, obj, ours))
+    return found
+
+
+def _not_this_imports_words(name):
+    return f"{name} was not made by this import, so it is kept."
+
+
 def disk_import_plan(item):
     ref = item["ref"]
+    if (ref.get("cdi_cleanup") or {}).get("id"):
+        # Its job ends by itself from here; deleting now would take a finished disk.
+        if ref.get("phase") == "cleanup":
+            return {"can": False, "needs": "admin", "why_not": (
+                f"The import of {ref['name']} is clearing its temporary storage. It ends by itself once that is done.")}
+        if ref.get("phase") == "creating":
+            return {"can": False, "needs": "admin",
+                    "why_not": f"The import of {ref['name']} is still being set up. Try again in a moment."}
+        if any(not ours for path, _, ours in _disk_import_found(item) if "/datavolumes/" in path):
+            return {"mode": "forget", "needs": "admin", "keeps": [_not_this_imports_words(ref["name"])]}
     return {"mode": "rollback", "needs": "admin",
             "undo": [f"Stops the download and deletes {ref['name']}, the disk it was filling"],
             "keeps": ["The image at its source is not touched"]}
@@ -572,12 +620,19 @@ def disk_import_plan(item):
 
 def disk_import_cancel(item, _options):
     ref = item["ref"]
-    ns, name = _q(ref["namespace"]), _q(ref["name"])
-    # The DataVolume first: while it exists it would make the claim again.
-    paths = (f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ns}/datavolumes/{name}",
-             f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
-    _delete_saved(item, *paths)
-    kept = _kept_note(item, *paths)
+    if not (ref.get("cdi_cleanup") or {}).get("id"):
+        # An older import, by name as it always was: each path's uid saved on the first run.
+        paths = _disk_import_paths(ref)
+        _delete_saved(item, *paths)
+        kept = _kept_note(item, *paths)
+        return f"Download stopped{kept}" if kept else f"Download stopped. {ref['name']} is being deleted."
+    found = _disk_import_found(item)
+    ours = [path for path, _, mine in found if mine]
+    if ours:
+        _delete_saved(item, *ours)
+    if any(not mine for _, _, mine in found):
+        return f"Download stopped. {_not_this_imports_words(ref['name'])}"
+    kept = _kept_note(item, *ours) if ours else ""
     return f"Download stopped{kept}" if kept else f"Download stopped. {ref['name']} is being deleted."
 
 
@@ -1039,6 +1094,9 @@ def register(ops):
             ops.CANCELLERS[kind] = (plan, run or (lambda _item, _options: ""))
     # Failed k3s jobs allow a retention/tracking review, not automatic deletion.
     ops.CLEANUPS.add("k3s-cluster")
+    # An import from a web address that CDI never finishes ran for ever: its canceller
+    # deletes only what carries its receipt's stamp, so it may be cancelled (#1338).
+    ops.CDI_CANCELLABLE.add("vm-disk-import")
     # A failed Helm upgrade had Cancel until then; its earlier settings are on its chart.
     ops.CLEANUPS.add("helm")
     ops.VIEWS["helm"] = _helm_view

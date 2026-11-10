@@ -238,11 +238,20 @@ class ReviewTests(Base):
                 with JOBS.transaction():
                     JOBS._write([i for i in JOBS._read() if i["id"] != operation["id"]])
 
-    def test_a_url_import_is_not_pointed_at_a_cancel_it_doesnt_have(self):
+    def test_a_url_import_is_pointed_at_its_cancel(self):
+        # #1338: its canceller deletes only what carries its receipt, so it has Cancel.
+        import homestead_cancel as CANCEL
+        self.enterContext(mock.patch.object(JOBS, "CDI_CANCELLABLE", set()))
+        self.enterContext(mock.patch.dict(JOBS.CANCELLERS))
+        self.enterContext(mock.patch.dict(JOBS.VIEWS))
+        self.enterContext(mock.patch.object(JOBS, "CLEANUPS", set(JOBS.CLEANUPS)))
+        # Still downloading: the import's own step would read the fake API, which this test is not about.
+        self.enterContext(mock.patch.dict(JOBS.RESOLVERS, {"vm-disk-import": lambda item: ("running", 15, "Downloading")}))
+        CANCEL.register(JOBS)
         self.finished_disk()
         self.job_on("vm-disk-import", "running", name=DISK, cdi_cleanup={"id": "x", "disks": {}})
-        self.assertNotIn("Cancel that", REMOVE.plan(NS, DISK)["blocking"][0])
-        self.assertFalse(next(j for j in JOBS.list_operations(wait=False))["cancellable"])
+        self.assertIn("Cancel that import", REMOVE.plan(NS, DISK)["blocking"][0])
+        self.assertTrue(next(j for j in JOBS.list_operations(wait=False))["cancellable"])
 
     def test_an_import_that_ended_still_holding_it_blocks_it(self):
         self.finished_disk()
