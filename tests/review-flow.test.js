@@ -188,8 +188,8 @@ test("UI.reviewFlow is ready only with a review, not blocked, not busy, acknowle
   assert.equal(flow.ready(), false);
   assert.equal(fields["#go"].disabled, true);
   await flow.open();
-  assert.equal(flow.ready(), true, "no tickbox means nothing to accept");
-  assert.equal(fields["#go"].disabled, false);
+  assert.equal(flow.ready(), false, "a tickbox that is not there is not a tick (#1317)");
+  assert.equal(fields["#go"].disabled, true);
   fields["#ack"] = { checked: false };
   assert.equal(flow.ready(), false);
   fields["#ack"].checked = true;
@@ -197,6 +197,11 @@ test("UI.reviewFlow is ready only with a review, not blocked, not busy, acknowle
   extra = false;
   assert.equal(flow.ready(), false);
   extra = true;
+  const optional = UI.reviewFlow({ preview: async () => ({ warnings: 0 }), render() {}, ackWhen: review => review.warnings > 0,
+    ack: "ack", button: "go", apply: async () => {} });
+  fields["#ack"] = null;
+  await optional.open();
+  assert.equal(optional.ready(), true, "a review that asks for no tick is ready without one");
   const blocked = UI.reviewFlow({ preview: async () => ({ blocked: true }), render() {}, blocked: review => review.blocked, apply: async () => {} });
   await blocked.open();
   assert.equal(blocked.ready(), false);

@@ -409,6 +409,9 @@ window.wlPlacement = async (ns, name) => {
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
   modal("Edit · " + name, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  // Whether this dialog is still the one open: another one reuses #mbody, and a late
+  // answer or error must not be drawn into it (#1317).
+  const loading = $("#mbody")?.firstElementChild, mine = () => !!loading && $("#mbody")?.firstElementChild === loading;
   // Placement, storage, its neighbours and its address are built from these
   // reads; a form built without one would save a change nobody made (#620).
   try {
@@ -424,6 +427,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       api(`/api/workloads/starts-after?${new URLSearchParams({ ns, name })}`).catch(e => ({ error: e.message })),
     ]);
     const vips = await vipChoices(network);
+    if (!mine()) return;
     STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
     // What it uses now, beside what it reserves: with one container, all of it is that container's.
@@ -499,7 +503,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     placementChanged();
     startsAfterNote();
     editAddressChanged();
-  } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `wlEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
+  } catch (e) { if (mine()) $("#mbody").innerHTML = UI.error(e, { retry: `wlEdit(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => {

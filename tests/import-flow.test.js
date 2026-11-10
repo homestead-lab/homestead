@@ -53,3 +53,12 @@ test("an error from a preview a newer review has replaced is not shown", async (
   fail(new Error("the old preview failed")); await old;
   assert.deepEqual(w.log.filter(e => e[0] === "toast"), []);
 });
+
+test("a send that fails after its dialog has gone does not throw into the page (#1317)", async () => {
+  const w = world({ fail: true }); await w.ctx.importReview(body()); w.fields["#importConfirm"].checked = true;
+  let release; w.state.gate = new Promise(r => { release = r; });
+  const sending = w.ctx.confirmImport(); await settle();
+  delete w.fields["#importGo"];
+  release(); await sending;
+  assert.ok(w.log.some(e => e[0] === "toast" && /Lost connection/.test(e[1])), "the failure is still shown");
+});

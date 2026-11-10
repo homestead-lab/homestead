@@ -108,7 +108,7 @@ async function aSendingWithBOpen() {
 test("a dialog opened during a send waits on the spinner with Start off, and reads nothing yet", async () => {
   const { w } = await aSendingWithBOpen();
   assert.equal(plans(w).length, 1, "only A's plan so far");
-  assert.match(w.fields["#mv_plan"].innerHTML, /asking both clusters/);
+  assert.match(w.fields["#mv_plan"].innerHTML, /Waiting for the transfer being sent/, "it says what it waits for (#1317)");
   assert.equal(w.fields["#mv_go"].disabled, true);
 });
 test("after a refused start, a dialog opened during the send plans and starts its own transfer", async () => {
@@ -131,4 +131,16 @@ test("Check again during a send waits for it, then reads the plan once", async (
   assert.equal(plans(w).length, 1);
   w.answer(null, "refused"); await send; await settle();
   assert.equal(plans(w).length, 2);
+});
+
+test("the stop choice cannot be flipped while the transfer is being sent, and the person is told (#1317)", async () => {
+  const w = world(); w.ctx.moveReview("source", "vm", "A", "copy"); w.answer(LIVE); await settle();
+  const send = w.ctx.moveStart("source", "vm", "A"); await settle();
+  w.fields["#mv_stop"] = { checked: true };
+  w.ctx.moveStopSource("source", "vm", "A", true);
+  assert.equal(w.fields["#mv_stop"].checked, false, "the tickbox goes back to what was sent");
+  assert.ok(w.log.some(e => e[0] === "toast" && /being sent/.test(e[1])), "a message says why");
+  assert.equal(plans(w).length, 1, "no new plan is asked for");
+  while (w.replies.length) w.answer({}); await send;
+  assert.equal(lastBody(w, "/api/move/start").stop_source, false);
 });

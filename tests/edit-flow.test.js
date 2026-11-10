@@ -56,3 +56,15 @@ test("an error from a preview a newer review has replaced is not shown", async (
   fail(Object.assign(new Error("the old preview failed"), { status: 500 })); await old;
   assert.deepEqual(w2.log.filter(e => e[0] === "toast"), [], "nothing about the replaced preview");
 });
+
+test("a failed read of Edit is not drawn into the dialog that replaced it (#1317)", async () => {
+  const w = world(); let fail;
+  const pane = { innerHTML: "", firstElementChild: { loading: true } };
+  w.fields["#mbody"] = pane; w.c.modal = () => {};
+  w.c.loadHardwareFeatures = () => new Promise((_, reject) => { fail = reject; });
+  w.c.api = () => new Promise(() => {}); w.c.mustRead = () => new Promise(() => {}); w.c.STATE = { data: { wl: [] } };
+  const editing = w.c.wlEdit("lab", "demo", true); await settle();
+  pane.firstElementChild = { another: "dialog" }; pane.innerHTML = "another dialog";
+  fail(new Error("the hardware could not be read")); await editing;
+  assert.equal(pane.innerHTML, "another dialog");
+});
