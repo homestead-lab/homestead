@@ -62,6 +62,9 @@ def set_cordon(node, unschedulable):
 
 
 LONGHORN_DRAIN_WAIT = 300   # seconds a drain waits on Longhorn's instance managers alone
+# An instance-manager can also be held by Longhorn's node drain policy (such
+# as its last volume copy), which no list Homestead reads shows.
+POLICY_MAY_HOLD = "Longhorn's node drain policy may also hold the instance-manager. "
 
 
 def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, progress=None, resumed=False):
@@ -102,6 +105,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     budgets = {}        # identity: [first refused at, refusal] of a budget whose copies are starting
     stale_since = None  # since when only engines that run elsewhere hold the instance-manager
     state = engines_read = cleans_itself = None     # what holds it, when that was read, Longhorn's own clean-up
+    cleanup_read = False    # cleans_itself: Longhorn's grace period when it removes orphans itself, else None
     throttled = {}      # identity: when to ask again, after the API server's own 429
     now = started       # the clock as last read: once a round, after the evictions
     while targets:
@@ -112,6 +116,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             if throttled.get(identity, 0) > now:
                 continue    # its Retry-After has not passed; the drain's deadline still applies
             ns, name = p["metadata"]["namespace"], p["metadata"]["name"]
+            throttled.pop(identity, None)   # throttled only while its latest answer is the API server's own 429
             try:
                 L.ksend("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
                       {"apiVersion": "policy/v1", "kind": "Eviction",
@@ -179,14 +184,14 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             # Longhorn is read every ENGINES_EVERY seconds, not every round.
             if engines_read is None or now >= engines_read + BLOCKERS.ENGINES_EVERY:
                 state, engines_read = BLOCKERS.engines_here(node, read=L.kget), now
-                if cleans_itself is None:
-                    cleans_itself = BLOCKERS.removes_instance_orphans(read=L.kget)
-            stale = state is not None and not state[0] and state[1] and not cleans_itself
+                if not cleanup_read:
+                    cleans_itself, cleanup_read = BLOCKERS.removes_instance_orphans(read=L.kget), True
+            stale = state is not None and not state[0] and state[1] and cleans_itself is None
             stale_since = (stale_since if stale_since is not None else now) if stale else None
             if stale and now >= stale_since + BLOCKERS.STALE_GRACE:
                 raise ValueError(f"The host stays cordoned. Longhorn still prevents eviction: {', '.join(sorted(storage)[:6])}, "
                                  f"and only engines that no longer run on {node} keep it. "
-                                 f"Nothing was sent. {BLOCKERS.say(node, state[1])[:1].upper()}{BLOCKERS.say(node, state[1])[1:]}")
+                                 f"Nothing was sent. {POLICY_MAY_HOLD}{BLOCKERS.say(node, state[1])[:1].upper()}{BLOCKERS.say(node, state[1])[1:]}")
         for name in held:
             budgets[name][0] = now if budgets[name][0] is None else budgets[name][0]
         # Each has its own deadline, and the first one passed ends the
@@ -195,21 +200,21 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         # but those is left, waiting longer is safe - it never forces
         # anything. A budget whose copies are starting is waited on from its
         # first refusal. Anything else that has not left has two minutes.
+        # Longhorn's own clean-up of orphan records starts after its grace
+        # period: waited for on top of the instance-manager's own time.
         others = [name for name in targets if name not in waiting and name not in throttled]
         slowed = [name for name in targets if name not in waiting and name in throttled]
         deadlines = ([(started + 120, 120, "Pods have not left the host", others)] if others else []) + \
             ([(started + 120, 120, BLOCKERS.THROTTLED[:1].upper() + BLOCKERS.THROTTLED[1:], slowed)] if slowed else []) + \
-            ([(started + LONGHORN_DRAIN_WAIT, LONGHORN_DRAIN_WAIT, "Longhorn still prevents eviction", storage)]
-             if storage else []) + \
+            ([(started + LONGHORN_DRAIN_WAIT + (cleans_itself or 0), LONGHORN_DRAIN_WAIT + (cleans_itself or 0),
+               "Longhorn still prevents eviction", storage)] if storage else []) + \
             [(budgets[name][0] + BLOCKERS.BUDGET_WAIT, BLOCKERS.BUDGET_WAIT,
               "It was still waiting for " + budgets[name][1]["why"], [name]) for name in sorted(held)]
         deadline, limit, reason, late = min(deadlines, key=lambda row: row[0])
         names = ", ".join(sorted(late)[:6])
         if now >= deadline:
             stall = BLOCKERS.stall_reason(node, read=L.kget) or BLOCKERS.GENERAL_ADVICE
-            # An instance-manager can also be held by Longhorn's node drain
-            # policy (such as its last volume copy), which no list shows.
-            also = "Longhorn's node drain policy may also hold it. " if late == storage else ""
+            also = POLICY_MAY_HOLD if late == storage else ""
             raise ValueError(f"The host stays cordoned. The drain timed out after {limit // 60} minutes. {reason}: {names}. "
                              f"Nothing was sent. {also}{stall[:1].upper()}{stall[1:]}")
         if progress:

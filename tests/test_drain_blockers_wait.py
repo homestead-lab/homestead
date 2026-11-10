@@ -42,6 +42,12 @@ def auto_deletion(value):
             "metadata": {"name": "orphan-resource-auto-deletion", "namespace": "longhorn-system"}, "value": value}
 
 
+def grace_period(value):
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+            "metadata": {"name": "orphan-resource-auto-deletion-grace-period", "namespace": "longhorn-system"},
+            "value": value}
+
+
 class Drain(unittest.TestCase):
     setUp = DRAIN.DrainNamesItsBlockerTests.setUp
     run_drain = DRAIN.DrainNamesItsBlockerTests.run_drain
@@ -87,6 +93,32 @@ class InstanceManagerTests(Drain):
                 self.run_drain(kube, power=True)
         self.assertLess(self.clock.now, NODE_ACTIONS.LONGHORN_DRAIN_WAIT)
         self.assertIn("orphan record", str(caught.exception))
+        self.assertIn("Longhorn's node drain policy may also hold the instance-manager.", str(caught.exception))
+
+    def test_with_auto_deletion_on_the_drain_also_waits_longhorns_grace_period(self):
+        # Longhorn removes the records only after its grace period
+        # (orphan-resource-auto-deletion-grace-period), so the drain's own five
+        # minutes alone could end just before it does.
+        for grace in ([grace_period("300")], []):     # read, or Longhorn's documented default
+            self.setUp()
+            im_pod, im_budget, objects = self.instance_manager_held(auto_deletion("instance"), *grace)
+            with self.subTest(grace), Kube(*objects) as kube:
+                asked = self.refuse(kube, im_pod, im_budget, times=200)    # about 400 s
+                result = self.run_drain(kube)
+            self.assertTrue(result["ok"], result)
+            self.assertEqual(201, len(asked))
+
+    def test_the_grace_period_added_to_the_wait_is_bounded(self):
+        for value, most in (("100000", NODE_ACTIONS.LONGHORN_DRAIN_WAIT + 1800),     # at most 30 minutes more
+                            ("60", NODE_ACTIONS.LONGHORN_DRAIN_WAIT + 60)):
+            self.setUp()
+            im_pod, im_budget, objects = self.instance_manager_held(auto_deletion("instance"), grace_period(value))
+            with self.subTest(value), Kube(*objects) as kube:
+                self.refuse(kube, im_pod, im_budget, times=10 ** 6)
+                with self.assertRaises(ValueError):
+                    self.run_drain(kube, power=True)
+            self.assertGreaterEqual(self.clock.now, most)
+            self.assertLess(self.clock.now, most + 5)
 
     def test_when_longhorn_removes_instance_orphans_itself_the_drain_waits_for_it(self):
         im_pod, im_budget, objects = self.instance_manager_held(auto_deletion("replica-data;instance"))
@@ -118,7 +150,7 @@ class InstanceManagerTests(Drain):
                 self.run_drain(kube, power=True)
         message = str(caught.exception)
         self.assertIn("Longhorn still prevents eviction", message)
-        self.assertIn("Nothing was sent. Longhorn's node drain policy may also hold it. ", message)
+        self.assertIn("Nothing was sent. Longhorn's node drain policy may also hold the instance-manager. ", message)
         self.assertLess(len(message.split(". ")[0]), 90)
 
     def test_longhorn_is_read_every_ten_seconds_while_the_drain_waits(self):
@@ -163,6 +195,26 @@ class ThrottledTests(Drain):
         self.assertIn("The API server asked Homestead to slow down", message)
         self.assertIn("lab/app-a", message)
         self.assertNotIn("Pods have not left the host", message)
+
+    def test_a_pod_throttled_once_then_stuck_for_another_reason_says_so(self):
+        # Throttled once, then the eviction is accepted but the pod never
+        # leaves (no controller here removes it): it has not left the host,
+        # and throttling is not why.
+        pod = DRAIN.workload()
+        with Kube(pod) as kube:
+            asked = []
+
+            def respond(method, path, sent):
+                asked.append(path)
+                if len(asked) == 1:
+                    raise throttled(path)
+                return {"kind": "Status", "apiVersion": "v1", "status": "Success", "code": 201}
+            kube.react("POST", DRAIN.eviction(pod), respond)
+            with self.assertRaises(ValueError) as caught:
+                self.run_drain(kube, power=True)
+        message = str(caught.exception)
+        self.assertIn("Pods have not left the host: lab/app-a", message)
+        self.assertNotIn("slow down", message)
 
 
 class RefusalWordsTests(unittest.TestCase):

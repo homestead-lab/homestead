@@ -435,6 +435,12 @@ ENGINES_EVERY = 10
 # Longhorn's setting for the orphan records it removes by itself; "instance"
 # among its values (separated by ";") covers engine-instance records.
 AUTO_DELETION = LH + "/settings/orphan-resource-auto-deletion"
+# How long Longhorn waits before it removes them (longhorn-manager
+# types/setting.go: SettingNameOrphanResourceAutoDeletionGracePeriod, an int
+# in seconds, default "300"); the drain waits that much longer, at most
+# GRACE_MOST.
+AUTO_DELETION_GRACE = AUTO_DELETION + "-grace-period"
+GRACE_DEFAULT, GRACE_MOST = 300, 1800
 
 PDB = "/apis/policy/v1/namespaces/{ns}/poddisruptionbudgets/{name}"
 # The cause Kubernetes gives an eviction a budget refuses
@@ -564,15 +570,24 @@ def engines_here(node, read=None):
 
 
 def removes_instance_orphans(read=None):
-    """Whether Longhorn removes engine-instance orphan records by itself
-    (orphan-resource-auto-deletion includes "instance"). Then the drain does
-    not stop early on them: Longhorn lets the instance-manager go once they
-    are removed. A setting that cannot be read counts as off, as before."""
+    """The seconds Longhorn waits before it removes engine-instance orphan
+    records by itself (orphan-resource-auto-deletion includes "instance"),
+    or None when it does not. Then the drain does not stop early on them and
+    waits that much longer: Longhorn lets the instance-manager go once they
+    are removed. A setting that cannot be read counts as off, as before; a
+    grace period that cannot be read is Longhorn's default, and at most
+    GRACE_MOST counts."""
     try:
         value = str(((read or kget)(AUTO_DELETION) or {}).get("value") or "")
     except Exception:
-        return False
-    return "instance" in [part.strip() for part in value.split(";")]
+        return None
+    if "instance" not in [part.strip() for part in value.split(";")]:
+        return None
+    try:
+        grace = int(str(((read or kget)(AUTO_DELETION_GRACE) or {}).get("value")).strip())
+    except Exception:
+        grace = GRACE_DEFAULT
+    return min(max(grace, 0), GRACE_MOST)
 
 
 GENERAL_ADVICE = "Check the Longhorn volumes, disruption budgets and pod events"
