@@ -229,7 +229,11 @@ def probe_tick():
         row = {"at": int(time.time()), "version": probe_version, "reason": reason, "error": "",
                "install": own or (before or {}).get("install", "")}
         try:
-            if probe.installed():
+            there = probe.installed()
+            if there is None:
+                # A read that failed decides nothing: keep the last answer, ask again next tick.
+                return None
+            if there:
                 row["reason"], detail = "present", "the node probe is installed already"
             else:
                 detail = probe.install(probe_version).get("detail", "")

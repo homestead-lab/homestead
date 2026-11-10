@@ -189,6 +189,9 @@ def https_check(url, fetch=None):
 TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
 
 
+_probe_seen = [False]    # the last answer about the node probe, for a read that fails
+
+
 def welcome(role="admin"):
     """The first-run checklist: the few settings a new cluster wants, each
     with whether it is done. Shown to an admin until one says it is done."""
@@ -208,7 +211,13 @@ def welcome(role="admin"):
                             "vips": len(REG.registered())}
     except Exception as error:
         steps["address"] = {"done": False, "error": str(error)[:160]}
-    steps["probe"] = {"done": bool(PROBE.installed())}
+    there = PROBE.installed()
+    if there is None:
+        steps["probe"] = {"done": _probe_seen[0],
+                          "error": "Homestead could not check whether the node probe is installed."}
+    else:
+        _probe_seen[0] = bool(there)
+        steps["probe"] = {"done": _probe_seen[0]}
     try:
         steps["backups"] = {"done": bool(BACKUP_TARGET.backup_target().get("configured"))}
     except Exception:

@@ -161,6 +161,23 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual("absent", result["state"])
         self.assertEqual([], self.sent)
 
+    def test_a_failed_read_is_unknown_not_absent(self):
+        """installed() answers "" only on the API's own 404; None says it could not tell."""
+        for failure in (urllib.error.HTTPError("/ds", 500, "down", {}, None), TimeoutError("timed out")):
+            with self.subTest(failure=failure):
+                probe.bind(lambda path, failure=failure: (_ for _ in ()).throw(failure), self._send, "lab")
+                self.assertIsNone(probe.installed())
+        probe.bind(self._get, self._send, "lab")
+        self.assertEqual("", probe.installed())
+
+    def test_a_probe_that_cannot_be_read_is_neither_installed_over_nor_reported_absent(self):
+        probe.bind(lambda path: (_ for _ in ()).throw(TimeoutError("timed out")), self._send, "lab")
+
+        self.assertEqual("unknown", probe.reconcile("2.8.49")["state"])
+        with self.assertRaisesRegex(ValueError, "could not check"):
+            probe.install("2.8.51")
+        self.assertEqual([], self.sent)
+
     def test_other_keys_in_the_configmap_survive(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(0)" + chr(10) + "",
                                               "smart.py": "print(0)" + chr(10) + "",

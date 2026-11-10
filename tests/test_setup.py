@@ -297,6 +297,21 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.read.side_effect = RuntimeError("network inventory unavailable")
         self.assertIn("error", self.state()["lan"])
 
+    def test_a_failed_read_of_the_probe_keeps_the_last_answer_and_says_so(self):
+        import homestead_probe as PROBE
+        answers = iter(["homestead-nodeprobe", None, "", None])
+        patch = mock.patch.object(PROBE, "installed", side_effect=lambda: next(answers))
+        patch.start(); self.addCleanup(patch.stop)
+        self.addCleanup(SETUP._probe_seen.__setitem__, 0, False)
+        self.assertEqual({"done": True}, SETUP.welcome("admin")["steps"]["probe"])
+        step = SETUP.welcome("admin")["steps"]["probe"]
+        self.assertTrue(step["done"], "an unread probe is not a removed one")
+        self.assertIn("error", step)
+        self.assertEqual({"done": False}, SETUP.welcome("admin")["steps"]["probe"], "a clean 404 answer still says not done")
+        step = SETUP.welcome("admin")["steps"]["probe"]
+        self.assertFalse(step["done"])
+        self.assertIn("error", step)
+
     def test_smb_needs_an_installed_enabled_server_but_does_not_claim_client_access(self):
         for installed, enabled, expected in ((False, False, False), (False, True, False), (True, False, False), (True, True, True)):
             with self.subTest(installed=installed, enabled=enabled):

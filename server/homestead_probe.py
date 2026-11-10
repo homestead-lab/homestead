@@ -144,12 +144,16 @@ def status():
 
 
 def installed():
-    """The probe's name if it is installed, under either spelling."""
+    """The probe's name if it is installed, "" only on the API's own 404, None if it could not be read."""
     for name in (NAMES.NODEPROBE,):
         try:
             found = kget("/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + name)
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                continue
+            return None
         except Exception:
-            continue
+            return None
         if (found.get("metadata", {}) or {}).get("name"):
             return name
     return ""
@@ -168,7 +172,10 @@ def presence():
 
 def install(version="dev"):
     """Create the probe for automatic installation or an administrator's retry."""
-    if installed():
+    there = installed()
+    if there is None:
+        raise ValueError("Homestead could not check whether the node probe is installed")
+    if there:
         raise ValueError("the node probe is already installed")
     if not shipped_scripts():
         raise ValueError("this image carries no probe scripts")
@@ -209,6 +216,8 @@ def reconcile(version=""):
     if not scripts:
         return _note({"state": "unknown", "detail": "this image carries no probe scripts"})
     name = installed()
+    if name is None:
+        return _note({"state": "unknown", "detail": "Homestead could not check whether the node probe is installed"})
     if not name:
         # Not installed, and not Homestead's to install unasked: the SMART
         # sidecar is privileged, which is the operator's decision to make.
