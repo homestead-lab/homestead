@@ -535,8 +535,10 @@ class ImportWaitTests(unittest.TestCase):
             job = self.look()
         self.assertEqual("failed", job["status"], job["message"])
         self.assertTrue(job["message"].startswith(
-            "Homestead could not check the import's temporary storage for 6 hours (a temporary claim of the import is "
-            "owned by something else), so this import has stopped and no VM was created."), job["message"])
+            "Homestead could not check the import's temporary storage for 6 hours. The last check said a temporary "
+            "claim of the import is owned by something else. This import has stopped, and no VM was created."),
+            job["message"])
+        self.assertLess(len(job["message"].split(". ")[0]) + 1, 90, "the short version stands alone")
         self.assertTrue(job["message"].endswith(UVMS.REMOVE_THERE), job["message"])
         self.assertTrue(self.kube.object(self.path(DVS[0])), "nothing of the disks is removed")
         self.assertFalse(self.ref()["retain_resources"], "the job lets go of the name")
@@ -602,11 +604,37 @@ class ImportWaitTests(unittest.TestCase):
         job = self.look(3)
         self.imp.commit_vm.assert_not_called()
         self.assertNotEqual("done", self.ref()["phase"], "the import ends without claiming a VM")
-        self.assertIn("The VM create was cut off after win11 was sent, so it may have been created. Check it under "
-                      "Virtual machines. Nothing it created was removed.", job["message"])
+        self.assertTrue(job["message"].startswith(
+            "The VM create was cut off after Kubernetes accepted win11. win11 may exist, so it is kept with everything "
+            "created for it. Check it under Virtual machines. The disks are kept as win11-disk, win11-disk-2."),
+            job["message"])
+        self.assertNotIn("could not be created", job["message"])
         self.assertTrue(self.kube.object(self.SECRET))
         self.assertTrue(self.kube.object(self.VM))
         self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+
+    def test_a_vm_sent_with_no_answer_may_exist_and_is_kept(self):
+        self.finished_disks()
+        self.kube.fail(self.VM.rsplit("/", 1)[0], 500, method="POST", applied=True)
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.imp.commit_vm = lambda prepared, send=None: send("POST", self.VM.rsplit("/", 1)[0], vm)
+        self.look()
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.assertTrue(job["message"].startswith(
+            "The VM create was cut off after win11 was sent with no answer. win11 may exist, so it is kept with "
+            "everything created for it."), job["message"])
+
+    def test_a_pause_after_the_vm_was_accepted_does_not_say_no_vm_was_created(self):
+        self.finished_disks()
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.cut_off_after((self.VM.rsplit("/", 1)[0], vm))
+        with self.refused():
+            self.walk(CONVERT_LIMIT)
+            job = self.look()
+        self.assertIn("This import has stopped. win11 may exist, so it is kept. Check it under Virtual machines.",
+                      job["message"])
+        self.assertNotIn("no VM was created", job["message"])
 
     def test_a_write_with_no_answer_is_kept_and_named(self):
         self.finished_disks()

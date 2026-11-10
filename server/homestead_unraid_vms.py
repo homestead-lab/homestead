@@ -1036,6 +1036,15 @@ def _journalled(ref, item):
     return send
 
 
+class MayExist(ValueError):
+    """A VM create cut off once the VM was sent: the VM may exist. Its words are the whole ending."""
+
+
+def _vm_sent(ref):
+    """The record of the VM itself, when this try sent it and it was not refused outright."""
+    return next((e for e in ref.get("vm_writes") or [] if e["kind"] == "VirtualMachine" and e["phase"] != "refused"), None)
+
+
 def _named(entry):
     return entry["path"].rsplit("/", 1)[-1]
 
@@ -1056,10 +1065,14 @@ def _after_cut_off(ref, item):
     if not journal:
         return
     # A VM refused outright made no VM; one sent with any other outcome may have.
-    vm = next((e for e in journal if e["kind"] == "VirtualMachine" and e["phase"] != "refused"), None)
+    vm = _vm_sent(ref)
     if vm:
-        raise ValueError(f"The VM create was cut off after {_named(vm)} was sent, so it may have been created. Check it "
-                         "under Virtual machines. Nothing it created was removed")
+        how = "Kubernetes accepted" if vm["phase"] in ("accepted", "removed") else "was sent with no answer"
+        name = _named(vm)
+        said = (f"The VM create was cut off after Kubernetes accepted {name}." if how == "Kubernetes accepted" else
+                f"The VM create was cut off after {name} was sent with no answer.")
+        raise MayExist(f"{said} {name} may exist, so it is kept with everything created for it. "
+                       "Check it under Virtual machines.")
     for entry in journal:
         if entry["phase"] != "accepted" or not entry.get("uid"):
             continue
@@ -1095,11 +1108,13 @@ def _paused(ref, item, hold):
         return hold
     limit = wait[1]
     how_long = f"{limit // 3600} hours" if limit >= 3600 else f"{limit // 60} minutes"
-    reason = hold[2].removeprefix("Import paused: ")[:160]
+    reason = hold[2].removeprefix("Import paused: ")[:160].rstrip(".")
+    vm = _vm_sent(ref)    # an earlier create cut off once the VM was sent: it may exist
+    stopped = (f"This import has stopped. {_named(vm)} may exist, so it is kept. Check it under Virtual machines."
+               if vm else "This import has stopped, and no VM was created.")
     return _end_keeping_disks(ref, item, (
-        f"Homestead could not check the import's temporary storage for {how_long} ({reason}), so this import has "
-        f"stopped and no VM was created. The VM on {_where(ref)} is unchanged. Nothing of the disks was removed. "
-        f"{REMOVE_THERE}"))
+        f"Homestead could not check the import's temporary storage for {how_long}. The last check said {reason}. "
+        f"{stopped} The VM on {_where(ref)} is unchanged. Nothing of the disks was removed. {REMOVE_THERE}"))
 
 
 def _end_keeping_disks(ref, item, detail):
@@ -1277,8 +1292,10 @@ def status(item):
         except ValueError as error:
             ref.pop("vm_writes", None)
             # The disks are whole: keep them, and say how to finish by hand.
-            detail = (f"The disks arrived, but the VM could not be created: {error}. They are kept as "
-                      f"{', '.join(d['dv'] for d in ref['disks'])}. Create the VM from them under Import.")
+            disks = ", ".join(d["dv"] for d in ref["disks"])
+            detail = (f"{error} The disks are kept as {disks}." if isinstance(error, MayExist) else
+                      f"The disks arrived, but the VM could not be created: {error}. They are kept as "
+                      f"{disks}. Create the VM from them under Import.")
             if ref.get("cdi_cleanup"):
                 ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
                 return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
