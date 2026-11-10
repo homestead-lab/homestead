@@ -101,7 +101,12 @@ def _is_vm_job(row):
 # this removal deletes itself (SETTINGS), and what an operator created by
 # default (_made_by_operator).
 SETTINGS = {("kubevirt.io", "KubeVirt"), ("cdi.kubevirt.io", "CDI")}
-OPERATORS = ("virt-operator", "cdi-operator", "cdi-controller")
+# The kinds an operator creates by default, and the only ones that can be
+# exempt: labels and ownerReferences can be written by anyone who can create
+# a VM, so for any other kind (VirtualMachine, VirtualMachineInstance,
+# DataVolume, snapshots and their contents, exports, clones, restores, pools,
+# DataSources, DataImportCrons, ...) nothing exempts an object, whatever it carries.
+CLUSTER_DEFAULTS = {"VirtualMachineClusterInstancetype", "VirtualMachineClusterPreference"}
 # Kinds with words of their own; any other is named by its kind.
 WORDS = {"VirtualMachine": ("virtual machine", "Delete {it} first."),
          "VirtualMachineInstance": ("running VM", "Stop and delete {it} first."),
@@ -112,17 +117,41 @@ def _ours_group(group):
     return group == "kubevirt.io" or group.endswith(".kubevirt.io")
 
 
-def _made_by_operator(obj):
-    """What an operator created by default, and removes with its settings: it
-    carries the operator's managed-by label, or the settings object owns it
-    (CDI's CDIConfig). CDI creates a StorageProfile for every storage class
-    with an empty spec; one with a spec set is a person's change."""
-    meta = obj.get("metadata") or {}
-    if (meta.get("labels") or {}).get("app.kubernetes.io/managed-by") in OPERATORS:
-        return True
-    if any(owner.get("kind") in ("KubeVirt", "CDI") for owner in meta.get("ownerReferences") or []):
-        return True
-    return obj.get("kind") == "StorageProfile" and not obj.get("spec")
+def _settings_uids():
+    """The live KubeVirt and CDI settings objects' uids, by kind, read now."""
+    uids = {}
+    for _, path, _ in REMOVALS["kubevirt"]["resources"]:
+        found = _optional(path)
+        if found:
+            uids[found.get("kind")] = (found.get("metadata") or {}).get("uid")
+    return uids
+
+
+def _owned_by_settings(obj, uids):
+    """Owned by the live settings object: the owner's group, kind and uid all match."""
+    for owner in (obj.get("metadata") or {}).get("ownerReferences") or []:
+        group = str(owner.get("apiVersion") or "").split("/")[0]
+        kind = owner.get("kind")
+        if ((kind, group) in (("KubeVirt", "kubevirt.io"), ("CDI", "cdi.kubevirt.io"))
+                and uids.get(kind) and owner.get("uid") == uids[kind]):
+            return True
+    return False
+
+
+def _made_by_operator(obj, uids):
+    """What an operator created by default, and removes with its settings. Only
+    these kinds can be: virt-operator's cluster-wide instance types and
+    preferences (its managed-by label); CDI's CDIConfig (owned by the live CDI
+    settings object, by uid); and CDI's StorageProfiles, one per storage class
+    with an empty spec (one with a spec set is a person's change)."""
+    kind, meta = obj.get("kind"), obj.get("metadata") or {}
+    if kind in CLUSTER_DEFAULTS:
+        return (meta.get("labels") or {}).get("app.kubernetes.io/managed-by") == "virt-operator"
+    if kind == "CDIConfig":
+        return _owned_by_settings(obj, uids)
+    if kind == "StorageProfile":
+        return not obj.get("spec")
+    return False
 
 
 def _types():
@@ -148,12 +177,12 @@ def blockers(what):
         raise ValueError("Homestead removes only virtual machines for now")
     found = []
     try:
-        types = _types()
+        types, uids = _types(), _settings_uids()
     except Exception as error:
         return [f"Homestead could not read which VM types the cluster serves ({_said(error)}), so nothing is removed."]
     for group, version, plural, kind in types:
         try:
-            rows = [_where(row) for row in _items(f"/apis/{group}/{version}/{plural}") if not _made_by_operator(row)]
+            rows = [_where(row) for row in _items(f"/apis/{group}/{version}/{plural}") if not _made_by_operator(row, uids)]
         except urllib.error.HTTPError as error:
             if error.code == 404:   # gone since the CRDs were read: none of them
                 continue

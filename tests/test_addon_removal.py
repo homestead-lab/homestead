@@ -168,8 +168,9 @@ class ReviewTests(Removal):
                                                     "labels": {"app.kubernetes.io/managed-by": "virt-operator"}}})
         self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "StorageProfile", "metadata": {"name": "longhorn"},
                        "spec": {}})
+        cdi = self.kube.object(CDI)["metadata"]["uid"]
         self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "CDIConfig", "metadata": {
-            "name": "config", "ownerReferences": [{"kind": "CDI", "name": "cdi", "uid": "x"}]}})
+            "name": "config", "ownerReferences": [{"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "CDI", "name": "cdi", "uid": cdi}]}})
         self.assertEqual([], self.review()["blockers"])
         self.kube.add({**cluster_type, "metadata": {"name": "my-size"}})
         self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "StorageProfile", "metadata": {"name": "local-path"},
@@ -177,6 +178,23 @@ class ReviewTests(Removal):
         said = " ".join(self.review()["blockers"])
         self.assertIn("1 VirtualMachineClusterInstancetype (my-size)", said)
         self.assertIn("1 StorageProfile (local-path)", said)
+
+    def test_an_operators_label_or_a_made_up_owner_exempts_nothing_a_person_could_lose(self):
+        # Labels and ownerReferences can be written by anyone who can create a VM.
+        spoofed = {"labels": {"app.kubernetes.io/managed-by": "virt-operator"},
+                   "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "KubeVirt", "name": "kubevirt", "uid": "not-the-live-one"}]}
+        self.kube.add({**vm("web"), "metadata": {"name": "web", "namespace": "lab", **spoofed}})
+        self.kube.add({"apiVersion": "snapshot.kubevirt.io/v1beta1", "kind": "VirtualMachineSnapshot",
+                       "metadata": {"name": "nightly", "namespace": "lab",
+                                    "labels": {"app.kubernetes.io/managed-by": "virt-operator"}}})
+        self.kube.add({"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "CDIConfig", "metadata": {
+            "name": "config", "ownerReferences": [{"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "CDI", "name": "cdi", "uid": "made-up"}]}})
+        said = " ".join(self.review()["blockers"])
+        for words in ("1 virtual machine (lab/web)", "1 VirtualMachineSnapshot (lab/nightly)", "1 CDIConfig (config)"):
+            self.assertIn(words, said)
+        with self.assertRaises(ValueError):
+            self.remove()
+        self.assertEqual([], self.deletes())
 
     def test_the_types_it_cannot_read_refuse(self):
         self.kube.fail("/apis/apiextensions.k8s.io/v1/customresourcedefinitions", 500, times=5)
