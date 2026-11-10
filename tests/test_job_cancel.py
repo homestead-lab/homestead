@@ -537,6 +537,35 @@ class UrlDiskImportTests(Store):
         self.assertIsNone(self.kube.object(self.DV))
         self.assertIsNotNone(self.kube.object(self.CLAIM), "not this import's: it is kept")
 
+    def test_a_disk_swapped_in_between_the_check_and_the_delete_survives(self):
+        self.work["disks"]["guest-disk"]["dv_uid"] = self.disk(stamp=self.work["id"])
+        op = self.importing()
+        delete = CANCEL._delete_saved
+        mine = {path: self.kube.object(path)["metadata"]["uid"] for path in (self.DV, self.CLAIM)}
+
+        def swapped(item, *paths):
+            # Checked and found this import's; then, before the delete, the stamped disk
+            # goes and a person's own, unstamped, takes its name.
+            self.kube.discard(self.CLAIM)
+            self.kube.discard(self.DV)
+            self.disk(stamp=None, claim_owner=False)
+            return delete(item, *paths)
+        self.enterContext(mock.patch.object(CANCEL, "_delete_saved", swapped))
+        OPS.cancel(op)
+        for path in (self.DV, self.CLAIM):
+            now = self.kube.object(path)
+            self.assertIsNotNone(now, f"{path}: the person's disk is kept")
+            self.assertNotEqual(mine[path], now["metadata"]["uid"])
+
+    def test_a_stamped_disk_with_another_uid_than_the_receipt_is_not_this_imports(self):
+        self.disk(stamp=self.work["id"])
+        self.work["disks"]["guest-disk"]["dv_uid"] = "the-one-this-import-made"
+        op = self.importing()
+        self.kube.writes.clear()
+        OPS.cancel(op)
+        self.assertEqual([], self.sent("DELETE"))
+        self.assertIsNotNone(self.kube.object(self.DV))
+
     def test_an_import_clearing_up_is_not_cancelled_into_deleting_its_disk(self):
         self.work["disks"]["guest-disk"]["dv_uid"] = self.disk(stamp=self.work["id"])
         op = self.importing(phase="cleanup")

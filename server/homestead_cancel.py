@@ -588,7 +588,9 @@ def _disk_import_found(item):
         if not work.get("id"):
             ours = True
         elif "/datavolumes/" in path:
-            ours = (meta.get("annotations") or {}).get(CDI_CLEANUP.STAMP) == work["id"]
+            # Its stamp, and the uid the receipt recorded for it when there is one.
+            ours = ((meta.get("annotations") or {}).get(CDI_CLEANUP.STAMP) == work["id"]
+                    and bool(meta.get("uid")) and meta["uid"] == (disk.get("dv_uid") or meta["uid"]))
             dv_uid = dv_uid or (meta.get("uid") if ours else None)
         else:
             ours = bool(meta.get("uid")) and (meta["uid"] == disk.get("target_uid") or bool(
@@ -629,6 +631,15 @@ def disk_import_cancel(item, _options):
     found = _disk_import_found(item)
     ours = [path for path, _, mine in found if mine]
     if ours:
+        # The delete is fenced with the uid of the object checked above, never one
+        # read again: what takes the name in between is not this import's.
+        uids = ref.setdefault("cancel_uids", {})
+        seeded = [path for path, obj, mine in found if mine and path not in uids]
+        for path, obj, mine in found:
+            if mine and path not in uids:
+                uids[path] = (obj.get("metadata") or {}).get("uid")
+        if seeded:
+            OPS.keep_cancel_ref(item)
         _delete_saved(item, *ours)
     if any(not mine for _, _, mine in found):
         return f"Download stopped. {_not_this_imports_words(ref['name'])}"
