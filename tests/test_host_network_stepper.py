@@ -944,7 +944,7 @@ class BothKindsWaitTests(DEADLINE.GuardBase):
 
     def test_both_wait_while_another_server_is_not_ready(self):
         self.kube.add(DEADLINE.node("node-c", ready=False, server=True))
-        self.refused("1 other server is not Ready or has sent no heartbeat in the last 20 seconds. If node-b stops answering "
+        self.refused("1 other server is not Ready or has sent no recent heartbeat. If node-b stops answering "
                      "too, the cluster could lose its quorum. Try again when every server is Ready")
 
     def test_a_bond_goes_ahead_on_a_quiet_cluster(self):

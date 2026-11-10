@@ -328,7 +328,7 @@ class KubeVipTests(Unfinished):
 class QuorumTests(Unfinished):
     """Restarting k3s or RKE2 takes the host quiet as the change did, so it goes by
     the other servers as they are at that round, however late that round is."""
-    DOWN = ("1 other server (node-b) is not Ready or has sent no heartbeat in the last 20 seconds. If node-a stops "
+    DOWN = ("1 other server (node-b) is not Ready or has sent no recent heartbeat. If node-a stops "
             "answering too, the cluster could lose its quorum. When every server is Ready, run `systemctl restart k3s` on node-a.")
 
     def tearDown(self):
@@ -344,7 +344,8 @@ class QuorumTests(Unfinished):
             status, progress, message = self.step(kind, ref, 300)
             self.assertEqual(("running", kind.confirmed_at, "confirmed"), (status, progress, ref["stage"]))
             self.assertEqual([], self.host.restarts())
-            self.assertEqual("node-a is on its new network; waiting for node-b to be Ready before it restarts k3s, "
+            self.assertEqual("node-a is on its new network; waiting for node-b to be Ready with a recent heartbeat "
+                             "before it restarts k3s, "
                              "for up to 300s more", message)
             self.kube.add(DEADLINE.node("node-b", ready=True, server=True))
             self.assertEqual("running", self.step(kind, ref, 330)[0])
@@ -376,7 +377,7 @@ class QuorumTests(Unfinished):
         for kind in self.each():
             self.kube.add(DEADLINE.node("node-b", ready=False, server=True))
             message = self.step(kind, kind.saved(), kind.module.RESTART_SECONDS + 1)[2]
-            self.assertIn("2 other servers (node-b, node-c) are not Ready or have sent no heartbeat", message)
+            self.assertIn("2 other servers (node-b, node-c) are not Ready or have sent no recent heartbeat", message)
 
     def test_a_worker_down_and_the_host_itself_do_not_hold_it(self):
         self.kube.add(DEADLINE.node("worker-c", ready=False))
@@ -395,14 +396,19 @@ class QuorumTests(Unfinished):
 
 class ServerHeartbeatTests(Unfinished):
     """Ready stays True about 40 s after a server's kubelet goes quiet, so a
-    server counts as up only while its kubelet renews its node Lease (#1318).
-    A server whose Lease is stale, missing, or stamped ahead of Homestead's
-    clock holds the restart and the next change, as a server not Ready does."""
+    server counts as up only while its kubelet renews its node Lease (#1318):
+    within half the Lease's own length (20 s for the usual 40), ahead of
+    Homestead's clock or behind it. A Lease outside that, or missing, holds the
+    restart and the next change, as a server not Ready does."""
+    CLOCKS = ("1 other server (node-b) is Ready, but its clock disagrees with Homestead's clock. Homestead cannot "
+              "check its heartbeat. If node-a stops answering too, the cluster could lose its quorum. When the "
+              "clocks agree, run `systemctl restart k3s` on node-a.")
 
     def tearDown(self):
-        for name in ("node-b", "node-m"):
+        for name in ("node-b", "node-m", "node-e"):
             self.kube.discard(DEADLINE.LEASE_PREFIX + name)
         self.kube.discard(NODES + "/node-m")
+        self.kube.discard(NODES + "/node-e")
         self.kube.add(DEADLINE.node("node-b", ready=True, server=True))
 
     def held_back(self, why, names="node-b"):
@@ -411,26 +417,58 @@ class ServerHeartbeatTests(Unfinished):
             status, progress, message = self.step(kind, ref, 5)
             self.assertEqual(("running", kind.confirmed_at, "confirmed"), (status, progress, ref["stage"]), why)
             self.assertEqual([], self.host.restarts(), why)
-            self.assertIn(f"waiting for {names} to be Ready before it restarts k3s", message, why)
+            self.assertIn(f"waiting for {names} to be Ready with a recent heartbeat before it restarts k3s", message, why)
 
-    def test_a_ready_server_whose_kubelet_stopped_holds_the_restart(self):
-        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 15))
-        self.held_back("renewed 20 s before the step: past the limit")
-
-    def test_a_server_renewed_lately_lets_it_go_ahead(self):
-        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 14))
+    def goes_ahead(self, why):
         for kind in self.each():
             ref = kind.saved()
             self.step(kind, ref, 5)
-            self.assertEqual(("restarting", 1), (ref["stage"], len(self.host.restarts())))
+            self.assertEqual(("restarting", 1), (ref["stage"], len(self.host.restarts())), why)
+
+    def final_words(self):
+        return [self.step(kind, kind.saved(), kind.module.RESTART_SECONDS + 1)[2] for kind in self.each()]
+
+    def test_a_ready_server_whose_kubelet_stopped_holds_the_restart(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 15))
+        self.held_back("renewed 20 s before the step: half its 40 s, past the limit")
+
+    def test_a_server_renewed_just_inside_the_window_lets_it_go_ahead(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 14.5))
+        self.goes_ahead("renewed 19.5 s before the step")
+
+    def test_the_window_is_half_the_leases_own_length(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 1, duration=10))
+        self.goes_ahead("renewed 4 s ago, inside half of 10 s")
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 1, duration=10))
+        self.held_back("renewed 6 s ago, past half of 10 s")
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 35, duration=120))
+        self.goes_ahead("renewed 40 s ago, inside half of 120 s")
 
     def test_a_server_with_no_lease_holds_the_restart(self):
         self.kube.fail(DEADLINE.LEASE_PREFIX + "node-b", 404, times=10)
         self.held_back("a Lease that cannot be found proves nothing")
 
-    def test_a_lease_stamped_ahead_of_homestead_holds_the_restart(self):
-        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 60))
-        self.held_back("a clock this far apart proves nothing")
+    def test_a_stamp_a_little_ahead_of_homestead_is_a_heartbeat(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 8))
+        self.goes_ahead("3 s ahead: clocks a little apart")
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 24.5))
+        self.goes_ahead("19.5 s ahead: still inside the window")
+
+    def test_a_stamp_far_ahead_holds_the_restart_and_blames_the_clocks(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 25.5))
+        self.held_back("20.5 s ahead: outside the window")
+        for message in self.final_words():
+            self.assertIn(self.CLOCKS, message)
+
+    def test_a_ready_server_with_a_stamp_far_behind_blames_the_clocks(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 1000))
+        for message in self.final_words():
+            self.assertIn(self.CLOCKS, message)
+
+    def test_a_ready_server_with_a_stamp_a_minute_old_has_no_recent_heartbeat(self):
+        self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + BONDS.RESTART_SECONDS + 1 - 60))
+        for message in self.final_words():
+            self.assertIn("1 other server (node-b) is not Ready or has sent no recent heartbeat.", message)
 
     def test_a_server_with_only_the_old_master_label_counts(self):
         self.kube.add({**DEADLINE.node("node-m", ready=True),
@@ -438,20 +476,36 @@ class ServerHeartbeatTests(Unfinished):
         self.kube.add(DEADLINE.stopped_kubelet("node-m", renewed=SINCE - 60))
         self.held_back("an older k3s labels its servers master only", names="node-m")
 
+    def test_a_server_with_only_the_etcd_label_counts(self):
+        self.kube.add({**DEADLINE.node("node-e", ready=True),
+                       "metadata": {"name": "node-e", "labels": {"node-role.kubernetes.io/etcd": "true"}}})
+        self.kube.add(DEADLINE.stopped_kubelet("node-e", renewed=SINCE - 60))
+        self.held_back("RKE2 split roles: an etcd-only server holds etcd's quorum", names="node-e")
+
     def test_the_guard_counts_a_stale_server_as_down(self):
         self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE - 60))
         with mock.patch.object(BONDS, "time", types.SimpleNamespace(time=lambda: SINCE, strftime=time.strftime)):
-            self.assertEqual(("", (0, 1)), BONDS.network_guard("node-a"))
-        self.kube.discard(DEADLINE.LEASE_PREFIX + "node-b")
-        with mock.patch.object(BONDS, "time", types.SimpleNamespace(time=lambda: SINCE, strftime=time.strftime)):
-            self.assertEqual(("", (1, 1)), BONDS.network_guard("node-a"))
+            self.assertEqual(("", (0, 1, 0)), BONDS.network_guard("node-a"))
+            self.kube.add(DEADLINE.stopped_kubelet("node-b", renewed=SINCE + 600))
+            self.assertEqual(("", (0, 1, 1)), BONDS.network_guard("node-a"), "one server down by its clock")
+            self.kube.discard(DEADLINE.LEASE_PREFIX + "node-b")
+            self.assertEqual(("", (1, 1, 0)), BONDS.network_guard("node-a"))
 
     def test_the_guard_says_why_in_one_idea_per_sentence(self):
-        said = BONDS.plan("node-a", {"members": ["enp2s0"]}, BOND_TESTS.facts(), servers_ready=(1, 2))["refusals"]
-        self.assertEqual(["1 other server is not Ready or has sent no heartbeat in the last 20 seconds. If node-a stops "
-                          "answering too, the cluster could lose its quorum. Try again when every server is Ready"], said)
-        said = BONDS.plan("node-a", {"members": ["enp2s0"]}, BOND_TESTS.facts(), servers_ready=(1, 3))["refusals"]
-        self.assertTrue(said[0].startswith("2 other servers are not Ready or have sent no heartbeat"), said)
+        def said(ready):
+            return BONDS.plan("node-a", {"members": ["enp2s0"]}, BOND_TESTS.facts(), servers_ready=ready)["refusals"]
+        self.assertEqual(["1 other server is not Ready or has sent no recent heartbeat. If node-a stops "
+                          "answering too, the cluster could lose its quorum. Try again when every server is Ready"], said((1, 2)))
+        self.assertTrue(said((1, 3))[0].startswith("2 other servers are not Ready or have sent no recent heartbeat."))
+        self.assertEqual(["1 other server is Ready, but its clock disagrees with Homestead's clock. Homestead cannot check "
+                          "its heartbeat. If node-a stops answering too, the cluster could lose its quorum. Set the same "
+                          "time on every host, then try again"], said((1, 2, 1)))
+        self.assertTrue(said((1, 3, 2))[0].startswith("2 other servers are Ready, but their clocks disagree with Homestead's clock."))
+        mixed = said((0, 2, 1))[0]
+        self.assertTrue(mixed.startswith("2 other servers are not Ready or have sent no recent heartbeat. The clock of 1 of "
+                                         "them disagrees with Homestead's clock."), mixed)
+        for words in (said((1, 2)), said((1, 2, 1)), said((1, 3, 2)), said((0, 2, 1))):
+            self.assertLess(len("node-a: " + words[0].split(". ")[0] + "."), 90, words)
 
 
 class RestartNotScheduledTests(Unfinished):

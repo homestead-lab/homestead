@@ -163,7 +163,8 @@ def _still_unconfirmed(spec, ref, now):
 # {"done": True} once it is. A job saved restarting by a version without it
 # has none, and is not sent back to kube-vip.
 KUBE_VIP_PODS = "/api/v1/namespaces/kube-system/pods"
-SERVER_LABELS = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master")
+# RKE2 can split roles: a server labelled etcd only still holds a vote in etcd.
+SERVER_LABELS = ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master", "node-role.kubernetes.io/etcd")
 
 
 def _said(error):
@@ -204,50 +205,77 @@ def _restart_kube_vip(read, send, node, ref):
 
 # A server counts as up only while it is Ready and its kubelet renews its node
 # Lease: Ready alone stays True about 40 s after the kubelet goes quiet (#1318).
-# The kubelet renews about every 10 s, so a renewal SERVER_HEARD seconds old
-# means at least one was missed. Its stamp is on the server's clock and the age
-# on Homestead's, so a stamp more than SERVER_AHEAD seconds ahead proves nothing
-# either: when unsure, the server counts as down and the change waits.
-SERVER_HEARD = 20
-SERVER_AHEAD = 5
+# The kubelet renews about every quarter of the Lease's leaseDurationSeconds
+# (10 s of the usual 40), so a renewal half that length old means at least one
+# was missed. The stamp is on the server's clock and the age on Homestead's, so
+# a stamp ahead counts within the same window, and one further ahead proves
+# nothing. A Ready server whose stamp is further ahead, or more than
+# CLOCK_BEHIND seconds behind (Ready would have dropped long before), points at
+# clocks that disagree, and the words say so. When unsure, it counts as down.
+SERVER_HEARD = 20       # the window when a Lease gives no length
+CLOCK_BEHIND = 120
 
 
-def _heard_lately(read, name, now):
-    """Whether name's kubelet renewed its node Lease in the last SERVER_HEARD
-    seconds. A Lease not found is no proof; any other failure to read it is
-    the caller's, as a failure to read the hosts is."""
+def _heartbeat(read, name, now):
+    """name's kubelet, by its node Lease: "fresh", "stale", "clock" (the stamp
+    is too far from Homestead's clock to judge) or "missing". A Lease not found
+    is no proof; any other failure to read it is the caller's, as a failure to
+    read the hosts is."""
     try:
-        renewed = kube_time((read(NODE_LEASE.format(name)).get("spec") or {}).get("renewTime"))
+        spec = read(NODE_LEASE.format(name)).get("spec") or {}
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return False
+            return "missing"
         raise
-    return renewed is not None and -SERVER_AHEAD <= now - renewed < SERVER_HEARD
+    renewed = kube_time(spec.get("renewTime"))
+    if renewed is None:
+        return "missing"
+    try:
+        window = int(spec.get("leaseDurationSeconds") or 0) / 2 or SERVER_HEARD
+    except (TypeError, ValueError):
+        window = SERVER_HEARD
+    age = now - renewed
+    if -window <= age < window:
+        return "fresh"
+    return "clock" if age < -window or age > CLOCK_BEHIND else "stale"
 
 
 def other_servers(nodes, node, read, now):
-    """The cluster's other control-plane servers: (their names, those down).
-    A server is down when it is not Ready or its kubelet was not heard from
-    lately (read: the Kubernetes reader; now: Homestead's clock)."""
-    names, down = [], []
+    """The cluster's other control-plane servers: (their names, those down,
+    those of them Ready but down because their clock disagrees). A server is
+    down when it is not Ready or its kubelet was not heard from lately (read:
+    the Kubernetes reader; now: Homestead's clock)."""
+    names, down, clocks = [], [], []
     for found in nodes:
         meta = found.get("metadata") or {}
         if meta.get("name") == node or not any(k in (meta.get("labels") or {}) for k in SERVER_LABELS):
             continue
-        names.append(meta["name"])
+        name = meta["name"]
+        names.append(name)
         if not any(c.get("type") == "Ready" and c.get("status") == "True"
-                   for c in (found.get("status") or {}).get("conditions") or []) \
-                or not _heard_lately(read, meta["name"], now):
-            down.append(meta["name"])
-    return names, down
+                   for c in (found.get("status") or {}).get("conditions") or []):
+            down.append(name)
+            continue
+        heard = _heartbeat(read, name, now)
+        if heard != "fresh":
+            down.append(name)
+        if heard == "clock":
+            clocks.append(name)
+    return names, down, clocks
 
 
-def _servers_down(node, count, names=()):
-    """Why the other servers being down holds a change on node back."""
+def _servers_down(node, count, clocks=0, names=()):
+    """Why the other servers being down holds a change on node back, cause first."""
     who = f"{count} other server{'s' if count != 1 else ''}" + (f" ({', '.join(names)})" if names else "")
-    are, have = ("is", "has") if count == 1 else ("are", "have")
-    return (f"{who} {are} not Ready or {have} sent no heartbeat in the last {SERVER_HEARD} seconds. "
-            f"If {node} stops answering too, the cluster could lose its quorum.")
+    one = count == 1
+    if clocks and clocks == count:
+        cause = (f"{who} {'is' if one else 'are'} Ready, but {'its clock disagrees' if one else 'their clocks disagree'} "
+                 f"with Homestead's clock. Homestead cannot check {'its' if one else 'their'} heartbeat.")
+    else:
+        cause = f"{who} {'is' if one else 'are'} not Ready or {'has' if one else 'have'} sent no recent heartbeat."
+        if clocks:
+            cause += f" The clock of {clocks} of them disagrees with Homestead's clock."
+    return f"{cause} If {node} stops answering too, the cluster could lose its quorum."
 
 
 def guard_refusals(node, busy, servers_ready):
@@ -258,24 +286,27 @@ def guard_refusals(node, busy, servers_ready):
     if busy:
         refusals.append(f"another host's network is changing ({busy}): one host at a time")
     if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
-        refusals.append(f"{_servers_down(node, servers_ready[1] - servers_ready[0])} Try again when every server is Ready")
+        down, clocks = servers_ready[1] - servers_ready[0], (servers_ready[2:] or (0,))[0]
+        way_out = "Set the same time on every host, then try again" if clocks == down else "Try again when every server is Ready"
+        refusals.append(f"{_servers_down(node, down, clocks)} {way_out}")
     return refusals
 
 
 def _before_restart(read, node, now):
     """What the restart of k3s or RKE2 on node goes by, read fresh each round:
-    (hosts, why the list has no answer, the other servers down). Restarting
+    (hosts, why the list has no answer, the other servers down, those of them
+    down by their clock). Restarting
     takes node off the network as the change did, so it waits for what
     network_guard does. The host itself is in the list, so an empty one is no answer."""
     try:
         nodes = read("/api/v1/nodes").get("items", [])
-        down = other_servers(nodes, node, read, now)[1]
+        _, down, clocks = other_servers(nodes, node, read, now)
     except Exception as error:
-        return None, _said(error), []
-    return (len(nodes), "", down) if nodes else (None, "the list came back empty", [])
+        return None, _said(error), [], []
+    return (len(nodes), "", down, clocks) if nodes else (None, "the list came back empty", [], [])
 
 
-def _restart_undone(node, service, unread, down, refused):
+def _restart_undone(node, service, unread, down, refused, clocks=()):
     """Why the restart was not sent, and what a person does about it."""
     undone = []
     if unread:
@@ -284,7 +315,9 @@ def _restart_undone(node, service, unread, down, refused):
                       f"`systemctl restart {service}` on {node}.")
     if down:
         undone.append(f"Homestead did not restart {service} on {node}, and flannel may still carry pod traffic by the old interface. "
-                      f"{_servers_down(node, len(down), down)} When every server is Ready, run `systemctl restart {service}` on {node}.")
+                      f"{_servers_down(node, len(down), len(clocks), down)} "
+                      f"When {'the clocks agree' if len(clocks) == len(down) else 'every server is Ready'}, "
+                      f"run `systemctl restart {service}` on {node}.")
     if refused:
         undone.append(f"{node} did not schedule the restart of {service} ({refused}), so it did not restart, and flannel may still "
                       f"carry pod traffic by the old interface. Run `systemctl restart {service}` on {node}.")
@@ -308,20 +341,20 @@ def _kube_vip_undone(ref, interface):
             f"its addresses on the old interface. Delete the kube-vip pod on {ref['node']}, and it starts again on {interface}."]
 
 
-def _not_finished(spec, ref, progress, elapsed, service="", unread="", down=(), refused=""):
+def _not_finished(spec, ref, progress, elapsed, service="", unread="", down=(), refused="", clocks=()):
     """The next step of a job with kube-vip or the restart still not done:
     (status, progress, message). It fails past the deadline, saying what is undone."""
     node, interface = ref["node"], spec.carries_on(ref)
     vip_undone = _kube_vip_undone(ref, interface)
     if elapsed > spec.restart_seconds:
         return ("failed", 100, f"{node} carries {ref['address']} on {interface} and keeps it, but the change is not finished. "
-                + " ".join(vip_undone + _restart_undone(node, service, unread, down, refused)))
+                + " ".join(vip_undone + _restart_undone(node, service, unread, down, refused, clocks)))
     reach = (["the cluster's hosts"] if unread else []) + ([f"kube-vip on {node}"] if vip_undone else [])
     doing = []
     if reach:
         doing.append(f"still trying to reach {' and '.join(reach)} ({unread or ref['kube_vip'].get('error', 'no answer')})")
     if down:
-        doing.append(f"waiting for {', '.join(down)} to be Ready before it restarts {service}")
+        doing.append(f"waiting for {', '.join(down)} to be Ready with a recent heartbeat before it restarts {service}")
     if refused:
         doing.append(f"still trying to schedule the restart of {service} ({refused})")
     return ("running", progress, f"{node} is on its new network; {' and '.join(doing)}, "
@@ -441,7 +474,7 @@ def _confirmed(spec, ref, node, elapsed, now):
     # kube-vip finds its interface when it starts: its pod here starts again.
     vip = _restart_kube_vip(kget, ksend, node, ref)
     service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
-    hosts, unread, down = _before_restart(kget, node, now) if service else (1, "", [])
+    hosts, unread, down, clocks = _before_restart(kget, node, now) if service else (1, "", [], [])
     refused = ""
     if hosts and hosts > 1 and not down:
         try:
@@ -455,7 +488,7 @@ def _confirmed(spec, ref, node, elapsed, now):
             return ("running", spec.restarting_at,
                     f"Restarting {service} on {node}, so flannel carries pod traffic by {spec.carries_on(ref)}")
     if not vip or unread or down or refused:
-        return _not_finished(spec, ref, spec.confirmed_at, elapsed, service, unread, down, refused)
+        return _not_finished(spec, ref, spec.confirmed_at, elapsed, service, unread, down, refused, clocks)
     ref.update(stage="done")
     return "succeeded", 100, spec.done(ref)
 

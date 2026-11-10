@@ -265,7 +265,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
 
     req: {action: create | change | remove, members, mode, primary, allow_down, lacp_confirmed}
     busy: another host's network change in progress (its title), or "".
-    servers_ready: (ready, total) of the cluster's other servers, or None.
+    servers_ready: (ready, total[, down by their clock]) of the cluster's other servers, or None.
     """
     shape = describe(facts)
     action = str(req.get("action") or ("change" if shape["bond"] else "create"))
@@ -718,11 +718,12 @@ def network_change(node, what):
 
 def network_guard(node):
     """What a host network change waits for: another host's change still
-    being checked, and the other servers' readiness (ready, total)."""
+    being checked, and the other servers' readiness (ready, total, those down
+    because their clock disagrees with Homestead's)."""
     busy = next((op.get("title", "") for op in OPS.snapshot()
                  if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
-    servers, down = NETWORK_JOB.other_servers(kget("/api/v1/nodes").get("items", []), node, kget, time.time())
-    return busy, (len(servers) - len(down), len(servers))
+    servers, down, clocks = NETWORK_JOB.other_servers(kget("/api/v1/nodes").get("items", []), node, kget, time.time())
+    return busy, (len(servers) - len(down), len(servers), len(clocks))
 
 
 def _host(body):

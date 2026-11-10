@@ -60,13 +60,13 @@ def real_node(name, heartbeat, transition, ready=True):
                  "message": "kubelet is posting ready status"}]}}
 
 
-def node_lease(name, renewed):
+def node_lease(name, renewed, duration=40):
     """The node's Lease in kube-node-lease, as read from a k3s cluster
     (1 Nov): the kubelet renews it about every 10 s, leaseDurationSeconds 40."""
     return {"apiVersion": "coordination.k8s.io/v1", "kind": "Lease",
             "metadata": {"name": name, "namespace": "kube-node-lease",
                          "ownerReferences": [{"apiVersion": "v1", "kind": "Node", "name": name, "uid": "uid-node"}]},
-            "spec": {"holderIdentity": name, "leaseDurationSeconds": 40, "renewTime": stamp(renewed, micro=True)}}
+            "spec": {"holderIdentity": name, "leaseDurationSeconds": duration, "renewTime": stamp(renewed, micro=True)}}
 
 
 LEASE_PREFIX = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/"
@@ -82,10 +82,10 @@ def kubelets(test, *names):
                         None if test.kube.object(where) else node_lease(name, renewed=test.now - 3))
 
 
-def stopped_kubelet(name, renewed):
+def stopped_kubelet(name, renewed, duration=40):
     """name's node Lease, last renewed at renewed. It names no owner, so the
     fake's garbage collection keeps it whatever the Node's uid."""
-    lease = node_lease(name, renewed)
+    lease = node_lease(name, renewed, duration)
     del lease["metadata"]["ownerReferences"]
     return lease
 
@@ -396,7 +396,7 @@ class BridgeGuardTests(BridgeBase):
 
     def test_a_bridge_waits_while_another_server_is_not_ready(self):
         self.kube.add(node("node-c", ready=False, server=True))
-        self.refused("1 other server is not Ready or has sent no heartbeat in the last 20 seconds. If node-b stops answering "
+        self.refused("1 other server is not Ready or has sent no recent heartbeat. If node-b stops answering "
                      "too, the cluster could lose its quorum. Try again when every server is Ready")
 
     def test_a_bridge_on_a_quiet_cluster_goes_ahead(self):
