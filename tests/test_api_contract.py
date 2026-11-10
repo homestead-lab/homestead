@@ -108,7 +108,6 @@ NO_DEMO_ANSWER = {
     "POST /api/node/drain": CHANGE,
     "POST /api/node/hardware": CHANGE,
     "POST /api/node/os/check": CHANGE,
-    "POST /api/node/os/upgrade": CHANGE,
     "POST /api/node/power/release": CHANGE,
     "POST /api/node/shell/prepare": CHANGE,
     "POST /api/node/smart/test": CHANGE,
