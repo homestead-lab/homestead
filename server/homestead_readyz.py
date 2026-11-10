@@ -46,12 +46,13 @@ POD_NAME = re.sub(r"[^A-Za-z0-9._-]", "", os.environ.get("HOSTNAME", "")) or "ho
 
 API_EVERY, API_FRESH, API_TIMEOUT = 10, 30, 2
 DATA_EVERY, DATA_RETRY = 30, 10
-# A write that hangs never fails: its caller keeps the lock, and everyone else
+# A write that hangs never fails: its caller keeps the data lock, and everyone else
 # would read the last result, True, for ever.
 DATA_STUCK = 60
 
 _clock = time.monotonic
-_lock = threading.Lock()
+_lock = threading.Lock()       # the API check
+_data_lock = threading.Lock()  # the /data write, apart so a hung write leaves the API check running
 # None: not checked yet.
 START = {"api_checked": None, "api_ok_at": None, "api_seconds": None, "data_checked": None, "data_ok": None,
          "data_held": None, "data_started": None}
@@ -81,12 +82,12 @@ def _due(checked, every, now):
     return checked is None or now - checked >= every
 
 
-def _refresh(now, probe_data, probe_api=True):
-    """Run whichever check is due, unless another caller is running them."""
+def _refresh_api(now):
+    """The API check, if due and nobody else is running it."""
     if not _lock.acquire(blocking=False):
         return
     try:
-        if probe_api and _due(_state["api_checked"], API_EVERY, now):
+        if _due(_state["api_checked"], API_EVERY, now):
             _state["api_checked"] = now
             started = _clock()
             try:
@@ -94,8 +95,18 @@ def _refresh(now, probe_data, probe_api=True):
                 _state.update(api_ok_at=now, api_seconds=max(0.0, _clock() - started))
             except Exception:
                 pass
+    finally:
+        _lock.release()
+
+
+def _refresh_data(now):
+    """The /data write, if due and nobody else is running it. Its own lock: a
+    write that hangs holds only this one, so the API check keeps running (#1323)."""
+    if not _data_lock.acquire(blocking=False):
+        return
+    try:
         every = DATA_EVERY if _state["data_ok"] else DATA_RETRY
-        if probe_data and _due(_state["data_checked"], every, now):
+        if _due(_state["data_checked"], every, now):
             _state.update(data_checked=now, data_started=now)
             try:
                 _write_probe()
@@ -107,7 +118,15 @@ def _refresh(now, probe_data, probe_api=True):
             finally:
                 _state["data_started"] = None
     finally:
-        _lock.release()
+        _data_lock.release()
+
+
+def _refresh(now, probe_data, probe_api=True):
+    """Run whichever check is due, unless another caller is running it."""
+    if probe_api:
+        _refresh_api(now)
+    if probe_data:
+        _refresh_data(now)
 
 
 def state(probe_data=True, probe_api=True):
