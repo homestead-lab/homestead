@@ -454,6 +454,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/nodes` | viewer |  | homestead_nodes |
 | GET | `/api/nodes/impact` | viewer |  | homestead_nodes |
 | GET | `/api/nodes/ports` | viewer |  | homestead_nodes |
+| GET | `/api/nodes/restart-ready` | viewer |  | homestead_nodes |
 | GET | `/api/nodes/uptime` | viewer |  | homestead_history |
 | GET | `/api/objectstore` | viewer |  | homestead_objectstore |
 | GET | `/api/objectstore/deploy` | admin |  | homestead_route_policy |

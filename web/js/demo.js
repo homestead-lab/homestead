@@ -817,6 +817,8 @@
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
     "/api/nodes": nodes, "/api/nodes/uptime": () => demoWithDeclared(),
+    // After the last host restart (#1290): everything it moved runs again.
+    "/api/nodes/restart-ready": { node: "harvester-node2", finished_at: "2026-11-10T08:12:00Z", ready: true, not_running: [], short_of_copies: [] },
     // Each host's ports (host-ports.js): one plain uplink with a spare, one
     // bond running on a slow member with CRC errors, one LACP bond the switch
     // is not answering.

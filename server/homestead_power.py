@@ -10,8 +10,10 @@ import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as KUBE
 import homestead_maintenance as MAINTENANCE
+import homestead_operations as OPS
 import homestead_os_rollout as ROLLOUT
 import homestead_power_hold as HOLD
+import homestead_restart_ready as RESTART_READY
 import homestead_whole_copy as WHOLE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -202,6 +204,14 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     warnings = []
     if not force and not planned_outage:
         warnings.extend(maintenance.get("waiting", []))
+    if not after_drain and not planned_outage:
+        # The last host restart not settled yet (#1290): said, never a block.
+        try:
+            settled = RESTART_READY.warning(RESTART_READY.state(kget, OPS.stored(), volumes=volumes, vmis=vmis))
+        except Exception:
+            settled = ""
+        if settled:
+            warnings.append(settled)
     if maintain and planned_outage:
         warnings.append("This is the cluster's only host, so nothing is stopped or moved: no cordon and no drain. "
                         "It only records the maintenance. Anything then done to the host affects the whole cluster.")
