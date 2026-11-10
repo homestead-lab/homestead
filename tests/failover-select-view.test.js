@@ -55,3 +55,15 @@ test("every place that shows the choice passes the app's own time", () => {
   assert.match(actions, /failoverSelect\(`fo_\$\{w\.ns\}_\$\{w\.name\}`, w\.failover \|\| "default", [^\n]*, w\.failover_seconds\)/);
   assert.match(form, /failoverSelect\(id\("failover"\), w\.failover \|\| "default",[\s\S]{0,200}?, "If its host fails", w\.failover_seconds\)/);
 });
+
+test("moving after 90 seconds is offered beside 15 seconds and the default (#1308)", () => {
+  const { failoverSelect, FAILOVER_HELP } = choice();
+  assert.match(failoverSelect("e_failover", "slow"), /<option value="slow" selected>Move after 90 seconds<\/option>/);
+  assert.match(FAILOVER_HELP.slow, /90 seconds/);
+  assert.match(failoverSelect("e_failover", "move"), /<option value="move" selected>Move after 15 seconds<\/option>/, "the two times in one form");
+});
+
+test("the demo has an app with a time of its own, so the dialog audit shows that choice", () => {
+  const demo = fs.readFileSync("web/js/demo.js", "utf8");
+  assert.match(demo, /failover: "custom", failover_seconds: \d+/);
+});

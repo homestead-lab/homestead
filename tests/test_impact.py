@@ -57,6 +57,11 @@ class AppTests(unittest.TestCase):
         r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=None)]), "web")
         self.assertEqual("waits", r["outcome"], "a time of its own that never runs out")
 
+    def test_an_app_set_to_move_after_90_seconds_says_so(self):
+        r = self.outcome(self.run_preview([app("web", failover="slow")]), "web")
+        self.assertEqual("moves", r["outcome"])
+        self.assertIn("about 90 seconds after the host stops answering", r["why"])
+
     def test_an_app_set_to_wait_waits(self):
         self.assertEqual("waits", self.outcome(self.run_preview([app("db", failover="wait")]), "db")["outcome"])
 

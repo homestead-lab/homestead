@@ -37,7 +37,7 @@ window.wlFailover = async () => {
     ? `${String(lh.unread).replace(/\.$/, "")}. Longhorn may not be installed on this cluster.` : lh.unread);
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Choose whether each container moves, waits, or uses the Kubernetes default of moving after five minutes when its host fails. Saving a changed setting restarts that container.</p>
+    <p class="small" style="margin-top:0">Choose whether each container moves, moves after 90 seconds, waits, or uses the Kubernetes default of moving after five minutes when its host fails. Saving a changed setting restarts that container.</p>
     ${lh?.unread ? UI.callout("warn", "Homestead could not read whether apps with storage can move off a failed host", esc(unread)) : lh ? `${UI.callout(moving ? "good" : "warn", moving ? "" : "Apps with storage cannot move", moving
       ? "If a host fails, Longhorn releases its storage, so apps set to move restart on another host with their storage."
       : "If a host fails, Longhorn keeps its storage attached to it, so apps that use it stay stopped until the host is back.", moving ? {} : { actions: `<button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()">Allow them to move</button>` })}` : ""}

@@ -28,6 +28,7 @@ import homestead_roles as ROLES
 
 FAILOVER_WORDS = {
     "move": ("moves", "about 15 seconds after the host stops answering"),
+    "slow": ("moves", "about 90 seconds after the host stops answering"),
     "wait": ("waits", "set to wait for its host to come back"),
     "default": ("moves", "after about 5 minutes, Kubernetes' default"),
 }

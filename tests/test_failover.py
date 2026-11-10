@@ -70,6 +70,13 @@ class ModeTests(unittest.TestCase):
         self.assertFalse(FAILOVER.waits_when_unreachable({"tolerations": [waits[1]]}))
         self.assertFalse(FAILOVER.waits_when_unreachable({}))
 
+    def test_moving_after_90_seconds_is_a_choice(self):
+        # #1308, part 2: between 15 s and five minutes.
+        rows = FAILOVER.tolerations({}, "slow")
+        self.assertEqual(after(90), rows)
+        self.assertEqual("slow", FAILOVER.mode_of({"tolerations": rows}))
+        self.assertEqual(90, FAILOVER.seconds_of({"tolerations": rows}))
+
     def test_keeping_a_time_homestead_does_not_offer_changes_nothing(self):
         spec = {"tolerations": [GPU] + after(120)}
         FAILOVER.apply(spec, "custom")
@@ -88,7 +95,7 @@ class ModeTests(unittest.TestCase):
         self.assertIn(GPU, spec["tolerations"])
 
     def test_an_unknown_mode_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "moves, waits"):
+        with self.assertRaisesRegex(ValueError, "moves after 15 or 90 seconds, waits"):
             FAILOVER.tolerations({}, "sometimes")
 
 
@@ -187,6 +194,9 @@ class DeployTests(unittest.TestCase):
 
     def test_a_new_container_moves_unless_told_otherwise(self):
         self.assertEqual("move", FAILOVER.mode_of(self.build()))
+
+    def test_a_new_container_can_move_after_90_seconds(self):
+        self.assertEqual("slow", FAILOVER.mode_of(self.build(failover="slow")))
 
     def test_a_new_container_can_wait_for_its_node(self):
         self.assertEqual("wait", FAILOVER.mode_of(self.build(failover="wait")))

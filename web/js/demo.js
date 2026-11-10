@@ -406,14 +406,14 @@
       cpu: 0.31, mem_mb: 738, nodes: ["harvester-node1"], hardware: [],
       images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.0.2.215" }],
       pod_count: 1, container_count: 1, pods: [pod("home-assistant", "harvester-node1", "ghcr.io/home-assistant/home-assistant:stable")] },
-    { name: "paperless", ns: "lab", kind: "Deployment", failover: "move", desired: 1, ready: 1, uptime: 220190,
+    { name: "paperless", ns: "lab", kind: "Deployment", failover: "slow", desired: 1, ready: 1, uptime: 220190,
       schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC", since: 0 },
       cpu: 0.18, mem_mb: 512, nodes: ["harvester-node3"], hardware: [],
       images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.0.2.216" }],
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
     // One pod on each host, with a pinned image (#873): the app card's pod list
     // shows each host whole and each pod by the part of its name that differs.
-    { name: "edge-tunnel", ns: "lab", kind: "Deployment", failover: "move", desired: 3, ready: 3, uptime: 351200,
+    { name: "edge-tunnel", ns: "lab", kind: "Deployment", failover: "custom", failover_seconds: 45, desired: 3, ready: 3, uptime: 351200,
       cpu: 0.03, mem_mb: 96, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"], hardware: [],
       images: [demoTunnelImage], ports: [], pod_count: 3, container_count: 3,
       pods: [["hwtkq", "harvester-node1", 0], ["x7k2p", "harvester-node2", 2], ["m4n9r", "harvester-node3", 0]].map(([suffix, node, restarts]) => ({

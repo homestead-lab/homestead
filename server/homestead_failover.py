@@ -8,6 +8,8 @@ it had not deployed at the default. Which is right depends on the app:
 
   move     fifteen seconds, then another node - an app that should come back
            quickly wherever there is room;
+  slow     ninety seconds, then another node - one that should ride out a
+           short network drop where it is (#1308);
   wait     never moved - an app tied to that host's hardware (a Coral, a
            Zigbee stick), or one better restarted where it was;
   default  Kubernetes' five minutes.
@@ -23,8 +25,9 @@ import homestead_kube as KUBE
 
 KEYS = ("node.kubernetes.io/unreachable", "node.kubernetes.io/not-ready")
 FAST_SECONDS = 15
+SLOW_SECONDS = 90
 DEFAULT_SECONDS = 300
-MODES = ("move", "wait", "default", "custom")
+MODES = ("move", "slow", "wait", "default", "custom")
 
 kget = ksend = None
 
@@ -64,7 +67,7 @@ def waits_when_unreachable(podspec):
 
 
 def mode_of(podspec):
-    """"move", "wait" or "default" when both node-failure keys hold exactly
+    """"move", "slow", "wait" or "default" when both node-failure keys hold exactly
     what that mode writes (no key at all is "default"); anything else is
     "custom", a time Homestead does not offer, kept as it is. seconds_of
     says which time it is."""
@@ -75,7 +78,7 @@ def mode_of(podspec):
     if len(times) != 1:
         return "custom"
     seconds = times.pop()
-    return {None: "wait", FAST_SECONDS: "move", DEFAULT_SECONDS: "default"}.get(seconds, "custom")
+    return {None: "wait", FAST_SECONDS: "move", SLOW_SECONDS: "slow", DEFAULT_SECONDS: "default"}.get(seconds, "custom")
 
 
 def after(seconds):
@@ -89,13 +92,14 @@ def tolerations(podspec, mode):
     """The pod's tolerations with the node-failure ones set for this mode;
     any others (a GPU taint, say) are kept as they are."""
     if mode not in MODES:
-        raise ValueError(f"When its host fails, a container moves, waits, or keeps Kubernetes' default, not {mode!r}")
+        raise ValueError(f"{mode!r} is not a failover choice. When its host fails, a container moves after "
+                         f"15 or 90 seconds, waits, or keeps Kubernetes' default.")
     if mode == "custom":
         return list((podspec or {}).get("tolerations") or [])
     kept = [t for t in (podspec or {}).get("tolerations") or [] if t.get("key") not in KEYS]
-    if mode == "move":
-        kept += [{"key": key, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": FAST_SECONDS}
-                 for key in KEYS]
+    if mode in ("move", "slow"):
+        kept += [{"key": key, "operator": "Exists", "effect": "NoExecute",
+                  "tolerationSeconds": FAST_SECONDS if mode == "move" else SLOW_SECONDS} for key in KEYS]
     elif mode == "wait":
         kept += [{"key": key, "operator": "Exists", "effect": "NoExecute"} for key in KEYS]
     return kept

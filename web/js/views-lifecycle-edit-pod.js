@@ -186,9 +186,10 @@ window.editLanToggle = async () => {
 };
 
 /* What a container does when the node it runs on stops answering. */
-const FAILOVER_WORDS = { move: "Move to another host", wait: "Wait for its host", default: "Kubernetes default (5 min)" };
+const FAILOVER_WORDS = { move: "Move after 15 seconds", slow: "Move after 90 seconds", wait: "Wait for its host", default: "Kubernetes default (5 min)" };
 const FAILOVER_HELP = {
   move: "Starts on another host about 15 seconds after its host stops answering.",
+  slow: "Starts on another host about 90 seconds after its host stops answering, so a short network drop does not move it.",
   wait: "Waits for its host to come back. For apps tied to that host's hardware.",
   default: "Kubernetes moves it after five minutes.",
   custom: "A time set outside Homestead. It is kept until another choice is saved.",
