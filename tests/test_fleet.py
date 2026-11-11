@@ -650,6 +650,142 @@ class MemberAnswerBoundTests(unittest.TestCase):
         self.assertEqual(3, len(view["members"]))
 
 
+class MemberCallDeadlineTests(unittest.TestCase):
+    """urllib's timeout is per wait on the socket: a member that sent its TLS
+    handshake, status line, headers or refusal a byte at a time held the call
+    (the Fleet page, a link or a remove) for as long as it kept sending. A real
+    local socket trickles here, as in the Uptime tests (#1018)."""
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def within_the_deadline(self, ask):
+        """What ask() returned or raised, asserting it ended by the 0.5 s
+        deadline; on a worker thread, so a call that keeps reading fails the
+        test instead of hanging the run."""
+        outcome = []
+
+        def run():
+            try:
+                outcome.append(ask())
+            except Exception as error:      # noqa: BLE001 - the test reads what came out
+                outcome.append(error)
+        started = time.monotonic()
+        worker = threading.Thread(target=run, daemon=True)
+        worker.start()
+        worker.join(5)
+        self.assertFalse(worker.is_alive(), "the call is still reading")
+        self.assertLess(time.monotonic() - started, 1.5, "the deadline is 0.5 s")
+        return outcome[0]
+
+    def ends_by_the_deadline(self, speak, scheme="http", method="GET"):
+        fleet = fresh_module("fleet_deadline")
+        url = f"{scheme}://127.0.0.1:{self.far_end(speak)}"
+        outcome = self.within_the_deadline(lambda: fleet._json(
+            url, method, "/api/fleet/state", {} if method == "POST" else None, timeout=0.5))
+        self.assertIsInstance(outcome, fleet.Unreachable)
+        self.assertEqual("no answer within 0.5 seconds", str(outcome))
+
+    def test_a_member_that_accepts_and_never_answers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(lambda conn, stop: stop.wait(10))
+
+    def test_a_member_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_member_that_trickles_its_headers_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        self.ends_by_the_deadline(speak, method="POST")
+
+    def test_a_member_that_trickles_its_refusal_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: 4000\r\n\r\n{\"error\": \"")
+            while not stop.wait(0.1):
+                conn.sendall(b"x")
+        self.ends_by_the_deadline(speak)
+
+    def test_a_tls_member_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+    def test_a_member_that_answers_in_time_is_read_whole(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for part in (b"HTTP/1.1 200 OK\r\n", b"Content-Type: application/json\r\n",
+                         b"Content-Length: 11\r\n\r\n", b'{"ok":true}'):
+                conn.sendall(part)
+                stop.wait(0.05)
+        fleet = fresh_module("fleet_in_time")
+        payload, response = fleet._json(f"http://127.0.0.1:{self.far_end(speak)}", "GET", "/api/fleet/hello",
+                                        timeout=2)
+        self.assertEqual({"ok": True}, payload)
+        self.assertEqual("application/json", response.headers.get("Content-Type"))
+
+    def test_a_refusal_in_time_still_gives_its_reason(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            body = b'{"error": "wrong password"}'
+            conn.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n"
+                         b"Content-Length: %d\r\n\r\n%s" % (len(body), body))
+        fleet = fresh_module("fleet_refusal")
+        with self.assertRaises(ValueError) as caught:
+            fleet._json(f"http://127.0.0.1:{self.far_end(speak)}", "GET", "/api/fleet", timeout=2)
+        self.assertEqual("wrong password", str(caught.exception))
+
+    def test_a_call_to_a_member_that_runs_out_of_time_names_it(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        fleet = fresh_module("fleet_call")
+        target = {"id": "m-1", "name": "shed", "url": f"http://127.0.0.1:{self.far_end(speak)}"}
+        with mock.patch.object(fleet, "sign", return_value={}):
+            outcome = self.within_the_deadline(lambda: fleet.call(target, "GET", "/api/fleet/hello", timeout=0.5))
+        self.assertIsInstance(outcome, fleet.Unreachable)
+        self.assertEqual("shed: no answer within 0.5 seconds", str(outcome))
+
+
 class SummaryStragglerTests(unittest.TestCase):
     """Members checked after a newer list was brought in were asked one by one
     on the request thread; a member whose check still runs was asked again."""

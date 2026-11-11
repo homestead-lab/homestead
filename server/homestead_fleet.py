@@ -21,6 +21,7 @@ import base64
 import copy
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import secrets
@@ -551,11 +552,55 @@ def console_authorizer(sender):
 
 
 # ------------------------------------------------------------------ calling
-def _open(request, timeout, deadline):
+def _watched(deadline, cuts):
+    """Connection classes whose socket a FETCH.Cut shuts at deadline, whatever
+    it waits for. urllib's timeout is per wait on the socket: a member that
+    sent its TLS handshake, status line, headers or refusal a byte at a time
+    held the call for as long as it kept sending. Every connection made
+    (a redirect makes another) goes into cuts."""
+    def connect(address, timeout=None, source_address=None, **options):
+        left = max(0.001, deadline - time.monotonic())
+        sock = socket.create_connection(address, min(timeout, left) if timeout else left, source_address, **options)
+        cuts.append(FETCH.Cut(sock, deadline))
+        return sock
+
+    class Plain(http.client.HTTPConnection):
+        def __init__(self, *args, **options):
+            super().__init__(*args, **options)
+            self._create_connection = connect
+
+    class Secure(http.client.HTTPSConnection):
+        def __init__(self, *args, **options):
+            super().__init__(*args, **options)
+            self._create_connection = connect
+
+        def connect(self):
+            # As HTTPSConnection.connect, with the handshake after the TLS
+            # socket is in the watchdog's hands (wrapping takes the descriptor).
+            http.client.HTTPConnection.connect(self)
+            sock = self._context.wrap_socket(self.sock, server_hostname=self._tunnel_host or self.host,
+                                             do_handshake_on_connect=False)
+            cuts[-1].use(sock)
+            self.sock = sock
+            sock.do_handshake()
+    return Plain, Secure
+
+
+def _open(request, timeout, deadline, cuts):
+    plain, secure = _watched(deadline, cuts)
     context = ssl.create_default_context() if request.full_url.startswith("https") else None
+
+    class PlainHandler(urllib.request.HTTPHandler):
+        def http_open(self, req):
+            return self.do_open(plain, req)
+
+    class SecureHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(secure, req, context=self._context)
     # Redirects by the rule of every other outside read: credentials stay on their origin.
-    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), FETCH._Redirects(
-        deadline, "the linked cluster's answer")).open(request, timeout=timeout)
+    opener = urllib.request.build_opener(PlainHandler(), SecureHandler(context=context), FETCH._Redirects(
+        deadline, "the linked cluster's answer"))
+    return opener.open(request, timeout=timeout)
 
 
 def _moved_to(sent, error):
@@ -600,12 +645,18 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
     for name, value in (headers or {}).items():
         request.add_header(name, value)
     deadline = time.monotonic() + timeout
+    cuts = []
+    late = f"no answer within {timeout:g} seconds"
     try:
-        with _open(request, timeout, deadline) as response:
+        with _open(request, timeout, deadline, cuts) as response:
             body = FETCH.read(response, ANSWER_MAX_BYTES, deadline, "the linked cluster's answer")
+            if any(cut.fired.is_set() for cut in cuts):     # cut short: what was read is not an answer
+                raise Unreachable(late)
             return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
+        if any(cut.fired.is_set() for cut in cuts):         # the refusal itself trickled
+            raise Unreachable(late) from error
         moved = _moved_to(request.full_url, error)
         if moved:
             shown, usable = moved
@@ -617,10 +668,20 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         if error.code >= 500:
             raise Unreachable(reason or f"HTTP {error.code}") from error
         raise ValueError(reason or f"HTTP {error.code}") from error
-    except (ValueError, Unreachable):
+    except Unreachable:
+        raise
+    except ValueError as error:
+        if any(cut.fired.is_set() for cut in cuts):
+            raise Unreachable(late) from error
         raise
     except Exception as error:
+        if any(cut.fired.is_set() for cut in cuts) or isinstance(getattr(error, "reason", error), TimeoutError):
+            raise Unreachable(late) from error
         raise Unreachable(f"no answer from {url}: {str(error)[:120]}") from error
+    finally:
+        for cut in cuts:
+            cut.cancel()
+            cut.close()
 
 
 def call(ref, method, path, body=None, timeout=TIMEOUT, user="", role="admin", signing_key=None):
