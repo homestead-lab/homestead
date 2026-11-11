@@ -1190,7 +1190,11 @@ def _tidy_job_locks(now):
 # the store's lock, as before; more kinds move here once their requests that
 # change a running job are checked.
 # The weekly trim (homestead_weekly_trim) waits up to 60 s on Longhorn per step.
-OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim"}
+# A host console job (homestead_host_console) runs a script on its host for up
+# to 240 s. It has no canceller or resume: a cancel only stops tracking it, once
+# its step has ended. A step whose result is dropped runs the script again,
+# which is safe: installing or removing the console twice ends the same way.
+OUTSIDE_LOCK = {"host-os", "host-bond", "host-bridge", "workload-copy", "weekly-trim", "host-console"}
 _resolving = threading.local()
 
 
@@ -1266,7 +1270,7 @@ def _resolve_outside(operation_id):
         return False
 
 
-_HOST_KINDS = {"host-os", "host-bond", "host-bridge"}
+_HOST_KINDS = {"host-os", "host-bond", "host-bridge", "host-console"}
 
 
 def step_claims(item):
