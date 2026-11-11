@@ -16,10 +16,15 @@ to anything but http or https is refused.
 
 The deadline covers the body, not the name lookup: that is bounded by the
 resolver (about 5 s in the Alpine image's musl), with no extra deadline here.
+
+Cut is the watchdog for the stages before the body (a TLS handshake, the status
+line, the headers): it shuts the socket at a deadline, whatever it waits for.
 """
 import http.client
 import io
 import json
+import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -179,3 +184,49 @@ def get_text(url, *, errors="strict", **options):
 
 def get_json(url, **options):
     return json.loads(get(url, **options).body)
+
+
+class Cut:
+    """Shuts a socket at deadline (time.monotonic()), whatever it
+    is waiting for: http.client's timeout is per wait on the socket, so an
+    answer that trickles in (a TLS handshake, a status line, then up to 100
+    headers of 64 KB) kept a probe, and its thread, going for as long as the
+    far end liked. It holds the socket itself, not conn.sock, which is set
+    late; under TLS, use() hands it the wrapping socket, which owns the
+    descriptor from then on."""
+
+    def __init__(self, sock, deadline):
+        self.fired = threading.Event()
+        self._lock = threading.Lock()
+        self._sock = sock
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            # The plain socket's own shutdown: under TLS it ends the read too.
+            socket.socket.shutdown(self._sock, socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _fire(self):
+        with self._lock:
+            self.fired.set()
+            self._shut()
+
+    def use(self, sock):
+        with self._lock:
+            self._sock = sock
+            if self.fired.is_set():     # it fired while the socket changed hands
+                self._shut()
+
+    def cancel(self):
+        self._timer.cancel()
+
+    def close(self):
+        with self._lock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
