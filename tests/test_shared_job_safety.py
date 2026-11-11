@@ -209,3 +209,66 @@ class UnchangedWriteTests(unittest.TestCase):
                 self.assertEqual(2, replace.call_count, "a durable write always lands")
             with open(path, encoding="utf-8") as handle:
                 self.assertEqual({"a": 2, "b": [1, 2]}, json.load(handle))
+
+
+class FailedWriteLeavesNoTemporaryFileTests(unittest.TestCase):
+    def check(self, name, kwargs=None):
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "store.json")
+            shared.write_json(target, {"v": 1})
+            error = OSError(errno.ESTALE, "stale handle")
+            real, made, name_for = getattr(os, name), [], shared.temporary
+            def fail(*args, **more):
+                if name == "fstat" and not (made and os.path.exists(made[0])):
+                    return real(*args, **more)      # the unchanged-content check reads fstat first
+                raise error
+            def name_of(path):
+                made.append(name_for(path))
+                return made[-1]
+            with mock.patch.object(shared, "temporary", side_effect=name_of), \
+                    mock.patch.object(shared.os, name, side_effect=fail):
+                with self.assertRaises(OSError) as raised:
+                    shared.write_json(target, {"v": 2}, **(kwargs or {}))
+            self.assertIs(error, raised.exception)
+            self.assertEqual(1, len(made))
+            self.assertFalse(os.path.exists(made[0]))
+            self.assertEqual({"v": 1}, json.loads(Path(target).read_text()))
+
+    def test_failed_sync_removes_the_temporary_file(self):
+        self.check("fsync")
+
+    def test_failed_fstat_removes_the_temporary_file(self):
+        self.check("fstat")
+
+    def test_failed_replace_removes_the_temporary_file(self):
+        self.check("replace")
+
+    def test_failed_chmod_removes_the_temporary_file(self):
+        self.check("chmod", {"mode": 0o600})
+
+    def test_an_interrupt_during_the_write_removes_the_temporary_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "store.json")
+            made, name_for = [], shared.temporary
+            def name_of(path):
+                made.append(name_for(path))
+                return made[-1]
+            with mock.patch.object(shared, "temporary", side_effect=name_of), \
+                    mock.patch.object(shared.os, "fsync", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    shared.write_json(target, {"v": 2})
+            self.assertFalse(os.path.exists(made[0]))
+
+    def test_failed_removal_keeps_the_first_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            target = os.path.join(folder, "store.json")
+            first = OSError(errno.ESTALE, "first")
+            with mock.patch.object(shared.os, "fsync", side_effect=first), \
+                    mock.patch.object(shared.os, "remove", side_effect=OSError(errno.ESTALE, "second")):
+                with self.assertRaises(OSError) as raised:
+                    shared.write_json(target, {"v": 2})
+            self.assertIs(first, raised.exception)
+
+
+if __name__ == "__main__":
+    unittest.main()
