@@ -882,8 +882,8 @@ def _go_on(ref):
     return "Resume job tries again from here."
 
 
-def _still_held(what, ref, disk_id, who="Longhorn"):
-    return (f"{who} has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
+def _still_held(what, ref, disk_id):
+    return (f"Longhorn has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
             f"no new replicas and stays in Longhorn. {_back_on(ref)} {_go_on(ref)}")
 
 
@@ -926,15 +926,20 @@ def retire_step(item):
         ref.pop("recheck")
         return "running", progress, "No new replicas go to the disk"
     if phase == "stop":
-        # Refused, it has changed nothing yet; it waits as long as the steps after it.
+        # Refused, it waits as long as the steps after it. A write that landed and
+        # lost its reply shows in this round's read of the disk, taken before it.
         try:
-            _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+            _patch(f"{LH}/nodes/{node}", stop_new, "stopping new volume copies")
         except ValueError as refused:
             said = str(refused)[:160]
             if _waited_out(ref, "stop_since"):
-                return "failed", 5, (f"Longhorn has not let new volume copies be stopped on {ref.get('path') or disk_id} after "
-                                     f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire changed nothing and the disk "
-                                     f"stays in Longhorn. {_go_on(ref)}")
+                path = ref.get("path") or disk_id
+                if disk.get("allowScheduling") is False and ref.get("was_scheduling", True):
+                    now = (f"{path} already takes no new volume copies and stays in Longhorn. {_back_on(ref)}")
+                else:
+                    now = f"This retire changed nothing, and {path} stays in Longhorn."
+                return "failed", 5, (f"Longhorn has refused to stop new volume copies on {path} for "
+                                     f"{LETTING_GO_WAIT // 60} minutes ({said}). {now} {_go_on(ref)}")
             return "running", 5, f"Stopping new volume copies first: {said}"
         ref["phase"] = "replicas"
         return "running", 10, "No new replicas go to the disk"
@@ -1029,7 +1034,9 @@ def retire_step(item):
             except ValueError as refused:
                 said = str(refused)[:160]
                 if _waited_out(ref, "release_since"):
-                    return "failed", 65, _still_held(f"the drive ({said})", ref, disk_id, who="Harvester")
+                    return "failed", 65, (f"Harvester has not released the drive after {LETTING_GO_WAIT // 60} minutes "
+                                          f"({said}). {ref.get('path') or disk_id} takes no new volume copies and stays "
+                                          f"in Longhorn. {_back_on(ref)} {_go_on(ref)}")
                 return "running", 65, f"Harvester has not released the drive yet: {said}"
         # Harvester takes a disk out of Longhorn itself when its drive is
         # there to unmount; a missing one it may not, so this does.

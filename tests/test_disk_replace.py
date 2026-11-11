@@ -595,6 +595,42 @@ class RetireWaitTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError):
             K.kget(f"{DISKS.BD}/bd-sdb")
 
+    def test_a_first_step_whose_reply_was_lost_does_not_say_nothing_changed(self):
+        self.c.kube.fail(self.NODE, 504, method="PATCH", applied=True)
+        self.c.kube.fail(self.NODE, 400, times=9999, method="PATCH")
+        ident = self.start()
+        self.look(ident)
+        self.pass_time(self.LIMIT)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertFalse(self.scheduling(), "the lost reply's write stands")
+        self.assertNotIn("changed nothing", job["message"])
+        self.assertIn("already takes no new volume copies", job["message"])
+        self.assertIn("Clean up", job["message"])
+        self.assertNotIn("replica", job["message"])
+
+    def test_resuming_a_refused_drive_release_at_once_gets_a_fresh_wait(self):
+        ident = self.refused_releasing()
+        self.pass_time(self.LIMIT)
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.now += 10
+        JOBS.resume(ident)
+        job = self.look(ident, 2)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("released the drive", job["message"])
+
+    def test_resuming_a_refused_record_removal_at_once_gets_a_fresh_wait(self):
+        self.c.kube.fail(f"{DISKS.BD}/bd-sdb", 400, times=9999, method="DELETE")
+        ident = self.force()
+        self.look(ident, 5)
+        self.pass_time(self.LIMIT)
+        self.assertEqual("failed", self.look(ident)["status"])
+        self.now += 10
+        JOBS.resume(ident)
+        job = self.look(ident, 2)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("removed the drive's record", job["message"])
+
     def test_cancel_at_removal_does_not_promise_it_finishes_in_moments(self):
         ident = self.refused_releasing()
         why = JOBS.cancel_plan(ident)["why_not"]
