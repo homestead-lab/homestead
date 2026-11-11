@@ -504,6 +504,83 @@ class RetireWaitTests(unittest.TestCase):
         self.assertEqual("succeeded", self.look(ident, 3)["status"])
         self.assertFalse(self.disk_in_longhorn())
 
+    def test_a_first_step_refused_for_half_an_hour_fails_with_nothing_changed(self):
+        self.c.kube.fail(self.NODE, 400, times=9999, method="PATCH")
+        ident = self.start()
+        self.look(ident)
+        self.pass_time(self.LIMIT - 1)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("Stopping new volume copies first", job["message"])
+        self.assertIn("refused", job["message"])
+        self.pass_time(1)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("30 minutes", job["message"])
+        self.assertIn("changed nothing", job["message"])
+        self.assertIn("Resume job", job["message"])
+        self.assertTrue(job["resumable"])
+        self.assertTrue(self.scheduling(), "the refused write changed nothing")
+        self.c.kube.stop_failing()
+        JOBS.resume(ident)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertFalse(self.scheduling())
+
+    def test_a_forced_first_step_refused_for_half_an_hour_asks_for_a_fresh_review(self):
+        self.c.kube.fail(self.NODE, 400, times=9999, method="PATCH")
+        ident = self.force()
+        self.look(ident)
+        self.pass_time(self.LIMIT)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("start the retire again", job["message"])
+        self.assertNotIn("Resume job", job["message"])
+
+    def refused_releasing(self):
+        """A forced retire past its replicas, its drive's release refused by Harvester."""
+        self.c.kube.fail(f"{DISKS.BD}/bd-sdb", 400, times=9999, method="PATCH")
+        ident = self.force()
+        self.look(ident, 4)
+        return ident
+
+    def test_a_drive_release_refused_for_half_an_hour_fails_with_the_disk_kept(self):
+        ident = self.refused_releasing()
+        self.pass_time(self.LIMIT - 1)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("releasing the drive was refused", job["message"])
+        self.pass_time(1)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("30 minutes", job["message"])
+        self.assertIn("Resume job", job["message"])
+        self.assertTrue(job["resumable"])
+        self.assertTrue(self.disk_in_longhorn())
+        self.c.kube.stop_failing()
+        JOBS.resume(ident)
+        self.assertEqual("succeeded", self.look(ident, 3)["status"])
+        self.assertFalse(self.disk_in_longhorn())
+
+    def test_a_drive_release_wait_does_not_use_up_the_disk_removal_wait(self):
+        ident = self.refused_releasing()
+        self.pass_time(self.LIMIT - 60)
+        self.assertEqual("running", self.look(ident)["status"])
+        self.c.kube.stop_failing()
+        self.c.kube.fail(self.NODE, 400, times=9999, method="PATCH")
+        self.look(ident)
+        self.pass_time(self.LIMIT - 1)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("removing it was refused", job["message"])
+
+    def test_cancel_at_removal_does_not_promise_it_finishes_in_moments(self):
+        ident = self.refused_releasing()
+        why = JOBS.cancel_plan(ident)["why_not"]
+        self.assertNotIn("moments", why)
+        self.assertIn("30 minutes", why)
+        self.assertIn("Resume job", why)
+
     def test_a_refused_carry_on_before_removal_can_still_be_cleaned_up(self):
         ident = self.failed()
         JOBS.resume(ident)

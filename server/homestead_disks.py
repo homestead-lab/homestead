@@ -839,7 +839,7 @@ UNCONFIRMED_WAIT = 1800
 LETTING_GO_WAIT = 1800
 # What a retire's waits have saved; carrying on starts them all again.
 WAITS = ("letting_go_since", "letting_go_for", "records_since", "remove_since", "recheck_since",
-         "unconfirmed_since", "unconfirmed_last")
+         "unconfirmed_since", "unconfirmed_last", "stop_since", "release_since")
 _clock = time.time
 
 
@@ -874,13 +874,16 @@ def _back_on(ref):
     return "It already took no new volume copies when this job started. Hosts > Disks > Allow new copies changes that."
 
 
-def _still_held(what, ref, disk_id):
+def _go_on(ref):
+    """How a failed retire goes on: a forced one before removal needs a fresh review."""
     if ref.get("force") and ref.get("phase") != "remove":
-        on = "To go on, start the retire again for a fresh review."
-    else:
-        on = "Resume job tries again from here."
-    return (f"Longhorn has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
-            f"no new replicas and stays in Longhorn. {_back_on(ref)} {on}")
+        return "To go on, start the retire again for a fresh review."
+    return "Resume job tries again from here."
+
+
+def _still_held(what, ref, disk_id, who="Longhorn"):
+    return (f"{who} has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
+            f"no new replicas and stays in Longhorn. {_back_on(ref)} {_go_on(ref)}")
 
 
 
@@ -922,7 +925,16 @@ def retire_step(item):
         ref.pop("recheck")
         return "running", progress, "No new replicas go to the disk"
     if phase == "stop":
-        _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+        # Refused, it has changed nothing yet; it waits as long as the steps after it.
+        try:
+            _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+        except ValueError as refused:
+            said = str(refused)[:160]
+            if _waited_out(ref, "stop_since"):
+                return "failed", 5, (f"Longhorn has not let new replicas be stopped on {ref.get('path') or disk_id} after "
+                                     f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire changed nothing and the disk "
+                                     f"stays in Longhorn. {_go_on(ref)}")
+            return "running", 5, f"Stopping new volume copies first: {said}"
         ref["phase"] = "replicas"
         return "running", 10, "No new replicas go to the disk"
     if phase == "replicas":
@@ -1010,7 +1022,14 @@ def retire_step(item):
             spec = bd.get("spec") or {}
             body = ({"spec": {"provision": False}} if "provision" in spec or "provisioner" in spec
                     else {"spec": {"fileSystem": {"provisioned": False}}})
-            _patch(f"{BD}/{disk_id}", body, "releasing the drive")
+            # Its own wait, so a slow release does not use up the removal's after it.
+            try:
+                _patch(f"{BD}/{disk_id}", body, "releasing the drive")
+            except ValueError as refused:
+                said = str(refused)[:160]
+                if _waited_out(ref, "release_since"):
+                    return "failed", 65, _still_held(f"the drive ({said})", ref, disk_id, who="Harvester")
+                return "running", 65, f"Harvester has not released the drive yet: {said}"
         # Harvester takes a disk out of Longhorn itself when its drive is
         # there to unmount; a missing one it may not, so this does.
         try:
