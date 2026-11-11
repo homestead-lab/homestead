@@ -64,6 +64,7 @@ class KindTests(unittest.TestCase):
         """A read cut by a request's deadline (#984) carries the page's
         message ("this page could not be read in full. Try again"), which
         an alert must not repeat."""
+        self.addCleanup(DEADLINE.end)      # spent() counts a cut read on this thread
         self.assertEqual("the cluster's API did not answer in time", self.says(DEADLINE.spent()))
         self.assertEqual("the cluster's API did not answer in time", ALERTS.read_failure(DEADLINE.Spent(DEADLINE.MESSAGE)))
 
