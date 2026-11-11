@@ -44,7 +44,7 @@ class Served(unittest.TestCase):
         self.enterContext(mock.patch.object(server, "WEBROOT", web))
         self.enterContext(mock.patch.object(server, "HOMESTEAD_VERSION", "9.9.9"))
         # A release image: started with HOMESTEAD_VERSION set, as the Dockerfile does.
-        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", False, create=True))
+        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", False))
         STATIC.forget()
         self.addCleanup(STATIC.forget)
         listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H)
@@ -316,7 +316,7 @@ class SourceCheckout(Served):
 
     def setUp(self):
         super().setUp()
-        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", True, create=True))
+        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", True))
         STATIC.forget()
 
     def name(self):
