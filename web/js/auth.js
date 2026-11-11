@@ -37,7 +37,10 @@ window.fetch = async (url, opts = {}) => {
   const served = r.headers?.get?.("X-Homestead-Version");
   const target = opts.headers?.["X-Homestead-Cluster"];
   const remote = target && target !== window.FLEET?.view?.self;
-  if (!remote && served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
+  // A build that is not a release answers with the name its page names its files by
+  // (assetVersion, views-overview.js); a release, with the version core.js says.
+  if (!remote && served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION
+      && served !== (typeof assetVersion === "function" ? assetVersion() : HOMESTEAD_VERSION)) homesteadUpdated(served);
   return r;
 };
 
@@ -67,8 +70,10 @@ window.homesteadUpdated = served => {
   bar.className = "signin-lapsed homestead-updated";
   bar.setAttribute("role", "status");
   const version = String(served).replace(/[^0-9A-Za-z.+-]/g, "");
-  bar.innerHTML = mine ? `<span class="spin2"></span><span>Homestead is now v${version}. Loading it…</span>`
-    : `<span>Homestead was updated to v${version}.</span><button class="btn sm pri" type="button" onclick="location.reload()">Reload</button>`;
+  // A build that is not a release is named by a hash: no version a person reads.
+  const release = /^\d+\.\d+\.\d+([-+][0-9A-Za-z.]+)?$/.test(version);
+  bar.innerHTML = mine ? `<span class="spin2"></span><span>${release ? `Homestead is now v${version}.` : "Homestead was updated."} Loading it…</span>`
+    : `<span>Homestead was updated${release ? ` to v${version}` : ""}.</span><button class="btn sm pri" type="button" onclick="location.reload()">Reload</button>`;
   document.body.appendChild(bar);
 };
 const _fetch = window.fetch;

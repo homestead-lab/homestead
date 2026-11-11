@@ -110,3 +110,45 @@ test("a linked cluster's version does not reload this page, but an explicitly lo
   await t.ctx.fetch("/api/image-updates/progress",{headers:{"X-Homestead-Cluster":"here"}});
   assert.equal(t.appended.length,1); assert.equal(t.timers.length,1);
 });
+
+test("a build that is not a release compares the name its page was served under, and names no version", async () => {
+  // A CI or plain docker build answers with the hash its page names its files by
+  // (homestead_static.header_version), never with core.js's release string.
+  const answer = version => ({ type: "basic", status: 200, headers: { get: name => name === "X-Homestead-Version" ? version : null } });
+  const t = load(0);
+  t.ctx.HOMESTEAD_VERSION = "2.8.317";
+  t.ctx.assetVersion = () => "c1a2b3c4d5e6f";
+  t.ctx.document.querySelector = () => null;
+  t.answers.next = () => answer("c1a2b3c4d5e6f");
+  await t.ctx.fetch("/api/workloads");
+  assert.equal(t.appended.length, 0, "the build this page came from says nothing");
+  t.answers.next = () => answer("c0f0f0f0f0f0f");
+  await t.ctx.fetch("/api/workloads");
+  assert.equal(t.appended.length, 1, "a rebuilt image is still offered");
+  assert.match(t.appended[0].innerHTML, /Homestead was updated\.<\/span>[\s\S]*Reload/);
+  assert.doesNotMatch(t.appended[0].innerHTML, /c0f0f0/, "a hash is not a version a person reads");
+
+  const mine = load(0);
+  mine.ctx.HOMESTEAD_VERSION = "2.8.317";
+  mine.ctx.assetVersion = () => "c1a2b3c4d5e6f";
+  mine.ctx.document.querySelector = () => null;
+  mine.ctx.location.reload = () => {};
+  mine.store["homestead.selfUpdate"] = String(Date.now());
+  mine.answers.next = () => answer("c0f0f0f0f0f0f");
+  await mine.ctx.fetch("/api/workloads");
+  assert.match(mine.appended[0].innerHTML, /Homestead was updated\. Loading it/);
+});
+
+test("a source checkout names its files by content but answers as its release: no bar", async () => {
+  const answer = version => ({ type: "basic", status: 200, headers: { get: name => name === "X-Homestead-Version" ? version : null } });
+  const t = load(0);
+  t.ctx.HOMESTEAD_VERSION = "2.8.317";
+  t.ctx.assetVersion = () => "c1a2b3c4d5e6f";
+  t.ctx.document.querySelector = () => null;
+  t.answers.next = () => answer("2.8.317");
+  await t.ctx.fetch("/api/workloads");
+  assert.equal(t.appended.length, 0);
+  t.answers.next = () => answer("2.8.318");
+  await t.ctx.fetch("/api/workloads");
+  assert.match(t.appended[0].innerHTML, /updated to v2\.8\.318/);
+});

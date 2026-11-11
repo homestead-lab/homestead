@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import threading
@@ -42,6 +43,8 @@ class Served(unittest.TestCase):
         Path(web, "vendor", "xterm", "xterm.js").write_text(SCRIPT)
         self.enterContext(mock.patch.object(server, "WEBROOT", web))
         self.enterContext(mock.patch.object(server, "HOMESTEAD_VERSION", "9.9.9"))
+        # A release image: started with HOMESTEAD_VERSION set, as the Dockerfile does.
+        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", False, create=True))
         STATIC.forget()
         self.addCleanup(STATIC.forget)
         listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H)
@@ -285,6 +288,83 @@ class BuildThatIsNotARelease(Served):
         with mock.patch.object(server, "HOMESTEAD_VERSION", "2.8.1"):
             STATIC.forget()
             self.assertIn(b"/js/core.js?v=2.8.1", self.get("/")[2])
+
+    def test_its_answers_name_the_build_its_page_names(self):
+        # auth.js compares this header with the page's own ?v= name: "ci" never
+        # matches anything a page holds, so every load said "Homestead was updated".
+        status, headers, _ = self.get("/")
+        self.assertEqual(200, status)
+        name = self.name()
+        self.assertEqual(name, headers["x-homestead-version"])
+        self.assertEqual(name, self.get("/healthz")[1]["x-homestead-version"])
+
+    def test_a_changed_build_answers_with_its_new_name(self):
+        old = self.name()
+        Path(server.WEBROOT, "js", "core.js").write_text(SCRIPT + "const rebuilt = 3;\n")
+        _, headers, page = self.get("/")
+        new = re.search(rb"/js/core\.js\?v=([^\"]+)", page).group(1).decode()
+        self.assertNotEqual(old, new)
+        self.assertEqual(new, headers["x-homestead-version"])
+        self.assertEqual(new, self.get("/healthz")[1]["x-homestead-version"])
+
+
+class SourceCheckout(Served):
+    """A source checkout started without HOMESTEAD_VERSION (CONTRIBUTING.md) runs
+    under the release string it was cut from, but its files change with every edit:
+    they are named by their content, so an edited script is never kept under the
+    name of the copy before it. It still says it is that release."""
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.object(STATIC, "SOURCE_CHECKOUT", True, create=True))
+        STATIC.forget()
+
+    def name(self):
+        _, _, page = self.get("/")
+        return re.search(rb"/js/core\.js\?v=([^\"]+)", page).group(1).decode()
+
+    def test_the_page_names_its_files_by_their_content_not_the_release(self):
+        self.assertRegex(self.name(), r"^c[0-9a-f]{12}$")
+
+    def test_a_script_asked_for_under_the_release_is_only_revalidated(self):
+        _, headers, _ = self.get("/js/core.js?v=9.9.9")
+        self.assertEqual("no-cache", headers["cache-control"])
+
+    def test_an_edited_script_gets_a_new_name_on_the_next_page_load(self):
+        old = self.name()
+        self.assertEqual("public, max-age=31536000, immutable", self.get(f"/js/core.js?v={old}")[1]["cache-control"])
+        Path(server.WEBROOT, "js", "core.js").write_text(SCRIPT + "const edited = 4;\n")
+        new = self.name()
+        self.assertNotEqual(old, new)
+        _, headers, body = self.get(f"/js/core.js?v={new}")
+        self.assertEqual("public, max-age=31536000, immutable", headers["cache-control"])
+        self.assertIn(b"const edited = 4;", body)
+        self.assertEqual("no-cache", self.get(f"/js/core.js?v={old}")[1]["cache-control"])
+
+    def test_it_still_answers_as_its_release(self):
+        # Settings > About, linked clusters and the update checks read the release.
+        self.assertEqual("9.9.9", self.get("/")[1]["x-homestead-version"])
+        self.assertEqual("9.9.9", self.get("/healthz")[1]["x-homestead-version"])
+
+
+class SourceCheckoutIsTheUnsetVariable(unittest.TestCase):
+    """What the server is started with decides it, read as the module loads."""
+
+    def loaded(self, **env):
+        clean = {k: v for k, v in os.environ.items() if k != "HOMESTEAD_VERSION"}
+        out = subprocess.run(
+            [sys.executable, "-c", "import homestead_static as S; print(S.SOURCE_CHECKOUT)"],
+            cwd=ROOT / "server", env={**clean, **env}, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, out.returncode, out.stderr)
+        return out.stdout.strip()
+
+    def test_started_without_the_variable_it_is_a_source_checkout(self):
+        self.assertEqual("True", self.loaded())
+        self.assertEqual("True", self.loaded(HOMESTEAD_VERSION=""))
+
+    def test_an_image_given_its_version_is_not(self):
+        self.assertEqual("False", self.loaded(HOMESTEAD_VERSION="2.8.1"))
+        self.assertEqual("False", self.loaded(HOMESTEAD_VERSION="dev"))
 
 
 class RealPageTests(unittest.TestCase):
