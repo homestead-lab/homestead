@@ -655,8 +655,10 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
             return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
-        if any(cut.fired.is_set() for cut in cuts):         # the refusal itself trickled
-            raise Unreachable(late) from error
+        if any(cut.fired.is_set() for cut in cuts):
+            # The refusal's body trickled past the deadline: the member did
+            # answer, so its status stands; what was read of the reason does not.
+            reason = ""
         moved = _moved_to(request.full_url, error)
         if moved:
             shown, usable = moved
