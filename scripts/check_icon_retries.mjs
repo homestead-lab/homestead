@@ -51,16 +51,20 @@ try {
 
   // The same data painted again does no DOM work, on every refresh, not every other one: the page
   // watcher (a real MutationObserver, which node tests do not have) must not count paint's own marks.
+  // paint() is counted too: no morph is only a skip when each refresh did paint.
   const morphs = await page.evaluate(async () => {
     await refresh(true); await new Promise(r => setTimeout(r, 50));   // let any change since settle once
-    const real = window.morph; let calls = 0;
+    const real = window.morph, realPaint = window.paint; let calls = 0;
+    const paints = [];
     const views = document.querySelector("#views");   // the page; the bell and widgets morph their own parts
     window.morph = (...args) => { if (args[0] === views) calls++; return real(...args); };
-    try { for (let tick = 0; tick < 3; tick++) { await refresh(true); await new Promise(r => setTimeout(r, 50)); } }
-    finally { window.morph = real; }
-    return { calls, hash: !!document.querySelector("#views").dataset.hash };
+    window.paint = (...args) => { paints[paints.length - 1]++; return realPaint(...args); };
+    try { for (let tick = 0; tick < 3; tick++) { paints.push(0); await refresh(true); await new Promise(r => setTimeout(r, 50)); } }
+    finally { window.morph = real; window.paint = realPaint; }
+    return { paints, calls, hash: !!document.querySelector("#views").dataset.hash };
   });
-  assert.deepEqual(morphs, { calls: 0, hash: true }, "three refreshes of the same data morph the page not once");
+  assert.ok(morphs.paints.every(n => n > 0), `each of the three refreshes paints the page: ${JSON.stringify(morphs.paints)}`);
+  assert.deepEqual({ calls: morphs.calls, hash: morphs.hash }, { calls: 0, hash: true }, "three refreshes of the same data morph the page not once");
 
   // An app that stops while its "…" menu is open: the open menu is left alone, and once it closes
   // the next refresh brings it up to date, though the data has not changed again since.
@@ -78,6 +82,14 @@ try {
     await refresh(true);
   });
   assert.ok((await items()).includes("Stop"), "the open menu is left as it was");
+  // Closing the menu puts it back in its row, a change the page watcher would see and so make the
+  // next paint morph by itself. The watcher is stopped across the close (paint() starts a new one),
+  // so only paint()'s own note of the part it left behind (report.skipped) can bring the menu up to date.
+  assert.ok(await page.evaluate(() => {
+    const views = document.querySelector("#views"), watcher = views.paintWatcher;
+    if (!watcher) return false;
+    watcher.disconnect(); delete views.paintWatcher; return true;
+  }), "the page has a paint watcher to stop");
   await page.keyboard.press("Escape");
   await page.locator("details.actionmenu-portal").waitFor({ state: "detached" });
   for (let tick = 0; tick < 2; tick++) await page.evaluate(() => refresh(true));
