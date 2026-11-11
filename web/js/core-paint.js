@@ -111,15 +111,19 @@ function paint(html) {
   // still behind this markup: forget the hash, so the next paint morphs and catches it up.
   // Focus a moved row lost is given back after paint's own records are dropped: a focus handler
   // that changes the page is then a change outside paint(), which the watcher sees.
+  // Focus comes back even when the paint fails part way, and only while nothing else has taken it.
   const report = { focusLater: true };
-  morph(host, next, report);
-  if (report.skipped) delete host.dataset.hash;
-  loadAppIcons(host);
-  if (window.applyRole) window.applyRole();
-  dropOrphanTooltip();
-  watcher?.takeRecords();
-  const focused = report.refocus;
-  if (focused && focused !== document.activeElement && host.contains(focused)) focused.focus({ preventScroll: true });
+  try {
+    morph(host, next, report);
+    if (report.skipped) delete host.dataset.hash;
+    loadAppIcons(host);
+    if (window.applyRole) window.applyRole();
+    dropOrphanTooltip();
+    watcher?.takeRecords();
+  } finally {
+    const focused = report.refocus, now = document.activeElement;
+    if (focused && (!now || now === document.body) && host.contains(focused)) focused.focus({ preventScroll: true });
+  }
 }
 /* The paint skip above compares with the last paint, so content that changes between paints - a
    sort that moves rows itself (sortRows), a menu lifted out, an icon taken away - must make the next
