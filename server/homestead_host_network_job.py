@@ -325,6 +325,11 @@ def _restart_undone(node, service, unread, down, refused, clocks=()):
     return undone
 
 
+# The stages where the host's rollback is disarmed and the job alone restarts
+# kube-vip, k3s or RKE2: stopping it then keeps the new network.
+DISARMED = ("confirmed", "restarting")
+
+
 def confirmed_keeps(node):
     """What stopping a job says once the host's rollback is disarmed, for a
     bond and a bridge: nothing else would restart kube-vip, k3s or RKE2."""
@@ -367,10 +372,20 @@ def _not_back(spec, ref):
     RKE2 restarted on its new interface, and what to check on that host."""
     node, interface = ref["node"], spec.carries_on(ref)
     service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
-    return (f"{node} was not Ready again {spec.restart_seconds // 60} minutes after {service} restarted on {interface}. "
+    restarted = f"Homestead asked it to restart {service}" if ref.get("restart_unsure") else f"{service} restarted"
+    return (f"{node} was not Ready again {spec.restart_seconds // 60} minutes after {restarted} on {interface}. "
             f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
             "If it becomes Ready later, nothing more is needed: the new network is kept. "
-            f"The old configuration is in {ref['backup']}")
+            f"The old configuration is in {ref['backup']}" + (f". {_restart_unsure(ref)}" if ref.get("restart_unsure") else ""))
+
+
+def _restart_unsure(ref):
+    """What a job says when the answer to its restart of k3s or RKE2 was lost."""
+    node = ref["node"]
+    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
+    return (f"Homestead asked {node} to restart {service} but got no answer, so it cannot tell whether {service} restarted. "
+            f"If `systemctl status {service}` on {node} shows {service} running since before the change, "
+            f"run `systemctl restart {service}` on {node}.")
 
 
 def kube_time(text):
@@ -479,13 +494,19 @@ def _confirmed(spec, ref, node, elapsed, now):
     refused = ""
     if hosts and hosts > 1 and not down:
         try:
-            out, err = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
-                                   **held(spec, ref))
-            refused = "" if "OK" in out.split() else (err or out or "no answer")[-160:]
+            answer = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
+                                 **held(spec, ref))
+            out, err = answer
+            code = getattr(answer, "exit_code", None)
+            # Only an exit code other than 0 proves nothing was scheduled. No OK
+            # with no code, or with 0, is an answer lost on its way back.
+            unsure = "OK" not in out.split() and not code
+            refused = "" if "OK" in out.split() or unsure else (err or out or f"exit code {code}")[-160:]
         except POD_EXEC.ExecTimeout:
-            pass    # it may have been scheduled: never twice; the Ready check below follows
+            unsure = True
         if not refused:
-            ref.update(stage="restarting", since=now, **restart_baseline(kget, node))
+            # It may have been scheduled: never twice; the Ready check follows.
+            ref.update(stage="restarting", since=now, **restart_baseline(kget, node), **({"restart_unsure": True} if unsure else {}))
             return ("running", spec.restarting_at,
                     f"Restarting {service} on {node}, so flannel carries pod traffic by {spec.carries_on(ref)}")
     if not vip or unread or down or refused:
@@ -503,7 +524,7 @@ def _restarting(spec, ref, node, elapsed):
         if not vip:
             return _not_finished(spec, ref, spec.waiting_at, elapsed)
         ref.update(stage="done")
-        return "succeeded", 100, spec.done(ref)
+        return "succeeded", 100, spec.done(ref) + (f". {_restart_unsure(ref)}" if ref.get("restart_unsure") else "")
     if elapsed > spec.restart_seconds:
         return "failed", 100, " ".join([_not_back(spec, ref), *_kube_vip_undone(ref, spec.carries_on(ref))])
     return "running", spec.waiting_at, f"Waiting for {node} to be Ready again"
