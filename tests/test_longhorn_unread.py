@@ -17,6 +17,7 @@ import homestead_alerts as ALERTS
 import homestead_cluster as CLUSTER
 import homestead_impact as IMPACT
 import homestead_kube as K
+import homestead_read_deadline as DEADLINE
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
 
 VOLUMES = "/apis/longhorn.io/v1beta2/volumes"
@@ -369,12 +370,52 @@ class VolumesUnreadAlertTests(LonghornFixture):
     def test_the_reason_is_cleared_once_the_volumes_are_read(self):
         self.break_read(VOLUMES)
         self.assertIn("500", self.OV.get_overview()["volumes_unread_reason"])
-        self.assertIn("500", self.OV._volumes_failed["reason"])
         self.mend()
         done = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
         self.assertTrue(done["vol"])
-        self.assertEqual("", self.OV._volumes_failed["reason"], "a read that worked leaves no reason behind")
-        self.assertEqual("", self.PAGES.read("ov")[1]["volumes_unread_reason"])
+        self.assertEqual("", self.PAGES.read("ov")[1]["volumes_unread_reason"], "a read that worked leaves no reason")
+
+    def snapshot_with_a_request_between(self, request):
+        """One snapshot cycle whose volume read fails with a 500, with
+        request() run after that read and before the cycle builds its
+        overview: what a request thread on the leader can do meanwhile."""
+        self.break_read(VOLUMES)
+        builders = self.OV.page_builders()
+        at = [key for key, _ in builders].index("ov")
+        builders.insert(at, ("between", lambda got: request()))
+        done = self.PAGES.cycle(self.OV.page_inputs(), builders)
+        self.assertFalse(done["vol"])
+        self.assertTrue(done["ov"])
+        return self.PAGES.read("ov")[1]
+
+    def test_a_request_that_reads_the_volumes_does_not_clear_the_snapshot_s_reason(self):
+        def request():
+            self.mend()
+            self.assertFalse(self.OV.get_overview()["volumes_unread"])
+        overview = self.snapshot_with_a_request_between(request)
+        self.assertTrue(overview["volumes_unread"])
+        self.assertIn("the cluster's API answered 500", overview["volumes_unread_reason"])
+        self.assertIn("the cluster's API answered 500", ALERTS.longhorn_facts(overview)[0]["body"])
+
+    def test_a_request_s_own_failed_read_does_not_become_the_snapshot_s_reason(self):
+        """A request that runs out of its time for reads (#984) fails with the
+        page's message; it is that request's, not the snapshot's alert's."""
+        self.addCleanup(DEADLINE.end)      # spent() counts a cut read on this thread
+
+        def spent(**_):
+            try:
+                raise DEADLINE.spent()
+            except DEADLINE.Spent as error:
+                raise RuntimeError(f"Longhorn's volumes could not be read: {error}") from error
+
+        def request():
+            with mock.patch.object(self.STORAGE, "get_volumes", spent):
+                self.assertTrue(self.OV.get_overview()["volumes_unread"])
+        overview = self.snapshot_with_a_request_between(request)
+        body = ALERTS.longhorn_facts(overview)[0]["body"]
+        self.assertIn("the cluster's API answered 500", body)
+        for part in ("in time", "this page", "Try again"):
+            self.assertNotIn(part, body)
 
     def test_the_snapshot_s_overview_carries_the_error_to_the_alert(self):
         """The leader's page snapshot reads the volumes once, in its own part;
