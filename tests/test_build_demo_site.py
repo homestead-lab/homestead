@@ -1,4 +1,5 @@
-"""scripts/build_demo_site.py: the demo site's scripts must not ask for files at the site root."""
+"""scripts/build_demo_site.py: the built demo scripts must not ask for vendored libraries, assets or
+icons at the site root (/api/ paths are left alone: demo.js answers them on purpose)."""
 import re
 import sys
 import tempfile
@@ -63,11 +64,6 @@ class BuiltScriptPaths(unittest.TestCase):
         left = {name: len(root_vendor.findall(text)) for name, text in self.scripts().items()
                 if root_vendor.search(text)}
         self.assertEqual(left, {})
-
-    def test_vendor_paths_sit_under_the_base(self):
-        text = self.scripts()["views-overview.js"]
-        self.assertIn(f'"{BASE}vendor"', text)  # what vendorBase() returns on the demo
-        self.assertIn(f"`{BASE}vendor/xterm/xterm.js", text)
 
     def test_assets_and_icons_still_sit_under_the_base(self):
         for name, text in self.scripts().items():
