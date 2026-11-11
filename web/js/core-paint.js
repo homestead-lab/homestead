@@ -81,7 +81,7 @@ function paint(html) {
   const host = V();
   const watcher = paintWatcher(host);
   // Changes since the last paint that the watcher has not been told of yet.
-  if (watcher && changedOutside(host, watcher.takeRecords())) delete host.dataset.hash;
+  if (watcher && watcher.takeRecords().length) delete host.dataset.hash;
   const tabs = pageTabs(STATE.view);
   if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
@@ -109,13 +109,17 @@ function paint(html) {
   enhanceActions(next);
   // A part morph left alone on purpose (an open "…" menu, a field being typed in) is
   // still behind this markup: forget the hash, so the next paint morphs and catches it up.
-  const report = {};
+  // Focus a moved row lost is given back after paint's own records are dropped: a focus handler
+  // that changes the page is then a change outside paint(), which the watcher sees.
+  const report = { focusLater: true };
   morph(host, next, report);
   if (report.skipped) delete host.dataset.hash;
   loadAppIcons(host);
   if (window.applyRole) window.applyRole();
   dropOrphanTooltip();
   watcher?.takeRecords();
+  const focused = report.refocus;
+  if (focused && focused !== document.activeElement && host.contains(focused)) focused.focus({ preventScroll: true });
 }
 /* The paint skip above compares with the last paint, so content that changes between paints - a
    sort that moves rows itself (sortRows), a menu lifted out, an icon taken away - must make the next
@@ -123,13 +127,10 @@ function paint(html) {
    drops the records of its own changes. Attributes are not watched: code that marks the page after
    a paint (linkFieldLabels' data-wraps, a tabindex) would otherwise undo the skip on every refresh,
    and a morph would only strip what it then adds back. */
-function changedOutside(host, records) {
-  return records.length > 0;
-}
 function paintWatcher(host) {
   if (typeof MutationObserver === "undefined") return null;
   if (!host.paintWatcher) {
-    host.paintWatcher = new MutationObserver(records => { if (changedOutside(host, records)) delete host.dataset.hash; });
+    host.paintWatcher = new MutationObserver(records => { if (records.length) delete host.dataset.hash; });
     host.paintWatcher.observe(host, { childList: true, subtree: true, characterData: true });
   }
   return host.paintWatcher;
@@ -156,7 +157,8 @@ function iconRetryDue(html) {
    list that re-sorts, gains or loses a row keeps each row's node, focus and state (#906). Children
    without one are paired by position as before. */
 const mkeyOf = node => node.nodeType === 1 ? node.getAttribute("data-mkey") : null;
-/* report.skipped is set when a subtree is left behind on purpose (paint() uses it). */
+/* report.skipped is set when a subtree is left behind on purpose (paint() uses it). With
+   report.focusLater, the node to give focus back to is left in report.refocus for the caller. */
 function morphNode(x, y, report = {}) {
   if (x.nodeType !== y.nodeType || x.nodeName !== y.nodeName) { const copy = y.cloneNode(true); x.replaceWith(copy); return copy; }
   if (x.nodeType === 3) { if (x.nodeValue !== y.nodeValue) x.nodeValue = y.nodeValue; return x; }
@@ -198,7 +200,10 @@ function morphKeyed(a, b, report = {}) {
     if (a.childNodes[i] !== node) { a.insertBefore(node, a.childNodes[i] || null); moved = true; }
   });
   // A browser blurs a node that is moved: give focus back to the one the reader was on.
-  if (moved && focused && focused !== document.activeElement && a.contains(focused)) focused.focus({ preventScroll: true });
+  if (moved && focused && focused !== document.activeElement && a.contains(focused)) {
+    if (report.focusLater) report.refocus = focused;
+    else focused.focus({ preventScroll: true });
+  }
 }
 function morph(a, b, report = {}) {
   // fast path: identical markup, nothing to do
@@ -248,6 +253,6 @@ function resetPaint() { const h = V(); delete h.dataset.painted; delete h.datase
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
   PAGE_SNAPSHOT, PAGE_SNAPSHOT_KEEP, keepSnapshot, snapshotKey, pagePlaceholder, pageSkeleton, filterBar, pageTabs,
-  paint, changedOutside, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
+  paint, paintWatcher, paintSignature, iconRetryDue, mkeyOf, morphNode, morphKeyed, morph, syncAttrs,
   resetPaint
 };
