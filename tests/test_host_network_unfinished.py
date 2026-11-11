@@ -12,10 +12,12 @@ A reply can be lost after the write landed, so a retry goes by what the cluster
 shows: a replacement pod is never deleted.
 
 On the shared Kubernetes fake (tests/fakes/kube.py) and a recording host."""
+import copy
 import sys
 import time
 import types
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -100,24 +102,37 @@ class Host:
         return [script for script, _, _ in self.ran if "systemctl restart" in script]
 
 
+BOOT = SINCE - 86_400    # when node-a booted, on Homestead's clock
+
+
 class RealHelper(Host):
-    """The host helper as homestead_hostrun.run answers the restart command,
-    per way the answer can end. It counts restarts the host really scheduled,
-    which is not what the job was told. systemd-run prints its unit names on
-    stderr when it schedules one; only `&& echo OK` prints on stdout."""
+    """The host helper as homestead_hostrun.run answers, per way the answer
+    to the restart command can end, and a host that restarts k3s 2 s after
+    it is scheduled. It counts restarts the host really scheduled, which is
+    not what the job was told. systemd-run prints its unit names on stderr
+    when it schedules one; only `&& echo OK` prints on stdout. A plain-tuple
+    answer with no OK would read as a lost one: fakes answer with Output."""
     UNITS = "Running timer as unit: run-r1.timer\nWill run service as unit: run-r1.service"
 
-    def __init__(self, ends="answered"):
+    def __init__(self, ends="answered", clock=lambda: SINCE, reads="answered"):
         super().__init__()
-        self.ends, self.scheduled = ends, 0
+        self.ends, self.clock, self.reads, self.scheduled = ends, clock, reads, 0
+        self.on_restart = lambda: None    # what else happens while the restart command runs
+        self.started, self.state = SINCE - 3600, "active"    # k3s's main process, on Homestead's clock
 
     def run(self, node, script, timeout=60, change="", holder=""):
         self.ran.append((script, change, holder))
+        if "systemctl show" in script:
+            return self.show()
         if "systemctl restart" not in script:
             return POD_EXEC.Output("", "", 0)
         if self.ends == "refused":      # systemd-run failed: nothing scheduled, exit code 1
             return POD_EXEC.Output("", "Failed to start transient timer unit: Unit run-r1.timer already exists.", 1)
+        if self.ends == "no status":    # a Failure Status with no exit code: the exec never started the command
+            return POD_EXEC.Output("", "", None)
         self.scheduled += 1
+        self.started = self.clock() + 2
+        self.on_restart()
         if self.ends == "answered":
             return POD_EXEC.Output("OK\n", self.UNITS, 0)
         if self.ends == "dropped":      # the stream closed before any output: no exit code
@@ -128,10 +143,21 @@ class RealHelper(Host):
             return POD_EXEC.Output("", self.UNITS, 0)
         if self.ends == "late":         # the answer came after the deadline
             raise POD_EXEC.ExecTimeout("The script on node-a did not finish within 45 seconds", "", "", 45)
+        if self.ends == "connection lost":    # the API server's connection broke after the request was sent
+            raise ConnectionResetError(104, "Connection reset by peer")
+        if self.ends == "helper not removed":   # the helper pod's DELETE failed after a good answer
+            raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
         raise AssertionError(self.ends)
 
+    def show(self):
+        if self.reads != "answered":
+            raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
+        return POD_EXEC.Output(f"ActiveState={self.state}\nExecMainStartTimestampMonotonic={int((self.started - BOOT) * 1e6)}\n"
+                               f"{self.clock() - BOOT:.2f} 1000.00\n", "", 0)
 
-LOST = ("dropped", "dropped after stderr", "no stdout", "late")
+
+# Answers lost after the command ran: the restart is scheduled on the host.
+LOST = ("dropped", "dropped after stderr", "late", "connection lost", "helper not removed")
 
 
 class Unfinished(unittest.TestCase):
@@ -143,10 +169,13 @@ class Unfinished(unittest.TestCase):
             module.bind(self.host, K.kget, K.ksend)
         self.now = SINCE
         DEADLINE.kubelets(self, "node-b", "node-c", "node-m")
+        # The job store's checkpoint: what a new leader would read if the step's result were lost.
+        self.checkpoints = []
+        self.enterContext(mock.patch.object(OPS, "checkpoint", lambda item: self.checkpoints.append(copy.deepcopy(item))))
 
     def step(self, kind, ref, after):
         self.now = SINCE + after
-        return kind.module.status({"ref": ref}, now=self.now)
+        return kind.module.status({"id": "job-1", "ref": ref}, now=self.now)
 
     def each(self):
         for kind in KINDS:
@@ -598,50 +627,149 @@ class RestartNotScheduledTests(Unfinished):
 
 
 def unsure(service="k3s"):
-    return (f"Homestead asked node-a to restart {service} but got no answer, so it cannot tell whether {service} restarted. "
-            f"If `systemctl status {service}` on node-a shows {service} running since before the change, "
+    return (f"The answer to the restart of {service} on node-a was lost, so Homestead cannot tell whether {service} restarted. "
+            f"The network settings on node-a are changed, but {service} may still use the old interface until it restarts. "
+            f"If `systemctl status {service}` on node-a shows it running since before the change, "
             f"run `systemctl restart {service}` on node-a.")
 
 
 class LostAnswerTests(Unfinished):
-    """The command ran on the host, but its answer was lost: the stream closed
-    with no exit code, it said 0 but its OK never came, or it came after the
-    deadline. The restart may be scheduled, so the job never asks again: a
-    second restart of k3s or RKE2 on the host is the harm."""
+    """The answer to the restart was lost: the stream closed with no exit
+    code, the answer came after the deadline, the connection broke after the
+    request was sent, or removing the helper failed after a good answer. The
+    restart may be scheduled, so the job never asks again: a second restart
+    of k3s or RKE2 on the host is the harm. The host then shows whether it
+    restarted; the job does not end on a guess."""
 
-    def helper(self, kind, ends):
-        self.host = RealHelper(ends)
+    def helper(self, kind, ends, reads="answered"):
+        self.host = RealHelper(ends, clock=lambda: self.now, reads=reads)
         kind.module.bind(self.host, K.kget, K.ksend)
 
+    def round(self, kind, ref, after):
+        """One round as the job store runs it: a step that raises keeps only
+        what the job saved before (its checkpoints), as the store does."""
+        before = copy.deepcopy(ref)
+        self.checkpoints.clear()
+        try:
+            return self.step(kind, ref, after)
+        except Exception:
+            ref.clear()
+            ref.update(copy.deepcopy(self.checkpoints[-1]["ref"] if self.checkpoints else before))
+            return None
+
+    def back(self):
+        self.come_back()
+        self.kube.add(DEADLINE.node_lease("node-a", renewed=self.now - 3))
+
     def test_a_lost_answer_never_leads_to_a_second_restart(self):
-        for ends in LOST:
+        for ends in (*LOST, "no status"):
             for kind in self.each():
                 self.helper(kind, ends)
                 ref = kind.saved()
                 for after in (5, 35, 65, 125, 300, kind.module.RESTART_SECONDS + 10):
-                    self.step(kind, ref, after)
+                    self.round(kind, ref, after)
+                self.assertEqual(1, len(self.host.restarts()), ends)
+                self.assertLessEqual(self.host.scheduled, 1, ends)
+
+    def test_a_result_lost_after_the_restart_was_sent_never_leads_to_a_second_restart(self):
+        # Homestead restarts, the leader changes, or someone else writes the job
+        # row while the step runs: the step's result is not saved, and the next
+        # round starts from the job as it was last saved.
+        for ends in ("answered", "dropped"):
+            for kind in self.each():
+                self.helper(kind, ends)
+                before = copy.deepcopy(kind.saved())
+                self.step(kind, copy.deepcopy(before), 5)
+                ref = copy.deepcopy(self.checkpoints[-1]["ref"] if self.checkpoints else before)
+                for after in (35, 65, 125):
+                    self.round(kind, ref, after)
                 self.assertEqual((1, 1), (self.host.scheduled, len(self.host.restarts())), ends)
+                self.assertEqual(("restarting", True), (ref["stage"], ref.get("restart_unsure")), ends)
+
+    def test_once_asked_it_moves_on_even_when_another_server_is_down_now(self):
+        for kind in self.each():
+            self.helper(kind, "connection lost")
+            ref = kind.saved()
+            self.round(kind, ref, 5)
+            self.kube.add(DEADLINE.node("node-c", ready=False, server=True))
+            self.step(kind, ref, 35)
+            self.assertEqual(("restarting", True, 1), (ref["stage"], ref.get("restart_unsure"), len(self.host.restarts())))
+            self.kube.discard(NODES + "/node-c")
 
     def test_a_lost_answer_moves_on_to_waiting_for_the_host(self):
         for ends in LOST:
             for kind in self.each():
                 self.helper(kind, ends)
                 ref = kind.saved()
-                self.assertEqual(("running", kind.module._SPEC.restarting_at, "Restarting k3s on node-a, so flannel carries pod "
-                                  f"traffic by {kind.interface}"), self.step(kind, ref, 5), ends)
+                self.round(kind, ref, 5)
+                self.round(kind, ref, 6)
                 self.assertEqual(("restarting", True), (ref["stage"], ref.get("restart_unsure")), ends)
+                self.assertEqual("running", self.step(kind, ref, 20)[0], ends)
 
-    def test_a_host_back_after_a_lost_answer_succeeds_saying_the_restart_is_not_proven(self):
+    def test_exit_code_0_proves_it_was_scheduled_even_without_its_ok(self):
+        for kind in self.each():
+            self.helper(kind, "no stdout")
+            ref = kind.saved()
+            self.step(kind, ref, 5)
+            self.assertEqual("restarting", ref["stage"])
+            self.assertNotIn("restart_unsure", ref)
+
+    def test_a_host_that_restarted_after_the_request_succeeds_without_a_note(self):
         for ends in LOST:
             for kind in self.each():
                 self.helper(kind, ends)
                 ref = kind.saved()
-                self.step(kind, ref, 5)
-                self.come_back()
-                self.kube.add(DEADLINE.node_lease("node-a", renewed=SINCE + 40))
+                self.round(kind, ref, 5)
+                self.round(kind, ref, 6)
+                self.now = SINCE + 45
+                self.back()
                 status, _, message = self.step(kind, ref, 45)
                 self.assertEqual("succeeded", status, ends)
-                self.assertTrue(message.endswith(". " + unsure()), message)
+                self.assertEqual(kind.module._SPEC.done(ref), message)
+
+    def test_a_command_that_never_ran_is_not_a_success_and_is_not_asked_again(self):
+        for kind in self.each():
+            self.helper(kind, "no status")
+            ref = kind.saved()
+            self.step(kind, ref, 5)
+            self.now = SINCE + 45
+            self.back()
+            status, _, message = self.step(kind, ref, 45)
+            self.assertEqual("failed", status)
+            self.assertEqual(f"{kept(kind)} k3s on node-a did not restart: it has run since before Homestead asked for the restart, "
+                             "and the answer to that request was lost. The network settings on node-a are changed, but k3s still "
+                             "uses the old interface. Run `systemctl restart k3s` on node-a.", message)
+            self.assertEqual((1, 0), (len(self.host.restarts()), self.host.scheduled))
+
+    def test_a_host_that_cannot_show_it_waits_then_fails_with_the_step_by_hand(self):
+        for kind in self.each():
+            self.helper(kind, "dropped", reads="fail")
+            ref = kind.saved()
+            self.step(kind, ref, 5)
+            self.now = SINCE + 45
+            self.back()
+            status, _, message = self.step(kind, ref, 45)
+            self.assertEqual("running", status)
+            self.assertTrue(message.startswith("Checking whether k3s restarted on node-a (the host did not answer: "), message)
+            self.now = SINCE + kind.module.RESTART_SECONDS + 10
+            self.back()
+            status, _, message = self.step(kind, ref, kind.module.RESTART_SECONDS + 10)
+            self.assertEqual("failed", status)
+            self.assertTrue(message.startswith(f"{kept(kind)} Homestead could not check whether k3s restarted (the host did "
+                                               "not answer: "), message)
+            self.assertTrue(message.endswith(unsure()), message)
+            self.assertEqual(1, len(self.host.restarts()))
+
+    def test_a_service_still_starting_is_waited_for(self):
+        for kind in self.each():
+            self.helper(kind, "dropped")
+            ref = kind.saved()
+            self.step(kind, ref, 5)
+            self.host.state = "activating"
+            self.now = SINCE + 45
+            self.back()
+            self.assertEqual(("running", kind.waiting_at, "Checking whether k3s restarted on node-a (k3s is activating)"),
+                             self.step(kind, ref, 45))
 
     def test_a_host_not_back_after_a_lost_answer_fails_without_saying_it_restarted(self):
         for kind in self.each():
@@ -652,22 +780,54 @@ class LostAnswerTests(Unfinished):
             self.step(kind, ref, 5)
             status, _, message = self.step(kind, ref, kind.module.RESTART_SECONDS + 10)
             self.assertEqual("failed", status)
-            self.assertIn(f"node-a was not Ready again 10 minutes after Homestead asked it to restart k3s on {kind.interface}.",
-                          message)
-            self.assertNotIn("after k3s restarted", message)
+            self.assertTrue(message.startswith("node-a was not Ready again 10 minutes after Homestead asked for the restart of "
+                                               "k3s. On node-a, check `journalctl -u k3s`"), message)
             self.assertIn(unsure(), message)
             self.assertEqual(1, self.host.scheduled)
+
+    def test_the_real_helper_failing_to_remove_its_pod_after_a_good_answer_never_leads_to_a_second_restart(self):
+        # The real homestead_hostrun, on the fake API, around an exec that
+        # answers OK: the DELETE of its helper pod then fails on transport, and
+        # that error replaces the good answer (hostrun._delete catches HTTPError only).
+        import homestead_hostrun as HOSTRUN
+        self.addCleanup(HOSTRUN.bind, *(getattr(HOSTRUN, name, None) for name in ("kget", "ksend", "exec_in", "NS")))
+        restarts = []
+
+        def exec_in(namespace, pod, argv, **options):
+            if "systemctl restart" in argv[-1]:
+                restarts.append(pod)
+                return POD_EXEC.Output(b"OK\n", RealHelper.UNITS, 0)
+            return POD_EXEC.Output(b"", "", 0)
+
+        def ksend(method, path, *args, **options):
+            if method == "DELETE" and "/pods/homestead-host-" in path:
+                raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
+            return K.ksend(method, path, *args, **options)
+
+        def kubelet(method, path, body):
+            body["status"] = {"phase": "Running"}    # the kubelet starts the helper straight away
+        self.kube.react("POST", "/api/v1/namespaces/homestead/pods", kubelet)
+        HOSTRUN.bind(K.kget, ksend, exec_in, "homestead")
+        for kind in self.each():
+            restarts.clear()
+            kind.module.bind(HOSTRUN, K.kget, K.ksend)
+            ref = kind.saved()
+            for after in (5, 35, 65):
+                self.round(kind, ref, after)
+            self.assertEqual(1, len(restarts), kind.kind)
+            self.assertEqual("restarting", ref["stage"])
 
     def test_an_answered_restart_says_nothing_more(self):
         for kind in self.each():
             self.helper(kind, "answered")
             ref = kind.saved()
             self.step(kind, ref, 5)
-            self.come_back()
-            self.kube.add(DEADLINE.node_lease("node-a", renewed=SINCE + 40))
+            self.now = SINCE + 45
+            self.back()
             status, _, message = self.step(kind, ref, 45)
             self.assertEqual("succeeded", status)
-            self.assertNotIn("no answer", message)
+            self.assertEqual(kind.module._SPEC.done(ref), message)
+            self.assertFalse([script for script, _, _ in self.host.ran if "systemctl show" in script], "no check needed")
 
 
 class CancelTests(Unfinished):
@@ -741,6 +901,34 @@ class JobStoreTests(DEADLINE.GuardBase):
 
     def test_a_bond(self):
         self.check_a_lost_reply_is_remembered_across_rounds(Bond)
+
+    def check_a_step_result_dropped_after_the_restart_was_sent_never_leads_to_a_second_restart(self, kind):
+        # Someone else writes the job row while the restart is asked for: the
+        # store drops the step's result. The next round starts from the job as
+        # it was last saved, which already says the restart was asked for.
+        host = RealHelper("answered", clock=lambda: self.now)
+        kind.module.bind(host, K.kget, K.ksend)
+        job = OPS.start(kind.kind, "A change", {"kind": "Node", "name": "node-a"}, "/nodes", kind.saved(), "Saved")["id"]
+
+        def written_elsewhere():
+            with OPS._lock:
+                rows = OPS._read()
+                next(row for row in rows if row["id"] == job)["message"] = "Written elsewhere"
+                OPS._write(rows)
+        host.on_restart = written_elsewhere
+        OPS.list_operations()
+        self.assertEqual(("confirmed", "Written elsewhere"), (self.job(job)["ref"]["stage"], self.job(job)["message"]))
+        host.on_restart = lambda: None
+        self.now = SINCE + 30
+        OPS.list_operations()
+        self.assertEqual((1, 1), (host.scheduled, len(host.restarts())))
+        self.assertEqual("restarting", self.job(job)["ref"]["stage"])
+
+    def test_a_bond_whose_step_result_is_dropped(self):
+        self.check_a_step_result_dropped_after_the_restart_was_sent_never_leads_to_a_second_restart(Bond)
+
+    def test_a_bridge_whose_step_result_is_dropped(self):
+        self.check_a_step_result_dropped_after_the_restart_was_sent_never_leads_to_a_second_restart(Bridge)
 
     def test_a_bridge(self):
         self.check_a_lost_reply_is_remembered_across_rounds(Bridge)

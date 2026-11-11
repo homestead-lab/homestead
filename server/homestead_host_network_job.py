@@ -16,6 +16,7 @@ import re
 import time
 import urllib.error
 
+import homestead_operations as OPS
 import homestead_pod_exec as POD_EXEC
 
 # A change script still running at its limit (homestead_pod_exec.ExecTimeout)
@@ -371,21 +372,60 @@ def _not_back(spec, ref):
     """Why a change failed whose host was not Ready again in time after k3s or
     RKE2 restarted on its new interface, and what to check on that host."""
     node, interface = ref["node"], spec.carries_on(ref)
-    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
-    restarted = f"Homestead asked it to restart {service}" if ref.get("restart_unsure") else f"{service} restarted"
-    return (f"{node} was not Ready again {spec.restart_seconds // 60} minutes after {restarted} on {interface}. "
+    service = _service(ref)
+    unsure = ref.get("restart_unsure")
+    restarted = f"Homestead asked for the restart of {service}" if unsure else f"{service} restarted on {interface}"
+    return (f"{node} was not Ready again {spec.restart_seconds // 60} minutes after {restarted}. "
             f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
             "If it becomes Ready later, nothing more is needed: the new network is kept. "
-            f"The old configuration is in {ref['backup']}" + (f". {_restart_unsure(ref)}" if ref.get("restart_unsure") else ""))
+            f"The old configuration is in {ref['backup']}" + (f". {_restart_unsure(ref)}" if unsure else ""))
+
+
+def _service(ref):
+    return next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
 
 
 def _restart_unsure(ref):
-    """What a job says when the answer to its restart of k3s or RKE2 was lost."""
-    node = ref["node"]
-    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
-    return (f"Homestead asked {node} to restart {service} but got no answer, so it cannot tell whether {service} restarted. "
-            f"If `systemctl status {service}` on {node} shows {service} running since before the change, "
+    """What a job says when the answer to its restart of k3s or RKE2 was lost
+    and the host could not show whether it restarted."""
+    node, service = ref["node"], _service(ref)
+    return (f"The answer to the restart of {service} on {node} was lost, so Homestead cannot tell whether {service} restarted. "
+            f"The network settings on {node} are changed, but {service} may still use the old interface until it restarts. "
+            f"If `systemctl status {service}` on {node} shows it running since before the change, "
             f"run `systemctl restart {service}` on {node}.")
+
+
+# When the answer to the restart was lost, the host shows whether the service
+# started again after the request: its main process's start, on the host's
+# own monotonic clock, against the host's uptime, gives how long ago it started.
+# A read; it changes nothing, so it is safe to repeat. The restart is timed 2 s
+# after the request, and the check waits until the job is past 30 s and the
+# kubelet is heard from, so a restart still to come is not mistaken for none.
+# Only a start more than STARTED_BEFORE seconds older than the request counts
+# as proof of none: the read itself takes time after the step's clock.
+STARTED_BEFORE = 120
+
+
+def _started(hostrun, node, ref, now):
+    """Whether the service started again after the restart was asked for:
+    ("after" | "before" | "", why the host could not show it)."""
+    service = _service(ref)
+    try:
+        out, _ = hostrun.run(node, f"systemctl show -p ActiveState -p ExecMainStartTimestampMonotonic {service}; cat /proc/uptime",
+                             timeout=45)
+        values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        uptime = float(next(line for line in out.splitlines() if "=" not in line and line.strip()).split()[0])
+        started = int(values.get("ExecMainStartTimestampMonotonic") or 0) / 1e6
+    except Exception as error:
+        return "", f"the host did not answer: {_said(error)}"
+    if values.get("ActiveState") != "active" or started <= 0:
+        return "", f"{service} is {values.get('ActiveState') or 'not found'}"
+    age, asked = uptime - started, now - ref.get("restart_asked", ref["since"])
+    if age < asked:
+        return "after", ""
+    if age > asked + STARTED_BEFORE:
+        return "before", ""
+    return "", f"{service} started about when the restart was asked for"
 
 
 def kube_time(text):
@@ -481,8 +521,17 @@ def _applied(spec, ref, node, elapsed, now):
             f"{node} puts itself back in {max(0, int(spec.rollback_seconds - elapsed))}s")
 
 
-def _confirmed(spec, ref, node, elapsed, now):
+def _save(item):
+    """Save the job as it is now, before a step sends what cannot be sent
+    twice. A job has an id once the job store holds it; one with none is
+    stepped outside the store (a preview), and there is nothing to save."""
+    if "id" in item:
+        OPS.checkpoint(item)
+
+
+def _confirmed(spec, item, node, elapsed, now):
     """The rollback is disarmed: kube-vip, then k3s or RKE2 on a cluster."""
+    ref = item["ref"]
     if not spec.restarts(ref):
         ref.update(stage="done")
         return "succeeded", 100, spec.done(ref)
@@ -491,42 +540,77 @@ def _confirmed(spec, ref, node, elapsed, now):
     vip = _restart_kube_vip(kget, ksend, node, ref)
     service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "")
     hosts, unread, down, clocks = _before_restart(kget, node, now) if service else (1, "", [], [])
-    refused = ""
-    if hosts and hosts > 1 and not down:
+    refused, unsure = "", "restart_asked" in ref
+    # Once asked, never asked again: a step that finds the mark asked in an
+    # earlier round whose outcome was not saved, whatever the hosts look like now.
+    if not unsure and hosts and hosts > 1 and not down:
+        # Saved before it is sent, as its answer can be lost on the way back in
+        # many ways: the stream, the removal of the helper pod, a restart of
+        # Homestead or a change of leader, a step result the store drops.
+        ref["restart_asked"] = now
+        _save(item)
         try:
             answer = hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
                                  **held(spec, ref))
-            out, err = answer
-            code = getattr(answer, "exit_code", None)
-            # Only an exit code other than 0 proves nothing was scheduled. No OK
-            # with no code, or with 0, is an answer lost on its way back.
-            unsure = "OK" not in out.split() and not code
-            refused = "" if "OK" in out.split() or unsure else (err or out or f"exit code {code}")[-160:]
+        except (ValueError, POD_EXEC.ExecUnreached, urllib.error.HTTPError):
+            # The hold, the helper pod or the API server refused before the
+            # command could start: nothing was sent, so it may be asked again.
+            ref.pop("restart_asked")
+            _save(item)
+            raise
         except POD_EXEC.ExecTimeout:
             unsure = True
-        if not refused:
-            # It may have been scheduled: never twice; the Ready check follows.
-            ref.update(stage="restarting", since=now, **restart_baseline(kget, node), **({"restart_unsure": True} if unsure else {}))
-            return ("running", spec.restarting_at,
-                    f"Restarting {service} on {node}, so flannel carries pod traffic by {spec.carries_on(ref)}")
+        else:
+            out, err = answer
+            code = getattr(answer, "exit_code", None)
+            # `&& echo OK`: exit code 0 proves it was scheduled even when the OK
+            # was lost, and any other code that it was not. No code is no proof.
+            if "OK" not in out.split() and code != 0:
+                if code is None:
+                    unsure = True
+                else:
+                    refused = (err or out or f"exit code {code}")[-160:]
+                    ref.pop("restart_asked")
+    if "restart_asked" in ref:
+        ref.update(stage="restarting", since=now, **restart_baseline(kget, node), **({"restart_unsure": True} if unsure else {}))
+        return ("running", spec.restarting_at,
+                f"Restarting {service} on {node}, so flannel carries pod traffic by {spec.carries_on(ref)}")
     if not vip or unread or down or refused:
         return _not_finished(spec, ref, spec.confirmed_at, elapsed, service, unread, down, refused, clocks)
     ref.update(stage="done")
     return "succeeded", 100, spec.done(ref)
 
 
-def _restarting(spec, ref, node, elapsed):
+def _restarting(spec, ref, node, elapsed, now):
     """k3s or RKE2 was asked to restart: end on its kubelet, or on a deadline.
-    A kube-vip still unproved is tried again; one saved without the field is not."""
-    _, kget, ksend = spec.bound()
+    A kube-vip still unproved is tried again; one saved without the field is not.
+    When the answer to the restart was lost, the host shows whether it restarted."""
+    hostrun, kget, ksend = spec.bound()
     vip = "kube_vip" not in ref or _restart_kube_vip(kget, ksend, node, ref)
+    vip_undone = _kube_vip_undone(ref, spec.carries_on(ref))
     if elapsed > 30 and kubelet_back(kget, node, ref):
+        if ref.get("restart_unsure"):
+            started, why = _started(hostrun, node, ref, now)
+            service, kept = _service(ref), (f"{node} carries {ref['address']} on {spec.carries_on(ref)} and keeps it, "
+                                            "but the change is not finished.")
+            if started == "before":
+                return ("failed", 100, " ".join([
+                    f"{kept} {service} on {node} did not restart: it has run since before Homestead asked for the restart, "
+                    f"and the answer to that request was lost. The network settings on {node} are changed, but {service} "
+                    f"still uses the old interface. Run `systemctl restart {service}` on {node}.",
+                    *vip_undone]))
+            if not started:
+                if elapsed > spec.restart_seconds:
+                    return ("failed", 100, " ".join([f"{kept} Homestead could not check whether {service} restarted ({why}). "
+                                                     + _restart_unsure(ref), *vip_undone]))
+                return "running", spec.waiting_at, f"Checking whether {service} restarted on {node} ({why})"
+            ref.pop("restart_unsure")
         if not vip:
             return _not_finished(spec, ref, spec.waiting_at, elapsed)
         ref.update(stage="done")
-        return "succeeded", 100, spec.done(ref) + (f". {_restart_unsure(ref)}" if ref.get("restart_unsure") else "")
+        return "succeeded", 100, spec.done(ref)
     if elapsed > spec.restart_seconds:
-        return "failed", 100, " ".join([_not_back(spec, ref), *_kube_vip_undone(ref, spec.carries_on(ref))])
+        return "failed", 100, " ".join([_not_back(spec, ref), *vip_undone])
     return "running", spec.waiting_at, f"Waiting for {node} to be Ready again"
 
 
@@ -538,7 +622,7 @@ def _step(spec, item, now):
     if ref["stage"] == "applied":
         return _applied(spec, ref, node, elapsed, now)
     if ref["stage"] == "confirmed":
-        return _confirmed(spec, ref, node, elapsed, now)
+        return _confirmed(spec, item, node, elapsed, now)
     if ref["stage"] == "restarting":
-        return _restarting(spec, ref, node, elapsed)
+        return _restarting(spec, ref, node, elapsed, now)
     return spec.other_stage(ref, elapsed)
