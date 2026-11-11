@@ -117,18 +117,26 @@ class ConsoleSettingsTests(unittest.TestCase):
         passing = threading.Thread(target=the_add_ons_pass, daemon=True)
         passing.start()
         self.assertTrue(held.wait(5))
-        self.runner.run.return_value = self.report()
-        item = {"ref": {"node": "node1", "uid": "original", "action": "enable", "version": "2.8.244"}}
-        answers = []
-        asking = threading.Thread(target=lambda: answers.append(CONSOLE.status(copy.deepcopy(item))), daemon=True)
-        asking.start()
-        asking.join(3)
-        self.assertEqual(1, len(answers), "the job's step must not wait for the add-on's pass to end")
-        self.assertEqual(("queued", 0, "Waiting for another host console action to finish."), answers[0])
+        said_while_running = []
+
+        def run(*args, **kwargs):
+            said_while_running.append(OPS.snapshot()[0]["message"])
+            return self.report()
+        self.runner.run.side_effect = run
+        CONSOLE.start("node1", "enable")
+        rounds = []
+        loop = threading.Thread(target=lambda: rounds.append(OPS.list_operations()[0]), daemon=True)
+        loop.start()
+        loop.join(3)
+        self.assertEqual(1, len(rounds), "the job's step must not wait for the add-on's pass to end")
+        self.assertEqual(("queued", "Waiting for another host console action to finish."),
+                         (rounds[0]["status"], rounds[0]["message"]))
         self.runner.run.assert_not_called()
         release.set()
         passing.join(5)
-        self.assertEqual("succeeded", CONSOLE.status(copy.deepcopy(item))[0], "its turn comes once the pass ends")
+        self.assertEqual("succeeded", OPS.list_operations()[0]["status"], "its turn comes once the pass ends")
+        self.assertEqual(["Installing the host console on node1."], said_while_running,
+                         "while its own script runs, the job says so, not that it waits for another")
 
     def addon(self, platform=None):
         CONSOLE.VERSION = "2.8.244"

@@ -216,6 +216,13 @@ def status(item):
         node = kget("/api/v1/nodes/" + urllib.parse.quote(ref["node"], safe=""))
         if node["metadata"].get("uid") != ref["uid"]:
             return "failed", 0, "The original host was replaced. Refresh Add-ons."
+        # Nothing else is saved until the script ends (up to minutes): say now
+        # what runs, so an earlier "Waiting for another…" is not left showing.
+        item.update(status="running", message={
+            "enable": f"Installing the host console on {ref['node']}.",
+            "disable": f"Removing the host console from {ref['node']}."}.get(
+                ref["action"], f"Checking the host console on {ref['node']}."))
+        ops.checkpoint(item)
         try:
             saved = _apply(ref["node"], ref["uid"], ref["action"])
         except Exception as error:
