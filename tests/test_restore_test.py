@@ -248,6 +248,15 @@ class JobTests(Base):
         result = json.loads(patch["metadata"]["annotations"]["homestead.io/restore-tested"])
         self.assertTrue(result["ok"])
 
+    def test_each_restore_is_followed_with_the_backup_it_restores(self):
+        # The volume-restore resolver ends a restore Longhorn finished on fewer
+        # copies only when it knows which backup this restore is of.
+        asked = []
+        RT.restore_status = lambda item: asked.append(item["ref"]) or ("running", 40, "restoring")
+        self.assertEqual("running", self.step(1000)[0])
+        self.assertEqual([{"namespace": "lab", "name": "restore-test-abcdef0123-0", "backup": "backup-data-2"}],
+                         asked)
+
     def test_a_restore_that_fails_cleans_up_and_fails(self):
         self.c.restore_state = "failed"
         status, _, message = self.step(1000)

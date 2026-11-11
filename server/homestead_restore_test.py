@@ -309,7 +309,9 @@ def resolve(item, checkpoint, now=None):
             except ValueError as error:
                 if "already exists" not in str(error):
                     return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {str(error)[:160]}")
-        states = [restore_status({"ref": {"namespace": ns, "name": r["restored"]}}) for r in ref["rows"]]
+        # The backup too: a restore Longhorn finished on fewer copies ends only for its own backup.
+        states = [restore_status({"ref": {"namespace": ns, "name": r["restored"], "backup": r["backup"]}})
+                  for r in ref["rows"]]
         failed = next(((r, s) for r, s in zip(ref["rows"], states) if s[0] == "failed"), None)
         if failed:
             return _finish(item, to, False, f"the backup of {failed[0]['claim']} did not restore: {failed[1][2]}")
