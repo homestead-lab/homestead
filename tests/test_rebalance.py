@@ -179,13 +179,12 @@ class PlanTests(unittest.TestCase):
 
     def test_follow_and_exclude_names_that_match_no_app_are_reported(self):
         lopsided(self)
-        plan = R.plan(["v0", "lab/app2"], follow=[("app3", "k1"), ("lab/web", "k1"), ("lab/app3", ""), ("lab/app0", "k9")])
+        plan = R.plan(["v0", "lab/app2"], follow=[("app3", "k1"), ("lab/web", "k1"), ("lab/app3", "")])
         self.assertEqual([
             {"field": "exclude", "given": "v0", "why": "no volume is listed under an app named v0. Apps are named namespace/app"},
             {"field": "follow", "given": "app3:k1", "why": "no volume is listed under an app named app3. Apps are named namespace/app"},
             {"field": "follow", "given": "lab/web:k1", "why": "no volume is listed under an app named lab/web"},
             {"field": "follow", "given": "lab/app3", "why": "it names no host. Write it as namespace/app:host"},
-            {"field": "follow", "given": "lab/app0:k9", "why": "there is no host named k9"},
         ], plan["unmatched"])
         self.assertIn("lab/app0", [m["app"] for m in plan["moves"]], "v0 was not left out: it names a volume, not an app")
 
@@ -233,6 +232,18 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([{"field": "follow", "given": "lab/app3:k1",
                            "why": "no volume is listed under an app named lab/app3"}], plan["unmatched"])
 
+    def test_a_copy_cannot_follow_to_a_host_longhorn_does_not_list(self):
+        # A container may move to any Kubernetes node; k4 has no Longhorn
+        # storage, and k9 is listed by neither. The page shows both rows.
+        c = lopsided(self)
+        c.kube.add({"apiVersion": "v1", "kind": "Node", "metadata": {"name": "k4"}, "spec": {},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
+        plan = R.plan(follow=[("lab/app3", "k4"), ("lab/app2", "k9")])
+        why = {s["claim"]: s["why"] for s in plan["skipped"]}
+        self.assertEqual("no copy follows lab/app3 to k4: Longhorn lists no host named k4", why["lab/v3"])
+        self.assertEqual("no copy follows lab/app2 to k9: Kubernetes lists no host named k9", why["lab/v2"])
+        self.assertEqual([], plan["unmatched"])
+
     def test_a_copy_that_does_not_fit_in_a_full_plan_says_so(self):
         lopsided(self)
         with mock.patch.object(R, "MAX_MOVES", 2):
@@ -250,6 +261,10 @@ class PlanTests(unittest.TestCase):
         plan = R.plan(follow=[("lab/app3", "k1"), ("lab/app3", "k1")])
         self.assertEqual(1, sum(m["volume"] == "v3" for m in plan["moves"]))
         self.assertEqual(["a copy of it already moves to k1 in this plan"],
+                         [n["why"] for n in plan["nothing_to_follow"] if n["claim"] == "lab/v3"])
+        # A second host that held a copy before the plan: no move goes there.
+        plan = R.plan(follow=[("lab/app3", "k1"), ("lab/app3", "k2")])
+        self.assertEqual(["it already has a copy on k2"],
                          [n["why"] for n in plan["nothing_to_follow"] if n["claim"] == "lab/v3"])
 
     def test_what_cannot_move_says_why(self):

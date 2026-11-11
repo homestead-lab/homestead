@@ -96,7 +96,8 @@ def _app(volume):
 
 
 def inventory():
-    """Hosts that may take a copy, and each volume with where its copies are."""
+    """Hosts that may take a copy, each volume with where its copies are, and
+    the names of every Kubernetes node (Longhorn may not run on each one)."""
     lh_nodes = _items(f"{LH}/nodes")
     k8s_nodes = {(n.get("metadata") or {}).get("name"): n for n in _items("/api/v1/nodes")}
     all_volumes = _items(f"{LH}/volumes")
@@ -149,7 +150,7 @@ def inventory():
                         "app": _app(volume), "size": size, "attached": status.get("currentNodeID") or "",
                         "hosts": sorted({(r.get("spec") or {}).get("nodeID") for r in whole}), "why": why,
                         "node_tags": set(spec.get("nodeSelector") or []), "disk_tags": set(spec.get("diskSelector") or [])})
-    return hosts, volumes
+    return hosts, volumes, set(k8s_nodes)
 
 
 def plan(exclude=(), follow=()):
@@ -161,7 +162,7 @@ def plan(exclude=(), follow=()):
     line under skipped when no copy can follow, one under nothing_to_follow
     when none needs to, or one under unmatched when the name (in follow or
     exclude) matches no app with a volume."""
-    hosts, volumes = inventory()
+    hosts, volumes, nodes = inventory()
     exclude = set(exclude or ())
     load = {name: h["load"] for name, h in hosts.items()}
     room = {name: h["available"] for name, h in hosts.items()}
@@ -210,9 +211,6 @@ def plan(exclude=(), follow=()):
             unmatched.append({"field": "follow", "given": f"{app}:{target}" if target else app,
                               "why": f"it names no {'host' if app else 'app'}. Write it as namespace/app:host"})
             continue
-        if target not in hosts:
-            unmatched.append({"field": "follow", "given": f"{app}:{target}", "why": f"there is no host named {target}"})
-            continue
         if app not in named:
             no_app("follow", f"{app}:{target}", app)
             continue
@@ -221,13 +219,17 @@ def plan(exclude=(), follow=()):
                 continue
             needless = ("it is left out of this plan" if app in exclude else
                         "it is empty, so there is nothing to copy" if v["size"] <= 0 else
-                        f"a copy of it already moves to {target} in this plan" if v["name"] in moved and target in v["hosts"] else
+                        f"a copy of it already moves to {target} in this plan"
+                        if any(m["volume"] == v["name"] and m["to"] == target for m in moves) else
                         f"it already has a copy on {target}" if target in v["hosts"] else "")
             if needless:
                 nothing_to_follow.append({"claim": v["claim"], "app": app, "to": target, "why": needless})
                 continue
-            if v["name"] in moved or len(moves) >= MAX_MOVES:
-                why = ("a copy of it already moves in this plan" if v["name"] in moved
+            if target not in hosts or v["name"] in moved or len(moves) >= MAX_MOVES:
+                # A container may move to a node Longhorn does not run on.
+                why = (f"Longhorn lists no host named {target}" if target not in hosts and target in nodes else
+                       f"Kubernetes lists no host named {target}" if target not in hosts else
+                       "a copy of it already moves in this plan" if v["name"] in moved
                        else f"the plan is full at {MAX_MOVES} moves")
                 unfollowed.append({"claim": v["claim"], "why": f"no copy follows {app} to {target}: {why}"})
                 continue
@@ -292,7 +294,7 @@ def reviewed(moves, exclude, token):
         raise ValueError("Review the copies to move again")
     if review_token(moves, exclude) != token:
         raise ValueError("The moves differ from the review. Review again.")
-    hosts, volumes = inventory()
+    hosts, volumes, _ = inventory()
     by_name = {v["name"]: v for v in volumes}
     out = []
     for m in moves:

@@ -1116,7 +1116,7 @@ TOOLS = [
          "Which volume copies would move to even out the disks; exclude: apps whose volumes are left alone, "
          "as namespace/app,namespace/app; follow: container moves to take a copy of their volumes along, as "
          "namespace/app:host,namespace/app:host. The answer lists under unmatched each name that matches no app "
-         "with a volume, each follow item with no host or an unknown host, and under nothing_to_follow each volume "
+         "with a volume or each follow item with no host, and under nothing_to_follow each volume "
          "that needs no copy moved.",
          {"exclude": S, "follow": S}, run=_get("/api/longhorn/rebalance/plan", {"exclude": "exclude", "follow": "follow"})),
     Tool("rebalance_storage", "Balance storage", "storage:manage", CHANGE,
