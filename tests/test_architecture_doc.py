@@ -119,6 +119,16 @@ class ArchitectureDocTest(unittest.TestCase):
         tree = ast.parse("A = B = None\nC: int = 1\nx, y = 1, 2\ndef f():\n    inner = 1\nclass K:\n    pass\n")
         self.assertEqual(top_level_names(tree), {"A", "B", "C", "x", "y", "f", "K"})
 
+    def test_the_write_guards_are_listed_in_their_order(self):
+        tree = ast.parse((ROOT / "server" / "homestead_kube.py").read_text(encoding="utf-8"))
+        order = next([element.id for element in node.value.elts] for node in tree.body
+                     if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "WRITE_GUARDS")
+        named = []
+        for name in re.findall(r"`homestead_kube\.(\w+)`", SS.text(PAGE)):
+            if name in order and name not in named:
+                named.append(name)
+        self.assertEqual(named, order, "List homestead_kube.WRITE_GUARDS on the page in the order the code runs them")
+
     def test_contributing_links_to_the_page(self):
         self.assertIn("](docs/architecture.md)", SS.text(CONTRIBUTING))
 
