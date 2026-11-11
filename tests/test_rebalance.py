@@ -162,6 +162,57 @@ class PlanTests(unittest.TestCase):
         self.assertIn("no copy follows lab/app3 to k1: its only copies are where it is attached now", why["lab/v3"])
         self.assertNotIn("lab/v2", why, "it has a copy on k2 already")
 
+    def test_an_app_that_needs_no_copy_to_follow_it_says_why(self):
+        # app0 already has a copy on k3; the empty volume has nothing to copy;
+        # app1 is left out of the plan. None of them is a failure.
+        c = lopsided(self)
+        c.kube.add(volume("empty", 0, ["k2", "k3"], attached="k2"))
+        for host in ("k2", "k3"):
+            c.kube.add(replica("empty", host))
+        c.kube.add(engine("empty", {"empty-r-k2-0": "RW", "empty-r-k3-0": "RW"}))
+        plan = R.plan(["lab/app1"], follow=[("lab/app0", "k3"), ("lab/empty", "k1"), ("lab/app1", "k1")])
+        rows = {(n["claim"], n["app"], n["to"]): n["why"] for n in plan["nothing_to_follow"]}
+        self.assertEqual({("lab/v0", "lab/app0", "k3"): "it already has a copy on k3",
+                          ("lab/empty", "lab/empty", "k1"): "it is empty, so there is nothing to copy",
+                          ("lab/v1", "lab/app1", "k1"): "it is left out of this plan"}, rows)
+        self.assertNotIn("lab/v0", {s["claim"] for s in plan["skipped"]}, "not a failure, so not under skipped")
+
+    def test_follow_and_exclude_names_that_match_no_app_are_reported(self):
+        lopsided(self)
+        plan = R.plan(["v0", "lab/app2"], follow=[("app3", "k1"), ("lab/web", "k1"), ("lab/app3", "")])
+        self.assertEqual([
+            {"field": "exclude", "given": "v0", "why": "no volume belongs to an app named v0; apps are named namespace/app"},
+            {"field": "follow", "given": "app3:k1", "why": "no volume belongs to an app named app3; apps are named namespace/app"},
+            {"field": "follow", "given": "lab/web:k1", "why": "no volume belongs to an app named lab/web"},
+            {"field": "follow", "given": "lab/app3", "why": "it names no host; write it as namespace/app:host"},
+        ], plan["unmatched"])
+        self.assertIn("lab/app0", [m["app"] for m in plan["moves"]], "v0 was not left out: it names a volume, not an app")
+
+    def test_the_route_reports_a_follow_item_with_no_host(self):
+        import homestead_routes as ROUTES
+        lopsided(self)
+        _, handler = R.ROUTES[("GET", "/api/longhorn/rebalance/plan")]
+        found = handler(ROUTES.Request("GET", "/api/longhorn/rebalance/plan",
+                                       {"follow": ["lab/app3,lab/app2:k1"]}, None, "op", "viewer"))
+        self.assertIn({"field": "follow", "given": "lab/app3", "why": "it names no host; write it as namespace/app:host"},
+                      found["unmatched"])
+        self.assertIn("lab/app2", [m.get("follows") for m in found["moves"]], "the well-formed item still follows")
+
+    def test_a_copy_that_does_not_fit_in_a_full_plan_says_so(self):
+        lopsided(self)
+        with mock.patch.object(R, "MAX_MOVES", 2):
+            plan = R.plan(follow=[("lab/app0", "k1"), ("lab/app1", "k1"), ("lab/app2", "k1")])
+        self.assertEqual(2, len(plan["moves"]))
+        why = {s["claim"]: s["why"] for s in plan["skipped"]}
+        self.assertEqual("no copy follows lab/app2 to k1: the plan is full at 2 moves", why["lab/v2"])
+
+    def test_an_app_asked_to_follow_to_two_hosts_says_why_the_second_copy_does_not(self):
+        lopsided(self)
+        plan = R.plan(follow=[("lab/app0", "k1"), ("lab/app0", "k3")])
+        self.assertEqual(1, sum(m["volume"] == "v0" for m in plan["moves"]))
+        why = {s["claim"]: s["why"] for s in plan["skipped"]}
+        self.assertEqual("no copy follows lab/app0 to k3: a copy of it already moves in this plan", why["lab/v0"])
+
     def test_what_cannot_move_says_why(self):
         c = lopsided(self)
         c.edit_volume("v0", lambda v: v["status"].update(robustness="degraded"))

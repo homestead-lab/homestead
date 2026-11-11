@@ -1113,8 +1113,10 @@ TOOLS = [
          {"enabled": B, "volume": S, "mode": {"type": "string", "enum": ["ignored", "enabled", "disabled"]}},
          plan=_plan_filesystem_freeze, execute=_set_filesystem_freeze, role="admin"),
     Tool("preview_storage_rebalance", "Preview balancing storage", "read", READ,
-         "Which volume copies would move to even out the disks; exclude: volumes to leave alone; "
-         "follow: container moves to take a copy of their volumes along, as app:host,app:host.",
+         "Which volume copies would move to even out the disks; exclude: apps whose volumes are left alone, "
+         "as namespace/app,namespace/app; follow: container moves to take a copy of their volumes along, as "
+         "namespace/app:host,namespace/app:host. The answer lists under unmatched each name that matches no app "
+         "with a volume, and under nothing_to_follow each volume that needs no copy moved.",
          {"exclude": S, "follow": S}, run=_get("/api/longhorn/rebalance/plan", {"exclude": "exclude", "follow": "follow"})),
     Tool("rebalance_storage", "Balance storage", "storage:manage", CHANGE,
          "Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude}.",

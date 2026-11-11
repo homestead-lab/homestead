@@ -157,7 +157,10 @@ def plan(exclude=(), follow=()):
     follow is the container moves reviewed beside it, (app, host) pairs:
     first, each of those apps' volumes gets a copy on its new host, so its
     reads stay local there - moved from the fullest host holding one that
-    it is not attached to."""
+    it is not attached to. Every app asked for gets an answer: a move, a
+    line under skipped when no copy can follow, one under nothing_to_follow
+    when none needs to, or one under unmatched when the name (in follow or
+    exclude) matches no app with a volume."""
     hosts, volumes = inventory()
     exclude = set(exclude or ())
     load = {name: h["load"] for name, h in hosts.items()}
@@ -194,10 +197,34 @@ def plan(exclude=(), follow=()):
         planned[(target, id(disk))] = planned.get((target, id(disk)), 0) + best["size"]
         best["hosts"] = [h for h in best["hosts"] if h != source] + [target]
 
-    unfollowed = []
+    unfollowed, nothing_to_follow, unmatched = [], [], []
+    named = {v["app"] for v in volumes}
+    def no_app(field, given, app):
+        hint = "" if "/" in app else "; apps are named namespace/app"
+        unmatched.append({"field": field, "given": given, "why": f"no volume belongs to an app named {app}{hint}"})
+    for app in sorted(exclude - named):
+        no_app("exclude", app, app)
     for app, target in follow or ():
-        for v in movable:
-            if v["app"] != app or v["name"] in moved or target in v["hosts"] or len(moves) >= MAX_MOVES:
+        if not app or not target:
+            unmatched.append({"field": "follow", "given": f"{app}:{target}" if target else app,
+                              "why": f"it names no {'host' if app else 'app'}; write it as namespace/app:host"})
+            continue
+        if app not in named:
+            no_app("follow", f"{app}:{target}", app)
+            continue
+        for v in volumes:
+            if v["app"] != app or v["why"]:     # one with a reason of its own is under skipped already
+                continue
+            needless = ("it is left out of this plan" if app in exclude else
+                        "it is empty, so there is nothing to copy" if v["size"] <= 0 else
+                        f"it already has a copy on {target}" if target in v["hosts"] else "")
+            if needless:
+                nothing_to_follow.append({"claim": v["claim"], "app": app, "to": target, "why": needless})
+                continue
+            if v["name"] in moved or len(moves) >= MAX_MOVES:
+                why = ("a copy of it already moves in this plan" if v["name"] in moved
+                       else f"the plan is full at {MAX_MOVES} moves")
+                unfollowed.append({"claim": v["claim"], "why": f"no copy follows {app} to {target}: {why}"})
                 continue
             sources = [h for h in v["hosts"] if h != v["attached"]]
             why = ("" if target in takers and sources and disk_room(target, v) > v["size"] else
@@ -234,6 +261,9 @@ def plan(exclude=(), follow=()):
             # Why nothing moves when the emptiest host is the one that cannot take copies.
             "closed": sorted(name for name, h in hosts.items() if not h["takes"]),
             "skipped": [{"claim": v["claim"], "why": v["why"]} for v in volumes if v["why"]] + unfollowed,
+            # Answers the page may leave out: no copy needed to follow, and
+            # names given that match no app with a volume.
+            "nothing_to_follow": nothing_to_follow, "unmatched": unmatched,
             "review_token": token}
 
 
@@ -432,7 +462,8 @@ def start_reviewed(b):
 ROUTES = {
     ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan(
         [a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
-        [tuple(pair.rsplit(":", 1)) for pair in (request.query.get("follow") or [""])[0].split(",") if pair.count(":") >= 1])),
+        # An item with no host is passed on too, so the plan can say so.
+        [tuple(pair.rsplit(":", 1)) if ":" in pair else (pair, "") for pair in (request.query.get("follow") or [""])[0].split(",") if pair])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
 

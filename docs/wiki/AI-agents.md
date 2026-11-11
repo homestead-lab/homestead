@@ -238,7 +238,7 @@ Tools come in three classes:
 | `trim_volume` | Gives a volume's freed space back to its disks | `storage:manage` | change |
 | `set_weekly_trim` | Asks to leave one volume out of the weekly trim, or to trim it weekly again | `storage:manage` | destructive |
 | `rebuild_volume` | Rebuilds missing copies of a detached volume now | `storage:manage` | change |
-| `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: volumes to leave alone | `read` | read |
+| `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: apps whose volumes are left alone, as namespace/app; follow: container moves as namespace/app:host | `read` | read |
 | `rebalance_storage` | Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude} | `storage:manage` | change |
 | `preview_volume_copy_move` | Where a Longhorn volume's copies are, and which would move to disks with these tags (comma-separated), e.g. nvme | `read` | read |
 | `move_volume_copies` | Moves the copies as preview_volume_copy_move planned, while the volume stays in use: settings {volume, disk_tags, node_tags, review_token} | `storage:manage` | change |
