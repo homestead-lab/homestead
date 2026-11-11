@@ -179,12 +179,13 @@ class PlanTests(unittest.TestCase):
 
     def test_follow_and_exclude_names_that_match_no_app_are_reported(self):
         lopsided(self)
-        plan = R.plan(["v0", "lab/app2"], follow=[("app3", "k1"), ("lab/web", "k1"), ("lab/app3", "")])
+        plan = R.plan(["v0", "lab/app2"], follow=[("app3", "k1"), ("lab/web", "k1"), ("lab/app3", ""), ("lab/app0", "k9")])
         self.assertEqual([
-            {"field": "exclude", "given": "v0", "why": "no volume belongs to an app named v0; apps are named namespace/app"},
-            {"field": "follow", "given": "app3:k1", "why": "no volume belongs to an app named app3; apps are named namespace/app"},
-            {"field": "follow", "given": "lab/web:k1", "why": "no volume belongs to an app named lab/web"},
-            {"field": "follow", "given": "lab/app3", "why": "it names no host; write it as namespace/app:host"},
+            {"field": "exclude", "given": "v0", "why": "no volume is listed under an app named v0. Apps are named namespace/app"},
+            {"field": "follow", "given": "app3:k1", "why": "no volume is listed under an app named app3. Apps are named namespace/app"},
+            {"field": "follow", "given": "lab/web:k1", "why": "no volume is listed under an app named lab/web"},
+            {"field": "follow", "given": "lab/app3", "why": "it names no host. Write it as namespace/app:host"},
+            {"field": "follow", "given": "lab/app0:k9", "why": "there is no host named k9"},
         ], plan["unmatched"])
         self.assertIn("lab/app0", [m["app"] for m in plan["moves"]], "v0 was not left out: it names a volume, not an app")
 
@@ -194,9 +195,43 @@ class PlanTests(unittest.TestCase):
         _, handler = R.ROUTES[("GET", "/api/longhorn/rebalance/plan")]
         found = handler(ROUTES.Request("GET", "/api/longhorn/rebalance/plan",
                                        {"follow": ["lab/app3,lab/app2:k1"]}, None, "op", "viewer"))
-        self.assertIn({"field": "follow", "given": "lab/app3", "why": "it names no host; write it as namespace/app:host"},
+        self.assertIn({"field": "follow", "given": "lab/app3", "why": "it names no host. Write it as namespace/app:host"},
                       found["unmatched"])
         self.assertIn("lab/app2", [m.get("follows") for m in found["moves"]], "the well-formed item still follows")
+
+    def test_spaces_round_list_items_are_ignored_at_preview_and_apply(self):
+        import homestead_routes as ROUTES
+        lopsided(self)
+        _, handler = R.ROUTES[("GET", "/api/longhorn/rebalance/plan")]
+        found = handler(ROUTES.Request("GET", "/api/longhorn/rebalance/plan",
+                                       {"exclude": [" lab/app0 , lab/app1"], "follow": ["lab/app3 :k1, lab/app2: k1 "]},
+                                       None, "op", "viewer"))
+        self.assertEqual([], found["unmatched"])
+        self.assertEqual(["lab/app0", "lab/app1"], found["excluded"])
+        self.assertFalse({"lab/app0", "lab/app1"} & {m["app"] for m in found["moves"]}, "both are left out")
+        self.assertEqual({"lab/app2", "lab/app3"}, {m.get("follows") for m in found["moves"]} - {None})
+        # The apply step, sent the exclude list as it was typed, gets the same token.
+        _, apply = R.ROUTES[("POST", "/api/longhorn/rebalance")]
+        reply = apply(ROUTES.Request("POST", "/api/longhorn/rebalance", {}, {
+            "moves": found["moves"], "review_token": found["review_token"], "exclude": [" lab/app0 ", "lab/app1"]}, "op", "operator"))
+        self.assertEqual(202, reply.code, reply.body)
+
+    def test_a_follow_app_whose_volume_cannot_move_now_gets_one_row_and_no_move(self):
+        c = lopsided(self)
+        c.edit_volume("v3", lambda v: v["status"].update(robustness="degraded"))
+        plan = R.plan(follow=[("lab/app3", "k1")])
+        self.assertNotIn("v3", [m["volume"] for m in plan["moves"]])
+        self.assertEqual(["it is not healthy now"], [s["why"] for s in plan["skipped"] if s["claim"] == "lab/v3"])
+        self.assertEqual([], plan["nothing_to_follow"])
+
+    def test_a_volume_named_by_its_claim_is_reported_as_not_listed_under_the_app(self):
+        # Longhorn lists no workload for a volume whose pod is not running:
+        # Homestead then names it by its claim, lab/v3.
+        c = lopsided(self)
+        c.edit_volume("v3", lambda v: v["status"]["kubernetesStatus"].update(workloadsStatus=None))
+        plan = R.plan(follow=[("lab/app3", "k1")])
+        self.assertEqual([{"field": "follow", "given": "lab/app3:k1",
+                           "why": "no volume is listed under an app named lab/app3"}], plan["unmatched"])
 
     def test_a_copy_that_does_not_fit_in_a_full_plan_says_so(self):
         lopsided(self)
@@ -212,6 +247,10 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(1, sum(m["volume"] == "v0" for m in plan["moves"]))
         why = {s["claim"]: s["why"] for s in plan["skipped"]}
         self.assertEqual("no copy follows lab/app0 to k3: a copy of it already moves in this plan", why["lab/v0"])
+        plan = R.plan(follow=[("lab/app3", "k1"), ("lab/app3", "k1")])
+        self.assertEqual(1, sum(m["volume"] == "v3" for m in plan["moves"]))
+        self.assertEqual(["a copy of it already moves to k1 in this plan"],
+                         [n["why"] for n in plan["nothing_to_follow"] if n["claim"] == "lab/v3"])
 
     def test_what_cannot_move_says_why(self):
         c = lopsided(self)

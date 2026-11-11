@@ -200,14 +200,18 @@ def plan(exclude=(), follow=()):
     unfollowed, nothing_to_follow, unmatched = [], [], []
     named = {v["app"] for v in volumes}
     def no_app(field, given, app):
-        hint = "" if "/" in app else "; apps are named namespace/app"
-        unmatched.append({"field": field, "given": given, "why": f"no volume belongs to an app named {app}{hint}"})
+        # A volume whose pod is not running may be listed under its claim instead.
+        hint = "" if "/" in app else ". Apps are named namespace/app"
+        unmatched.append({"field": field, "given": given, "why": f"no volume is listed under an app named {app}{hint}"})
     for app in sorted(exclude - named):
         no_app("exclude", app, app)
     for app, target in follow or ():
         if not app or not target:
             unmatched.append({"field": "follow", "given": f"{app}:{target}" if target else app,
-                              "why": f"it names no {'host' if app else 'app'}; write it as namespace/app:host"})
+                              "why": f"it names no {'host' if app else 'app'}. Write it as namespace/app:host"})
+            continue
+        if target not in hosts:
+            unmatched.append({"field": "follow", "given": f"{app}:{target}", "why": f"there is no host named {target}"})
             continue
         if app not in named:
             no_app("follow", f"{app}:{target}", app)
@@ -217,6 +221,7 @@ def plan(exclude=(), follow=()):
                 continue
             needless = ("it is left out of this plan" if app in exclude else
                         "it is empty, so there is nothing to copy" if v["size"] <= 0 else
+                        f"a copy of it already moves to {target} in this plan" if v["name"] in moved and target in v["hosts"] else
                         f"it already has a copy on {target}" if target in v["hosts"] else "")
             if needless:
                 nothing_to_follow.append({"claim": v["claim"], "app": app, "to": target, "why": needless})
@@ -433,6 +438,9 @@ def cancel_run(work, chosen):
 def start_reviewed(b):
     """Start the rebalance someone reviewed, as a job; a 409 with the plan as
     it is now when it no longer holds, a 202 with the job when it starts."""
+    if isinstance(b.get("exclude"), list):
+        # Trimmed as the preview trims them, so the token matches.
+        b = {**b, "exclude": [a.strip() if isinstance(a, str) else a for a in b["exclude"]]}
     running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
@@ -458,12 +466,17 @@ def start_reviewed(b):
     return ROUTER.Reply(202, {"operation": operation})
 
 
+def _listed(request, key):
+    """A comma list from the query, each item trimmed of spaces."""
+    return [a.strip() for a in (request.query.get(key) or [""])[0].split(",") if a.strip()]
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan(
-        [a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
+        _listed(request, "exclude"),
         # An item with no host is passed on too, so the plan can say so.
-        [tuple(pair.rsplit(":", 1)) if ":" in pair else (pair, "") for pair in (request.query.get("follow") or [""])[0].split(",") if pair])),
+        [tuple(x.strip() for x in pair.rsplit(":", 1)) if ":" in pair else (pair, "") for pair in _listed(request, "follow")])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
 
