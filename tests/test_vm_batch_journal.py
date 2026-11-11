@@ -249,7 +249,10 @@ class VMBatchJournalTests(unittest.TestCase):
                 cluster.commit(prepared(), ops, create_one=lambda cfg, **kw: made.append(cfg) or create_one(cfg, self.send),
                                review=review, send=send)
         self.assertEqual([], made)
+        with self.assertRaisesRegex(ValueError, "approval and resource writer"):
+            cluster.commit(prepared(), ops, create_one=None, review=self.body, send=self.send)
         self.assertEqual([], ops.stored())
+        self.assertEqual([], self.sent)
         with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.assertEqual([], self.sent)

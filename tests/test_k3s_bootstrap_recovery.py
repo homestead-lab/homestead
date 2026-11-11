@@ -141,7 +141,16 @@ class BootstrapRecoveryTests(unittest.TestCase):
         self.commit()
         with self.assertRaisesRegex(ValueError, "already has job"):
             self.commit()
+        # A fresh approval for the same batch (same namespace and name, other
+        # VMs) is still refused while the first one runs: the same-batch rule.
+        other = copy.deepcopy(self.prepared)
+        for node, vm in zip(other["plan"]["nodes"], other["configs"]):
+            node["name"] = vm["name"] = node["name"].replace("test-", "other-")
+        with self.assertRaisesRegex(ValueError, "needs recovery|already running"):
+            cluster.commit(other, ops, create_one=self.create, send=self.send,
+                           review={"capacity_token": f"{int(time.time()) + 600}.another-approval"})
         self.assertEqual(2, len(self.created))
+        self.assertEqual(1, len(ops.stored()))
 
     def test_history_limit_cannot_evict_active_intent_or_retained_failure(self):
         items = [{"id": "in-flight", "status": "running", "ref": {}},
