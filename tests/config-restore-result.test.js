@@ -36,7 +36,8 @@ const STOPPED = {
     { id: "settings", label: "Settings", state: "restored", detail: "" },
     { id: "ipam", label: "IP addresses", state: "failed",
       detail: "Writing this part failed, so it may be partly restored. Restore it again from the same backup. Error from homestead-unifi: conflict" },
-    { id: "portal", label: "Portal", state: "not_started", detail: "Not started, because an earlier part failed." },
+    { id: "portal", label: "Portal", state: "not_started", detail: "" },
+    { id: "vmstore", label: "VM image store", state: "skipped", detail: "" },
   ],
 };
 
@@ -46,8 +47,8 @@ test("a restore that stops part way lists every part and keeps the dialog open",
   assert.equal(seen.closed, 0, "the dialog stays open");
   assert.deepEqual(seen.toasts, [], "no success toast for a restore that failed");
   const shown = seen.modals.at(-1).html;
-  for (const words of ["Settings", "Restored", "IP addresses", "Failed", "homestead-unifi: conflict", "Portal", "Not started",
-    "The restore stopped part way"]) assert.match(shown, new RegExp(words), words);
+  for (const words of ["Settings: Restored", "IP addresses: Failed", "homestead-unifi: conflict", "Portal: Not started",
+    "VM image store: Nothing in the backup", "The restore stopped part way"]) assert.match(shown, new RegExp(words), words);
   assert.match(shown, /ui-checklist/);
   assert.equal(seen.reloads, 0);
 });
@@ -61,8 +62,31 @@ test("restored users still lead to signing in again after the list is shown", as
   assert.match(shown, /Failed/, "the list is shown first");
   assert.equal(seen.reloads, 0, "not before the person has seen it");
   assert.match(shown, /configRestoreSignIn\(\)/);
+  assert.match(shown, /Everyone must sign in again/);
   c.configRestoreSignIn();
   assert.equal(seen.reloads, 1);
+});
+
+test("a users write that failed may still have landed, so it also leads to signing in", async () => {
+  const reply = { ...STOPPED, restored: [], parts: [{ id: "users", label: "Users and roles", state: "failed", detail: "Error: timed out" },
+    { id: "ipam", label: "IP addresses", state: "not_started", detail: "" }] };
+  const { c, seen } = load(reply, ["users", "ipam"]);
+  await c.configRestoreGo();
+  const shown = seen.modals.at(-1).html;
+  assert.match(shown, /Everyone may need to sign in again/);
+  assert.match(shown, /configRestoreSignIn\(\)/);
+  assert.doesNotMatch(shown, /closeModal\(\)/);
+});
+
+test("every part written but the reload after it failed: an error, not a stop", async () => {
+  const reply = { ok: false, restored: ["ipam"], skipped: [], parts: [{ id: "ipam", label: "IP addresses", state: "restored", detail: "" }],
+    detail: "Restored IP addresses. Homestead could not reload the restored parts." };
+  const { c, seen } = load(reply, ["ipam"]);
+  await c.configRestoreGo();
+  const shown = seen.modals.at(-1).html;
+  assert.match(shown, /The restore finished with an error/);
+  assert.doesNotMatch(shown, /stopped part way/);
+  assert.equal(seen.closed, 0);
 });
 
 test("a restore that finished closes the dialog as before", async () => {

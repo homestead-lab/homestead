@@ -25,6 +25,7 @@ import urllib.error
 import zlib
 
 import homestead_api_errors as API_ERRORS
+import homestead_audit as AUDIT_LOG
 import homestead_kube as KUBE
 
 kget = ksend = None
@@ -226,12 +227,12 @@ def restore(doc, passphrase, part_ids):
         row = {"id": part["id"], "label": part["label"]}
         rows.append(row)
         if failed:
-            row.update(state="not_started", detail="Not started, because an earlier part failed.")
+            row.update(state="not_started", detail="")
             continue
         saved = {o["name"]: o for o in payload.get(part["id"], []) if o.get("object")}
         if not saved:
             skipped.append(part["label"])
-            row.update(state="skipped", detail="The backup holds nothing for this part.")
+            row.update(state="skipped", detail="")
             continue
         current = ""
         try:
@@ -251,23 +252,25 @@ def restore(doc, passphrase, part_ids):
     try:
         _after_restore(done + ([failed["id"]] if failed else []))
     except Exception as error:
-        after_error = (" Homestead could not reload the restored parts, so some pages may show the old values."
-                       f" Restart Homestead to read them afresh. Error: {_error_text(error)}")
+        after_error = (" Homestead could not reload the restored parts."
+                       " Some pages may show the old values until Homestead restarts."
+                       f" Error: {_error_text(error)}")
     labels = lambda ids: ", ".join(_part(i)["label"] for i in ids)
     if failed:
+        # Each part's state is in its row; the detail does not list them again.
         detail = f"The restore stopped at {failed['label']}, which may be partly restored."
-        if done:
-            detail += f" Restored before it: {labels(done)}."
-        waiting = [r["label"] for r in rows if r["state"] == "not_started"]
-        if waiting:
-            detail += f" Not started: {', '.join(waiting)}."
     else:
         detail = ((f"restored {labels(done)}" if done else "nothing to restore")
                   + (f"; the backup held nothing for {', '.join(skipped)}" if skipped else ""))
-    if after_error and not detail.endswith("."):
-        detail += "."
-    return {"ok": not failed and not after_error, "restored": done, "skipped": skipped, "parts": rows,
-            "detail": detail + after_error}
+    if after_error and not failed:
+        # Read as the notice's first sentence: a capital and a full stop.
+        detail = detail[0].upper() + detail[1:] + "."
+    ok = not failed and not after_error
+    if not ok:
+        # Answered 200 so the page can show the rows; the audit line still
+        # says the request did not succeed.
+        AUDIT_LOG.note(outcome="error")
+    return {"ok": ok, "restored": done, "skipped": skipped, "parts": rows, "detail": detail + after_error}
 
 
 # Its routes and who may use them (homestead_routes.py).

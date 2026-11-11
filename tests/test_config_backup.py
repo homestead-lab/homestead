@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_config_backup as config
 import homestead_kube as K
+import homestead_routes as ROUTES
 from fakes.kube import Kube
 from rebind import keep_bound
 
@@ -36,6 +37,8 @@ class ConfigBackupTests(unittest.TestCase):
     def setUp(self):
         self.kube = self.enterContext(Kube())
         self.restored = []
+        ROUTES._clear_notes()
+        self.addCleanup(ROUTES._clear_notes)
         keep_bound(self, config)
         config.bind(K.kget, K.ksend, "2.8.212", PARTS, site=lambda: "Loft rack",
                     after_restore=self.restored.extend)
@@ -103,6 +106,7 @@ class ConfigBackupTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(["ipam"], result["restored"])
         self.assertEqual([("ipam", "restored")], [(r["id"], r["state"]) for r in result["parts"]])
+        self.assertNotIn("outcome", ROUTES._take_notes(), "a restore that finished is an ordinary success")
         self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
         self.assertEqual(base64.b64encode(b"unifi-key").decode(), self.data("secrets", "homestead-unifi")["key"])
         self.assertEqual('{"site_name":"Changed"}', self.data("configmaps", "homestead-settings")["settings.json"])
@@ -151,7 +155,12 @@ class ConfigBackupTests(unittest.TestCase):
         self.assertEqual(["settings"], result["restored"])
         failed = result["parts"][1]
         self.assertIn("partly restored", failed["detail"])
-        self.assertIn("injected failure", failed["detail"], "the full error follows the cause")
+        self.assertIn("homestead-unifi", failed["detail"], "it names the object whose write failed")
+        self.assertLess(failed["detail"].index("partly restored"), failed["detail"].index("injected failure"),
+                        "the cause comes first, then the full error")
+        self.assertEqual("", result["parts"][2]["detail"], "a part not started says so by its state alone")
+        self.assertEqual("error", ROUTES._take_notes().get("outcome"),
+                         "answered 200 for the page, but the audit line says it did not succeed")
         self.assertIn("IP addresses", result["detail"])
         # What was written stays written; nothing after the failed part is touched.
         self.assertEqual('{"site_name":"Loft rack"}', self.data("configmaps", "homestead-settings")["settings.json"])
@@ -180,6 +189,8 @@ class ConfigBackupTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual([("ipam", "restored")], self.states(result))
         self.assertIn("cache unavailable", result["detail"])
+        self.assertTrue(result["detail"].startswith("Restored IP addresses."), result["detail"])
+        self.assertEqual("error", ROUTES._take_notes().get("outcome"))
         self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
 
     def test_an_unknown_part_is_refused_before_anything_is_written(self):

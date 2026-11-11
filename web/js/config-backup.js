@@ -156,15 +156,18 @@ const CONFIG_RESULT_WORDS = { restored: ["Restored", "ok"], failed: ["Failed", "
 window.configRestoreResult = result => {
   const rows = result.parts || [];
   const failed = rows.some(p => p.state === "failed");
-  const users = rows.some(p => p.id === "users" && p.state === "restored");
+  // A users write that failed may still have been applied (a lost reply), so
+  // it leads to signing in again too.
+  const usersRow = rows.find(p => p.id === "users");
+  const users = usersRow && ["restored", "failed"].includes(usersRow.state);
   modal("Restore configuration", `<div class="ui-stack">
     ${UI.callout("bad", failed ? "The restore stopped part way" : "The restore finished with an error", esc(result.detail || ""))}
     ${UI.checklist(rows.map(p => {
       const [word, state] = CONFIG_RESULT_WORDS[p.state] || CONFIG_RESULT_WORDS.not_started;
       return { state, title: `${p.label}: ${word}`, detailHtml: p.detail ? esc(p.detail) : "" };
     }))}
-    ${users ? UI.lead("Users and roles were restored, so everyone signs in again.") : ""}
-    ${UI.actions(users ? UI.button("Sign in again", "configRestoreSignIn()", { kind: "pri" }) : UI.cancel("Close"))}
+    ${users ? UI.lead(usersRow.state === "restored" ? "Everyone must sign in again." : "Everyone may need to sign in again.") : ""}
+    ${UI.actions(users ? UI.button("Reload to sign in", "configRestoreSignIn()", { kind: "pri" }) : UI.cancel("Close"))}
   </div>`);
   if (!users) { resetPaint(); configRefreshSettings(); }
 };
