@@ -839,7 +839,8 @@ UNCONFIRMED_WAIT = 1800
 LETTING_GO_WAIT = 1800
 # What a retire's waits have saved; carrying on starts them all again.
 WAITS = ("letting_go_since", "letting_go_for", "records_since", "remove_since", "recheck_since",
-         "unconfirmed_since", "unconfirmed_last", "stop_since", "release_since")
+         "unconfirmed_since", "unconfirmed_last", "stop_since", "release_since",
+         "cleanup_since")
 _clock = time.time
 
 
@@ -931,7 +932,7 @@ def retire_step(item):
         except ValueError as refused:
             said = str(refused)[:160]
             if _waited_out(ref, "stop_since"):
-                return "failed", 5, (f"Longhorn has not let new replicas be stopped on {ref.get('path') or disk_id} after "
+                return "failed", 5, (f"Longhorn has not let new volume copies be stopped on {ref.get('path') or disk_id} after "
                                      f"{LETTING_GO_WAIT // 60} minutes ({said}), so this retire changed nothing and the disk "
                                      f"stays in Longhorn. {_go_on(ref)}")
             return "running", 5, f"Stopping new volume copies first: {said}"
@@ -1054,7 +1055,12 @@ def retire_step(item):
                 ksend("DELETE", f"{BD}/{disk_id}")
             except urllib.error.HTTPError as error:
                 if error.code != 404:
-                    raise
+                    said = str(_refused(error, "removing the drive's record"))[:160]
+                    if _waited_out(ref, "cleanup_since"):
+                        return "failed", 90, (f"Harvester has not removed the drive's record after {LETTING_GO_WAIT // 60} "
+                                              f"minutes ({said}). {ref.get('path') or disk_id} is already out of Longhorn "
+                                              f"on {node}. Resume job tries again from here.")
+                    return "running", 90, f"Harvester has not removed the drive's record yet: {said}"
         ref["phase"] = "done"
         return "succeeded", 100, (
             f"{ref.get('path') or disk_id} is out of Longhorn on {node}. Add the new drive there (Hosts > Disks > "

@@ -574,6 +574,27 @@ class RetireWaitTests(unittest.TestCase):
         self.assertEqual("running", job["status"], job["message"])
         self.assertIn("removing it was refused", job["message"])
 
+    def test_a_drive_record_removal_refused_for_half_an_hour_fails_with_the_disk_out(self):
+        self.c.kube.fail(f"{DISKS.BD}/bd-sdb", 400, times=9999, method="DELETE")
+        ident = self.force()
+        self.look(ident, 5)
+        self.pass_time(self.LIMIT - 1)
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertIn("refused", job["message"])
+        self.pass_time(1)
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("30 minutes", job["message"])
+        self.assertIn("Resume job", job["message"])
+        self.assertTrue(job["resumable"])
+        self.assertFalse(self.disk_in_longhorn())
+        self.c.kube.stop_failing()
+        JOBS.resume(ident)
+        self.assertEqual("succeeded", self.look(ident, 2)["status"])
+        with self.assertRaises(urllib.error.HTTPError):
+            K.kget(f"{DISKS.BD}/bd-sdb")
+
     def test_cancel_at_removal_does_not_promise_it_finishes_in_moments(self):
         ident = self.refused_releasing()
         why = JOBS.cancel_plan(ident)["why_not"]
