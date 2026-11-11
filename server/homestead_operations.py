@@ -794,7 +794,7 @@ def _volume_restore(item):
         return "running", 16, "Waiting for Longhorn to create the volume"
     status = volume.get("status", {}) or {}
     # Longhorn restores onto the copies it could place and adds the rest later:
-    # not every copy placed fails the job only while no copy has started.
+    # not every copy placed fails the job only when no copy was placed at all.
     unplaced = next(((c.get("message") or c.get("reason") or "Longhorn cannot schedule the restored volume")
                      for c in status.get("conditions", []) or []
                      if c.get("type") == "Scheduled" and c.get("status") == "False"), "")
@@ -815,7 +815,14 @@ def _volume_restore(item):
     errors = [str(row.get("error")) for row in restore_rows if row.get("error")]
     if errors:
         return "failed", min([int(row.get("progress", 0) or 0) for row in restore_rows] or [20]), errors[0]
-    if unplaced and not restore_rows and not status.get("restoreInitiated"):
+    # Read once, and only when a decision below needs them; None: not read.
+    replicas = (_volume_replicas(volume_name)
+                if (unplaced and not restore_rows) or robustness == "degraded" else None)
+    # Longhorn sets restoreInitiated before it works out Scheduled, so only the
+    # copies tell "none placed" (fail now) from "some placed" (follow the
+    # restore). Unread, the job waits rather than fail on a guess.
+    if unplaced and not restore_rows and replicas is not None and not any(
+            (r.get("spec") or {}).get("nodeID") and not (r.get("spec") or {}).get("failedAt") for r in replicas):
         return "failed", 18, unplaced
     restoring = any(bool(row.get("isRestoring")) for row in restore_rows)
     progresses = [int(row.get("progress", 0) or 0) for row in restore_rows]
@@ -846,11 +853,8 @@ def _volume_restore(item):
     if completed and phase == "Bound" and robustness == "degraded":
         # Finished is what Longhorn says: the missing copies are Longhorn's to add,
         # and the volume shows as degraded until it has.
-        copies = _restored_copies(volume_name, volume)
-        return "succeeded", 100, (f"Restored PVC {namespace}/{name} is bound. "
-                                  f"{copies or 'Not every volume copy is placed yet'}. "
-                                  "Longhorn adds the rest when a host can take them.")
-    why = f". Longhorn cannot place every volume copy yet: {unplaced[:200]}" if unplaced else ""
+        return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound.{_copies_so_far(volume, replicas)}"
+    why = f". Longhorn has not placed all volume copies yet: {unplaced[:200]}" if unplaced else ""
     if restoring or restore_progress:
         return "running", operation_progress, f"Restoring backup data · {restore_progress}%{why}"
     if restored:
@@ -860,20 +864,31 @@ def _volume_restore(item):
     return "running", 18, f"Waiting for Longhorn restore engines{why}"
 
 
-def _restored_copies(volume_name, volume):
-    """"1 of 2 volume copies so far", from Longhorn's replicas of the volume, or
-    "" when they cannot be read or the count is not short."""
-    wanted = int((volume.get("spec") or {}).get("numberOfReplicas") or 0)
+def _volume_replicas(volume_name):
+    """Longhorn's replicas (copies) of a volume, or None when they cannot be read."""
     selector = urllib.parse.quote(f"longhornvolume={volume_name}", safe="")
     try:
-        replicas = kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
-                        f"?labelSelector={selector}").get("items", [])
+        return kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
+                    f"?labelSelector={selector}").get("items", [])
     except Exception:
-        return ""   # only the count is lost: the restore is finished either way
+        return None
+
+
+def _copies_so_far(volume, replicas):
+    """What a restore that ended degraded says about its copies, from the same
+    read of the replicas the job decided on."""
+    rest = " Longhorn adds the rest when a host can take them."
+    wanted = int((volume.get("spec") or {}).get("numberOfReplicas") or 0)
+    if replicas is None or not wanted:
+        return " Not every volume copy is placed yet." + rest
     healthy = sum(1 for r in replicas if (r.get("spec") or {}).get("healthyAt")
                   and not (r.get("spec") or {}).get("failedAt")
                   and (r.get("status") or {}).get("currentState") == "running")
-    return f"{healthy} of {wanted} volume copies so far" if 0 < healthy < wanted else ""
+    if healthy >= wanted:
+        return ""   # Longhorn finished the last copy since the volume was read
+    if not healthy:
+        return " Not every volume copy is placed yet." + rest
+    return f" {healthy} of {wanted} volume copies {'is' if healthy == 1 else 'are'} ready so far." + rest
 
 
 def _image_cleanup(item):

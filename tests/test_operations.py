@@ -369,10 +369,14 @@ class OperationTests(unittest.TestCase):
             "spec": {"csi": {"volumeHandle": "lh-restored"}}}
         self.objects[
             "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/lh-restored"
-        ] = {"status": {"conditions": [{"type": "Scheduled", "status": "False",
-                                          "message": "insufficient storage"}]}}
+        ] = {"status": {"restoreInitiated": True, "restoreRequired": True,   # as Longhorn sets them first
+                        "conditions": [{"type": "Scheduled", "status": "False",
+                                        "message": "insufficient storage"}]}}
         self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
                      "?labelSelector=longhornvolume%3Dlh-restored"] = {"items": []}
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
+                     "?labelSelector=longhornvolume%3Dlh-restored"] = {"items": [
+                         {"spec": {"nodeID": "", "healthyAt": "", "failedAt": ""}, "status": {"currentState": "stopped"}}]}
         failed = operations.list_operations()[0]
         self.assertEqual("failed", failed["status"])
         self.assertIn("insufficient storage", failed["message"])
@@ -396,18 +400,26 @@ class OperationTests(unittest.TestCase):
                      "?labelSelector=longhornvolume%3Dlh-restored"] = {"items": [{"status": engine}]}
         self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
                      "?labelSelector=longhornvolume%3Dlh-restored"] = {"items": [
-                         {"spec": {"healthyAt": "2026-11-11T10:00:00Z", "failedAt": ""},
+                         {"spec": {"nodeID": "node-a", "healthyAt": "2026-11-11T10:00:00Z", "failedAt": ""},
                           "status": {"currentState": "running"}},
-                         {"spec": {"healthyAt": "", "failedAt": ""}, "status": {"currentState": "stopped"}}]}
+                         {"spec": {"nodeID": "", "healthyAt": "", "failedAt": ""}, "status": {"currentState": "stopped"}}]}
         return volume, engine
+
+    def replicas(self):
+        return self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
+                            "?labelSelector=longhornvolume%3Dlh-restored"]["items"]
 
     def test_a_restore_longhorn_places_on_fewer_copies_is_followed_not_failed(self):
         volume, engine = self.degraded_restore()
         item = {"ref": {"namespace": "lab", "name": "restored-data", "backup": "backup-123"}}
         status, progress, message = operations._volume_restore(item)
         self.assertEqual(("running", 52), (status, progress), "a copy is restoring: follow it")
-        self.assertEqual("Restoring backup data · 45%. Longhorn cannot place every volume copy yet: "
+        self.assertEqual("Restoring backup data · 45%. Longhorn has not placed all volume copies yet: "
                          "insufficient storage on node-b", message)
+        # restoreRequired false while a copy still restores: not finished.
+        volume["status"]["restoreRequired"] = False
+        self.assertEqual("running", operations._volume_restore(item)[0], "a copy is still restoring")
+        volume["status"]["restoreRequired"] = True
         # Restored onto the one copy, still degraded: Longhorn says it is finished.
         engine["restoreStatus"]["replica-a"].update(isRestoring=False, progress=100, state="complete")
         engine["lastRestoredBackup"] = "backup-123"
@@ -415,7 +427,18 @@ class OperationTests(unittest.TestCase):
                          "Longhorn has not cleared restoreRequired yet")
         volume["status"]["restoreRequired"] = False
         self.assertEqual(("succeeded", 100, "Restored PVC lab/restored-data is bound. 1 of 2 volume copies "
-                          "so far. Longhorn adds the rest when a host can take them."),
+                          "is ready so far. Longhorn adds the rest when a host can take them."),
+                         operations._volume_restore(item))
+        # Only a running copy that is healthy and has not failed counts.
+        self.replicas()[1].update(spec={"nodeID": "node-b", "healthyAt": "2026-11-11T10:00:00Z",
+                                        "failedAt": "2026-11-11T10:05:00Z"}, status={"currentState": "running"})
+        self.assertIn(" 1 of 2 ", operations._volume_restore(item)[2])
+        self.replicas()[1].update(spec={"nodeID": "node-b", "healthyAt": "2026-11-11T10:00:00Z", "failedAt": ""},
+                                  status={"currentState": "stopped"})
+        self.assertIn(" 1 of 2 ", operations._volume_restore(item)[2])
+        # Longhorn finished the second copy between its reads: no "rest" to add.
+        self.replicas()[1]["status"]["currentState"] = "running"
+        self.assertEqual(("succeeded", 100, "Restored PVC lab/restored-data is bound."),
                          operations._volume_restore(item))
         # The copies cannot be read: the job still ends, without the count.
         del self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
@@ -434,12 +457,27 @@ class OperationTests(unittest.TestCase):
         engine["restoreStatus"]["replica-a"]["error"] = "restore failed"
         self.assertEqual("failed", operations._volume_restore(item)[0])
 
-    def test_a_restore_no_copy_could_start_on_still_fails_at_once(self):
+    def test_a_restore_no_copy_could_be_placed_for_still_fails_at_once(self):
+        # Longhorn sets restoreInitiated before it works out Scheduled, in the same update.
         volume, engine = self.degraded_restore()
-        volume["status"].pop("restoreInitiated")
+        volume["status"].update(state="detached", robustness="unknown")
         engine["restoreStatus"] = None
+        for replica in self.replicas():
+            replica["spec"].update(nodeID="", healthyAt="")
         item = {"ref": {"namespace": "lab", "name": "restored-data", "backup": "backup-123"}}
         self.assertEqual(("failed", 18, "insufficient storage on node-b"), operations._volume_restore(item))
+        # A copy placed on a host, its restore not started yet (the attaching window): wait.
+        self.replicas()[0]["spec"]["nodeID"] = "node-a"
+        self.assertEqual("running", operations._volume_restore(item)[0])
+        # A placed copy that has failed does not count as placed.
+        self.replicas()[0]["spec"]["failedAt"] = "2026-11-11T10:05:00Z"
+        self.assertEqual("failed", operations._volume_restore(item)[0])
+        # The copies cannot be read: wait rather than fail on a guess.
+        del self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
+                         "?labelSelector=longhornvolume%3Dlh-restored"]
+        status, _, message = operations._volume_restore(item)
+        self.assertEqual("running", status)
+        self.assertIn("insufficient storage on node-b", message)
 
     def test_smart_test_progress_is_persisted_through_shared_resolver(self):
         # The resolver's answers, asked back to back; the cadence between real
