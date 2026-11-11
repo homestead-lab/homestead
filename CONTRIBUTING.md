@@ -21,6 +21,9 @@ acts, and leave a person able to see what happened.
   updates its own ClusterRole to match on start, so a new permission reaches
   existing installs by an ordinary upgrade.
 
+How the server talks to Kubernetes, chooses a leader and runs jobs is in
+[docs/architecture.md](docs/architecture.md).
+
 ### Project layout
 
 | Path | Holds |
