@@ -137,6 +137,7 @@ window.configRestoreGo = async () => {
     const result = await api("/api/config/restore", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ file: state.doc, passphrase: state.pass, parts }) });
     window.__configRestore = null;
+    if (result.ok === false) return configRestoreResult(result);
     toast(result.detail, "ok");
     closeModal();
     if (parts.includes("users")) setTimeout(() => window.location.reload(), 1200);
@@ -146,6 +147,29 @@ window.configRestoreGo = async () => {
     go.disabled = false; configPartsChanged();
   }
 };
+
+/* A restore that stopped part way, or whose caches could not be cleared:
+   what happened to each part, so nothing restored goes unnoticed. */
+const CONFIG_RESULT_WORDS = { restored: ["Restored", "ok"], failed: ["Failed", "bad"], not_started: ["Not started", "todo"],
+  skipped: ["Nothing in the backup", "skip"] };
+
+window.configRestoreResult = result => {
+  const rows = result.parts || [];
+  const failed = rows.some(p => p.state === "failed");
+  const users = rows.some(p => p.id === "users" && p.state === "restored");
+  modal("Restore configuration", `<div class="ui-stack">
+    ${UI.callout("bad", failed ? "The restore stopped part way" : "The restore finished with an error", esc(result.detail || ""))}
+    ${UI.checklist(rows.map(p => {
+      const [word, state] = CONFIG_RESULT_WORDS[p.state] || CONFIG_RESULT_WORDS.not_started;
+      return { state, title: `${p.label}: ${word}`, detailHtml: p.detail ? esc(p.detail) : "" };
+    }))}
+    ${users ? UI.lead("Users and roles were restored, so everyone signs in again.") : ""}
+    ${UI.actions(users ? UI.button("Sign in again", "configRestoreSignIn()", { kind: "pri" }) : UI.cancel("Close"))}
+  </div>`);
+  if (!users) { resetPaint(); configRefreshSettings(); }
+};
+
+window.configRestoreSignIn = () => window.location.reload();
 
 function configRefreshSettings() {
   if (STATE.view === "settings" && window.viewSettings) viewSettings();

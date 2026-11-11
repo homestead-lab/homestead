@@ -100,7 +100,9 @@ class ConfigBackupTests(unittest.TestCase):
         self.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Changed"}'})
         now = self.kube.object(path("configmaps", "homestead-ipam"))["metadata"]["resourceVersion"]
         result = config.restore(doc, "correct horse", ["ipam"])
+        self.assertTrue(result["ok"])
         self.assertEqual(["ipam"], result["restored"])
+        self.assertEqual([("ipam", "restored")], [(r["id"], r["state"]) for r in result["parts"]])
         self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
         self.assertEqual(base64.b64encode(b"unifi-key").decode(), self.data("secrets", "homestead-unifi")["key"])
         self.assertEqual('{"site_name":"Changed"}', self.data("configmaps", "homestead-settings")["settings.json"])
@@ -124,12 +126,67 @@ class ConfigBackupTests(unittest.TestCase):
         result = config.restore(doc, "correct horse", ["portal"])
         self.assertEqual([], result["restored"])
         self.assertEqual(["Portal"], result["skipped"])
+        self.assertEqual([("portal", "skipped")], [(r["id"], r["state"]) for r in result["parts"]])
         self.assertEqual({"portal.json": "{}"}, self.data("configmaps", "homestead-portal"))
 
     def test_nothing_chosen_is_refused(self):
         doc = config.backup(None, "correct horse")
         with self.assertRaises(ValueError):
             config.restore(doc, "correct horse", [])
+
+    def states(self, result):
+        return [(r["id"], r["state"]) for r in result["parts"]]
+
+    def test_a_failed_write_stops_the_restore_and_says_what_each_part_did(self):
+        doc = config.backup(None, "correct horse")
+        self.put("configmaps", "homestead-settings", {"settings.json": '{"site_name":"Changed"}'})
+        self.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[]}'})
+        self.put("secrets", "homestead-auth", {"store.json": "bmV3"})
+        # The second object of IP addresses changed meanwhile: its PUT is refused.
+        self.kube.fail(path("secrets", "homestead-unifi"), 409, method="PUT")
+        result = config.restore(doc, "correct horse", ["settings", "ipam", "portal", "users"])
+        self.assertFalse(result["ok"])
+        self.assertEqual([("settings", "restored"), ("ipam", "failed"), ("portal", "not_started"),
+                          ("users", "not_started")], self.states(result))
+        self.assertEqual(["settings"], result["restored"])
+        failed = result["parts"][1]
+        self.assertIn("partly restored", failed["detail"])
+        self.assertIn("injected failure", failed["detail"], "the full error follows the cause")
+        self.assertIn("IP addresses", result["detail"])
+        # What was written stays written; nothing after the failed part is touched.
+        self.assertEqual('{"site_name":"Loft rack"}', self.data("configmaps", "homestead-settings")["settings.json"])
+        self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
+        self.assertEqual({"store.json": "bmV3"}, self.data("secrets", "homestead-auth"))
+        self.assertFalse([w for w in self.kube.writes if w[1] == path("secrets", "homestead-auth")])
+        # The caches are cleared for every part written, the partly written one too.
+        self.assertEqual(["settings", "ipam"], self.restored)
+
+    def test_a_write_that_times_out_fails_its_part(self):
+        doc = config.backup(None, "correct horse")
+        self.kube.fail(path("configmaps", "homestead-settings"), TimeoutError("timed out"))
+        result = config.restore(doc, "correct horse", ["settings", "ipam"])
+        self.assertFalse(result["ok"])
+        self.assertEqual([("settings", "failed"), ("ipam", "not_started")], self.states(result))
+        self.assertIn("timed out", result["parts"][0]["detail"])
+        self.assertEqual(["settings"], self.restored)
+
+    def test_an_error_after_the_restore_does_not_hide_what_was_restored(self):
+        def broken(parts):
+            raise RuntimeError("cache unavailable")
+        config.bind(K.kget, K.ksend, "2.8.212", PARTS, after_restore=broken)
+        doc = config.backup(None, "correct horse")
+        self.put("configmaps", "homestead-ipam", {"ipam.json": '{"subnets":[]}'})
+        result = config.restore(doc, "correct horse", ["ipam"])
+        self.assertFalse(result["ok"])
+        self.assertEqual([("ipam", "restored")], self.states(result))
+        self.assertIn("cache unavailable", result["detail"])
+        self.assertEqual('{"subnets":[1]}', self.data("configmaps", "homestead-ipam")["ipam.json"])
+
+    def test_an_unknown_part_is_refused_before_anything_is_written(self):
+        doc = config.backup(None, "correct horse")
+        with self.assertRaises(ValueError):
+            config.restore(doc, "correct horse", ["settings", "nothing-like-this"])
+        self.assertFalse([w for w in self.kube.writes if w[0] != "GET"])
 
     def test_another_file_is_not_mistaken_for_a_backup(self):
         with self.assertRaises(ValueError):
