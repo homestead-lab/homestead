@@ -45,10 +45,12 @@ NODE_DOWN_VALUES = ("do-nothing", "delete-statefulset-pod", "delete-deployment-p
 NODE_DOWN_RELEASE = "delete-both-statefulset-and-deployment-pod"
 NODE_DOWN_MARK = "homestead.io/node-down-set"
 # Network shares (SMB and NFS shares on ReadWriteMany volumes) are served by a
-# share-manager pod on one host. Without fast failover, a share whose host
-# fails comes back only after Kubernetes stops waiting for the host - several
-# minutes; with it, Longhorn notices through a lease and moves it in about a
-# minute.
+# share-manager pod on one host. Without fast failover, Longhorn moves a share
+# whose host fails once Kubernetes marks the host NotReady (its share-manager
+# controller force deletes the pod; no pod eviction, no node-down policy, no
+# app toleration is waited for), about a minute after the host goes silent;
+# the share is usually served again two or three minutes after it (pod start,
+# attach, NFS grace). With it, Longhorn notices sooner through a lease.
 RWX_FAST = "rwx-volume-fast-failover"
 RWX_FAST_MARK = "homestead.io/rwx-fast-failover-set"
 # How long Longhorn waits for a failed host to come back before it copies that

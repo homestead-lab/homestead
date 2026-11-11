@@ -67,3 +67,30 @@ test("the demo has an app with a time of its own, so the dialog audit shows that
   const demo = fs.readFileSync("web/js/demo.js", "utf8");
   assert.match(demo, /failover: "custom", failover_seconds: \d+/);
 });
+
+/* A shared volume (a network share, an app's ReadWriteMany volume) is served
+   by Longhorn's share manager from one host. Longhorn moves it once Kubernetes
+   marks that host not ready, whatever the apps' failover choice, and without
+   waiting for Kubernetes' five minutes. The words pin that fact, not a sentence. */
+test("the failover choices that keep an app on its host say they do not keep its shared volumes there", () => {
+  const { FAILOVER_HELP } = choice();
+  for (const mode of ["wait", "slow"]) {
+    assert.match(FAILOVER_HELP[mode], /shared volumes/i, mode);
+    assert.match(FAILOVER_HELP[mode], /once Kubernetes marks the host as not ready/, mode);
+  }
+});
+
+test("the network share tip and wiki name the real trigger and count from one moment", () => {
+  const allocation = fs.readFileSync("web/js/views-storage-allocation.js", "utf8");
+  const tip = allocation.split("\n").find(line => line.includes("Restart network shares quickly after a host failure"));
+  assert.ok(tip, "the setting is still there");
+  const wiki = fs.readFileSync("docs/wiki/Network-shares.md", "utf8");
+  const failure = require("./helpers/between")(wiki, "### After a host failure", "### Partial SMB service").replace(/\s+/g, " ");
+  for (const [where, text] of [["tip", tip], ["wiki", failure]]) {
+    assert.doesNotMatch(text, /several minutes|Kubernetes stops waiting/, where);
+    assert.match(text, /once Kubernetes marks the host as not ready/, where);
+    // Every time given counts from the host going silent, not from a taint or a detection.
+    const clocks = [...text.matchAll(/(?:seconds?|minutes?) (?:after|of) ([a-z' ]{0,40}?)(?=[.,])/g)].map(m => m[1]);
+    for (const clock of clocks) assert.match(clock, /^(the|its) host stops answering$|^a failure$/, `${where}: "${clock}"`);
+  }
+});

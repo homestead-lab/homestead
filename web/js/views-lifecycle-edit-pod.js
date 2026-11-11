@@ -189,8 +189,8 @@ window.editLanToggle = async () => {
 const FAILOVER_WORDS = { move: "Move after 15 seconds", slow: "Move after 90 seconds", wait: "Wait for its host", default: "Kubernetes default (5 min)" };
 const FAILOVER_HELP = {
   move: "Starts on another host about 15 seconds after its host stops answering.",
-  slow: "Starts on another host about 90 seconds after its host stops answering, so a short network drop does not move it.",
-  wait: "Waits for its host to come back. For apps tied to that host's hardware.",
+  slow: "Starts on another host about 90 seconds after its host stops answering, so a short network drop does not move it. This choice does not keep shared volumes on the host. Longhorn takes them off it once Kubernetes marks the host as not ready.",
+  wait: "Waits for its host to come back. For apps tied to that host's hardware. This choice does not keep shared volumes on the host. Longhorn takes them off it once Kubernetes marks the host as not ready.",
   default: "Kubernetes moves it after five minutes.",
   custom: "A time set outside Homestead. It is kept until another choice is saved.",
 };

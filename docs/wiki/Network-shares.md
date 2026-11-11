@@ -148,9 +148,13 @@ their own modified date, not the date they were deleted.
 Each shared volume is served from one host by Longhorn's share manager. With
 **Restart network shares quickly after a host failure** on (under
 **Settings → Hardware and storage**, and on by default), Longhorn moves it to
-another host within about a minute. When it is off, the share moves only after
-Kubernetes stops waiting for the host, which takes several minutes. The SMB server itself restarts on another
-host about 15 seconds after its host stops responding. A volume that is
+another host within about a minute. When it is off, Longhorn starts moving the
+share once Kubernetes marks the host as not ready, about a minute after the host
+stops answering. The share is usually back two or three minutes after the host
+stops answering. An app's choice for when its host fails does not keep the share
+on the host, but an app on the failed host still follows its own choice. The SMB
+server itself moves to another host on its own failover time, which also starts
+once Kubernetes marks the host as not ready. A volume that is
 rebuilding a copy stays readable and writable, so shares keep working during a
 rebuild.
 
