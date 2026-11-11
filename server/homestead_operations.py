@@ -748,6 +748,50 @@ def _vm_disk_import(item):
     return "running", progress, message
 
 
+# A backup Longhorn has not started (no state yet, New, Pending, or in
+# progress with nothing uploaded) ends after this long with no progress: a
+# queue behind Longhorn's concurrent-backup limit fits, and a target that
+# cannot be reached is seen the same day. One uploading, however slowly, runs on.
+BACKUP_START_LIMIT = 12 * 3600
+_NOT_STARTED = {"": "Longhorn has not given it a state yet", "new": "Longhorn still reports it as new",
+                "pending": "Longhorn still reports it as pending",
+                "inprogress": "Longhorn reports it in progress with nothing uploaded"}
+_clock = time.time   # a seam for the tests
+
+
+def _backup_waited(ref):
+    """How long this backup has waited to start with the jobs loop looking
+    throughout. A gap in looking (Homestead down, the clock stepped) says
+    nothing about Longhorn, so the wait starts again, as for failed reads
+    (homestead_job_errors.GAP). The last look is saved at most once per
+    LAST_EVERY."""
+    now = _clock()
+    wait = ref.get("waiting_since") if isinstance(ref.get("waiting_since"), dict) else {}
+    since, last = wait.get("since"), wait.get("last")
+    if last is None or since is None or last > now or now - last > ERRORS.GAP:
+        since = last = now
+    elif now - last >= ERRORS.LAST_EVERY:
+        last = now
+    ref["waiting_since"] = {"since": since, "last": last}
+    return now - since
+
+
+def _backup_not_started(ref, state, progress):
+    """The failure for a backup that did not start in time, or None. Its
+    snapshot is not handed to the helper sweep (no snapshot_pending): Longhorn
+    may still start the Backup later and read it, and nothing here deletes the
+    Backup, so the snapshot stays until a person removes it."""
+    if state not in _NOT_STARTED or (state == "inprogress" and progress > 0):
+        ref.pop("waiting_since", None)
+        return None
+    if _backup_waited(ref) < BACKUP_START_LIMIT:
+        return None
+    kept = f", so its snapshot {ref['snapshot']} is kept" if ref.get("snapshot") else ""
+    return ("failed", progress,
+            f"The backup did not start within {BACKUP_START_LIMIT // 3600} hours. {_NOT_STARTED[state]}. "
+            f"Longhorn may still start it later{kept}. Check that the backup target can be reached, then back up again.")
+
+
 def _backup(item):
     ref = item["ref"]
     obj = kget(f"/apis/longhorn.io/v1beta2/namespaces/{ref['namespace']}/backups/{ref['name']}")
@@ -765,7 +809,7 @@ def _backup(item):
         return "succeeded", 100, "Backup complete"
     if state in ("error", "failed", "unknown"):
         return "failed", progress, status.get("error") or f"Longhorn reports this backup as {state} and gave no detail"
-    return "running", progress, f"Backup {state or 'pending'}"
+    return _backup_not_started(ref, state, progress) or ("running", progress, f"Backup {state or 'pending'}")
 
 
 def _volume_restore(item):

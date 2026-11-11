@@ -598,5 +598,85 @@ class BackupJobEndsTests(unittest.TestCase):
         self.assertEqual([], self.kube.writes)
 
 
+class BackupThatNeverStartsTests(unittest.TestCase):
+    """A backup Longhorn never starts ends after BACKUP_START_LIMIT with no
+    progress, counted only while the jobs loop was looking."""
+
+    STEP = 4 * 60   # one look per 4 minutes: under the gap that restarts a wait
+    job_at = BackupJobEndsTests.job_at
+
+    def setUp(self):
+        BackupJobEndsTests.setUp(self)
+        self.now = 1_800_000_000.0
+        self.enterContext(mock.patch.object(operations, "_clock", lambda: self.now, create=True))
+
+    def watch(self, name, seconds):
+        """The jobs loop looks at the job every STEP for this long; its last look."""
+        for _ in range(int(seconds // self.STEP)):
+            self.now += self.STEP
+            operations.list_operations()
+        return self.find(name)
+
+    def find(self, name):
+        return next(job for job in operations.list_operations() if job["resource"]["name"] == name)
+
+    def moved(self, name, **status):
+        """Longhorn gives the Backup a new status."""
+        path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups/{name}"
+        backup = self.kube.object(path)
+        backup["status"] = status
+        self.kube.discard(path)
+        self.kube.add(backup)
+
+    def test_a_backup_with_no_progress_ends_after_twelve_hours_naming_what_longhorn_says(self):
+        self.assertEqual(12 * 3600, getattr(operations, "BACKUP_START_LIMIT", None))
+        for status, says in (({}, "has not given it a state"), ({"state": ""}, "has not given it a state"),
+                             ({"state": "New"}, "as new"), ({"state": "Pending"}, "as pending"),
+                             ({"state": "InProgress", "progress": 0}, "nothing uploaded")):
+            with self.subTest(status=status):
+                name = self.job_at(**status)["resource"]["name"]
+                self.assertEqual("running", self.watch(name, 12 * 3600 - self.STEP)["status"])
+                job = self.watch(name, self.STEP)
+                self.assertEqual("failed", job["status"])
+                self.assertIn("did not start within 12 hours", job["message"])
+                self.assertIn(says, job["message"])
+                self.assertIn("Check that the backup target can be reached", job["message"])
+        self.assertEqual([], self.kube.writes, "ending the job changes nothing in Longhorn")
+
+    def test_a_backup_uploading_however_slowly_keeps_running(self):
+        name = self.job_at(state="InProgress", progress=3)["resource"]["name"]
+        self.assertEqual("running", self.watch(name, 24 * 3600)["status"])
+
+    def test_the_wait_starts_again_once_the_backup_moved(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.watch(name, 11 * 3600)
+        self.moved(name, state="InProgress", progress=20)
+        self.watch(name, 2 * 3600)
+        self.moved(name, state="Pending")
+        self.assertEqual("running", self.watch(name, 11 * 3600)["status"])
+
+    def test_time_no_one_was_looking_does_not_count(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.watch(name, 11 * 3600)
+        self.now += 2 * 3600   # Homestead down: no look in between
+        self.assertEqual("running", self.watch(name, 12 * 3600)["status"], "the wait started again at the first look back")
+        self.assertEqual("failed", self.watch(name, self.STEP)["status"])
+
+    def test_a_timed_out_backup_does_not_hand_its_snapshot_to_the_sweep(self):
+        """Longhorn may still start the backup later and read that snapshot,
+        so it is kept and the message names it."""
+        name = self.job_at(state="Pending")["resource"]["name"]
+        with operations.transaction() as t:
+            items = t.items
+            row = next(item for item in items if item["ref"].get("name") == name)
+            row["ref"].update(snapshot="hs-backup-1", snapshot_uid="uid-1")
+            t.save(items)
+        job = self.watch(name, 12 * 3600)
+        self.assertEqual("failed", job["status"])
+        self.assertIn("snapshot hs-backup-1 is kept", job["message"])
+        stored = next(item for item in operations.stored() if item["id"] == job["id"])
+        self.assertNotIn("snapshot_pending", stored["ref"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -509,6 +509,22 @@ class BackUpNowTests(BoundToFake):
         self.assertEqual(1, sum(1 for m, p, *_ in kube.writes if m == "DELETE" and "/snapshots/" in p))
         self.assertEqual("succeeded", self.job(item["id"])["status"])
 
+    def test_a_backup_that_never_started_keeps_its_snapshot_after_its_job_ends(self):
+        """Its job ends after OPS.BACKUP_START_LIMIT, but Longhorn may still
+        start the Backup later and read that snapshot: the sweep leaves it."""
+        self.fake()
+        result, item = self.start()
+        self.finish(result, state="Pending")
+        now = [float(NOW)]
+        self.enterContext(mock.patch.object(OPS, "_clock", lambda: now[0], create=True))
+        self.enterContext(mock.patch.object(OPS, "BACKUP_START_LIMIT", 600, create=True))
+        for _ in range(3):   # looks at 0, 4 and 8 minutes; the limit is 10
+            self.assertEqual("running", self.resolve(item["id"]))
+            now[0] += 240
+        self.assertEqual("failed", self.resolve(item["id"]))
+        self.sweep()
+        self.assertEqual([result["snapshot"]], self.snapshots())
+
 
 # ---------------------------------------------------------- failed VM create
 K3S_BARE = {"harvester": False, "cdi": False}
