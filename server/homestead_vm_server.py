@@ -1,8 +1,7 @@
 """The VM and logo code that lived in server.py (track 1, part 5): what a new
-VM may be created with and creating one at its address, VM power, a k3s
-cluster's VMs, VM image disks, the VM store loop, VM logos, the logo
-choices and Helm charts' logos, and the logo routes server.py's handler
-answered.
+VM may be created with, VM power, VM image disks, the VM store loop, VM
+logos, the logo choices and Helm charts' logos, and the logo routes
+server.py's handler answered.
 
 server.py binds what it still owns through bind_routes(): each helper in
 ROUTE_NEEDS is looked up in server.py when it is called, or, once moved
@@ -11,7 +10,6 @@ reaches it here too; each name in VALUES is server.py's own value (the same
 object, for _cache)."""
 import time
 import homestead_api_v1 as API_V1
-import homestead_cancel as CANCEL
 import homestead_deploy_appstore as APPSTORE
 import homestead_helm as HELM
 import homestead_icons as ICONS
@@ -30,7 +28,6 @@ import homestead_routes as MODULE_ROUTES
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_vm_hardware as VM_HARDWARE
 import homestead_vm_review as VM_REVIEW
-import homestead_vms as VMS
 import homestead_vmstore as VMSTORE
 import homestead_workloads as WORKLOADS
 
@@ -144,26 +141,6 @@ def kubevirt_gates():
                    .get("featureGates") or []))
 
 
-def create_vm_with_address(cfg):
-    """A VM, and - when it has an address of its own - that address checked
-    as free first and recorded in IP addresses after, under the VM's name."""
-    static = cfg.get("static_ip") or None
-    if static:
-        problem = vm_address_problem(str(static.get("address") or "").strip())
-        if problem:
-            raise ValueError(problem)
-    result = VM_CREATE.create_vm(cfg, PLATFORM.detect(), vm_default_class())
-    if result.get("address"):
-        try:
-            IPAM.save_record({"ip": result["address"], "name": cfg.get("name", ""), "kind": "static",
-                              "category": "server", "mac": result.get("mac", ""), "owner": "homestead",
-                              "note": f"VM {cfg.get('namespace') or 'lab'}/{cfg.get('name', '')}"
-                                      + (f" · {cfg['ipam_note']}" if cfg.get("ipam_note") else "")})
-        except Exception:
-            pass
-    return result
-
-
 def api_vm_power(ns, name, action):
     """Start, stop, restart, force off or reset a VM for /api/v1 (and MQTT): stop
     and force off as the app does; start, restart and reset through the same
@@ -193,13 +170,6 @@ def api_vm_power(ns, name, action):
     _cache.pop("vms", None)
     job = (result.get("operation") or {}).get("id") if isinstance(result, dict) else None
     return {"warnings": list(plan.get("warnings") or []), "job": job}
-
-
-def _remove_cluster_vm(ns, node):
-    """One VM of a k3s cluster whose build stopped part-way: gone with its
-    disks, and its address free again."""
-    VMS.delete(ns, node["name"], with_disks=True)
-    CANCEL.forget_addresses({node["address"]: node["name"]})
 
 
 def _vm_image_disks():

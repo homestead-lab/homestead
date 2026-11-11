@@ -243,6 +243,13 @@ class VMBatchJournalTests(unittest.TestCase):
     def test_missing_approval_or_store_failure_sends_nothing(self):
         with self.assertRaises(ValueError):
             cluster.commit(prepared(), ops, create_one=create_one, review={}, send=self.send)
+        made = []
+        for review, send in ((None, None), (None, self.send), (self.body, None)):
+            with self.subTest(review=review, send=send), self.assertRaisesRegex(ValueError, "approval and resource writer"):
+                cluster.commit(prepared(), ops, create_one=lambda cfg, **kw: made.append(cfg) or create_one(cfg, self.send),
+                               review=review, send=send)
+        self.assertEqual([], made)
+        self.assertEqual([], ops.stored())
         with store_writes(ops, fail=OSError("disk")), self.assertRaises(OSError):
             self.dispatch()
         self.assertEqual([], self.sent)

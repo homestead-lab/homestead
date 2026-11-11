@@ -23,7 +23,6 @@ import re
 import secrets
 import socket
 import time
-from contextlib import nullcontext
 import homestead_vm_power_job as VM_POWER
 import homestead_vm_write as VM_WRITE
 import homestead_k3s_health as HEALTH
@@ -46,14 +45,12 @@ SETUPS = {
 START_LIMIT = 45 * 60
 
 kget = None
-create = None       # makes one VM, with its address checked and recorded
 check = None        # why an address cannot be a VM's, or ""
-remove = None       # legacy binding only; failed batches must never call it
 
 
-def bind(_kget, _create, _check, _remove=None):
-    global kget, create, check, remove
-    kget, create, check, remove = _kget, _create, _check, _remove
+def bind(_kget, _check):
+    global kget, check
+    kget, check = _kget, _check
 
 
 def review(cfg):
@@ -208,13 +205,11 @@ def prepare(cfg, token=None, guest_checks=False):
     return {"namespace": ns, "plan": built, "configs": configs, **({"guest_health": health} if health else {})}
 
 
-def start(cfg, ops):
-    return commit(prepare(cfg), ops)
-
-
-def commit(prepared, ops, *, create_one=None, before_node=None, review=None, send=None):
+def commit(prepared, ops, *, create_one, review, send, before_node=None):
     """Journal before writes; stop on uncertainty and retain every partial VM.
 
+    Only reviewed dispatch builds a batch: every write goes through the job's
+    resource writer, so a refused create's clean-up is on record too.
     Only public resource identities/phase information enter the operation.
     Request bodies, login passwords and join tokens remain in memory only.
     before_node is the fresh batch-admission hook, not an automatic retry.
@@ -224,16 +219,11 @@ def commit(prepared, ops, *, create_one=None, before_node=None, review=None, sen
             any(node["name"] != cfg.get("name") or cfg.get("namespace") != ns
                 for node, cfg in zip(built["nodes"], prepared["configs"]))):
         raise ValueError("The prepared batch of VMs is incomplete or inconsistent, so nothing was created")
-    create_one = create_one or create
-    journal = {}
-    if review is not None:
-        token = review.get("capacity_token")
-        if not isinstance(token, str) or not token or not callable(send):
-            raise ValueError("Reviewed VM batch requires its approval and resource writer")
-        journal = {"dispatch_protocol": 2, "writes": [], "review_digest": hashlib.sha256(token.encode()).hexdigest(),
-                   "review_expires": int(token.split(".", 1)[0])}
-    elif send is not None:
-        raise ValueError("A batch resource writer requires reviewed dispatch")
+    token = review.get("capacity_token") if isinstance(review, dict) else None
+    if not isinstance(token, str) or not token or not callable(send) or not callable(create_one):
+        raise ValueError("Reviewed VM batch requires its approval and resource writer")
+    journal = {"dispatch_protocol": 2, "writes": [], "review_digest": hashlib.sha256(token.encode()).hexdigest(),
+               "review_expires": int(token.split(".", 1)[0])}
     operation = ops.start("k3s-cluster", f"k3s cluster {built['name']}",
                           {"kind": "VirtualMachine", "name": built["nodes"][0]["name"], "namespace": ns}, "/vms",
                           {"namespace": ns, "name": built["name"], "nodes": copy.deepcopy(built["nodes"]),
@@ -242,8 +232,8 @@ def commit(prepared, ops, *, create_one=None, before_node=None, review=None, sen
                            "created": [], "attempted": "", **journal,
                            **({"guest_health": copy.deepcopy(prepared["guest_health"])} if prepared.get("guest_health") else {})},
                           "Checking batch before creating VMs")
-    with VM_POWER.worker_lock(operation["id"], ops) if journal else nullcontext():
-        writer = VM_WRITE.ResourceWriter(send, VM_WRITE.operation_recorder(ops, operation["id"])) if journal else None
+    with VM_POWER.worker_lock(operation["id"], ops):
+        writer = VM_WRITE.ResourceWriter(send, VM_WRITE.operation_recorder(ops, operation["id"]))
         return _commit_nodes(prepared, ops, operation, create_one, before_node, writer)
 
 
@@ -260,21 +250,19 @@ def _commit_nodes(prepared, ops, operation, create_one, before_node, writer):
             # not proof that this VM, its claims or its Secret were not made.
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
                              f"Creating {node['name']}. Waiting for Kubernetes to confirm it.", attempted=node["name"])
-            result = create_one(copy.deepcopy(vm), send=writer) if writer else create_one(copy.deepcopy(vm))
-            if writer:
-                writer.check()  # ownership warnings cannot hide uncertain writes
+            result = create_one(copy.deepcopy(vm), send=writer)
+            writer.check()  # ownership warnings cannot hide uncertain writes
             identity = (result or {}).get("vm_identity") or {}
             if (identity.get("namespace") != ns or identity.get("name") != node["name"] or
                     not identity.get("uid") or not identity.get("resourceVersion")):
                 raise ValueError("VM creation identity was not returned")
-            if writer:
-                with ops.transaction() as t:
-                    current = next(row for row in t.items if row["id"] == operation["id"])
-                    receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
-                        "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
-                    if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {
-                            key: identity[key] for key in ("uid", "resourceVersion")}):
-                        raise ValueError("VM result does not match its verified creation receipt")
+            with ops.transaction() as t:
+                current = next(row for row in t.items if row["id"] == operation["id"])
+                receipts = [entry for entry in current["ref"]["writes"] if entry["resource"] == {
+                    "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "namespace": ns, "name": node["name"]}]
+                if (not receipts or receipts[-1]["phase"] != "accepted" or receipts[-1]["identity"] != {
+                        key: identity[key] for key in ("uid", "resourceVersion")}):
+                    raise ValueError("VM result does not match its verified creation receipt")
             made.append({"name": node["name"], "identity": identity})
             ops.record_phase(operation["id"], "provisioning", int(10 * len(made) / len(built["nodes"])),
                              f"Created {node['name']}. Its resources are kept.", created=copy.deepcopy(made), attempted="")
