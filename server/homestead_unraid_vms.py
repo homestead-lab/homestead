@@ -1119,8 +1119,11 @@ def _journalled(ref, item):
     return send
 
 
-class MayExist(ValueError):
-    """A VM create cut off once the VM was sent: the VM may exist. Its words are the whole ending."""
+# The label on an imported VM that names the import job whose create made it:
+# the job's id, written into a copy of vm_cfg at the create (status, phase
+# "convert"). A create whose reply was lost has no uid to compare, so this is
+# how a later round proves the VM there is this import's own.
+IMPORT_JOB_LABEL = NAMES.key("import-job")
 
 
 def _vm_sent(ref):
@@ -1132,30 +1135,57 @@ def _named(entry):
     return entry["path"].rsplit("/", 1)[-1]
 
 
-def _left(ref):
+def _left(ref, but=None):
     """What this try created and is still there, as far as its record shows."""
-    return ", ".join(_named(e) for e in ref.get("vm_writes") or [] if e["phase"] in ("accepted", "intent", "uncertain"))
+    return ", ".join(_named(e) for e in ref.get("vm_writes") or []
+                     if e is not but and e["phase"] in ("accepted", "intent", "uncertain"))
+
+
+def _this_imports(found, sent, item):
+    """Whether the VM found is the one this import's create made: the uid its
+    POST answered with, or, when the answer was lost, this job's id on it. A VM
+    of the same name without either is somebody else's."""
+    meta = found.get("metadata") or {}
+    return bool(sent.get("uid") and meta.get("uid") == sent["uid"]) or \
+        (meta.get("labels") or {}).get(IMPORT_JOB_LABEL) == item["id"]
+
+
+def _carries_this_job(ref, item):
+    """Whether the import's VM is there with this job's id on it. A read that
+    fails raises: the round is asked again, and nothing is ended."""
+    found = KUBE.get_optional(f"/apis/kubevirt.io/v1/namespaces/{ref['namespace']}/virtualmachines/{ref['name']}",
+                              read=kget)
+    return isinstance(found, dict) and _this_imports(found, {}, item)
 
 
 def _after_cut_off(ref, item):
-    """An earlier try of the VM create was cut off part way. Once the VM itself
-    was sent it may have been created, so everything is kept and a person
-    checks it. Before that, what the try created is removed, each by the uid
-    its POST answered with (one created again under the name since is not
-    this one's); one sent with no answer may be there, so it is kept. Raises
-    ValueError, the import's refused ending, when anything is kept."""
+    """An earlier try of the VM create was cut off part way, or its reply was
+    lost. Once the VM itself was sent, the VM of that name is read: when it is
+    this import's (_this_imports), the reply was lost and not the VM, and True
+    says the import is done. When there is none, nothing was made and the
+    create is sent again: a first POST applied late then gets a 409, which is
+    not a definite answer, and the next round finds it. A VM of that name that
+    is not this import's is never adopted: the import ends, leaving it. What
+    the try created before the VM is removed, each by the uid its POST answered
+    with (one created again under the name since is not this one's); one sent
+    with no answer may be there, so it is kept. Raises ValueError, the import's
+    refused ending, when anything is kept."""
     journal = ref.get("vm_writes")
     if not journal:
-        return
-    # A VM refused outright made no VM; one sent with any other outcome may have.
+        return False
+    refusal = ""
     vm = _vm_sent(ref)
     if vm:
-        how = "Kubernetes accepted" if vm["phase"] in ("accepted", "removed") else "was sent with no answer"
+        # A read that fails raises: the round is asked again, and nothing is sent.
+        found = KUBE.get_optional(vm["path"], read=kget)
+        if found is not None and _this_imports(found, vm, item):
+            return True
         name = _named(vm)
-        said = (f"The VM create was cut off after Kubernetes accepted {name}." if how == "Kubernetes accepted" else
-                f"The VM create was cut off after {name} was sent with no answer.")
-        raise MayExist(f"{said} {name} may exist, so it is kept with everything created for it. "
-                       "Check it under Virtual machines.")
+        if found is not None:
+            refusal = f"A VM named {name} already exists, and this import did not create it, so it is left as it is"
+        elif vm["phase"] in ("accepted", "removed"):
+            # Made, then removed by someone: not made again behind their back.
+            refusal = f"{name} was created, then removed before the import finished"
     for entry in journal:
         if entry["phase"] != "accepted" or not entry.get("uid"):
             continue
@@ -1170,11 +1200,15 @@ def _after_cut_off(ref, item):
             if error.code == 409:   # created again under the name since: not this try's
                 entry["phase"] = "removed"
         OPS.checkpoint(item)
-    left = _left(ref)
+    left = _left(ref, but=vm)
     ref.pop("vm_writes", None)
+    if refusal:
+        raise ValueError(refusal + (f". {left} that this try created may be there, so "
+                                    f"{'it is' if ', ' not in left else 'they are'} kept" if left else ""))
     if left:
         raise ValueError(f"The VM create was cut off part way. {left} may be what it created, so "
                          f"{'it is' if ', ' not in left else 'they are'} kept. Check before creating the VM")
+    return False
 
 
 # The waits with a limit, by phase: a pause there counts toward it (#1329).
@@ -1354,36 +1388,42 @@ def status(item):
         except ValueError as error:
             raise RuntimeError(f"The cluster's platform could not be read, so the VM is not created yet ({error})") from None
         try:
-            # An earlier try cut off part way (a restart) left a record of what it sent.
-            _after_cut_off(ref, item)
-            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), found, "")
-            IMP._recheck_vm_creation(prepared)
-            ref["vm_writes"] = []
-            try:
-                IMP.commit_vm(prepared, send=_journalled(ref, item))
-            except urllib.error.HTTPError as error:
-                # Refused: commit_vm removed what it made for the VM, and the
-                # next round would only make and remove it again. Anything else
-                # may have made the VM, and is asked again as before.
-                if not KUBE.definite_refusal(error.code):
-                    raise
-                error.close()
-                left = _left(ref)
-                raise ValueError(f"Kubernetes refused it (HTTP {error.code})"
-                                 + (f". {left} that this try created could not be removed, so "
-                                    f"{'it is' if ', ' not in left else 'they are'} kept" if left else "")) from None
+            # An earlier try cut off part way (a restart, a lost reply) left a record of what it sent.
+            if not _after_cut_off(ref, item):
+                # Stamped with this job's id, so a lost reply can be told from somebody else's VM.
+                cfg = dict(ref["vm_cfg"], labels={**(ref["vm_cfg"].get("labels") or {}), IMPORT_JOB_LABEL: item["id"]})
+                prepared = IMP.prepare_vm(cfg, found, "")
+                IMP._recheck_vm_creation(prepared)
+                ref["vm_writes"] = []
+                try:
+                    IMP.commit_vm(prepared, send=_journalled(ref, item))
+                except urllib.error.HTTPError as error:
+                    # Refused: commit_vm removed what it made for the VM, and the
+                    # next round would only make and remove it again. Anything else
+                    # may have made the VM: the round is asked again, and the next
+                    # one reads what is there before sending anything (_after_cut_off).
+                    if not KUBE.definite_refusal(error.code):
+                        raise
+                    error.close()
+                    left = _left(ref)
+                    raise ValueError(f"Kubernetes refused it (HTTP {error.code})"
+                                     + (f". {left} that this try created could not be removed, so "
+                                        f"{'it is' if ', ' not in left else 'they are'} kept" if left else "")) from None
         except ValueError as error:
-            ref.pop("vm_writes", None)
-            # The disks are whole: keep them, and say how to finish by hand.
-            disks = ", ".join(d["dv"] for d in ref["disks"])
-            detail = (f"{error} The disks are kept as {disks}." if isinstance(error, MayExist) else
-                      f"The disks arrived, but the VM could not be created: {error}. They are kept as "
-                      f"{disks}. Create the VM from them under Import.")
-            if ref.get("cdi_cleanup"):
-                ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
-                return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
-            ref["phase"] = "failed"
-            return "failed", 100, detail
+            # A first create whose reply was lost can land late, after the read
+            # in _after_cut_off: then a check above says the VM exists. A VM of
+            # that name carrying this job's id is this import's, so it is done.
+            if not _carries_this_job(ref, item):
+                ref.pop("vm_writes", None)
+                # The disks are whole: keep them, and say how to finish by hand.
+                disks = ", ".join(d["dv"] for d in ref["disks"])
+                detail = (f"The disks arrived, but the VM could not be created: {error}. They are kept as "
+                          f"{disks}. Create the VM from them under Import.")
+                if ref.get("cdi_cleanup"):
+                    ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
+                    return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
+                ref["phase"] = "failed"
+                return "failed", 100, detail
         ref.pop("vm_writes", None)
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
