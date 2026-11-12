@@ -59,7 +59,7 @@ test("values of several containers are named with their container", async () => 
 test("an unread Secret says it could not check, never none, and the save waits for a new review", async () => {
   const w = world({ secret_removed: null });
   await w.c.editReview(body());
-  assert.match(w.shown(), /Homestead could not read this app's Secret\. Which stored values saving deletes is not known\./);
+  assert.match(w.shown(), /Homestead could not read this app's Secret\. Review again to see which stored values the save deletes\./);
   assert.match(w.shown(), /Review changes again/);
   assert.doesNotMatch(w.shown(), /Save changes|Delete \d/);
   w.fields["#editCapacityConfirm"].checked = true;
@@ -89,7 +89,7 @@ test("the storage-copy review names the values, and saves only with their tick",
 test("an unread Secret in the storage-copy review asks for the review again", async () => {
   const w = world({ secret_removed: null, capacity: { ...CAPACITY, copy_helper: { ...CAPACITY } } });
   await w.c.editReview(body());
-  assert.match(w.shown(), /Which stored values saving deletes is not known/);
+  assert.match(w.shown(), /Review again to see which stored values the save deletes/);
   assert.match(w.shown(), /Review changes again/);
   assert.doesNotMatch(w.shown(), /Start data move/);
 });
@@ -101,6 +101,12 @@ test("past four names the rest are counted, and kept or unnamed values read righ
   await w.c.editReview(body());
   assert.match(w.shown(), /Saving deletes 6 values stored in this app's Secret\. Homestead cannot restore them: A_TOKEN, B_TOKEN, C_TOKEN, D_TOKEN and 2 more\./);
   assert.doesNotMatch(w.shown(), /RENAMED_TOKEN/, "a value kept under another name is not lost");
+  const five = world({ secret_removed: names.slice(0, 5).map(name => ({ container: "cloudflared", name })) });
+  await five.c.editReview(body());
+  assert.match(five.shown(), /Homestead cannot restore them: A_TOKEN, B_TOKEN, C_TOKEN, D_TOKEN and 1 more\./);
+  const four = world({ secret_removed: names.slice(0, 4).map(name => ({ container: "cloudflared", name })) });
+  await four.c.editReview(body());
+  assert.match(four.shown(), /Homestead cannot restore them: A_TOKEN, B_TOKEN, C_TOKEN, D_TOKEN\./);
   assert.match(w.shown(), /Delete 6 stored values/);
   const leftover = world({ secret_removed: [{ container: null, name: "cloudflared.LEFTOVER_TOKEN" }, { container: "worker", name: "DB_PASSWORD" }] });
   await leftover.c.editReview(body());

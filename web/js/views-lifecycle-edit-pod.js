@@ -701,7 +701,7 @@ function storageCopyReview(config, capacity, review = {}) {
 const editRemovedLost = review => (review.secret_removed || []).filter(v => !v.value_kept);
 const editRemovedUnread = review => review.secret_removed === null;
 function editRemovedLine(review) {
-  if (editRemovedUnread(review)) return "Homestead could not read this app's Secret. Which stored values saving deletes is not known.";
+  if (editRemovedUnread(review)) return "Homestead could not read this app's Secret. Review again to see which stored values the save deletes.";
   const lost = editRemovedLost(review);
   if (!lost.length) return "";
   const several = new Set(lost.map(v => v.container)).size > 1;
