@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_cancel as CANCEL
 import homestead_disk_setup as DISK_SETUP
 import homestead_helper_sweep as SWEEP
 import homestead_imports as IMPORTS
@@ -509,10 +510,12 @@ class BackUpNowTests(BoundToFake):
         self.assertEqual(1, sum(1 for m, p, *_ in kube.writes if m == "DELETE" and "/snapshots/" in p))
         self.assertEqual("succeeded", self.job(item["id"])["status"])
 
-    def test_a_backup_that_never_started_keeps_its_snapshot_after_its_job_ends(self):
-        """Its job ends after OPS.BACKUP_START_LIMIT, but Longhorn may still
-        start the Backup later and read that snapshot: the sweep leaves it."""
-        self.fake()
+    def test_a_backup_flagged_for_no_progress_keeps_its_snapshot_until_cancel_removes_both(self):
+        """Past OPS.BACKUP_START_LIMIT the job needs attention but runs on:
+        Longhorn may still start the Backup and read its snapshot, so the
+        sweep leaves it. Cancel, through the public path, removes the Backup
+        and the snapshot."""
+        kube = self.fake()
         result, item = self.start()
         self.finish(result, state="Pending")
         now = [float(NOW)]
@@ -521,9 +524,23 @@ class BackUpNowTests(BoundToFake):
         for _ in range(3):   # looks at 0, 4 and 8 minutes; the limit is 10
             self.assertEqual("running", self.resolve(item["id"]))
             now[0] += 240
-        self.assertEqual("failed", self.resolve(item["id"]))
+        self.assertEqual("running", self.resolve(item["id"]))
+        self.assertTrue(self.job(item["id"])["message"].startswith("Needs attention:"))
         self.sweep()
         self.assertEqual([result["snapshot"]], self.snapshots())
+        self.assertIsNotNone(kube.object(f"{BACKUP_LIST}/{result['backup']}"))
+        self.addCleanup(CANCEL.bind, *(getattr(CANCEL, name, None) for name in (
+            "kget", "ksend", "remove_workload", "tidy_restore")))
+        CANCEL.bind(KUBE.kget, KUBE.ksend)
+        # What CANCEL.register sets for a backup, as server.py registers it.
+        self.enterContext(mock.patch.dict(OPS.CANCELLERS, {"backup": (CANCEL.backup_plan, CANCEL.backup_cancel)}))
+        public = next(job for job in OPS.snapshot() if job["id"] == item["id"])
+        self.assertTrue(public["cancellable"])
+        self.assertIn(result["snapshot"], " ".join(OPS.cancel_plan(item["id"])["undo"]))
+        OPS.cancel(item["id"], {}, by="alice")
+        self.assertEqual("cancelled", self.job(item["id"])["status"])
+        self.assertIsNone(kube.object(f"{BACKUP_LIST}/{result['backup']}"))
+        self.assertEqual([], self.snapshots())
 
 
 # ---------------------------------------------------------- failed VM create

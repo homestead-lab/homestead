@@ -599,10 +599,12 @@ class BackupJobEndsTests(unittest.TestCase):
 
 
 class BackupThatNeverStartsTests(unittest.TestCase):
-    """A backup Longhorn never starts ends after BACKUP_START_LIMIT with no
-    progress, counted only while the jobs loop was looking."""
+    """A backup Longhorn does not move for BACKUP_START_LIMIT, counted only
+    while the jobs loop was looking, is marked as needing attention. It keeps
+    running (its guards, its Cancel) and gives Longhorn's own reason."""
 
-    STEP = 4 * 60   # one look per 4 minutes: under the gap that restarts a wait
+    STEP = 4 * 60   # one look per 4 minutes: under the gap that pauses a wait
+    WAIT = "Wait for backup nightly-0 to be deleted"   # a reason Longhorn's backup controller gives
     job_at = BackupJobEndsTests.job_at
 
     def setUp(self):
@@ -628,43 +630,61 @@ class BackupThatNeverStartsTests(unittest.TestCase):
         self.kube.discard(path)
         self.kube.add(backup)
 
-    def test_a_backup_with_no_progress_ends_after_twelve_hours_naming_what_longhorn_says(self):
+    def flagged(self, job):
+        return job["status"] == "running" and job["message"].startswith("Needs attention:")
+
+    def test_a_backup_with_no_progress_is_flagged_after_twelve_hours_with_longhorn_s_reason(self):
         self.assertEqual(12 * 3600, getattr(operations, "BACKUP_START_LIMIT", None))
-        for status, says in (({}, "has not given it a state"), ({"state": ""}, "has not given it a state"),
-                             ({"state": "New"}, "as new"), ({"state": "Pending"}, "as pending"),
-                             ({"state": "InProgress", "progress": 0}, "nothing uploaded")):
+        # Longhorn's states: "" is its new state; Pending carries its reason in status.messages.
+        for status, says in (({}, "Longhorn gives no reason"), ({"state": ""}, "Longhorn gives no reason"),
+                             ({"state": "Pending", "messages": {"ReconcileInfo": self.WAIT}}, f"Longhorn says: {self.WAIT}."),
+                             ({"state": "InProgress", "progress": 0}, "Longhorn gives no reason")):
             with self.subTest(status=status):
                 name = self.job_at(**status)["resource"]["name"]
-                self.assertEqual("running", self.watch(name, 12 * 3600 - self.STEP)["status"])
+                self.assertFalse(self.flagged(self.watch(name, 12 * 3600 - self.STEP)))
                 job = self.watch(name, self.STEP)
-                self.assertEqual("failed", job["status"])
-                self.assertIn("did not start within 12 hours", job["message"])
+                self.assertTrue(self.flagged(job), job["message"])
+                self.assertTrue(job["cancellable"], "Cancel stays offered")
+                self.assertIn("no progress for 12 hours", job["message"])
                 self.assertIn(says, job["message"])
-                self.assertIn("Check that the backup target can be reached", job["message"])
-        self.assertEqual([], self.kube.writes, "ending the job changes nothing in Longhorn")
+                self.assertIn("Cancel removes the waiting backup and its snapshot", job["message"])
+                self.assertNotIn("backup target", job["message"])
+        self.assertEqual([], self.kube.writes, "nothing is written to Longhorn")
 
-    def test_a_backup_uploading_however_slowly_keeps_running(self):
+    def test_it_carries_on_by_itself_once_the_backup_starts(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.assertTrue(self.flagged(self.watch(name, 12 * 3600)))
+        self.moved(name, state="InProgress", progress=10)
+        job = self.watch(name, self.STEP)
+        self.assertEqual(("running", "Backup inprogress"), (job["status"], job["message"]))
+
+    def test_a_backup_uploading_however_slowly_is_not_flagged(self):
         name = self.job_at(state="InProgress", progress=3)["resource"]["name"]
-        self.assertEqual("running", self.watch(name, 24 * 3600)["status"])
+        self.assertFalse(self.flagged(self.watch(name, 24 * 3600)))
 
-    def test_the_wait_starts_again_once_the_backup_moved(self):
+    def test_a_backup_at_zero_percent_whose_upload_size_grows_is_not_flagged(self):
+        name = self.job_at(state="InProgress", progress=0)["resource"]["name"]
+        for hour in range(1, 25):
+            self.moved(name, state="InProgress", progress=0, newlyUploadDataSize=str(hour * 1024 ** 2))
+            job = self.watch(name, 3600)
+        self.assertFalse(self.flagged(job))
+
+    def test_the_wait_starts_again_once_the_backup_moved_even_briefly(self):
         name = self.job_at(state="Pending")["resource"]["name"]
         self.watch(name, 11 * 3600)
         self.moved(name, state="InProgress", progress=20)
-        self.watch(name, 2 * 3600)
+        self.watch(name, self.STEP)
         self.moved(name, state="Pending")
-        self.assertEqual("running", self.watch(name, 11 * 3600)["status"])
+        self.assertFalse(self.flagged(self.watch(name, 11 * 3600)))
 
-    def test_time_no_one_was_looking_does_not_count(self):
+    def test_time_no_one_was_looking_pauses_the_wait(self):
         name = self.job_at(state="Pending")["resource"]["name"]
         self.watch(name, 11 * 3600)
         self.now += 2 * 3600   # Homestead down: no look in between
-        self.assertEqual("running", self.watch(name, 12 * 3600)["status"], "the wait started again at the first look back")
-        self.assertEqual("failed", self.watch(name, self.STEP)["status"])
+        self.assertFalse(self.flagged(self.watch(name, 3600 - 2 * self.STEP)), "the 2 hours down do not count")
+        self.assertTrue(self.flagged(self.watch(name, 3 * self.STEP)), "the 11 hours before still count")
 
-    def test_a_timed_out_backup_does_not_hand_its_snapshot_to_the_sweep(self):
-        """Longhorn may still start the backup later and read that snapshot,
-        so it is kept and the message names it."""
+    def test_a_flagged_backup_does_not_hand_its_snapshot_to_the_sweep(self):
         name = self.job_at(state="Pending")["resource"]["name"]
         with operations.transaction() as t:
             items = t.items
@@ -672,8 +692,7 @@ class BackupThatNeverStartsTests(unittest.TestCase):
             row["ref"].update(snapshot="hs-backup-1", snapshot_uid="uid-1")
             t.save(items)
         job = self.watch(name, 12 * 3600)
-        self.assertEqual("failed", job["status"])
-        self.assertIn("snapshot hs-backup-1 is kept", job["message"])
+        self.assertTrue(self.flagged(job))
         stored = next(item for item in operations.stored() if item["id"] == job["id"])
         self.assertNotIn("snapshot_pending", stored["ref"])
 
