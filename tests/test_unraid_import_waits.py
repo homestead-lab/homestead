@@ -548,6 +548,13 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIn("The disks arrived, but the VM could not be created: Kubernetes refused it (HTTP 422).",
                       job["message"])
 
+    def test_an_ending_from_a_message_with_its_own_full_stop_has_one(self):
+        self.finished_disks()
+        self.imp.commit_vm = mock.Mock(side_effect=ValueError(
+            "A VM or something it needs already exists. Check it and review the creation again."))
+        job = self.look(3)
+        self.assertIn("review the creation again. They are kept as", job["message"])
+
     def walk(self, seconds, every=4 * 60):
         """Time passes with the jobs loop looking every few minutes."""
         while seconds > every:
@@ -724,8 +731,9 @@ class ImportWaitTests(unittest.TestCase):
         self.imp.commit_vm.assert_not_called()
         self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
         self.assertTrue(job["message"].startswith(
-            "The disks arrived, but the VM could not be created: A VM named win11 already exists, and this import "
-            "did not create it, so it is left as it is. They are kept as win11-disk, win11-disk-2."), job["message"])
+            "A VM named win11 already exists, and nothing on it shows that this import created it. It is left as it "
+            "is. The disks are kept as win11-disk, win11-disk-2. Create the VM from them under Import with another "
+            "name."), job["message"])
         self.assertEqual(theirs, self.kube.object(self.VM)["metadata"]["uid"], "never adopted, never replaced")
         self.assertFalse([w for w in self.kube.writes if w[1] == self.VM], "nothing is sent to it")
         self.assertNotEqual("done", self.ref()["phase"])
@@ -754,19 +762,37 @@ class ImportWaitTests(unittest.TestCase):
         self.imp.commit_vm = mock.Mock()
         job = self.look(3)
         self.imp.commit_vm.assert_not_called()
-        self.assertIn("A VM named win11 already exists, and this import did not create it", job["message"])
+        self.assertIn("A VM named win11 already exists, and nothing on it shows that this import created it.",
+                      job["message"])
         self.assertEqual(theirs, self.kube.object(self.VM)["metadata"]["uid"])
+
+    def test_a_vm_whose_known_uid_does_not_match_is_refused_even_with_this_jobs_id(self):
+        # The POST answered with a uid: that alone decides. Another uid is another VM
+        # (removed and applied again, restored from a backup), whatever its labels say.
+        self.finished_disks()
+        self.cut_off_after((self.VMS, self.vm_body()))
+        self.kube.discard(self.VM)
+        self.kube.add(self.vm_body({UVMS.IMPORT_JOB_LABEL: self.ident}))
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
+        self.assertIn("A VM named win11 already exists, and nothing on it shows that this import created it.",
+                      job["message"])
 
     def test_a_vm_accepted_then_removed_is_not_created_again(self):
         self.finished_disks()
         self.cut_off_after((self.VMS, self.vm_body()))
         self.kube.discard(self.VM)
+        # The API in trouble again: any second read of the VM fails, once.
+        self.kube.fail(self.VM, 503, method="GET", skip=1)
         self.imp.commit_vm = mock.Mock()
         job = self.look(3)
         self.imp.commit_vm.assert_not_called()
         self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
-        self.assertIn("The disks arrived, but the VM could not be created: win11 was created, then removed before "
-                      "the import finished.", job["message"])
+        self.assertTrue(job["message"].startswith(
+            "The VM win11 was created, then removed before the import finished, so it is not created again. The "
+            "disks are kept as win11-disk, win11-disk-2. Create the VM from them under Import."), job["message"])
         self.assertIsNone(self.kube.object(self.VM))
 
     def test_a_pause_after_the_vm_was_accepted_does_not_say_no_vm_was_created(self):

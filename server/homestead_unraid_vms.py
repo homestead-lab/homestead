@@ -1119,11 +1119,23 @@ def _journalled(ref, item):
     return send
 
 
-# The label on an imported VM that names the import job whose create made it:
-# the job's id, written into a copy of vm_cfg at the create (status, phase
-# "convert"). A create whose reply was lost has no uid to compare, so this is
-# how a later round proves the VM there is this import's own.
-IMPORT_JOB_LABEL = NAMES.key("import-job")
+# The label on an imported VM that names the import operation (job) whose
+# create made it: the job's id, written into a copy of vm_cfg at the create
+# (status, phase "convert"). A create whose reply was lost has no uid to
+# compare, so this is how a later round proves the VM there is this import's
+# own. Not "import-job": that is an annotation on imported Deployments naming
+# their copy Job (homestead_import_guard).
+IMPORT_JOB_LABEL = NAMES.key("import-operation")
+
+
+class Ended(ValueError):
+    """_after_cut_off's own ending, in whole sentences: it has just read the
+    VM, so the import ends on it without reading again. taken: a VM of that
+    name is there, so a VM made from the disks needs another name."""
+
+    def __init__(self, words, taken=False):
+        super().__init__(words)
+        self.taken = taken
 
 
 def _vm_sent(ref):
@@ -1143,11 +1155,13 @@ def _left(ref, but=None):
 
 def _this_imports(found, sent, item):
     """Whether the VM found is the one this import's create made: the uid its
-    POST answered with, or, when the answer was lost, this job's id on it. A VM
-    of the same name without either is somebody else's."""
+    POST answered with, which alone decides when it is known (another uid is
+    another VM, whatever its labels say), or, when the answer was lost, this
+    job's id on it. A VM of the same name with neither is somebody else's."""
     meta = found.get("metadata") or {}
-    return bool(sent.get("uid") and meta.get("uid") == sent["uid"]) or \
-        (meta.get("labels") or {}).get(IMPORT_JOB_LABEL) == item["id"]
+    if sent.get("uid"):
+        return meta.get("uid") == sent["uid"]
+    return (meta.get("labels") or {}).get(IMPORT_JOB_LABEL) == item["id"]
 
 
 def _carries_this_job(ref, item):
@@ -1173,7 +1187,7 @@ def _after_cut_off(ref, item):
     journal = ref.get("vm_writes")
     if not journal:
         return False
-    refusal = ""
+    refusal, taken = "", False
     vm = _vm_sent(ref)
     if vm:
         # A read that fails raises: the round is asked again, and nothing is sent.
@@ -1182,10 +1196,13 @@ def _after_cut_off(ref, item):
             return True
         name = _named(vm)
         if found is not None:
-            refusal = f"A VM named {name} already exists, and this import did not create it, so it is left as it is"
+            # What is known: nothing on it proves it is this import's (#1377's
+            # code, released alone, sent the VM without this job's id).
+            refusal = f"A VM named {name} already exists, and nothing on it shows that this import created it. It is left as it is."
+            taken = True
         elif vm["phase"] in ("accepted", "removed"):
             # Made, then removed by someone: not made again behind their back.
-            refusal = f"{name} was created, then removed before the import finished"
+            refusal = f"The VM {name} was created, then removed before the import finished, so it is not created again."
     for entry in journal:
         if entry["phase"] != "accepted" or not entry.get("uid"):
             continue
@@ -1203,11 +1220,11 @@ def _after_cut_off(ref, item):
     left = _left(ref, but=vm)
     ref.pop("vm_writes", None)
     if refusal:
-        raise ValueError(refusal + (f". {left} that this try created may be there, so "
-                                    f"{'it is' if ', ' not in left else 'they are'} kept" if left else ""))
+        raise Ended(refusal + (f" {left} that this try created may be there, so "
+                               f"{'it is' if ', ' not in left else 'they are'} kept." if left else ""), taken)
     if left:
-        raise ValueError(f"The VM create was cut off part way. {left} may be what it created, so "
-                         f"{'it is' if ', ' not in left else 'they are'} kept. Check before creating the VM")
+        raise Ended(f"The VM create was cut off part way. {left} may be what it created, so "
+                    f"{'it is' if ', ' not in left else 'they are'} kept. Check before creating the VM.")
     return False
 
 
@@ -1413,12 +1430,16 @@ def status(item):
             # A first create whose reply was lost can land late, after the read
             # in _after_cut_off: then a check above says the VM exists. A VM of
             # that name carrying this job's id is this import's, so it is done.
-            if not _carries_this_job(ref, item):
+            # _after_cut_off's own endings have just read the VM: no second read,
+            # which could fail and leave a round with no record (it would send again).
+            if isinstance(error, Ended) or not _carries_this_job(ref, item):
                 ref.pop("vm_writes", None)
                 # The disks are whole: keep them, and say how to finish by hand.
                 disks = ", ".join(d["dv"] for d in ref["disks"])
-                detail = (f"The disks arrived, but the VM could not be created: {error}. They are kept as "
-                          f"{disks}. Create the VM from them under Import.")
+                detail = (f"{error} The disks are kept as {disks}. Create the VM from them under Import"
+                          f"{' with another name' if error.taken else ''}." if isinstance(error, Ended) else
+                          f"The disks arrived, but the VM could not be created: {str(error).rstrip('.')}. "
+                          f"They are kept as {disks}. Create the VM from them under Import.")
                 if ref.get("cdi_cleanup"):
                     ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
                     return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
