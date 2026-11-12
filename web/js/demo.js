@@ -3069,7 +3069,7 @@ ssh_pwauth: true
           { kind: "app", ns: "lab", name: "paperless", outcome: "waits", why: "set to wait for its host to come back", notes: [] },
           { kind: "set", ns: "data", name: "postgres", icon: "", here: 1, copies: 1, keeps_answering: false, outcome: "waits", setting: "node_down",
             why: "waits until its pod is deleted: Kubernetes doesn't start a StatefulSet's pod elsewhere while the old one might still run. To have Longhorn do this, turn on Settings → Hardware and storage → Allow apps with storage to move off a failed host.", notes: [] },
-          { kind: "app", ns: "lab", name: "home-assistant", outcome: "moves", to: ["harvester-node1", "harvester-node3"], why: "about 15 seconds after the host stops answering", notes: [] },
+          { kind: "app", ns: "lab", name: "home-assistant", outcome: "moves", to: ["harvester-node1", "harvester-node3"], why: "about 15 seconds after the host is marked not ready", notes: [] },
           { kind: "vm", ns: "lab", name: "k3s-demo-server-1", os_logo: "ubuntu", outcome: "moves", to: ["harvester-node1"], migratable: true,
             why: "restarts on another host once this one is declared down; on a drain it moves live, without stopping", notes: [] }],
         at_risk: [{ name: "scratch-test", namespace: "lab", volume: "pvc-demo-scratch", left: 0, wanted: 1 }],

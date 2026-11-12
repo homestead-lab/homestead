@@ -289,8 +289,9 @@ pod on another host while the old one might still run, so it:
   not on Longhorn. When Longhorn is installed and every volume is on
   Longhorn, the line links to the setting (**Settings → Hardware and
   storage → Longhorn storage**);
-- **moves** after its failover setting's delay - about 15 seconds, or
-  Kubernetes' default of about 5 minutes - when that setting does delete them and every volume it uses is on Longhorn, with a
+- **moves** after its failover setting's delay - 15 or 90 seconds, or
+  Kubernetes' default of 5 minutes, counted from when Kubernetes marks the host
+  as not ready, about a minute after it stops answering - when that setting does delete them and every volume it uses is on Longhorn, with a
   healthy copy elsewhere.
 
 A line that **couldn't be checked** means Homestead couldn't read where its

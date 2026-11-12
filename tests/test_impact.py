@@ -51,16 +51,28 @@ class AppTests(unittest.TestCase):
     def test_an_app_with_a_time_of_its_own_moves_after_that_time(self):
         # #1308: an app with 120 s was said to move after five minutes.
         r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=120)]), "web")
-        self.assertIn("about 2 minutes after the host stops answering", r["why"])
+        self.assertIn("about 2 minutes after the host is marked not ready", r["why"])
         r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=45)]), "web")
-        self.assertIn("about 45 seconds after the host stops answering", r["why"])
+        self.assertIn("about 45 seconds after the host is marked not ready", r["why"])
         r = self.outcome(self.run_preview([app("web", failover="custom", failover_seconds=None)]), "web")
         self.assertEqual("waits", r["outcome"], "a time of its own that never runs out")
 
     def test_an_app_set_to_move_after_90_seconds_says_so(self):
         r = self.outcome(self.run_preview([app("web", failover="slow")]), "web")
         self.assertEqual("moves", r["outcome"])
-        self.assertIn("about 90 seconds after the host stops answering", r["why"])
+        self.assertIn("about 90 seconds after the host is marked not ready", r["why"])
+
+    def test_every_failover_time_counts_from_the_host_marked_not_ready(self):
+        # A toleration counts from the taint, which comes once Kubernetes marks
+        # the host not ready (its grace period, about a minute), not from the
+        # moment the host stops answering. Every time names that moment.
+        apps = [app("a", failover="move"), app("b", failover="slow"), app("c", failover="default"),
+                app("d", failover="custom", failover_seconds=45)]
+        result = self.run_preview(apps)
+        for name in "abcd":
+            why = self.outcome(result, name)["why"]
+            self.assertIn("after the host is marked not ready", why, name)
+            self.assertNotRegex(why, r"(seconds|minutes) after the host stops answering", name)
 
     def test_an_app_set_to_wait_waits(self):
         self.assertEqual("waits", self.outcome(self.run_preview([app("db", failover="wait")]), "db")["outcome"])
@@ -230,7 +242,7 @@ class StatefulSetTests(unittest.TestCase):
         for policy in ("delete-statefulset-pod", "delete-both-statefulset-and-deployment-pod"):
             r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down=policy))
             self.assertEqual(("moves", ["node1", "node3"]), (r["outcome"], r["to"]), policy)
-            self.assertEqual("moves once Longhorn deletes its pod, after about 5 minutes, Kubernetes' default", r["why"])
+            self.assertEqual("moves once Longhorn deletes its pod, about 5 minutes after the host is marked not ready, Kubernetes' default", r["why"])
         r = self.row(self.preview([sts()], volumes=self.LONGHORN_TWO, node_down="delete-deployment-pod"))
         self.assertEqual("waits", r["outcome"], "deleting Deployments' pods leaves StatefulSets' alone")
 
@@ -255,7 +267,7 @@ class StatefulSetTests(unittest.TestCase):
     def test_a_set_set_to_move_moves_after_its_own_delay(self):
         fast = {"tolerations": [{"key": self.UNREACHABLE, "operator": "Exists", "effect": "NoExecute", "tolerationSeconds": 15}]}
         r = self.row(self.preview([sts(spec=fast)], volumes=self.LONGHORN_TWO, node_down="delete-statefulset-pod"))
-        self.assertEqual(("moves", "moves once Longhorn deletes its pod, about 15 seconds after the host stops answering"),
+        self.assertEqual(("moves", "moves once Longhorn deletes its pod, about 15 seconds after the host is marked not ready"),
                          (r["outcome"], r["why"]))
 
     def test_its_only_healthy_copy_here_stops_it(self):

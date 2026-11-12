@@ -76,7 +76,7 @@ test("the failover choices that keep an app on its host say they do not keep its
   const { FAILOVER_HELP } = choice();
   for (const mode of ["wait", "slow"]) {
     assert.match(FAILOVER_HELP[mode], /shared volumes/i, mode);
-    assert.match(FAILOVER_HELP[mode], /once Kubernetes marks the host as not ready/, mode);
+    assert.match(FAILOVER_HELP[mode], /once the host is marked not ready/, mode);
   }
 });
 
@@ -93,4 +93,29 @@ test("the network share tip and wiki name the real trigger and count from one mo
     const clocks = [...text.matchAll(/(?:seconds?|minutes?) (?:after|of) ([a-z' ]{0,40}?)(?=[.,])/g)].map(m => m[1]);
     for (const clock of clocks) assert.match(clock, /^(the|its) host stops answering$|^a failure$/, `${where}: "${clock}"`);
   }
+});
+
+/* A failover time counts from when Kubernetes marks the host as not ready
+   (the taint), about a minute after the host stops answering; the help says
+   so for every time, and the wiki's table offers what the dialog offers. */
+test("every failover time says it counts from the host marked not ready", () => {
+  const { FAILOVER_HELP } = choice();
+  for (const mode of ["move", "slow", "default"]) {
+    assert.match(FAILOVER_HELP[mode], /(seconds|minutes) after its host is (marked )?not ready/, mode);
+    assert.doesNotMatch(FAILOVER_HELP[mode], /(seconds|minutes) after (its|the) host stops answering/, mode);
+  }
+  // The default's help is held to the Edit dialog's word budget; the two
+  // moves say how long marking the host takes.
+  for (const mode of ["move", "slow"]) assert.match(FAILOVER_HELP[mode], /about a minute after it stops answering/, mode);
+});
+
+test("the Containers wiki lists the choices the dialog offers, timed from the host marked not ready", () => {
+  const vm = require("node:vm");
+  const c = { window: {}, esc: String };
+  vm.createContext(c);
+  vm.runInContext(require("./helpers/between")(source, "/* What a container does when the node it runs on stops answering. */", "const FAILOVER_HELP") + "window.W = FAILOVER_WORDS;", c);
+  const wiki = fs.readFileSync("docs/wiki/Containers.md", "utf8");
+  const section = require("./helpers/between")(wiki, "## If a node fails", /\n## /);
+  for (const name of Object.values(c.window.W)) assert.ok(section.includes(`| **${name}** |`), name);
+  assert.match(section.replace(/\s+/g, " "), /count from when Kubernetes marks the host as not ready, which is about a minute after the host stops answering/);
 });
