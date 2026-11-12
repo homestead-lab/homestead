@@ -174,12 +174,61 @@ def held(ns, dep, read):
     unread Secret may answer {} here: only that preview uses it, and the save
     itself reads the Secret again (externalize refuses a failed read) and
     keeps every reference the form did not name (#1001)."""
+    return held_or_unknown(ns, dep, read) or {}
+
+
+def held_or_unknown(ns, dep, read):
+    """held(), but None when the Secret could not be read."""
     if not own(dep):
         return {}
     try:
         return _ours(_read(f"/api/v1/namespaces/{ns}/secrets/{own(dep)}", read), dep)
     except Exception:
-        return {}
+        return None
+
+
+def removed(current, proposed, data, masked=()):
+    """What a save of proposed deletes from the app's Secret, for its review:
+    exactly the keys prune() removes after that save (unused(), on the app
+    as the save writes it), one entry per variable of current that refers
+    to the key ({"key", "container", "name", "value_kept"}), or one named by
+    the key itself when nothing names it (container None). value_kept says
+    the value lives on under a key the saved app uses, or as a value it
+    sets (a renamed variable): only the others are lost. data is
+    held_or_unknown(); None when it could not be read, which is "could not
+    check", never "none". proposed is left as it is."""
+    name = own(current)
+    if not name:
+        return []
+    if data is None:
+        return None
+    saved = copy.deepcopy(proposed)
+    literals = {str(item["value"]) for container in _containers(saved)
+                for item in container.get("env") or [] if item.get("value")}
+    as_saved(saved, current, masked, data)
+    gone = unused(saved, name, data)
+    still = (literals | {_decoded(value) for key, value in data.items() if key not in gone}) - {None}
+    spec = ((current.get("spec") or {}).get("template") or {}).get("spec") or {}
+    users = {}
+    for container in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+        for item in container.get("env") or []:
+            ref = (item.get("valueFrom") or {}).get("secretKeyRef") or {}
+            if ref.get("name") == name:
+                users.setdefault(ref.get("key"), []).append((container.get("name"), item.get("name")))
+    out = []
+    for key in sorted(gone):
+        value = _decoded(data[key])
+        for container, variable in users.get(key) or [(None, key)]:
+            out.append({"key": key, "container": container, "name": variable,
+                        "value_kept": value is not None and value in still})
+    return out
+
+
+def _decoded(encoded):
+    try:
+        return base64.b64decode(encoded).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 def to_move(dep, masked=(), data=None):

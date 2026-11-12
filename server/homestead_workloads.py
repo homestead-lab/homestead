@@ -265,14 +265,19 @@ def preview_edit(request):
     # The edit as YAML for git (#735); a rename is made in git as a rename.
     # Values kept in the app's own Secret - and any value with a credential
     # in it - are shown as references to that Secret, not as values.
-    change, secret = {}, {}
+    # What the save deletes from the app's Secret (every save removes values
+    # the app no longer uses, even one that changes nothing else), or None
+    # when the Secret could not be read: the review then says it could not check.
+    change, secret, removed = {}, {}, []
     if context.get("action") != RENAME.KIND:
         proposed = copy.deepcopy(prepared["deployment"])
-        secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), ENVSEC.held(b["ns"], current, kget))
+        data = ENVSEC.held_or_unknown(b["ns"], current, kget)
+        removed = ENVSEC.removed(current, proposed, data, b.get("masked_env"))
+        secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), data or {})
         change = GITOPS.patch(current, proposed)
     return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
             "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else "",
-            "secret": secret if change else {}}
+            "secret": secret if change else {}, "secret_removed": removed}
 
 
 def edit(request):

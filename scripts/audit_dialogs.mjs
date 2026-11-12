@@ -198,6 +198,10 @@ const DIALOGS = [
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],
   ["workload-edit-storage", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',3)"],
   ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Review changes"],
+  // The worst case of the stored values a save deletes: five, from two containers, one of them removed.
+  ["workload-edit-removed-values", "workloads", "wlEdit('lab','home-assistant')", "window.__demoStoredValues={'mqtt-sidecar':['MQTT_PASSWORD']};editReview({ns:'lab',name:'home-assistant',remove_containers:['mqtt-sidecar'],containers:[{original_name:'home-assistant',name:'home-assistant',env:{TZ:'UTC'},secret_env:['HOME_ASSISTANT_TOKEN','PLUS_API_KEY','DB_PASSWORD','WEBHOOK_SECRET']}]}).finally(()=>{delete window.__demoStoredValues})"],
+  // When the review cannot read the app's Secret, it cannot be saved from.
+  ["workload-edit-removed-unread", "workloads", "wlEdit('lab','frigate')", "window.__demoSecretUnread=true;editReview({ns:'lab',name:'frigate',containers:[{original_name:'frigate',name:'frigate',env:{TZ:'UTC'},secret_env:['PLUS_API_KEY']}]}).finally(()=>{delete window.__demoSecretUnread})"],
   ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],
