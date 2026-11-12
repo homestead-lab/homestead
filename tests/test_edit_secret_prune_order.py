@@ -170,5 +170,66 @@ class ASaveThatSucceeds(Fixture):
         self.assertIn("cloudflared.THEIRS_TOKEN", self.kube.object(SECRET)["data"])
 
 
+
+class ValuesUsedOtherwiseAreKept(unittest.TestCase):
+    """A save removes only values nothing in the app uses: an init container
+    referring to one, a container taking the whole Secret (envFrom) or a
+    volume of it all count as uses, and a value that is not text is kept as
+    it is."""
+
+    def setUp(self):
+        dep, secret = objects()
+        self.dep, self.secret = dep, secret
+        for patch in (mock.patch.object(LC, "kget", K.kget), mock.patch.object(LC, "ksend", K.ksend),
+                      mock.patch.object(WORKLOADS, "kget", K.kget, create=True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def start(self):
+        self.kube = self.enterContext(Kube(self.dep, self.secret))
+
+    def save_image(self):
+        """An image bump from Edit, sending back what the form showed."""
+        form = WORKLOADS.workload_edit_payload("lab", "tunnel", self.kube.object(DEP), [], services=[])
+        container = form["containers"][0]
+        return WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+            {"original_name": "cloudflared", "name": "cloudflared", "image": "cloudflare/cloudflared:2026.2.0",
+             "env": dict(container["env"]), "secret_env": list(container["secret_env"])}]})
+
+    def test_a_value_an_init_container_uses_is_kept(self):
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["initContainers"] = [{"name": "migrate", "image": "example/migrate:1",
+                                   "env": [ref("MIGRATE_TOKEN", "migrate.MIGRATE_TOKEN")]}]
+        self.secret["data"]["migrate.MIGRATE_TOKEN"] = b64("migrate")
+        self.start()
+        self.save_image()
+        self.assertEqual(b64("migrate"), self.kube.object(SECRET)["data"].get("migrate.MIGRATE_TOKEN"))
+
+    def test_a_secret_a_container_takes_whole_keeps_every_value(self):
+        container = self.dep["spec"]["template"]["spec"]["containers"][0]
+        container["envFrom"] = [{"secretRef": {"name": "tunnel-env"}}]
+        self.secret["data"]["EXTRA_TOKEN"] = b64("extra")
+        self.start()
+        self.save_image()
+        self.assertEqual(b64("extra"), self.kube.object(SECRET)["data"].get("EXTRA_TOKEN"))
+
+    def test_a_secret_mounted_as_a_volume_keeps_its_values(self):
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["volumes"] = [{"name": "keys", "secret": {"secretName": "tunnel-env",
+                                                       "items": [{"key": "tls.key", "path": "tls.key"}]}}]
+        spec["containers"][0]["volumeMounts"] = [{"name": "keys", "mountPath": "/keys"}]
+        self.secret["data"]["tls.key"] = b64("key-file")
+        self.start()
+        self.save_image()
+        self.assertEqual(b64("key-file"), self.kube.object(SECRET)["data"].get("tls.key"))
+
+    def test_a_value_that_is_not_text_is_kept_as_it_is(self):
+        binary = base64.b64encode(bytes([0xff, 0xfe, 0x00, 0x81])).decode()
+        self.secret["data"][OLD] = binary
+        self.start()
+        self.save_image()
+        self.assertEqual(binary, self.kube.object(SECRET)["data"].get(OLD))
+
+
 if __name__ == "__main__":
     unittest.main()

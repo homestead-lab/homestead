@@ -48,6 +48,52 @@ def _refs(dep, name):
             if ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == name}
 
 
+def unused(dep, name, data):
+    """The keys of Secret name's data that dep does not use: the values a
+    save may remove. Every container and init container counts, by env,
+    envFrom (the whole Secret: then nothing is unused) and volumes (the
+    keys a volume lists, or the whole Secret)."""
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    keys = set()
+    for container in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+        for item in container.get("envFrom") or []:
+            if (item.get("secretRef") or {}).get("name") == name:
+                return set()
+        for item in container.get("env") or []:
+            ref = (item.get("valueFrom") or {}).get("secretKeyRef") or {}
+            if ref.get("name") == name:
+                keys.add(ref.get("key"))
+    for volume in spec.get("volumes") or []:
+        sources = [volume.get("secret") and dict(volume["secret"], name=volume["secret"].get("secretName"))]
+        sources += [source.get("secret") for source in (volume.get("projected") or {}).get("sources") or []]
+        for source in filter(None, sources):
+            if source.get("name") != name:
+                continue
+            if not source.get("items"):
+                return set()
+            keys.update(item.get("key") for item in source["items"])
+    return {key for key in data if key not in keys}
+
+
+def _same_bytes(current, moved):
+    """moved with each value the form sent back unchanged put back as the
+    Secret holds it: a value that is not UTF-8 text reaches the form with
+    replacement characters (values()), and must not be written over."""
+    for key, encoded in list(moved.items()):
+        held = current.get(key)
+        if held is None or held == encoded:
+            continue
+        try:
+            raw = base64.b64decode(held)
+            raw.decode("utf-8")
+        except UnicodeDecodeError:
+            if base64.b64decode(encoded).decode("utf-8", "replace") == raw.decode("utf-8", "replace"):
+                moved[key] = held
+        except ValueError:
+            continue
+    return moved
+
+
 def _move(dep, name, masked):
     """Turn each secret-looking literal into a reference to Secret name, in
     place; {key: base64 value} of what moved."""
@@ -185,15 +231,17 @@ def prune(ns, dep, staged, send):
         return []
     name = staged["metadata"]["name"]
     data = staged.get("data") or {}
-    used = _refs(dep, name)
-    gone = sorted(key for key in data if key not in used)
+    gone = sorted(unused(dep, name, data))
     if not gone:
         return []
-    body = dict(staged, data={key: value for key, value in data.items() if key in used})
+    body = dict(staged, data={key: value for key, value in data.items() if key not in gone})
     body["metadata"] = {k: v for k, v in staged["metadata"].items() if k != "managedFields"}
     try:
         send("PUT", f"/api/v1/namespaces/{ns}/secrets/{name}", body)
-    except Exception as error:  # noqa: BLE001 - the save stands; leftovers are harmless
+    except (OSError, ValueError) as error:
+        # What a write can raise: an HTTP error or a lost connection (OSError,
+        # URLError and timeouts among them) or a write guard's refusal
+        # (ValueError). The save stands, so it is logged, not raised.
         print(f"Unused values stay in Secret {ns}/{name} until the next save: {error}", file=sys.stderr)
         return []
     return gone
@@ -207,6 +255,7 @@ def _write(ns, dep, read, send, masked, drop_unused):
     # YAML for git so the save moves exactly what that shows).
     current = _read(path, read) if own(dep) else None
     moved = _move(dep, name, to_move(dep, masked, _ours(current, dep)))
+    _same_bytes((current or {}).get("data") or {}, moved)
     if not moved and not own(dep):
         return dep, None  # nothing secret here, and no Secret of its own to tidy
     if not own(dep):
@@ -216,9 +265,9 @@ def _write(ns, dep, read, send, masked, drop_unused):
     owner = dep["metadata"]["name"]
     if current is not None and ((current.get("metadata") or {}).get("labels") or {}).get(LABEL) is None:
         raise ValueError(f"Secret {name} already exists in {ns}. It is not the one Homestead keeps for {owner}'s variables")
-    used = _refs(dep, name)
-    data = {key: value for key, value in {**((current or {}).get("data") or {}), **moved}.items()
-            if key in used or not drop_unused}
+    merged = {**((current or {}).get("data") or {}), **moved}
+    drop = unused(dep, name, merged) if drop_unused else set()
+    data = {key: value for key, value in merged.items() if key not in drop}
     labels = {LABEL: owner, "app.kubernetes.io/managed-by": "homestead"}
     written = current
     if current is None:
