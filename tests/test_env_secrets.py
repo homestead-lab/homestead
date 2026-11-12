@@ -168,6 +168,12 @@ class EditRoundTripTests(unittest.TestCase):
         finally:
             server.KUBE_HELPERS.kget = original
 
+    def saved(self):
+        """The Deployment the save wrote (values it no longer uses leave the
+        Secret after it, so it need not be the last write)."""
+        return [body for method, path, body in self.store.sent
+                if (method, path) == ("PUT", "/apis/apps/v1/namespaces/lab/deployments/tunnel")][-1]
+
     def test_the_form_shows_the_value_and_saving_a_change_updates_the_secret(self):
         container = self.payload()
         self.assertEqual({"TUNNEL_TOKEN": "first", "TZ": "UTC"}, container["env"])
@@ -175,7 +181,7 @@ class EditRoundTripTests(unittest.TestCase):
         self.assertEqual(["TUNNEL_TOKEN"], container["secret_env"])
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TUNNEL_TOKEN": "second", "TZ": "UTC"}}]})
-        saved = self.store.sent[-1][2]
+        saved = self.saved()
         self.assertNotIn("second", json.dumps(saved))
         self.assertEqual(b64("second"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])
         self.assertEqual({"TUNNEL_TOKEN": "second", "TZ": "UTC"}, self.payload()["env"])
@@ -188,8 +194,7 @@ class EditRoundTripTests(unittest.TestCase):
             {"original_name": "cloudflared", "name": "cloudflared",
              "env": {"LOGIN": "first", "DATABASE_URL": "postgres://u:pw-5c@db.example.com/x", "TZ": "UTC"},
              "secret_env": ["TUNNEL_TOKEN"]}]})
-        method, path, saved = self.store.sent[-1]
-        self.assertEqual(("PUT", "/apis/apps/v1/namespaces/lab/deployments/tunnel"), (method, path))
+        saved = self.saved()
         self.assertNotIn("first", json.dumps(saved))
         self.assertNotIn("pw-5c", json.dumps(saved))
         env = {r["name"]: r for r in saved["spec"]["template"]["spec"]["containers"][0]["env"]}
@@ -204,7 +209,7 @@ class EditRoundTripTests(unittest.TestCase):
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TZ": "UTC"},
              "secret_env": ["TUNNEL_TOKEN"]}]})
-        env = self.store.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["env"]
+        env = self.saved()["spec"]["template"]["spec"]["containers"][0]["env"]
         self.assertEqual([{"name": "TZ", "value": "UTC"}], env)
         self.assertEqual({}, self.store.objects[SECRET]["data"])
 
@@ -214,7 +219,7 @@ class EditRoundTripTests(unittest.TestCase):
         del self.store.objects[SECRET]
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TUNNEL_TOKEN": "legacy"}}]})
-        self.assertNotIn("legacy", json.dumps(self.store.sent[-1][2]))
+        self.assertNotIn("legacy", json.dumps(self.saved()))
         self.assertEqual(b64("legacy"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])
 
 

@@ -13,6 +13,7 @@ back.
 """
 import base64
 import re
+import sys
 import urllib.error
 
 ANNOTATION = "homestead.io/env-secret"
@@ -157,7 +158,48 @@ def as_saved(dep, current, masked=(), data=None):
 def externalize(ns, dep, read, send, masked=()):
     """Move secret-looking literal values into the workload's Secret, writing
     the Secret first. Changes dep in place and returns it; a Deployment with
-    nothing secret-looking, and no Secret yet, is left exactly as it was."""
+    nothing secret-looking, and no Secret yet, is left exactly as it was.
+    Values dep no longer refers to are removed in the same write: for a new
+    app, or one that only gains a container, where nothing in use can go.
+    Edit uses stage() and prune() instead."""
+    return _write(ns, dep, read, send, masked, drop_unused=True)[0]
+
+
+def stage(ns, dep, read, send, masked=()):
+    """externalize() for a save that may still fail: new and changed values
+    are written, and every value already kept stays, so the app as it is now
+    still finds everything it refers to whatever happens to the save. Changes
+    dep in place; returns the Secret as written (or as read, when nothing
+    changed) for prune(), or None when there is none."""
+    return _write(ns, dep, read, send, masked, drop_unused=False)[1]
+
+
+def prune(ns, dep, staged, send):
+    """After the Deployment dep was saved: remove from the Secret staged()
+    returned the values dep no longer refers to. The write carries that
+    Secret's resourceVersion, so a Secret another save changed since is left
+    alone. The save already succeeded: a failure here only leaves values
+    nothing uses, which the next save removes, so it is reported to the log
+    and not raised. Returns the keys removed."""
+    if not staged:
+        return []
+    name = staged["metadata"]["name"]
+    data = staged.get("data") or {}
+    used = _refs(dep, name)
+    gone = sorted(key for key in data if key not in used)
+    if not gone:
+        return []
+    body = dict(staged, data={key: value for key, value in data.items() if key in used})
+    body["metadata"] = {k: v for k, v in staged["metadata"].items() if k != "managedFields"}
+    try:
+        send("PUT", f"/api/v1/namespaces/{ns}/secrets/{name}", body)
+    except Exception as error:  # noqa: BLE001 - the save stands; leftovers are harmless
+        print(f"Unused values stay in Secret {ns}/{name} until the next save: {error}", file=sys.stderr)
+        return []
+    return gone
+
+
+def _write(ns, dep, read, send, masked, drop_unused):
     name = secret_name(dep)
     path = f"/api/v1/namespaces/{ns}/secrets/{name}"
     # What the Secret holds now is read first when there is one: a variable
@@ -166,28 +208,30 @@ def externalize(ns, dep, read, send, masked=()):
     current = _read(path, read) if own(dep) else None
     moved = _move(dep, name, to_move(dep, masked, _ours(current, dep)))
     if not moved and not own(dep):
-        return dep  # nothing secret here, and no Secret of its own to tidy
+        return dep, None  # nothing secret here, and no Secret of its own to tidy
     if not own(dep):
         current = _read(path, read)
     if current is None and not moved:
-        return dep
+        return dep, None
     owner = dep["metadata"]["name"]
     if current is not None and ((current.get("metadata") or {}).get("labels") or {}).get(LABEL) is None:
         raise ValueError(f"Secret {name} already exists in {ns}. It is not the one Homestead keeps for {owner}'s variables")
     used = _refs(dep, name)
-    data = {key: value for key, value in {**((current or {}).get("data") or {}), **moved}.items() if key in used}
+    data = {key: value for key, value in {**((current or {}).get("data") or {}), **moved}.items()
+            if key in used or not drop_unused}
     labels = {LABEL: owner, "app.kubernetes.io/managed-by": "homestead"}
+    written = current
     if current is None:
-        send("POST", f"/api/v1/namespaces/{ns}/secrets",
-             {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-              "metadata": {"name": name, "namespace": ns, "labels": labels}, "data": data})
+        written = send("POST", f"/api/v1/namespaces/{ns}/secrets",
+                       {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                        "metadata": {"name": name, "namespace": ns, "labels": labels}, "data": data})
     elif data != (current.get("data") or {}):
         current["data"] = data
         current["metadata"].pop("managedFields", None)
         current["metadata"].setdefault("labels", {}).update(labels)
-        send("PUT", path, current)
+        written = send("PUT", path, current)
     dep["metadata"].setdefault("annotations", {})[ANNOTATION] = name
-    return dep
+    return dep, written if isinstance(written, dict) and written.get("metadata") else None
 
 
 def values(ns, dep, read):
