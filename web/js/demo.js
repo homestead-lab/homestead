@@ -2898,9 +2898,9 @@ ssh_pwauth: true
           .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["node-1", "node-2"],
             { class: "longhorn-r2", claim_reused: true })] : []) },
         iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
-          { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
+          { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", pv: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
             state: "FAILED", address: "192.0.2.40", port: 3260, disks: ["sdj"] },
-          { sid: 71, target: "iqn.2019-10.io.longhorn:pvc-demo-spool", volume: "pvc-demo-spool", namespace: "lab", claim: "spool-data",
+          { sid: 71, target: "iqn.2019-10.io.longhorn:pvc-demo-spool", volume: "pvc-demo-spool", pv: "pvc-demo-spool", namespace: "lab", claim: "spool-data",
             state: "LOGGED_IN", address: "192.0.2.40", port: 3260, disks: ["sds"] }] }] : [] },
       };
     },

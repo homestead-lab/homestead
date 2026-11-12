@@ -86,3 +86,18 @@ test("an app whose Services couldn't be read says so, never no listeners", () =>
   assert.doesNotMatch(unread, /—/);
   assert.match(unread, /Not read/);
 });
+
+test("a pod whose volume cannot attach because of a stale iSCSI session says so on the app, with the steps", () => {
+  const why = "Volume notes-data cannot attach, because node-2 still holds an old connection to it from before an outage. "
+    + "End that connection on node-2 (Cluster Health lists the steps), or restart node-2.";
+  const waiting = pod("x2k7p", "node-2", { phase: "Pending", ready: false, stale_session: why });
+  const stuck = { ...app, pods: [waiting] };
+  const tree = context.workloadHierarchy(stuck);
+  assert.ok(tree.includes(`>${context.esc(why)}</div>`), "the reason is shown on the pod's row");
+  assert.match(tree, /title="[^"]*stale iSCSI session[^"]*"/, "the iSCSI term only in its tip");
+  assert.ok(tree.includes(`onclick="event.stopPropagation(); staleSessionsReview(${context.jsq("node-2")})">Show the steps</button>`),
+    "the link opens Cluster Health's steps for that host");
+  assert.equal(vm.runInContext("workloadBlocked", context)(stuck), why, "the app's own line says it too");
+  assert.equal(vm.runInContext("workloadBlocked", context)(app), "", "without it, nothing new");
+  assert.doesNotMatch(context.workloadHierarchy(app), /Show the steps/);
+});

@@ -371,6 +371,20 @@ def _why_waiting(ns, pod):
                             "check longhorn-system on that host, or delete this pod so it starts on another")
         # Not a failure while the node may still be joining: only after ten minutes.
         found["stuck"] = age >= 600
+    # Kubernetes' own words name the other two causes; only an attach failure
+    # they do not explain is matched against the stale sessions.
+    session = None if "driver driver.longhorn.io" in message or "invalid controller count" in message else \
+        _stale_session(pod, latest, message)
+    if session:
+        # The cause Cluster Health names (homestead_storage_leftovers), on this
+        # pod's host and for the very volume Kubernetes cannot attach: one
+        # reading, so the app and Cluster Health never disagree. A message,
+        # not a hint: like any volume that cannot attach, stuck after three minutes.
+        node = pod["spec"]["nodeName"]
+        found["message"] = (f"Volume {session.get('claim') or session.get('volume')} cannot attach, because {node} "
+                            f"still holds an old connection to it from before an outage. End that connection on "
+                            f"{node} (Cluster Health lists the steps), or restart {node}.")
+        found["stale_session"] = True
     if "invalid controller count" in message:
         # Two pods on different nodes attached a volume on a migratable class,
         # and Longhorn took that for a VM live migration. Nothing clears it but
@@ -379,6 +393,33 @@ def _why_waiting(ns, pod):
                          "a VM migration. Scale the workload to 0, wait for the volume to detach, then scale "
                          "it back up. Recreate updates, or a shareable class, stop it happening again.")
     return found
+# How the attach/detach controller writes an attach failure on the pod, the
+# volume being the PV's name: 'AttachVolume.Attach failed for volume "pvc-…" : …'.
+ATTACH_FAILED = re.compile(r'^AttachVolume\.Attach failed for volume "([^"]+)"')
+def _stale_session(pod, latest, message):
+    """The stale iSCSI session that keeps this pod's volume from attaching:
+    its newest warning is Kubernetes' attach failure for a volume, and the
+    latest reading names a session to that same volume on the pod's host.
+    None when either is missing, or the reading could not be made."""
+    attach = ATTACH_FAILED.match(message) if latest.get("reason") == "FailedAttachVolume" else None
+    node = (pod.get("spec") or {}).get("nodeName")
+    if not attach or not node:
+        return None
+    try:
+        return LEFTOVERS.stale_session(node, attach.group(1))
+    except Exception:
+        return None
+def stale_session_reason(ns, pod):
+    """What the app's own page says about a pod that waits: the stale-session
+    reason _why_waiting gives, or "". The pod's events are read only when the
+    reading names a stale session on its host at all."""
+    try:
+        if not LEFTOVERS.stale_session((pod.get("spec") or {}).get("nodeName")):
+            return ""
+    except Exception:
+        return ""
+    found = _why_waiting(ns, pod)
+    return found["message"] if found and found.get("stale_session") else ""
 def _age(stamp):
     try:
         return time.time() - calendar.timegm(time.strptime(str(stamp), "%Y-%m-%dT%H:%M:%SZ"))
@@ -470,3 +511,4 @@ import homestead_updates as U  # noqa: E402
 import homestead_update_registry as REGISTRY  # noqa: E402
 import homestead_update_checks as CHECKS  # noqa: E402
 import homestead_names as NAMES  # noqa: E402
+import homestead_storage_leftovers as LEFTOVERS  # noqa: E402
