@@ -223,6 +223,49 @@ class VMMutationJobTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "job has ended"):
             ops.record_phase(ident, "writing", 0, "late worker")
 
+    def test_a_create_stamps_its_vm_with_the_job_id_and_an_edit_does_not(self):
+        vms = "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"
+        claim = {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "guest-disk", "namespace": "lab"}}
+        sent = {}
+
+        def answer(method, path, body=None, **kwargs):
+            sent[path] = copy.deepcopy(body)
+            return {**copy.deepcopy(body), "metadata": {**body["metadata"], "uid": "u-" + body["metadata"]["name"],
+                                                        "resourceVersion": "1"}}
+        self.send.side_effect = answer
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+              "metadata": {"name": "guest", "namespace": "lab", "labels": {"app": "guest"}}}
+
+        def commit(writer):
+            writer("POST", "/api/v1/namespaces/lab/persistentvolumeclaims", claim)
+            made = writer("POST", vms, vm)
+            return {"ok": True, "vm_identity": {key: made["metadata"][key] for key in ("namespace", "name", "uid", "resourceVersion")}}
+        self.dispatch(commit, kind="vm-create")
+        ident = ops.stored()[0]["id"]
+        self.assertEqual({"app": "guest", job.CREATE_JOB_LABEL: ident}, sent[vms]["metadata"]["labels"])
+        self.assertNotIn("labels", sent["/api/v1/namespaces/lab/persistentvolumeclaims"]["metadata"], "only the VM is stamped")
+        self.assertEqual({"app": "guest"}, vm["metadata"]["labels"], "the caller's manifest is left as it was")
+        self.send.side_effect = lambda method, path, body=None, **kw: sent.update({path: copy.deepcopy(body)}) or copy.deepcopy(self.vm)
+        self.dispatch(kind="vm-edit", body={"capacity_token": f"{int(time.time()) + 600}.edit"})
+        self.assertNotIn(job.CREATE_JOB_LABEL, str(sent[PATH]))
+
+    def test_a_vm_is_this_attempts_by_its_receipt_uid_or_when_the_answer_was_lost_by_the_stamp(self):
+        vm = {"resource": {"kind": "VirtualMachine"}}
+        stamped = {"metadata": {"uid": "a", "labels": {job.CREATE_JOB_LABEL: "job-1"}}}
+        cases = [
+            ({**vm, "identity": {"uid": "a"}}, {"metadata": {"uid": "a"}}, True),
+            # A known uid decides: another uid is another VM, whatever its stamp says.
+            ({**vm, "identity": {"uid": "b"}}, stamped, False),
+            ({**vm, "phase": "uncertain"}, stamped, True),
+            ({**vm, "phase": "uncertain"}, {"metadata": {"uid": "a", "labels": {job.CREATE_JOB_LABEL: "job-2"}}}, False),
+            ({**vm, "phase": "uncertain"}, {"metadata": {"uid": "a"}}, False),
+            # Only a VM carries the stamp: a claim with no receipt is unproven.
+            ({"resource": {"kind": "PersistentVolumeClaim"}, "phase": "uncertain"}, stamped, False),
+        ]
+        for entry, found, expected in cases:
+            with self.subTest(entry=entry, found=found):
+                self.assertIs(expected, job.made_by_attempt(found, entry, "job-1"))
+
     def test_recovery_routes_are_admin_only_and_monitor_does_not_write(self):
         for suffix in ("preview", "resolve"):
             self.assertIn("/api/operations/vm-recovery/" + suffix, server.ADMIN_ROUTES)
