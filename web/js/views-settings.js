@@ -665,12 +665,14 @@ window.selfDataPrepare = async () => {
 window.selfDataWatch = async index => {
   const flow = selfDataDialog, job = flow?.jobs?.[index];
   if (!job) return;
+  flow.watch?.poll?.stop();
   const watch = {}; flow.watch = watch; flow.review = null;
-  const paint = async () => {
-    if (selfDataDialog !== flow || flow.watch !== watch || !$("#selfDataFlow")) return;
+  // A poll (#983), every 3 s: none in a hidden tab, and closing the dialog cancels its read. A failed read ends it, as before.
+  const paint = async signal => {
+    if (selfDataDialog !== flow || flow.watch !== watch || !$("#selfDataFlow")) return false;
     try {
-      const state = await api("/api/self/data/prepare");
-      if (selfDataDialog !== flow || flow.watch !== watch || !$("#selfDataFlow")) return;
+      const state = await api("/api/self/data/prepare", { signal });
+      if (selfDataDialog !== flow || flow.watch !== watch || !$("#selfDataFlow")) return false;
       const current = state.preparations.find(j => j.id === job.id);
       if (!current) throw new Error("The preparation record is not available. Check the existing volumes before creating another.");
       flow.state = state; flow.selected = current;
@@ -681,10 +683,16 @@ window.selfDataWatch = async index => {
           UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "This host must be able to use both volumes." }))) : ""}
         <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()", { attrs: 'data-dialog-dismiss="true"' })) +
           (current.archivable ? UI.button("Archive record", `selfDataArchiveReview(${jsArg(current.id)})`, {attrs:'data-need="admin"'}) : ""))}</div>`;
-      if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
-    } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
+      if (["succeeded", "failed", "cancelled"].includes(current.status)) return false;
+    } catch (e) {
+      if (UI.pollCancelled(signal)) return false;
+      if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`;
+      // Stopped, not just false: a read given up after 30 s ends the poll too.
+      watch.poll?.stop(); return false;
+    }
   };
-  await paint();
+  watch.poll = UI.poll(paint, 3000);
+  await watch.poll.first;
 };
 let selfDataArchiveDialog = null;
 window.selfDataArchiveReview = async id => {

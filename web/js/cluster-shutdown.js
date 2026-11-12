@@ -1,11 +1,12 @@
 /* A lost connection during shutdown keeps the last observation, never success. */
 let shutdownReview = null;
 let shutdownSequence = 0;
-let shutdownTimer;
+let shutdownTimer = null;
+const shutdownStop = () => { shutdownTimer?.stop(); shutdownTimer = null; };
 window.clusterShutdown = async () => {
   const sequence = ++shutdownSequence;
   shutdownReview = null;
-  clearTimeout(shutdownTimer);
+  shutdownStop();
   try {
     const current = await api('/api/cluster/shutdown');
     if (sequence !== shutdownSequence) return;
@@ -49,7 +50,7 @@ window.clusterShutdownStart = async () => {
   }
 };
 window.clusterShutdownProgress = state => {
-  clearTimeout(shutdownTimer);
+  shutdownStop();
   const expired = Date.now() / 1000 > state.deadline + 180;
   const canCancel = !['handoff', 'released', 'failed'].includes(state.phase) && !expired;
   modal('Cluster shutdown progress', '<div id="shutdownLive" aria-live="polite"></div>' +
@@ -83,20 +84,27 @@ function shutdownPaint(state, disconnected = false) {
       drain.pods.map(p => [esc(p.pod), esc(p.node), esc(SHUTDOWN_DRAIN_WORDS[p.state] || p.state)]))) : '') +
     UI.table([{label:'Host'}, {label:'Last known state'}], state.plan.nodes.map(n => [esc(n.name), `${esc(state.hosts?.find(h => h.name === n.name)?.state || 'Waiting for the helper')}${left(n.name) ? ` · ${left(n.name)} pod${left(n.name) === 1 ? '' : 's'} still stopping` : ''}<span class="sub">${n.name === state.plan.own_node ? 'Last · Homestead\'s host' : 'Turned off after all apps and volumes stop'}</span>`]));
 }
+/* A poll (#983), every 2 s. It reads on in a hidden tab (background: a shutdown is followed as it
+   happens), and closing the dialog stops it. api() leaves its own `timeout` to a
+   caller that passes a signal, so the 10 s limit on a read joins the poll's signal here. */
 function shutdownPoll(last) {
+  shutdownStop();
   if (!$('#shutdownLive')) return;
-  shutdownTimer = setTimeout(async () => {
-    if (!$('#shutdownLive')) return;
+  shutdownTimer = UI.poll(async signal => {
+    if (!$('#shutdownLive')) return false;
     try {
-      const result = await api('/api/cluster/shutdown', {keep:true, timeout:10000});
-      if (!$('#shutdownLive')) return;
+      // Without AbortSignal.any the 10 s limit alone; closing still ends the poll through its own race.
+      const timeout = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(10000) : null;
+      const limit = timeout && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout || signal;
+      const result = await api('/api/cluster/shutdown', {keep:true, signal:limit});
+      if (UI.pollCancelled(signal) || !$('#shutdownLive')) return false;
       if (!result.state || result.state.run !== last.run) throw new Error('The shutdown record changed');
       const next = result.state;
-      if (next.phase !== last.phase || (Date.now() / 1000 > next.deadline + 180 && $('#shutdownCancel'))) return clusterShutdownProgress(next);
+      if (next.phase !== last.phase || (Date.now() / 1000 > next.deadline + 180 && $('#shutdownCancel'))) { clusterShutdownProgress(next); return false; }
       shutdownPaint(next);
-      shutdownPoll(next);
-    } catch (_) { shutdownPaint(last, true); shutdownPoll(last); }
-  }, 2000);
+      last = next;
+    } catch (_) { if (UI.pollCancelled(signal)) return false; shutdownPaint(last, true); }
+  }, 2000, { later: true, background: true });
 }
 window.clusterShutdownCancel = async () => {
   try {

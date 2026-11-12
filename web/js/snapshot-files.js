@@ -1,5 +1,6 @@
 /* A snapshot browser prepares its own copy; the live claim stays mounted. */
-let snapshotFilesReview = null, snapshotFilesSession = null, snapshotFilesTimer, snapshotFilesSequence = 0;
+let snapshotFilesReview = null, snapshotFilesSession = null, snapshotFilesTimer = null, snapshotFilesSequence = 0;
+const snapshotFilesStop = () => { snapshotFilesTimer?.stop(); snapshotFilesTimer = null; };
 window.snapshotFiles = async (volume, snapshot) => {
   snapshotFilesDismiss();
   const sequence = ++snapshotFilesSequence;
@@ -35,11 +36,13 @@ window.snapshotFilesStart = async () => {
     if (sequence !== snapshotFilesSequence) { snapshotFilesRelease(session); return; }
     if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Check the preparation progress', esc(error.message) + '. The request may have created a copy, and its saved session is checked.');
   }
-  if ($('#snapshotFilesProgress')) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 2000);
+  // A poll (#983): its first read at once, then every 3 s; none in a hidden tab, and closing the dialog cancels its read.
+  snapshotFilesStop();
+  if ($('#snapshotFilesProgress')) snapshotFilesTimer = UI.poll(snapshotFilesPoll, 3000);
 };
 function snapshotFilesPaint(state) {
   if (state.state === 'ready') {
-    clearTimeout(snapshotFilesTimer);
+    snapshotFilesStop();
     // The file manager owns the session from here: closing it ends the session.
     snapshotFilesSession = null;
     window.fileManagerSnapshot(state);
@@ -47,7 +50,7 @@ function snapshotFilesPaint(state) {
   }
   const host = $('#snapshotFilesProgress');
   if (!host) return;
-  if (['failed', 'closed', 'closing'].includes(state.state)) clearTimeout(snapshotFilesTimer);
+  if (['failed', 'closed', 'closing'].includes(state.state)) snapshotFilesStop();
   if (snapshotFilesSession) snapshotFilesSession.state = state.state;
   const linked = state.source?.method === 'linked-clone';
   host.innerHTML = state.state === 'preparing'
@@ -56,18 +59,19 @@ function snapshotFilesPaint(state) {
       UI.progress(state.percent ?? null, {label:state.stage === 'clone' ? (linked ? 'Linked clone' : 'Snapshot copy') : 'Preparation', detail:state.message})
     : UI.callout(state.state === 'failed' ? 'bad' : 'warn', state.state === 'closed' ? 'Browser closed' : 'Browser needs attention', esc(state.message || 'The temporary session no longer exists.'));
 }
-async function snapshotFilesPoll() {
-  if (!$('#snapshotFilesProgress') || !snapshotFilesSession) return;
+// One read of the preparation poll; false ends it.
+async function snapshotFilesPoll(signal) {
+  if (!$('#snapshotFilesProgress') || !snapshotFilesSession) return false;
   const sequence = snapshotFilesSequence, s = snapshotFilesSession;
   try {
-    const state = await api(`/api/snapshot-files/status?namespace=${encodeURIComponent(s.namespace)}&session=${encodeURIComponent(s.session)}`);
-    if (sequence !== snapshotFilesSequence) return;
+    const state = await api(`/api/snapshot-files/status?namespace=${encodeURIComponent(s.namespace)}&session=${encodeURIComponent(s.session)}`, {signal});
+    if (sequence !== snapshotFilesSequence) return false;
     snapshotFilesPaint(state);
   } catch (error) {
-    if (sequence !== snapshotFilesSequence) return;
+    if (UI.pollCancelled(signal) || sequence !== snapshotFilesSequence) return false;
     if ($('#snapshotFilesProgress')) $('#snapshotFilesProgress').innerHTML = UI.callout('warn', 'Progress unavailable', esc(error.message) + '. Trying again. The temporary session expires automatically.');
   }
-  if ($('#snapshotFilesProgress') && !['failed','closed','closing'].includes(snapshotFilesSession?.state)) snapshotFilesTimer = setTimeout(snapshotFilesPoll, 3000);
+  if (!$('#snapshotFilesProgress') || ['failed','closed','closing'].includes(snapshotFilesSession?.state)) return false;
 }
 async function snapshotFilesRelease(session) {
   if (!session) return;
@@ -78,7 +82,7 @@ async function snapshotFilesRelease(session) {
 }
 window.snapshotFilesDismiss = () => {
   ++snapshotFilesSequence;
-  clearTimeout(snapshotFilesTimer);
+  snapshotFilesStop();
   const session = snapshotFilesSession;
   snapshotFilesSession = null;
   snapshotFilesReview = null;

@@ -9,11 +9,12 @@ function setup() {
     $: key => fields[key], esc: v => String(v).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     modal: (_title, html) => { fields["#selfDataFlow"] = { innerHTML: html }; },
     deployCapacityHtml: c => `<p>${(c.warnings || []).map(ctx.esc).join(", ")}</p>`, noteOperation: o => noted.push(o),
-    setTimeout: f => timers.push(f),
+    // UI.poll's give-up timer (30 s) is its own (dialog-polls.test.js); these are the loop's waits.
+    setTimeout: (f, ms) => ms === 30000 ? 0 : timers.push(f), clearTimeout() {},
     api: async (path, options) => {
-      const body = options ? JSON.parse(options.body) : undefined;
+      const body = options?.method ? JSON.parse(options.body) : undefined;
       sent.push({ path, body });
-      if (!options) return structuredClone(state);
+      if (!options?.method) return structuredClone(state);
       if (path === "/api/self/data/prepare/preview") return { storage_class: "destination", size: "3Gi", capacity_token: "signed", capacity: { blocked: false, warnings: ["Storage is not reserved"] } };
       if (path === "/api/self/data/prepare") {
         state.preparations = [{ id: "job", operation: body.operation, destination: "target", status: "running", node: "node1", progress: 15, message: "Creating volume", prepared: false }];

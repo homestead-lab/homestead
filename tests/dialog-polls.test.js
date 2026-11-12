@@ -434,14 +434,8 @@ test("going to another page stops that page's polls at once", async () => {
    nearest function before it), where that function or the callback reads:
    api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
 const HAND_POLLS_LEFT = [
-  "cluster-shutdown.js shutdownPoll",
-  "host-os.js osUpdatesFollow",
-  "onboard.js guideWatch",
-  "snapshot-files.js snapshotFilesPoll",
   "views-lifecycle-images.js viewImages",
   "views-lifecycle-import.js watchMoves",
-  "views-protect.js refreshSnapshotDialog",
-  "views-settings.js paint",
   "views-storage-volumes.js volumeProgressWatch",
 ];
 function handPolls(file, src) {

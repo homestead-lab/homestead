@@ -742,25 +742,29 @@ function snapshotCleanupHtml(p) {
     ${pct == null ? '<span class="spin2"></span>' : `<div class="meter" role="progressbar" aria-label="Longhorn volume cleanup" aria-valuenow="${+pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${Math.max(0, Math.min(100, +pct))}%"></span></div>`}
     <p class="small">Progress of the slowest copy. This covers cleanup of the whole volume, not each snapshot, including cleanup started in Longhorn or by schedules.</p></div>`;
 }
+/* A poll (#983), every 4 s: none in a hidden tab, and closing the dialog cancels its reads. */
 async function refreshSnapshotDialog(token, vol, label) {
-  const host = $("#snapshot_live");
-  if (!host || +host.dataset.token !== token || $("#modal").classList.contains("hidden")) return;
-  clearTimeout(SNAPSHOT_TIMER);
-  try {
-    const [snaps, progress] = await Promise.all([
-      api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
-      api("/api/lh/snapshot-progress?volume=" + encodeURIComponent(vol)).catch(e => ({error: e.message})),
-    ]);
-    if ($("#snapshot_live") !== host || token !== SNAPSHOT_REFRESH) return;
-    host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
-    if (window.applyRole) applyRole();
-  } catch (e) {
-    if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "The snapshots could not be refreshed", `${esc(String(e.message).replace(/\.$/, ""))}. Homestead is trying again. An earlier cleanup may still be running.`);
-  }
-  if ($("#snapshot_live") === host) {
-    clearTimeout(SNAPSHOT_TIMER);
-    SNAPSHOT_TIMER = setTimeout(() => refreshSnapshotDialog(token, vol, label), 4000);
-  }
+  const shown = () => { const host = $("#snapshot_live"); return host && +host.dataset.token === token && !$("#modal").classList.contains("hidden") ? host : null; };
+  if (!shown()) return;
+  SNAPSHOT_TIMER?.stop();
+  const poll = SNAPSHOT_TIMER = UI.poll(async signal => {
+    const host = shown();
+    if (!host) return false;
+    try {
+      const [snaps, progress] = await Promise.all([
+        api("/api/lh/snapshots?volume=" + encodeURIComponent(vol), { signal }),
+        api("/api/lh/snapshot-progress?volume=" + encodeURIComponent(vol), { signal }).catch(e => ({error: e.message})),
+      ]);
+      if ($("#snapshot_live") !== host || token !== SNAPSHOT_REFRESH) return false;
+      host.innerHTML = snapshotCleanupHtml(progress) + `<div class="sec">Snapshots (${snaps.length})</div>` + snapshotTimeline(snaps, vol, label);
+      if (window.applyRole) applyRole();
+    } catch (e) {
+      if (UI.pollCancelled(signal)) return false;
+      if ($("#snapshot_live") === host) host.innerHTML = UI.callout("warn", "The snapshots could not be refreshed", `${esc(String(e.message).replace(/\.$/, ""))}. Homestead is trying again. An earlier cleanup may still be running.`);
+    }
+    if ($("#snapshot_live") !== host) return false;
+  }, 4000);
+  await poll.first;
 }
 window.lhSnaps = async (vol, label) => {
   const token = ++SNAPSHOT_REFRESH;

@@ -4,7 +4,8 @@
 // test moves by hand, a tab that can be hidden, and a modal that keeps the elements
 // of the last body drawn (by id) until another body replaces them, as the browser's
 // #mbody does. close() is closeModal: the box is hidden, its elements stay, and the
-// dialog's polls are stopped. Every read is held until the test answers it, and a
+// dialog's polls are stopped, after the hooks closeModal calls first (the snapshot
+// browser's and the data move's). Every read is held until the test answers it, and a
 // read cancelled through its signal rejects as fetch does.
 // It is NOT a browser: the browser groups open these dialogs for real.
 const fs = require("node:fs"), vm = require("node:vm");
@@ -50,7 +51,8 @@ module.exports = function dialogPollWorld(files, extra = {}) {
   const register = body => {
     for (const [tag, id] of String(body).matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)) {
       let content = "";
-      const el = { id, checked: false, disabled: /\sdisabled\b/.test(tag), value: "", dataset: {}, outerHTML: tag, textContent: "",
+      const dataset = Object.fromEntries([...tag.matchAll(/\sdata-([a-z-]+)="([^"]*)"/g)].map(([, k, v]) => [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
+      const el = { id, checked: false, disabled: /\sdisabled\b/.test(tag), value: "", dataset, outerHTML: tag, textContent: "",
         classList: { contains: () => false, add() {}, remove() {}, toggle() {} } };
       Object.defineProperty(el, "innerHTML", { get: () => content, set: value => { content = value; register(value); } });
       fields["#" + id] = el;
@@ -85,7 +87,7 @@ module.exports = function dialogPollWorld(files, extra = {}) {
     ctx, clock, document, fields, reads, answers,
     run: code => vm.runInContext(code, ctx),
     // closeModal(): the box hides, its body stays, and the dialog's polls stop (#983).
-    close() { hidden = true; ctx.UI.stopPolls(); },
+    close() { ctx.window.snapshotFilesDismiss?.(); ctx.window.selfDataClose?.(); hidden = true; ctx.UI.stopPolls(); },
     get open() { return !hidden; },
     get title() { return title; },
   };
