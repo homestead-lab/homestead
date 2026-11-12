@@ -155,10 +155,21 @@ def _remove_refused_create(kind, namespace, name, ident, ops, send):
     return _run_cleanup(ident, ops, send)
 
 
+def _cleanup_path(namespace, target):
+    if target["kind"] == "VirtualMachine":
+        return f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines/{target['name']}"
+    return f"/api/v1/namespaces/{namespace}/{REMOVABLE[target['kind']]}/{target['name']}"
+
+
 def _run_cleanup(ident, ops, send):
     """Each delete still an intent is sent and its outcome written down, then
     the job says what went. The name is free again (retain_resources off)
-    only when nothing the attempt made is left."""
+    only when nothing the attempt made is left. Two origins share it: a
+    refused create's own clean-up, and an admin's reviewed removal
+    (homestead_vm_mutation_recovery.remove), whose steps carry the
+    resourceVersion the review read and may start with the VM itself. A VM
+    step that did not go keeps every later step: the claims, Secrets and
+    ConfigMaps a VM of that name may use are never removed beside it."""
     import homestead_kube as KUBE
     item = next((row for row in ops.stored() if isinstance(row, dict) and row.get("id") == ident), None)
     cleanup = ((item or {}).get("ref") or {}).get("cleanup") or {}
@@ -171,19 +182,27 @@ def _run_cleanup(ident, ops, send):
         if step["phase"] != "intent":
             continue
         target = step["resource"]
-        try:
-            # 404: gone already (a restart after the delete was sent).
-            KUBE.delete_if_present(f"/api/v1/namespaces/{namespace}/{REMOVABLE[target['kind']]}/{target['name']}",
-                                   {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": step["uid"]}},
-                                   send=send)
-            outcome = {"phase": "removed"}
-        except Exception as error:
-            # A 409 is one made again under the name since; a 5xx or no
-            # answer is not known to be gone. Either way it is kept.
-            code = getattr(error, "code", None)
-            if hasattr(error, "close"):
-                error.close()
-            outcome = {"phase": "kept", **({"http_status": int(code)} if isinstance(code, int) else {})}
+        vm_stayed = any(saved["resource"]["kind"] == "VirtualMachine" and saved["phase"] == "kept"
+                        for saved in cleanup["steps"])
+        if vm_stayed:
+            outcome = {"phase": "kept"}  # not sent: the VM it may belong to is still there
+        else:
+            # The fence is what the decision read: the receipt's uid, or for a
+            # reviewed removal the uid and resourceVersion the review showed.
+            fence = {"uid": step["uid"], **({"resourceVersion": step["resourceVersion"]} if step.get("resourceVersion") else {})}
+            try:
+                # 404: gone already (a restart after the delete was sent).
+                KUBE.delete_if_present(_cleanup_path(namespace, target),
+                                       {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": fence}, send=send)
+                outcome = {"phase": "removed"}
+            except Exception as error:
+                # A 409 is one made again under the name since, or changed
+                # since the review; a 5xx or no answer is not known to be gone.
+                # Either way it is kept.
+                code = getattr(error, "code", None)
+                if hasattr(error, "close"):
+                    error.close()
+                outcome = {"phase": "kept", **({"http_status": int(code)} if isinstance(code, int) else {})}
         with ops.transaction() as t:
             items = t.items
             row = next(r for r in items if isinstance(r, dict) and r.get("id") == ident)
@@ -193,6 +212,7 @@ def _run_cleanup(ident, ops, send):
                 if saved["sequence"] == step["sequence"]:
                     saved.update(outcome)
             t.save(items)
+        step.update(outcome)
     with ops.transaction() as t:
         items = t.items
         row = next(r for r in items if isinstance(r, dict) and r.get("id") == ident)
@@ -204,25 +224,42 @@ def _run_cleanup(ident, ops, send):
         for entry in row["ref"].get("writes", []):
             if entry.get("sequence") in gone:
                 entry["removed"] = True
-        code = cleanup.get("http_status")
-        if left:
-            names = ", ".join(f"{t.get('kind')} {t.get('name')}" for t in left)
-            message = (f"The cluster refused the VM (HTTP {code}). What it created was removed except {names}. "
-                       "Check the kept write records. Nothing was retried.")
+        names = ", ".join(f"{t.get('kind')} {t.get('name')}" for t in left)
+        if cleanup.get("origin") == "reviewed":
+            by = cleanup.get("by") or "An admin"
+            words = {"VirtualMachine": "VM", "PersistentVolumeClaim": "Volume"}
+            kept = ", ".join(f"{words.get(t.get('kind'), t.get('kind'))} {t.get('name')}" for t in left)
+            if not left and not gone:
+                message = "Nothing was left to remove. The name can be used again."
+            elif not left:
+                message = f"{by} removed what this attempt created. Nothing else was changed."
+            elif gone:
+                message = f"{by} removed part of what this attempt created. Kept: {kept}. Check them, then review again."
+            elif cleanup["steps"]:
+                message = (f"Nothing was removed: what the review showed changed since, or could not be removed. "
+                           f"Kept: {kept}. Review again.")
+            else:
+                message = f"Nothing was removed. Kept: {kept}. Check them before creating the VM again."
         else:
-            message = (f"The cluster refused the VM (HTTP {code}). The volume claims, Secrets and ConfigMaps this attempt "
-                       "created were removed. Nothing was retried.")
+            code = cleanup.get("http_status")
+            if left:
+                message = (f"The cluster refused the VM (HTTP {code}). What it created was removed except {names}. "
+                           "Check the kept write records. Nothing was retried.")
+            else:
+                message = (f"The cluster refused the VM (HTTP {code}). The volume claims, Secrets and ConfigMaps this attempt "
+                           "created were removed. Nothing was retried.")
         cleanup["state"] = "done"
         row["ref"].update(phase="failed", retain_resources=bool(left))
         ops._finish(row, "failed", row.get("progress", 0), message)
         t.save(items)
-    return {"all": not left}
+    return {"all": not left, "removed": len(gone), "message": message}
 
 
 def resume_cleanups(ops, send):
-    """The leader's round: a refused create's clean-up that a restart cut
-    off is finished, under the job's own lock (never beside a dispatcher
-    still running it)."""
+    """The leader's round: a create's clean-up that a restart cut off (a
+    refused create's, or an admin's reviewed removal) is finished, under the
+    job's own lock (never beside a dispatcher still running it). It sends
+    only the deletes already written down, each fenced as written."""
     for item in ops.stored():
         if not isinstance(item, dict):
             continue
@@ -233,7 +270,7 @@ def resume_cleanups(ops, send):
             with POWER.worker_lock(item["id"], ops, timeout=1):
                 _run_cleanup(item["id"], ops, send)
         except Exception as error:
-            print(f"refused VM create {item['id']}: clean-up not finished: {str(error)[:160]}", flush=True)
+            print(f"VM create {item['id']}: clean-up not finished: {str(error)[:160]}", flush=True)
 
 
 def status(item):
