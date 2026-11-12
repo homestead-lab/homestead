@@ -79,6 +79,8 @@ HELD_GRACE = 180
 # without a word, so it is not offered.
 REBUILD = "concurrent-replica-rebuild-per-node-limit"
 REBUILD_RANGE = (1, 10)
+# How long whether Longhorn removes orphan records by itself is kept (seconds).
+ORPHAN_KEEP = 300
 WARN_PCT, CRIT_PCT = 80, 95
 GiB = 1024 ** 3
 
@@ -336,14 +338,14 @@ def orphan_auto_removal():
     says it: {"setting": the name read or None, "said": a sentence}. Shown
     only; Homestead does not change it (drain blockers say it per row)."""
     auto = BLOCKERS.auto_removal(kget)
-    if auto is None:
-        return {"setting": None, "said": "Homestead cannot tell whether Longhorn removes orphan records by "
-                                         "itself: it could not read Longhorn's setting."}
-    on = [kind for kind in BLOCKERS.AUTO_KINDS if auto[kind] is True]
-    off = [kind for kind in BLOCKERS.AUTO_KINDS if auto[kind] is False]
-    said = (f"Longhorn removes {' and '.join(on)} orphan records by itself"
-            + (f", but not {' or '.join(off)} records." if off else ".")
-            if on else f"Longhorn does not remove {' or '.join(off)} orphan records by itself.")
+    unsure = BLOCKERS.auto_unsure(auto, "orphan records")
+    if unsure:
+        return {"setting": auto and auto["setting"], "said": unsure}
+    on = [BLOCKERS.AUTO_WORDS[kind] for kind in BLOCKERS.AUTO_KINDS if auto[kind] is True]
+    off = [BLOCKERS.AUTO_WORDS[kind] for kind in BLOCKERS.AUTO_KINDS if auto[kind] is False]
+    said = (f"Longhorn removes records of {' and '.join(on)} by itself"
+            + (f", but not records of {' or '.join(off)}." if off else ".")
+            if on else f"Longhorn does not remove records of {' or '.join(off)} by itself.")
     return {"setting": auto["setting"], "said": said}
 
 
@@ -415,7 +417,9 @@ def status():
     out["rwx_fast_failover"] = cfg["rwx_fast_failover"]
     out["replenish_wait"] = cfg["replenish_wait"]
     out["replenish_choices"] = list(REPLENISH_CHOICES)
-    out["orphan_auto_removal"] = orphan_auto_removal()
+    # Only the settings card shows it, but its route serves the leader's snapshot
+    # of status(); kept a while, so status()'s other callers add no read each.
+    out["orphan_auto_removal"] = homestead_routes.cached("lh-orphan-auto-removal", ORPHAN_KEEP, orphan_auto_removal)
     return out
 
 

@@ -176,11 +176,16 @@ AUTO_KIND = {ENGINE_INSTANCE: "instance", REPLICA_INSTANCE: "instance", "shard-i
              "shardgroup-instance": "instance", **{name: "replica-data" for name in REPLICA_DATA}}
 
 
+# The everyday words for each kind; the setting's own item names go in brackets.
+AUTO_WORDS = {"instance": "leftover processes", "replica-data": "leftover volume data"}
+
+
 def auto_removal(read=None):
     """{"setting": the name read, kind: True, False, or None when that setting
-    does not cover the kind}, for each of AUTO_KINDS; None when neither
-    setting could be read or its value is not one Longhorn takes. Never a
-    guess: a failed read of the new name is not answered from the old one."""
+    does not cover the kind}, for each of AUTO_KINDS; {"setting", "unknown":
+    the value} when the value is not one Longhorn takes; None when neither
+    setting could be read. Never a guess: a failed read of the new name is not
+    answered from the old one."""
     read = read or kget
     for name in (AUTO_DELETION, OLD_AUTO_DELETION):
         try:
@@ -194,37 +199,49 @@ def auto_removal(read=None):
         value = str(item.get("value") or "").strip()
         if name == OLD_AUTO_DELETION:
             if value not in ("true", "false"):
-                return None
+                return {"setting": name, "unknown": value}
             return {"setting": name, "instance": None, "replica-data": value == "true"}
         kinds = {part.strip() for part in value.split(";")} - {""}
         if kinds - set(AUTO_KINDS):
-            return None
+            return {"setting": name, "unknown": value}
         return {"setting": name, **{kind: kind in kinds for kind in AUTO_KINDS}}
+    return None
+
+
+def auto_unsure(auto, what):
+    """"Cannot tell" about what, saying why, when auto does not answer at all; else None."""
+    if auto is None:
+        return (f"Homestead cannot tell whether Longhorn removes {what} by itself. "
+                f"It could not read Longhorn's {AUTO_DELETION} setting.")
+    if "unknown" in auto:
+        return (f"Homestead cannot tell whether Longhorn removes {what} by itself. Longhorn's "
+                f"{auto['setting']} setting holds a value Homestead does not know: {auto['unknown'][:60]}.")
     return None
 
 
 def _auto_said(types, auto):
     """The restart review's words on whether Longhorn removes records of these
-    orphan types by itself; kept out of a row's what (the review's token)."""
-    if auto is None:
-        return (" Homestead cannot tell whether Longhorn removes these records by itself: it could not read "
-                f"Longhorn's {AUTO_DELETION} setting.")
+    orphan types by itself; kept out of a row's what (the review's token).
+    Longhorn removes none on a host that is down, so "while the host is up"."""
+    unsure = auto_unsure(auto, "these records")
+    if unsure:
+        return " " + unsure
     said = ""
     kinds = {AUTO_KIND.get(t) for t in types}
     for kind in AUTO_KINDS:
         if kind not in kinds:
             continue
-        on = auto.get(kind)
+        on, words = auto.get(kind), AUTO_WORDS[kind]
         if on is None:
-            said += f" Homestead cannot tell whether Longhorn removes {kind} records by itself."
+            said += f" Homestead cannot tell whether Longhorn removes records of {words} by itself."
             continue
         if auto["setting"] == OLD_AUTO_DELETION:
             setting = f"its {OLD_AUTO_DELETION} setting is {'on' if on else 'off'}"
         else:
             setting = f"its {AUTO_DELETION} setting {'includes' if on else 'does not include'} {kind}"
-        said += (f" Longhorn removes {kind} records by itself on this cluster"
-                 f"{' after a grace period' if auto['setting'] == AUTO_DELETION else ''} ({setting})." if on else
-                 f" Longhorn does not remove {kind} records by itself on this cluster ({setting}).")
+        said += (f" Longhorn removes records of {words} by itself on this cluster while the host is up"
+                 f"{', after a grace period' if auto['setting'] == AUTO_DELETION else ''} ({setting})." if on else
+                 f" Longhorn does not remove records of {words} by itself on this cluster ({setting}).")
     for other in sorted({t or "unknown" for t in types if t not in AUTO_KIND}):
         said += f" Homestead cannot tell whether Longhorn removes {other} records by itself."
     return said
@@ -451,7 +468,7 @@ def review(rows):
     return [(row["id"], _STUCK_FOR.sub(" past its grace period", row["what"])) for row in rows]
 
 
-def _for_host(node, now=None, read=None):
+def _for_host(node, now=None, read=None, auto=True):
     now = time.time() if now is None else now
     got = _read_all({"orphans": ORPHANS, "instancemanagers": INSTANCE_MANAGERS, "engines": ENGINES,
                      "pods": _pods_path(node), "claims": CLAIMS, "attachments": ATTACHMENTS}, read)
@@ -469,7 +486,7 @@ def _for_host(node, now=None, read=None):
     if orphans is not None:
         # Read only when the host has orphan records to say it of; unread, it is said, never a blocker.
         mine = any((o.get("spec") or {}).get("nodeID") == node and not _terminating(o) for o in orphans)
-        rows += _orphan_rows(node, orphans, engines, auto_removal(read) if mine else None)
+        rows += _orphan_rows(node, orphans, engines, auto_removal(read) if mine and auto else None)
     named = {r["engine"] for row in rows if row["kind"] == "engine-orphans" for r in row["records"]}
     named |= _removing_engines(node, orphans)
     if managers is not None and engines is not None:
@@ -682,7 +699,8 @@ def stall_reason(node, read=None):
     """What holds node, read now, for the message of a drain that stalled;
     "" when nothing is found."""
     try:
-        return say(node, _for_host(node, read=read))
+        # say() uses each row's what only, so Longhorn's removal setting is not read.
+        return say(node, _for_host(node, read=read, auto=False))
     except Exception:  # the message falls back to its general advice
         return ""
 
