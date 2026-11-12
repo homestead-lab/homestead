@@ -591,14 +591,78 @@ def _hidden_more(text):
     return "".join(out) + text[shown:]
 
 
+# Two kinds of name are kept although _PLAIN hides them, as they are what a
+# person needs to find the problem. _PLAIN's rules, their order and what each
+# matches are untouched: where the rule that hides a kept name matches it, the
+# name is set aside instead of replaced, and put back once every rule has run.
+# _hidden_more then runs on that text as it does on _PLAIN's (a name set aside
+# is one character to it, so a name inside a value it hides goes with the
+# value). The text is then what _PLAIN and _hidden_more make of it, except that
+# a kept name stands where _PLAIN would have put its marker. plain_error checks
+# this on every call: with each slot given back its marker, the text must equal
+# their own output, or their own output is what it returns. Kept:
+# - a run the last rule hides (20 or more of letters, digits and +_=-) that is
+#   wholly a Longhorn volume's name, its replica's or its engine's;
+# - a quoted dotted name the address rule hides that is exactly one of the API
+#   groups in Homestead's API paths or a Longhorn object it reads (a closed
+#   list; any other may be a host).
+_API_GROUPS = {
+    "longhorn.io", "kubevirt.io", "cdi.kubevirt.io", "subresources.kubevirt.io", "upload.cdi.kubevirt.io",
+    "storage.k8s.io", "snapshot.storage.k8s.io", "coordination.k8s.io", "networking.k8s.io", "scheduling.k8s.io",
+    "metrics.k8s.io", "discovery.k8s.io", "rbac.authorization.k8s.io", "apiextensions.k8s.io",
+    "admissionregistration.k8s.io", "certificates.k8s.io", "cluster.x-k8s.io", "helm.cattle.io", "upgrade.cattle.io",
+    "k8s.cni.cncf.io", "harvesterhci.io", "network.harvesterhci.io", "loadbalancer.harvesterhci.io",
+    "devices.harvesterhci.io", "metallb.io", "cert-manager.io",
+    "volumes.longhorn.io", "engines.longhorn.io", "replicas.longhorn.io", "nodes.longhorn.io",
+    "settings.longhorn.io", "volumeattachments.longhorn.io",
+}
+_VOLUME = re.compile(r"pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-r-[0-9a-f]{8}|-e-\d{1,3})?")
+# By the rule's place in _PLAIN (a test pins the rules and their order).
+_KEPT = {2: lambda found: found[1:-1] in _API_GROUPS,
+         len(_PLAIN) - 1: _VOLUME.fullmatch}
+# A name set aside waits as one private-use character, its index into the
+# list of names. The input's own private-use characters are replaced first,
+# so a text cannot forge one, and only those indexes are put back. No rule
+# can match one: it is not a letter, digit, space or any character they name.
+_SLOTS = re.compile("[\ue000-\uf8ff]")
+_SLOT_COUNT = 0xf8ff - 0xe000 + 1
+
+
+def _apply(index, text, kept):
+    """The rule at index, as pattern.sub(word, text) applies it, but a match
+    that is a kept name goes into kept and leaves its slot."""
+    pattern, word = _PLAIN[index]
+    keep = _KEPT.get(index)
+    if keep is None:
+        return pattern.sub(word, text)
+
+    def replace(match):
+        if keep(match.group(0)) and len(kept) < _SLOT_COUNT:
+            kept.append((match.group(0), match.expand(word)))
+            return chr(0xe000 + len(kept) - 1)
+        return match.expand(word)
+    return pattern.sub(replace, text)
+
+
 def plain_error(text, limit=160):
     """An error as it may go to a notification channel: one short line,
-    addresses, URLs and token-shaped strings replaced, cut at limit."""
+    addresses, URLs and token-shaped strings replaced, cut at limit; a
+    Longhorn volume's name and Homestead's API groups kept (above)."""
     text = " ".join(str(text or "").split())
-    for pattern, word in _PLAIN:
-        text = pattern.sub(word, text)
-    text = _hidden_more(text)
-    return text if len(text) <= limit else text[:limit - 1] + "…"
+    slotted, kept = _SLOTS.sub("\ufffd", text), []
+    for index in range(len(_PLAIN)):
+        slotted = _apply(index, slotted, kept)
+    slotted = _hidden_more(slotted)
+    if not kept and not _SLOTS.search(text):
+        plain = slotted                    # nothing set aside or cleared: the rules' own output
+    else:
+        plain = text
+        for pattern, word in _PLAIN:
+            plain = pattern.sub(word, plain)
+        plain = _hidden_more(plain)
+        if kept and _SLOTS.sub(lambda m: kept[ord(m.group(0)) - 0xe000][1], slotted) == plain:
+            plain = _SLOTS.sub(lambda m: kept[ord(m.group(0)) - 0xe000][0], slotted)
+    return plain if len(plain) <= limit else plain[:limit - 1] + "…"
 
 
 # Failures that mean the API server did not answer: on this path every
