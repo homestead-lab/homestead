@@ -160,7 +160,77 @@ def _removing_engines(node, orphans):
             and (o.get("spec") or {}).get("orphanType") == ENGINE_INSTANCE} - {None, ""}
 
 
-def _orphan_rows(node, orphans, engines):
+# Which orphan records Longhorn removes by itself (longhorn-manager types/setting.go):
+# from v1.9.0, orphan-resource-auto-deletion lists the kinds, joined by ";" -
+# "instance", "replica-data", empty for none; Longhorn refuses anything else
+# (UnmarshalOrphanResourceTypes). Up to v1.8, the on/off orphan-auto-deletion,
+# which covered replica data only, the one orphan type then; v1.9.0 copies it
+# into the new setting (datastore syncSettingOrphanResourceAutoDeletionSettings).
+AUTO_DELETION = "orphan-resource-auto-deletion"
+OLD_AUTO_DELETION = "orphan-auto-deletion"
+AUTO_KINDS = ("instance", "replica-data")
+# The kind of the setting that covers each orphan type (v1.13.0: every instance
+# type goes through instance_manager_controller.go deleteOrphans, replica data
+# through node_controller.go deleteOrphansForReplicaDataStore).
+AUTO_KIND = {ENGINE_INSTANCE: "instance", REPLICA_INSTANCE: "instance", "shard-instance": "instance",
+             "shardgroup-instance": "instance", **{name: "replica-data" for name in REPLICA_DATA}}
+
+
+def auto_removal(read=None):
+    """{"setting": the name read, kind: True, False, or None when that setting
+    does not cover the kind}, for each of AUTO_KINDS; None when neither
+    setting could be read or its value is not one Longhorn takes. Never a
+    guess: a failed read of the new name is not answered from the old one."""
+    read = read or kget
+    for name in (AUTO_DELETION, OLD_AUTO_DELETION):
+        try:
+            item = read(f"{LH}/settings/{name}") or {}
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                continue
+            return None
+        except Exception:
+            return None
+        value = str(item.get("value") or "").strip()
+        if name == OLD_AUTO_DELETION:
+            if value not in ("true", "false"):
+                return None
+            return {"setting": name, "instance": None, "replica-data": value == "true"}
+        kinds = {part.strip() for part in value.split(";")} - {""}
+        if kinds - set(AUTO_KINDS):
+            return None
+        return {"setting": name, **{kind: kind in kinds for kind in AUTO_KINDS}}
+    return None
+
+
+def _auto_said(types, auto):
+    """The restart review's words on whether Longhorn removes records of these
+    orphan types by itself; kept out of a row's what (the review's token)."""
+    if auto is None:
+        return (" Homestead cannot tell whether Longhorn removes these records by itself: it could not read "
+                f"Longhorn's {AUTO_DELETION} setting.")
+    said = ""
+    kinds = {AUTO_KIND.get(t) for t in types}
+    for kind in AUTO_KINDS:
+        if kind not in kinds:
+            continue
+        on = auto.get(kind)
+        if on is None:
+            said += f" Homestead cannot tell whether Longhorn removes {kind} records by itself."
+            continue
+        if auto["setting"] == OLD_AUTO_DELETION:
+            setting = f"its {OLD_AUTO_DELETION} setting is {'on' if on else 'off'}"
+        else:
+            setting = f"its {AUTO_DELETION} setting {'includes' if on else 'does not include'} {kind}"
+        said += (f" Longhorn removes {kind} records by itself on this cluster"
+                 f"{' after a grace period' if auto['setting'] == AUTO_DELETION else ''} ({setting})." if on else
+                 f" Longhorn does not remove {kind} records by itself on this cluster ({setting}).")
+    for other in sorted({t or "unknown" for t in types if t not in AUTO_KIND}):
+        said += f" Homestead cannot tell whether Longhorn removes {other} records by itself."
+    return said
+
+
+def _orphan_rows(node, orphans, engines, auto=None):
     mine = [o for o in orphans if (o.get("spec") or {}).get("nodeID") == node]
     removable, other, removing = [], [], []
     for orphan in sorted(mine, key=lambda o: o["metadata"]["name"]):
@@ -194,7 +264,7 @@ def _orphan_rows(node, orphans, engines):
             f"volume{'s' if count != 1 else ''} {_names(volumes)}, now running on {_names(hosts)}",
             f"Each record keeps a leftover engine process on {node}'s instance-manager. Longhorn keeps the "
             f"instance-manager, and its disruption budget at 0, while it still runs engines, so the drain "
-            f"cannot evict it.",
+            f"cannot evict it.{_auto_said([ENGINE_INSTANCE], auto)}",
             "Remove these orphan records in the restart review: Longhorn then stops the leftover processes. "
             f"The volumes keep running on {_names(hosts)}.",
             can_remove=True, records=records))
@@ -217,7 +287,7 @@ def _orphan_rows(node, orphans, engines):
             f"other-orphans:{node}", "other-orphans",
             f"{count} other Longhorn orphan record{'s' if count != 1 else ''} on {node}: {_names(said)}",
             f"Longhorn keeps what an orphan record names on {node} until the record is removed. An instance "
-            f"record can keep {node}'s instance-manager from stopping.",
+            f"record can keep {node}'s instance-manager from stopping.{_auto_said([kind for _, kind, _ in other], auto)}",
             fix))
     if removing:
         count = len(removing)
@@ -397,7 +467,9 @@ def _for_host(node, now=None, read=None):
     engines = None if engine_list is None else _engines_by_name(engine_list)
     rows = []
     if orphans is not None:
-        rows += _orphan_rows(node, orphans, engines)
+        # Read only when the host has orphan records to say it of; unread, it is said, never a blocker.
+        mine = any((o.get("spec") or {}).get("nodeID") == node and not _terminating(o) for o in orphans)
+        rows += _orphan_rows(node, orphans, engines, auto_removal(read) if mine else None)
     named = {r["engine"] for row in rows if row["kind"] == "engine-orphans" for r in row["records"]}
     named |= _removing_engines(node, orphans)
     if managers is not None and engines is not None:

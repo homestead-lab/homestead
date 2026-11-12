@@ -142,5 +142,44 @@ class NodeDownTests(unittest.TestCase):
         self.assertIsNone(LHCAP.node_down(missing))
 
 
+class OrphanAutoRemovalTests(unittest.TestCase):
+    """Settings > Hardware and storage shows whether Longhorn removes orphan
+    records by itself. Shown only: Homestead does not change the setting."""
+
+    def said(self, *settings, fail=None):
+        c = Cluster(self)
+        for obj in settings:
+            c.kube.add(obj)
+        if fail:
+            c.kube.fail(f"{LHCAP.LH}/settings/{fail}", 500)
+        shown = LHCAP.status()["orphan_auto_removal"]
+        self.assertEqual([], c.sent, "shown only, never written")
+        return shown
+
+    def test_the_new_list_setting(self):
+        cases = {"": "Longhorn does not remove instance or replica-data orphan records by itself.",
+                 "instance": "Longhorn removes instance orphan records by itself, but not replica-data records.",
+                 "replica-data;instance": "Longhorn removes instance and replica-data orphan records by itself."}
+        for value, said in cases.items():
+            with self.subTest(value=value):
+                shown = self.said(setting("orphan-resource-auto-deletion", value))
+                self.assertEqual(said, shown["said"])
+                self.assertEqual("orphan-resource-auto-deletion", shown["setting"])
+
+    def test_the_old_on_or_off_setting(self):
+        shown = self.said(setting("orphan-auto-deletion", "false"))
+        self.assertEqual("Longhorn does not remove replica-data orphan records by itself.", shown["said"])
+        self.assertEqual("orphan-auto-deletion", shown["setting"])
+        self.assertEqual("Longhorn removes replica-data orphan records by itself.",
+                         self.said(setting("orphan-auto-deletion", "true"))["said"])
+
+    def test_missing_unreadable_or_unknown_cannot_tell(self):
+        cannot = "Homestead cannot tell whether Longhorn removes orphan records by itself: it could not read Longhorn's setting."
+        self.assertEqual(cannot, self.said()["said"])
+        self.assertEqual(cannot, self.said(setting("orphan-resource-auto-deletion", ""),
+                                           fail="orphan-resource-auto-deletion")["said"])
+        self.assertEqual(cannot, self.said(setting("orphan-resource-auto-deletion", "instance;all"))["said"])
+
+
 if __name__ == "__main__":
     unittest.main()

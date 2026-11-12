@@ -310,5 +310,123 @@ class DrainBlockerTests(unittest.TestCase):
         self.assertEqual(["engine-orphans", "other-orphans", "stuck-pod"], [row["kind"] for row in rows])
 
 
+def lh_setting(name, value):
+    """A Longhorn Setting as the API server answers it (longhorn-manager
+    k8s/pkg/apis/longhorn/v1beta2/setting.go: the value is a string)."""
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+            "metadata": {"namespace": "longhorn-system", "name": name}, "value": value, "status": {"applied": True}}
+
+
+# From Longhorn v1.9.0 (types/setting.go): the kinds it removes by itself, joined by ";".
+NEW = "orphan-resource-auto-deletion"
+# Up to Longhorn v1.8: on or off, replica data only.
+OLD = "orphan-auto-deletion"
+
+
+class AutoRemovalTests(unittest.TestCase):
+    """The restart review says whether Longhorn removes the orphan records it
+    names by itself, from Longhorn's own setting. It never changes a row's
+    what (the review's token) and never guesses."""
+
+    def rows(self, *objects, fail=None):
+        with Kube(*objects) as kube:
+            if fail:
+                kube.fail(LH + f"/settings/{fail}", 500)
+            return {row["kind"]: row for row in BLOCKERS.for_host("node-a", now=NOW)}
+
+    def engine_case(self, *settings, fail=None):
+        return self.rows(engine_orphan("vol-a", 1), engine("vol-a", "node-b"), *settings, fail=fail)
+
+    def test_instance_records_longhorn_leaves_are_said(self):
+        why = self.engine_case(lh_setting(NEW, ""))["engine-orphans"]["why"]
+        self.assertIn("Longhorn does not remove instance records by itself on this cluster "
+                      "(its orphan-resource-auto-deletion setting does not include instance).", why)
+
+    def test_instance_records_longhorn_removes_are_said(self):
+        why = self.engine_case(lh_setting(NEW, "instance"))["engine-orphans"]["why"]
+        self.assertIn("Longhorn removes instance records by itself on this cluster after a grace period "
+                      "(its orphan-resource-auto-deletion setting includes instance).", why)
+        self.assertNotIn("does not remove", why)
+
+    def test_each_kind_in_a_row_is_said_on_its_own(self):
+        rows = self.rows(fixture("orphan_replica_instance"), fixture("orphan_replica_data"),
+                         lh_setting(NEW, " replica-data ; "))
+        why = rows["other-orphans"]["why"]
+        self.assertIn("Longhorn does not remove instance records by itself", why)
+        self.assertIn("Longhorn removes replica-data records by itself on this cluster after a grace period "
+                      "(its orphan-resource-auto-deletion setting includes replica-data).", why)
+
+    def test_the_old_on_or_off_setting_is_read_when_the_new_one_is_missing(self):
+        rows = self.rows(fixture("orphan_replica_data"), lh_setting(OLD, "false"))
+        self.assertIn("Longhorn does not remove replica-data records by itself on this cluster "
+                      "(its orphan-auto-deletion setting is off).", rows["other-orphans"]["why"])
+        rows = self.rows(fixture("orphan_replica_data"), lh_setting(OLD, "true"))
+        self.assertIn("Longhorn removes replica-data records by itself on this cluster "
+                      "(its orphan-auto-deletion setting is on).", rows["other-orphans"]["why"])
+
+    def test_the_old_setting_says_nothing_about_instance_records(self):
+        # Before Longhorn 1.9 there were no instance orphan records to remove.
+        why = self.engine_case(lh_setting(OLD, "true"))["engine-orphans"]["why"]
+        self.assertIn("Homestead cannot tell whether Longhorn removes instance records by itself.", why)
+        self.assertNotIn("by itself on this cluster", why)
+
+    def test_the_new_setting_wins_over_a_leftover_old_one(self):
+        why = self.engine_case(lh_setting(OLD, "true"), lh_setting(NEW, ""))["engine-orphans"]["why"]
+        self.assertIn("does not include instance", why)
+
+    def test_no_setting_at_all_cannot_tell(self):
+        why = self.engine_case()["engine-orphans"]["why"]
+        self.assertIn("Homestead cannot tell whether Longhorn removes these records by itself: it could not "
+                      "read Longhorn's orphan-resource-auto-deletion setting.", why)
+
+    def test_a_failed_read_cannot_tell_and_is_no_blocker_of_its_own(self):
+        rows = self.engine_case(lh_setting(NEW, ""), fail=NEW)
+        self.assertEqual(["engine-orphans"], sorted(rows), "no unread row: the setting holds nothing back")
+        self.assertIn("Homestead cannot tell whether Longhorn removes these records by itself",
+                      rows["engine-orphans"]["why"])
+        self.assertNotIn("does not include", rows["engine-orphans"]["why"])
+
+    def test_a_failed_read_of_the_new_name_does_not_fall_back_to_the_old(self):
+        rows = self.engine_case(lh_setting(NEW, ""), lh_setting(OLD, "true"), fail=NEW)
+        self.assertIn("Homestead cannot tell", rows["engine-orphans"]["why"])
+
+    def test_a_value_longhorn_would_refuse_cannot_tell(self):
+        for value in ("instance;everything", "true"):
+            with self.subTest(value=value):
+                why = self.engine_case(lh_setting(NEW, value))["engine-orphans"]["why"]
+                self.assertIn("Homestead cannot tell", why)
+                self.assertNotIn("by itself on this cluster", why)
+
+    def test_an_orphan_type_homestead_does_not_know_cannot_tell(self):
+        odd = fixture("orphan_replica_instance")
+        odd["spec"]["orphanType"] = "something-new"
+        why = self.rows(odd, lh_setting(NEW, "instance;replica-data"))["other-orphans"]["why"]
+        self.assertIn("Homestead cannot tell whether Longhorn removes something-new records by itself.", why)
+
+    def test_the_review_token_and_what_do_not_change(self):
+        # review() feeds the restart review's token: an open review must still
+        # apply whatever the setting says, read or not.
+        objects = (engine_orphan("vol-a", 1), engine("vol-a", "node-b"), fixture("orphan_replica_data"))
+        seen = []
+        for extra, fail in (((), None), ((lh_setting(NEW, ""),), None), ((lh_setting(NEW, "instance"),), None),
+                            ((lh_setting(NEW, ""),), NEW)):
+            with Kube(*objects, *extra) as kube:
+                if fail:
+                    kube.fail(LH + f"/settings/{fail}", 500)
+                seen.append(BLOCKERS.review(BLOCKERS.for_host("node-a", now=NOW)))
+        self.assertEqual(1, len({json.dumps(token) for token in seen}), seen)
+
+    def test_a_host_with_no_orphan_records_does_not_read_the_setting(self):
+        with Kube(instance_manager("node-a", engines=[]), pod(phase="Running"), claim(), attachment()) as kube:
+            self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))
+        self.assertFalse([path for path, _ in kube.reads if "/settings/" in path])
+
+    def test_records_being_removed_get_no_line(self):
+        removing = engine_orphan("vol-a", 1)
+        removing["metadata"]["deletionTimestamp"] = stamp(NOW - 30)
+        rows = self.rows(removing, engine("vol-a", "node-b"), lh_setting(NEW, ""))
+        self.assertNotIn("by itself on this cluster", rows["removing-orphans"]["why"])
+
+
 if __name__ == "__main__":
     unittest.main()
