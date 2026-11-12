@@ -170,7 +170,6 @@ class ASaveThatSucceeds(Fixture):
         self.assertIn("cloudflared.THEIRS_TOKEN", self.kube.object(SECRET)["data"])
 
 
-
 class ValuesUsedOtherwiseAreKept(unittest.TestCase):
     """A save removes only values nothing in the app uses: an init container
     referring to one, a container taking the whole Secret (envFrom) or a
@@ -222,6 +221,28 @@ class ValuesUsedOtherwiseAreKept(unittest.TestCase):
         self.start()
         self.save_image()
         self.assertEqual(b64("key-file"), self.kube.object(SECRET)["data"].get("tls.key"))
+
+    def test_a_projected_volume_keeps_the_keys_it_lists(self):
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["volumes"] = [{"name": "keys", "projected": {"sources": [
+            {"secret": {"name": "tunnel-env", "items": [{"key": "tls.crt", "path": "tls.crt"}]}}]}}]
+        self.secret["data"].update({"tls.crt": b64("cert-file"), "cloudflared.LEFTOVER_TOKEN": b64("left")})
+        self.start()
+        self.save_image()
+        data = self.kube.object(SECRET)["data"]
+        self.assertEqual(b64("cert-file"), data.get("tls.crt"))
+        self.assertNotIn("cloudflared.LEFTOVER_TOKEN", data, "a key nothing uses still goes")
+
+    def test_a_secret_the_pod_names_in_a_form_not_read_keeps_every_value(self):
+        # A CSI volume's nodePublishSecretRef (and other storage secretRefs) name
+        # the Secret in ways the save does not read key by key: it keeps them all.
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["volumes"] = [{"name": "share", "csi": {"driver": "smb.csi.example.com",
+                                                     "nodePublishSecretRef": {"name": "tunnel-env"}}}]
+        self.secret["data"]["username"] = b64("share-user")
+        self.start()
+        self.save_image()
+        self.assertEqual(b64("share-user"), self.kube.object(SECRET)["data"].get("username"))
 
     def test_a_value_that_is_not_text_is_kept_as_it_is(self):
         binary = base64.b64encode(bytes([0xff, 0xfe, 0x00, 0x81])).decode()

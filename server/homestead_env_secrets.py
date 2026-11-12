@@ -12,6 +12,7 @@ values as ordinary variables again (see values()), and saving moves them
 back.
 """
 import base64
+import copy
 import re
 import sys
 import urllib.error
@@ -54,6 +55,8 @@ def unused(dep, name, data):
     envFrom (the whole Secret: then nothing is unused) and volumes (the
     keys a volume lists, or the whole Secret)."""
     spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    if _named_elsewhere(spec, name):
+        return set()
     keys = set()
     for container in (spec.get("containers") or []) + (spec.get("initContainers") or []):
         for item in container.get("envFrom") or []:
@@ -73,6 +76,25 @@ def unused(dep, name, data):
                 return set()
             keys.update(item.get("key") for item in source["items"])
     return {key for key in data if key not in keys}
+
+
+def _named_elsewhere(spec, name):
+    """Whether the pod spec names the Secret anywhere unused() does not read
+    key by key (a CSI or other storage volume's secretRef, imagePullSecrets):
+    then every value is kept."""
+    rest = copy.deepcopy(spec)
+    for container in (rest.get("containers") or []) + (rest.get("initContainers") or []):
+        container.pop("env", None)
+        container.pop("envFrom", None)
+    rest["volumes"] = [volume for volume in rest.get("volumes") or [] if not volume.keys() & {"secret", "projected"}]
+
+    def names(node):
+        if isinstance(node, dict):
+            return any(names(value) for value in node.values())
+        if isinstance(node, list):
+            return any(names(value) for value in node)
+        return node == name
+    return names(rest)
 
 
 def _same_bytes(current, moved):
