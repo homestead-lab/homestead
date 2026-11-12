@@ -15,8 +15,8 @@ function setup() {
   }
   function modal(title,body) {html=body;Object.keys(fields).forEach(key=>delete fields[key]);fields['#modal']={classList:{contains:()=>closed}};closed=false;register(body);}
   const c={window:null,console,esc:value=>String(value??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsArg:value=>JSON.stringify(value),
-    $:key=>fields[key],modal,toast(){},noteOperation(){},clearTimeout(){},setTimeout:fn=>{timers.push(fn);return timers.length;},api:async(path,init)=>{
-      if(!init)return item;const body=JSON.parse(init.body);sent.push({path,body});
+    $:key=>fields[key],modal,toast(){},noteOperation(){},clearTimeout(){},setTimeout:(fn,ms)=>{if(ms===30000)return 0;timers.push(fn);return timers.length;},api:async(path,init)=>{
+      if(!init?.method)return item;const body=JSON.parse(init.body);sent.push({path,body});
       if(path.endsWith('/review'))return plan;if(path.endsWith('/recheck'))return recovery;
       return new Promise(resolve=>{pending=resolve;});
     }};

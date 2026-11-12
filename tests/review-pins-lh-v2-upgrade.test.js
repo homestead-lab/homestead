@@ -16,9 +16,10 @@ function world({ report = {} } = {}) {
     esc: s => String(s ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;"), can: () => true, icon: () => "",
     modal: (title, h) => { closed = false; log.push(["modal", title, h]); fields["#lhV2UpgradeBody"].innerHTML = h; }, childModal: (title, h) => log.push(["childModal", title, h]),
     closeModal: () => { closed = true; log.push(["closeModal"]); }, toast: (text, tone) => log.push(["toast", text, tone]), clusterComponentsPaint: () => log.push(["clusterComponentsPaint"]),
-    setTimeout: f => { timer = f; log.push(["setTimeout"]); return 1; }, clearTimeout: () => log.push(["clearTimeout"]),
+    // The status poll's own wait (5 s) is the one poll() runs; UI.poll's give-up (30 s or more, whatever its limit) is its own (dialog-polls.test.js).
+    setTimeout: (f, ms) => { if (ms > 5000) return 0; timer = f; log.push(["setTimeout"]); return 1; }, clearTimeout: id => { if (id) log.push(["clearTimeout"]); },
     api: async (path, opts) => {
-      if (!opts) { log.push(["api", path]); if (state.report) return state.report(path); if (state.reportError) throw new Error(state.reportError); return base; }
+      if (!opts?.method) { log.push(["api", path]); if (state.report) return state.report(path); if (state.reportError) throw new Error(state.reportError); return base; }
       const body = JSON.parse(opts.body); log.push(["api", path, body]); posts.push({ path, body });
       if (path.endsWith("/review")) return { capacity_token: "review-token", plan: base };
       if (state.fail) throw new Error("refused");

@@ -13,9 +13,9 @@ function setup() {
   }
   function show(title,body) {html=body;for(const key of Object.keys(fields)) delete fields[key];fields['#modal']={classList:{contains:()=>closed}};closed=false;register(body);}
   const c={window:null,console,MODAL_STACK:[],esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsq:s=>JSON.stringify(s).replaceAll('"','&quot;'),jsArg:s=>JSON.stringify(String(s??'')),
-    actionBar:actions=>actions.filter(Boolean).map(a=>a.label).join(' '), $:s=>fields[s],modal:show,childModal:show,toast(){},noteOperation(){},clearTimeout(){},setTimeout:f=>{timers.push(f);return timers.length;},
+    actionBar:actions=>actions.filter(Boolean).map(a=>a.label).join(' '), $:s=>fields[s],modal:show,childModal:show,toast(){},noteOperation(){},clearTimeout(){},setTimeout:(f,ms)=>{if(ms===30000)return 0;timers.push(f);return timers.length;},
     api:async(path,opts)=>{
-      if(!opts)return item;
+      if(!opts?.method)return item;
       const body=JSON.parse(opts.body);sent.push({path,body});
       if(path.endsWith('/plan'))return plan;
       if(path.endsWith('/prepare-review'))return prep;

@@ -8,8 +8,8 @@ function setup(){
     let value='';const el={value:'',checked:false,disabled:tag.includes('disabled'),dataset:{typedExpect:tag.match(/data-typed-expect="([^"]*)"/)?.[1]}};
     Object.defineProperty(el,'innerHTML',{get:()=>value,set:v=>{value=v;register(v);}});fields['#'+id]=el;
   }}
-  const c={window:null,console,esc:v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsArg:v=>JSON.stringify(v),$:s=>fields[s],toast(){},clearTimeout(){},setTimeout:f=>timers.push(f),modal(title,body){html=body;Object.keys(fields).forEach(k=>delete fields[k]);closed=false;fields['#modal']={classList:{contains:()=>closed}};register(body);},api:async(path,opts)=>{
-    if(!opts)return item;sent.push({path,body:JSON.parse(opts.body)});
+  const c={window:null,console,esc:v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsArg:v=>JSON.stringify(v),$:s=>fields[s],toast(){},clearTimeout(){},setTimeout:(f,ms)=>ms===30000?0:timers.push(f),modal(title,body){html=body;Object.keys(fields).forEach(k=>delete fields[k]);closed=false;fields['#modal']={classList:{contains:()=>closed}};register(body);},api:async(path,opts)=>{
+    if(!opts?.method)return item;sent.push({path,body:JSON.parse(opts.body)});
     if(path.endsWith('/review'))return plan;
     if(path.endsWith('/retirement-review'))return {...plan,id:item.id,action:'retire-runtime',capacity_token:'retire-token'};
     return new Promise((resolve,reject)=>{pending=resolve;rejectPending=reject;});

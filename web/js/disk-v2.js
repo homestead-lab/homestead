@@ -34,7 +34,7 @@ function diskV2Region(plan, scope={}) {
 }
 const diskV2Post = (path, body) => api(`/api/disks/v2/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 function diskV2Reset() {
-  clearTimeout(diskV2Timer); ++diskV2Sequence; diskV2Approval=null;
+  diskV2Timer?.stop(); diskV2Timer=null; ++diskV2Sequence; diskV2Approval=null;
   if(window.__logTimer) {window.__logTimer.stop?.();window.__logTimer=null;}
 }
 function diskV2Volumes(rows, destinations=false) {
@@ -88,17 +88,19 @@ window.diskV2Watch = async id => {
   if(typeof MODAL_STACK!=='undefined') MODAL_STACK.length=0;
   modal('Disk preparation · Longhorn V2','<div id="diskV2Status"><div class="empty"><span class="spin2"></span>Checking saved task</div>'+UI.actions(UI.cancel('Close'))+'</div>',true,'disk-v2');
   const host=$('#diskV2Status');
-  async function poll() {
-    if(sequence!==diskV2Sequence || $('#diskV2Status')!==host || $('#modal')?.classList.contains('hidden')) return;
+  // A poll (#983): closing the dialog cancels its read; returning false ends it. It reads on in a
+  // hidden tab (background): a disk being emptied and prepared is followed as it happens.
+  const poll=diskV2Timer=UI.poll(async signal => {
+    if(sequence!==diskV2Sequence || $('#diskV2Status')!==host || $('#modal')?.classList.contains('hidden')) return false;
     try {
-      const item=await api('/api/disks/v2/status?id='+encodeURIComponent(id));
-      if(sequence!==diskV2Sequence || $('#diskV2Status')!==host || $('#modal')?.classList.contains('hidden')) return;
+      const item=await api('/api/disks/v2/status?id='+encodeURIComponent(id),{signal});
+      if(sequence!==diskV2Sequence || $('#diskV2Status')!==host || $('#modal')?.classList.contains('hidden')) return false;
       diskV2Paint(item);window.noteOperation?.(item);
-      if(['succeeded','failed','cancelled'].includes(item.status)) return;
-    } catch(e) {if($('#diskV2Status')===host) {host.__snapshot=null;host.innerHTML=UI.callout('warn','Task status unavailable',esc(e.message)+'. Checking again. Completion is not assumed.');}}
-    if(sequence===diskV2Sequence && $('#diskV2Status')===host) diskV2Timer=setTimeout(poll,4000);
-  }
-  await poll();
+      if(['succeeded','failed','cancelled'].includes(item.status)) return false;
+    } catch(e) {if(UI.pollCancelled(signal)) return false;if($('#diskV2Status')===host) {host.__snapshot=null;host.innerHTML=UI.callout('warn','Task status unavailable',esc(e.message)+'. Checking again. Completion is not assumed.');}}
+    if(sequence!==diskV2Sequence || $('#diskV2Status')!==host) return false;
+  },4000,{background:true});
+  await poll.first;
 };
 function diskV2Paint(item) {
   const host=$('#diskV2Status'); if(!host) return;
