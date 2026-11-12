@@ -2,8 +2,46 @@
 import hashlib
 import time
 
+import copy
+
+import homestead_names as NAMES
 import homestead_vm_power_job as POWER
 import homestead_vm_write as WRITE
+
+# The label on a VM the Create VM page makes: the id of the job whose create
+# made it. A create whose reply was lost has no uid to compare, so this is how
+# a later review proves the VM there is this attempt's own (made_by_attempt).
+# Its own key, not the Unraid import's "import-operation": that one says the
+# VM was imported, and this VM was not.
+CREATE_JOB_LABEL = NAMES.key("create-operation")
+
+
+def made_by_attempt(found, entry, ident):
+    """Whether the object found is the one this job's write made: the uid its
+    POST answered with, which alone decides when it is known (another uid is
+    another object, whatever its labels say), or, when the answer was lost,
+    this job's id on a VirtualMachine. Anything else of that name is somebody
+    else's."""
+    meta = (found or {}).get("metadata") or {}
+    uid = (entry.get("identity") or {}).get("uid")
+    if uid:
+        return meta.get("uid") == uid
+    return ((entry.get("resource") or {}).get("kind") == "VirtualMachine"
+            and (meta.get("labels") or {}).get(CREATE_JOB_LABEL) == ident)
+
+
+def _stamping(writer, namespace, ident):
+    """The writer a create's commit gets: the VirtualMachine it POSTs carries
+    this job's id (CREATE_JOB_LABEL); every other write goes as it is."""
+    vms = f"/apis/kubevirt.io/v1/namespaces/{namespace}/virtualmachines"
+
+    def send(method, path, body=None, **kwargs):
+        if method == "POST" and path == vms and isinstance(body, dict):
+            body = copy.deepcopy(body)
+            meta = body.setdefault("metadata", {})
+            meta["labels"] = {**(meta.get("labels") or {}), CREATE_JOB_LABEL: ident}
+        return writer(method, path, body, **kwargs)
+    return send
 
 
 def dispatch(kind, body, namespace, name, identity, ops, send, commit):
@@ -25,7 +63,7 @@ def dispatch(kind, body, namespace, name, identity, ops, send, commit):
         ops.record_phase(ident, "writing", 0, "Preparing the reviewed VM settings. Each write is recorded.")
         writer = WRITE.ResourceWriter(send, WRITE.operation_recorder(ops, ident))
         try:
-            result = commit(writer)
+            result = commit(_stamping(writer, namespace, ident) if kind == "vm-create" else writer)
             writer.check()  # a low-level warning must not hide a failed write
             if not writer.count:
                 raise ValueError("VM commit did not produce a verified resource receipt")
