@@ -101,3 +101,18 @@ test("approving a request that changes nothing irreversibly stays a primary Run"
   assert.match(shown.html, /class="btn pri"[^>]*>Run it</);
   assert.doesNotMatch(shown.html, /class="btn danger"/);
 });
+
+test("approving an edit that deletes stored values is a danger button named from what it deletes", () => {
+  const edit = { id: "e5", tool: "edit_container", title: "Edit a container", key: "Claude Code",
+    action: "Edit a container: it deletes 2 values stored for lab/tunnel that cannot be restored",
+    summary: { action: "Edit a container: it deletes 2 values stored for lab/tunnel that cannot be restored", app: "lab/tunnel",
+      deletes_stored_values: ["DB_PASSWORD (worker)", "OLD_TOKEN (cloudflared)"] }, args: { settings: { ns: "lab", name: "tunnel" } } };
+  const { c, shown } = context([edit]);
+  c.agentApprove("e5");
+  assert.match(shown.html, /class="btn danger"[^>]*>Delete 2 stored values</);
+  assert.match(shown.html, /OLD_TOKEN \(cloudflared\)/);
+  const plain = { ...edit, id: "e6", summary: { action: "Edit a container: this needs the admin role", settings: {} } };
+  const other = context([plain]);
+  other.c.agentApprove("e6");
+  assert.doesNotMatch(other.shown.html, /btn danger/, "an edit that deletes no stored value keeps the usual button");
+});

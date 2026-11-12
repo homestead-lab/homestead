@@ -340,7 +340,10 @@ def _edit_container(args, ctx):
     the save refuses before writing anything, and the refusal becomes an agent
     request listing those values. Approving reviews the edit again as the
     person; the save then carries that new review's acknowledgement, and only
-    when it deletes exactly the values the request listed."""
+    when it deletes exactly the values the request listed. An edit that would
+    also need an administrator for another reason (host access, a workload
+    only an admin may edit) is refused when it would delete stored values, as
+    one request cannot list them: it is made on the Edit page."""
     settings = _clean(args.get("settings"))
     settings.pop("confirm_secret_removed", None)
     if ctx.get("fresh"):
@@ -349,7 +352,11 @@ def _edit_container(args, ctx):
             raise ToolError("Homestead could not read the app's Secret, so it cannot check which stored values the "
                             "edit deletes. Nothing was saved. The agent can ask again.")
         now = _lost_values(review.get("secret_removed"))
-        if now != sorted((ctx.get("summary") or {}).get("deletes_stored_values") or []):
+        listed = sorted((ctx.get("summary") or {}).get("deletes_stored_values") or [])
+        if now and not listed:
+            raise ToolError(f"This edit now also deletes values stored in the app's Secret, which the request did not "
+                            f"list: {', '.join(now)}. Nothing was saved. Make this edit on the Edit page.")
+        if now != listed:
             raise ToolError("The stored values this edit deletes are not the ones the request listed. Nothing was "
                             "saved. The agent can ask again; check the new list before approving it.")
         if now:
@@ -357,6 +364,12 @@ def _edit_container(args, ctx):
         return call("POST", "/api/edit", body=settings, **_as(ctx))
     try:
         return call("POST", "/api/edit", body=settings, **_as(ctx))
+    except (HOSTACCESS.Refused, PermissionError) as error:
+        # It needs an administrator for another reason (_guarded files that
+        # request): first make sure it deletes no stored value.
+        if isinstance(error, HOSTACCESS.Refused) or str(error).startswith("only an admin"):
+            _refuse_if_it_deletes(settings)
+        raise
     except ToolError as error:
         refusal = error.data if isinstance(error.data, dict) else {}
         if (refusal.get("refused"), refusal.get("reason")) != ("secret_removed", "unconfirmed"):
@@ -372,6 +385,24 @@ def _edit_container(args, ctx):
              "settings": AUDIT.redact(args.get("settings") or {})},
             "Deleting stored values needs a person: one must approve this in Homestead, where it lists them. "
             "Follow it with get_agent_request.") from None
+
+
+def _refuse_if_it_deletes(settings):
+    """Refuse an edit an administrator must approve for another reason when
+    it would also delete stored values (or when that cannot be checked)."""
+    import homestead_workloads as WORKLOADS
+    try:
+        lost = WORKLOADS.stored_values_lost(settings)
+    except (OSError, ValueError, KeyError):
+        lost = None
+    if lost is None:
+        raise ToolError("This edit needs an administrator, and Homestead could not read the app's Secret to check "
+                        "which stored values it deletes. Nothing was saved. Make this edit on the Edit page.")
+    if lost:
+        names = _lost_values(lost)
+        raise ToolError(f"This edit deletes {len(names)} value{'' if len(names) == 1 else 's'} stored in the app's "
+                        f"Secret, which cannot be restored: {', '.join(names)}. It also needs an administrator, and "
+                        "an agent cannot ask for both. Nothing was saved. Make this edit on the Edit page.")
 
 
 def _preview(path):
@@ -779,7 +810,7 @@ TOOLS = [
          "history and can be undone there. A save that deletes values stored in the app's Secret (the preview's "
          "secret_removed, except a renamed variable's old key) cannot be undone, so it never runs on the agent's "
          "call: it becomes a request a person approves in Homestead, which lists those values; confirm_secret_removed "
-         "is ignored here.",
+         "is ignored here. Such an edit that also needs an administrator is refused: it is made on the Edit page.",
          {"settings": SETTINGS}, ["settings"], run=_guarded(_edit_container)),
     Tool("scale_container", "Scale a container", "containers:manage", CHANGE,
          "Sets how many copies of a container run. A scale that needs room is refused with the capacity "

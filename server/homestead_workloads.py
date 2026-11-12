@@ -353,6 +353,22 @@ def secret_removal(b, prepared, context):
     return None
 
 
+def stored_values_lost(b):
+    """The values stored in the app's Secret an Edit save of b would lose
+    (ENVSEC.removed()'s entries whose value is not kept), read without the
+    review's role checks: for the agent tool, which must know before it
+    asks an administrator to approve an edit it may not make itself. None
+    when the Secret cannot be read; none for a rename, which deletes none."""
+    ns, name = LC.dns_label(b.get("ns"), "namespace"), LC.dns_label(b.get("name"), "workload name")
+    if b.get("workload_name") and b["workload_name"] != name:
+        return []
+    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    prepared = WORKLOAD_EDIT.prepare_edit(dict(b), current=current)
+    entries = ENVSEC.removed(current, prepared["deployment"], ENVSEC.held_or_unknown(ns, current, kget),
+                             b.get("masked_env"))
+    return None if entries is None else [entry for entry in entries if not entry["value_kept"]]
+
+
 def edit(request):
     b = request.body
     _path_names(b.get("ns"), b.get("name"))

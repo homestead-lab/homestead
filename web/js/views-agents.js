@@ -171,6 +171,9 @@ const agentPost = (path, id) => api(path, { method: "POST", headers: { "Content-
 const AGENT_RISKY = /^(delete|remove|restore|revert|rollback|wipe)_/;
 function agentResult(r) {
   if (r.tool === "run_container_command") return { risky: true, label: "Run command" };
+  // An edit that deletes values stored in the app's Secret: they cannot be restored either.
+  const stored = (r.summary?.deletes_stored_values || []).length;
+  if (stored) return { risky: true, label: `Delete ${stored} stored value${stored === 1 ? "" : "s"}` };
   if (!AGENT_RISKY.test(r.tool || "")) return { risky: false, label: "Run it" };
   const verb = (r.tool.split("_")[0] || "").replace(/^./, c => c.toUpperCase());
   const a = r.args || {}, target = a.namespace && a.name ? `${a.namespace}/${a.name}` : a.name || a.snapshot || a.volume || "";

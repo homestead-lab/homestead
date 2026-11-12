@@ -29,6 +29,7 @@ import homestead_agent_tools as TOOLS
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_deploy_server as DEPLOY_SERVER
 import homestead_env_secrets as ENVSEC
+import homestead_host_access as HOSTACCESS
 import homestead_kube as K
 import homestead_lifecycle as LC
 import homestead_mcp as MCP
@@ -467,6 +468,15 @@ class AnAgentProposesAPersonApproves(Fixture):
         self.key = {"id": "k1", "name": "claude", "owner": "ada", "scopes": ["read", "containers:manage"],
                     "expires": time.time() + 3600, "mcp": True, "role": "operator", "kind": "key"}
 
+    def capacity_plan(self, body):
+        """As the real edit_capacity_plan checks host access for the caller's
+        role: an app only an admin may edit, then host access the edit adds."""
+        current = K.kget(dep_path(body["name"]))
+        HOSTACCESS.require_target(current, "lab")
+        prepared, context, plan = super().capacity_plan(body)
+        HOSTACCESS.require_edit(current, prepared["deployment"])
+        return prepared, context, plan
+
     def agent(self, name, settings):
         return MCP.call_tool(name, {"settings": copy.deepcopy(settings)}, self.key, "192.0.2.40")
 
@@ -503,6 +513,9 @@ class AnAgentProposesAPersonApproves(Fixture):
         self.assertEqual("done", done["status"], done)
         self.assertEqual(["cloudflared.OLD_TOKEN"], done["result"]["secret_removed"])
         self.assertEqual({"cloudflared.TUNNEL_TOKEN", "worker.DB_PASSWORD"}, set(self.stored()))
+        approved = [json.loads(line) for line in Path(AUDIT._path()).read_text(encoding="utf-8").splitlines()][-1]
+        self.assertEqual("approved", approved["outcome"])
+        self.assertIn("deleted stored values: cloudflared.OLD_TOKEN", approved["detail"])
 
     def test_a_list_that_changed_after_the_request_is_refused(self):
         rid = self.propose(self.body(env=DROP_OLD))["request"]
@@ -533,8 +546,44 @@ class AnAgentProposesAPersonApproves(Fixture):
         request = REQUESTS.create(TOOLS.BY_NAME["edit_container"], {"settings": settings},
                                   {"action": "Edit a container: this needs the admin role", "settings": settings},
                                   "admin", self.key, "this needs the admin role", "192.0.2.40", escalated=True)
-        self.assertEqual("failed", REQUESTS.approve(request["id"], "ada", "admin")["status"])
+        failed = REQUESTS.approve(request["id"], "ada", "admin")
+        self.assertEqual("failed", failed["status"])
+        self.assertIn("which the request did not list: OLD_TOKEN (cloudflared)", failed["detail"])
+        self.assertIn("Make this edit on the Edit page.", failed["detail"])
         self.assertEqual(b64("old"), self.stored()["cloudflared.OLD_TOKEN"])
+
+    def admin_only(self):
+        """tunnel uses the host's network: only an admin may edit it."""
+        dep = self.kube.object(dep_path("tunnel"))
+        dep["spec"]["template"]["spec"]["hostNetwork"] = True
+        self.kube.add(dep)
+
+    def assertRefusedUpFront(self, settings):
+        with self.assertRaises(TOOLS.ToolError) as refused:
+            self.agent("edit_container", settings)
+        message = str(refused.exception)
+        self.assertIn("OLD_TOKEN (cloudflared)", message)
+        self.assertIn("cannot be restored", message)
+        self.assertTrue(message.endswith("Make this edit on the Edit page."), message)
+        self.assertEqual(0, REQUESTS.listing("admin")["pending"], "no request a person could never complete")
+        self.assertNothingWritten()
+
+    def test_an_app_only_an_admin_may_edit_is_refused_up_front_when_values_go(self):
+        self.admin_only()
+        self.assertRefusedUpFront(self.body(env=DROP_OLD))
+
+    def test_an_edit_adding_host_access_is_refused_up_front_when_values_go(self):
+        body = self.body(env=DROP_OLD)
+        body["containers"][0]["privileges"] = {"privileged": True}
+        self.assertRefusedUpFront(body)
+
+    def test_an_edit_needing_an_admin_that_deletes_nothing_is_still_a_request(self):
+        self.admin_only()
+        body = self.body()
+        body["containers"][0]["image"] = "cloudflare/cloudflared:2026.2.0"
+        answer = self.agent("edit_container", body)
+        self.assertEqual("pending_approval", answer["status"])
+        self.assertEqual("admin", REQUESTS.get(answer["request"])["role"])
 
     def test_no_value_appears_in_the_approval_the_answer_or_the_audit_log(self):
         answer = self.propose(self.body(env=DROP_OLD))
@@ -559,6 +608,7 @@ class AnAgentProposesAPersonApproves(Fixture):
         tool = TOOLS.BY_NAME["edit_container"]
         self.assertIn("never runs on the agent's call", tool.description)
         self.assertIn("confirm_secret_removed is ignored", tool.description)
+        self.assertIn("also needs an administrator is refused", tool.description)
         wiki = (Path(__file__).resolve().parents[1] / "docs" / "wiki" / "AI-agents.md").read_text(encoding="utf-8")
         row = next(line for line in wiki.splitlines() if line.startswith("| `edit_container`"))
         self.assertIn("never runs on the agent's call", row)

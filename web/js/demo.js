@@ -3778,7 +3778,14 @@ ssh_pwauth: true
       created: ago(2), expires: ago(-28), ended: null, decided_by: null, detail: "", role: "admin", escalated: true, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
       action: "Deploy grafana/grafana:11 into lab with a LoadBalancer on 192.0.2.60", summary: { action: "Deploy grafana/grafana:11 into lab with a LoadBalancer on 192.0.2.60", image: "docker.io/grafana/grafana:11",
         namespace: "lab", ports: [3000], load_balancer_ip: "192.0.2.60", why_admin: "It publishes a new address on the network" },
-      args: { image: "grafana/grafana:11", namespace: "lab", ports: [3000] }, result: null }],
+      args: { image: "grafana/grafana:11", namespace: "lab", ports: [3000] }, result: null },
+    // An edit that deletes a stored value waits for a person: the request lists it, names only.
+    { id: "c83f1a6e2b9d0475", tool: "edit_container", title: "Edit a container", status: "pending", reason: "it deletes 1 value stored for lab/paperless that cannot be restored",
+      created: ago(1), expires: ago(-29), ended: null, decided_by: null, detail: "", role: "operator", escalated: true, key: "Claude Code", owner: "demo", addr: "192.0.2.31",
+      action: "Edit a container: it deletes 1 value stored for lab/paperless that cannot be restored", summary: { action: "Edit a container: it deletes 1 value stored for lab/paperless that cannot be restored",
+        app: "lab/paperless", deletes_stored_values: ["OLD_API_TOKEN (paperless)"],
+        effect: "Approving deletes these values stored in the app's Secret. Homestead cannot restore them. If the list is different when it is approved, nothing is saved." },
+      args: { settings: { ns: "lab", name: "paperless" } }, result: null }],
     finished: [
     { id: "c4d81f7e0a3b2956", tool: "delete_snapshot", title: "Delete a snapshot", status: "done", reason: "Free space on frigate-config", created: ago(95), expires: ago(65), ended: ago(92),
       decided_by: "demo", detail: "Deleted the snapshot snap-0412 of frigate-config", role: "operator", escalated: false, key: "Claude Code", owner: "demo", addr: "192.0.2.31",

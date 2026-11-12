@@ -141,7 +141,7 @@ Tools come in three classes:
 | `preview_compose` | What a Docker Compose file would deploy, and its review, without deploying it | `containers:manage` | change |
 | `apply_compose` | Deploys a Compose file as preview_compose reviewed it | `containers:manage` | change |
 | `preview_edit_container` | What saving these settings (from get_container_settings, changed) would do: what restarts, and the capacity review | `containers:manage` | change |
-| `edit_container` | Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside settings, its capacity_token and confirm_capacity: true. A save that deletes values stored in the app's Secret (the preview's secret_removed, except a renamed variable's old key) cannot be undone, so it never runs on the agent's call: it becomes a request a person approves in Homestead, which lists those values; confirm_secret_removed is ignored here | `containers:manage` | change |
+| `edit_container` | Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside settings, its capacity_token and confirm_capacity: true. A save that deletes values stored in the app's Secret (the preview's secret_removed, except a renamed variable's old key) cannot be undone, so it never runs on the agent's call: it becomes a request a person approves in Homestead, which lists those values; confirm_secret_removed is ignored here. Such an edit that also needs an administrator is refused: it is made on the Edit page | `containers:manage` | change |
 | `scale_container` | Sets how many copies of a container run | `containers:manage` | change |
 | `preview_move_container` | Whether a container fits on another host, and its capacity_token for move_container | `containers:manage` | change |
 | `move_container` | Moves a container to another host as preview_move_container reviewed it | `containers:manage` | change |
@@ -307,6 +307,8 @@ agent follows it with `get_agent_request`.
   request too. The request lists those values by name (never a value): once
   deleted, they cannot be restored. Approving reviews the edit again; if it
   would then delete other values, nothing is saved and the agent can ask again.
+  Such an edit that also needs an administrator (host access, or an app only
+  an administrator may edit) is refused instead: it is made on the Edit page.
 - On approval Homestead **plans again as the approver** and runs only if the
   plan is unchanged. If the cluster moved on, the request ends as failed and the
   agent can ask again.
