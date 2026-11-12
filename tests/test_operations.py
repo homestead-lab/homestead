@@ -605,6 +605,7 @@ class BackupThatNeverStartsTests(unittest.TestCase):
 
     STEP = 4 * 60   # one look per 4 minutes: under the gap that pauses a wait
     WAIT = "Wait for backup nightly-0 to be deleted"   # a reason Longhorn's backup controller gives
+    NONE = "Longhorn gives no reason. This happens when the volume cannot be attached for the backup."
     job_at = BackupJobEndsTests.job_at
 
     def setUp(self):
@@ -636,9 +637,11 @@ class BackupThatNeverStartsTests(unittest.TestCase):
     def test_a_backup_with_no_progress_is_flagged_after_twelve_hours_with_longhorn_s_reason(self):
         self.assertEqual(12 * 3600, getattr(operations, "BACKUP_START_LIMIT", None))
         # Longhorn's states: "" is its new state; Pending carries its reason in status.messages.
-        for status, says in (({}, "Longhorn gives no reason"), ({"state": ""}, "Longhorn gives no reason"),
+        for status, says in (({}, self.NONE), ({"state": ""}, self.NONE),
                              ({"state": "Pending", "messages": {"ReconcileInfo": self.WAIT}}, f"Longhorn says: {self.WAIT}."),
-                             ({"state": "InProgress", "progress": 0}, "Longhorn gives no reason")):
+                             ({"state": "Pending", "messages": {"a": "Waiting for the engine e-1 to be ready", "b": "retry 2."}},
+                              "Longhorn says: Waiting for the engine e-1 to be ready. retry 2."),
+                             ({"state": "InProgress", "progress": 0}, self.NONE)):
             with self.subTest(status=status):
                 name = self.job_at(**status)["resource"]["name"]
                 self.assertFalse(self.flagged(self.watch(name, 12 * 3600 - self.STEP)))
@@ -648,6 +651,8 @@ class BackupThatNeverStartsTests(unittest.TestCase):
                 self.assertIn("no progress for 12 hours", job["message"])
                 self.assertIn(says, job["message"])
                 self.assertIn("Cancel removes the waiting backup and its snapshot", job["message"])
+                self.assertIn("The job stays open because Longhorn may still start the backup and read its snapshot.", job["message"])
+                self.assertTrue(job["message"].endswith("Back up again once the cause has cleared."), job["message"])
                 self.assertNotIn("backup target", job["message"])
         self.assertEqual([], self.kube.writes, "nothing is written to Longhorn")
 

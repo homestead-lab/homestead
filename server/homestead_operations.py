@@ -792,13 +792,13 @@ def _backup_not_started(ref, state, progress, status):
     if _backup_waited(ref, seen) < BACKUP_START_LIMIT:
         return None
     messages = status.get("messages") if isinstance(status.get("messages"), dict) else {}
-    said = " ".join(" ".join(str(text).split()) for text in messages.values() if str(text).strip())[:240]
+    said = ". ".join(" ".join(str(text).split()).rstrip(".") for text in messages.values() if str(text).strip())[:240]
     cause = (f"Longhorn says: {said.rstrip('.')}." if said else
-             "Longhorn gives no reason, as when the volume cannot be attached for the backup.")
+             "Longhorn gives no reason. This happens when the volume cannot be attached for the backup.")
     return ("running", progress,
             f"Needs attention: the backup has made no progress for {BACKUP_START_LIMIT // 3600} hours. {cause} "
-            f"It keeps its place because {ERRORS.KEEPS_GUARDS['backup']}. "
-            "Cancel removes the waiting backup and its snapshot. Then back up again.")
+            "The job stays open because Longhorn may still start the backup and read its snapshot. "
+            "Cancel removes the waiting backup and its snapshot. Back up again once the cause has cleared.")
 
 
 def _backup(item):
