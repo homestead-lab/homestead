@@ -84,8 +84,9 @@ def _named_elsewhere(spec, name):
     then every value is kept."""
     rest = copy.deepcopy(spec)
     for container in (rest.get("containers") or []) + (rest.get("initContainers") or []):
-        container.pop("env", None)
-        container.pop("envFrom", None)
+        # Mounts and devices name volumes, never Secrets.
+        for field in ("env", "envFrom", "volumeMounts", "volumeDevices"):
+            container.pop(field, None)
     rest["volumes"] = [volume for volume in rest.get("volumes") or [] if not volume.keys() & {"secret", "projected"}]
 
     def names(node):

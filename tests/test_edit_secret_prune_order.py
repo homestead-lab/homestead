@@ -244,6 +244,19 @@ class ValuesUsedOtherwiseAreKept(unittest.TestCase):
         self.save_image()
         self.assertEqual(b64("share-user"), self.kube.object(SECRET)["data"].get("username"))
 
+    def test_a_volume_named_after_the_secret_still_lets_unused_values_go(self):
+        # The mount names the volume, not the Secret: it is no reason to keep everything.
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["volumes"] = [{"name": "tunnel-env", "secret": {"secretName": "tunnel-env",
+                                                             "items": [{"key": "tls.key", "path": "tls.key"}]}}]
+        spec["containers"][0]["volumeMounts"] = [{"name": "tunnel-env", "mountPath": "/keys"}]
+        self.secret["data"].update({"tls.key": b64("key-file"), "cloudflared.LEFTOVER_TOKEN": b64("left")})
+        self.start()
+        self.save_image()
+        data = self.kube.object(SECRET)["data"]
+        self.assertEqual(b64("key-file"), data.get("tls.key"))
+        self.assertNotIn("cloudflared.LEFTOVER_TOKEN", data)
+
     def test_a_value_that_is_not_text_is_kept_as_it_is(self):
         binary = base64.b64encode(bytes([0xff, 0xfe, 0x00, 0x81])).decode()
         self.secret["data"][OLD] = binary
