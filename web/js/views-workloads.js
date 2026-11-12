@@ -92,7 +92,7 @@ const workloadBlocked = w => {
   const pod = (w.pods || []).find(p => p.unplaced);
   return pod ? `Cannot start: ${pod.unplaced}` : (w.pods || []).find(p => p.stale_session)?.stale_session || "";
 };
-const STALE_SESSION_TIP = "Cluster Health names this a stale iSCSI session: the host is still logged in to a Longhorn instance-manager address that is gone.";
+const STALE_SESSION_TIP = "Cluster Health calls this old connection a stale iSCSI session: the host is still logged in to a Longhorn instance-manager address that is gone.";
 
 /* What tells one pod of an app from another: the part Kubernetes adds after
    the ReplicaSet hash (#873). A name of 20 characters or fewer, such as most
@@ -145,7 +145,7 @@ function workloadHierarchy(w, { wide = false } = {}) {
       ${p.pull?.total_bytes ? `<div class="tree-pull">${pullBar(p.pull)}</div>` : ""}
       ${p.unplaced ? `<div class="tree-why unplaced" title="${esc(p.unplaced)}">Cannot be placed: ${esc(p.unplaced)}</div>` : ""}
       ${p.stale_session ? `<div class="tree-why unplaced" title="${esc(`${p.stale_session} ${STALE_SESSION_TIP}`)}">${esc(p.stale_session)}</div>
-        <div class="tree-why unplaced"><button type="button" class="linkish xs" onclick="event.stopPropagation(); staleSessionsReview(${jsq(p.node)})">Show the steps</button></div>` : ""}
+        <div class="tree-why unplaced"><button type="button" class="linkish xs" onclick="event.stopPropagation(); staleSessionsReview(${jsq(p.node)})">Show how to end the connection</button></div>` : ""}
       <div class="tree-containers">${(p.containers || []).map(c => `<div class="tree-container">
         <span class="tree-branch ${c.kind === "init" ? "init" : ""}">${c.kind === "init" ? "Init" : "Container"}</span>
         <b title="${esc(c.name)}">${esc(c.name)}</b>${UI.chip(c.state || "pending", c.ready || (c.kind === "init" && c.state === "Completed") ? "ok" : "neutral")}

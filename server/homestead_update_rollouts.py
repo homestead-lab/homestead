@@ -371,10 +371,7 @@ def _why_waiting(ns, pod):
                             "check longhorn-system on that host, or delete this pod so it starts on another")
         # Not a failure while the node may still be joining: only after ten minutes.
         found["stuck"] = age >= 600
-    # Kubernetes' own words name the other two causes; only an attach failure
-    # they do not explain is matched against the stale sessions.
-    session = None if "driver driver.longhorn.io" in message or "invalid controller count" in message else \
-        _stale_session(pod, latest, message)
+    session = None if OTHER_CAUSE.search(message) else _stale_session(pod, events, latest)
     if session:
         # The cause Cluster Health names (homestead_storage_leftovers), on this
         # pod's host and for the very volume Kubernetes cannot attach: one
@@ -382,8 +379,8 @@ def _why_waiting(ns, pod):
         # not a hint: like any volume that cannot attach, stuck after three minutes.
         node = pod["spec"]["nodeName"]
         found["message"] = (f"Volume {session.get('claim') or session.get('volume')} cannot attach, because {node} "
-                            f"still holds an old connection to it from before an outage. End that connection on "
-                            f"{node} (Cluster Health lists the steps), or restart {node}.")
+                            f"keeps an old connection to it through an address that is gone. End that connection on "
+                            f"{node} (Cluster Health lists the steps), or drain {node} from Hosts and restart it.")
         found["stale_session"] = True
     if "invalid controller count" in message:
         # Two pods on different nodes attached a volume on a migratable class,
@@ -396,12 +393,30 @@ def _why_waiting(ns, pod):
 # How the attach/detach controller writes an attach failure on the pod, the
 # volume being the PV's name: 'AttachVolume.Attach failed for volume "pvc-…" : …'.
 ATTACH_FAILED = re.compile(r'^AttachVolume\.Attach failed for volume "([^"]+)"')
-def _stale_session(pod, latest, message):
+# The kubelet's own warning while a volume is not attached, every ~2 minutes,
+# which takes turns with the controller's as the newest: "Unable to attach or
+# mount volumes: unmounted volumes=[data], unattached volumes=[data …]: …".
+UNATTACHED = re.compile(r"unattached volumes=\[[^\]\s]")
+# An attach failure whose text names a cause of its own: the two Longhorn texts
+# above, or a volume that is faulted, not ready or held by another host. A
+# restart of this host would not fix those, so no stale session is claimed.
+OTHER_CAUSE = re.compile(r"driver driver\.longhorn\.io|invalid controller count|not ready for workloads|faulted"
+                         r"|already attached|attached to another node|Multi-Attach", re.I)
+def _event_text(event):
+    return " ".join(str(event.get("message") or event.get("reason") or "").split())[:300]
+def _stale_session(pod, events, latest):
     """The stale iSCSI session that keeps this pod's volume from attaching:
-    its newest warning is Kubernetes' attach failure for a volume, and the
-    latest reading names a session to that same volume on the pod's host.
-    None when either is missing, or the reading could not be made."""
-    attach = ATTACH_FAILED.match(message) if latest.get("reason") == "FailedAttachVolume" else None
+    Kubernetes' newest attach failure names a volume, with no other cause in
+    its text, and the latest reading names a session to that same volume on
+    the pod's host. The attach failure is the newest warning, or the newest
+    one behind the kubelet's "unattached volumes" warning. None when any of
+    that is missing, or the reading could not be made."""
+    if latest.get("reason") == "FailedMount" and UNATTACHED.search(_event_text(latest)):
+        attaches = [e for e in events if e.get("reason") == "FailedAttachVolume"]
+        latest = max(attaches, key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "") if attaches else {}
+    message = _event_text(latest)
+    attach = (ATTACH_FAILED.match(message) if latest.get("reason") == "FailedAttachVolume"
+              and not OTHER_CAUSE.search(message) else None)
     node = (pod.get("spec") or {}).get("nodeName")
     if not attach or not node:
         return None
@@ -411,8 +426,11 @@ def _stale_session(pod, latest, message):
         return None
 def stale_session_reason(ns, pod):
     """What the app's own page says about a pod that waits: the stale-session
-    reason _why_waiting gives, or "". The pod's events are read only when the
-    reading names a stale session on its host at all."""
+    reason _why_waiting gives, or "". A pod in a normal start (under a
+    minute, as _why_waiting waits) costs no read; an older one's events are
+    read only when the reading names a stale session on its host at all."""
+    if _age((pod.get("metadata") or {}).get("creationTimestamp")) < 60:
+        return ""
     try:
         if not LEFTOVERS.stale_session((pod.get("spec") or {}).get("nodeName")):
             return ""
