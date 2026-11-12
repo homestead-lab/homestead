@@ -8,6 +8,7 @@ still applies; read and replace the names defined here, here.
 """
 import time
 import urllib.error
+import homestead_cordon as CORDON
 import homestead_names as NAMES
 import homestead_maintenance as MAINTENANCE
 import homestead_drain_blockers as BLOCKERS
@@ -49,12 +50,17 @@ def node_action_check(node, action):
     return True, "", rep
 
 
-def set_cordon(node, unschedulable):
+def set_cordon(node, unschedulable, take_over=False):
     # Cordoning or uncordoning here makes the cordon this caller's: a cluster
     # upgrade's mark on it goes in the same patch, so the upgrade's end never
-    # undoes it (homestead_components.CORDON_MARK).
+    # undoes it (homestead_components.CORDON_MARK). take_over, a person's
+    # Cordon or Uncordon on the Hosts page only: every Homestead job's cordon
+    # mark goes too (homestead_cordon), so the page never shows the person's
+    # cordon as a job's. A job never takes over: another job's mark stays, and
+    # that job still gives the host back at its end.
+    marks = (CORDON.MARK, *CORDON.OLD_MARKS) if take_over else (NAMES.key("upgrade-cordon"),)
     L.ksend("PATCH", f"/api/v1/nodes/{node}",
-          {"metadata": {"annotations": {NAMES.key("upgrade-cordon"): None}},
+          {"metadata": {"annotations": {key: None for key in marks}},
            "spec": {"unschedulable": bool(unschedulable)}},
           ctype="application/merge-patch+json")
     L._bust("nodes", "ov", "node:", "impact:")

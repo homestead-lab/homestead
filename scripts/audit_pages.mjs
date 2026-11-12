@@ -85,6 +85,7 @@ const PAGES = [
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],
   ["events-audit", "events", "STATE.eventsTab='audit';viewEvents()"],
   ["node-page", "nodes", "nodeDetail('harvester-node1')"],
+  ["node-page-cordoned-by-job", "nodes", "window.__demoCordonedByJob = { node: 'harvester-node3', holder: { job: 'op-upgrade', kind: 'platform-upgrade', title: 'Upgrade k3s', running: false } }; nodeDetail('harvester-node3')"],
   ["node-storage", "nodes", "nodeDetail('harvester-node1');setTimeout(() => nodeSectionGo('storage'), 1200)"],
   ["node-devices", "nodes", "nodeDetail('harvester-node1');setTimeout(() => { nodeSectionGo('hardware'); nodeDevicesLook('harvester-node1'); }, 1200)"],
   ...["homestead", "updates", "placement", "monitoring", "hardware", "fleet", "connections", "access", "troubleshooting", "you"]

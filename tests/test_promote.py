@@ -138,6 +138,9 @@ import homestead_operations as OPS
 import homestead_platform as PLATFORM
 from rebind import keep_bound
 from fakes.kube import Kube
+import homestead_lifecycle as L
+
+REAL_SET_CORDON = NODE_ACTIONS.set_cordon
 
 
 class Hostrun:
@@ -405,6 +408,21 @@ class JobTests(PlanBase):
         self.assertEqual("running", item["ref"]["phase"])
         self.assertEqual("Make app-1 a server", self.host.changes[launch[0]], "the reinstall takes the host's lease")
         self.assertEqual({""}, {c for i, c in enumerate(self.host.changes) if i != launch[0]}, "reads take none")
+
+    def test_the_promote_cordon_keeps_other_jobs_marks(self):
+        # As on dev: only the upgrade's mark goes. Another job holding the host
+        # (a V2 clean-up, a cluster shutdown) keeps its mark, so its own end
+        # still finds it; only a person's Cordon on the Hosts page clears them.
+        marks = {"homestead.io/cordoned-by": "op-3", "homestead.io/cluster-shutdown": "run-42", "homestead.io/upgrade-cordon": "op-7"}
+        self.cluster.edit("app-1", lambda n: n["metadata"].setdefault("annotations", {}).update(marks))
+        with mock.patch.object(NODE_ACTIONS, "set_cordon", REAL_SET_CORDON), mock.patch.object(L, "ksend", K.ksend), \
+                mock.patch.object(L, "_bust", lambda *keys: None):
+            self.started()
+        node = self.cluster.kube.object("/api/v1/nodes/app-1")
+        self.assertTrue(node["spec"]["unschedulable"])
+        annotations = node["metadata"].get("annotations") or {}
+        self.assertEqual({"homestead.io/cordoned-by": "op-3", "homestead.io/cluster-shutdown": "run-42"},
+                         {k: v for k, v in annotations.items() if k in marks})
 
     def test_token_never_stored_or_reported(self):
         item = self.started()
