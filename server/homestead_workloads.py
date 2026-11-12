@@ -8,6 +8,7 @@ by name (bind), so a test that replaces one in server.py replaces it here too.
 import copy
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -275,9 +276,71 @@ def preview_edit(request):
         removed = ENVSEC.removed(current, proposed, data, b.get("masked_env"))
         secret = ENVSEC.as_saved(proposed, current, b.get("masked_env"), data or {})
         change = GITOPS.patch(current, proposed)
-    return {"capacity": plan, "capacity_token": CAPACITY_REVIEW.issue(b, context),
+    token = CAPACITY_REVIEW.issue(b, context)
+    return {"capacity": plan, "capacity_token": token,
             "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else "",
-            "secret": secret if change else {}, "secret_removed": removed}
+            "secret": secret if change else {}, "secret_removed": removed,
+            # What the save sends back to delete them (confirm_secret_removed): only for a list it read.
+            **({"secret_removed_token": secret_removal_token(b["ns"], b["name"], {entry["key"] for entry in removed},
+                                                             token)} if removed else {})}
+
+
+# Deleting values stored in the app's Secret cannot be undone (nothing else
+# holds them), so the server checks it, as it checks the exact VM name before
+# initialising missing state (homestead_capacity_review.enforce): the save
+# works the list out again with the function the review used (ENVSEC.removed,
+# through ENVSEC.unused, which the removal itself uses) and needs the review's
+# own token for exactly that list. The token is signed over the app, the key
+# names and the review's capacity token, which binds the reviewed body and the
+# app as it was: never a value.
+def secret_removal_token(ns, name, keys, capacity_token):
+    return CAPACITY_REVIEW.issue({}, _secret_removal_context(ns, name, keys, capacity_token))
+
+
+def _secret_removal_context(ns, name, keys, capacity_token):
+    return {"secret_removed": {"namespace": ns, "name": name, "keys": sorted(keys), "review": capacity_token or ""}}
+
+
+def _stored_names(entries):
+    names = [f"{entry['name']} ({entry['container']})" if entry.get("container") else entry["name"] for entry in entries]
+    return ", ".join(names[:4]) + (f" and {len(names) - 4} more" if len(names) > 4 else "")
+
+
+def secret_removal(b, prepared, context):
+    """Before anything of an Edit save is written: the keys of the app's
+    Secret it may delete (put in prepared["secret_removal"], which the
+    removal keeps to), or a 409 refusal ("refused": "secret_removed", with
+    "reason" unread, unconfirmed or changed) when it may not."""
+    current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+    entries = ENVSEC.removed(current, prepared.get("deployment"),
+                             ENVSEC.held_or_unknown(b["ns"], current, kget), b.get("masked_env"))
+
+    def refused(reason, error):
+        # error is what a person reads; detail names the fields, for API callers.
+        return ROUTER.Reply(409, {"error": error, "refused": "secret_removed", "reason": reason,
+                                  "secret_removed": entries, "detail": "Send the review's secret_removed_token as "
+                                  "confirm_secret_removed, with that review's capacity_token."})
+    if entries is None:
+        return refused("unread", "Homestead could not read this app's Secret. Nothing was saved. Try again in a "
+                                 "moment to see which stored values the save deletes.")
+    keys = sorted({entry["key"] for entry in entries})
+    lost = [entry for entry in entries if not entry["value_kept"]]
+    ack = b.get("confirm_secret_removed")
+    if isinstance(ack, str) and ack:
+        if ack.split(".", 1)[0].isdigit() and int(ack.split(".", 1)[0]) < time.time():
+            return refused("changed", f"The review is more than {CAPACITY_REVIEW.TTL // 60} minutes old. Nothing "
+                                      "was saved. Review the changes again to see which stored values the save deletes.")
+        if not (CAPACITY_REVIEW.valid(b, context) and CAPACITY_REVIEW.valid(
+                {"capacity_token": ack}, _secret_removal_context(b["ns"], b["name"], keys, b.get("capacity_token")))):
+            return refused("changed", "The values stored in this app's Secret changed since the review. Nothing "
+                                      "was saved. Review the changes again to see which values the save deletes.")
+    elif lost:
+        count = f"{len(lost)} value{'' if len(lost) == 1 else 's'}"
+        return refused("unconfirmed", f"Saving deletes {count} stored in this app's Secret. Homestead cannot restore "
+                                      f"{'it' if len(lost) == 1 else 'them'}: {_stored_names(lost)}. Nothing was saved. "
+                                      "Review the changes and confirm deleting them.")
+    prepared["secret_removal"] = keys
+    return None
 
 
 def edit(request):
@@ -311,6 +374,10 @@ def edit(request):
             first_gate = START_ORDER.lists(kget)[0]   # as they are before this save
     prepared, context, plan = edit_capacity_plan(b)
     CAPACITY_REVIEW.enforce(b, plan, context)
+    if context.get("action") != RENAME.KIND:
+        refused = secret_removal(b, prepared, context)   # before any write
+        if refused is not None:
+            return refused
     # The class is made only when an app first moves into its tier:
     # every save sends the tier, and most keep it. A class someone made with
     # other values is kept, and the save says so.

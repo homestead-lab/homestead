@@ -141,7 +141,7 @@ Tools come in three classes:
 | `preview_compose` | What a Docker Compose file would deploy, and its review, without deploying it | `containers:manage` | change |
 | `apply_compose` | Deploys a Compose file as preview_compose reviewed it | `containers:manage` | change |
 | `preview_edit_container` | What saving these settings (from get_container_settings, changed) would do: what restarts, and the capacity review | `containers:manage` | change |
-| `edit_container` | Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside settings, its capacity_token and confirm_capacity: true | `containers:manage` | change |
+| `edit_container` | Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside settings, its capacity_token and confirm_capacity: true. A save that deletes values stored in the app's Secret (the preview's secret_removed) cannot be undone: once the person agrees to lose them, add the preview's secret_removed_token as confirm_secret_removed; without it the save is refused | `containers:manage` | change |
 | `scale_container` | Sets how many copies of a container run | `containers:manage` | change |
 | `preview_move_container` | Whether a container fits on another host, and its capacity_token for move_container | `containers:manage` | change |
 | `move_container` | Moves a container to another host as preview_move_container reviewed it | `containers:manage` | change |

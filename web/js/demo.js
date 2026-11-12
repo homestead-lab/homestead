@@ -3379,7 +3379,8 @@ ssh_pwauth: true
       const secretRemoved = rename ? [] : window.__demoSecretUnread ? null : [
         ...(body.containers || []).flatMap(c => (c.secret_env || []).filter(n => !(n in (c.env || {}))).map(n => stored(c.name, n))),
         ...(body.remove_containers || []).flatMap(c => (window.__demoStoredValues?.[c] || []).map(n => stored(c, n)))];
-      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", secret_removed: secretRemoved, capacity: {
+      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", secret_removed: secretRemoved,
+        ...(secretRemoved?.length ? { secret_removed_token: "demo-removal" } : {}), capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,

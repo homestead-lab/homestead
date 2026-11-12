@@ -718,7 +718,9 @@ TOOLS = [
     Tool("edit_container", "Edit a container", "containers:manage", CHANGE,
          "Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside "
          "settings, its capacity_token and confirm_capacity: true. The change is in the container's change "
-         "history and can be undone there.",
+         "history and can be undone there. A save that deletes values stored in the app's Secret (the preview's "
+         "secret_removed) cannot be undone: once the person agrees to lose them, add the preview's "
+         "secret_removed_token as confirm_secret_removed; without it the save is refused.",
          {"settings": SETTINGS}, ["settings"], run=_with_review("/api/edit/preview", "/api/edit")),
     Tool("scale_container", "Scale a container", "containers:manage", CHANGE,
          "Sets how many copies of a container run. A scale that needs room is refused with the capacity "

@@ -752,7 +752,9 @@ def edit_workload(cfg, hold=False, prepared=None):
     # that fails part way leaves every value the app refers to in place.
     staged = ENVSEC.stage(ns, dep, L.kget, L.ksend, cfg.get("masked_env") or ())
     saved = L.ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    removed = ENVSEC.prune(ns, dep, staged, L.ksend)
+    # Only the stored values the save was allowed to delete: the list the
+    # person confirmed (homestead_workloads.edit); none for a start-order save.
+    removed = ENVSEC.prune(ns, dep, staged, L.ksend, prepared.get("secret_removal"))
     L._bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name, **({"secret_removed": removed} if removed else {}),
             **({"held_replicas": held, "_held_receipt": saved} if hold else {})}

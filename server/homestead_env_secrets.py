@@ -292,9 +292,11 @@ def stage(ns, dep, read, send, masked=()):
     return _write(ns, dep, read, send, masked, drop_unused=False)[1]
 
 
-def prune(ns, dep, staged, send):
+def prune(ns, dep, staged, send, allowed=None):
     """After the Deployment dep was saved: remove from the Secret staged()
-    returned the values dep no longer refers to. The write carries that
+    returned the values dep no longer refers to, and of those only the keys
+    in allowed when it is given (the list the person confirmed: a key that
+    appeared since stays for a later save to list). The write carries that
     Secret's resourceVersion, so a Secret another save changed since is left
     alone. The save already succeeded: a failure here only leaves values
     nothing uses, which the next save removes, so it is reported to the log
@@ -303,7 +305,7 @@ def prune(ns, dep, staged, send):
         return []
     name = staged["metadata"]["name"]
     data = staged.get("data") or {}
-    gone = sorted(unused(dep, name, data))
+    gone = sorted(unused(dep, name, data) & (set(data) if allowed is None else set(allowed)))
     if not gone:
         return []
     body = dict(staged, data={key: value for key, value in data.items() if key not in gone})
