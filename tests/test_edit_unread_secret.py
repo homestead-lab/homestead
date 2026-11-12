@@ -21,6 +21,7 @@ import homestead_workload_edit as WEDIT
 import server  # noqa: F401  (binds the modules the Edit form reads through)
 import homestead_workloads as WORKLOADS
 from fakes.kube import Kube
+from fakes import confirmed_edit as CONFIRMED
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/tunnel"
 SECRET = "/api/v1/namespaces/lab/secrets/tunnel-env"
@@ -136,13 +137,13 @@ class WithoutTheFormTests(Fixture):
         self.assertEqual({KEY: b64("second")}, data)
 
     def test_a_form_save_that_deletes_the_row_removes_it(self):
-        WEDIT.edit_workload(self.save(self.open_form(), env={"TZ": "UTC"}))
+        CONFIRMED.save(self.save(self.open_form(), env={"TZ": "UTC"}), [KEY])
         env, data = self.saved()
         self.assertNotIn("TUNNEL_TOKEN", env)
         self.assertEqual({}, data)
 
     def test_a_rename_in_the_form_moves_the_value(self):
-        WEDIT.edit_workload(self.save(self.open_form(), env={"TUNNEL_TOKEN_V2": "first", "TZ": "UTC"}))
+        CONFIRMED.save(self.save(self.open_form(), env={"TUNNEL_TOKEN_V2": "first", "TZ": "UTC"}), [KEY])
         env, data = self.saved()
         self.assertNotIn("TUNNEL_TOKEN", env)
         self.assertEqual("cloudflared.TUNNEL_TOKEN_V2", env["TUNNEL_TOKEN_V2"]["valueFrom"]["secretKeyRef"]["key"])

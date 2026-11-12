@@ -762,8 +762,8 @@ const EDIT_REVIEW = UI.reviewFlow({
     const renaming = workloadName && workloadName !== name;
     // Flux or Argo CD brings the old name back (#734): its own tick, checked before this, sent so the server knows.
     if (renaming && review.managed?.by) body.confirm_managed = true;
-    // The stored values it deletes: the review's own token for that list, once ticked; the server checks it.
-    if (review.secret_removed_token && (!editRemovedCount(review) || $("#editRemovedConfirm")?.checked))
+    // The stored values it deletes: the review's own token for that list, only once ticked; the server checks it.
+    if (review.secret_removed_token && editRemovedCount(review) && $("#editRemovedConfirm")?.checked)
       body.confirm_secret_removed = review.secret_removed_token;
     const button = $("#editGo");
     button.disabled = true;

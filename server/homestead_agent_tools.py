@@ -33,6 +33,7 @@ import sys
 import urllib.error
 import urllib.parse
 
+import homestead_agent_audit as AUDIT
 import homestead_api_v1 as API_V1
 import homestead_auth as AUTH
 import homestead_changes as CHANGES
@@ -68,11 +69,13 @@ class ToolError(Exception):
 
 
 class NeedsApproval(Exception):
-    """A change only a person can let happen: it becomes an agent request."""
+    """A change only a person can let happen: it becomes an agent request.
+    summary, when given, is what the person is shown in place of the raw
+    arguments; note is what the agent is told."""
 
-    def __init__(self, role, reason):
+    def __init__(self, role, reason, summary=None, note=None):
         super().__init__(reason)
-        self.role, self.reason = role, reason
+        self.role, self.reason, self.summary, self.note = role, reason, summary, note
 
 
 class _Query(dict):
@@ -301,19 +304,74 @@ def _clean(settings):
     return settings
 
 
+def _review_now(preview_path, settings, ctx):
+    """An approved run's review, made now as the approver: its capacity
+    token goes in settings in place of the agent's."""
+    settings.pop("capacity_token", None)
+    review = call("POST", preview_path, body=settings, **_as(ctx))
+    if (review.get("capacity") or {}).get("blocked"):
+        raise ToolError("it no longer fits: " + "; ".join((review.get("capacity") or {}).get("reasons") or []))
+    settings.update(capacity_token=review.get("capacity_token"), confirm_capacity=True)
+    return review
+
+
 def _with_review(preview_path, apply_path):
     """The app's two steps in one, for an approved run: review now, as the
     approver, then apply with that review's token."""
     def run(args, ctx):
         settings = _clean(args.get("settings"))
         if ctx.get("fresh"):
-            settings.pop("capacity_token", None)
-            review = call("POST", preview_path, body=settings, **_as(ctx))
-            if (review.get("capacity") or {}).get("blocked"):
-                raise ToolError("it no longer fits: " + "; ".join((review.get("capacity") or {}).get("reasons") or []))
-            settings.update(capacity_token=review.get("capacity_token"), confirm_capacity=True)
+            _review_now(preview_path, settings, ctx)
         return call("POST", apply_path, body=settings, **_as(ctx))
     return _guarded(run)
+
+
+def _lost_values(entries):
+    """The stored values a save deletes for good (the review's secret_removed
+    without a renamed variable's old key), as a person reads them: names only."""
+    return sorted(f"{entry['name']} ({entry['container']})" if entry.get("container") else entry["name"]
+                  for entry in entries or () if not entry.get("value_kept"))
+
+
+def _edit_container(args, ctx):
+    """edit_container. An agent may propose an edit that deletes values stored
+    in the app's Secret, but only a person's approval deletes them: the
+    agent's own call never sends the acknowledgement (whatever it passes), so
+    the save refuses before writing anything, and the refusal becomes an agent
+    request listing those values. Approving reviews the edit again as the
+    person; the save then carries that new review's acknowledgement, and only
+    when it deletes exactly the values the request listed."""
+    settings = _clean(args.get("settings"))
+    settings.pop("confirm_secret_removed", None)
+    if ctx.get("fresh"):
+        review = _review_now("/api/edit/preview", settings, ctx)
+        if review.get("secret_removed") is None:
+            raise ToolError("Homestead could not read the app's Secret, so it cannot check which stored values the "
+                            "edit deletes. Nothing was saved. The agent can ask again.")
+        now = _lost_values(review.get("secret_removed"))
+        if now != sorted((ctx.get("summary") or {}).get("deletes_stored_values") or []):
+            raise ToolError("The stored values this edit deletes are not the ones the request listed. Nothing was "
+                            "saved. The agent can ask again; check the new list before approving it.")
+        if now:
+            settings["confirm_secret_removed"] = review.get("secret_removed_token")
+        return call("POST", "/api/edit", body=settings, **_as(ctx))
+    try:
+        return call("POST", "/api/edit", body=settings, **_as(ctx))
+    except ToolError as error:
+        refusal = error.data if isinstance(error.data, dict) else {}
+        if (refusal.get("refused"), refusal.get("reason")) != ("secret_removed", "unconfirmed"):
+            raise
+        lost = _lost_values(refusal.get("secret_removed"))
+        app = f"{settings.get('ns')}/{settings.get('name')}"
+        raise NeedsApproval(
+            "operator", f"it deletes {len(lost)} value{'' if len(lost) == 1 else 's'} stored for {app} that cannot "
+                        "be restored",
+            {"app": app, "deletes_stored_values": lost,
+             "effect": "Approving deletes these values stored in the app's Secret. Homestead cannot restore them. "
+                       "If the list is different when it is approved, nothing is saved.",
+             "settings": AUDIT.redact(args.get("settings") or {})},
+            "Deleting stored values needs a person: one must approve this in Homestead, where it lists them. "
+            "Follow it with get_agent_request.") from None
 
 
 def _preview(path):
@@ -719,9 +777,10 @@ TOOLS = [
          "Saves a container's settings as preview_edit_container reviewed them: the same settings plus, inside "
          "settings, its capacity_token and confirm_capacity: true. The change is in the container's change "
          "history and can be undone there. A save that deletes values stored in the app's Secret (the preview's "
-         "secret_removed) cannot be undone: once the person agrees to lose them, add the preview's "
-         "secret_removed_token as confirm_secret_removed; without it the save is refused.",
-         {"settings": SETTINGS}, ["settings"], run=_with_review("/api/edit/preview", "/api/edit")),
+         "secret_removed, except a renamed variable's old key) cannot be undone, so it never runs on the agent's "
+         "call: it becomes a request a person approves in Homestead, which lists those values; confirm_secret_removed "
+         "is ignored here.",
+         {"settings": SETTINGS}, ["settings"], run=_guarded(_edit_container)),
     Tool("scale_container", "Scale a container", "containers:manage", CHANGE,
          "Sets how many copies of a container run. A scale that needs room is refused with the capacity "
          "review's warnings; call again with confirm_capacity: true to accept them.",

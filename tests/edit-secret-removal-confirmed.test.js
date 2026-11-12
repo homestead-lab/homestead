@@ -1,7 +1,7 @@
 "use strict";
 // The server checks that a save deleting values stored in the app's Secret
 // carries the review's own token for that list (confirm_secret_removed). The
-// page sends it once the tick is set, and shows the server's refusal (the
+// page sends it only once the tick is set, and shows the server's refusal (the
 // values changed since the review) with a way out: a new review.
 const test = require("node:test"), assert = require("node:assert/strict");
 const fs = require("node:fs"), vm = require("node:vm");
@@ -43,12 +43,14 @@ test("a ticked deletion sends the review's token", async () => {
   assert.equal(w.sent()[0].confirm_secret_removed, "removal-1");
 });
 
-test("a save that loses no value sends a token only when the review gave one", async () => {
+test("a save that loses no value sends no token, even one the review gave", async () => {
+  // Only a tick sends it: a renamed variable's old key goes with no tick, so no token goes either.
   const kept = world({ secret_removed: [{ ...LOST[0], value_kept: true }], secret_removed_token: "removal-2" });
   await kept.c.editReview(body());
   kept.fields["#editCapacityConfirm"].checked = true;
   await kept.c.confirmEdit();
-  assert.equal(kept.sent()[0].confirm_secret_removed, "removal-2", "a renamed variable's old key goes too");
+  assert.equal(kept.sent().length, 1);
+  assert.ok(!("confirm_secret_removed" in kept.sent()[0]));
   const none = world({ secret_removed: [] });
   await none.c.editReview(body());
   none.fields["#editCapacityConfirm"].checked = true;

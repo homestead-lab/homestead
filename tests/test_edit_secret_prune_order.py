@@ -20,10 +20,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_env_secrets as ENVSEC
 import homestead_kube as K
 import homestead_lifecycle as LC
-import homestead_workload_edit as WEDIT
 import server  # noqa: F401  (binds the modules the Edit form reads through)
 import homestead_workloads as WORKLOADS
 from fakes.kube import Kube
+from fakes import confirmed_edit as CONFIRMED
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/tunnel"
 SECRET = "/api/v1/namespaces/lab/secrets/tunnel-env"
@@ -65,9 +65,10 @@ class Fixture(unittest.TestCase):
         form = WORKLOADS.workload_edit_payload("lab", "tunnel", self.kube.object(DEP), [], services=[])
         container = form["containers"][0]
         self.assertEqual({"TUNNEL_TOKEN": "first", "OLD_TOKEN": "old", "TZ": "UTC"}, container["env"])
-        return WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        # Every key it holds confirmed: which of them go is the save's own choice (unused()).
+        return CONFIRMED.save({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "image": container["image"],
-             "env": env, "secret_env": list(container["secret_env"])}]})
+             "env": env, "secret_env": list(container["secret_env"])}]}, self.kube.object(SECRET)["data"])
 
     def missing(self):
         """Keys the app's Deployment refers to that its Secret does not hold."""
@@ -150,9 +151,10 @@ class ASaveThatSucceeds(Fixture):
         self.kube.fail(SECRET, 500, method="PUT", times=10)
         self.save({"TUNNEL_TOKEN": "first", "TZ": "UTC"})
         self.kube.stop_failing()
-        WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        CONFIRMED.save({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "image": "cloudflare/cloudflared:2026.2.0",
-             "env": {"TUNNEL_TOKEN": "first", "TZ": "UTC"}, "secret_env": ["TUNNEL_TOKEN"]}]})
+             "env": {"TUNNEL_TOKEN": "first", "TZ": "UTC"}, "secret_env": ["TUNNEL_TOKEN"]}]},
+            self.kube.object(SECRET)["data"])
         self.assertEqual({TOKEN: b64("first")}, self.kube.object(SECRET)["data"])
 
     def test_a_secret_changed_by_another_save_in_between_is_not_pruned(self):
@@ -191,9 +193,10 @@ class ValuesUsedOtherwiseAreKept(unittest.TestCase):
         """An image bump from Edit, sending back what the form showed."""
         form = WORKLOADS.workload_edit_payload("lab", "tunnel", self.kube.object(DEP), [], services=[])
         container = form["containers"][0]
-        return WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        return CONFIRMED.save({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "image": "cloudflare/cloudflared:2026.2.0",
-             "env": dict(container["env"]), "secret_env": list(container["secret_env"])}]})
+             "env": dict(container["env"]), "secret_env": list(container["secret_env"])}]},
+            self.kube.object(SECRET)["data"])
 
     def test_a_value_an_init_container_uses_is_kept(self):
         spec = self.dep["spec"]["template"]["spec"]

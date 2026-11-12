@@ -280,9 +280,10 @@ def preview_edit(request):
     return {"capacity": plan, "capacity_token": token,
             "managed": GITOPS.notice(current), "yaml": GITOPS.document(current, change) if change else "",
             "secret": secret if change else {}, "secret_removed": removed,
-            # What the save sends back to delete them (confirm_secret_removed): only for a list it read.
-            **({"secret_removed_token": secret_removal_token(b["ns"], b["name"], {entry["key"] for entry in removed},
-                                                             token)} if removed else {})}
+            # What the save sends back once the person ticks deleting them (confirm_secret_removed):
+            # only for a list it read that loses a value (a renamed value's old key needs no tick).
+            **({"secret_removed_token": secret_removal_token(b["ns"], b["name"], removed, token)}
+               if removed and any(not entry["value_kept"] for entry in removed) else {})}
 
 
 # Deleting values stored in the app's Secret cannot be undone (nothing else
@@ -291,14 +292,18 @@ def preview_edit(request):
 # works the list out again with the function the review used (ENVSEC.removed,
 # through ENVSEC.unused, which the removal itself uses) and needs the review's
 # own token for exactly that list. The token is signed over the app, the key
-# names and the review's capacity token, which binds the reviewed body and the
-# app as it was: never a value.
-def secret_removal_token(ns, name, keys, capacity_token):
-    return CAPACITY_REVIEW.issue({}, _secret_removal_context(ns, name, keys, capacity_token))
+# names, which of them lose their value (what the person ticked), and the
+# review's capacity token, which binds the reviewed body and the app as it
+# was: never a value.
+def secret_removal_token(ns, name, entries, capacity_token):
+    """entries: ENVSEC.removed()'s list, as the review answered it."""
+    return CAPACITY_REVIEW.issue({}, _secret_removal_context(ns, name, entries, capacity_token))
 
 
-def _secret_removal_context(ns, name, keys, capacity_token):
-    return {"secret_removed": {"namespace": ns, "name": name, "keys": sorted(keys), "review": capacity_token or ""}}
+def _secret_removal_context(ns, name, entries, capacity_token):
+    return {"secret_removed": {"namespace": ns, "name": name, "keys": sorted({entry["key"] for entry in entries}),
+                               "lost": sorted({entry["key"] for entry in entries if not entry["value_kept"]}),
+                               "review": capacity_token or ""}}
 
 
 def _stored_names(entries):
@@ -321,24 +326,29 @@ def secret_removal(b, prepared, context):
                                   "secret_removed": entries, "detail": "Send the review's secret_removed_token as "
                                   "confirm_secret_removed, with that review's capacity_token."})
     if entries is None:
-        return refused("unread", "Homestead could not read this app's Secret. Nothing was saved. Try again in a "
-                                 "moment to see which stored values the save deletes.")
+        return refused("unread", "Homestead could not read this app's Secret. Nothing was saved. Try again in a moment.")
     keys = sorted({entry["key"] for entry in entries})
     lost = [entry for entry in entries if not entry["value_kept"]]
     ack = b.get("confirm_secret_removed")
-    if isinstance(ack, str) and ack:
-        if ack.split(".", 1)[0].isdigit() and int(ack.split(".", 1)[0]) < time.time():
-            return refused("changed", f"The review is more than {CAPACITY_REVIEW.TTL // 60} minutes old. Nothing "
-                                      "was saved. Review the changes again to see which stored values the save deletes.")
-        if not (CAPACITY_REVIEW.valid(b, context) and CAPACITY_REVIEW.valid(
-                {"capacity_token": ack}, _secret_removal_context(b["ns"], b["name"], keys, b.get("capacity_token")))):
-            return refused("changed", "The values stored in this app's Secret changed since the review. Nothing "
-                                      "was saved. Review the changes again to see which values the save deletes.")
-    elif lost:
+    if not lost:
+        # It loses no value (nothing goes, or only a renamed variable's old
+        # key): no acknowledgement is needed, and one sent anyway is ignored.
+        prepared["secret_removal"] = keys
+        return None
+    if not (isinstance(ack, str) and ack):
         count = f"{len(lost)} value{'' if len(lost) == 1 else 's'}"
         return refused("unconfirmed", f"Saving deletes {count} stored in this app's Secret. Homestead cannot restore "
                                       f"{'it' if len(lost) == 1 else 'them'}: {_stored_names(lost)}. Nothing was saved. "
                                       "Review the changes and confirm deleting them.")
+    if ack.split(".", 1)[0].isdigit() and int(ack.split(".", 1)[0]) < time.time():
+        return refused("changed", f"The review is more than {CAPACITY_REVIEW.TTL // 60} minutes old. Nothing "
+                                  "was saved. Review the changes again to see which stored values the save deletes.")
+    # Bound to this save's body and app (its capacity token), to the keys it
+    # deletes and to those of them whose value is lost (what was ticked).
+    if not (CAPACITY_REVIEW.valid(b, context) and CAPACITY_REVIEW.valid(
+            {"capacity_token": ack}, _secret_removal_context(b["ns"], b["name"], entries, b.get("capacity_token")))):
+        return refused("changed", "The values stored in this app's Secret changed since the review. Nothing "
+                                  "was saved. Review the changes again to see which values the save deletes.")
     prepared["secret_removal"] = keys
     return None
 

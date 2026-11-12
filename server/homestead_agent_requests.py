@@ -202,8 +202,10 @@ def approve(rid, user, role):
     tool = TOOLS.BY_NAME.get(row["tool"])
     # In a form no account can have (a username cannot contain ':'). A key's
     # name may hold ':', written as the look-alike '\u2236' so the name ends at the next ':'.
+    # summary: what the person was shown, for a run that must still match it (edit_container's stored values).
     ctx = {"user": f"approving:{str(row['key'].get('name')).replace(':', chr(0x2236))}:{user}", "role": role, "fresh": True,
-           "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]}}
+           "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]},
+           "summary": row.get("summary") or {}}
     try:
         if tool is None:
             raise TOOLS.ToolError("this Homestead no longer has that tool")
