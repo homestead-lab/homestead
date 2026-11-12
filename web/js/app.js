@@ -190,6 +190,8 @@ function go(v, options = {}) {
   // holding the browser's connections the new page needs.
   window.NAV_TOKEN++;
   window.abortPageReads?.();
+  // Its polls (page: true) end with it; a poll's reads do not use the page's signal alone.
+  window.UI?.stopPagePolls?.();
   STATE.busy = false;
   STATE.view = v;
   // A search narrows the page it was typed on. Going somewhere else starts
