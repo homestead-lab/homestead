@@ -613,14 +613,18 @@ const UI = (() => {
      redrawn without leaving it (the refresh loop) is not left: the page's
      owner keeps one handle and stops it before starting another, or each
      redraw adds a poll.
+     `background: true` reads on in a hidden tab, every `ms` as when shown, and
+     reads nothing extra when the tab comes back: for a dialog that follows a
+     long operation that can go wrong (a cluster shutdown, an OS update run),
+     so its state is current the moment someone looks.
      `first` settles once the first read has ended (answered, failed or
      cancelled) or the poll has stopped before it: an opener that waited for
      its first read before a poll (a busy flag held until then) still can. */
   const polls = new Set(), pagePolls = new Set();
   const navToken = () => typeof window !== "undefined" ? window.NAV_TOKEN : undefined;
-  function poll(read, ms, { later = false, dialog = true, readOnShow = true, page = false } = {}) {
+  function poll(read, ms, { later = false, dialog = true, readOnShow = true, page = false, background = false } = {}) {
     const doc = typeof document !== "undefined" ? document : null;
-    const hidden = () => doc?.visibilityState === "hidden" || doc?.hidden === true;
+    const hidden = () => !background && (doc?.visibilityState === "hidden" || doc?.hidden === true);
     const visit = navToken(), left = () => page && navToken() !== visit;
     const pageSignal = page && typeof pageReadSignal === "function" ? pageReadSignal() : null;
     let timer = null, running = null, again = false, stopped = false, firstDone;
@@ -671,7 +675,7 @@ const UI = (() => {
       get stopped() { return stopped; },
       first,
     };
-    doc?.addEventListener?.("visibilitychange", shown);
+    if (!background) doc?.addEventListener?.("visibilitychange", shown);
     if (page) pagePolls.add(handle);
     else if (dialog) polls.add(handle);
     if (later) wait(); else run("start");

@@ -491,3 +491,35 @@ test("the hand-poll ratchet sees each shape of a read that re-arms itself", () =
   };
   for (const [src, n] of Object.entries(cases)) assert.equal(handPolls("x.js", src).length, n, src);
 });
+
+/* background: true, for a dialog that follows a long operation that can go
+   wrong: it reads on in a hidden tab at its own interval, and the tab coming
+   back is no reason for an extra read. */
+test("a background poll reads on in a hidden tab, and showing the tab adds no read", async () => {
+  const { UI, clock, document } = loadUI();
+  let calls = 0;
+  const poll = UI.poll(async () => { calls++; }, 2000, { background: true });
+  await clock.settle();
+  assert.equal(calls, 1);
+  document.show(false);
+  await clock.advance(6000);
+  assert.equal(calls, 4, "every interval while hidden");
+  document.show(true); await clock.settle();
+  assert.equal(calls, 4, "no extra read when the tab comes back");
+  await clock.advance(2000);
+  assert.equal(calls, 5);
+  assert.equal(document.listening("visibilitychange"), 0, "it does not follow the tab at all");
+  UI.stopPolls();
+  await clock.advance(10000);
+  assert.equal(calls, 5, "closing its dialog still stops it");
+  assert.equal(poll.stopped, true);
+});
+
+test("a background poll started in a hidden tab reads at once", async () => {
+  const { UI, clock, document } = loadUI();
+  document.show(false);
+  let calls = 0;
+  UI.poll(async () => { calls++; }, 2000, { background: true });
+  await clock.settle();
+  assert.equal(calls, 1);
+});
