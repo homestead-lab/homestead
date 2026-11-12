@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import homestead_host_bonds as BONDS
 import homestead_host_bridge as BRIDGE
+import homestead_host_network_job as NETWORK_JOB
 import homestead_kube as K
 import homestead_operations as OPS
 import homestead_pod_exec as POD_EXEC
@@ -114,10 +115,15 @@ class RealHelper(Host):
     answer with no OK would read as a lost one: fakes answer with Output."""
     UNITS = "Running timer as unit: run-r1.timer\nWill run service as unit: run-r1.service"
 
-    def __init__(self, ends="answered", clock=lambda: SINCE, reads="answered"):
+    def __init__(self, ends="answered", clock=lambda: SINCE, reads="answered", request_lag=1, read_lag=5):
         super().__init__()
         self.ends, self.clock, self.reads, self.scheduled = ends, clock, reads, 0
         self.on_restart = lambda: None    # what else happens while the restart command runs
+        # Real time passes inside a step: a helper pod is made and started for
+        # each run, so the request reaches the host request_lag seconds after
+        # the step's clock, and a read read_lag seconds after that.
+        self.request_lag, self.read_lag, self.step_at, self.spent = request_lag, read_lag, None, 0
+        self.show_says = None    # what the read prints in place of the host's state
         self.started, self.state = SINCE - 3600, "active"    # k3s's main process, on Homestead's clock
 
     def run(self, node, script, timeout=60, change="", holder=""):
@@ -131,7 +137,7 @@ class RealHelper(Host):
         if self.ends == "no status":    # a Failure Status with no exit code: the exec never started the command
             return POD_EXEC.Output("", "", None)
         self.scheduled += 1
-        self.started = self.clock() + 2
+        self.started = self.passes(self.request_lag) + 2
         self.on_restart()
         if self.ends == "answered":
             return POD_EXEC.Output("OK\n", self.UNITS, 0)
@@ -149,11 +155,25 @@ class RealHelper(Host):
             raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
         raise AssertionError(self.ends)
 
+    def real(self):
+        """The time now, as it passes inside the step the test is running."""
+        if self.step_at != self.clock():
+            self.step_at, self.spent = self.clock(), 0
+        return self.step_at + self.spent
+
+    def passes(self, seconds):
+        self.real()
+        self.spent += seconds
+        return self.real()
+
     def show(self):
+        at = self.passes(self.read_lag)
         if self.reads != "answered":
             raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
+        if self.show_says is not None:
+            return POD_EXEC.Output(self.show_says, "", 0)
         return POD_EXEC.Output(f"ActiveState={self.state}\nExecMainStartTimestampMonotonic={int((self.started - BOOT) * 1e6)}\n"
-                               f"{self.clock() - BOOT:.2f} 1000.00\n", "", 0)
+                               f"{at - BOOT:.2f} 1000.00\n", "", 0)
 
 
 # Answers lost after the command ran: the restart is scheduled on the host.
@@ -626,10 +646,10 @@ class RestartNotScheduledTests(Unfinished):
             self.assertNotIn("restart_unsure", ref)
 
 
-def unsure(service="k3s"):
-    return (f"The answer to the restart of {service} on node-a was lost, so Homestead cannot tell whether {service} restarted. "
-            f"The network settings on node-a are changed, but {service} may still use the old interface until it restarts. "
-            f"If `systemctl status {service}` on node-a shows it running since before the change, "
+def unsure(why="", service="k3s"):
+    return (f"Homestead cannot tell whether {service} on node-a restarted after it asked for the restart"
+            + (f" ({why})" if why else "") + f". The network settings on node-a are changed, but {service} may still use the old "
+            f"interface until it restarts. If `systemctl status {service}` on node-a shows it running since before the change, "
             f"run `systemctl restart {service}` on node-a.")
 
 
@@ -641,9 +661,11 @@ class LostAnswerTests(Unfinished):
     of k3s or RKE2 on the host is the harm. The host then shows whether it
     restarted; the job does not end on a guess."""
 
-    def helper(self, kind, ends, reads="answered"):
-        self.host = RealHelper(ends, clock=lambda: self.now, reads=reads)
+    def helper(self, kind, ends, reads="answered", **lags):
+        self.host = RealHelper(ends, clock=lambda: self.now, reads=reads, **lags)
         kind.module.bind(self.host, K.kget, K.ksend)
+        # Homestead's clock after a run returns: the time the helper took has passed.
+        self.enterContext(mock.patch.object(NETWORK_JOB, "clock", self.host.real, create=True))
 
     def round(self, kind, ref, after):
         """One round as the job store runs it: a step that raises keeps only
@@ -736,9 +758,9 @@ class LostAnswerTests(Unfinished):
             self.back()
             status, _, message = self.step(kind, ref, 45)
             self.assertEqual("failed", status)
-            self.assertEqual(f"{kept(kind)} k3s on node-a did not restart: it has run since before Homestead asked for the restart, "
-                             "and the answer to that request was lost. The network settings on node-a are changed, but k3s still "
-                             "uses the old interface. Run `systemctl restart k3s` on node-a.", message)
+            self.assertEqual(f"{kept(kind)} k3s on node-a did not restart. It has run since before Homestead asked for the restart. "
+                             "The network settings on node-a are changed, but k3s still uses the old interface until it restarts. "
+                             "Run `systemctl restart k3s` on node-a.", message)
             self.assertEqual((1, 0), (len(self.host.restarts()), self.host.scheduled))
 
     def test_a_host_that_cannot_show_it_waits_then_fails_with_the_step_by_hand(self):
@@ -750,15 +772,42 @@ class LostAnswerTests(Unfinished):
             self.back()
             status, _, message = self.step(kind, ref, 45)
             self.assertEqual("running", status)
-            self.assertTrue(message.startswith("Checking whether k3s restarted on node-a (the host did not answer: "), message)
+            self.assertTrue(message.startswith("Checking whether k3s restarted on node-a (node-a did not answer: "), message)
             self.now = SINCE + kind.module.RESTART_SECONDS + 10
             self.back()
             status, _, message = self.step(kind, ref, kind.module.RESTART_SECONDS + 10)
             self.assertEqual("failed", status)
-            self.assertTrue(message.startswith(f"{kept(kind)} Homestead could not check whether k3s restarted (the host did "
-                                               "not answer: "), message)
-            self.assertTrue(message.endswith(unsure()), message)
+            self.assertTrue(message.startswith(f"{kept(kind)} Homestead cannot tell whether k3s on node-a restarted after it "
+                                               "asked for the restart (node-a did not answer: "), message)
+            self.assertTrue(message.endswith(unsure()[unsure().index(". The network"):]), message)
+            self.assertEqual(1, message.count("cannot tell"), message)
             self.assertEqual(1, len(self.host.restarts()))
+
+    def test_a_restart_counts_when_the_helper_is_slow_to_send_it_and_slower_to_read(self):
+        # A helper pod is made and started for each run: the request reaches
+        # the host well after the step's clock, and the read later still.
+        for request_lag, read_lag in ((1, 5), (20, 25), (0, 40)):
+            for kind in self.each():
+                self.helper(kind, "dropped", request_lag=request_lag, read_lag=read_lag)
+                ref = kind.saved()
+                self.step(kind, ref, 5)
+                self.now = SINCE + 45
+                self.back()
+                self.assertEqual("succeeded", self.step(kind, ref, 45)[0], (request_lag, read_lag))
+
+    def test_what_the_host_cannot_show_is_said_in_words(self):
+        for says, why in (("ActiveState=inactive\nExecMainStartTimestampMonotonic=0\n123.00 1.00\n", "k3s is not running"),
+                          ("ActiveState=failed\nExecMainStartTimestampMonotonic=5000000\n123.00 1.00\n", "k3s has failed"),
+                          ("", "Homestead could not read the answer from node-a"),
+                          ("ActiveState=active\nExecMainStartTimestampMonotonic=x\nabc\n", "Homestead could not read the answer from node-a")):
+            for kind in self.each():
+                self.helper(kind, "dropped")
+                self.host.show_says = says
+                ref = kind.saved()
+                self.step(kind, ref, 5)
+                self.now = SINCE + 45
+                self.back()
+                self.assertEqual(f"Checking whether k3s restarted on node-a ({why})", self.step(kind, ref, 45)[2])
 
     def test_a_service_still_starting_is_waited_for(self):
         for kind in self.each():
@@ -768,7 +817,7 @@ class LostAnswerTests(Unfinished):
             self.host.state = "activating"
             self.now = SINCE + 45
             self.back()
-            self.assertEqual(("running", kind.waiting_at, "Checking whether k3s restarted on node-a (k3s is activating)"),
+            self.assertEqual(("running", kind.waiting_at, "Checking whether k3s restarted on node-a (k3s is starting)"),
                              self.step(kind, ref, 45))
 
     def test_a_host_not_back_after_a_lost_answer_fails_without_saying_it_restarted(self):

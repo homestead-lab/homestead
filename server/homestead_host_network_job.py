@@ -385,25 +385,34 @@ def _service(ref):
     return next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
 
 
-def _restart_unsure(ref):
-    """What a job says when the answer to its restart of k3s or RKE2 was lost
-    and the host could not show whether it restarted."""
+def _restart_unsure(ref, why=""):
+    """What a job says when it has no proof that k3s or RKE2 restarted after
+    it asked: the answer was lost, or the request may not have been sent."""
     node, service = ref["node"], _service(ref)
-    return (f"The answer to the restart of {service} on {node} was lost, so Homestead cannot tell whether {service} restarted. "
-            f"The network settings on {node} are changed, but {service} may still use the old interface until it restarts. "
-            f"If `systemctl status {service}` on {node} shows it running since before the change, "
+    return (f"Homestead cannot tell whether {service} on {node} restarted after it asked for the restart"
+            + (f" ({why})" if why else "") + ". " + _old_interface(ref, "may still use")
+            + f" If `systemctl status {service}` on {node} shows it running since before the change, "
             f"run `systemctl restart {service}` on {node}.")
 
 
+def _old_interface(ref, verb):
+    node, service = ref["node"], _service(ref)
+    return f"The network settings on {node} are changed, but {service} {verb} the old interface until it restarts."
+
+
 # When the answer to the restart was lost, the host shows whether the service
-# started again after the request: its main process's start, on the host's
-# own monotonic clock, against the host's uptime, gives how long ago it started.
-# A read; it changes nothing, so it is safe to repeat. The restart is timed 2 s
-# after the request, and the check waits until the job is past 30 s and the
-# kubelet is heard from, so a restart still to come is not mistaken for none.
-# Only a start more than STARTED_BEFORE seconds older than the request counts
-# as proof of none: the read itself takes time after the step's clock.
+# started again after the request: how long ago its main process started, from
+# its start on the host's monotonic clock and the host's uptime. A read; it
+# changes nothing, so it is safe to repeat. The restart is timed 2 s after the
+# request, and the check waits until the job is past 30 s and the kubelet is
+# heard from, so a restart still to come is not mistaken for none.
+# "After" compares with the time since the request taken once the read is back
+# (clock), so the time the read takes counts on the side of the request.
+# "Before" needs a start more than STARTED_BEFORE seconds older than the request
+# seen from the step's start, so a slow read cannot turn a restart into none.
 STARTED_BEFORE = 120
+clock = time.time
+_STATES = {"activating": "is starting", "deactivating": "is stopping", "reloading": "is reloading", "failed": "has failed"}
 
 
 def _started(hostrun, node, ref, now):
@@ -413,17 +422,22 @@ def _started(hostrun, node, ref, now):
     try:
         out, _ = hostrun.run(node, f"systemctl show -p ActiveState -p ExecMainStartTimestampMonotonic {service}; cat /proc/uptime",
                              timeout=45)
+    except Exception as error:
+        return "", f"{node} did not answer: {_said(error)}"
+    read_at = clock()
+    try:
         values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
         uptime = float(next(line for line in out.splitlines() if "=" not in line and line.strip()).split()[0])
         started = int(values.get("ExecMainStartTimestampMonotonic") or 0) / 1e6
-    except Exception as error:
-        return "", f"the host did not answer: {_said(error)}"
-    if values.get("ActiveState") != "active" or started <= 0:
-        return "", f"{service} is {values.get('ActiveState') or 'not found'}"
-    age, asked = uptime - started, now - ref.get("restart_asked", ref["since"])
-    if age < asked:
+    except (StopIteration, ValueError, IndexError):
+        return "", f"Homestead could not read the answer from {node}"
+    state = values.get("ActiveState") or ""
+    if state != "active" or started <= 0:
+        return "", f"{service} {_STATES.get(state, 'is not running')}"
+    age, asked = uptime - started, ref.get("restart_asked", ref["since"])
+    if age < read_at - asked:
         return "after", ""
-    if age > asked + STARTED_BEFORE:
+    if age > now - asked + STARTED_BEFORE:
         return "before", ""
     return "", f"{service} started about when the restart was asked for"
 
@@ -523,8 +537,10 @@ def _applied(spec, ref, node, elapsed, now):
 
 def _save(item):
     """Save the job as it is now, before a step sends what cannot be sent
-    twice. A job has an id once the job store holds it; one with none is
-    stepped outside the store (a preview), and there is nothing to save."""
+    twice. Every job the store steps has an id. A job without one is not in
+    the store, so there is no row to save it to: only tests step jobs like
+    that (test_host_network_deadline, test_host_bonds, test_host_bridge), and
+    the tests of this save give their job an id."""
     if "id" in item:
         OPS.checkpoint(item)
 
@@ -571,6 +587,7 @@ def _confirmed(spec, item, node, elapsed, now):
                 else:
                     refused = (err or out or f"exit code {code}")[-160:]
                     ref.pop("restart_asked")
+                    _save(item)
     if "restart_asked" in ref:
         ref.update(stage="restarting", since=now, **restart_baseline(kget, node), **({"restart_unsure": True} if unsure else {}))
         return ("running", spec.restarting_at,
@@ -595,14 +612,11 @@ def _restarting(spec, ref, node, elapsed, now):
                                             "but the change is not finished.")
             if started == "before":
                 return ("failed", 100, " ".join([
-                    f"{kept} {service} on {node} did not restart: it has run since before Homestead asked for the restart, "
-                    f"and the answer to that request was lost. The network settings on {node} are changed, but {service} "
-                    f"still uses the old interface. Run `systemctl restart {service}` on {node}.",
-                    *vip_undone]))
+                    f"{kept} {service} on {node} did not restart. It has run since before Homestead asked for the restart. "
+                    + _old_interface(ref, "still uses") + f" Run `systemctl restart {service}` on {node}.", *vip_undone]))
             if not started:
                 if elapsed > spec.restart_seconds:
-                    return ("failed", 100, " ".join([f"{kept} Homestead could not check whether {service} restarted ({why}). "
-                                                     + _restart_unsure(ref), *vip_undone]))
+                    return "failed", 100, " ".join([f"{kept} {_restart_unsure(ref, why)}", *vip_undone])
                 return "running", spec.waiting_at, f"Checking whether {service} restarted on {node} ({why})"
             ref.pop("restart_unsure")
         if not vip:
