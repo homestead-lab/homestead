@@ -101,12 +101,12 @@ test("the network share tip and wiki name the real trigger and count from one mo
 test("every failover time says it counts from the host marked not ready", () => {
   const { FAILOVER_HELP } = choice();
   for (const mode of ["move", "slow", "default"]) {
-    assert.match(FAILOVER_HELP[mode], /(seconds|minutes) after its host is (marked )?not ready/, mode);
-    assert.doesNotMatch(FAILOVER_HELP[mode], /(seconds|minutes) after (its|the) host stops answering/, mode);
+    assert.match(FAILOVER_HELP[mode], /(seconds|minutes) after Kubernetes marks its host not ready/, mode);
+    assert.doesNotMatch(FAILOVER_HELP[mode], /(seconds|minutes) after (its|the) host stops answering|about a minute after it stops/, mode);
   }
-  // The default's help is held to the Edit dialog's word budget; the two
-  // moves say how long marking the host takes.
-  for (const mode of ["move", "slow"]) assert.match(FAILOVER_HELP[mode], /about a minute after it stops answering/, mode);
+  // The minute is the time to be marked, not when the app moves. The
+  // default's help is held to the Edit dialog's word budget.
+  for (const mode of ["move", "slow"]) assert.match(FAILOVER_HELP[mode], /marks its host not ready, which takes about a minute/, mode);
 });
 
 test("the Containers wiki lists the choices the dialog offers, timed from the host marked not ready", () => {

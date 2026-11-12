@@ -1980,11 +1980,13 @@ menu - usually its web UI - and its card links to that one first.
 
 ## When a node fails
 
-Each container chooses what happens when its node stops answering: move to
-another node after about 15 seconds (new containers' default), wait for its
-node to come back (for hardware-bound apps), or Kubernetes' five-minute
-default. **If a node fails** on Containers sets every container in one list;
-each editor has it under *Placement*. The choice is the pod's tolerations
+Each container chooses what happens when its host stops answering: move to
+another host 15 seconds (new containers' default) or 90 seconds after
+Kubernetes marks the host not ready, which takes about a minute; wait for its
+host to come back (for hardware-bound apps); or Kubernetes' default, five
+minutes after that mark. A time set outside Homestead is shown and kept.
+**If a host fails** on Containers sets every container in one list; each
+editor has it under *Placement*. The choice is the pod's tolerations
 for the unreachable and not-ready taints, so it shows for containers made
 elsewhere too. A moved container's single-host volume follows it only if Longhorn releases
 it from the failed host: its *Pod Deletion Policy When Node is Down* set to
