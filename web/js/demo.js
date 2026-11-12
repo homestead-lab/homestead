@@ -1894,6 +1894,32 @@ ssh_pwauth: true
       if(op.kind==="k3s-cluster")op.tracking_stopped=true;
       return {ok:true,detail:"Tracking resolved as unknown, and nothing was sent to the cluster",operation:op};
     },
+    "/api/operations/vm-recovery/removal-preview": (url, init) => {
+      const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
+      if (!op?.mutation_recovery || op.kind !== "vm-create") throw new Error("This job has nothing to remove. Only a failed VM create that kept what it made can be reviewed here.");
+      const {namespace, name} = op.resource, made = (kind, apiVersion, object) => ({resource:{apiVersion,kind,namespace,name:object},
+        current:{uid:`demo-${object}`,resourceVersion:"1"},last_write:"accepted",relationship:"Created by this attempt",remove:true,holds:false});
+      return {capacity_token:"demo-vm-removal",plan:{id,blocked:false,blockers:[],requires_confirmation:true,confirm:name,
+        resource:{namespace,name},action:"vm-create-removal",
+        resources:[{...made("VirtualMachine","kubevirt.io/v1",name),last_write:"uncertain"},made("PersistentVolumeClaim","v1",`${name}-disk`),
+          made("Secret","v1",`${name}-cloudinit`),
+          {resource:{apiVersion:"v1",kind:"PersistentVolumeClaim",namespace,name:`${name}-rootdisk`},current:null,last_write:"not dispatched",
+            relationship:"Goes with the VM",remove:false,holds:false,with_vm:true},
+          {resource:{apiVersion:"v1",kind:"ConfigMap",namespace,name:`${name}-vbios`},current:{uid:"demo-rom",resourceVersion:"1"},
+            last_write:"accepted",relationship:"Used by VM media",remove:false,holds:true}],
+        warnings:[`The VM ${name} was created by this attempt, and it is removed with the rest. The data on its volumes is lost.`,
+          "Only what this attempt provably created is removed. That is the object its create answered for, or a VM that carries this job's id; anything else of that name is left as it is.",
+          "Disks made from the VM's own templates are not in this job's record. KubeVirt removes the ones the VM owns (Goes with the VM) with it, and Harvester keeps its template disks. Check Volumes once the VM is gone."]}};
+    },
+    "/api/operations/vm-recovery/remove": (url, init) => {
+      const body=JSON.parse(init.body), op=(window.__demoOps || []).find(row=>row.id===body.id);
+      if (!op?.mutation_recovery || op.kind !== "vm-create" || body.capacity_token !== "demo-vm-removal" || body.confirm !== op.resource.name)
+        throw new Error("What this attempt created changed since the review, or the review expired. Nothing was removed. Review again.");
+      // The ConfigMap another VM uses stays, so the job keeps its hold on the name.
+      Object.assign(op,{status:"failed",finished_at:new Date().toISOString(),
+        message:`Admin removed part of what this attempt created. Kept: ConfigMap ${op.resource.name}-vbios. Check them, then review again.`});
+      return {ok:false,removed:3,detail:op.message,operation:op};
+    },
     "/api/operations/cancel-plan": (url, init) => {
       const id = JSON.parse(init?.body || "{}").id;
       const op = (window.__demoOps || []).find(item => item.id === id) || {};
