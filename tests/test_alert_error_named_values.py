@@ -148,6 +148,11 @@ class NamedValueTests(unittest.TestCase):
     def test_authorization_without_a_scheme_hides_its_first_word(self):
         self.hides("proxy said Authorization: hunter was refused", "hunter", keeps=("Authorization:",))
 
+    def test_a_field_joined_onto_another_value_is_hidden_too(self):
+        self.hides('got password="abc";token: hunter back', "abc", "hunter", keeps=("back",))
+        self.hides("got token: [a];secret: hunter back", "hunter", keeps=("back",))
+        self.hides("got token: [a, [b]] hunter", "hunter")
+
     def test_a_header_value_is_hidden_to_its_end(self):
         for name in ("Authorization", "Proxy-Authorization"):
             for first in ("Basic", "Custom"):
@@ -268,7 +273,8 @@ class TimeTests(unittest.TestCase):
               "eyJ." * 2500, "a/" * 5000, "A1/" * 3333, "abcdef." * 1428, "x" * 10000, HIDDEN * 1250,
               "Cookie: " + "a=b; " * 1998, "<hidden>." * 1111, "aB" * 5000, "@sha1:" * 1666, ":" * 9999 + "@",
               "password:" * 1111, "'" * 10000, "Authorization: " + "Basic " * 1663, "_" * 9999 + "/", "eyJ" * 3333,
-              "token: [" * 1250, "pass: \"a b" * 1000]
+              "token: [" * 1250, "pass: \"a b" * 1000,
+              "token: [" * 1249 + "]", "token: [a]" * 1000]
 
     def test_long_hostile_texts_stay_fast(self):
         for shape in self.SHAPES:

@@ -507,7 +507,17 @@ def _space(text, at):
     return len(text) if found < 0 else found
 
 
-def _value_end(text, at, name, typed=True):
+def _find(text, what, at, seen):
+    """text.find(what, at), remembering the last answer in seen: the
+    fields are read left to right, so each part of text is searched once."""
+    start, found = seen.get(what, (len(text) + 1, -1))
+    if not start <= at <= (len(text) if found < 0 else found):
+        found = text.find(what, at)
+        seen[what] = (at, found)
+    return found
+
+
+def _value_end(text, at, name, seen, typed=True):
     """Where the value of the field named name, starting at at, ends: the
     next space, and not before its closing quote, bracket or escaped quote.
     A block value and a header's value (Authorization, Cookie) run to the
@@ -525,13 +535,15 @@ def _value_end(text, at, name, typed=True):
     if quoted:
         return at, _space(text, quoted.match(text, at).end())
     if text.startswith("[", at):
-        close = text.find("]", at)
-        return at, _space(text, len(text) if close < 0 else close + 1)
+        close, inner = _find(text, "]", at, seen), _find(text, "[", at + 1, seen)
+        if close < 0 or -1 < inner < close:             # not closed, or a list in a list: to the end
+            return at, len(text)
+        return at, _space(text, close + 1)
     if _BLOCK.match(text, at):
         return at, len(text)
     error = _FIELD_ERROR.match(text, at) if typed else None
     if error:
-        return _value_end(text, error.end(), "", False) if error.group(1) else (at, at)
+        return _value_end(text, error.end(), "", seen, False) if error.group(1) else (at, at)
     end = _space(text, at)
     if text.count('"', at, end) % 2:                    # a quoted part with a space in it
         close = text.find('"', end)
@@ -549,12 +561,9 @@ def _hidden_more(text):
     field named like a password, key or token, a login before an @, a signed
     token, a join token and a long key. It only turns parts of text into the
     marker, so nothing _PLAIN hid can show again."""
-    spans, at = [], 0
-    while m := _FIELD.search(text, at):
-        at = m.end()
-        if MASKS.SECRET_WORD.search(m.group(2)):
-            spans.append(_value_end(text, at, m.group(2)))
-            at = max(at, spans[-1][1])                  # a field inside a hidden value is hidden with it
+    seen = {}
+    spans = [_value_end(text, m.end(), m.group(2), seen) for m in _FIELD.finditer(text)
+             if MASKS.SECRET_WORD.search(m.group(2))]
     for word in _WORD.finditer(text):
         colon, at = word.group(0).find(":"), len(word.group(0))
         while colon >= 0 and (at := word.group(0).rfind("@", colon, at)) > colon:
