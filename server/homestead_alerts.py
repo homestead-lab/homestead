@@ -510,8 +510,11 @@ def _space(text, at):
 def _value_end(text, at, name, typed=True):
     """Where the value of the field named name, starting at at, ends: the
     next space, and not before its closing quote, bracket or escaped quote.
-    A block value runs to the end. A cookie's pairs go with it; an
-    Authorization's scheme word and a field error's type stay shown."""
+    A block value and a header's value (Authorization, Cookie) run to the
+    end, with a known scheme word and a field error's type left shown."""
+    if name.lower().endswith(("authorization", "cookie")):    # a header's value runs to the end of its line
+        scheme = _SCHEME.match(text, at) if name.lower().endswith("authorization") else None
+        return (scheme.end() if scheme else at), len(text)
     if text.startswith(("\\\"", "\\'"), at):
         close = text.find(text[at:at + 2], at + 2)
         return at, _space(text, len(text) if close < 0 else close + 2)
@@ -529,9 +532,6 @@ def _value_end(text, at, name, typed=True):
     error = _FIELD_ERROR.match(text, at) if typed else None
     if error:
         return _value_end(text, error.end(), "", False) if error.group(1) else (at, at)
-    if name.lower().endswith("authorization"):
-        scheme = _SCHEME.match(text, at)
-        at = scheme.end() if scheme else at
     end = _space(text, at)
     if text.count('"', at, end) % 2:                    # a quoted part with a space in it
         close = text.find('"', end)

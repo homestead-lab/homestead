@@ -111,13 +111,14 @@ class NamedValueTests(unittest.TestCase):
         self.hides("GET /v1?token=abc&page=2 refused", "abc", "page=2", keeps=("refused",))
 
     def test_a_cookie_hides_every_pair(self):
-        self.hides("sent Cookie: sid=abcdef; theme=dark and failed", "abcdef", "dark", keeps=("and failed",))
+        text = self.hides("sent Cookie: sid=abcdef; theme=dark and failed", "abcdef", "dark", "failed")
+        self.assertEqual(f"sent Cookie: {HIDDEN}", text)
 
     def test_authorization_keeps_the_scheme_and_hides_the_credential(self):
         for scheme in ("Basic", "Digest", "Negotiate", "Bearer"):
             with self.subTest(scheme=scheme):
                 text = self.hides(f"proxy said Authorization: {scheme} dXNlcjpw was refused", "dXNlcjpw")
-                self.assertIn(f"Authorization: {scheme} {HIDDEN} was refused", text)
+                self.assertEqual(f"proxy said Authorization: {scheme} {HIDDEN}", text)
 
     def test_a_login_before_an_at_is_hidden(self):
         text = self.hides("dial ann:hunter@db.example.com failed", "ann", "hunter")
@@ -145,7 +146,18 @@ class NamedValueTests(unittest.TestCase):
         self.hides("config password: | hunter two", "hunter", "two")
 
     def test_authorization_without_a_scheme_hides_its_first_word(self):
-        self.hides("proxy said Authorization: hunter was refused", "hunter", keeps=("Authorization:", "refused"))
+        self.hides("proxy said Authorization: hunter was refused", "hunter", keeps=("Authorization:",))
+
+    def test_a_header_value_is_hidden_to_its_end(self):
+        for name in ("Authorization", "Proxy-Authorization"):
+            for first in ("Basic", "Custom"):
+                with self.subTest(name=name, first=first):
+                    text = self.hides(f"proxy said {name}: {first} hunter two", "hunter", "two")
+                    self.assertEqual(f"proxy said {name}: " + ("Basic " if first == "Basic" else "") + HIDDEN, text)
+        text = self.hides("sent Cookie: sid=abc; plain; theme=hunter two", "abc", "hunter", "two")
+        self.assertEqual(f"sent Cookie: {HIDDEN}", text)
+        text = self.hides("got Set-Cookie: sid=hunter; Path=/; HttpOnly", "hunter", "HttpOnly")
+        self.assertEqual(f"got Set-Cookie: {HIDDEN}", text)
 
     def test_a_field_error_keeps_its_type_and_hides_the_value_it_repeats(self):
         text = self.hides('spec.signerName: Invalid value: "hunter": must be set', "hunter")
@@ -205,7 +217,9 @@ class OnlyMoreHiddenTests(unittest.TestCase):
              "0123456789abcdef", "abcdef", "sha256:", "longhorn", "volumes", "not found", "{", "}", "\t", "\n",
              "é", "-", "_", "<", ">", SIGNED, JOIN, SLASHED, HOOK, "T0AB1CD2E", "1", "Z", '\\"', "b'", 'u"',
              "[", "]", "|", ">", "Required value", "Invalid value: ", "Unsupported value: ", "Not found: ",
-             "Forbidden: ", "Too long: ", "Internal error: ", "hunter two"]
+             "Forbidden: ", "Too long: ", "Internal error: ", "hunter two",
+             "Authorization: Basic hunter two", "Authorization: Custom hunter two", "Proxy-Authorization: ",
+             "Cookie: a=b; plain; c=d", "Set-Cookie: "]
 
     def inputs(self):
         rng = random.Random(1082)
