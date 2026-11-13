@@ -166,8 +166,8 @@ def _removing_engines(node, orphans):
 # (UnmarshalOrphanResourceTypes). Up to v1.8, the on/off orphan-auto-deletion,
 # which covered replica data only, the one orphan type then; v1.9.0 copies it
 # into the new setting (datastore syncSettingOrphanResourceAutoDeletionSettings).
-AUTO_DELETION = "orphan-resource-auto-deletion"
-OLD_AUTO_DELETION = "orphan-auto-deletion"
+REMOVAL_SETTING = "orphan-resource-auto-deletion"
+OLD_REMOVAL_SETTING = "orphan-auto-deletion"
 AUTO_KINDS = ("instance", "replica-data")
 # The kind of the setting that covers each orphan type (v1.13.0: every instance
 # type goes through instance_manager_controller.go deleteOrphans, replica data
@@ -187,7 +187,7 @@ def auto_removal(read=None):
     setting could be read. Never a guess: a failed read of the new name is not
     answered from the old one."""
     read = read or kget
-    for name in (AUTO_DELETION, OLD_AUTO_DELETION):
+    for name in (REMOVAL_SETTING, OLD_REMOVAL_SETTING):
         try:
             item = read(f"{LH}/settings/{name}") or {}
         except urllib.error.HTTPError as error:
@@ -197,7 +197,7 @@ def auto_removal(read=None):
         except Exception:
             return None
         value = str(item.get("value") or "").strip()
-        if name == OLD_AUTO_DELETION:
+        if name == OLD_REMOVAL_SETTING:
             if value not in ("true", "false"):
                 return {"setting": name, "unknown": value}
             return {"setting": name, "instance": None, "replica-data": value == "true"}
@@ -212,7 +212,7 @@ def auto_unsure(auto, what):
     """"Cannot tell" about what, saying why, when auto does not answer at all; else None."""
     if auto is None:
         return (f"Homestead cannot tell whether Longhorn removes {what} by itself. "
-                f"It could not read Longhorn's {AUTO_DELETION} setting.")
+                f"It could not read Longhorn's {REMOVAL_SETTING} setting.")
     if "unknown" in auto:
         return (f"Homestead cannot tell whether Longhorn removes {what} by itself. Longhorn's "
                 f"{auto['setting']} setting holds a value Homestead does not know: {auto['unknown'][:60]}.")
@@ -235,12 +235,12 @@ def _auto_said(types, auto):
         if on is None:
             said += f" Homestead cannot tell whether Longhorn removes records of {words} by itself."
             continue
-        if auto["setting"] == OLD_AUTO_DELETION:
-            setting = f"its {OLD_AUTO_DELETION} setting is {'on' if on else 'off'}"
+        if auto["setting"] == OLD_REMOVAL_SETTING:
+            setting = f"its {OLD_REMOVAL_SETTING} setting is {'on' if on else 'off'}"
         else:
-            setting = f"its {AUTO_DELETION} setting {'includes' if on else 'does not include'} {kind}"
+            setting = f"its {REMOVAL_SETTING} setting {'includes' if on else 'does not include'} {kind}"
         said += (f" Longhorn removes records of {words} by itself on this cluster while the host is up"
-                 f"{', after a grace period' if auto['setting'] == AUTO_DELETION else ''} ({setting})." if on else
+                 f"{', after a grace period' if auto['setting'] == REMOVAL_SETTING else ''} ({setting})." if on else
                  f" Longhorn does not remove records of {words} by itself on this cluster ({setting}).")
     for other in sorted({t or "unknown" for t in types if t not in AUTO_KIND}):
         said += f" Homestead cannot tell whether Longhorn removes {other} records by itself."
