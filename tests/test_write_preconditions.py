@@ -24,8 +24,11 @@ Only code counts: text in strings, comments and docstrings never does, and
 neither does a word elsewhere in the function (a log line, a check).
 
 COUNTS is the sites on dev when the guard came in, per file. A count may go
-down (and then has to be lowered here, or the entry removed), never up, and
-a file that is not listed has none. Strategic merge patches of labels or
+down (and then has to be lowered here, or the entry removed). It goes up only
+for a new write that truly needs no precondition (any first argument "PUT"
+counts, also a PUT that is not to Kubernetes, such as an object-store bucket
+create): raise that file's entry by one, with a comment on the line saying
+why, and the reviewer decides. A file that is not listed has none. Strategic merge patches of labels or
 annotations count the same: no special case. A failure names each site in
 the file by line and function.
 
@@ -52,8 +55,10 @@ WHAT_TO_DO = (
     "PUT the object as you read it in the same function (it carries the resourceVersion Kubernetes compares), "
     "or name the resourceVersion or uid you send, or use a JSON patch with a \"test\" op, or write through "
     "homestead_kube.update_json, which does. "
-    "A count may only go down: when a write is fixed, lower its file's count in COUNTS in "
-    "tests/test_write_preconditions.py.")
+    "When a write is fixed, lower its file's count in COUNTS in tests/test_write_preconditions.py. "
+    "When a new write truly needs no precondition (a PUT that is not to Kubernetes, such as an object-store "
+    "bucket create, or a create that cannot collide), raise that file's entry in COUNTS in "
+    "tests/test_write_preconditions.py by one, with a comment on the line saying why.")
 
 # file under server/ -> writes in it with no precondition seen, when the guard came in.
 COUNTS = {
@@ -545,6 +550,11 @@ class WritePreconditionRatchet(unittest.TestCase):
         self.assertEqual({}, stale,
                          "file: (found, allowed). Fewer than allowed: lower the count in COUNTS in "
                          "tests/test_write_preconditions.py, or remove the entry, so it cannot grow back.")
+
+    def test_the_failure_message_gives_an_honest_new_write_a_route(self):
+        self.assertIn("raise that file's entry in COUNTS in tests/test_write_preconditions.py by one, "
+                      "with a comment on the line saying why", WHAT_TO_DO)
+        self.assertIn("not to Kubernetes", WHAT_TO_DO)
 
     def test_the_scan_still_sees_writes(self):
         self.assertGreater(sum(self.found.values()), 50)
