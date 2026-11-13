@@ -319,8 +319,8 @@ def _removal_snapshot(item, read, actor):
                      "holds": value is not None and relationship not in ("Another object of that name", CREATED, "Not made by this attempt"),
                      "value": value})
     vm = next(row for row in rows if row["resource"] == vm_target)
-    warnings = ["Only what this attempt provably created is removed. That is the object its create answered for, or "
-                "a VM that carries this job's id; anything else of that name is left as it is."]
+    warnings = ["Only what this attempt created is removed: the object its create answered for, or a VM with this "
+                "job's id. Anything else of that name stays."]
     if vm["current"] and not vm["remove"]:
         # Claims, Secrets and ConfigMaps a VM of that name may use stay with it.
         blockers.append(f"A VM named {name} exists, and nothing on it shows that this attempt created it. It is left "
@@ -331,6 +331,14 @@ def _removal_snapshot(item, read, actor):
     elif vm["remove"]:
         warnings.insert(0, f"The VM {name} was created by this attempt, and it is removed with the rest. "
                            "The data on its volumes is lost.")
+        # What the VM alone owns (commit_vm makes it the owner of the Secret
+        # and the ROM ConfigMaps) is deleted by the garbage collector with
+        # it, whatever this review says: it is shown as going with the VM,
+        # never as kept, and gets no delete of its own.
+        for row in rows:
+            owners = ((row["value"] or {}).get("metadata") or {}).get("ownerReferences") or []
+            if row is not vm and owners and all(owner.get("uid") == vm["current"]["uid"] for owner in owners):
+                row.update(relationship="Goes with the VM", remove=False, holds=False, with_vm=True)
         # Disks KubeVirt makes from the VM's dataVolumeTemplates are owned by
         # the VM and go with it; they are not in the record, so they are shown.
         for template in (vm["value"].get("spec") or {}).get("dataVolumeTemplates") or []:
@@ -355,9 +363,10 @@ def _removal_snapshot(item, read, actor):
             if not by:
                 continue
             if row.get("with_vm"):
-                # A disk that goes with the VM cannot be fenced: the VM stays.
+                # What goes with the VM cannot be fenced: the VM stays.
                 row["relationship"] = f"Goes with the VM, and used by {by}"
-                blockers.append(f"The disk {row['resource']['name']} goes with the VM {name}, and {by} uses it. "
+                what = {"PersistentVolumeClaim": "disk"}.get(row["resource"]["kind"], row["resource"]["kind"])
+                blockers.append(f"The {what} {row['resource']['name']} goes with the VM {name}, and {by} uses it. "
                                 "Nothing is removed.")
             elif row["remove"] and row["resource"]["kind"] != "VirtualMachine":
                 row.update(remove=False, holds=True, relationship=f"Used by {by}")
@@ -411,7 +420,10 @@ def remove(body, ops, read, actor, send=None):
                           **({} if row["resource"]["kind"] == "VirtualMachine" else {"resourceVersion": row["current"]["resourceVersion"]})}
                          for row in plan["resources"] if row["remove"]]
                 item["ref"]["cleanup"] = {"state": "removing", "origin": "reviewed", "by": actor, "at": time.time(),
-                                          "steps": steps, "kept": [row["resource"] for row in plan["resources"] if row["holds"]]}
+                                          "steps": steps, "kept": [row["resource"] for row in plan["resources"] if row["holds"]],
+                                          # Owned by the VM: gone with it, kept if it stays.
+                                          "with_vm": [row["resource"] for row in plan["resources"]
+                                                      if row.get("with_vm") and row["current"]]}
                 t.save(items)
             outcome = JOB._run_cleanup(ident, ops, send) or {}
     except RECOVERY.DispatcherBusy:

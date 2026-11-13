@@ -737,6 +737,71 @@ class UncertainCreateRemovalTests(unittest.TestCase):
             self.remove(ident, {"capacity_token": f"{int(time.time()) + 600}.forged"})
         self.assertEqual([], self.deletes())
 
+    def owned_by_the_vm(self):
+        """The VM's POST answered, its Secret's owner PATCH went, and the ROM's
+        PATCH answered 500: the job fails and keeps what it made, and the VM
+        owns the Secret (garbage collection takes it with the VM)."""
+        self.kube.fail(ROM, 500, method="PATCH")
+        with self.assertRaises(Exception):
+            self.create()
+        self.kube.writes.clear()
+        ident = ops.stored()[-1]["id"]
+        vm_uid = self.kube.object(WEB)["metadata"]["uid"]
+        self.assertEqual([vm_uid], [ref["uid"] for ref in self.kube.object(SECRET)["metadata"]["ownerReferences"]])
+        return ident
+
+    def test_an_object_the_going_vm_owns_that_another_vm_uses_blocks_the_removal(self):
+        ident = self.owned_by_the_vm()
+        self.kube.add({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "web2", "namespace": "lab"},
+                       "spec": {"template": {"spec": {"volumes": [
+                           {"name": "c", "cloudInitNoCloud": {"secretRef": {"name": "web-cloudinit"}}}]}}}})
+        review = self.review(ident)
+        plan = review["plan"]
+        self.assertTrue(plan["blocked"], plan)
+        self.assertIsNone(review["capacity_token"])
+        self.assertIn("The Secret web-cloudinit goes with the VM web, and VM web2 uses it. Nothing is removed.", plan["blockers"])
+        secret = next(row for row in plan["resources"] if row["resource"]["name"] == "web-cloudinit")
+        self.assertTrue(secret.get("with_vm"), "never shown as Kept: the cluster deletes it with the VM")
+        self.assertFalse(secret["remove"])
+        with self.assertRaisesRegex(ValueError, "Nothing was removed"):
+            self.remove(ident, {"capacity_token": f"{int(time.time()) + 600}.forged"})
+        self.assertEqual([], self.deletes())
+        self.assertEqual(self.paths, self.left())
+
+    def test_objects_the_going_vm_owns_are_listed_as_removed_with_it_and_the_job_says_so(self):
+        ident = self.owned_by_the_vm()
+        # The ROM is owned too (as once its PATCH went): both go with the VM.
+        rom = self.kube.object(ROM)
+        rom["metadata"]["ownerReferences"] = self.kube.object(SECRET)["metadata"]["ownerReferences"]
+        KUBE.ksend("PUT", ROM, rom)
+        self.kube.writes.clear()
+        review = self.review(ident)
+        plan = review["plan"]
+        self.assertFalse(plan["blocked"], plan)
+        rows = {row["resource"]["name"]: row for row in plan["resources"]}
+        for owned in ("web-cloudinit", "web-vbios"):
+            self.assertEqual(("Goes with the VM", False, False, True),
+                             (rows[owned]["relationship"], rows[owned]["remove"], rows[owned]["holds"], rows[owned].get("with_vm")))
+        self.assertTrue(rows["web"]["remove"] and rows["web-disk"]["remove"])
+        result = self.remove(ident, review)
+        self.assertEqual([], self.left())
+        self.assertEqual([WEB, CLAIM], self.deletes(), "what the VM owns goes by garbage collection, not by a delete")
+        self.assertTrue(result["ok"])
+        self.assertEqual("admin removed what this attempt created. Removed with the VM: ConfigMap web-vbios, "
+                         "Secret web-cloudinit. Nothing else was changed.", result["detail"])
+        self.assertFalse(self.job(ident)["ref"]["retain_resources"])
+
+    def test_objects_the_vm_owns_are_said_to_be_kept_when_the_vm_stays(self):
+        ident = self.owned_by_the_vm()
+        review = self.review(ident)
+        self.kube.fail(WEB, 500, method="DELETE")
+        result = self.remove(ident, review)
+        self.assertIn("Kept: VM web", result["detail"])
+        self.assertIn("Secret web-cloudinit", result["detail"])
+        self.assertNotIn("Removed with the VM", result["detail"])
+        self.assertIsNotNone(self.kube.object(SECRET))
+        self.assertTrue(self.job(ident)["ref"]["retain_resources"])
+
     def test_a_list_cut_short_or_pods_that_cannot_be_read_keep_everything(self):
         for path, answer in ((VMS, {"items": [], "metadata": {"continue": "more"}}),
                              ("/apis/kubevirt.io/v1/namespaces/lab/virtualmachineinstances", {"items": [], "metadata": {"continue": "more"}}),
@@ -764,5 +829,5 @@ class UncertainCreateRemovalTests(unittest.TestCase):
         for path in self.paths:
             self.kube.discard(path)
         result = self.remove(ident, self.review(ident))
-        self.assertEqual("Nothing was left to remove. The name can be used again.", result["detail"])
+        self.assertEqual("Nothing was left to remove. Check Volumes before creating the VM again.", result["detail"])
         self.assertFalse(self.job(ident)["ref"]["retain_resources"])

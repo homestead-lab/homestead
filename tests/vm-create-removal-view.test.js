@@ -25,7 +25,7 @@ function setup({blocked = false, missing = false, fail = false, answer = null} =
       sent.push({path, body: JSON.parse(options.body)});
       if (path.endsWith("/removal-preview")) return {capacity_token: missing ? null : "signed-removal", plan: {blocked, confirm: "web",
         blockers: blocked ? ["A VM named web exists, and nothing on it shows that this attempt created it."] : [],
-        warnings: ["Only what this attempt provably created is removed."], resources: ROWS}};
+        warnings: ["Only what this attempt created is removed:"], resources: ROWS}};
       if (fail) throw new Error("lost response");
       return answer || {ok: true, removed: 2, detail: "admin removed what this attempt created.", operation: {id: "job", status: "failed"}};
     }};
@@ -47,7 +47,7 @@ test("the review says what goes and what stays, and removal waits for the typed 
   assert.match(html, /Volume · web-rootdisk<\/td><td[^>]*>Goes with the VM<\/td><td[^>]*>Removed with the VM</);
   assert.match(html, /Secret · web-cloudinit<\/td><td[^>]*>Used by VM media<\/td><td[^>]*>Kept</);
   assert.match(html, />Cancel</);
-  assert.match(html, /Only what this attempt provably created is removed/);
+  assert.match(html, /Only what this attempt created is removed/);
   await t.ctx.vmCreateRemoveApply();
   assert.equal(t.sent.length, 1, "nothing is sent before the name is typed");
   t.fields["#vmCreateRemoveName"].value = "wrong";

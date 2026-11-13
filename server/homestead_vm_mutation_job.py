@@ -220,7 +220,10 @@ def _run_cleanup(ident, ops, send):
             return None
         cleanup = row["ref"]["cleanup"]
         gone = {step["sequence"] for step in cleanup["steps"] if step["phase"] == "removed"}
-        left = [step["resource"] for step in cleanup["steps"] if step["phase"] != "removed"] + cleanup["kept"]
+        vm_gone = any(step["resource"]["kind"] == "VirtualMachine" and step["phase"] == "removed" for step in cleanup["steps"])
+        owned = cleanup.get("with_vm") or []  # what the VM owns goes with it, or stays with it
+        left = ([step["resource"] for step in cleanup["steps"] if step["phase"] != "removed"] + cleanup["kept"]
+                + ([] if vm_gone else owned))
         for entry in row["ref"].get("writes", []):
             if entry.get("sequence") in gone:
                 entry["removed"] = True
@@ -229,12 +232,14 @@ def _run_cleanup(ident, ops, send):
             by = cleanup.get("by") or "An admin"
             words = {"VirtualMachine": "VM", "PersistentVolumeClaim": "Volume"}
             kept = ", ".join(f"{words.get(t.get('kind'), t.get('kind'))} {t.get('name')}" for t in left)
+            with_vm = (" Removed with the VM: " + ", ".join(f"{words.get(t.get('kind'), t.get('kind'))} {t.get('name')}"
+                                                          for t in owned) + ".") if vm_gone and owned else ""
             if not left and not gone:
-                message = "Nothing was left to remove. The name can be used again."
+                message = "Nothing was left to remove. Check Volumes before creating the VM again."
             elif not left:
-                message = f"{by} removed what this attempt created. Nothing else was changed."
+                message = f"{by} removed what this attempt created.{with_vm} Nothing else was changed."
             elif gone:
-                message = f"{by} removed part of what this attempt created. Kept: {kept}. Check them, then review again."
+                message = f"{by} removed part of what this attempt created.{with_vm} Kept: {kept}. Check them, then review again."
             elif cleanup["steps"]:
                 message = (f"Nothing was removed: what the review showed changed since, or could not be removed. "
                            f"Kept: {kept}. Review again.")
