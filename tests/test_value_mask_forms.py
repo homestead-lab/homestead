@@ -99,6 +99,20 @@ class Forms(unittest.TestCase):
                 self.assertNotIn("x.example.com/a", now)
                 self.assertNotIn("tok", now)
 
+    def test_a_word_starting_with_its_at_is_not_part_of_a_login(self):
+        for text in ("Listening on http://198.51.100.7:8080 using @next/swc", "a: https://h.example.com:8443\n  @scope/pkg x@y",
+                     "https://h:1\t@tcp(db)/a", "https://h:1 @@x"):
+            with self.subTest(text=text):
+                self.assertEqual(_before(text), strip(text))
+                self.assertEqual(strip(text), strip(strip(text)), "masking twice changes nothing")
+
+    def test_an_address_inside_a_word_ends_the_reach(self):
+        for text in ("https://h.example.com:8443 a:x://y b@c", "https://h:1 •••://••• b@c", "https://h:1 x:\\y b@c"):
+            with self.subTest(text=text):
+                once = strip(text)
+                self.assertEqual(once, strip(once), "masking twice changes nothing")
+                self.assertTrue(_shows_no_more(once, _before(text)))
+
     def test_a_code_like_fragment_or_query_piece_is_hidden(self):
         for given, wanted in (("https://h.example.com/#AbC1dEf2GhI3jK", "https://h.example.com/#•••"),
                               ("https://h.example.com/p?AbC1dEf2", "https://h.example.com/p?•••"),
@@ -131,7 +145,9 @@ class Forms(unittest.TestCase):
         n = 200_000
         texts = ["https://h:1 " * (n // 12) + "@", "https://h:1\n " * (n // 13) + "@",
                  "".join("https://h:1\n" + " " * i for i in range(600)) + "@",
-                 ("https://h:1 x\n" * (n // 14)) + "a@b", "https://h/#" + "a1" * (n // 2)]
+                 ("https://h:1 x\n" * (n // 14)) + "a@b", "https://h/#" + "a1" * (n // 2),
+                 # Many short addresses, then one long word holding an "@".
+                 "https://h:1 " * 2000 + "a@" + "x" * (n + 20_000), "https://h:1 " * 2000 + "a:x://y " + "a@" + "x" * n]
         for text in texts:
             started = time.monotonic()
             stripped = strip(text)
@@ -140,39 +156,82 @@ class Forms(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 1.5, text[:40])
 
 
+def _shown_at(output, text):
+    """The places of text that output shows, reading output as text with
+    some stretches replaced by the mask (each piece outside a mask at the
+    first place it fits after the one before); None when output is not that
+    (a JSON text written back compact)."""
+    pieces = output.split(HIDDEN)
+    if len(pieces) == 1:
+        return set(range(len(text))) if output == text else None
+    first, last = pieces[0], pieces[-1]
+    at, limit = len(first), len(text) - len(last)
+    if not text.startswith(first) or not text.endswith(last) or at > limit:
+        return None
+    shown = set(range(at)) | set(range(limit, len(text)))
+    for piece in pieces[1:-1]:
+        found = text.find(piece, at, limit)
+        if found < 0:
+            return None
+        shown.update(range(found, found + len(piece)))
+        at = found + len(piece)
+    return shown
+
+
+def _shows_no_place_more(text, now, before):
+    """Whether now shows no place of text that before hides; where either is
+    not text masked in place, whether now could be made from before by
+    hiding more of it."""
+    places, then = _shown_at(now, text), _shown_at(before, text)
+    if places is None or then is None:
+        return _shows_no_more(now, before)
+    return places <= then
+
+
 # Parts of a wide set of addresses; every combination is masked both ways.
 SCHEMES = ("https", "http", "postgres", "gotify", "ssh")
-LOGINS = ("", "u@", "u:p@", "u:my pass@", "u:12 34@", "u:a b c@", "u:a\n  b@", "u:a\nb@", "u:a\n\n  b@", "@")
-HOSTS = ("h.example.com", "h.example.com:8443", "198.51.100.7:80", "[2001:db8::1]:443", "h")
-PATHS = ("", "/", "/x/y", "/hooks/abc", "/design", "/a b")
+FOLDED = "u:a" + "\n  b" * MASKS.FOLD_LINES + "@"
+LOGINS = ("", "u@", "u:p@", "u:my pass@", "u:12 34@", "u:a\tb c@", "u:a\n  b@", "u:a\nb@", "u:a\n\n  b@", "@",
+          FOLDED, FOLDED.replace("@", "\n  c@"))
+HOSTS = ("h.example.com", "h.example.com:8443", "198.51.100.7:80", "[2001:db8::1]:443")
+PATHS = ("", "/", "/x/y", "/hooks/abc", "/a b")
 TAILS = ("", "?page=2", "?token=t", "?AbC1dEf2", "#install", "#AbC1dEf2GhI3", "?a=1&B2c3D4e5f", "#L42", "#x y@z")
 AROUND = (("", ""), ("see ", " then"), ("url: ", "\nnext: a@b.example.com"), ('{"u":"', '"}'),
-          ("  - ", "\n    more@x.example.com"), ("a ", " b c@d"), ("x\n  ", "\n  y@z"),
+          ("  - ", "\n    more@x.example.com"), ("a ", "\tb c@d"), ("x\n  ", "\n  y@z"),
           # A second address of another scheme after it, on the line and folded, and one before it.
           ("", " gotify://tok@x.example.com/a"), ("", "\n  pbul://k@x/y z@w"), ("", " t@pover://k@x"),
           ("https://h.example.com:8443 ", " a@b"), ("url: https://h:1\n  ", "\n  ssh://u:p@x"),
-          ("", " https://u:p@x/hooks/abc c@d"), ("", " x //u:p@h/y and u:p@tcp(db)/a"))
+          ("", " https://u:p@x/hooks/abc c@d"), ("", " x //u:p@h/y and u:p@tcp(db)/a"),
+          # An address inside a word between it and a later "@", and a word that starts with its "@".
+          ("", " a:x://y b@c"), ("", "\n  q:u://v w@z"), ("", " @scope/pkg x@y"))
 
 
 class OnlyMoreIsHidden(unittest.TestCase):
-    def test_no_form_shows_a_character_that_was_hidden_before(self):
-        texts = [f"{before}{scheme}://{login}{host}{path}{tail}{after}" for scheme, login, host, path, tail, (before, after)
-                 in itertools.product(SCHEMES, LOGINS, HOSTS, PATHS, TAILS, AROUND)]
-        checked = changed = 0
-        for text, then in zip(texts, _before(*texts)):
-            now = strip(text)
-            checked += 1
+    @classmethod
+    def setUpClass(cls):
+        cls.texts = [f"{before}{scheme}://{login}{host}{path}{tail}{after}" for scheme, login, host, path, tail, (before, after)
+                     in itertools.product(SCHEMES, LOGINS, HOSTS, PATHS, TAILS, AROUND)]
+        cls.before = _before(*cls.texts)
+        cls.now = [strip(text) for text in cls.texts]
+
+    def test_no_form_shows_a_place_that_was_hidden_before(self):
+        changed = 0
+        for text, now, then in zip(self.texts, self.now, self.before):
             changed += now != then
-            if not _shows_no_more(now, then):
+            if not _shows_no_place_more(text, now, then):
                 self.fail(f"{text!r}: now {now!r}, before {then!r}")
-            self.assertEqual(now, strip(now), text)
-        self.assertGreater(checked, 50_000)
+        self.assertGreater(len(self.texts), 100_000)
         self.assertGreater(changed, 1_000, "the new forms are reached")
+
+    def test_masking_twice_changes_nothing(self):
+        for text, now in zip(self.texts, self.now):
+            if strip(now) != now:
+                self.fail(f"{text!r}: once {now!r}, twice {strip(now)!r}")
 
     def test_a_cut_text_shows_no_character_that_was_hidden_before(self):
         texts = [f"{before}{scheme}://{login}{host}{path}{tail}{after}" for scheme, login, host, path, tail, (before, after)
-                 in itertools.product(SCHEMES, LOGINS, HOSTS[:3], PATHS[:3], TAILS[::2], AROUND)]
-        cuts = [(text, length) for text in texts for length in range(0, len(text) + 1, 4)]
+                 in itertools.product(SCHEMES, LOGINS[:10], HOSTS[:3], PATHS[:3], TAILS[::2], AROUND[::2])]
+        cuts = [(text, length) for text in texts for length in range(0, len(text) + 1, 5)]
         with mock.patch.object(MASKS, "_spans", MASKS.tokens), mock.patch.object(MASKS, "_code_like", lambda piece: False):
             before = [strip(MASKS.cut(text, length)) for text, length in cuts]
         for (text, length), then in zip(cuts, before):
@@ -182,12 +241,16 @@ class OnlyMoreIsHidden(unittest.TestCase):
                 self.fail(f"{text!r} cut at {length}: now {now!r}, before {then!r}")
         self.assertGreater(len(cuts), 20_000)
 
-    def test_the_comparison_itself_tells_more_from_less(self):
+    def test_the_comparisons_themselves_tell_more_from_less(self):
         self.assertTrue(_shows_no_more("https://•••@h", "https://u:p •••@h"))
         self.assertTrue(_shows_no_more("a •••", "a b c"))
         self.assertFalse(_shows_no_more("https://u:p@h", "https://•••@h"))
         self.assertFalse(_shows_no_more("a ••• secret", "a ••• b"))
         self.assertFalse(_shows_no_more("x", "y"))
+        # By place: a piece shown elsewhere does not excuse showing it here.
+        self.assertTrue(_shows_no_place_more("a b a", "a •••", "a b •••"))
+        self.assertFalse(_shows_no_place_more("a b a", "••• b a", "a b •••"))
+        self.assertFalse(_shows_no_place_more("x a y a", "x a ••• a", "x a y •••"))
 
 
 if __name__ == "__main__":

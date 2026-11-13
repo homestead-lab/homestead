@@ -312,11 +312,14 @@ def _spans(text):
     """(start, end) of every address as tokens() finds them, except that one
     whose login may go on past whitespace reaches on to the end of the word
     holding the next "@" on its line or a folded line after it (see
-    NOT_ENDED), when no other address starts before that word ends: each
-    address is masked by its own rule. Linear in the text: the next "@",
-    each token's line and that line's end are found once and kept while the
-    tokens move on."""
-    done, at, line, brk, ends = 0, -1, 0, -2, {}
+    NOT_ENDED), unless that word starts with its "@" (or a mask the older
+    rules put before it: "•••@tcp(", from "@tcp(") or a word on the way
+    holds ":/" or ":\\" (another address, or one already masked whole):
+    each address is masked by its own rule, and masking twice changes
+    nothing. Linear in the text: the next "@" and where its word ends, the
+    next ":/", each token's line and that line's end are found once and
+    kept while the tokens move on."""
+    done, at, reach, colon, line, brk, ends = 0, -1, -1, -1, 0, -2, {}
     listed = list(tokens(text))
     for index, (start, end) in enumerate(listed):
         if start < done:
@@ -327,17 +330,20 @@ def _spans(text):
             if at < end:
                 at = text.find("@", end)
                 at = len(text) if at < 0 else at
+                space = SPACE_AT.search(text, at)
+                reach = space.start() if space else len(text)
+            if colon < end:
+                found = COLON.search(text, end)
+                colon = found.start() if found else len(text)
             while brk != -1 and (brk == -2 or brk < start):
                 line = 0 if brk == -2 else brk + 1
                 found = LINE_BREAK.search(text, line)
                 brk = found.start() if found else -1
             if line not in ends:
                 ends[line] = _line_end(text, line, brk)
-            if at < ends[line]:
-                space = SPACE_AT.search(text, at)
-                reach = space.start() if space else len(text)
-                if index + 1 == len(listed) or listed[index + 1][0] >= reach:
-                    end = reach
+            if at < ends[line] and colon >= reach and text[at - 1] not in SPACE and not text.endswith(HIDDEN, 0, at) \
+                    and (index + 1 == len(listed) or listed[index + 1][0] >= reach):
+                end = reach
         done = end
         yield start, end
 
