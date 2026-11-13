@@ -21,11 +21,28 @@ strip = MASKS.strip_url_secrets
 HIDDEN = MASKS.HIDDEN
 
 
+def _as_before():
+    """The masks with the two new rules switched off."""
+    # create: a module without these rules has nothing to switch off.
+    spans = mock.patch.object(MASKS, "_spans", lambda text: ((start, end, False) for start, end in MASKS.tokens(text)), create=True)
+    code = mock.patch.object(MASKS, "_code_like", lambda piece: False, create=True)
+
+    class Both:
+        def __enter__(self):
+            spans.__enter__()
+            code.__enter__()
+
+        def __exit__(self, *info):
+            code.__exit__(*info)
+            spans.__exit__(*info)
+    return Both()
+
+
 def _before(*texts):
     """What the masks showed before these forms were added: the address ends
     at its first whitespace and a fragment or query piece is checked only by
     the older rules."""
-    with mock.patch.object(MASKS, "_spans", MASKS.tokens), mock.patch.object(MASKS, "_code_like", lambda piece: False):
+    with _as_before():
         shown = [strip(text) for text in texts]
     return shown[0] if len(texts) == 1 else shown
 
@@ -105,6 +122,21 @@ class Forms(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(_before(text), strip(text))
                 self.assertEqual(strip(text), strip(strip(text)), "masking twice changes nothing")
+
+    def test_a_login_reaches_a_word_that_starts_with_its_at(self):
+        for text in ("https://user:ab cd @h.example.com/x", "https://user:ab\n  cd @h.example.com/x", "https://u:ab\t@tcp(db)/a"):
+            with self.subTest(text=text):
+                once = self.assertMasked(text, "cd", "user", "ab")
+                self.assertTrue(_shows_no_more(once, _before(text)))
+
+    def test_another_address_inside_the_reach_hides_the_whole_stretch(self):
+        for text, wanted in (("https://user:ab a:x://y cd@h.example.com/x next", "https://••• next"),
+                             ("https://user:ab gotify://k cd@h.example.com", "https://•••"),
+                             ("--url=https://user:ab x@pbul://k@h", "--url=https://•••"),
+                             ("https://user:ab\n  x:\\y cd@h", "https://•••")):
+            with self.subTest(text=text):
+                self.assertEqual(wanted, self.assertMasked(text, "cd", "user"))
+                self.assertTrue(_shows_no_more(wanted, _before(text)))
 
     def test_an_address_inside_a_word_ends_the_reach(self):
         for text in ("https://h.example.com:8443 a:x://y b@c", "https://h:1 •••://••• b@c", "https://h:1 x:\\y b@c"):
@@ -190,7 +222,7 @@ def _shows_no_place_more(text, now, before):
 
 # Parts of a wide set of addresses; every combination is masked both ways.
 SCHEMES = ("https", "http", "postgres", "gotify", "ssh")
-FOLDED = "u:a" + "\n  b" * MASKS.FOLD_LINES + "@"
+FOLDED = "u:a" + "\n  b" * getattr(MASKS, "FOLD_LINES", 8) + "@"
 LOGINS = ("", "u@", "u:p@", "u:my pass@", "u:12 34@", "u:a\tb c@", "u:a\n  b@", "u:a\nb@", "u:a\n\n  b@", "@",
           FOLDED, FOLDED.replace("@", "\n  c@"))
 HOSTS = ("h.example.com", "h.example.com:8443", "198.51.100.7:80", "[2001:db8::1]:443")
@@ -232,7 +264,7 @@ class OnlyMoreIsHidden(unittest.TestCase):
         texts = [f"{before}{scheme}://{login}{host}{path}{tail}{after}" for scheme, login, host, path, tail, (before, after)
                  in itertools.product(SCHEMES, LOGINS[:10], HOSTS[:3], PATHS[:3], TAILS[::2], AROUND[::2])]
         cuts = [(text, length) for text in texts for length in range(0, len(text) + 1, 5)]
-        with mock.patch.object(MASKS, "_spans", MASKS.tokens), mock.patch.object(MASKS, "_code_like", lambda piece: False):
+        with _as_before():
             before = [strip(MASKS.cut(text, length)) for text, length in cuts]
         for (text, length), then in zip(cuts, before):
             now = strip(MASKS.cut(text, length))

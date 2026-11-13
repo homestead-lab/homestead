@@ -312,13 +312,16 @@ def _spans(text):
     """(start, end) of every address as tokens() finds them, except that one
     whose login may go on past whitespace reaches on to the end of the word
     holding the next "@" on its line or a folded line after it (see
-    NOT_ENDED), unless that word starts with its "@" (or a mask the older
-    rules put before it: "•••@tcp(", from "@tcp(") or a word on the way
-    holds ":/" or ":\\" (another address, or one already masked whole):
-    each address is masked by its own rule, and masking twice changes
-    nothing. Linear in the text: the next "@" and where its word ends, the
-    next ":/", each token's line and that line's end are found once and
-    kept while the tokens move on."""
+    NOT_ENDED). (start, end, whole): whole when a word on the way holds ":/"
+    or ":\\" (another address, or one already masked): the stretch is then
+    hidden whole after "scheme://", so no address in it is shown by another's
+    rule, and masking twice changes nothing. An address whose host part is
+    a plain host:port reaches on only over plain words to an "@" inside a
+    word: not to a word that starts with its "@" (or with a mask the older
+    rules put before it: "•••@tcp(", from "@tcp("), so "@scope/pkg" is not
+    the end of a login, and not past a word holding ":/" or ":\\". Linear in the text: the next
+    "@" and where its word ends, the next ":/", each token's line and that
+    line's end are found once and kept while the tokens move on."""
     done, at, reach, colon, line, brk, ends = 0, -1, -1, -1, 0, -2, {}
     listed = list(tokens(text))
     for index, (start, end) in enumerate(listed):
@@ -326,6 +329,7 @@ def _spans(text):
             continue
         head = HEAD.match(text, start, end)
         body = text[head.end():end] if head else ""
+        whole = False
         if ":" in body and not NOT_ENDED.search(body):
             if at < end:
                 at = text.find("@", end)
@@ -341,11 +345,12 @@ def _spans(text):
                 brk = found.start() if found else -1
             if line not in ends:
                 ends[line] = _line_end(text, line, brk)
-            if at < ends[line] and colon >= reach and text[at - 1] not in SPACE and not text.endswith(HIDDEN, 0, at) \
-                    and (index + 1 == len(listed) or listed[index + 1][0] >= reach):
-                end = reach
+            starts = text[at - 1] in SPACE or text.endswith(HIDDEN, 0, at)
+            crossed = colon < reach or (index + 1 < len(listed) and listed[index + 1][0] < reach)
+            if at < ends[line] and not (HOST.fullmatch(body) and (starts or crossed)):
+                whole, end = crossed, reach
         done = end
-        yield start, end
+        yield start, end, whole
 
 
 def _bare_login(word):
@@ -373,7 +378,7 @@ def _bare(text):
     return WORD.sub(lambda found: _bare_login(found.group(0)), text) if "@" in text else text
 
 
-def _strip_word(word, start=None):
+def _strip_word(word, start=None, whole=False):
     """One whitespace-delimited word. An address that starts inside the word
     (after "@", ":", "/" or "\\", or after scheme characters) is not one a
     parser reads on its own: the whole word is hidden (MID_WORD), since
@@ -385,6 +390,8 @@ def _strip_word(word, start=None):
         prefix = word[:start]
         if start and (PREFIX_MARK.search(prefix) or prefix[-1] in SCHEME):
             return MID_WORD
+        if whole:
+            return prefix + HEAD.match(word, start).group(1) + "://" + HIDDEN
         return prefix + _mask_token(word[start:])
     return _bare_login(word)
 
@@ -401,9 +408,9 @@ def _word_start(text, low, at):
 
 def _strip_text(text):
     out, done = [], 0
-    for start, end in _spans(text):
+    for start, end, whole in _spans(text):
         word = _word_start(text, done, start)
-        out += [_bare(text[done:word]), _strip_word(text[word:end], start - word)]
+        out += [_bare(text[done:word]), _strip_word(text[word:end], start - word, whole)]
         done = end
     return "".join(out) + _bare(text[done:])
 
@@ -491,7 +498,7 @@ def cut(text, length, mark="…"):
     text = str(text or "")
     if len(text) <= length:
         return text
-    for start, end in _spans(text):
+    for start, end, _ in _spans(text):
         if start >= length:
             break
         if end > length:
@@ -540,7 +547,7 @@ def has_stripped(value):
     if isinstance(value, list):
         return any(has_stripped(item) for item in value)
     return isinstance(value, str) and (TOO_LONG in value or TOO_MANY in value or JSON_HIDDEN in value or HIDDEN + "@" in value or MID_WORD in value or (HIDDEN in value and any(
-        HIDDEN in value[start:end] for start, end in _spans(value))))
+        HIDDEN in value[start:end] for start, end, _ in _spans(value))))
 
 
 # Fields that name a list's items (env and containers by name, ConfigMap
