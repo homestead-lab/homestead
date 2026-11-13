@@ -408,5 +408,117 @@ class SettingTests(unittest.TestCase):
             server.APP_SETTINGS.validate({"restore_tests": {"enabled": "yes"}})
 
 
+# A password inside an address that outside text quotes, built in pieces.
+WORD = "hun" + "ter2"
+ADDRESS = "postgres://app:" + WORD + "@db.example.com/x"
+
+
+class MessagesMasked(Base):
+    """Every outside text a restore test copies into its job message or the
+    app's result has any address login masked, for every role."""
+
+    def result(self):
+        patches = [b for m, p, b in self.c.sent if m == "PATCH" and p == DEPLOYMENT]
+        return patches[-1]["metadata"]["annotations"]["homestead.io/restore-tested"] if patches else ""
+
+    def assertMasked(self, *texts):
+        for text in texts:
+            self.assertNotIn(WORD, text)
+        self.assertTrue(any("postgres://•••@db.example.com" in text for text in texts), texts)
+
+    def to_checking(self):
+        self.step(1000)
+        self.assertEqual("running", self.step(1100)[0])
+
+    def test_a_waiting_copys_message(self):
+        self.to_checking()
+        self.c.set_pod(self.item, {"containerStatuses": [{"name": "app", "state": {"waiting": {
+            "reason": "CreateContainerConfigError", "message": f"env DB_URL={ADDRESS} could not be read"}}}]})
+        status, _, waiting = self.step(1200)
+        self.assertEqual("running", status)
+        self.assertIn("CreateContainerConfigError", waiting)
+        status, _, message = self.step(1100 + RT.READY_WAIT + 10)
+        self.assertEqual("failed", status)
+        self.assertMasked(waiting)
+        self.assertMasked(message, self.result())
+
+    def test_a_long_waiting_message_is_cut_without_showing_part_of_a_login(self):
+        self.to_checking()
+        self.c.set_pod(self.item, {"containerStatuses": [{"name": "app", "state": {"waiting": {
+            "reason": "CreateContainerError", "message": "x" * 120 + " " + ADDRESS}}}]})
+        _, _, waiting = self.step(1200)
+        self.assertNotIn("postgres://app", waiting)
+        self.assertNotIn("hun", waiting)
+
+    def test_a_copy_that_cannot_be_scheduled(self):
+        self.to_checking()
+        self.c.set_pod(self.item, {"conditions": [{"type": "PodScheduled", "status": "False",
+                                                   "message": f"0/3 nodes: mount {ADDRESS} failed"}]})
+        _, _, waiting = self.step(1200)
+        _, _, message = self.step(1100 + RT.READY_WAIT + 10)
+        self.assertMasked(waiting)
+        self.assertMasked(message, self.result())
+
+    def test_a_restore_that_is_refused(self):
+        def refused(cfg):
+            raise ValueError(f"the backup target {ADDRESS} did not answer")
+        with mock.patch.object(RT, "restore", refused):
+            status, _, message = self.step(1000)
+        self.assertEqual("failed", status)
+        self.assertMasked(message, self.result())
+
+    def test_a_restore_that_says_it_was_not_created(self):
+        with mock.patch.object(RT, "restore", lambda cfg: {"created": False, "message": f"target {ADDRESS} is read-only"}):
+            status, _, message = self.step(1000)
+        self.assertEqual("failed", status)
+        self.assertMasked(message, self.result())
+
+    def test_a_restore_that_fails_or_is_still_going(self):
+        with mock.patch.object(RT, "restore_status", lambda item: ("running", 40, f"reading {ADDRESS}")):
+            status, _, going = self.step(1000)
+        self.assertEqual("running", status)
+        self.assertMasked(going)
+        with mock.patch.object(RT, "restore_status", lambda item: ("failed", 40, f"could not read {ADDRESS}")):
+            status, _, message = self.step(1010)
+        self.assertEqual("failed", status)
+        self.assertMasked(message, self.result())
+
+    def test_a_copy_that_does_not_answer(self):
+        self.to_checking()
+        self.ready_pod()
+        self.c.answer = {"ok": False, "error": f"redirected to {ADDRESS}"}
+        self.assertEqual("running", self.step(1200)[0])
+        status, _, message = self.step(1200 + RT.ANSWER_WAIT + 10)
+        self.assertEqual("failed", status)
+        self.assertMasked(message, self.result())
+
+    def test_a_copy_that_cannot_be_made_yet(self):
+        self.step(1000)
+        self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", OSError(f"proxy {ADDRESS} refused"), times=99, method="POST")
+        status, _, message = self.step(1100)
+        self.assertEqual("running", status)
+        self.assertMasked(message)
+
+    def test_what_could_not_be_removed(self):
+        self.to_checking()
+        copy_path = "/apis/apps/v1/namespaces/lab/deployments/" + RT._copy_name(self.item)
+        self.c.kube.fail(copy_path, OSError(f"proxy {ADDRESS} refused"), times=99, method="DELETE")
+        status, _, message = self.step(1100 + RT.READY_WAIT + 10)
+        self.assertEqual("failed", status)
+        self.assertIn("Remove them manually", message)
+        self.assertMasked(message, self.result())
+        self.item["ref"].pop("cancelled", None)
+        with self.assertRaises(ValueError) as caught:
+            RT.cancel_run(self.item, [])
+        self.assertMasked(str(caught.exception))
+
+    def test_a_message_without_an_address_is_unchanged(self):
+        self.to_checking()
+        self.c.set_pod(self.item, {"conditions": [{"type": "PodScheduled", "status": "False",
+                                                   "message": "0/3 nodes are available: 3 Insufficient memory."}]})
+        self.assertEqual("Waiting for the copy to be ready: 0/3 nodes are available: 3 Insufficient memory.",
+                         self.step(1200)[2])
+
+
 if __name__ == "__main__":
     unittest.main()
