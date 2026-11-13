@@ -50,6 +50,7 @@ SECRET = "homestead-fleet-key"
 # stays valid.
 SKEW = 300
 TIMEOUT = 15
+SHOWN_ADDRESS_MAX = 120     # the most of a redirect's address an error shows
 # A member's answer: read to at most this many bytes (the same as the
 # largest request body Homestead takes), and all of it within the call's
 # timeout. It was read whole, and the timeout was per wait on the socket.
@@ -557,18 +558,26 @@ def _open(request, timeout, deadline):
         deadline, "the linked cluster's answer")).open(request, timeout=timeout)
 
 
-def _moved_to(sent, path, error):
-    """The address a call was redirected to, when that is another origin."""
+def _moved_to(sent, error):
+    """Where a failed call was redirected, when that is another origin: the
+    address shown (scheme, host and port only, cut at SHOWN_ADDRESS_MAX) and
+    whether it may be used, or None. "" is an address not shown."""
     to = error.geturl() or sent
     if 300 <= error.code < 400 and to == sent and error.headers:
         to = urllib.parse.urljoin(sent, error.headers.get("Location") or "")
     try:
         if FETCH._origin(to) == FETCH._origin(sent):
-            return ""
+            return None
+        parts = urllib.parse.urlsplit(to)
+        scheme, host, port = parts.scheme.lower(), parts.hostname or "", parts.port
     except ValueError:
-        return ""
-    parts = urllib.parse.urlsplit(to)
-    return to[:-len(path)] if path and to.endswith(path) else f"{parts.scheme}://{parts.netloc}"
+        return "", False
+    if scheme not in ("http", "https") or not re.fullmatch(r"[a-z0-9.-]+|[0-9a-f:.]+", host):
+        return "", False
+    shown = f"{scheme}://{f'[{host}]' if ':' in host else host}{f':{port}' if port else ''}"
+    if len(shown) > SHOWN_ADDRESS_MAX:
+        shown = shown[:SHOWN_ADDRESS_MAX - 1] + "\u2026"
+    return shown, scheme == "https" or sent.startswith("http:")
 
 
 def _reason(error):
@@ -597,10 +606,14 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
             return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
-        moved = _moved_to(request.full_url, path, error)
+        moved = _moved_to(request.full_url, error)
         if moved:
-            raise Moved(f"the address redirects to {moved}. Change the address to {moved} "
-                        f"({reason or error.msg or f'HTTP {error.code}'}).") from error
+            shown, usable = moved
+            said = (f"the address redirects to {shown}. Change the address to that one" if usable else
+                    "the address redirects somewhere Homestead does not follow. "
+                    "A linked cluster's address must be an https address that answers by itself")
+            said += f" ({reason or f'HTTP {error.code}'})."
+            raise (Unreachable if error.code >= 500 else Moved)(said) from error
         if error.code >= 500:
             raise Unreachable(reason or f"HTTP {error.code}") from error
         raise ValueError(reason or f"HTTP {error.code}") from error
