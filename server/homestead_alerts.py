@@ -14,6 +14,7 @@ import urllib.error
 import homestead_history as HISTORY
 import homestead_read_deadline as DEADLINE
 import homestead_shared as SHARED
+import homestead_value_masks as MASKS
 
 DATA_DIR = "/data"
 HOLD = 60
@@ -454,12 +455,113 @@ _PLAIN = [
 ]
 
 
+# What _hidden_more looks for in _PLAIN's output. Each pattern is tried in
+# bounded time: no nested quantifier, and a run is only entered at its start.
+_FIELD = re.compile(r"(?<![A-Za-z0-9_.-])(['\"]?)([A-Za-z0-9_.-]+)\1 ?[:=] ?")      # password=, "token": , X-Api-Key:
+_QUOTED = {q: re.compile(q + r"(?:[^" + q + r"\\]|\\.)*" + q + "?") for q in "'\""}
+_SCHEME = re.compile(r"[A-Za-z]+ (?=\S)")                                            # Basic, Digest
+_SIGNED = re.compile(r"eyJ[A-Za-z0-9_-]*(\.)?"
+                     r"|<hidden>\.((?:<hidden>|[A-Za-z0-9_-])+\.(?:<hidden>|[A-Za-z0-9_-])+)(?![A-Za-z0-9_.-])")
+_JOIN = re.compile(r"(?<![A-Za-z0-9])[a-z0-9]{6}\.[a-z0-9]{16}(?![A-Za-z0-9])")
+_LETTERS = re.compile(r"(?<![A-Za-z])[A-Za-z]{24,}")
+_SLASHED = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]*[/+][A-Za-z0-9+/=_-]*")
+_WORD = re.compile(r"\S+")
+_DIGEST = re.compile(r"sha\d{1,4}:")
+_UPPER, _DIGIT = re.compile("[A-Z]"), re.compile("[0-9]")
+_RUN = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_.-<>")
+
+
+def _upper_share(run):
+    letters = sum(c.isalpha() for c in run)
+    return letters, sum("A" <= c <= "Z" for c in run) / (letters or 1)
+
+
+def _key_like(m):
+    """A run of letters, or of pieces joined by / or +, that reads as a key
+    rather than a word, a CamelCase name or a path."""
+    run = m.group(0)
+    if run.isalpha():
+        return len(run) >= 48 or 0.25 <= _upper_share(run)[1] <= 0.75
+    if sum(1 for piece in run.split("/") if _UPPER.search(piece) and _DIGIT.search(piece)) >= 2:
+        return True
+    letters, upper = _upper_share(run)
+    return len(run) >= 30 and upper >= 0.25 and (1 - upper) * letters >= letters / 10
+
+
+def _signed(m):
+    """A token's head and a dot, or a hidden head and two parts that are
+    not a lowercase name (a hidden name's domain stays shown)."""
+    if m.group(0).startswith("eyJ"):
+        return m.group(1) is not None
+    return "<hidden>" in m.group(2) or bool(_UPPER.search(m.group(2)))
+
+
+def _space(text, at):
+    """Where the next space from at is, or the end of text."""
+    found = text.find(" ", at)
+    return len(text) if found < 0 else found
+
+
+def _value_end(text, at, name):
+    """Where the value of the field named name, starting at at, ends: the
+    next space, and not before its closing quote when it is quoted. A
+    cookie's pairs go with it; an Authorization's scheme word stays shown."""
+    quoted = _QUOTED.get(text[at:at + 1])
+    if quoted:
+        return at, _space(text, quoted.match(text, at).end())
+    if name.lower().endswith("authorization"):
+        scheme = _SCHEME.match(text, at)
+        at = scheme.end() if scheme else at
+    end = _space(text, at)
+    while text[end - 1:end] in (";", ",") and end < len(text):
+        after = _space(text, end + 1)
+        if "=" not in text[end + 1:after]:
+            break
+        end = after
+    return at, end
+
+
+def _hidden_more(text):
+    """text, already through _PLAIN, with more of it hidden: the value of a
+    field named like a password, key or token, a login before an @, a signed
+    token, a join token and a long key. It only turns parts of text into the
+    marker, so nothing _PLAIN hid can show again."""
+    spans = [_value_end(text, m.end(), m.group(2)) for m in _FIELD.finditer(text)
+             if MASKS.SECRET_WORD.search(m.group(2))]
+    for word in _WORD.finditer(text):
+        colon, at = word.group(0).find(":"), len(word.group(0))
+        while colon >= 0 and (at := word.group(0).rfind("@", colon, at)) > colon:
+            if not _DIGEST.match(word.group(0), at + 1):
+                spans.append((word.start(), word.start() + at + 1))
+                break
+    for pattern, keep in ((_SIGNED, _signed), (_JOIN, None), (_LETTERS, _key_like), (_SLASHED, _key_like)):
+        floor, at = 0, 0
+        while m := pattern.search(text, at):
+            at = max(m.end(), m.start() + 1)
+            if keep and not keep(m):
+                continue
+            start, end = m.start(), m.end()             # the whole run it sits in
+            while start > floor and text[start - 1] in _RUN:
+                start -= 1
+            while end < len(text) and text[end] in _RUN:
+                end += 1
+            spans.append((start, end))
+            floor = at = end
+    out, shown = [], 0
+    for start, end in sorted(s for s in spans if s[1] > s[0]):
+        if start > shown or not out:
+            out += [text[shown:start], "<hidden>"]
+        shown = max(shown, end)
+    return "".join(out) + text[shown:]
+
+
 def plain_error(text, limit=160):
     """An error as it may go to a notification channel: one short line,
     addresses, URLs and token-shaped strings replaced, cut at limit."""
     text = " ".join(str(text or "").split())
     for pattern, word in _PLAIN:
         text = pattern.sub(word, text)
+    text = _hidden_more(text)
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
