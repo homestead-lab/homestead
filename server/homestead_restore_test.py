@@ -321,7 +321,7 @@ def _resolve(item, checkpoint, now=None):
                     return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {made.get('message') or 'restores are not supported here'}")
             except ValueError as error:
                 if "already exists" not in str(error):
-                    return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {str(error)[:160]}")
+                    return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {MASKS.cut(str(error), 160)}")
         # The backup too: a restore Longhorn finished on fewer copies ends only for its own backup.
         states = [restore_status({"ref": {"namespace": ns, "name": r["restored"], "backup": r["backup"]}})
                   for r in ref["rows"]]
@@ -398,9 +398,9 @@ def _make_copy(item, ns, dep):
                 return f"Kubernetes refused the test's {what}: {_said(error)}", True
             return f"the test's {what} could not be made yet: {_said(error)}", False
         except (KeyError, TypeError) as error:      # the app's spec is not what a copy can be built from
-            return f"the test's {what} could not be built from the app ({type(error).__name__}: {error})"[:200], True
+            return MASKS.cut(f"the test's {what} could not be built from the app ({type(error).__name__}: {error})", 200), True
         except (OSError, ValueError) as error:      # no answer, a timeout, a reply that was not JSON
-            return f"the test's {what} could not be made yet: {str(error)[:160] or type(error).__name__}", False
+            return f"the test's {what} could not be made yet: {MASKS.cut(str(error), 160) or type(error).__name__}", False
     return "", False
 
 

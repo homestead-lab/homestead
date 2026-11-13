@@ -512,6 +512,71 @@ class MessagesMasked(Base):
             RT.cancel_run(self.item, [])
         self.assertMasked(str(caught.exception))
 
+    # A login whose secret starts with digits: a cut inside it, before masking, leaves a host and port.
+    LONG = "postgres://zqxuser:" + "1234" + "5678pw@db.example.com/x"
+
+    def assertNoLoginPart(self, text):
+        self.assertNotRegex(text, r"postgres://(?!•••)")
+        self.assertNotIn("1234", text)
+
+    def fresh(self, n):
+        self.item = {"id": f"{n:04x}ef0123456789abcdef", "progress": 0,
+                     "ref": {"namespace": "lab", "name": "paperless", "phase": "plan"}}
+
+    def cuts(self, limit, before=0):
+        """Padding that puts the cut at each place from the address's start to past its login."""
+        return [limit - before - place for place in range(len(self.LONG.split("@")[0]) + 2)]
+
+    def test_a_refused_restore_is_cut_without_showing_part_of_a_login(self):
+        for n, pad in enumerate(self.cuts(160)):
+            with self.subTest(pad=pad):
+                self.fresh(n)
+                with mock.patch.object(RT, "restore", mock.Mock(side_effect=ValueError("p" * (pad - 1) + " " + self.LONG))):
+                    status, _, message = self.step(1000)
+                self.assertEqual("failed", status)
+                self.assertNoLoginPart(message)
+                self.assertNoLoginPart(self.result())
+
+    def test_a_copy_not_made_in_time_is_cut_without_showing_part_of_a_login(self):
+        error = []
+        # The fence is made first on every round, so each round meets this error.
+        self.c.kube.react("POST", "/apis/networking.k8s.io/v1/namespaces/lab/networkpolicies",
+                          lambda m, p, b: (_ for _ in ()).throw(OSError(error[-1])))
+        for n, pad in enumerate(self.cuts(160)):
+            with self.subTest(pad=pad):
+                self.fresh(n)
+                error.append("p" * (pad - 1) + " " + self.LONG)
+                self.step(1000)
+                self.assertEqual("running", self.step(1100)[0])
+                status, _, message = self.step(1100 + RT.READY_WAIT + 10)
+                self.assertEqual("failed", status)
+                self.assertIn("could not be made yet", message)
+                self.assertNoLoginPart(message)
+                self.assertNoLoginPart(self.result())
+
+    def test_a_copy_that_cannot_be_built_is_cut_without_showing_part_of_a_login(self):
+        before = len("the test's copy of the app could not be built from the app (KeyError: '")
+        for n, pad in enumerate(self.cuts(200, before)):
+            with self.subTest(pad=pad):
+                self.fresh(n)
+                self.step(1000)
+                with mock.patch.object(RT, "copy_of", mock.Mock(side_effect=KeyError("p" * (pad - 1) + " " + self.LONG))):
+                    status, _, message = self.step(1100)
+                self.assertEqual("failed", status)
+                self.assertIn("could not be built from the app", message)
+                self.assertNoLoginPart(message)
+                self.assertNoLoginPart(self.result())
+
+    def test_a_waiting_message_is_cut_without_showing_part_of_a_login(self):
+        self.to_checking()
+        for n, pad in enumerate(self.cuts(140)):
+            with self.subTest(pad=pad):
+                self.c.set_pod(self.item, {"containerStatuses": [{"name": "app", "state": {"waiting": {
+                    "reason": "CreateContainerError", "message": "p" * (pad - 1) + " " + self.LONG}}}]})
+                status, _, waiting = self.step(1200 + n)
+                self.assertEqual("running", status)
+                self.assertNoLoginPart(waiting)
+
     def test_a_message_without_an_address_is_unchanged(self):
         self.to_checking()
         self.c.set_pod(self.item, {"conditions": [{"type": "PodScheduled", "status": "False",
