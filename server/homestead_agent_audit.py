@@ -7,7 +7,9 @@ newest are shown in Settings beside the keys, where one can be revoked.
 
 Kept as JSON lines on the data volume, for KEEP_DAYS and at most MAX_LINES;
 every copy of Homestead appends and trims it under one shared lock, so two
-copies on one volume lose no line (#986). Anything that looks like a password or token in what was asked is written
+copies on one volume lose no line (#986). Each line is ASCII JSON, any
+other code point escaped, so a call is written whatever characters it
+holds and reads back the same. Anything that looks like a password or token in what was asked is written
 as "(hidden)", and long text is cut short.
 """
 import json
@@ -75,7 +77,7 @@ def record(key, via, action, args=None, outcome="ok", detail="", addr="", approv
              "addr": str(addr or "")[:64]}
     if approved_by:
         entry["approved_by"] = approved_by
-    line = json.dumps(entry, separators=(",", ":"), ensure_ascii=False)
+    line = json.dumps(entry, separators=(",", ":"), ensure_ascii=True)
     try:
         with _lock:
             os.makedirs(DATA_DIR, exist_ok=True)
@@ -124,7 +126,7 @@ def _trim_locked(now=None):
     temp = SHARED.temporary(_path())
     try:
         with open(temp, "w", encoding="utf-8") as handle:
-            handle.writelines(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n" for r in rows)
+            handle.writelines(json.dumps(r, separators=(",", ":"), ensure_ascii=True) + "\n" for r in rows)
             handle.flush()
             os.fsync(handle.fileno())       # on disk before it replaces the log
         os.replace(temp, _path())
