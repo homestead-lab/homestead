@@ -440,9 +440,9 @@ function nodeAddressTags(n) {
    jobs' cordon marks): plain words for a tip, or with html a button that
    opens the job. "" for a person's own cordon, another tool's, or when the
    job list could not be read: the host then shows cordoned alone. A cluster
-   shutdown that has ended is recovered from its job, which checks that every
-   host is back and every shutdown helper has ended; the Hosts page's
-   Uncordon checks none of that. */
+   shutdown that has ended is recovered with Uncordon hosts in its job, which
+   checks that every host is back and every shutdown helper has ended; the
+   Hosts page's Uncordon host checks none of that. */
 window.nodeCordonWords = (n, html = false) => {
   const by = n.schedulable === false && n.cordoned_by;
   if (!by) return "";
@@ -451,7 +451,7 @@ window.nodeCordonWords = (n, html = false) => {
   const more = html && by.job && !by.title ? ` ${open("Open job")}` : "";
   if (by.running) return `Cordoned by a job that is still running${name}.${more}`;
   if (!by.job) return "Cordoned by a job that has ended. Check the host, then uncordon it.";
-  const next = by.kind === "cluster-shutdown" ? "Recover the hosts from the job." : "Check the job, then uncordon the host.";
+  const next = by.kind === "cluster-shutdown" ? "Use Uncordon hosts in the job." : "Check the job, then uncordon the host.";
   return `Cordoned by a job that has ended${name}. ${next}${more}`;
 };
 
@@ -878,13 +878,14 @@ async function nodePage(name) {
 }
 function nodePageSummary(n) {
   const h = nodeHealth(n), known = value => h.ready && value != null && value !== "";
+  const byJob = nodeCordonWords(n);
   const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GiB` : "—";
   return `<span class="sumitem">${UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues].join(" · ") })}</span>
     <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
     <span class="sumitem" data-tip="${esc(NODE_FS_TIP)}">Node filesystem <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
     ${h.ready && nodeTemp(n).value != null ? `<span class="sumitem">${nodeTemp(n).label} <b class="${tempCls(nodeTemp(n).value)}">${esc(nodeTemp(n).text)}</b>${nodeTemp(n).extra ? ` <span class="dim xs">${esc(nodeTemp(n).extra)}</span>` : ""}</span>` : ""}
-    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip(nodeCordonWords(n) ? "cordoned by a job" : "cordoned", "warn", { tip: nodeCordonWords(n) })}</span>`}
+    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip(byJob ? "cordoned by a job" : "cordoned", "warn", { tip: byJob })}</span>`}
     ${window.hostMaintenanceChip?.(n.name) ? `<span class="sumitem">${window.hostMaintenanceChip(n.name)}</span>` : ""}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */

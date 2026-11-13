@@ -44,8 +44,8 @@ test("a job that ended and left the cordon says to check the job, then uncordon"
 
 test("an ended cluster shutdown points to its own recovery, not to Uncordon", () => {
   const c = context();
-  assert.equal(c.nodeCordonWords(shutdown), "Cordoned by a job that has ended: Shut down cluster. Recover the hosts from the job.");
-  assert.doesNotMatch(c.nodeCordonWords(shutdown, true), /uncordon/i);
+  assert.equal(c.nodeCordonWords(shutdown), "Cordoned by a job that has ended: Shut down cluster. Use Uncordon hosts in the job.");
+  assert.doesNotMatch(c.nodeCordonWords(shutdown, true), /uncordon (the host|it)/i, "never the page's own Uncordon");
 });
 
 test("a job with no title is never named by its kind, and still opens", () => {
