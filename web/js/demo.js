@@ -1906,7 +1906,7 @@ ssh_pwauth: true
           {resource:{apiVersion:"v1",kind:"ConfigMap",namespace,name:`${name}-vbios`},current:{uid:"demo-rom",resourceVersion:"1"},
             last_write:"accepted",relationship:"Used by VM media",remove:false,holds:true}],
         warnings:[`The VM ${name} was created by this attempt, and it is removed with the rest. The data on its volumes is lost.`,
-          "Only what this attempt provably created is removed. That is the object its create answered for, or a VM that carries this job's id; anything else of that name is left as it is.",
+          "Only what this attempt created is removed: the object its create answered for, or a VM with this job's id. Anything else of that name stays.",
           "Disks made from the VM's own templates are not in this job's record. KubeVirt removes the ones the VM owns (Goes with the VM) with it, and Harvester keeps its template disks. Check Volumes once the VM is gone."]}};
     },
     "/api/operations/vm-recovery/remove": (url, init) => {
