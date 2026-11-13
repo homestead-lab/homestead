@@ -5,8 +5,15 @@ can carry a credential outside a Secret.
   other parsers accept - and everything up to the next ASCII whitespace)
   loses only what can be a credential, and fails closed:
   - everything before its last "@" is a login: "https://•••@host/path";
+  - a login may hold a space, or a YAML value may fold it onto a more
+    indented next line ("https://user:my pass@host"): an address whose
+    host part runs to its end and holds a ":" reaches on to the end of the
+    word holding the next "@" on its line, or on a folded line after it
+    (FOLD_LINES), and that whole stretch is one address;
   - a parameter (query or fragment) keeps its value only for a harmless
     name (SHOWN_PARAMS: page, sort, q, lang, ...): "?token=•••&page=2";
+    a piece without "=" that is one code-like word (CODE_LIKE: 8 or more
+    letters and digits, mixed) hides the rest: "#•••";
   - a scheme not on PLAIN_SCHEMES (pbul://, pover://, gotify://, ...)
     shows nothing after "scheme://";
   - a host named for a notification service (NOTIFY_LABELS: ntfy.*,
@@ -114,6 +121,8 @@ PLAIN_SCHEMES = frozenset((
 WORD = re.compile(r"[^ \t\r\n\f\v]+")
 DSN = re.compile(r"@(?:tcp6?|udp6?|unix)\(")
 LONG = 16
+# A query or fragment piece that looks like a code rather than an anchor.
+CODE_LIKE = re.compile(r"[A-Za-z0-9]{8,}")
 LETTER = re.compile(r"[A-Za-z]")
 DIGIT = re.compile(r"[0-9]")
 HEX = re.compile(r"[0-9A-Fa-f]+")
@@ -130,6 +139,14 @@ AFTER_HOOK = re.compile(r"(?i)(?:^|/)(?:" + "|".join(sorted(HOOK_SEGMENTS)) + r"
 BOT_SEGMENT = re.compile(r"(?i)(?:^|/)bot[0-9]+:")
 LONG_SEGMENT = re.compile(r"[^/]{16,}")
 HOST_END = re.compile(r"[/?#\\]")
+# How a login may continue past whitespace: an address whose host part ends
+# the token and holds a ":" (not "/", "?", "#", "\\" or "@" yet) reaches on
+# to the next "@" on its line, or on up to FOLD_LINES more lines each
+# indented more than the address's own (a folded YAML value).
+NOT_ENDED = re.compile(r"[/?#\\@]")
+LINE_BREAK = re.compile(r"[\r\n]")
+INDENT = re.compile(r"[ \t]*")
+FOLD_LINES = 8
 QUERY = re.compile(r"[?#]")
 PARTS = re.compile(r"([?&;#])")
 # A longer text holding an address is hidden whole rather than checked.
@@ -163,6 +180,12 @@ def sees_values(role):
     return AUTH.allows(role, reveal_role())
 
 
+def _code_like(piece):
+    """A bare query or fragment piece that looks like a code: CODE_LIKE,
+    letters and digits mixed."""
+    return bool(CODE_LIKE.fullmatch(piece) and LETTER.search(piece) and DIGIT.search(piece))
+
+
 def _generated(word):
     """A segment or bare parameter that looks like a secret: a credential
     word, a bot token, or a long generated-looking string."""
@@ -178,7 +201,7 @@ def _query(text):
     """The query and fragment ("?..." or "#..."): a parameter keeps its
     value only for a name in SHOWN_PARAMS (and a plain value), every other
     value is name=•••; from a name that is not plain or a bare word that
-    looks like a secret, the rest is hidden."""
+    looks like a secret or a code, the rest is hidden."""
     if not text:
         return text
     out = []
@@ -187,7 +210,7 @@ def _query(text):
             out.append(piece)
             continue
         name, equals, value = piece.partition("=")
-        if not NAME.fullmatch(name) or (not equals and name.lower() not in SHOWN_PARAMS and _generated(name)):
+        if not NAME.fullmatch(name) or (not equals and name.lower() not in SHOWN_PARAMS and (_generated(name) or _code_like(name))):
             return "".join(out) + HIDDEN
         shown = not equals or (name.lower() in SHOWN_PARAMS and VALUE.fullmatch(value))
         out.append(piece if shown else f"{name}={HIDDEN}")
@@ -266,6 +289,59 @@ def tokens(text):
         yield first, end
 
 
+def _line_end(text, line, brk):
+    """Where a value on the line starting at line (ending at brk, -1 for the
+    text's end) stops: brk, or the break ending the last of up to
+    FOLD_LINES next lines each indented more than this one."""
+    indent = INDENT.match(text, line).end() - line
+    end = len(text) if brk < 0 else brk
+    for _ in range(FOLD_LINES):
+        if brk < 0:
+            break
+        nxt = brk + 2 if text.startswith("\r\n", brk) else brk + 1
+        first = INDENT.match(text, nxt).end()
+        if first - nxt <= indent or first >= len(text) or text[first] in "\r\n":
+            break
+        found = LINE_BREAK.search(text, first)
+        brk = found.start() if found else -1
+        end = len(text) if brk < 0 else brk
+    return end
+
+
+def _spans(text):
+    """(start, end) of every address as tokens() finds them, except that one
+    whose login may go on past whitespace reaches on to the end of the word
+    holding the next "@" on its line or a folded line after it (see
+    NOT_ENDED), when no other address starts before that word ends: each
+    address is masked by its own rule. Linear in the text: the next "@",
+    each token's line and that line's end are found once and kept while the
+    tokens move on."""
+    done, at, line, brk, ends = 0, -1, 0, -2, {}
+    listed = list(tokens(text))
+    for index, (start, end) in enumerate(listed):
+        if start < done:
+            continue
+        head = HEAD.match(text, start, end)
+        body = text[head.end():end] if head else ""
+        if ":" in body and not NOT_ENDED.search(body):
+            if at < end:
+                at = text.find("@", end)
+                at = len(text) if at < 0 else at
+            while brk != -1 and (brk == -2 or brk < start):
+                line = 0 if brk == -2 else brk + 1
+                found = LINE_BREAK.search(text, line)
+                brk = found.start() if found else -1
+            if line not in ends:
+                ends[line] = _line_end(text, line, brk)
+            if at < ends[line]:
+                space = SPACE_AT.search(text, at)
+                reach = space.start() if space else len(text)
+                if index + 1 == len(listed) or listed[index + 1][0] >= reach:
+                    end = reach
+        done = end
+        yield start, end
+
+
 def _bare_login(word):
     """word without a scheme-less login: "//•••@host", "•••@tcp(...)". The
     login ends at the last "@tcp(" (a password may hold one) or, after
@@ -319,7 +395,7 @@ def _word_start(text, low, at):
 
 def _strip_text(text):
     out, done = [], 0
-    for start, end in tokens(text):
+    for start, end in _spans(text):
         word = _word_start(text, done, start)
         out += [_bare(text[done:word]), _strip_word(text[word:end], start - word)]
         done = end
@@ -399,14 +475,17 @@ def strip_url_secrets(text):
 
 
 def cut(text, length, mark="…"):
-    """text shortened to length characters, never inside a URL token: one
-    that would be cut goes whole. Tokens end only at ASCII whitespace, so a
-    cut text holds whole tokens of the full text, and masking it gives the
-    same as masking first and cutting after."""
+    """text shortened to length characters, never inside an address (a URL
+    token, reaching on as _spans() says): one that would be cut goes whole,
+    with its word. A plain text cut so holds whole addresses of the full
+    text, so masking it hides at least what masking first and cutting after
+    would. A JSON object or list is not one once cut: it is masked as plain
+    text then, so the two can differ in form (the masked JSON is written
+    back compact), but every address in it is still masked."""
     text = str(text or "")
     if len(text) <= length:
         return text
-    for start, end in tokens(text):
+    for start, end in _spans(text):
         if start >= length:
             break
         if end > length:
@@ -424,8 +503,9 @@ def cut(text, length, mark="…"):
 
 def squeeze(text):
     """Runs of ASCII whitespace as one space. Only ASCII whitespace ends a
-    URL token, so this never joins or splits one: masking before or after
-    gives the same."""
+    URL token, so this never splits one; it may join a line onto the one
+    before, so masking after squeezing hides at least what masking before
+    does."""
     return SPACES.sub(" ", str(text or "")).strip(SPACE)
 
 
@@ -454,7 +534,7 @@ def has_stripped(value):
     if isinstance(value, list):
         return any(has_stripped(item) for item in value)
     return isinstance(value, str) and (TOO_LONG in value or TOO_MANY in value or JSON_HIDDEN in value or HIDDEN + "@" in value or MID_WORD in value or (HIDDEN in value and any(
-        HIDDEN in value[start:end] for start, end in tokens(value))))
+        HIDDEN in value[start:end] for start, end in _spans(value))))
 
 
 # Fields that name a list's items (env and containers by name, ConfigMap
