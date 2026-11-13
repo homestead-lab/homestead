@@ -148,6 +148,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route == "/echo-headers":
             self.answer({name.lower(): value for name, value in self.headers.items()})
             return True
+        if route == "/signed-only":
+            if self.headers.get(FLEET.H_SIG):
+                self.answer({"ok": True})
+            else:
+                self.answer({"error": "not signed"}, status=401)
+            return True
         if route == "/cf/cdn-cgi/access/certs":
             self.answer({"keys": [{"kid": "k1", "kty": "RSA", "n": "AQAB", "e": "AQAB"}]})
             return True
@@ -191,6 +197,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/moved?"):
+            self.send_response(307)
+            self.send_header("Location", self.path.partition("?")[2])
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
         if self.path == "/api/auth/login":
             return self.answer({"ok": True}, headers=[("Set-Cookie", "homestead_session=s3ss; HttpOnly")])
         self.answer({"error": "not found"}, status=404)
@@ -470,6 +481,70 @@ class OutboundFetchTests(Served):
         seen, _ = MOVE._call({"url": f"https://{self.host}"}, f"/moved?https://{self.other}/echo-headers",
                              token=session)
         self.assertNotIn(session, json.dumps(seen))
+
+
+class LinkedClusterRedirectTests(Served):
+    """Calls between linked clusters follow redirects by the rule of every other outside read."""
+
+    session = "s" + "ess-" + "456"
+    signature = {FLEET.H_FROM: "member-a", FLEET.H_SIG: "s" + "ig-" + "123"}
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.seen = []
+
+        class Plain(Handler):
+            def do_GET(self):
+                cls.seen.append(self.path)
+                super().do_GET()
+        cls.plain = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Plain)
+        cls.plain.daemon_threads = True
+        threading.Thread(target=cls.plain.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.plain.shutdown()
+        cls.plain.server_close()
+        super().tearDownClass()
+
+    def redirected(self, target, **sent):
+        seen, _ = FLEET._json(f"https://{self.host}", "GET", f"/moved?{target}/echo-headers", **sent)
+        return json.dumps(seen)
+
+    def test_the_sign_in_session_stays_on_its_host(self):
+        self.assertNotIn(self.session, self.redirected(f"https://{self.other}", token=self.session))
+
+    def test_the_signature_stays_on_its_host(self):
+        seen = self.redirected(f"https://{self.other}", headers=self.signature)
+        self.assertNotIn(self.signature[FLEET.H_SIG], seen)
+        self.assertNotIn("x-homestead-fleet", seen)
+
+    def test_a_redirect_on_the_same_host_keeps_both(self):
+        seen = json.loads(self.redirected(f"https://{self.host}", token=self.session, headers=self.signature))
+        self.assertEqual(f"homestead_session={self.session}", seen.get("cookie"))
+        self.assertEqual(self.signature[FLEET.H_SIG], seen.get("x-homestead-fleet-signature"))
+
+    def test_a_redirect_from_https_to_plain_http_is_refused(self):
+        plain = "http://%s:%d" % self.plain.server_address
+        with self.assertRaisesRegex(ValueError, "a redirect from https to plain http"):
+            self.redirected(plain, token=self.session)
+        self.assertEqual([], self.seen, "nothing reaches the plain address")
+
+    def test_a_member_whose_address_redirects_is_told_to_change_it(self):
+        member = {"name": "member-b", "url": f"https://{self.host}/moved?https://{self.other}"}
+        with mock.patch.object(FLEET, "sign", lambda *args, **kwargs: dict(self.signature)), \
+                self.assertRaises(ValueError) as caught:
+            FLEET.call(member, "GET", "/signed-only")
+        self.assertEqual(f"member-b: the address redirects to https://{self.other}. "
+                         f"Change the address to https://{self.other} (not signed).", str(caught.exception))
+
+    def test_a_sign_in_whose_address_redirects_is_told_to_change_it(self):
+        with self.assertRaises(ValueError) as caught:
+            FLEET._login(f"https://{self.host}/moved?https://{self.other}", "admin", "secret")
+        self.assertTrue(str(caught.exception).startswith(
+            f"the address redirects to https://{self.other}. Change the address to https://{self.other} ("),
+            str(caught.exception))
 
 
 class CoverageTests(unittest.TestCase):

@@ -94,6 +94,10 @@ class Unreachable(Exception):
     """The other Homestead could not be asked. Worth trying again."""
 
 
+class Moved(ValueError):
+    """The other Homestead's address sends its calls to another address."""
+
+
 def bind(_kget, _ksend, namespace, version="", site=None, address=None, earlier=None):
     """address: where this Homestead is reached now - its VIP once it has
     one. earlier: addresses it gave out before that (the node's own), which
@@ -546,9 +550,25 @@ def console_authorizer(sender):
 
 
 # ------------------------------------------------------------------ calling
-def _open(request, timeout):
+def _open(request, timeout, deadline):
     context = ssl.create_default_context() if request.full_url.startswith("https") else None
-    return urllib.request.urlopen(request, timeout=timeout, context=context)
+    # Redirects by the rule of every other outside read: credentials stay on their origin.
+    return urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), FETCH._Redirects(
+        deadline, "the linked cluster's answer")).open(request, timeout=timeout)
+
+
+def _moved_to(sent, path, error):
+    """The address a call was redirected to, when that is another origin."""
+    to = error.geturl() or sent
+    if 300 <= error.code < 400 and to == sent and error.headers:
+        to = urllib.parse.urljoin(sent, error.headers.get("Location") or "")
+    try:
+        if FETCH._origin(to) == FETCH._origin(sent):
+            return ""
+    except ValueError:
+        return ""
+    parts = urllib.parse.urlsplit(to)
+    return to[:-len(path)] if path and to.endswith(path) else f"{parts.scheme}://{parts.netloc}"
 
 
 def _reason(error):
@@ -572,11 +592,15 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         request.add_header(name, value)
     deadline = time.monotonic() + timeout
     try:
-        with _open(request, timeout) as response:
+        with _open(request, timeout, deadline) as response:
             body = FETCH.read(response, ANSWER_MAX_BYTES, deadline, "the linked cluster's answer")
             return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
+        moved = _moved_to(request.full_url, path, error)
+        if moved:
+            raise Moved(f"the address redirects to {moved}. Change the address to {moved} "
+                        f"({reason or error.msg or f'HTTP {error.code}'}).") from error
         if error.code >= 500:
             raise Unreachable(reason or f"HTTP {error.code}") from error
         raise ValueError(reason or f"HTTP {error.code}") from error
@@ -805,6 +829,8 @@ def _login(url, username, password):
     try:
         _, response = _json(url, "POST", "/api/auth/login",
                             {"username": username, "password": password, "remember": False})
+    except Moved:
+        raise
     except ValueError as error:
         raise ValueError(f"that Homestead refused the sign-in: {error}") from error
     except Unreachable as error:
