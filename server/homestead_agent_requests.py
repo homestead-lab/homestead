@@ -126,6 +126,21 @@ def pending_count():
         return sum(1 for r in _settle(_load(), time.time()).values() if r["status"] == "pending")
 
 
+_PLAIN_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
+def _app(args):
+    """Which app a request is about, from plain names in its arguments
+    (namespace/name, or inside settings); "" when it names none."""
+    plain = lambda v: isinstance(v, str) and _PLAIN_NAME.fullmatch(v)
+    for where in (args, args.get("settings")):
+        if isinstance(where, dict):
+            name, ns = where.get("name"), where.get("namespace") or ""
+            if plain(name) and (ns == "" or plain(ns)):
+                return f"{ns}/{name}" if ns else name
+    return ""
+
+
 def listing(role):
     """Waiting first, then the latest ended, for the bell and the page."""
     with _lock:
@@ -133,13 +148,18 @@ def listing(role):
     ordered = sorted(rows.values(), key=lambda r: (r["status"] != "pending", -r["created"]))
     def visible(row):
         details = public(row, full=True)
+        can_decide = AUTH.allows(role, row["role"])
         # A reviewed command may read credentials that ordinary log viewers
         # cannot access. Only its requesting key and administrators get that
         # output or the exact arguments, not everyone viewing the requests page.
-        if row.get("tool") == "run_container_command" and not AUTH.allows(role, "admin"):
+        # Any other request's settings, plan and result go only to the people
+        # who can decide it; the rest see that it exists and what it is about.
+        if not can_decide or (row.get("tool") == "run_container_command" and not AUTH.allows(role, "admin")):
             for field in ("summary", "args", "result"):
                 details.pop(field, None)
-        return {**details, "can_decide": AUTH.allows(role, row["role"])}
+        if not can_decide:
+            details.update(app=_app(row.get("args") or {}), details_hidden=True)
+        return {**details, "can_decide": can_decide}
     return {"requests": [visible(r) for r in ordered[:100]],
             "pending": sum(1 for r in rows.values() if r["status"] == "pending")}
 

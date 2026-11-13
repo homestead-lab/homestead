@@ -81,3 +81,14 @@ test("an approval the server could not run is reported as a failure", async () =
   await t.c.agentApproveRun("p1", null);
   assert.deepEqual(t.toasts.at(-1), ["The cluster changed since you reviewed this", "bad"]);
 });
+
+test("a request whose details the server left out says who can see them", async () => {
+  const hidden = request("p1", { tool: "deploy_container", title: "Deploy a container", role: "admin", escalated: true, can_decide: false,
+    details_hidden: true, app: "lab/web", summary: undefined, args: undefined });
+  const t = setup([hidden]);
+  await t.c.viewAgents();
+  const html = t.painted[0];
+  assert.match(html, /Details are shown to people who can approve this request\./);
+  assert.match(html, /lab\/web/, "the app it is about is named");
+  assert.doesNotMatch(html, /Raw details/, "nothing to unfold");
+});
