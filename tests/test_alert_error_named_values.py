@@ -135,6 +135,31 @@ class NamedValueTests(unittest.TestCase):
         self.hides(f"posted to {HOOK} failed", "T0AB1CD2E", "B0FG3HI4J", "aBcDeFgHiJkLmNoPqRsT")
         self.hides(f"rejected {LETTERS} today", LETTERS, keeps=("today",))
 
+    def test_a_value_in_any_quoting_is_hidden_whole(self):
+        q = '\\"'                                          # a quote written inside a quoted text
+        self.hides(f"body {{{q}password{q}: {q}hunter two{q}, {q}user{q}: {q}ann{q}}}", "hunter", "two",
+                   keeps=(f"{q}user{q}: {q}ann{q}",))
+        self.hides("got {'token': b'hunter two'} back", "hunter", "two", keeps=("back",))
+        self.hides('set password=abc"hunter two" and stopped', "hunter", "two", keeps=("and stopped",))
+        self.hides("got token: [hunter, two] back", "hunter", "two", keeps=("back",))
+        self.hides("config password: | hunter two", "hunter", "two")
+
+    def test_authorization_without_a_scheme_hides_its_first_word(self):
+        self.hides("proxy said Authorization: hunter was refused", "hunter", keeps=("Authorization:", "refused"))
+
+    def test_a_field_error_keeps_its_type_and_hides_the_value_it_repeats(self):
+        text = self.hides('spec.signerName: Invalid value: "hunter": must be set', "hunter")
+        self.assertEqual(f"spec.signerName: Invalid value: {HIDDEN} must be set", text)
+        text = self.hides("spec.tokenRef: Unsupported value: hunter", "hunter")
+        self.assertEqual(f"spec.tokenRef: Unsupported value: {HIDDEN}", text)
+
+    def test_a_value_across_the_cut_stays_hidden(self):
+        for pad in range(120, 170):
+            with self.subTest(pad=pad):
+                text = ALERTS.plain_error("x" * pad + " password=hunterhunterhunter tail")
+                self.assertLessEqual(len(text), 160)
+                self.assertNotIn("hun", text)
+
     def test_the_text_is_still_cut_at_the_limit(self):
         text = ALERTS.plain_error("password=hunter " + "word " * 100)
         self.assertLessEqual(len(text), 160)
@@ -157,6 +182,8 @@ PLAIN = [
     "/var/lib/longhorn/replicas is full", "IncompleteRead(100 bytes read, 300 more expected)",
     "error: You must be logged in to the server (Unauthorized)",
     "HTTP Error 401: Unauthorized", "certificate signed by unknown authority",
+    "spec.containers[0].env[0].valueFrom.secretKeyRef.name: Required value",
+    "spec.tokenSecret: Forbidden: may not be changed", "spec.passwordRef: Too long: may not be more than 63 bytes",
 ]
 
 
@@ -176,7 +203,9 @@ class OnlyMoreHiddenTests(unittest.TestCase):
              "\\", "Bearer ", "Basic ", "https://", "host=", "port=", "192.0.2.10", "[2001:db8::1]", ":6443",
              "example.com", HIDDEN, "<address>", "abc", "ABC", "a1B2c3D4e5F6g7H8i9J0", "x" * 25, LETTERS,
              "0123456789abcdef", "abcdef", "sha256:", "longhorn", "volumes", "not found", "{", "}", "\t", "\n",
-             "é", "-", "_", "<", ">", SIGNED, JOIN, SLASHED, HOOK, "T0AB1CD2E", "1", "Z"]
+             "é", "-", "_", "<", ">", SIGNED, JOIN, SLASHED, HOOK, "T0AB1CD2E", "1", "Z", '\\"', "b'", 'u"',
+             "[", "]", "|", ">", "Required value", "Invalid value: ", "Unsupported value: ", "Not found: ",
+             "Forbidden: ", "Too long: ", "Internal error: ", "hunter two"]
 
     def inputs(self):
         rng = random.Random(1082)
@@ -193,6 +222,17 @@ class OnlyMoreHiddenTests(unittest.TestCase):
         for raw in self.inputs():
             old, new = before(raw), ALERTS.plain_error(raw, limit=WIDE)
             self.assertTrue(only_more_hidden(old, new), f"{raw!r}\nbefore: {old!r}\nnow:    {new!r}")
+
+    def test_with_the_cut_every_shown_character_is_one_shown_before(self):
+        """The cut text is the start of the uncut text, which only hides
+        more than the earlier rules did on the whole input: so every
+        character the cut text shows, the earlier rules showed too."""
+        for raw in self.inputs():
+            old, full = before(raw), ALERTS.plain_error(raw, limit=WIDE)
+            self.assertTrue(only_more_hidden(old, full), raw)
+            for limit in (40, 160):
+                cut = ALERTS.plain_error(raw, limit=limit)
+                self.assertEqual(full if len(full) <= limit else full[:limit - 1] + "…", cut, raw)
 
     def test_the_checker_refuses_a_text_that_shows_more(self):
         self.assertTrue(only_more_hidden("a <hidden> b c", "a <hidden> <hidden> c"))
@@ -213,7 +253,8 @@ class TimeTests(unittest.TestCase):
     SHAPES = ["pass" * 2500, "password=" + "a" * 9991, '"password": "' + "\\" * 9987, "a:" * 4999 + "@",
               "eyJ." * 2500, "a/" * 5000, "A1/" * 3333, "abcdef." * 1428, "x" * 10000, HIDDEN * 1250,
               "Cookie: " + "a=b; " * 1998, "<hidden>." * 1111, "aB" * 5000, "@sha1:" * 1666, ":" * 9999 + "@",
-              "password:" * 1111, "'" * 10000, "Authorization: " + "Basic " * 1663, "_" * 9999 + "/", "eyJ" * 3333]
+              "password:" * 1111, "'" * 10000, "Authorization: " + "Basic " * 1663, "_" * 9999 + "/", "eyJ" * 3333,
+              "token: [" * 1250, "pass: \"a b" * 1000]
 
     def test_long_hostile_texts_stay_fast(self):
         for shape in self.SHAPES:

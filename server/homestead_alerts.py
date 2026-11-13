@@ -457,9 +457,14 @@ _PLAIN = [
 
 # What _hidden_more looks for in _PLAIN's output. Each pattern is tried in
 # bounded time: no nested quantifier, and a run is only entered at its start.
-_FIELD = re.compile(r"(?<![A-Za-z0-9_.-])(['\"]?)([A-Za-z0-9_.-]+)\1 ?[:=] ?")      # password=, "token": , X-Api-Key:
+_FIELD = re.compile(r"(?<![A-Za-z0-9_.-])(\\?['\"]?)([A-Za-z0-9_.-]+)\1 ?[:=] ?")  # password=, "token": , X-Api-Key:
 _QUOTED = {q: re.compile(q + r"(?:[^" + q + r"\\]|\\.)*" + q + "?") for q in "'\""}
-_SCHEME = re.compile(r"[A-Za-z]+ (?=\S)")                                            # Basic, Digest
+_SCHEME = re.compile(r"(?i:basic|bearer|digest|negotiate|ntlm|token|apikey|hoba|mutual|oauth|dpop|kerberos"
+                     r"|aws4-hmac-sha256) (?=\S)")
+# Kubernetes' field error types: the type stays shown, a value it repeats is hidden.
+_FIELD_ERROR = re.compile(r"(?:(?:Invalid|Unsupported|Duplicate) value|Not found)(: )"
+                          r"|(?:Required value|Forbidden:|Too long:|Too many:|Internal error:)(?= |$)")
+_BLOCK = re.compile(r"[|>][-+]?(?= |$)")
 _SIGNED = re.compile(r"eyJ[A-Za-z0-9_-]*(\.)?"
                      r"|<hidden>\.((?:<hidden>|[A-Za-z0-9_-])+\.(?:<hidden>|[A-Za-z0-9_-])+)(?![A-Za-z0-9_.-])")
 _JOIN = re.compile(r"(?<![A-Za-z0-9])[a-z0-9]{6}\.[a-z0-9]{16}(?![A-Za-z0-9])")
@@ -502,17 +507,35 @@ def _space(text, at):
     return len(text) if found < 0 else found
 
 
-def _value_end(text, at, name):
+def _value_end(text, at, name, typed=True):
     """Where the value of the field named name, starting at at, ends: the
-    next space, and not before its closing quote when it is quoted. A
-    cookie's pairs go with it; an Authorization's scheme word stays shown."""
+    next space, and not before its closing quote, bracket or escaped quote.
+    A block value runs to the end. A cookie's pairs go with it; an
+    Authorization's scheme word and a field error's type stay shown."""
+    if text.startswith(("\\\"", "\\'"), at):
+        close = text.find(text[at:at + 2], at + 2)
+        return at, _space(text, len(text) if close < 0 else close + 2)
+    quoted = _QUOTED.get(text[at + 1:at + 2]) if text[at:at + 1] in tuple("bBuUrRfF") else None
+    if quoted:
+        return at, _space(text, quoted.match(text, at + 1).end())
     quoted = _QUOTED.get(text[at:at + 1])
     if quoted:
         return at, _space(text, quoted.match(text, at).end())
+    if text.startswith("[", at):
+        close = text.find("]", at)
+        return at, _space(text, len(text) if close < 0 else close + 1)
+    if _BLOCK.match(text, at):
+        return at, len(text)
+    error = _FIELD_ERROR.match(text, at) if typed else None
+    if error:
+        return _value_end(text, error.end(), "", False) if error.group(1) else (at, at)
     if name.lower().endswith("authorization"):
         scheme = _SCHEME.match(text, at)
         at = scheme.end() if scheme else at
     end = _space(text, at)
+    if text.count('"', at, end) % 2:                    # a quoted part with a space in it
+        close = text.find('"', end)
+        end = len(text) if close < 0 else _space(text, close + 1)
     while text[end - 1:end] in (";", ",") and end < len(text):
         after = _space(text, end + 1)
         if "=" not in text[end + 1:after]:
@@ -526,8 +549,12 @@ def _hidden_more(text):
     field named like a password, key or token, a login before an @, a signed
     token, a join token and a long key. It only turns parts of text into the
     marker, so nothing _PLAIN hid can show again."""
-    spans = [_value_end(text, m.end(), m.group(2)) for m in _FIELD.finditer(text)
-             if MASKS.SECRET_WORD.search(m.group(2))]
+    spans, at = [], 0
+    while m := _FIELD.search(text, at):
+        at = m.end()
+        if MASKS.SECRET_WORD.search(m.group(2)):
+            spans.append(_value_end(text, at, m.group(2)))
+            at = max(at, spans[-1][1])                  # a field inside a hidden value is hidden with it
     for word in _WORD.finditer(text):
         colon, at = word.group(0).find(":"), len(word.group(0))
         while colon >= 0 and (at := word.group(0).rfind("@", colon, at)) > colon:
