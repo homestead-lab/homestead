@@ -485,5 +485,193 @@ class StoppedRestoreTests(unittest.TestCase):
         self.assertFalse(self.gone())
 
 
+class EndedRestorePairTests(unittest.TestCase):
+    """A plain restore that lost the race for its claim name failed and kept
+    its snapshot pair: cleanup() waits for a claim restoring from it, a failed
+    job has no Cancel, so it was removed by hand (#1303). The leader's sweep
+    now removes the pair an ended restore job made, by the restore id the job
+    stamped on it, and nothing else."""
+    CLAIMS = "/api/v1/namespaces/lab/persistentvolumeclaims"
+    RESTORE_ID = "0123456789abcdef01234567"
+
+    def setUp(self):
+        import homestead_helper_sweep as SWEEP
+        self.sweeper = SWEEP
+        self.enterContext(patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("longhorn.io", "snapshot.storage.k8s.io")))
+        self.kube.react("GET", CSI.API, lambda *_: {"kind": "APIResourceList", "groupVersion": "snapshot.storage.k8s.io/v1"})
+        self.enterContext(patch.multiple(OPS, kget=KUBE.kget))
+        self.enterContext(patch.multiple(server.LH, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.enterContext(patch.object(CSI, "ensure_support", return_value={"ready": True}))
+        self.enterContext(patch.dict(OPS.RESOLVERS, {"volume-restore": server.STORAGE_ROUTES._restore_then_tidy}))
+        self.kube.add({"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": "lab"}})
+        self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Backup",
+                       "metadata": {"name": "backup-a", "namespace": "longhorn-system"},
+                       "status": {"state": "Completed", "url": "s3://example/backup-a", "volumeName": "disk-a",
+                                  "volumeSize": str(5 * 1024 ** 3)}})
+        self.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "example-class"},
+                       "provisioner": "driver.longhorn.io", "parameters": {"numberOfReplicas": "2"}})
+
+    def start(self, restore_id=RESTORE_ID):
+        ref = {"namespace": "lab", "name": "example-data", "backup": "backup-a", "restore_started": False,
+               "restore_config": {"backup": "backup-a", "namespace": "lab", "name": "example-data",
+                                  "storage_class": "example-class", "restore_id": restore_id,
+                                  "annotations": {"homestead.io/restore-id": restore_id}}}
+        return OPS.start("volume-restore", "Restore example-data",
+                         {"kind": "PersistentVolumeClaim", "name": "example-data", "namespace": "lab"}, "/volumes", ref)["id"]
+
+    def job(self, ident):
+        """The job, after one more round of the jobs' poll."""
+        return next(job for job in OPS.list_operations() if job["id"] == ident)
+
+    def someone_takes_the_name_first(self):
+        """Another operation makes the claim between the restore's look and its create."""
+        def first(*_):
+            if not self.kube.object(self.CLAIMS + "/example-data"):
+                self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim", "status": {"phase": "Pending"},
+                               "metadata": {"name": "example-data", "namespace": "lab"}})
+            return None    # the fake answers: 409, the name is taken
+        self.kube.react("POST", self.CLAIMS, first)
+
+    def pairs(self):
+        return sorted(row["metadata"]["name"] for row in KUBE.kget(CSI.API + "/volumesnapshotcontents")["items"]) + \
+            sorted(row["metadata"]["name"] for row in KUBE.kget(CSI.API + "/namespaces/lab/volumesnapshots")["items"])
+
+    def sweep(self):
+        self.sweeper.sweep(now=time.time())
+
+    def lost_race(self):
+        self.someone_takes_the_name_first()
+        ident = self.start()
+        self.assertEqual("running", self.job(ident)["status"], "the create's 409 is waited out once")
+        job = self.job(ident)
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("created by another operation", job["message"])
+        self.assertEqual(2, len(self.pairs()), "the pair it made is still there")
+        return ident
+
+    def test_a_restore_that_lost_its_claim_name_has_its_pair_removed_once_it_failed(self):
+        self.lost_race()
+        self.sweep()
+        self.assertEqual([], self.pairs())
+        claim = self.kube.object(self.CLAIMS + "/example-data")
+        self.assertIsNotNone(claim, "the other operation's claim is not touched")
+        self.assertIsNone(claim["metadata"].get("deletionTimestamp"))
+
+    def test_the_pair_is_looked_for_once_not_every_minute(self):
+        self.lost_race()
+        self.sweep()
+        def listed():
+            return len([path for path, _ in self.kube.reads if "volumesnapshotcontents?" in path])
+        before = listed()
+        self.assertGreater(before, 0)
+        self.sweep()
+        self.assertEqual(before, listed())
+
+    def test_a_restore_resumed_and_ended_again_has_its_new_pair_removed_too(self):
+        ident = self.lost_race()
+        self.sweep()
+        # Resumed, it made its pair again, then ended again.
+        CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem", self.RESTORE_ID)
+        with OPS.transaction() as t:
+            items = t.items
+            item = next(i for i in items if i["id"] == ident)
+            item.update(status="running", finished_at="")
+            OPS._finish(item, "failed", 8, "The destination PVC was created by another operation")
+            item["finished_at"] = "2099-01-01T00:00:00Z"
+            t.save(items)
+        self.assertEqual(2, len(self.pairs()))
+        self.sweep()
+        self.assertEqual([], self.pairs())
+
+    def test_a_restore_resumed_while_the_sweep_runs_keeps_its_pair(self):
+        """The sweep read the job as failed; a person resumes it before the
+        pair is deleted. The resumed restore reuses that pair (its name comes
+        from the restore id), so deleting it would leave its claim on a gone
+        snapshot."""
+        ident = self.lost_race()
+        self.kube.discard(self.CLAIMS + "/example-data")    # the other claim went: a resume can carry on
+        resumed = []
+
+        def resume_first(*_):
+            if not resumed:
+                resumed.append(OPS.resume(ident))
+            return None
+        self.kube.react("GET", CSI.API + "/volumesnapshotcontents", resume_first)
+        self.sweep()
+        self.assertTrue(resumed)
+        self.assertEqual("running", OPS.stored()[0]["status"])
+        self.assertEqual(2, len(self.pairs()), "the resumed restore's pair is kept")
+        self.assertFalse(any(m == "DELETE" and "volumesnapshot" in p for m, p, *_ in self.kube.writes))
+
+    def test_a_pair_that_cannot_be_removed_is_not_looked_for_every_minute(self):
+        """Not this job's pair after all (its snapshot pairs with other
+        content): left, and not listed again each minute."""
+        self.lost_race()
+        snapshot = CSI.API + "/namespaces/lab/volumesnapshots/" + self.pairs()[0]
+        obj = self.kube.object(snapshot)
+        obj["spec"]["source"]["volumeSnapshotContentName"] = "homestead-restore-other"
+        self.kube.discard(snapshot)
+        self.kube.add(obj)
+        self.sweep()
+        self.assertEqual(2, len(self.pairs()))
+
+        def listed():
+            return len([path for path, _ in self.kube.reads if "volumesnapshotcontents?" in path])
+        before = listed()
+        self.sweep()
+        self.assertEqual(before, listed())
+
+    def test_a_running_restore_keeps_its_pair(self):
+        """It made its pair and has not made its claim yet."""
+        self.kube.fail(self.CLAIMS, 500, method="POST")
+        ident = self.start()
+        self.assertEqual("running", self.job(ident)["status"])
+        self.sweep()
+        self.assertEqual(2, len(self.pairs()))
+
+    def test_another_restores_pair_and_one_from_before_the_stamp_are_kept(self):
+        mine = self.lost_race()
+        other = CSI.import_backup("lab", "example-data", "backup-b", "disk-a", "s3://example/backup-b", "Filesystem",
+                                  "fedcba9876543210fedcba98")
+        before = CSI.import_backup("lab", "example-data", "backup-c", "disk-a", "s3://example/backup-c", "Filesystem")
+        self.sweep()
+        self.assertEqual(sorted([other, before]) * 2, self.pairs())
+        self.assertIsNotNone(mine)
+
+    def test_a_failed_restore_whose_own_claim_restores_from_the_pair_keeps_it(self):
+        self.kube.fail(self.CLAIMS, 500, method="POST", applied=True)
+        ident = self.start()
+        self.assertEqual("running", self.job(ident)["status"], "its claim was made, the answer lost")
+        self.assertIsNotNone(self.kube.object(self.CLAIMS + "/example-data"))
+        with OPS.transaction() as t:
+            items = t.items
+            OPS._finish(next(i for i in items if i["id"] == ident), "failed", 8, "CSI restore snapshot failed: example")
+            t.save(items)
+        self.sweep()
+        self.assertEqual(2, len(self.pairs()), "cleanup() removes it once the claim binds")
+        self.kube("DELETE", self.CLAIMS + "/example-data")
+        self.sweep()
+        self.assertEqual([], self.pairs(), "the claim is gone, so nothing restores from it")
+
+    def test_a_pair_made_before_the_stamp_still_matches_on_a_resume(self):
+        name = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem")
+        content = self.kube.object(CSI.API + "/volumesnapshotcontents/" + name)
+        self.assertNotIn("homestead.io/restore-id", content["metadata"].get("annotations") or {})
+        stamped = CSI.import_backup("lab", "other-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem",
+                                    self.RESTORE_ID)
+        content = self.kube.object(CSI.API + "/volumesnapshotcontents/" + stamped)
+        self.assertEqual(self.RESTORE_ID, content["metadata"]["annotations"]["homestead.io/restore-id"])
+        # A pair made by an older Homestead under the stamped name, without the stamp, is adopted as before.
+        for path in (CSI.API + "/volumesnapshotcontents/" + stamped, CSI.API + "/namespaces/lab/volumesnapshots/" + stamped):
+            obj = self.kube.object(path)
+            obj["metadata"]["annotations"].pop("homestead.io/restore-id")
+            self.kube.discard(path)
+            self.kube.add(obj)
+        self.assertEqual(stamped, CSI.import_backup("lab", "other-data", "backup-a", "disk-a", "s3://example/backup-a",
+                                                    "Filesystem", self.RESTORE_ID))
+
+
 if __name__ == "__main__":
     unittest.main()

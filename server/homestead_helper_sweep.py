@@ -11,8 +11,10 @@ too (homestead_pullwatch.sweep, which used to run only while a pull was being
 watched), and an import whose Job finished a week ago is removed the way its
 Remove button does it, so the workload keeps its proof of completion.
 
-"Back up now"'s local snapshot goes here too, once its backup completed and
-no unfinished job names the snapshot or its volume.
+"Back up now"'s local snapshot goes here too, once its backup completed or
+failed and no unfinished job names the snapshot or its volume; so does the
+snapshot pair a plain restore made, once its job ended and no claim of its
+name restores from it (a restore that lost the race for its claim name).
 
 Only Homestead's own objects: the task label and the name both have to be
 Homestead's, and each delete names the uid that was read."""
@@ -22,6 +24,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_csi_restore as CSI_RESTORE
 import homestead_import_job as IMPORT_JOB
 import homestead_kube as KUBE
 import homestead_longhorn_backups as BACKUPS
@@ -101,15 +104,16 @@ def sweep(now=None):
                 removed.append(meta["name"])
     removed += _old_imports(items, now, MAX_PER_ROUND - len(removed))
     removed += _backup_snapshots(items, MAX_PER_ROUND - len(removed))
+    removed += _restore_pairs(items, MAX_PER_ROUND - len(removed))
     return removed
 
 
 def _backup_snapshots(items, budget):
     """"Back up now"'s local snapshot, once its backup completed (the backup
-    is the restore point) and nothing uses the snapshot or its volume: no
-    unfinished or unresolved job names either (a revert, a restore, a failed
-    revert awaiting recovery), and no file-browser session reads a clone of
-    the snapshot. Both are read again just before each delete; when either
+    is the restore point) or failed (there is none), and nothing uses the
+    snapshot or its volume: no unfinished or unresolved job names either (a
+    revert, a restore, a failed revert awaiting recovery), and no
+    file-browser session reads a clone of the snapshot. Both are read again just before each delete; when either
     cannot be read, nothing goes this round. One in use waits for a later
     round. Asked once: a delete that fails is said and the snapshot stays."""
     removed = []
@@ -117,7 +121,7 @@ def _backup_snapshots(items, budget):
         if len(removed) >= budget:
             break
         ref = item.get("ref") if isinstance(item, dict) else None
-        if (not isinstance(ref, dict) or item.get("kind") != "backup" or item.get("status") != "succeeded"
+        if (not isinstance(ref, dict) or item.get("kind") != "backup" or item.get("status") not in ("succeeded", "failed")
                 or ref.get("snapshot_pending") is not True):
             continue
         found = _in_use()
@@ -131,6 +135,58 @@ def _backup_snapshots(items, budget):
             removed.append(ref["snapshot"])
         _released(item["id"])
     return removed
+
+
+def _restore_pairs(items, budget):
+    """The snapshot pair (VolumeSnapshot and its Retain content) a plain
+    restore made, once its job failed or was cancelled: cleanup() removes one
+    only once a claim restoring from it binds, and a restore that lost the
+    race for its claim name never gets one. Only a pair stamped with that
+    job's restore id, and kept while a live claim of its name restores from
+    it. Each delete runs under the jobs' lock, with the job read again
+    there, so a restore resumed since keeps its pair: a resume reuses it. Looked for until none of the job's is left, then not again
+    until the job ends again (a resumed restore makes its pair again)."""
+    if budget <= 0:
+        return []
+    try:
+        ended = {item["ref"]["restore_config"]["restore_id"]: (item["id"], item.get("finished_at"))
+                 for item in OPS.stored()
+                 if isinstance(item, dict) and item.get("kind") == "volume-restore"
+                 and item.get("status") in ("failed", "cancelled") and isinstance(item.get("ref"), dict)
+                 and item["ref"].get("pair_checked") != item.get("finished_at")
+                 and isinstance(item["ref"].get("restore_config"), dict)
+                 and item["ref"]["restore_config"].get("restore_id")}
+    except Exception as error:
+        print(f"restore snapshots not removed, the jobs could not be read: {str(error)[:160]}", flush=True)
+        return []
+    if not ended:
+        return []
+    try:
+        found = CSI_RESTORE.discard_ended(set(ended), budget, _while_ended(ended))
+    except Exception as error:
+        print(f"restore snapshots not removed: {str(error)[:160]}", flush=True)
+        return []
+    if found is None:
+        return []
+    removed, left = found
+    for restore_id, (ident, finished) in ended.items():
+        if restore_id not in left:
+            _marked([ident], "pair_checked", finished)
+    return removed
+
+
+def _while_ended(ended):
+    """guard for discard_ended: remove() under the jobs' lock, only while the
+    job is still failed or cancelled with the end time read before. A resume
+    takes the same lock, so it cannot slip in between."""
+    def guard(restore_id, remove):
+        ident, finished = ended[restore_id]
+        with OPS.transaction() as t:
+            item = next((row for row in t.items if isinstance(row, dict) and row.get("id") == ident), None)
+            if not item or item.get("status") not in ("failed", "cancelled") or item.get("finished_at") != finished:
+                return None
+            return remove()
+    return guard
 
 
 BROWSE = "/apis/snapshot.storage.k8s.io/v1/volumesnapshotcontents?labelSelector=" + urllib.parse.quote(
@@ -161,15 +217,23 @@ def _in_use():
 
 def _released(ident):
     """The backup job's snapshot is no longer waited on, gone or not."""
+    _marked([ident], "snapshot_pending", False)
+
+
+def _marked(idents, key, value=True):
+    """Sets ref[key] on each of these jobs."""
     try:
         with OPS.transaction() as t:
             items = t.items
-            item = next((row for row in items if isinstance(row, dict) and row.get("id") == ident), None)
-            if item and isinstance(item.get("ref"), dict):
-                item["ref"]["snapshot_pending"] = False
+            changed = False
+            for item in items:
+                if isinstance(item, dict) and item.get("id") in idents and isinstance(item.get("ref"), dict):
+                    item["ref"][key] = value
+                    changed = True
+            if changed:
                 t.save(items)
     except Exception as error:
-        print(f"backup job {ident} not updated: {str(error)[:160]}", flush=True)
+        print(f"backup or restore jobs {', '.join(idents)} not updated: {str(error)[:160]}", flush=True)
 
 
 def _words(value):
