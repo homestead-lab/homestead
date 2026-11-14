@@ -151,6 +151,18 @@ def status():
                 if leading else _state["holder"], "error": _state["error"]}
 
 
+def leader_node():
+    """The host the leader's pod runs on, "" when no leader is known or its
+    pod cannot be read. The holder is the leader pod's name (IDENTITY)."""
+    holder = status()["holder"]
+    if not holder:
+        return ""
+    try:
+        return (kget(f"/api/v1/namespaces/{NS}/pods/{holder}").get("spec") or {}).get("nodeName") or ""
+    except Exception:
+        return ""
+
+
 def run():
     while True:
         try:

@@ -293,7 +293,7 @@ class RolloutTests(unittest.TestCase):
         done = self.run_until_done() if ROLLOUT.start(now=1000) else None
         self.assertEqual("succeeded", done["status"])
         self.assertIn("needing a restart: node-1", done["message"])
-        self.assertIn("(node-1: Running VMs are on this host", done["message"], "the job says why")
+        self.assertIn("needing a restart: node-1 (Running VMs are on this host", done["message"], "the job says why, naming the host once")
         self.assertEqual({"node-1", "node-2"}, set(self.hosts.began))
 
     def test_a_host_waits_for_copies_still_rebuilding_then_restarts(self):

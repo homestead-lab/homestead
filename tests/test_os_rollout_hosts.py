@@ -27,6 +27,7 @@ import homestead_alerts as ALERTS
 import homestead_drain_blockers as BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as K
+import homestead_leader as LEADER
 import homestead_os_rollout as ROLLOUT
 import homestead_power as power
 import homestead_power_jobs as POWER_JOBS
@@ -216,7 +217,11 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-a"], restart="never")
         done = self.run_it()
         self.assertEqual([], self.sent)
-        self.assertIn("needs a restart", done["results"][0]["note"])
+        self.assertEqual("Updates installed. It needs a restart, which this run does not do.",
+                         done["results"][0]["note"])
+        self.assertTrue(done["results"][0]["restart_needed"])
+        self.assertIn("needing a restart: node-a (this run does not restart hosts)", done["message"])
+        self.assertEqual(1, done["message"].count("node-a"), "the host is named once")
         self.assertEqual("when-needed", ROLLOUT.settings()["reboot"], "the setting is not touched")
 
     def test_this_runs_answer_can_restart_when_the_setting_says_never(self):
@@ -231,6 +236,46 @@ class ChosenHostsTests(Runs):
         ROLLOUT.start("asked-hosts", only=["node-a"])
         self.run_it()
         self.assertEqual([], self.sent)
+
+    def test_a_host_with_nothing_to_install_that_needs_a_restart_is_not_called_up_to_date(self):
+        # #1319: with restarts off it was "up to date", and the summary left it out.
+        self.hosts.facts["node-b"] = host_facts([], reboot=True)
+        ROLLOUT.save_settings({"reboot": "never"})
+        ROLLOUT.start("asked-hosts", only=["node-b"])
+        done = self.run_it()
+        self.assertEqual([], self.sent)
+        row = done["results"][0]
+        self.assertEqual("Up to date. It needs a restart, which this run does not do.", row["note"])
+        self.assertTrue(row["restart_needed"])
+        self.assertIn("needing a restart: node-b (this run does not restart hosts)", done["message"])
+
+    def test_the_leaders_host_goes_last_whichever_replica_answers(self):
+        # #1319: the order followed the pod that answered, not the leader.
+        self.kube.add(pod("homestead-0", ns=LEADER.NS, node="node-a", phase="Running", claim="homestead-data"))
+        self.kube.add(pod("homestead-1", ns=LEADER.NS, node="node-c", phase="Running", claim="homestead-data"))
+        keep_bound(self, LEADER)
+        LEADER.bind(K.kget, K.ksend, LEADER.NS)
+        self.addCleanup(LEADER._state.update, dict(LEADER._state))
+        LEADER._state.update(leader=False, holder="homestead-1")   # this replica, on node-a, does not lead
+        self.own = "node-a"
+        self.bind()
+        mock.patch.object(ROLLOUT, "own_node", LEADER.leader_node).start()
+        self.addCleanup(mock.patch.stopall)
+        self.assertEqual(["node-a", "node-b", "node-c"], ROLLOUT.start("asked-hosts", only=["node-a", "node-b", "node-c"])["nodes"])
+        self.assertEqual([False, False, True], [h["homestead_here"] for h in ROLLOUT.preview(["node-a", "node-b", "node-c"])["hosts"]])
+
+    def test_with_no_leader_known_no_host_is_called_homesteads(self):
+        keep_bound(self, LEADER)
+        LEADER.bind(K.kget, K.ksend, LEADER.NS)
+        self.addCleanup(LEADER._state.update, dict(LEADER._state))
+        LEADER._state.update(leader=False, holder="")
+        self.assertEqual("", LEADER.leader_node())
+
+    def test_server_binds_the_leaders_host(self):
+        import ast
+        tree = ast.parse((Path(server.__file__)).read_text())
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "OS_ROLLOUT.bind")
+        self.assertEqual("LEADER.leader_node", ast.unparse(call.args[6]))
 
     def test_only_the_two_answers_are_taken(self):
         with self.assertRaises(ValueError):

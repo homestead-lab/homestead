@@ -51,8 +51,9 @@ function hostOsBody(node, f) {
     ${UI.actions([
       f.reboot ? UI.button("Restart host…", `nodeActions(${jsArg(node)})`, { attrs: 'data-need="admin"' }) : "",
       UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }),
-      updates.length && !f.upgrading ? UI.button(`Install ${updates.length} update${updates.length === 1 ? "" : "s"}`,
-        `hostOsUpgrade(${jsArg(node)})`, { kind: "pri", attrs: 'data-need="admin"' }) : "",
+      // The OS updates review: it holds automatic updates and refuses while a run is on.
+      updates.length && !f.upgrading ? UI.button(`Install ${updates.length} update${updates.length === 1 ? "" : "s"}…`,
+        `osUpdatesReview([${jsArg(node)}])`, { kind: "pri", attrs: 'data-need="admin"' }) : "",
     ].join(""))}
     <div class="dim xs" style="margin-top:8px">To update every host one at a time, or in a weekly window, open
       <a class="linkish" onclick="osUpdates()">OS updates</a>.</div>`;
@@ -90,21 +91,6 @@ window.hostOsCheck = async node => {
     toast(`${node}: ${r.facts.summary?.text || "read"}`, "ok");
   } catch (e) { toast(e.message, "bad"); }
   nodeHostOsPaint(node);
-};
-
-window.hostOsUpgrade = async node => {
-  const f = HOST_OS.cache[node]?.facts || {};
-  const count = (f.updates || []).length;
-  const ok = await ask(`Install ${count} update${count === 1 ? "" : "s"} on ${node}? Its package manager (${f.package_manager || "the host's"}) refreshes its lists and installs every waiting update. Apps and VMs keep running. ${f.reboot || (f.updates || []).some(u => HOS_KERNEL.test(u.name)) ? "A kernel update then needs a restart, from Host actions" : "A restart is needed only if an update asks for one"}.`,
-    { title: "Install updates", ok: "Install updates" });
-  if (!ok) return;
-  try {
-    const r = await api("/api/node/os/upgrade", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
-    if (r.operation && window.noteOperation) noteOperation(r.operation);
-    toast(r.detail, "ok");
-    HOST_OS.cache[node] = null;
-    nodeHostOsPaint(node, true);
-  } catch (e) { toast(e.message, "bad"); }
 };
 
 /* ---------- partition tables, to scale ---------- */
@@ -368,7 +354,7 @@ function osUpdatesReviewHost(h, several, plain) {
     : h.updates.some(u => HOS_KERNEL.test(u.name)) ? `${UI.chip("likely", "warn")} <span class="dim xs">a kernel update is in the list</span>`
     : "Only if an update asks for one";
   return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "Up to date"], ["Restart", restart],
-      h.homestead_here ? ["Homestead", `${UI.chip("runs on this host", "info")} <span class="dim xs">A restart can stop this page from responding for a few minutes, but the update continues.${several ? " It is updated last." : ""}</span>`] : null])}
+      h.homestead_here ? ["Homestead's leader", `${UI.chip("runs on this host", "info")} <span class="dim xs">A restart can stop this page from responding for a few minutes, but the update continues.${several ? " It is updated last." : ""}</span>`] : null])}
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
     <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>`;
 }
