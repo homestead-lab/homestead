@@ -852,9 +852,15 @@ def helm_plan(item):
         # The settings kept are from before the latest upgrade, not this one's: going back
         # to them would undo that. A cancel of a failed job's put-back has its own path.
         if not _was_failed(item) and _moved_since_written(item, chart):
-            # A run cut off may have landed its write, so it can't say nothing was changed.
-            why = f"{name} has changed since this upgrade was written, so it was not put back" if item.get("cancel_record") else _changed_words(name)
-            return {"can": False, "needs": "admin", "why_not": why}
+            # A put-back cut off may have landed its write, so it can't say nothing was changed.
+            # A stop cut off writes nothing: the leader's look runs it again (#1334).
+            if item.get("cancel_record") and _reviewed(item) != "forget":
+                return {"can": False, "needs": "admin",
+                        "why_not": f"{name} has changed since this upgrade was written, so it was not put back"}
+            # Cancel is the job's only button: refused, a chart that keeps failing read as
+            # running until the job's own time limit. It stops following instead (#1334).
+            return {"mode": "forget", "needs": "admin", "keeps": [
+                f"{name} changed since this upgrade, so nothing is put back. The later changes stay."]}
         plan = {"mode": "rollback", "needs": "admin", "severity": "high", "reviewed_target": _chart_seen(chart),
                 "undo": [f"Restores {name}'s chart version and values from before the upgrade, "
                          "and Helm runs again with them"],
@@ -910,7 +916,8 @@ def _helm_cancel(item, _options):
     # Read again here: the review read the chart a moment ago, and this is its own read. So
     # too for the leader running a running upgrade's cancel again: a later upgrade is not undone.
     if item.get("previous_status") == "failed" or (
-            _running_again(item) and action == "upgrade" and item["ref"].get("chart_uid") and not item["ref"].get("no_change")):
+            _running_again(item) and action == "upgrade" and item["ref"].get("chart_uid") and not item["ref"].get("no_change")
+            and _reviewed(item) != "forget"):
         if _went_back(item, chart):
             return f"{name} went back to its settings from before the upgrade"
         why = _no_put_back(item, action, name, chart)
@@ -924,6 +931,9 @@ def _helm_cancel(item, _options):
             return "Stopped following it. It changed nothing."
         # The review read the chart a moment ago; this is the canceller's own read.
         if _moved_since_written(item, chart) and HELM.previous_spec(chart) is not None:
+            # Stopping was reviewed: nothing is written. A put-back reviewed is refused.
+            if _reviewed(item) == "forget":
+                return f"Stopped following it. The later changes to {name} stay."
             raise ValueError(_changed_words(name))
         if not HELM.restore_previous(chart):
             # Still there and unreadable: nothing was written, whatever was reviewed.
