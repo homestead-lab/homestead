@@ -385,8 +385,11 @@ again: the image is already downloaded, so it is quick.
 **A VM start fails at once: "The VM crashed while starting".** The start job
 stops on KubeVirt's first crash and shows its reason, with the full QEMU
 message in the job's log. "QEMU was refused permission to signal its own
-threads" is a kernel's AppArmor change (Ubuntu's 7.0.0-43, November 2026):
-boot the host's previous kernel until a fixed one is out. A start sets the VM
+threads" is a kernel's AppArmor change (Ubuntu's 7.0.0-43, November 2026). It
+happens while `kernel.apparmor_restrict_unprivileged_unconfined` is 1, which
+Ubuntu sets. Homestead sets it to 0 on k3s and RKE2 hosts that run VMs, once,
+in `/etc/sysctl.d/91-homestead-apparmor.conf`, and **Check node health** offers
+the same fix. Booting the host's previous kernel works too. A start sets the VM
 back to stay off, as it was before.
 
 ### GPU passthrough
