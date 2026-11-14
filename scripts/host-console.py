@@ -128,6 +128,40 @@ def node_rows(data):
     return f"{ready}/{len(rows)} nodes Ready", rows
 
 
+DATA_PROBLEMS = {
+    "faulted": "Homestead cannot start: its data volume is faulted. Run Check node health.",
+    "stuck": "Homestead cannot start: its data volume is stuck after a restart. Run Check node health.",
+}
+
+
+def homestead_data_problem(prefix):
+    """One line when Homestead is not running because of its data volume, else
+    "" (docs/plans/resilience-and-validated-updates.md, section 3.4). Reads
+    only Homestead's Deployment, its data claim and that Longhorn volume."""
+    raw = command(prefix + ["-n", "lab", "get", "deployment", "homestead", "-o", "json"])
+    if not raw:
+        return ""
+    dep = json.loads(raw)
+    if (dep.get("status") or {}).get("readyReplicas"):
+        return ""
+    volumes = (((dep.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
+    claim = next(((v.get("persistentVolumeClaim") or {}).get("claimName") for v in volumes
+                  if v.get("name") == "data" and v.get("persistentVolumeClaim")), "")
+    if not claim:
+        return ""
+    raw = command(prefix + ["-n", "lab", "get", "pvc", claim, "-o", "json"])
+    pv = ((json.loads(raw) if raw else {}).get("spec") or {}).get("volumeName") or ""
+    if not pv:
+        return ""
+    raw = command(prefix + ["-n", "longhorn-system", "get", "volumes.longhorn.io", pv, "-o", "json"])
+    status = (json.loads(raw) if raw else {}).get("status") or {}
+    if status.get("robustness") == "faulted":
+        return DATA_PROBLEMS["faulted"]
+    if status.get("robustness") == "unknown" or status.get("state") in ("attaching", "detaching"):
+        return DATA_PROBLEMS["stuck"]
+    return ""
+
+
 def cluster_stats():
     prefix = kube_command()
     if not prefix:
@@ -157,6 +191,12 @@ def cluster_stats():
                 result["url"] = clean(f"http://{host}:{ports[0]['port']}")
         except (ValueError, TypeError, KeyError, AttributeError):
             pass
+    try:
+        problem = homestead_data_problem(prefix)
+    except Exception:
+        problem = ""        # unread: the console says nothing it cannot see
+    if problem:
+        result.update(health="bad", problem=problem)
     return result
 
 
@@ -364,7 +404,8 @@ def dashboard(data, width, height, braille=True):
     cluster_y = ram_y + metrics_h if wide else disk_y + metrics_h
     badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]", "muted": "[--]"}[cluster.get("health", "muted")]
     summary = badge + " " + cluster["summary"]
-    compact_cluster = wide and height < 28 and bool(cluster.get("url")) and len(summary) + len(cluster["url"]) + 3 <= width - 4
+    compact_cluster = (wide and height < 28 and bool(cluster.get("url")) and not cluster.get("problem")
+                       and len(summary) + len(cluster["url"]) + 3 <= width - 4)
     node_start = 2 if compact_cluster else 3
     cluster_h = max(4, len(nodes) * (1 if wide else 2) + node_start + 1, height - 1 - cluster_y)
     frame = Frame(width, cluster_y + cluster_h, braille)
@@ -444,7 +485,9 @@ def dashboard(data, width, height, braille=True):
     elif data.get("updated") and width >= 72:
         frame.put(cluster_y + 1, width - 20, "checked " + data["updated"], "muted")
     if not compact_cluster:
-        frame.put(cluster_y + 2, 2, cluster.get("url") or cluster.get("detail", ""), "accent", max(0, width - 4))
+        # Why Homestead cannot start comes first: its address answers nothing then.
+        frame.put(cluster_y + 2, 2, cluster.get("problem") or cluster.get("url") or cluster.get("detail", ""),
+                  "bad" if cluster.get("problem") else "accent", max(0, width - 4))
     for i, node in enumerate(nodes):
         badge = {"ok": "[OK]", "warn": "[!]", "bad": "[FAIL]"}[node["health"]]
         if wide:
