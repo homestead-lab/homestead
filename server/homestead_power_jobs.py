@@ -203,6 +203,10 @@ def _after_stop(operation_id, power_plan, opening, cause):
     return f"{opening}. The host was uncordoned, because this job had cordoned it. {cause}", {"uncordoned": True}
 
 
+def _key(item):
+    return (item.get("kind"), item.get("ns"), item.get("name"))
+
+
 def _held_by(operation_id):
     return next((((i.get("ref") or {}).get("held") or []) for i in OPS.stored() if i.get("id") == operation_id), [])
 
@@ -380,9 +384,32 @@ def hold_for_power(operation_id, power_plan, progress):
     moving = [i for i in items if i["kind"] == "VirtualMachine" and picks.get(i["id"]) == "move"]
     if not waiting and not moving:
         return False
-    progress("holding", 8, f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
-             + (f", moving {len(moving)} VM{'' if len(moving) == 1 else 's'}" if moving else "") + ". Nothing has been sent to the host yet")
-    held = [HOLD.stop(item, operation_id) for item in waiting]
+    stopping = (f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
+                + (f", moving {len(moving)} VM{'' if len(moving) == 1 else 's'}" if moving else "") + ". Nothing has been sent to the host yet")
+    progress("holding", 8, stopping)
+    # The whole list goes on the job once, before the first app is touched,
+    # and joins what an earlier pass of this job already recorded, never
+    # replacing it: a pass that dies part way must not drop an app an earlier
+    # one stopped (#1321). Restore reads how each ran from its own mark, so
+    # "was" waits until the stop says.
+    held = list(_held_by(operation_id))
+    before = {_key(i) for i in held}
+    held += [{**item, "was": None} for item in waiting if _key(item) not in before]
+    progress("holding", 8, stopping, held=held)
+    done = set()
+    for item in waiting:
+        try:
+            result = HOLD.stop(item, operation_id)
+        except ValueError:
+            # A refusal comes before any write (another job's mark, a
+            # StatefulSet that would lose its claims): what this pass listed
+            # but has not stopped was never touched, so it goes off the list
+            # again. What an earlier pass stopped stays: that hold is real.
+            held = [i for i in held if _key(i) in before or _key(i) in done]
+            progress("holding", 8, stopping, held=held)
+            raise
+        done.add(_key(item))
+        held = [result if _key(i) == _key(item) else i for i in held]
     progress("holding", 8, "Waiting for them to stop. Nothing has been sent to the host yet", held=held)
     if moving:
         # A resumed job finds some already moved: only what is still here moves.

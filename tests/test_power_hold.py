@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power_hold as HOLD
 import homestead_power as POWER
+import homestead_power_jobs as JOBS
 import homestead_lifecycle as LC
 import homestead_node_actions as NODE_ACTIONS
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -219,6 +220,83 @@ class StopRestoreTests(unittest.TestCase):
         held = [HOLD.stop(self.items[1], "job-1")]
         HOLD.restore(held, "job-1")
         self.assertIn(("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/vms/virtualmachines/gpu/start", {}), self.k.sent)
+
+
+class StoppedBeforeRecordedTests(unittest.TestCase):
+    """#1321: an app stopped by a job that then failed was left at 0, because
+    the job recorded what it held only after every stop had gone through."""
+
+    def setUp(self):
+        self.k = Objects({DEP: {"metadata": {"name": "plex"}, "spec": {"replicas": 2}},
+                          VM: {"metadata": {"name": "gpu"}, "spec": {"runStrategy": "RerunOnFailure"}}})
+        keep_bound(self, HOLD)
+        HOLD.bind(self.k.get, self.k.send)
+        self.recorded = []
+        self.plan = {"node": "k1", "choices": {"Deployment/lab/plex": "wait", "VirtualMachine/vms/gpu": "wait"},
+                     "hold": [{"id": "Deployment/lab/plex", "kind": "Deployment", "ns": "lab", "name": "plex"},
+                              {"id": "VirtualMachine/vms/gpu", "kind": "VirtualMachine", "ns": "vms", "name": "gpu"}]}
+
+    def progress(self, phase, percent, message, **details):
+        if "held" in details:
+            self.recorded = copy.deepcopy(details["held"])
+
+    def hold(self):
+        return JOBS.hold_for_power("job-1", self.plan, self.progress)
+
+    def test_an_app_stopped_before_a_later_stop_failed_is_still_listed_and_started_again(self):
+        send = self.k.send
+
+        def failing(method, path, body=None, ctype=None):
+            if method == "PUT":
+                raise urllib.error.URLError("connection lost")
+            return send(method, path, body, ctype)
+        HOLD.bind(self.k.get, failing)
+        with self.assertRaises(urllib.error.URLError):
+            self.hold()
+        self.assertEqual(0, self.k.objects[DEP]["spec"]["replicas"])
+        self.assertEqual(["lab/plex", "vms/gpu"], [f"{i['ns']}/{i['name']}" for i in self.recorded],
+                         "the VM got its mark before its shut down failed, so it is listed too")
+        HOLD.bind(self.k.get, send)
+        started, left = HOLD.restore(self.recorded, "job-1")
+        self.assertEqual((["lab/plex", "vms/gpu"], []), (started, left))
+        self.assertEqual(2, self.k.objects[DEP]["spec"]["replicas"], "started as it ran, from its own mark")
+
+    def test_an_app_whose_stop_was_refused_is_not_listed_as_held(self):
+        self.k.objects[DEP]["metadata"]["annotations"] = {HOLD.HELD_BY: "job-0", HOLD.HELD_AS: "3"}
+        with self.assertRaisesRegex(ValueError, "held by another job"):
+            self.hold()
+        self.assertEqual([], self.recorded, "never touched, so nothing for the Operations page to show as held")
+        self.assertEqual({HOLD.HELD_BY: "job-0", HOLD.HELD_AS: "3"}, self.k.objects[DEP]["metadata"]["annotations"])
+
+    def test_a_resumed_pass_that_dies_keeps_what_the_first_pass_stopped(self):
+        web, jelly = "/apis/apps/v1/namespaces/lab/deployments/web", "/apis/apps/v1/namespaces/lab/deployments/jelly"
+        self.k.objects.update({web: {"metadata": {"name": "web"}, "spec": {"replicas": 3}},
+                               jelly: {"metadata": {"name": "jelly"}, "spec": {"replicas": 1}}})
+        def dep(name):
+            return {"id": f"Deployment/lab/{name}", "kind": "Deployment", "ns": "lab", "name": name}
+        def plan(*names):
+            return {"node": "k1", "choices": {dep(n)["id"]: "wait" for n in names}, "hold": [dep(n) for n in names]}
+        self.enterContext(mock.patch.object(JOBS, "kget", lambda path: {"items": []}))   # nothing left on the host
+        JOBS.hold_for_power("job-1", plan("plex", "web"), self.progress)   # the first pass stops both
+        first = self.recorded
+        self.enterContext(mock.patch.object(JOBS.OPS, "stored", mock.Mock(
+            return_value=[{"id": "job-1", "ref": {"held": copy.deepcopy(first)}}])))
+        self.assertEqual(["lab/plex", "lab/web"], [f"{i['ns']}/{i['name']}" for i in first])
+        send = self.k.send
+
+        def dying(path):
+            if path == jelly:
+                raise urllib.error.URLError("homestead restarted")
+            return self.k.get(path)
+        HOLD.bind(dying, send)
+        self.recorded = []
+        with self.assertRaises(urllib.error.URLError):
+            JOBS.hold_for_power("job-1", plan("jelly"), self.progress)     # the resumed pass dies on its first app
+        self.assertEqual(["lab/plex", "lab/web", "lab/jelly"], [f"{i['ns']}/{i['name']}" for i in self.recorded])
+        HOLD.bind(self.k.get, send)
+        started, left = HOLD.restore(self.recorded, "job-1")
+        self.assertEqual((["lab/plex", "lab/web"], ["lab/jelly (changed since)"]), (started, left))
+        self.assertEqual((2, 3), (self.k.objects[DEP]["spec"]["replicas"], self.k.objects[web]["spec"]["replicas"]))
 
 
 class OwnPodTests(unittest.TestCase):
