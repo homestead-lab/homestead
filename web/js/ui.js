@@ -514,7 +514,10 @@ const UI = (() => {
        render(review, input), failed(error, input)  show the outcome
        blocked(review) true when the review allows nothing to be sent
        ack, button     ids of the tickbox, there only when something must be
-                       accepted, and of the button that sends
+                       accepted, and of the button that sends. A tickbox that is
+                       missing counts as not ticked (#1317)
+       ackWhen(review) false when this review has no tickbox to accept (default
+                       true), so the missing one is not read as unticked
        check(review)   any further condition, such as a typed name
        apply(review)   sends it; after() runs once that settles
        conflict(error, review)  given a 409 from apply() (the server says
@@ -531,7 +534,7 @@ const UI = (() => {
      Unlike the components above it returns no HTML: render() writes the
      dialog. */
   const reviewFlow = ({ preview, loading = () => {}, live = () => true, render, failed = () => {},
-    blocked = () => false, ack = "", button = "", check = () => true, apply, after = () => {}, conflict = null }) => {
+    blocked = () => false, ack = "", ackWhen = () => true, button = "", check = () => true, apply, after = () => {}, conflict = null }) => {
     let sequence = 0, current = null, busy = false;
     const byId = id => (id && document.getElementById(id)) || null;
     const flow = {
@@ -555,7 +558,7 @@ const UI = (() => {
       },
       ready() {
         const box = byId(ack), go = byId(button);
-        const ok = !!(current && !busy && !blocked(current) && (!box || box.checked) && check(current));
+        const ok = !!(current && !busy && !blocked(current) && (!ack || !ackWhen(current) || !!(box && box.checked)) && check(current));
         if (go) go.disabled = !ok;
         return ok;
       },

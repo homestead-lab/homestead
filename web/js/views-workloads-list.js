@@ -415,6 +415,16 @@ window.capacityHostTable = capacityHostTable;
    "Restart it anyway", never "Start it anyway". */
 const reviewAck = what => `${String(what || "Starts").split(" ")[0].replace(/s$/, "")} it anyway`;
 window.reviewAck = reviewAck;
+/* What a start review asks to be accepted; it draws the tickbox only when there is something (#1317). */
+function startProblems(plan, warnings = []) {
+  const { concerns } = capacityNotes(plan);
+  const topology = plan.topology_status === "blocked" ? "Its placement and spread rules do not allow all its copies to fit."
+    : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its placement and spread rules have not been checked." : "";
+  return [...new Set([...(plan.blockers || []), ...concerns,
+    ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
+    ...(topology ? [topology] : []), ...warnings])];
+}
+window.startReviewAsks = (plan, warnings = []) => startProblems(plan, warnings).length > 0;
 /* The review before a container or VM starts, is created or saved
    (design.md, Reviews): a whole UI.dialog review. The header names it; the
    lead says what happens and where; one notice; the objects; the hosts with
@@ -430,11 +440,7 @@ function startReview(plan, { what = "Starts", name, kind = "", where: place = ""
     : ok.length === 1 ? ` on <b>${esc(ok[0].name)}</b>, the only host that can run it`
     : placement.preferred && ok.some(host => host.name === placement.preferred) ? ` on <b>${esc(placement.preferred)}</b> if it can, or another host`
     : ok.length ? ` on one of ${ok.length} hosts` : "";
-  const topology = plan.topology_status === "blocked" ? "Its placement and spread rules do not allow all its copies to fit."
-    : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its placement and spread rules have not been checked." : "";
-  const problems = [...new Set([...(plan.blockers || []), ...concerns,
-    ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
-    ...(topology ? [topology] : []), ...warnings])];
+  const problems = startProblems(plan, warnings);
   const verb = reviewAck(what).split(" ")[0].toLowerCase();
   const reservations = ok.filter(host => host.reservations_known).map(host =>
     `<li>${esc(host.name)}: already reserved ${esc(host.reserved_gb)} of ${esc(host.allocatable_gb ?? "?")} GiB memory · ${esc(host.reserved_cpu_percent ?? "?")}% CPU${host.request_slots != null ? ` · room for ${esc(host.request_slots)} more` : ""}</li>`)
@@ -491,5 +497,5 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  renderWorkloads, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadExpanded, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, reviewAck, startReview
+  renderWorkloads, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadExpanded, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, reviewAck, startProblems, startReview
 };

@@ -1074,6 +1074,11 @@ const moveBody = (cluster, kind, name) => ({
   source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES, stop_source: MOVE_STOP_SOURCE });
 
 window.moveStopSource = (cluster, kind, name, stop) => {
+  // The request being sent keeps the choice it was made with, so a flip now would be shown and not sent (#1317).
+  if (MOVE_PLAN.busy) {
+    if ($("#mv_stop")) $("#mv_stop").checked = MOVE_STOP_SOURCE;
+    return toast("A transfer is being sent. Change the choice after it has been accepted or refused.", "bad");
+  }
   MOVE_STOP_SOURCE = stop === true;
   if ($("#mv_go")) $("#mv_go").disabled = true;
   movePlan(cluster, kind, name);
@@ -1156,8 +1161,8 @@ function moveVolumesTable(plan, cluster, kind, name) {
     <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Data</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
-const moveLoading = ({ host, go }) => {
-  host.innerHTML = '<div class="empty"><span class="spin2"></span> asking both clusters…</div>';
+const moveLoading = ({ host, go }, words = "asking both clusters…") => {
+  host.innerHTML = `<div class="empty"><span class="spin2"></span> ${words}</div>`;
   if (go) go.disabled = true;
 };
 const MOVE_PLAN = UI.reviewFlow({
@@ -1223,7 +1228,8 @@ const MOVE_PLAN = UI.reviewFlow({
   },
   after: () => {
     const again = MOVE_REPLAN && MOVE_TARGET; MOVE_REPLAN = false;
-    if (again) window.movePlan(again.cluster, again.kind, again.name);   // nothing happens if no such dialog is open
+    // Only while the dialog is still open: a plan read for a closed one would be drawn nowhere (#1317).
+    if (again && $("#mv_plan")) window.movePlan(again.cluster, again.kind, again.name);
   },
 });
 let MOVE_STARTING = null, MOVE_REPLAN = false;
@@ -1231,9 +1237,10 @@ window.movePlan = (cluster, kind, name) => {
   const host = $("#mv_plan"), go = $("#mv_go");
   if (!host) return;
   ++MOVE_PLAN_EDITS;
-  // Nothing is read while a start is being sent. The dialog waits on the spinner: a refused start's after() reads
-  // its plan, and an accepted one closes it.
-  if (MOVE_PLAN.busy) return moveLoading({ host, go });
+  // Nothing is read while a start is being sent. The dialog waits on the spinner and says why: a refused start's
+  // after() reads its plan, and an accepted one closes it. A lost reply keeps it waiting, as a new start would be a
+  // second transfer.
+  if (MOVE_PLAN.busy) return moveLoading({ host, go }, "Waiting while the transfer is sent…");
   return MOVE_PLAN.open({ cluster, kind, name, host, go });
 };
 
@@ -1465,7 +1472,8 @@ const IMPORT_REVIEW = UI.reviewFlow({
   failed: e => toast(e.message, "bad"),
   blocked: review => review.capacity.blocked, ack: "importConfirm",
   apply: async review => {
-    $("#importGo").disabled = true;
+    const go = $("#importGo");
+    if (go) go.disabled = true;
     try {
       const result = await api("/api/import", {method:"POST", headers:{"Content-Type":"application/json"},
         body:JSON.stringify({...review.config, capacity_token:review.capacity_token, confirm_capacity:true})});
@@ -1475,9 +1483,12 @@ const IMPORT_REVIEW = UI.reviewFlow({
     } catch (e) {
       // An unknown outcome is never an automatic retry: the flow consumed the review.
       toast(e.message + " Check Recent jobs before trying again. Any volumes already created are kept.", "bad");
-      $("#importGo").textContent = "Review again";
-      $("#importGo").disabled = false;
-      $("#importGo").onclick = () => importReview(review.config);
+      // Only if the dialog that sent it is still the one shown (#1317).
+      if ($("#importGo") === go) {
+        go.textContent = "Review again";
+        go.disabled = false;
+        go.onclick = () => importReview(review.config);
+      }
     }
   },
   after: () => window.refreshOperations?.(true),

@@ -379,7 +379,7 @@ const VM_CREATE = UI.reviewFlow({
   },
   failed: error => toast(error.message,"bad"),
   // Nothing needing attention: no tickbox to tick, only the button.
-  blocked: review => review.capacity.blocked, ack: "vmCreateApprove", button: "vmCreateApply",
+  blocked: review => review.capacity.blocked, ack: "vmCreateApprove", ackWhen: review => startReviewAsks(review.capacity), button: "vmCreateApply",
   apply: async review => {
     const cfg = review.config, button = $("#vmCreateApply");
     button.disabled = true; button.textContent = "Preparing the disk and creating the VM…";

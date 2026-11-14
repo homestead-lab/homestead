@@ -369,7 +369,7 @@ const VM_POWER = UI.reviewFlow({
     $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}`)}${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`;
   },
   // The tickbox is there only when there is a warning to accept.
-  blocked: review => review.capacity.blocked, ack: "vmPowerApprove", button: "vmPowerApply",
+  blocked: review => review.capacity.blocked, ack: "vmPowerApprove", ackWhen: review => startReviewAsks(review.capacity), button: "vmPowerApply",
   check: review => vmStateInitReady(review.capacity, "vmPower"),
   apply: async review => {
     const button = $("#vmPowerApply");
@@ -720,7 +720,8 @@ const VM_EDIT = UI.reviewFlow({
     $("#mbody").innerHTML = `${UI.callout("bad", "", `${esc(error.message)}`)}<button class="btn" data-dialog-dismiss="true" onclick="vmEditReviewBack()">Back to edit</button>`;
   },
   // The tickbox is there only when there is something to accept.
-  blocked: review => review.capacity.blocked, ack: "vmEditApprove", button: "vmEditApply",
+  blocked: review => review.capacity.blocked, ack: "vmEditApprove",
+  ackWhen: review => review.capacity.vm?.admission_needed ? startReviewAsks(review.capacity, review.capacity.warnings || []) : (review.capacity.warnings || []).length > 0, button: "vmEditApply",
   check: review => vmStateInitReady(review.capacity, "vmEdit"),
   apply: async review => {
     const button = $("#vmEditApply");
@@ -903,7 +904,7 @@ const K3S = UI.reviewFlow({
     if ($("#k3sAgainLoading")) $("#mbody").innerHTML = UI.error(error, { retry: "k3sReviewAgain()", dialog: true });
   },
   // The tickbox is there only when there is a warning to accept.
-  blocked: plan => plan.ok === false || plan.capacity.blocked, ack: "k_capacity_confirm", button: "k_go",
+  blocked: plan => plan.ok === false || plan.capacity.blocked, ack: "k_capacity_confirm", ackWhen: plan => (plan.capacity.warnings || []).length > 0, button: "k_go",
   apply: async review => {
     const button = $("#k_go");
     button.disabled = true; button.textContent = "Creating VMs…";
