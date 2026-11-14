@@ -22,10 +22,11 @@ for arch in $PLATFORMS; do
     "$SCANNER" image --input "/input/$arch.tar" --scanners vuln --severity HIGH,CRITICAL \
     --exit-code 1 --format json --output "/reports/$arch.json" || status=1
 done
-# These default helpers also run code as Homestead or on the host. Scan their
-# fresh registry manifests rather than relying on the main image's inventory.
+# This default helper also runs code as Homestead or on the host. Scan its
+# fresh registry manifest rather than relying on the main image's inventory.
+# The node probe and the runtime helpers run Homestead's own image, scanned above.
 for arch in $PLATFORMS; do
-  for image in alpine:3.24 python:3.12-alpine; do
+  for image in alpine:3.24; do
     name=$(printf '%s' "$image" | tr ':/' '__')
     docker run --rm --mount "type=bind,source=$reports,target=/reports" \
       --mount 'type=volume,source=homestead-trivy-cache,target=/root/.cache/trivy' \

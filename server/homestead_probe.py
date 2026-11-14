@@ -68,16 +68,22 @@ def manifest(version="dev", namespace=None, scripts=None):
         "metadata": {"name": NAME, "namespace": namespace},
         "data": shipped_scripts() if scripts is None else scripts,
     }
+    # Homestead's own image, as the SMART sidecar's: one image Homestead
+    # builds, upgrades and scans, rather than a stock one that can lag
+    # Alpine's security fixes (November 2026, krb5-libs).
     telemetry = {
-        "name": "probe", "image": "python:3.12-alpine",
+        "name": "probe", "image": NAMES.IMAGE + ":" + version,
+        "imagePullPolicy": "IfNotPresent",
         "command": ["python3", "/srv/probe.py"],
         "ports": [{"containerPort": PROBE_PORT, "name": "http"}],
         "env": [node_name],
         "resources": {"requests": {"cpu": "5m", "memory": "24Mi"},
                       "limits": {"memory": "64Mi"}},
         # Reads sensors and counters and nothing else: no capabilities, no
-        # writable filesystem, and no privilege available to escalate to.
-        "securityContext": {"allowPrivilegeEscalation": False,
+        # writable filesystem, and no privilege available to escalate to. Root,
+        # as the stock image ran it: Homestead's image defaults to its own user.
+        "securityContext": {"runAsUser": 0, "runAsGroup": 0, "runAsNonRoot": False,
+                            "allowPrivilegeEscalation": False,
                             "readOnlyRootFilesystem": True,
                             "capabilities": {"drop": ["ALL"]}},
         "volumeMounts": [_mount("code", "/srv"), _mount("sys", "/host/sys"),

@@ -22,7 +22,8 @@ spec:
         - operator: Exists
       containers:
         - name: probe
-          image: python:3.12-alpine
+          image: {{ include "homestead.image" . }}
+          imagePullPolicy: IfNotPresent
           command:
             - python3
             - "/srv/probe.py"
@@ -41,6 +42,9 @@ spec:
             limits:
               memory: 64Mi
           securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:

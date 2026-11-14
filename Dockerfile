@@ -21,7 +21,10 @@ ENV PORT=8080 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apk add --no-cache smartmontools rsync tzdata \
+# The base image can lag Alpine's security fixes by days (krb5-libs, November
+# 2026): upgrade what it ships before adding to it.
+RUN apk upgrade --no-cache \
+    && apk add --no-cache smartmontools rsync tzdata \
     && addgroup -S -g 10001 homestead && adduser -S -D -H -u 10001 -G homestead homestead \
     && mkdir -p /srv /web /data \
     && chown -R homestead:homestead /data

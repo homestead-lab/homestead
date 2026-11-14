@@ -57,8 +57,6 @@ annotations:
   artifacthub.io/images: |
     - name: homestead
       image: ghcr.io/homestead-lab/homestead:{version}
-    - name: probe
-      image: python:3.12-alpine
 """
 
 VALUES = """# Homestead's Helm values. Everything else is fixed by the release.

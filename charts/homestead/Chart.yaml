@@ -21,5 +21,3 @@ annotations:
   artifacthub.io/images: |
     - name: homestead
       image: ghcr.io/homestead-lab/homestead:2.8.335-dev.13
-    - name: probe
-      image: python:3.12-alpine

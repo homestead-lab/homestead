@@ -1474,7 +1474,8 @@ spec:
         - operator: Exists
       containers:
         - name: probe
-          image: python:3.12-alpine
+          image: ghcr.io/homestead-lab/homestead:2.8.335-dev.13
+          imagePullPolicy: IfNotPresent
           command:
             - python3
             - "/srv/probe.py"
@@ -1493,6 +1494,9 @@ spec:
             limits:
               memory: 64Mi
           securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
