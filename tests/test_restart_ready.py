@@ -19,6 +19,7 @@ import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_power as POWER
 from fakes.kube import Kube
+import own_pod
 from rebind import keep_bound
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -181,6 +182,7 @@ class RestartReviewWarnsTests(unittest.TestCase):
         keep_bound(self, POWER)
         POWER.bind(K.kget, lambda host: {"workloads": [], "stranded": []},
                    lambda: {"members": ["node-a", "node-b", "node-c"], "can_lose": 1}, lambda: True)
+        self.kube.add(own_pod.runs_as(self, K.kget))
         self.jobs = [restart_job()]
         self.enterContext(mock.patch.object(OPS, "stored", lambda: list(self.jobs)))
         self.cluster = Settling(self.kube)
