@@ -29,6 +29,7 @@ import homestead_os_rollout as ROLLOUT
 import homestead_power as POWER
 import homestead_power_jobs as JOBS
 from fakes.kube import Kube
+import own_pod
 
 NODE = "/api/v1/nodes/node-a"
 QUORUM = {"members": ["node-a", "node-b", "node-c"], "can_lose": 1, "ready": ["node-a", "node-b", "node-c"], "total": 3,
@@ -56,6 +57,7 @@ class Case(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.kube = self.enterContext(Kube(host("node-a"), host("node-b"), host("node-c"),
                                            groups=("longhorn.io", "kubevirt.io")))
+        self.kube.add(own_pod.runs_as(self, POWER.LHCAP.kget))   # the review reads Homestead's own pod
         impact = {"workloads": [], "stranded": []}
         self.before_job = []      # what happens between the review and the job (run_now)
         for target, name, value in (

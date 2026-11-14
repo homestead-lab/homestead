@@ -25,6 +25,7 @@ import homestead_power_hold as HOLD
 import homestead_power_jobs as JOBS
 import homestead_routes as ROUTER
 from fakes.kube import Kube
+import own_pod
 
 NODES = "/api/v1/nodes"
 QUORUM = {"members": ["node-a", "node-b", "node-c"], "can_lose": 1, "ready": ["node-a", "node-b", "node-c"], "total": 3,
@@ -70,6 +71,7 @@ class Case(unittest.TestCase):
         self.data = tmp.name
         self.kube = self.enterContext(Kube(host("node-a"), host("node-b"), host("node-c"), *self.objects,
                                            groups=("longhorn.io", "kubevirt.io")))
+        self.kube.add(own_pod.runs_as(self, POWER.LHCAP.kget))   # the review reads Homestead's own pod
         impact = {"workloads": [{"ns": "apps", "name": "web", "eligible": ["node-b"]}], "stranded": []}
         self.leader = mock.Mock(return_value=True)
         for target, name, value in (

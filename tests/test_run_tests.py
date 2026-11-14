@@ -39,9 +39,31 @@ class NoClusterSummaryTests(unittest.TestCase):
         one = unittest.TestSuite([unittest.FunctionTestCase(reads_the_cluster)])
         out = io.StringIO()
         with mock.patch.object(RUN.unittest.defaultTestLoader, "loadTestsFromNames", lambda names: one), \
+                mock.patch.dict(RUN.os.environ), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
             self.assertTrue(RUN.run([]))
         self.assertRegex(out.getvalue(), r"(?m)^no_cluster: \d+ requests from \d+ tests turned away \(top: ")
+
+
+class PodNameTests(unittest.TestCase):
+    """Homestead reads its pod name from HOSTNAME. A CI runner has none and a container has
+    its own, so a run gives every test the same one: the machine does not decide whether a
+    test takes the path a pod takes (#1410's read of Homestead's own pod went unseen in CI)."""
+
+    def test_the_tests_of_a_run_see_the_run_s_pod_name_whatever_the_machine_has(self):
+        import contextlib
+        import io
+        for machine in ({}, {"HOSTNAME": "ci-box"}):
+            seen = []
+            one = unittest.TestSuite([unittest.FunctionTestCase(lambda: seen.append(RUN.os.environ.get("HOSTNAME")))])
+            with self.subTest(machine=machine), mock.patch.dict(RUN.os.environ, machine), \
+                    mock.patch.object(RUN.unittest.defaultTestLoader, "loadTestsFromNames", lambda names: one), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                if not machine:
+                    RUN.os.environ.pop("HOSTNAME", None)
+                RUN.run([])
+                self.assertEqual([RUN.POD_NAME], seen)
+
 
 class GuardInEveryRunTests(unittest.TestCase):
     """The leak guard checks what the tests before it left bound, so every
@@ -161,6 +183,11 @@ class TimedShardTests(unittest.TestCase):
 
 
 class RecordTests(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.dict(RUN.os.environ)   # record_durations() sets the run's pod name
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def test_each_file_is_timed_once_and_rounded(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

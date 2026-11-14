@@ -19,6 +19,7 @@ anything the tests share, runs everything. CI still runs every test.
 import argparse
 import io
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -28,6 +29,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TESTS = ROOT / "tests"
+POD_NAME = "homestead-test-0"   # the pod name every run gives the tests (run())
 DURATIONS = TESTS / "durations.json"
 # A test that reads the whole tree, not one module: always run by --changed.
 SCANS = re.compile(r"rglob\(|os\.walk\(|\.glob\(|listdir\(|iterdir\(|git ls-files")
@@ -91,6 +93,7 @@ def record_durations(files, clock=time.perf_counter, previous=None):
     weighed by its size); it is named."""
     previous = previous or {}
     sys.path.insert(0, str(TESTS))
+    os.environ["HOSTNAME"] = POD_NAME   # timed as run() runs them
     seconds = {}
     for path in sorted(files):
         start = clock()
@@ -152,6 +155,10 @@ def with_guard(files):
 
 def run(files):
     sys.path.insert(0, str(TESTS))
+    # As in a pod, on every machine: Homestead reads its pod name from HOSTNAME when its
+    # modules load. A CI runner has none and a container has its own, and a test that only
+    # passes without one went unseen in CI (#1410's read of Homestead's own pod).
+    os.environ["HOSTNAME"] = POD_NAME
     # Before any test file loads: a real lookup or connect fails at once and is
     # named (tests/network_guard.py); a test file not on its list is reported
     # (and fails the run once network_guard.ENFORCE is on).
