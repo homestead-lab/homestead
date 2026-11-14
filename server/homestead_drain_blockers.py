@@ -437,6 +437,10 @@ PDB = "/apis/policy/v1/namespaces/{ns}/poddisruptionbudgets/{name}"
 BUDGET_CAUSE = "DisruptionBudget"
 _BUDGET_NAMED = re.compile(r"^The disruption budget (\S+) (?:needs \d+ healthy pods|is still being processed)")
 UNREAD_WHY = "could not read why"
+# The condition the disruption controller sets when it cannot work a budget
+# out (pkg/controller/disruption/disruption.go failSafe; policy/v1
+# DisruptionAllowedCondition and SyncFailedReason).
+SYNC_CONDITION, SYNC_FAILED = "DisruptionAllowed", "SyncFailed"
 
 
 def refusal(error, pod, read=None):
@@ -447,15 +451,21 @@ def refusal(error, pod, read=None):
     change yet, or its status is behind an eviction just made (disruptedPods
     set, or currentHealthy above desiredHealthy with no disruption allowed),
     so waiting can let the eviction through. A body or
-    budget that can't be read is not passing, with why "couldn't read why"."""
+    budget that can't be read is not passing, with why "couldn't read why".
+    A budget Kubernetes cannot update (SyncFailed) is not passing either.
+    plain: the 429 is the API server's own Status with no budget cause."""
     unknown = {"budget": None, "passing": False, "starting": 0, "expected": 0, "why": UNREAD_WHY}
     try:
         status = json.loads(error.read() or b"null")
         causes = ((status or {}).get("details") or {}).get("causes") or []
     except Exception:  # no body, not JSON, not a Status: why is unknown
         return unknown
-    named = [_BUDGET_NAMED.match(c.get("message") or "") for c in causes
-             if isinstance(c, dict) and c.get("reason") == BUDGET_CAUSE]
+    budget_causes = [c for c in causes if isinstance(c, dict) and c.get("reason") == BUDGET_CAUSE]
+    if isinstance(status, dict) and status.get("kind") == "Status" and not budget_causes:
+        # The API server's own 429 (such as API priority and fairness): no
+        # budget refused it, so the drain tries it again in its normal wait.
+        return {**unknown, "plain": True, "why": "the API server asked Homestead to slow down"}
+    named = [_BUDGET_NAMED.match(c.get("message") or "") for c in budget_causes]
     named = [m.group(1) for m in named if m]
     ns = (pod.get("metadata") or {}).get("namespace") or ""
     if not named or not ns:
@@ -471,9 +481,18 @@ def refusal(error, pod, read=None):
         # currentHealthy stays as it was until the budget controller resyncs.
         behind = bool(st.get("disruptedPods")) or (
             healthy > desired and int(st.get("disruptionsAllowed") or 0) == 0)
+        # The disruption controller could not work the budget out (its
+        # failSafe): its counts are the last ones written, so they promise
+        # nothing, and it allows no disruption until the cause is fixed.
+        failed_sync = next((c for c in st.get("conditions") or [] if isinstance(c, dict)
+                            and c.get("type") == SYNC_CONDITION and c.get("reason") == SYNC_FAILED), None)
     except Exception:
         return unknown
     budget = f"{ns}/{named[0]}"
+    if failed_sync:
+        return {"budget": budget, "passing": False, "starting": 0, "expected": expected,
+                "why": f"disruption budget {budget}, which allows no disruption because Kubernetes cannot update it: "
+                       f"{failed_sync.get('message') or 'no reason given'}"}
     starting = max(0, expected - healthy)
     if starting:
         why = (f"disruption budget {budget}, which has {healthy} of {expected} copies healthy and needs "
