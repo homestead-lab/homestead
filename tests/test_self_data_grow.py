@@ -136,8 +136,7 @@ class GrowTests(unittest.TestCase):
     def test_a_failed_move_is_said_and_tried_again_three_times_at_most(self):
         G.tick(0)
         self.c.hosts = 2
-        self.c.prepare = lambda body, actor, start=False: (_ for _ in ()).throw(ValueError("no room on node2"))
-        G.prepare = self.c.prepare
+        G.prepare = lambda body, actor, start=False: (_ for _ in ()).throw(ValueError("no room on node2"))
         self.assertIn("no room on node2", G.tick(60))
         (fact,) = G.alert_facts(60)
         self.assertEqual(("self-data-grow:failed", "degraded"), (fact["key"], fact["severity"]))

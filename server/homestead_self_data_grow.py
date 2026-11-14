@@ -45,8 +45,9 @@ LOCAL_PATH = "rancher.io/local-path"
 RETRY = 6 * 3600
 TRIES = 3
 SHOW_DONE = 86400
-DATA_DIR = "/data"
-# The steps of a person's move, as server.py runs them: bind() gives them.
+DATA_DIR = None     # None: the self-data routes' own, as server.py binds them
+# The steps of a person's move: the self-data routes' own, looked up when
+# asked (server.py binds them there), unless bind() gives others (tests).
 prepare = preview_move = start_move = None
 jobs = blockers = rollout_running = own_node = None
 
@@ -57,8 +58,51 @@ def bind(data_dir, *, prepare_fn, preview_fn, start_fn, jobs_fn, blockers_fn, ro
     jobs, blockers, rollout_running, own_node = jobs_fn, blockers_fn, rollout_fn, node_fn
 
 
+def _routes():
+    import homestead_self_data_server as ROUTES
+    return ROUTES
+
+
+def _prepare_step(body, actor, start=False):
+    return (prepare or _routes().self_data_preparation)(body, actor, start=start)
+
+
+def _preview_step(body, actor):
+    return (preview_move or _routes().preview_self_data_move)(body, actor)
+
+
+def _start_step(body, actor):
+    return (start_move or _routes().start_self_data_move)(body, actor)
+
+
+def _jobs():
+    if jobs:
+        return jobs()
+    import homestead_operations as OPS
+    return OPS.stored()
+
+
+def _blockers():
+    if blockers:
+        return blockers()
+    import homestead_operations as OPS
+    import homestead_self_data_prepare as PREPARE
+    return PREPARE.blocking_jobs(OPS)
+
+
+def _rolling():
+    if rollout_running:
+        return rollout_running()
+    import homestead_os_rollout as ROLLOUT
+    return (ROLLOUT._load().get("rollout") or {}).get("status") == "running"
+
+
+def _node():
+    return (own_node or _routes().own_node)()
+
+
 def _path():
-    return os.path.join(DATA_DIR, "self-data-grow.json")
+    return os.path.join(DATA_DIR or _routes().DATA_DIR, "self-data-grow.json")
 
 
 def _load():
@@ -103,9 +147,9 @@ def wanted():
 def _quiet():
     """"" at a quiet moment, else what Homestead waits for. The jobs are the
     ones a person's move would wait for too (running, or keeping resources)."""
-    if blockers():
+    if _blockers():
         return "the jobs that are running or keep resources to finish"
-    if rollout_running():
+    if _rolling():
         return "the OS update rollout to finish"
     return ""
 
@@ -123,12 +167,12 @@ def _target_class():
 
 
 def _prepare(own, now):
-    node = own_node()
+    node = _node()
     target = _target_class()
     operation = secrets.token_hex(12)
     body = {"operation": operation, "storage_class": target, "node": node, "one_host": True}
-    review = prepare(body, ACTOR, start=False)
-    started = prepare({**body, "capacity_token": review["capacity_token"], "confirm_capacity": True}, ACTOR, start=True)
+    review = _prepare_step(body, ACTOR, start=False)
+    started = _prepare_step({**body, "capacity_token": review["capacity_token"], "confirm_capacity": True}, ACTOR, start=True)
     return {"phase": "preparing", "operation": operation, "destination": started["destination"],
             "source": own["claim"], "storage_class": target, "node": node, "at": now}
 
@@ -136,11 +180,11 @@ def _prepare(own, now):
 def _move(state, now):
     body = {"operation": state["operation"], "destination": state["destination"],
             "worker_node": state["node"], "copy_node": state["node"]}
-    review = preview_move(body, ACTOR)
+    review = _preview_step(body, ACTOR)
     # The phase first: the copy taken once Homestead stops carries it to the new volume.
     _save({**state, "phase": "moving", "moved_at": now})
     try:
-        start_move({**body, "capacity_token": review["capacity_token"], "confirm_move": True, "confirm_capacity": True}, ACTOR)
+        _start_step({**body, "capacity_token": review["capacity_token"], "confirm_move": True, "confirm_capacity": True}, ACTOR)
     except Exception:
         _save({**state, "phase": "prepared"})
         raise
@@ -171,7 +215,7 @@ def tick(now=None):
                 raise ValueError("the move did not finish, and Homestead is back on its original data")
             return ""
         if phase in ("preparing", "prepared"):
-            item = next((row for row in jobs() if (row.get("ref") or {}).get("operation") == state["operation"]), None)
+            item = next((row for row in _jobs() if (row.get("ref") or {}).get("operation") == state["operation"]), None)
             if item is None:
                 raise ValueError("the preparation of the new volume is no longer listed in Jobs")
             if item.get("status") == "failed":

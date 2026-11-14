@@ -41,7 +41,6 @@ import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_data_review as SELF_DATA_REVIEW
 import homestead_self_data_prepare as SELF_DATA_PREPARE
-import homestead_self_data_grow as SELF_DATA_GROW
 import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_data_finish as SELF_DATA_FINISH
@@ -877,16 +876,6 @@ def start_self_data_move(body, actor):
         raise SELF_DATA_FENCE.Held("The move setup could not start, so no data was copied or switched") from None
     return {"ok": True, "operation": job, "handoff": execution["scope"].operation}, execution["status_token"]
 
-
-# The move a person reviews, run by the leader once the cluster grows past one
-# host (homestead_self_data_grow). Looked up when asked, as below.
-SELF_DATA_GROW.bind(DATA_DIR,
-    prepare_fn=lambda body, actor, start=False: SELF_DATA_ROUTES.self_data_preparation(body, actor, start=start),
-    preview_fn=lambda body, actor: SELF_DATA_ROUTES.preview_self_data_move(body, actor),
-    start_fn=lambda body, actor: start_self_data_move(body, actor),
-    jobs_fn=lambda: OPS.stored(), blockers_fn=lambda: SELF_DATA_PREPARE.blocking_jobs(OPS),
-    rollout_fn=lambda: (OS_ROLLOUT._load().get("rollout") or {}).get("status") == "running",
-    node_fn=lambda: SELF_DATA_ROUTES.own_node())
 
 # Looked up when asked, so a test that patches one is the one used.
 SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
