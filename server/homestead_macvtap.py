@@ -28,6 +28,8 @@ import re
 import homestead_kubevirt_cr as KUBEVIRT_CR
 import homestead_kube as KUBE
 import homestead_routes
+import homestead_names as NAMES
+import homestead_operator_manifests as OPERATOR_MANIFESTS
 
 VERSION = "v0.13.2"
 IMAGE = "quay.io/kubevirt/macvtap-cni"
@@ -232,6 +234,18 @@ def register_binding():
     KUBEVIRT_CR.update(change, current=_kubevirt, write=ksend)
 
 
+def _refuse_if_managed(chart):
+    """A chart Homestead did not make, or that Flux, Argo CD, Helm, OLM,
+    an operator or an administrator's mark manages, is theirs: a write here
+    would be undone at their next sync (#1315). The same test as the KubeVirt
+    and CDI upgrades (homestead_components._operator_chart_owner)."""
+    owner = OPERATOR_MANIFESTS.external(chart or {})
+    if not owner and ((chart or {}).get("metadata", {}).get("labels") or {}).get(NAMES.key("managed")) != "true":
+        owner = "an unrecognized HelmChart installation"
+    if owner:
+        raise ValueError(f"{CHART} is managed by {owner}. Upgrade it through that manager.")
+
+
 def install(cfg=None):
     """The DaemonSet as a HelmChart, and the binding in KubeVirt."""
     cfg = cfg or {}
@@ -257,10 +271,12 @@ def install(cfg=None):
     except Exception:
         chart = None
     if chart:
+        _refuse_if_managed(chart)
         # An earlier try that Helm could not apply: its chart is replaced,
         # which runs the install again.
         chart.setdefault("spec", {})["chartContent"] = content
-        KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart, kget, ksend)
+        KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart, kget, ksend,
+                             _refuse_if_managed)
     else:
         addons._post_chart(CHART, {"chartContent": content, "targetNamespace": NS})
     homestead_routes.forget("helm")   # the Helm page shows the chart installing (#978)
@@ -273,9 +289,11 @@ def upgrade(target):
     """A new image version, in the same chart."""
     p = platform(True) or {}
     chart = kget(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}")
+    _refuse_if_managed(chart)
     chart.setdefault("spec", {})["chartContent"] = addons.chart_archive(
         "macvtap", target, manifests(p.get("distribution", ""), target), "")
-    KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart, kget, ksend)
+    KUBE.put_past_status(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}", chart, kget, ksend,
+                             _refuse_if_managed)
     homestead_routes.forget("helm")   # the Helm page shows the new version (#978)
     return f"macvtap is moving to {target}. Running VMs keep their interfaces."
 

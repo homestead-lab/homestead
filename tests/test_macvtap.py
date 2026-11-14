@@ -11,6 +11,7 @@ import homestead_addons as ADDONS
 import homestead_baseline as BASELINE
 import homestead_kube as K
 import homestead_macvtap as MACVTAP
+import homestead_names as NAMES
 import homestead_network_vms as VMNET
 import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
@@ -207,13 +208,85 @@ class ChartTests(unittest.TestCase):
     def test_a_failed_install_is_replaced_not_refused(self):
         cluster = Scene(self)
         cluster.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
-                          "metadata": {"namespace": MACVTAP.NS, "name": MACVTAP.CHART}, "spec": {"chartContent": "old"}})
+                          "metadata": {"namespace": MACVTAP.NS, "name": MACVTAP.CHART, "generation": 1,
+                                       "labels": {NAMES.key("managed"): "true"}}, "spec": {"chartContent": "old"}})
         cluster.bind(lambda *a: "new")
         MACVTAP.install()
         put = next(body for method, path, body in cluster.sent if method == "PUT")
         self.assertEqual("new", put["spec"]["chartContent"])
         self.assertEqual("new", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
         self.assertEqual([], cluster.charts)
+
+
+class ManagedChartTests(unittest.TestCase):
+    """A chart that Flux, Argo CD or an administrator manages is left as it is (#1315)."""
+    FLUX = {"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}
+
+    def chart(self, cluster, labels=None, annotations=None):
+        cluster.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                          "metadata": {"namespace": MACVTAP.NS, "name": MACVTAP.CHART, "generation": 1,
+                                       "labels": {NAMES.key("managed"): "true", **(labels or {})},
+                                       "annotations": annotations or {}},
+                          "spec": {"chartContent": "old"}})
+        cluster.bind(lambda *a: "new")
+
+    def test_the_install_retry_leaves_a_chart_flux_applies(self):
+        cluster = Scene(self)
+        self.chart(cluster, labels=self.FLUX)
+        with self.assertRaisesRegex(ValueError, "managed by Flux"):
+            MACVTAP.install()
+        self.assertEqual([], [w for w in cluster.sent if w[0] in ("PUT", "POST", "PATCH")])
+        self.assertEqual("old", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
+
+    def test_the_upgrade_leaves_a_chart_argo_cd_applies(self):
+        cluster = Scene(self)
+        self.chart(cluster, annotations={"argocd.argoproj.io/tracking-id": "infra:helm.cattle.io/HelmChart:kube-system/homestead-macvtap"})
+        with self.assertRaisesRegex(ValueError, "managed by Argo CD"):
+            MACVTAP.upgrade("v0.14.0")
+        self.assertEqual("old", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
+
+    def test_an_administrators_mark_counts_as_a_manager(self):
+        import homestead_updates as UPDATES
+        cluster = Scene(self)
+        self.chart(cluster, annotations={UPDATES.MANAGED: "the platform team"})
+        with self.assertRaisesRegex(ValueError, "managed by the platform team"):
+            MACVTAP.upgrade("v0.14.0")
+
+    def test_a_chart_applied_by_hand_is_left_alone(self):
+        cluster = Scene(self)
+        self.chart(cluster)
+        by_hand = cluster.kube.object(CHART_PATH)
+        by_hand["metadata"]["labels"].clear()
+        cluster.kube.add(by_hand)
+        for act in (MACVTAP.install, lambda: MACVTAP.upgrade("v0.14.0")):
+            with self.assertRaisesRegex(ValueError, "homestead-macvtap is managed by an unrecognized HelmChart installation. "
+                                                    "Upgrade it through that manager."):
+                act()
+        self.assertEqual("old", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
+
+    def test_a_mark_that_lands_before_the_retry_stops_the_write(self):
+        cluster = Scene(self)
+        self.chart(cluster)
+        real_send = MACVTAP.ksend
+        def conflict(method, path, body):
+            if method == "PUT" and path == CHART_PATH and not getattr(conflict, "done", False):
+                conflict.done = True
+                marked = cluster.kube.object(CHART_PATH)
+                marked["metadata"]["labels"].update(self.FLUX)   # a manager's mark lands meanwhile
+                cluster.kube.add(marked)
+                import urllib.error
+                raise urllib.error.HTTPError(path, 409, "Conflict", {}, None)
+            return real_send(method, path, body)
+        MACVTAP.ksend = conflict
+        with self.assertRaisesRegex(ValueError, "managed by"):
+            MACVTAP.upgrade("v0.14.0")
+        self.assertEqual("old", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
+
+    def test_a_chart_nobody_manages_is_still_upgraded(self):
+        cluster = Scene(self)
+        self.chart(cluster)
+        MACVTAP.upgrade("v0.14.0")
+        self.assertEqual("new", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
 
 
 class HostLimitTests(unittest.TestCase):

@@ -587,8 +587,9 @@ class WhatDropsTheKeptPagesTests(unittest.TestCase):
 
     def test_a_macvtap_chart_change_drops_the_helm_page(self):
         import homestead_macvtap as MACVTAP
+        import homestead_names as NAMES
         sent = []
-        chart = {"metadata": {"name": MACVTAP.CHART}, "spec": {}}
+        chart = {"metadata": {"name": MACVTAP.CHART, "labels": {NAMES.key("managed"): "true"}}, "spec": {}}
         with mock.patch.object(MACVTAP, "kget", lambda path: copy.deepcopy(chart)), \
                 mock.patch.object(MACVTAP, "ksend", lambda *a, **k: sent.append(a)), \
                 mock.patch.object(MACVTAP, "platform", lambda *a: {}), \
