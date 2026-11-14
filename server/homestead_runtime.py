@@ -19,12 +19,15 @@ import re
 
 import homestead_names as NAMES
 import homestead_platform as PLATFORM
+import homestead_version
 
 SOCKET_DIR = "/run/k3s/containerd"
 SOCKET = "/host/run/k3s/containerd/containerd.sock"
 CRICTL = f"/usr/local/bin/crictl --runtime-endpoint unix://{SOCKET} --image-endpoint unix://{SOCKET}"
 CTR = f"/usr/local/bin/ctr -a {SOCKET} -n k8s.io"
-IMAGE = "python:3.12-alpine"
+# Homestead's own image, of this release: one image Homestead builds, upgrades
+# and scans, rather than a stock one that can lag Alpine's security fixes.
+IMAGE = NAMES.IMAGE + ":" + homestead_version.VERSION
 K3S_BIN = "/var/lib/rancher/k3s/data/current/bin"
 
 
