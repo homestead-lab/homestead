@@ -141,6 +141,14 @@ class UpgradeJobTests(unittest.TestCase):
                              {"kind": "Upgrade", "name": "hvst-upgrade-x", "namespace": "harvester-system"},
                              "/system/cluster", {"upgrade": "hvst-upgrade-x", "version": "v1.5.1"})["id"]
 
+    def wait(self, seconds, every=4 * 60):
+        """Time passes with the jobs loop looking at least every few minutes, as it does."""
+        while seconds > every:
+            self.now += every
+            seconds -= every
+            self.look()
+        self.now += seconds
+
     def look(self):
         return next(job for job in OPS.list_operations() if job["id"] == self.job)
 
@@ -151,7 +159,7 @@ class UpgradeJobTests(unittest.TestCase):
 
     def test_an_upgrade_harvester_never_took_ends_failed_and_says_so(self):
         self.assertEqual("running", self.look()["status"])
-        self.now += self.LIMIT - 1
+        self.wait(self.LIMIT - 1)
         self.assertEqual("running", self.look()["status"], "a moment longer is still a wait")
         self.now += 1
         job = self.look()
@@ -164,28 +172,39 @@ class UpgradeJobTests(unittest.TestCase):
         self.assertEqual("running", self.look()["status"])
         self.kube.discard(self.PATH)
         self.look()
-        self.now += self.LIMIT
+        self.wait(self.LIMIT)
         self.assertEqual("failed", self.look()["status"])
 
     def test_an_upgrade_seen_again_starts_the_wait_afresh(self):
         self.look()
-        self.now += self.LIMIT - 1
+        self.wait(self.LIMIT - 1)
         self.upgrade()
         self.assertEqual("running", self.look()["status"])
         self.kube.discard(self.PATH)
         self.look()
-        self.now += self.LIMIT - 1
+        self.wait(self.LIMIT - 1)
         self.assertEqual("running", self.look()["status"], "it was there a moment ago, so the wait starts again")
 
     def test_a_long_running_upgrade_has_no_limit(self):
         self.upgrade()
         self.look()
-        self.now += self.LIMIT * 100
+        self.wait(self.LIMIT * 100)
         self.assertEqual("running", self.look()["status"])
+
+    def test_time_not_watched_does_not_count_toward_the_limit(self):
+        self.look()
+        self.wait(self.LIMIT - 60)
+        self.look()
+        self.now += 20 * 60       # Homestead was down: nobody looked
+        self.assertEqual("running", self.look()["status"], "the wait starts again after a gap")
+        self.wait(self.LIMIT - 1)
+        self.assertEqual("running", self.look()["status"])
+        self.wait(1)
+        self.assertEqual("failed", self.look()["status"])
 
     def test_a_failed_read_is_not_taken_for_a_missing_upgrade(self):
         self.look()
-        self.now += self.LIMIT
+        self.wait(self.LIMIT)
         self.kube.fail("/apis/harvesterhci.io/v1beta1/namespaces/harvester-system/upgrades", 500, times=99)
         self.assertEqual("running", self.look()["status"], "not read is not gone: the kept-errors limit decides")
 
