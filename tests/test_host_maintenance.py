@@ -252,7 +252,7 @@ class JobTests(Case):
         self.assertNotIn("power", item["message"].lower())
         self.assertIn("aintenance was not started", item["message"])
         self.assertIn("HTTP 429", item["message"])
-        self.assertTrue(self.cordoned(), "left cordoned, as a refused reboot's drain is")
+        self.assertFalse(self.cordoned(), "the job's own cordon comes off, as a refused reboot's does (#1289)")
 
     def test_a_recheck_that_fails_says_maintenance_not_power(self):
         real = POWER.plan

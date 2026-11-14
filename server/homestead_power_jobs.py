@@ -97,6 +97,7 @@ def _run_power_job(operation_id, power_plan, force=False, resumed=False):
     phase_state = {"phase": "reviewed"}
 
     def power_progress(phase, percent, message, **details):
+        details.update(_cordon_found(operation_id, power_plan, phase))
         updated = OPS.record_phase(operation_id, phase, percent, message, owner=POD_NAME or None, **details)
         phase_state["phase"] = phase
         if phase == "sending":
@@ -128,17 +129,78 @@ def _run_power_job(operation_id, power_plan, force=False, resumed=False):
         raise  # another replica owns the job; nothing to record or send here
     except Exception as e:
         uncertain = phase_state["phase"] in ("sending", "observing")
-        message = ("Whether the restart or shutdown was sent is uncertain. Check the existing job and helper before trying again." if uncertain else
-                   "Nothing was sent. Check whether the host is still cordoned: " + str(e))
         if uncertain:
+            message = "Whether the restart or shutdown was sent is uncertain. Check the existing job and helper before trying again."
             power_progress("observing", 20, message)
         else:
-            # Power was not sent: what was stopped to wait for the host starts
-            # again now. The host stays cordoned, so an app tied to it waits
-            # for scheduling to be allowed.
+            # Power was not sent: the cordon this job put on comes off first,
+            # so what was stopped to wait for the host can start there again
+            # now. A cordon from before the job stays.
+            message, cordon = _after_stop(operation_id, power_plan, "Nothing was sent", str(e))
             message, restored = _start_what_was_held(operation_id, message)
-            power_progress("failed", 10, message, failed_phase=phase_state["phase"], **restored)
+            power_progress("failed", 10, message, failed_phase=phase_state["phase"], **cordon, **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def _job_ref(operation_id):
+    return next(((i.get("ref") or {}) for i in OPS.stored() if i.get("id") == operation_id), {})
+
+
+def _cordon_found(operation_id, power_plan, phase):
+    """At the job's cordon step, just before it cordons: whether the host has
+    no cordon yet, so that the cordon there after it is this job's own (#1289).
+    Recorded once: a resumed job finds its own cordon from its first run and
+    keeps that first answer. A host that cannot be read, or is not the reviewed
+    host, counts as cordoned already, so its cordon is never taken off."""
+    if phase != "cordoning":
+        return {}
+    try:
+        if "own_cordon" in _job_ref(operation_id):
+            return {}
+        own = False
+        if power_plan.get("node_uid"):
+            found = kget(f"/api/v1/nodes/{urllib.parse.quote(power_plan['node'], safe='')}")
+            own = ((found.get("metadata") or {}).get("uid") == power_plan["node_uid"]
+                   and not (found.get("spec") or {}).get("unschedulable"))
+    except Exception:
+        own = False
+    return {"own_cordon": own}
+
+
+# The drain's and the recheck's own words for the cordon, which the job says
+# itself once it knows what became of it.
+_CORDON_WORDS = (("The host stays cordoned, and nothing was sent: ", ""), ("The host stays cordoned. ", ""),
+                 ("The host stays cordoned; ", ""), (" Nothing was sent.", ""), (", so nothing was sent", ""))
+
+
+def _after_stop(operation_id, power_plan, opening, cause):
+    """A job that stopped before power (or before maintenance opened): the
+    cordon it put on comes off; a cordon from before it stays. Returns the
+    job's message, saying what is true of the cordon now, and what its record
+    gets. Only this job's cordon, on the reviewed host (by uid): a job from
+    before own_cordon was recorded, or stopped before its cordon step, leaves
+    the host as it is and says so as before."""
+    ref = _job_ref(operation_id)
+    if "own_cordon" not in ref or ref.get("planned_outage") or ref.get("forced"):
+        return f"{opening}. Check whether the host is still cordoned: {cause}", {}
+    for old, new in _CORDON_WORDS:
+        cause = cause.replace(old, new)
+    cause = (cause[:1].upper() + cause[1:]).rstrip(" .")    # what follows starts with ". "
+    if ref.get("cordoned_before") is not False or not ref["own_cordon"]:
+        return f"{opening}. The host stays cordoned, as it was before this job. {cause}", {}
+    try:
+        found = kget(f"/api/v1/nodes/{urllib.parse.quote(power_plan['node'], safe='')}")
+    except Exception as error:
+        return f"{opening}. The host stays cordoned, because it could not be read: {error}. {cause}", {}
+    if (found.get("metadata") or {}).get("uid") != power_plan.get("node_uid"):
+        return f"{opening}. The host was replaced during this job, so its cordon was left alone. {cause}", {}
+    if not (found.get("spec") or {}).get("unschedulable"):
+        return f"{opening}. The host is not cordoned. {cause}", {}
+    try:
+        NODE_ACTIONS.set_cordon(power_plan["node"], False)
+    except Exception as error:
+        return f"{opening}. The host stays cordoned, because uncordoning it failed: {error}. {cause}", {}
+    return f"{opening}. The host was uncordoned, because this job had cordoned it. {cause}", {"uncordoned": True}
 
 
 def _held_by(operation_id):
@@ -147,8 +209,9 @@ def _held_by(operation_id):
 
 def _start_what_was_held(operation_id, message):
     """What this job stopped starts again. The message says so, and the second
-    answer is what the job's record gets."""
+    answer is what the job's record gets. The message ends with one full stop."""
     restored = {}
+    message = message.rstrip(" .")
     held = _held_by(operation_id)
     if held:
         try:
@@ -158,7 +221,7 @@ def _start_what_was_held(operation_id, message):
             message += (". Left as they are: " + ", ".join(left)) if left else ""
         except Exception as error:
             message += f". What was stopped could not be started again ({str(error)[:120]}). Start it manually"
-    return message, restored
+    return message + ".", restored
 
 
 # The words of the steps it shares with a reboot, for a job that sends no power.
@@ -183,11 +246,13 @@ def _run_maintenance(operation_id, power_plan, resumed=False):
     planned_outage = bool(power_plan.get("planned_outage"))
 
     def progress(phase, percent, message, **details):
+        details.update(_cordon_found(operation_id, power_plan, phase))
         return OPS.record_phase(operation_id, phase, percent, _maintenance_words(message), owner=POD_NAME or None, **details)
 
     def before_open():
         (POWER.recheck_planned_outage if planned_outage else POWER.recheck_after_drain)(power_plan)
 
+    opening = False
     try:
         steps = []
         if not _opened_by(node, operation_id):
@@ -195,6 +260,7 @@ def _run_maintenance(operation_id, power_plan, resumed=False):
             steps = NODE_ACTIONS.node_maintain(
                 node, before_open, power_plan["drain_pods"], progress, planned_outage=planned_outage, resumed=resumed,
                 hold=None if planned_outage else (lambda: hold_for_power(operation_id, power_plan, progress)))["steps"]
+            opening = True
             _open_maintenance(operation_id, power_plan, declared, planned_outage)
         progress("maintained", 100, f"In maintenance: {declared['reason']}")
         OPS.advance_soon()     # the job is done: until the loop sees that, it blocks a Reboot
@@ -208,9 +274,14 @@ def _run_maintenance(operation_id, power_plan, resumed=False):
             message = f"In maintenance: {declared['reason']}. Its job could not record that ({str(e)[:120]})"
             progress("failed", 100, message)
             raise PowerNotSent(message, {"id": operation_id}) from e
-        message, restored = _start_what_was_held(
-            operation_id, "Maintenance was not started. Check whether the host is still cordoned: " + _maintenance_words(str(e)))
-        progress("failed", 10, message, **restored)
+        if opening:
+            # Whether the event was written is not known: the host stays
+            # cordoned, as the error says.
+            message, cordon = "Maintenance was not started. Check whether the host is still cordoned: " + str(e), {}
+        else:
+            message, cordon = _after_stop(operation_id, power_plan, "Maintenance was not started", str(e))
+        message, restored = _start_what_was_held(operation_id, _maintenance_words(message))
+        progress("failed", 10, message, **cordon, **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
 
 
