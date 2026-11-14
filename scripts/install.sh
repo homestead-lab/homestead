@@ -1510,7 +1510,10 @@ $why"
   if kc -n lab get deploy homestead >/dev/null; then
     ready=$(kc -n lab get deploy homestead -o jsonpath='{.status.readyReplicas}')
     if [ -n "$ready" ] && [ "$ready" -gt 0 ]; then found homestead ok "Homestead is running" "The Homestead deployment has a ready replica."
-    else found homestead bad "Homestead is not running" "The Homestead deployment has no ready replicas. The fix restarts it; if the problem persists, check the pod's events." fix_homestead yes; fi
+    else
+      found homestead bad "Homestead is not running" "The Homestead deployment has no ready replicas. The fix restarts it; if the problem persists, check the pod's events." fix_homestead yes
+      check_homestead_data
+    fi
   fi
   if [ "$KIND" = k3s-server ] && [ -d "$DATA/server/db/etcd" ]; then
     newest=$(ls -t "$DATA"/server/db/snapshots 2>/dev/null | head -n 1)
@@ -1521,6 +1524,53 @@ $why"
       else found snapshot ok "Newest etcd snapshot is $age hours old" "$newest"; fi
     fi
   fi
+}
+
+# Why Homestead cannot start, when its data volume is the reason
+# (docs/plans/resilience-and-validated-updates.md, section 3.4). Each fix is
+# shown in full and runs only after a yes; an unattended run prints it.
+HS_DATA_PV=""
+MINIMAL=storage-minimal-available-percentage
+check_homestead_data() {
+  kc get crd volumes.longhorn.io >/dev/null || return 0
+  claim=$(kc -n lab get deploy homestead -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")].persistentVolumeClaim.claimName}')
+  [ -n "$claim" ] || return 0
+  HS_DATA_PV=$(kc -n lab get pvc "$claim" -o jsonpath='{.spec.volumeName}')
+  [ -n "$HS_DATA_PV" ] || return 0
+  seen=$(kc -n longhorn-system get volumes.longhorn.io "$HS_DATA_PV" -o jsonpath='{.status.state} {.status.robustness}')
+  state=${seen%% *}; robust=${seen#* }
+  if [ "$robust" = faulted ]; then
+    min=$(kc -n longhorn-system get settings.longhorn.io "$MINIMAL" -o jsonpath='{.value}')
+    found homestead-data bad "Homestead cannot start: its data volume is faulted" "Its data volume $HS_DATA_PV ($claim) went down without a clean stop, so Longhorn marked its copies failed. Longhorn brings such a volume back by itself only from a copy on a disk that takes new copies, and a disk below Longhorn's minimal free space (${min:-25}%) takes none. The node probe's watchdog salvages it once per boot when that is the reason. The fix lowers the minimal free space to $(salvage_low "${min:-25}")% until the volume is back, and then sets it to ${min:-25}% again. Freeing space on that disk instead works too. It runs: $KC -n longhorn-system patch settings.longhorn.io $MINIMAL --type merge -p '{\"value\":\"$(salvage_low "${min:-25}")\"}', then waits up to 5 minutes for $HS_DATA_PV to be salvaged, then $KC -n longhorn-system patch settings.longhorn.io $MINIMAL --type merge -p '{\"value\":\"${min:-25}\"}'" fix_salvage_threshold no
+  elif [ "$robust" = unknown ] || [ "$state" = attaching ] || [ "$state" = detaching ]; then
+    found homestead-data bad "Homestead cannot start: its data volume is stuck after a restart" "Its data volume $HS_DATA_PV ($claim) is $state with its health $robust, so Homestead waits on its mount. After a restart without a drain Longhorn can keep its engine or a copy in this state until whatever uses the volume lets go. The fix stops Homestead, waits up to 3 minutes for the volume to detach, and starts Homestead again. It runs: $KC -n lab scale deployment/homestead --replicas=0, then waits for $HS_DATA_PV to detach, then $KC -n lab scale deployment/homestead --replicas=<the copies it had>" fix_reattach_homestead no
+  fi
+}
+salvage_low() { if [ "${1:-25}" -gt 10 ] 2>/dev/null; then echo 10; else echo 5; fi; }
+fix_salvage_threshold() {
+  old=$(kc -n longhorn-system get settings.longhorn.io "$MINIMAL" -o jsonpath='{.value}'); [ -n "$old" ] || old=25
+  low=$(salvage_low "$old")
+  run $KC -n longhorn-system patch settings.longhorn.io "$MINIMAL" --type merge -p "{\"value\":\"$low\"}" || return 1
+  robust=faulted; i=0
+  while [ "$DRY" = 0 ] && [ $i -lt 60 ]; do
+    robust=$(kc -n longhorn-system get volumes.longhorn.io "$HS_DATA_PV" -o jsonpath='{.status.robustness}')
+    [ "$robust" != faulted ] && break
+    i=$((i+1)); sleep 5
+  done
+  # Set back whatever happened: the lower value is only for this salvage.
+  run $KC -n longhorn-system patch settings.longhorn.io "$MINIMAL" --type merge -p "{\"value\":\"$old\"}" || return 1
+  [ "$DRY" = 1 ] || [ "$robust" != faulted ]
+}
+fix_reattach_homestead() {
+  copies=$(kc -n lab get deploy homestead -o jsonpath='{.spec.replicas}')
+  [ "${copies:-0}" -gt 0 ] 2>/dev/null || copies=1
+  run $KC -n lab scale deployment/homestead --replicas=0 || return 1
+  i=0
+  while [ "$DRY" = 0 ] && [ $i -lt 36 ]; do
+    [ "$(kc -n longhorn-system get volumes.longhorn.io "$HS_DATA_PV" -o jsonpath='{.status.state}')" = detached ] && break
+    i=$((i+1)); sleep 5
+  done
+  run $KC -n lab scale deployment/homestead --replicas="$copies"
 }
 
 run_checks() {
@@ -1672,6 +1722,8 @@ doctor_report() { # the results, most severe first, as text
   for level in bad warn ok; do
     grep "|$level|" "$FOUND" | while IFS='|' read -r id lvl title detail fix safe; do
       printf '%s %s%s\n' "$(mark "$lvl")" "$title" "$([ -n "$fix" ] && [ "$lvl" != ok ] && printf ' (fix available)')"
+      # Homestead's data volume: unattended runs print what the fix would run.
+      case "$id" in homestead-data) printf '%s\n' "$detail" | sed 's/^/    /' ;; esac
     done
   done
 }

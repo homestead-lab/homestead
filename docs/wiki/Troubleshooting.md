@@ -96,6 +96,46 @@ pods' log (`kubectl logs` on them, the lines starting `{"v":1`) and in
 `audit.jsonl` on Homestead's data volume. See
 [Settings › Audit log](Settings#audit-log).
 
+### Homestead does not come back after a restart
+
+A host restarted without a drain (a power cut, a plain `reboot`) can leave
+Homestead's data volume down, and Homestead waits on its mount. The host's
+console then says "Homestead cannot start: its data volume is faulted" or "is
+stuck after a restart". Run **Check node health** on a server node: it finds the
+case below and offers its fix, which runs only after you agree. Run unattended
+(`install.sh doctor report`), it prints the commands instead.
+
+**Its data volume is faulted.** Longhorn marked its copies failed, and brings
+such a volume back by itself (auto-salvage) only from a copy on a disk that
+takes new copies. A disk below Longhorn's minimal free space (25% by default)
+takes none, so the volume stays down. The node probe's watchdog salvages
+Homestead's data volume by itself in this case, once per boot, and Homestead
+raises an alert when it is back. By hand, free space on that disk, or lower the
+minimal free space until the volume is back and then set it back:
+
+```bash
+kubectl -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage --type merge -p '{"value":"10"}'
+kubectl -n longhorn-system get volumes.longhorn.io   # wait until it is no longer faulted
+kubectl -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage --type merge -p '{"value":"25"}'
+```
+
+**Its data volume is stuck attaching or detaching, or its health is unknown.**
+Longhorn can keep its engine or a copy in that state until whatever uses the
+volume lets go. Stop Homestead, wait for the volume to detach, and start it
+again:
+
+```bash
+kubectl -n lab scale deployment/homestead --replicas=0
+kubectl -n longhorn-system get volumes.longhorn.io   # wait until it is detached
+kubectl -n lab scale deployment/homestead --replicas=1
+```
+
+To keep this from happening again, Homestead warns before a restart when a
+volume would not come back on its own ("After an unclean restart, ... will not
+come back on its own"), and flags its own data when it is a shared volume with
+one copy of Homestead, or not on the system disk. Each warning names the move
+that fixes it.
+
 ## Monitoring Homestead itself
 
 Homestead answers these addresses for monitors. None of them needs the page.
@@ -341,6 +381,13 @@ immediate PersistentVolumeClaims".** Releases before 2.8.132 guessed the name
 of the storage class Harvester makes for a downloaded image, and newer
 Harvester names it differently. Delete the VM with its disk and create it
 again: the image is already downloaded, so it is quick.
+
+**A VM start fails at once: "The VM crashed while starting".** The start job
+stops on KubeVirt's first crash and shows its reason, with the full QEMU
+message in the job's log. "QEMU was refused permission to signal its own
+threads" is a kernel's AppArmor change (Ubuntu's 7.0.0-43, November 2026):
+boot the host's previous kernel until a fixed one is out. A start sets the VM
+back to stay off, as it was before.
 
 ### GPU passthrough
 

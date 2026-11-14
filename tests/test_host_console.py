@@ -56,6 +56,24 @@ class ConsoleDataTests(unittest.TestCase):
              patch.object(console, "command", side_effect=['{"items": []}', json.dumps(service)]):
             self.assertEqual("http://192.0.2.100:8088", console.cluster_stats()["url"])
 
+    def test_homestead_down_on_its_data_volume_is_said_in_place_of_its_address(self):
+        dep = {"status": {}, "spec": {"template": {"spec": {"volumes": [
+            {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}}]}}}}
+        service = {"status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.100"}]}}, "spec": {"ports": [{"port": 8088}]}}
+        for seen, words in (({"robustness": "faulted", "state": "detached"}, "its data volume is faulted"),
+                            ({"robustness": "unknown", "state": "attaching"}, "its data volume is stuck after a restart")):
+            with self.subTest(seen=seen), patch.object(console, "kube_command", return_value=["kubectl"]), \
+                 patch.object(console, "command", side_effect=['{"items": []}', json.dumps(service), json.dumps(dep),
+                                                               json.dumps({"spec": {"volumeName": "pvc-data"}}),
+                                                               json.dumps({"status": seen})]):
+                data = console.cluster_stats()
+                self.assertEqual(("bad", f"Homestead cannot start: {words}. Run Check node health."),
+                                 (data["health"], data["problem"]))
+        ready = dict(dep, status={"readyReplicas": 1})
+        with patch.object(console, "kube_command", return_value=["kubectl"]), \
+                 patch.object(console, "command", side_effect=['{"items": []}', json.dumps(service), json.dumps(ready)]):
+            self.assertNotIn("problem", console.cluster_stats())
+
     def test_subprocesses_are_bounded_and_cannot_read_console_input(self):
         with patch.object(console.subprocess, "run", side_effect=subprocess.TimeoutExpired("kubectl", 5)) as run:
             self.assertIsNone(console.command(["kubectl", "get", "nodes"]))

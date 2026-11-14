@@ -793,6 +793,45 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("rebuild automatically", out)
         self.assertNotIn("Match copies to hosts", out)
 
+    def homestead_down(self, seen):
+        """The k3s stand-in with Homestead not ready, its data claim on the
+        Longhorn volume pvc-data, which reads as seen ("state robustness")."""
+        text = STUBS["k3s"].replace(
+            '  *"-n lab get deploy homestead"*) case "$*" in *jsonpath*) echo 1 ;; *) echo found ;; esac ;;\n  *"get crd"*) exit 1 ;;',
+            '  *"-n lab get deploy homestead -o jsonpath={.status.readyReplicas}"*) echo "" ;;\n'
+            '  *"-n lab get deploy homestead -o jsonpath={.spec.template"*) echo homestead-data ;;\n'
+            '  *"-n lab get deploy homestead -o jsonpath={.spec.replicas}"*) echo 2 ;;\n'
+            '  *"-n lab get deploy homestead"*) echo found ;;\n'
+            '  *"-n lab get pvc homestead-data"*) echo pvc-data ;;\n'
+            '  *"get crd"*) exit 0 ;;\n'
+            '  *"get volumes.longhorn.io pvc-data"*) echo "' + seen + '" ;;\n'
+            '  *"get settings.longhorn.io"*) echo 25 ;;')
+        self.assertNotEqual(STUBS["k3s"], text)
+        Path(self.bin, "k3s").write_text(text + "\n", encoding="utf-8", newline="\n")
+
+    def test_a_faulted_data_volume_is_named_and_its_fix_runs_only_after_a_yes(self):
+        self.homestead_down("detached faulted")
+        code, out = functions('KC="k3s kubectl"; NODE=node1; KIND=k3s-server; SERVICE=k3s; FOUND="$TMPDIR/found"; '
+                              ': > "$FOUND"; check_cluster; cat "$FOUND"', path_extra=self.bin)
+        self.assertIn("homestead-data|bad|Homestead cannot start: its data volume is faulted|", out)
+        self.assertIn("below Longhorn's minimal free space (25%) takes none", out)
+        self.assertIn("lowers the minimal free space to 10% until the volume is back, and then sets it to 25% again", out)
+        self.assertTrue(out.rstrip().endswith("fix_salvage_threshold|no"), "never one of the safe fixes")
+        code, out = functions('KC="k3s kubectl"; HS_DATA_PV=pvc-data; fix_salvage_threshold', path_extra=self.bin)
+        self.assertIn('+ k3s kubectl -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage --type merge -p {"value":"10"}', out)
+        self.assertIn('+ k3s kubectl -n longhorn-system patch settings.longhorn.io storage-minimal-available-percentage --type merge -p {"value":"25"}', out)
+
+    def test_a_stuck_data_volume_is_detached_and_homestead_started_with_its_copies(self):
+        self.homestead_down("attaching unknown")
+        code, out = functions('KC="k3s kubectl"; NODE=node1; KIND=k3s-server; SERVICE=k3s; FOUND="$TMPDIR/found"; '
+                              ': > "$FOUND"; check_cluster; doctor_report', path_extra=self.bin)
+        self.assertIn("[FAIL] Homestead cannot start: its data volume is stuck after a restart (fix available)", out)
+        self.assertIn("    Its data volume pvc-data (homestead-data) is attaching with its health unknown", out,
+                      "an unattended report prints the fix's commands")
+        code, out = functions('KC="k3s kubectl"; HS_DATA_PV=pvc-data; fix_reattach_homestead', path_extra=self.bin)
+        self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=0", out)
+        self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=2", out)
+
     def test_a_one_host_cluster_with_a_faulted_volume_says_both(self):
         out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\npvc-b faulted <none>\\n")
         self.assertIn("[WARN] Longhorn volumes are not healthy", out)
