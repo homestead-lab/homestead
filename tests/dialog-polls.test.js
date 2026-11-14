@@ -314,3 +314,212 @@ test("closing a dialog stops its polls", () => {
   const core = require("./helpers/core-source")();
   assert.match(between(core, "function closeModal(", "\n}\n"), /UI\??\.stopPolls/);
 });
+
+test("first settles when the first read ends, or when the poll stops before it", async () => {
+  const { UI, clock, document } = loadUI();
+  let answer, settled = false;
+  const poll = UI.poll(() => new Promise(resolve => { answer = resolve; }), 2000);
+  poll.first.then(() => { settled = true; });
+  await clock.settle();
+  assert.equal(settled, false, "not while the first read is on its way");
+  answer(); await clock.settle();
+  assert.equal(settled, true);
+  document.show(false);
+  let hiddenSettled = false;
+  const waiting = UI.poll(async () => {}, 2000);
+  waiting.first.then(() => { hiddenSettled = true; });
+  await clock.advance(10000);
+  assert.equal(hiddenSettled, false, "a poll started in a hidden tab has not read yet");
+  waiting.stop(); await clock.settle();
+  assert.equal(hiddenSettled, true, "stopped before reading, it settles too, so its opener is not held for good");
+  poll.stop();
+});
+
+/* A page's poll (page: true): closing a dialog leaves it running, leaving the
+   page stops it and cancels its read at once. UI.poll hands its own signal to
+   api(), so the page's own read cancel (abortPageReads) never reaches it: a
+   page poll that nothing stopped would go on reading the page left behind. */
+test("a page's poll outlives closing a dialog, and leaving the page stops it and cancels its read", async () => {
+  const { UI, clock, document } = loadUI();
+  const signals = [];
+  let calls = 0;
+  const poll = UI.poll(signal => { calls++; signals.push(signal); return calls === 1 ? Promise.resolve() : new Promise(() => {}); }, 2000, { page: true });
+  await clock.settle();
+  UI.stopPolls();
+  await clock.advance(2000);
+  assert.equal(calls, 2, "closing a dialog is not leaving the page");
+  UI.stopPagePolls();
+  assert.equal(signals[1].aborted, true, "the read in flight is cancelled at once");
+  assert.equal(UI.pollCancelled(signals[1]), true, "as a cancel, so its answer or error is not shown");
+  assert.equal(poll.stopped, true);
+  document.show(false); document.show(true);
+  await clock.advance(60000);
+  assert.equal(calls, 2, "nothing reads again, however the tab changes");
+  assert.equal(document.listening("visibilitychange"), 0);
+  assert.equal(clock.pending(), 0);
+});
+
+test("a page's poll whose page reads were abandoned stops on its next turn", async () => {
+  const { UI, clock, ctx } = loadUI();
+  ctx.NAV_TOKEN = 3;
+  let calls = 0;
+  const poll = UI.poll(async () => { calls++; }, 2000, { page: true });
+  await clock.advance(2000);
+  assert.equal(calls, 2);
+  ctx.NAV_TOKEN++;            // a section change abandons the page's reads without go()
+  await clock.advance(10000);
+  assert.equal(calls, 2, "no read for the page left behind");
+  assert.equal(poll.stopped, true);
+  assert.equal(clock.pending(), 0);
+});
+
+// The page's own read cancel, as core-api.js has it: pageReadSignal() and abortPageReads().
+function withPageReads(ctx) {
+  ctx.AbortSignal = AbortSignal;
+  const api = fs.readFileSync("web/js/core-api.js", "utf8");
+  vm.runInContext(between(api, "let pageReads =", "async function api("), ctx);
+}
+
+test("a page's poll whose page is left while its read runs drops that read's answer", async () => {
+  const { UI, clock, ctx } = loadUI();
+  ctx.NAV_TOKEN = 1;
+  withPageReads(ctx);
+  let calls = 0, answer, painted = 0;
+  const poll = UI.poll(async signal => { calls++; await new Promise(resolve => { answer = resolve; }); if (!UI.pollCancelled(signal)) painted++; }, 2000, { page: true });
+  ctx.NAV_TOKEN++; ctx.abortPageReads();   // a Network section change: no go()
+  answer(); await clock.settle();
+  assert.equal(painted, 0, "the late answer is not painted");
+  assert.equal(poll.stopped, true, "and the poll ends");
+  await clock.advance(10000);
+  assert.equal(calls, 1);
+  assert.equal(clock.pending(), 0);
+});
+
+test("stopPagePolls leaves dialog polls and the polls that are neither alone", async () => {
+  const { UI, clock } = loadUI();
+  let dialogReads = 0, otherReads = 0;
+  UI.poll(async () => { dialogReads++; }, 2000);
+  UI.poll(async () => { otherReads++; }, 2000, { dialog: false });
+  UI.stopPagePolls();
+  await clock.advance(4000);
+  assert.equal(dialogReads, 3);
+  assert.equal(otherReads, 3, "the main refresh loop and the alert checks are not a page's");
+});
+
+test("going to another page stops that page's polls at once", async () => {
+  const { UI, clock, ctx } = loadUI();
+  const app = fs.readFileSync("web/js/app.js", "utf8");
+  ctx.NAV_TOKEN = 1;
+  withPageReads(ctx);
+  ctx.STATE = {};
+  const signals = [];
+  const waiting = UI.poll(signal => { signals.push(signal); return new Promise(() => {}); }, 2000, { page: true });
+  const between_reads = UI.poll(async () => { signals.push(null); }, 2000, { page: true });
+  await clock.settle();
+  vm.runInContext(between(app, "window.NAV_TOKEN++;", "STATE.busy = false;"), ctx);
+  assert.equal(signals[0].aborted, true, "the read in flight is cancelled at once, not 30 s later");
+  assert.equal(waiting.stopped && between_reads.stopped, true, "both polls end as the page is left, not at their next turn");
+  await clock.settle();
+  assert.equal(clock.pending(), 0, "no timer is left waiting for the page left behind");
+  await clock.advance(60000);
+  assert.equal(signals.length, 2);
+});
+
+/* The second ratchet: a function that reads and then sets a timer to run
+   itself again is a poll written by hand. It reads on in a hidden tab, and a
+   read that never answers stops it for good. New ones go on UI.poll. The
+   list is what is left today, by file and function; moving one to UI.poll
+   takes it off (the list must match exactly, so a move cannot be forgotten).
+   It sees a setTimeout whose callback calls the function it sits in (the
+   nearest function before it), where that function or the callback reads:
+   api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
+const HAND_POLLS_LEFT = [
+  "cluster-shutdown.js shutdownPoll",
+  "disk-allocation.js poll",
+  "disk-v2.js poll",
+  "host-os.js osUpdatesFollow",
+  "longhorn-runtime.js poll",
+  "longhorn-v2-setup.js lhV2Poll",
+  "longhorn-v2-setup.js poll",
+  "longhorn-v2-upgrade.js lhV2UpgradePoll",
+  "onboard.js guideWatch",
+  "snapshot-files.js snapshotFilesPoll",
+  "views-lifecycle-images.js viewImages",
+  "views-lifecycle-import.js watchMoves",
+  "views-protect.js refreshSnapshotDialog",
+  "views-settings.js paint",
+  "views-storage-volumes.js volumeProgressWatch",
+];
+function handPolls(file, src) {
+  const head = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)?\s*([A-Za-z_$][\w$.]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>/g;
+  const found = [];
+  for (const m of src.matchAll(/\bsetTimeout\(\s*/g)) {
+    const before = src.slice(0, m.index);
+    let name = null, at = 0;
+    for (const h of before.matchAll(head)) { name = h[1] || h[2]; at = h.index; }
+    if (!name) continue;
+    const self = name.split(".").pop().replace(/\$/g, "\\$");
+    let depth = 0, end = m.index + m[0].length;
+    for (; end < src.length; end++) {
+      const c = src[end];
+      if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) { if (depth === 0) break; depth--; }
+      else if (c === "," && depth === 0) break;
+    }
+    const callback = src.slice(m.index + m[0].length, end).trim();
+    const again = callback === name.split(".").pop() || new RegExp(`(?:^|[^\\w$.])${self}\\s*\\(`).test(callback);
+    const reads = /(?:^|[^\w$.])(?:api|mustRead|fetch|post|refresh|view[A-Z]\w*)\(/.test(src.slice(at, m.index) + callback);
+    if (again && reads) found.push(`${file} ${name}`);
+  }
+  return found;
+}
+
+test("no new hand-written read loop of the shapes it can see in web/js (use UI.poll); the list left only shrinks", () => {
+  const found = fs.readdirSync("web/js").filter(f => f.endsWith(".js") && f !== "demo.js" && f !== "ui.js").sort()
+    .flatMap(file => handPolls(file, fs.readFileSync(`web/js/${file}`, "utf8")));
+  assert.deepEqual(found, HAND_POLLS_LEFT);
+});
+
+test("the hand-poll ratchet sees each shape of a read that re-arms itself", () => {
+  const cases = {
+    "async function poll() { await api('/x'); setTimeout(poll, 4000); }": 1,
+    "function watch() { refresh(); timer = setTimeout(() => watch(), 4000); }": 1,
+    "const tick = async () => { await mustRead('/x', 'x'); setTimeout(tick, 2000); };": 1,
+    "function viewThings() { setTimeout(() => { if (ok) viewThings(); }, 3000); }": 1,
+    "function step() { send(); setTimeout(step, 30); }": 0,
+    "async function save() { await api('/x', { method: 'POST' }); setTimeout(() => refresh(true), 1500); }": 0,
+  };
+  for (const [src, n] of Object.entries(cases)) assert.equal(handPolls("x.js", src).length, n, src);
+});
+
+/* background: true, for a dialog that follows a long operation that can go
+   wrong: it reads on in a hidden tab at its own interval, and the tab coming
+   back is no reason for an extra read. */
+test("a background poll reads on in a hidden tab, and showing the tab adds no read", async () => {
+  const { UI, clock, document } = loadUI();
+  let calls = 0;
+  const poll = UI.poll(async () => { calls++; }, 2000, { background: true });
+  await clock.settle();
+  assert.equal(calls, 1);
+  document.show(false);
+  await clock.advance(6000);
+  assert.equal(calls, 4, "every interval while hidden");
+  document.show(true); await clock.settle();
+  assert.equal(calls, 4, "no extra read when the tab comes back");
+  await clock.advance(2000);
+  assert.equal(calls, 5);
+  assert.equal(document.listening("visibilitychange"), 0, "it does not follow the tab at all");
+  UI.stopPolls();
+  await clock.advance(10000);
+  assert.equal(calls, 5, "closing its dialog still stops it");
+  assert.equal(poll.stopped, true);
+});
+
+test("a background poll started in a hidden tab reads at once", async () => {
+  const { UI, clock, document } = loadUI();
+  document.show(false);
+  let calls = 0;
+  UI.poll(async () => { calls++; }, 2000, { background: true });
+  await clock.settle();
+  assert.equal(calls, 1);
+});

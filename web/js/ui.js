@@ -601,33 +601,57 @@ const UI = (() => {
      is longer: its signal aborts with a TimeoutError, the dialog shows the
      failure as it shows any other, and the poll carries on.
      pollCancelled(signal) says the read was cancelled on purpose (the dialog
-     closed, another pod picked): its answer or error is not shown. */
-  const polls = new Set();
-  function poll(read, ms, { later = false, dialog = true, readOnShow = true } = {}) {
+     closed, another pod picked): its answer or error is not shown.
+     `page: true` is a page's poll (a list that follows a job, say): closing
+     a dialog leaves it, and leaving the page stops it and cancels its read
+     (stopPagePolls, from go()). The poll hands api() its own signal, so the
+     page's own read cancel (abortPageReads) never reaches it; without this a
+     page poll would go on reading the page left behind. Its read is also
+     given the page's own signal (pageReadSignal), so a change of section that
+     does not go through go() (Network's tabs abandon the page's reads by
+     NAV_TOKEN) cancels its read at once too, and the poll then ends. A page
+     redrawn without leaving it (the refresh loop) is not left: the page's
+     owner keeps one handle and stops it before starting another, or each
+     redraw adds a poll.
+     `background: true` reads on in a hidden tab, every `ms` as when shown, and
+     reads nothing extra when the tab comes back: for a dialog that follows a
+     long operation that can go wrong (a cluster shutdown, an OS update run),
+     so its state is current the moment someone looks.
+     `first` settles once the first read has ended (answered, failed or
+     cancelled) or the poll has stopped before it: an opener that waited for
+     its first read before a poll (a busy flag held until then) still can. */
+  const polls = new Set(), pagePolls = new Set();
+  const navToken = () => typeof window !== "undefined" ? window.NAV_TOKEN : undefined;
+  function poll(read, ms, { later = false, dialog = true, readOnShow = true, page = false, background = false } = {}) {
     const doc = typeof document !== "undefined" ? document : null;
-    const hidden = () => doc?.visibilityState === "hidden" || doc?.hidden === true;
-    let timer = null, running = null, again = false, stopped = false;
+    const hidden = () => !background && (doc?.visibilityState === "hidden" || doc?.hidden === true);
+    const visit = navToken(), left = () => page && navToken() !== visit;
+    const pageSignal = page && typeof pageReadSignal === "function" ? pageReadSignal() : null;
+    let timer = null, running = null, again = false, stopped = false, firstDone;
+    const first = new Promise(resolve => { firstDone = resolve; });
     const wait = () => { clearTimeout(timer); timer = stopped || hidden() ? null : setTimeout(run, ms); };
     async function run(why = "tick") {
       clearTimeout(timer); timer = null;
       if (stopped) return;
+      if (left()) return handle.stop();
       if (running) { again = true; return; }
       if (hidden()) return;
       const mine = running = typeof AbortController === "function" ? new AbortController() : { signal: undefined, abort() {} };
       let result, limit = null;
+      const signal = pageSignal && mine.signal && typeof AbortSignal !== "undefined" && typeof AbortSignal.any === "function" ? AbortSignal.any([mine.signal, pageSignal]) : mine.signal;
       const given = new Promise((_, fail) => {
         // A cancelled read ends now, even one that does not listen to its signal.
-        mine.signal?.addEventListener?.("abort", () => fail(mine.signal.reason), { once: true });
+        signal?.addEventListener?.("abort", () => fail(signal.reason), { once: true });
         limit = setTimeout(() => {
           const late = timedOut(Math.max(5 * ms, 30000));
           mine.abort(late); fail(late);
         }, Math.max(5 * ms, 30000));
       });
       given.catch(() => { /* raced below */ });
-      try { result = await Promise.race([read(mine.signal, why), given]); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
-      finally { clearTimeout(limit); }
+      try { result = await Promise.race([read(signal, why), given]); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
+      finally { clearTimeout(limit); firstDone(); }
       if (running === mine) running = null;
-      if (stopped) return;
+      if (stopped || left()) return handle.stop();
       if (result === false) return handle.stop();
       if (again) { again = false; return run("show"); }
       wait();
@@ -641,20 +665,24 @@ const UI = (() => {
         stopped = true; clearTimeout(timer); timer = null;
         running?.abort(); running = null;
         doc?.removeEventListener?.("visibilitychange", shown);
-        polls.delete(handle);
+        polls.delete(handle); pagePolls.delete(handle);
+        firstDone();
       },
       // Read now, or straight after the read still running (a new pod picked).
       now() { run("now"); },
       // Cancel the read running and read again at once (another pod picked).
       restart() { if (running) { running.abort(); again = true; } else run(); },
       get stopped() { return stopped; },
+      first,
     };
-    doc?.addEventListener?.("visibilitychange", shown);
-    if (dialog) polls.add(handle);
+    if (!background) doc?.addEventListener?.("visibilitychange", shown);
+    if (page) pagePolls.add(handle);
+    else if (dialog) polls.add(handle);
     if (later) wait(); else run("start");
     return handle;
   }
   function stopPolls() { [...polls].forEach(p => p.stop()); }
+  function stopPagePolls() { [...pagePolls].forEach(p => p.stop()); }
   function timedOut(after) {
     const message = `No response in ${Math.round(after / 1000)} s`;
     if (typeof DOMException === "function") return new DOMException(message, "TimeoutError");
@@ -753,7 +781,7 @@ const UI = (() => {
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
-    quantity, parseMemory, parseCpu, who, reviewFlow, poll, stopPolls, pollCancelled };
+    quantity, parseMemory, parseCpu, who, reviewFlow, poll, stopPolls, stopPagePolls, pollCancelled };
 })();
 window.UI = UI;
 
