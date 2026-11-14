@@ -22,6 +22,7 @@ import homestead_disk_v2 as DISK_V2
 import homestead_operations as OPS
 import homestead_routes
 import homestead_kube as KUBE
+import homestead_self as SELF
 
 kget = ksend = None
 v2_status = lambda: {}
@@ -208,6 +209,116 @@ def held_status(now=None):
         for row in held.values():
             row["policy"] = policy
     return held
+
+
+def _whole(replica):
+    """A copy Longhorn's auto-salvage could bring back: healthy when last
+    seen, and never marked failed. (homestead_lhrebuild.whole's rule.)"""
+    spec, status = replica.get("spec") or {}, replica.get("status") or {}
+    return not spec.get("failedAt") and (status.get("currentState") == "running" or bool(spec.get("healthyAt")))
+
+
+def salvage_blocked(volumes, replicas, lhnodes, own_claims=()):
+    """Volumes whose only whole copy is on a disk Longhorn's auto-salvage
+    would refuse: a disk that does not take new copies (DiskPressure, or
+    scheduling turned off), or a host that does not. After an unclean restart
+    Longhorn marks such a volume's copy failed and salvages it only from a
+    disk that takes copies, so the volume never comes back on its own
+    (November 2026: Homestead's own data, on a disk under 25% free).
+    own_claims: "namespace/name" of the claims Homestead's own pod mounts."""
+    disks = {}
+    for node in lhnodes or []:
+        name, spec = (node.get("metadata") or {}).get("name", ""), node.get("spec") or {}
+        for disk, state in ((node.get("status") or {}).get("diskStatus") or {}).items():
+            cond = next((c for c in state.get("conditions") or [] if c.get("type") == "Schedulable"), {})
+            takes = (cond.get("status") == "True" and spec.get("allowScheduling", True)
+                     and ((spec.get("disks") or {}).get(disk) or {}).get("allowScheduling", True))
+            disks[(name, state.get("diskUUID") or "")] = {
+                "takes": bool(takes), "reason": cond.get("reason") or ("" if spec.get("allowScheduling", True) else "host"),
+                "path": ((spec.get("disks") or {}).get(disk) or {}).get("path") or disk,
+                "available": int(state.get("storageAvailable") or 0), "maximum": int(state.get("storageMaximum") or 0)}
+    copies = {}
+    for replica in replicas or []:
+        spec = replica.get("spec") or {}
+        if spec.get("volumeName") and _whole(replica):
+            copies.setdefault(spec["volumeName"], []).append(spec)
+    out = []
+    for volume in volumes or []:
+        name = (volume.get("metadata") or {}).get("name", "")
+        whole = copies.get(name) or []
+        if len(whole) != 1:
+            continue   # none is detached-copies' alert; two or more can salvage from each other
+        disk = disks.get((whole[0].get("nodeID") or "", whole[0].get("diskID") or ""))
+        if not disk or disk["takes"]:
+            continue
+        k8s = (volume.get("status") or {}).get("kubernetesStatus") or {}
+        claim = "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x) or name
+        out.append({"volume": name, "claim": claim, "own": claim in set(own_claims or ()),
+                    "node": whole[0].get("nodeID") or "", "path": whole[0].get("diskPath") or disk["path"],
+                    "reason": disk["reason"], "available": disk["available"], "maximum": disk["maximum"]})
+    return sorted(out, key=lambda row: (not row["own"], row["claim"]))
+
+
+def _own_claims():
+    """The claims Homestead's own pod mounts: its data."""
+    if not SELF.POD:
+        return []
+    pod = kget(f"/api/v1/namespaces/{SELF.NS}/pods/{SELF.POD}")
+    return [f"{SELF.NS}/{v['persistentVolumeClaim']['claimName']}" for v in (pod.get("spec") or {}).get("volumes") or []
+            if (v.get("persistentVolumeClaim") or {}).get("claimName")]
+
+
+def salvage_status():
+    """salvage_blocked from the cluster as it is now, with Longhorn's
+    free-space threshold."""
+    try:
+        own = _own_claims()
+    except Exception:
+        own = []   # unread: every volume still gets its warning
+    rows = salvage_blocked(KUBE.items(f"{LH}/volumes", read=kget), KUBE.items(f"{LH}/replicas", read=kget),
+                           KUBE.items(f"{LH}/nodes", read=kget), own)
+    return {"rows": rows, "minimal": _int(_setting(MINIMAL, 25), 25) if rows else 25}
+
+
+def unclean_restart_warning(rows, node):
+    """For a review that restarts node: the volumes there that would not
+    come back on their own if it stopped without a drain, or ""."""
+    names = [("Homestead's own data" if row["own"] else row["claim"]) for row in rows or [] if row["node"] == node]
+    if not names:
+        return ""
+    shown = ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+    return (f"If {node} stops without a drain, for example in a power cut, {len(names)} volume"
+            f"{'s' if len(names) != 1 else ''} would not come back on {'their' if len(names) != 1 else 'its'} own: {shown}. "
+            f"{'Their only copies are' if len(names) != 1 else 'Its only copy is'} on a disk here that takes no new copies. "
+            "Free space on the disk, or move the copies with Move copies on Volumes, before restarting.")
+
+
+def salvage_alert_facts(state):
+    """One alert per volume that would not come back after an unclean
+    restart: critical for Homestead's own data, a warning for the rest."""
+    facts = []
+    minimal = state.get("minimal", 25)
+    for row in state.get("rows") or []:
+        free = (f"{row['available'] / 1024 ** 3:.1f} GiB free of {row['maximum'] / 1024 ** 3:.1f} GiB "
+                f"({row['available'] * 100 // row['maximum']}%)") if row["maximum"] else "an unknown amount of free space"
+        if row["reason"] == "host":
+            why = f"Longhorn does not place copies on {row['node']}, the host that holds its only copy"
+        elif row["reason"] and row["reason"] != "DiskPressure":
+            why = f"Longhorn does not place copies on {row['path']} on {row['node']}, the disk that holds its only copy"
+        else:
+            why = (f"Its only copy is on {row['path']} on {row['node']}, which has {free}. Longhorn keeps "
+                   f"{minimal}% of a disk free and salvages a volume only from a disk above that")
+        fix = ("Free space on that disk, move the copy to another disk with Move copies on Volumes, "
+               "or lower Minimal free space in Settings, Hardware and storage")
+        what = "Homestead's own data" if row["own"] else row["claim"]
+        facts.append({"signals": {"blocked": 1}, "key": f"salvage-blocked:{row['volume']}", "category": "degraded",
+                      "severity": "critical" if row["own"] else "degraded",
+                      "title": f"After an unclean restart, {what} will not come back on its own",
+                      "resolved": f"{what} can come back on its own after a restart again",
+                      "body": (f"{why}. After a restart without a drain, Longhorn marks the copy failed and cannot bring "
+                               f"it back by itself{', so Homestead does not start' if row['own'] else ''}. {fix}."),
+                      "href": "/volumes"})
+    return facts
 
 
 def _int(text, default):

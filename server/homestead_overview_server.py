@@ -318,6 +318,7 @@ def _alert_sources():
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("held-volumes", lambda: LHCAP.held_alert_facts(LHCAP.held_status()))
+    take("salvage-blocked", lambda: LHCAP.salvage_alert_facts(cached("salvage-blocked", 60, LHCAP.salvage_status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", keep, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", keep, NODES.ports_report)))

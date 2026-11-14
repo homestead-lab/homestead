@@ -356,7 +356,8 @@ function osUpdatesReviewHost(h, several, plain) {
   return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "Up to date"], ["Restart", restart],
       h.homestead_here ? ["Homestead's leader", `${UI.chip("runs on this host", "info")} <span class="dim xs">A restart can stop this page from responding for a few minutes, but the update continues.${several ? " It is updated last." : ""}</span>`] : null])}
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
-    <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>`;
+    <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>
+    ${h.unclean_restart ? `<p class="small dim">${esc(h.unclean_restart)}</p>` : ""}`;
 }
 function osUpdatesReviewHtml(review, restart) {
   const names = review.hosts.map(h => h.node), several = names.length > 1;

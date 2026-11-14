@@ -137,7 +137,7 @@ def _reviewed_vm_power(body):
         fresh, fresh_context = vm_power_capacity_plan(body)
         CAPACITY_REVIEW.enforce(body, fresh, fresh_context)
     return VM_POWER_JOB.dispatch(body, context, OPS,
-        lambda: VMS.power(ns, name, action, raw_errors=True), before_send)
+        lambda: VMS.power(ns, name, action, raw_errors=True), before_send, VMS._strategy(current))
 
 
 def vm_create_configuration(body, *, preview=False):
