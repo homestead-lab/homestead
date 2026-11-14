@@ -21,9 +21,9 @@ test("every Playwright install names one version, 1.63 or later", () => {
     ...fs.readdirSync("docs").filter(f => f.endsWith(".md")).map(f => `docs/${f}`)];
   const pins = places.flatMap(file => [...read(file).matchAll(/playwright(?:[@-]|:v)(\d+\.\d+\.\d+)/g)].map(m => `${file}: ${m[1]}`));
   const count = file => pins.filter(pin => pin.startsWith(`${file}: `)).length;
-  // Both installs in ci.yml and its browser cache key, the demo and release builds, and the contributors' guide.
+  // Both installs in ci.yml and their two browser cache keys, the demo and release builds, and the contributors' guide.
   assert.deepEqual([".github/workflows/ci.yml", ".github/workflows/demo.yml", ".github/workflows/release.yml", "CONTRIBUTING.md"].map(count),
-    [3, 1, 1, 1], pins.join("\n"));
+    [4, 1, 1, 1], pins.join("\n"));
   const unpinned = places.flatMap(file => read(file).split("\n").filter(line => /npm (install|i) .*\bplaywright\b(?![@-])/.test(line)).map(line => `${file}: ${line.trim()}`));
   assert.deepEqual(unpinned, [], "every install names its version");
   const versions = new Set(pins.map(pin => pin.split(": ")[1]));

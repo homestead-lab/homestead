@@ -118,12 +118,21 @@ jobs:
         run: |
           sudo apt-get install -y -qq tmux whiptail >/dev/null
           bash scripts/capture_tui.sh
-      - name: Draw them as the wiki shows them
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-1.64.1-chromium-${{ runner.os }}
+      # A stalled download fails here in minutes, not at the 6-hour job limit.
+      - name: Install the browser
+        if: always()
+        timeout-minutes: 5
         run: |
           npm install --no-save --no-package-lock playwright@1.64.1 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
-          node scripts/render_tui.mjs
+      - name: Draw them as the wiki shows them
+        if: always()
+        run: node scripts/render_tui.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -155,7 +164,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-1.64.1-chromium-${{ runner.os }}
+      # A stalled download fails here in minutes, not at the 6-hour job limit.
       - name: Install the browser
+        timeout-minutes: 5
         run: |
           npm install --no-save --no-package-lock playwright@1.64.1 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
