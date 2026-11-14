@@ -8,9 +8,11 @@ job that kept it: another job never takes it, and restart() removes it once
 the app has started. It writes nothing to the app: the caller saves the
 Record with the job first, then stop() stops it in one write fenced on that
 uid and resourceVersion, marking it HELD_BY
-<kind>:<job id> and HELD_AS how it ran. An app held by another job is refused;
-one already stopped (0 replicas, suspended, Halted) is recorded so and never
-written to, or started.
+<kind>:<job id> and HELD_AS how it ran. An app held by another job is refused,
+unless the app runs again (a person's Start leaves the marks on) and the job
+history shows that job can no longer act on it: then it is held as it runs
+now, never at the count that job recorded. One already stopped (0 replicas,
+suspended, Halted) is recorded so and never written to, or started.
 
 restart() reads the app fresh and starts it as it ran, with one fenced write
 that also takes the marks away, only when it is the same object, still held
@@ -208,6 +210,48 @@ def _ours(mark, job_kind, job_id):
     return mark == f"{job_kind}:{job_id}" or (":" not in mark and mark == str(job_id))
 
 
+def _ended(mark):
+    """Whether the job a mark names can no longer act on the app, by the job
+    history: found there, of the kind the mark names, and succeeded, or failed
+    or cancelled with nothing left to carry on (not resumable, no clean-up,
+    no recovery), and, for a power job, nothing it holds still waiting to be
+    started again. One not found (history cleared, or a cluster shutdown's
+    run, which is not kept there), or a history that can't be read, keeps
+    its mark. A new kind of job that can still act on an app after it has
+    failed must say so through RESUMABLE, CLEANUPS or _recovery_needed in
+    homestead_operations: what is not registered there counts as ended."""
+    kind, _, job = mark.rpartition(":")
+    try:
+        import homestead_operations as OPS  # imported here: it is far bigger than this file needs
+        row = next((row for row in OPS.stored() if row.get("id") == job), None)
+        if row is None or (kind and row.get("kind") != kind):
+            return False
+        ref, status = row.get("ref") or {}, row.get("status")
+        if ref.get("held") and ref.get("restored") is None:
+            return False
+        resumable = OPS.RESUMABLE.get(row.get("kind"))
+        return (status in OPS.TERMINAL and not (status == "failed" and resumable and not resumable(row))
+                and not OPS._cleanable(row) and not OPS._recovery_needed(row))
+    except Exception:
+        return False
+
+
+def _started_by_hand(obj, field):
+    """Whether an app with a mark runs again (a person's Start): not stopped,
+    and a VM with its instance running unless its run strategy is Always
+    (Manual, Once or RerunOnFailure say nothing of whether it runs now).
+    What can't be read is no."""
+    now = _state(obj)
+    if now == STOPPED[field]:
+        return False
+    if field != "runStrategy" or now == "Always":
+        return True
+    try:
+        return _vm_running(_meta(obj)["namespace"], _meta(obj)["name"])
+    except Exception:
+        return False
+
+
 def _was_stopped(record):
     """Stopped before the job: never written to, never started."""
     field = FIELD[record.kind]
@@ -280,6 +324,11 @@ def hold(obj, job_kind, job_id, keep_template=False):
     if not all(meta.get(key) for key in ("name", "namespace", "uid", "resourceVersion")) or meta.get("deletionTimestamp"):
         raise Refused(f"{meta.get('name') or 'It'} is being removed or is incomplete")
     field, mark = FIELD[kind], _notes(obj).get(HELD_BY)
+    if mark and not _ours(mark, job_kind, job_id) and _started_by_hand(obj, field) and _ended(mark):
+        # A mark a person's Start left on (nothing else takes it off). Held as
+        # it runs now: the count that job recorded may undo a scale-down a
+        # person made on purpose (one writer to a volume); fewer copies is safe.
+        mark = None
     if mark and not _ours(mark, job_kind, job_id):
         raise Refused(f"{meta['name']} is held by {mark}")
     earlier = {field: _from_text(field, _notes(obj).get(HELD_AS)) if mark else _state(obj)}
