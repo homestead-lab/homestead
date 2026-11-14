@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 
 import homestead_data_copies as DATA_COPIES
+import homestead_self_data_placement as SELF_PLACEMENT
 import homestead_heartbeats as HEARTBEATS
 import homestead_leader as LEADER
 import homestead_mqtt as MQTT
@@ -134,10 +135,21 @@ def data_copies():
         return {"state": "unknown", "error": str(error)[:160]}
 
 
+def placement():
+    """Where Homestead's data copy is stored, and what makes that fragile
+    (homestead_self_data_placement), read at most every 60 seconds;
+    {"error"} when it cannot be read."""
+    try:
+        return homestead_routes.cached("self-data-placement", 60, SELF_PLACEMENT.status)
+    except Exception as error:
+        return {"findings": [], "error": str(error)[:160]}
+
+
 def replicas_view():
     """The Redundancy card's read: replicas_now(), with the copies of
-    Homestead's data (data_copies), so the card needs no second call."""
-    return {**replicas_now(), "data_copies": data_copies()}
+    Homestead's data (data_copies) and its placement, so the card needs no
+    second call."""
+    return {**replicas_now(), "data_copies": data_copies(), "placement": placement()}
 
 
 def replicas_now():

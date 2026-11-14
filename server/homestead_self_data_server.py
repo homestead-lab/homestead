@@ -191,6 +191,12 @@ def fit_own_strategy():
         print(f"could not check Homestead's own update strategy: {error}", flush=True)
 
 
+def _own_copies():
+    """How many copies of Homestead its Deployment asks for."""
+    dep = kget(f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{NAMES.BRAND}")
+    return int((dep.get("spec") or {}).get("replicas") or 1)
+
+
 def self_data_preparation(body, actor, *, start=False):
     """Review or enqueue destination preparation; never switches the app PVC."""
     try:
@@ -201,9 +207,16 @@ def self_data_preparation(body, actor, *, start=False):
             info = homestead_data_volume()
             row = next((r for r in info.get("classes", []) if r["name"] == body.get("storage_class")), None)
             if row is None: raise SELF_DATA_FENCE.Held("Choose an available destination storage class")
+            one_host = body.get("one_host") is True
+            if row.get("current") and not one_host:
+                raise SELF_DATA_FENCE.Held(f"Homestead's data is already on {row['name']}. Choose another class, "
+                                           "or a volume that one host mounts at a time")
+            if one_host and row["shareable"] and _own_copies() > 1:
+                raise SELF_DATA_FENCE.Held("Homestead runs more than one copy, and each needs the volume. "
+                                           "Lower Redundancy to one copy before moving to a volume that one host mounts")
             _, image = _self_data_helper_image(kget, SELF.NS)
             return SELF_DATA_PREPARE.review(kget, SELF.NS, NAMES.BRAND, body, actor=actor, image=image,
-                access_mode="ReadWriteMany" if row["shareable"] else "ReadWriteOnce",
+                access_mode="ReadWriteMany" if row["shareable"] and not one_host else "ReadWriteOnce",
                 threshold=get_app_settings()["thresholds"]["memory"]["critical"], clock=time.time)
         if not start:
             cfg, public, context, _ = reviewed()
@@ -452,6 +465,11 @@ def homestead_data_volume(dep=None):
     # then share it: the move is not only for redundancy.
     classes = [{"name": r["name"], "shareable": r["name"] in shared} for r in rows
                if class_selectable(r) and r["name"] != klass]
+    if "ReadWriteMany" in modes and klass in shared:
+        # Its own class again, as a volume one host mounts at a time: a shared
+        # volume needs a share-manager, which an undrained restart can strand
+        # (design 3.1). Offered only with one_host.
+        classes.insert(0, {"name": klass, "shareable": True, "current": True})
     # Data volumes an earlier move left behind: kept until deleted, so they
     # are said out loud rather than found later as a mystery.
     try:

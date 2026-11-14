@@ -444,6 +444,20 @@ function dataCopiesNote(copies) {
       : `A second copy on another host keeps the data available if one host fails.${can("admin") ? how : ""}`}
     ${!refused && can("admin") ? `<div class="row" style="margin-top:6px"><button class="btn sm pri" id="rep_keep_two" onclick="replicasKeepTwo()">Keep two copies</button></div>` : ""}</div>`;
 }
+/* Design 3.1: what makes Homestead's data fragile after an unclean restart, and
+   the reviewed move that fixes it. A copy on a disk that takes no new copies is
+   the salvage alert's, not this note's. */
+function placementNote(placement) {
+  if (placement?.error) return `<div class="note" style="margin-top:10px">Where Homestead's data is stored could not be read. ${esc(placement.error)}</div>`;
+  return (placement?.findings || []).map(f => f.kind === "shared"
+    ? `<div class="note" style="margin-top:10px"><b>Homestead's data is a shared volume, which only several copies of Homestead need.</b>
+      A shared volume is served by a share-manager pod, which an unclean restart can leave down, and Homestead with it. A volume that one host mounts at a time does without it.
+      ${can("admin") ? `<div class="row" style="margin-top:6px"><button class="btn sm" id="rep_one_host" onclick="replicasMoveData('', ${jsq(placement.storage_class || "")}, true)">Use a volume one host mounts</button></div>` : ""}</div>`
+    : `<div class="note" style="margin-top:10px"><b>Homestead's data is not on the system disk.</b>
+      Its only copy is on ${esc(f.path || "a second disk")} on ${esc(f.node || "its host")}, so a problem with that disk stops Homestead even while the host is fine.
+      Move the copy to the disk tagged os with Move copies on Volumes. Homestead keeps running while it moves.
+      <div class="row" style="margin-top:6px"><button class="btn sm" onclick="openOperation(${jsq("/volumes?find=" + (placement.claim || ""))})">Show on Volumes</button></div></div>`).join("");
+}
 window.replicasKeepTwo = async () => {
   const go = $("#rep_keep_two");
   if (go) go.disabled = true;
@@ -482,6 +496,7 @@ async function replicasPaint() {
         <select id="rep_class" aria-label="Storage class for its data">${r.data.classes.map(c => `<option value="${esc(c.name)}" ${c.name === "longhorn" && !r.data.shareable ? "selected" : ""}>${esc(c.name)}${c.shareable ? " · shared by all hosts" : " · one host"}</option>`).join("")}</select>
         <button class="btn sm" onclick="replicasMoveData()">Move data</button>` : ""}</div>
       ${dataCopiesNote(r.data_copies)}
+      ${placementNote(r.placement)}
       ${(r.data.kept || []).length ? `<div class="note" style="margin-top:8px">Other Homestead data volumes:
         ${r.data.kept.map(k => `<span class="mono">${esc(k)}</span>`).join(", ")}. These may be prepared destinations or recovery copies.
         Check their jobs before deleting anything.
@@ -504,12 +519,13 @@ window.selfDataClose = () => { selfDataDialog = null; selfDataArchiveDialog = nu
 const selfDataPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const selfDataId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), n => n.toString(16).padStart(2, "0")).join("");
 const selfDataHostOptions = (nodes, selected = "") => nodes.map(n => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""} ${n.ready ? "" : "disabled"}>${esc(n.name)}${n.ready ? "" : " · unavailable"}</option>`).join("");
-window.replicasMoveData = async (jobId = "", chosen = "") => {
+window.replicasMoveData = async (jobId = "", chosen = "", oneHost = false) => {
   // The class picked beside the button is the one the dialog starts with,
-  // unless the caller chose one (Keep two copies: longhorn-r2).
+  // unless the caller chose one (Keep two copies: longhorn-r2; Use a volume
+  // one host mounts: the class it is on now, one host at a time).
   const picked = chosen || $("#rep_class")?.value || "";
   selfDataArchiveDialog = null;
-  const request = {}; selfDataDialog = request;
+  const request = { oneHost }; selfDataDialog = request;
   modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading the volumes and hosts…</p></div>', true, "operation-review");
   try {
     const state = await api("/api/self/data/prepare");
@@ -527,7 +543,9 @@ window.replicasMoveData = async (jobId = "", chosen = "") => {
         `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p>${j.closable ? `<button class="btn sm pri" data-need="admin" onclick="selfDataCloseReview(${jsq(j.id)})">Close recovery</button>` : ""}<button class="btn sm" onclick="selfDataOpenJob(${jsq(j.id)})">${j.status === "failed" && j.mutation_recovery && j.kind === "k3s-cluster" ? "Review batch outcome" : "Open job"}</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
         `${esc(j.status)}${j.recovery ? " · requires recovery" : ""}`])) + '<p class="ui-help">Finish or review these jobs before preparing another volume. Archiving a finished preparation does not clear a job that is running or needs recovery.</p>') : ""}
       ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataClassChanged()">${(state.classes || []).map(c =>
-        `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.shareable ? "every host can use it" : "stored on one host's disk"}</option>`).join("")}</select>`),
+        `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" data-current="${c.current ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.current ? "the class it is on now, mounted by one host at a time" : c.shareable ? "every host can use it" : "stored on one host's disk"}</option>`).join("")}</select>`),
+        `<div id="selfDataOneHostField" hidden><label class="row" style="gap:6px"><input type="checkbox" id="selfDataOneHost" ${oneHost ? "checked" : ""} onchange="selfDataInvalidate()"> Mounted by one host at a time</label>
+          <p class="ui-help">A volume that one host mounts needs no share-manager, so an unclean restart cannot leave Homestead waiting on one. Only one copy of Homestead can then run.</p></div>`,
         `<div id="selfDataHostField">${UI.field("Which host's disk", `<select aria-label="Host whose disk holds the volume" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`,
           { help: "This storage keeps the volume on one host's own disk, so Homestead can then run only on that host." })}</div>`)}
       <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) || !!state.blocking_jobs?.length }))}</div>`;
@@ -587,6 +605,11 @@ window.selfDataClassChanged = () => {
   const option = $("#selfDataClass")?.selectedOptions?.[0];
   const field = $("#selfDataHostField");
   if (field) field.hidden = option?.dataset.shareable === "1";
+  // A class every host can share may still be used one host at a time; its own
+  // class again only that way.
+  const one = $("#selfDataOneHostField"), box = $("#selfDataOneHost");
+  if (one) one.hidden = option?.dataset.shareable !== "1";
+  if (box) { const current = option?.dataset.current === "1"; if (current) box.checked = true; box.disabled = current; }
   selfDataInvalidate();
 };
 window.selfDataInvalidate = () => {
@@ -599,6 +622,7 @@ window.selfDataPrepareReview = async () => {
   if (!flow || flow.busy || flow.state?.blocking_jobs?.length) return;
   selfDataInvalidate();
   const body = { operation: selfDataId(), storage_class: $("#selfDataClass").value, node: $("#selfDataHost").value };
+  if ($("#selfDataOneHostField") && !$("#selfDataOneHostField").hidden) body.one_host = !!$("#selfDataOneHost")?.checked;
   flow.request = body;
   $("#selfDataReview").innerHTML = '<p>Checking…</p>';
   try {
