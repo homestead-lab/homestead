@@ -322,11 +322,13 @@ class NoJobNoRunTests(Runs):
         self.job("disk-allocation", "node-b")
 
     def test_a_run_whose_job_is_refused_does_not_start(self):
-        for start in (lambda: ROLLOUT.start(), lambda: ROLLOUT.start("asked-hosts", only=["node-c"])):
+        # Every host is refused up front for the busy host (#1333); node-c alone reaches the job's own refusal.
+        for start, words in ((lambda: ROLLOUT.start(), "node-b has a job running"),
+                             (lambda: ROLLOUT.start("asked-hosts", only=["node-c"]), "Finish disk preparation")):
             self.refusing_job()
             with self.assertRaises(ValueError) as refused:
                 start()
-            self.assertIn("Finish disk preparation", str(refused.exception))
+            self.assertIn(words, str(refused.exception))
             self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
             self.assertIsNone(ROLLOUT.tick(now=1000), "nothing moves")
             self.assertEqual([], self.hosts.began)
@@ -614,9 +616,22 @@ class PreviewTests(Runs):
         answer = self.post(restart="never")
         self.assertEqual("never", answer["rollout"]["restart"])
 
-    def test_every_host_now_still_starts_past_a_job_on_a_host(self):
-        # Refusing busy hosts is for the chosen hosts; the gap for the rest is listed.
+    def test_every_host_now_refuses_a_host_with_a_job_running(self):
         self.job("smart-test", "node-b")
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start("asked")
+        self.assertIn("node-b has a job running", str(refused.exception))
+        self.assertEqual({}, ROLLOUT._load().get("rollout") or {})
+        self.assertEqual(self.preview("node-b")["blocked"], str(refused.exception), "the review and the refusal say the same")
+
+    def test_every_host_now_refuses_while_containers_are_being_rebalanced(self):
+        self.job("container-rebalance")
+        with self.assertRaises(ValueError) as refused:
+            ROLLOUT.start("asked")
+        self.assertIn("rebalanced", str(refused.exception))
+
+    def test_every_host_now_starts_when_no_job_is_in_the_way(self):
+        self.job("smart-test", "node-b", status="succeeded")
         self.assertEqual(3, len(self.post()["rollout"]["nodes"]))
 
 
@@ -972,6 +987,19 @@ class WindowSkippedTests(Runs):
         self.assertEqual("schedule", self.rollout()["reason"])
         self.assertEqual("", self.line())
 
+    def test_a_window_with_a_job_on_a_host_is_skipped_and_tried_again(self):
+        """_in_the_way does not know a host's own job (a smart test): start() refuses it."""
+        ROLLOUT.OPS._write([])
+        self.job("smart-test", "node-b")
+        ROLLOUT.tick(now=SUNDAY)
+        self.assertEqual({}, self.rollout(), "not started")
+        self.assertIn("node-b has a job running", self.line())
+        self.assertEqual([], self.hosts.holds)
+        ROLLOUT.OPS._write([])
+        ROLLOUT.tick(now=SUNDAY + ROLLOUT.WINDOW_RETRY)
+        self.assertEqual("schedule", self.rollout()["reason"], "tried again, and runs")
+        self.assertEqual("", self.line())
+
     def test_the_line_names_whichever_job_is_in_the_way_now(self):
         ROLLOUT.tick(now=SUNDAY)
         ROLLOUT.OPS._write([])
@@ -1016,7 +1044,7 @@ class WindowSkippedTests(Runs):
     def test_asking_for_a_run_still_refuses_with_the_reason(self):
         with self.assertRaises(ValueError) as refused:
             ROLLOUT.ROUTES[("POST", "/api/os-updates/start")][1](types.SimpleNamespace(query={}, body={}))
-        self.assertIn("Finish disk preparation", str(refused.exception))
+        self.assertIn("node-b has a job running", str(refused.exception))
         self.assertEqual([], self.alerts(), "someone is looking at this one")
 
     def test_a_run_going_when_the_window_opens_is_no_skip(self):

@@ -248,9 +248,10 @@ def start(reason="asked", now=None, only=None, restart=None):
             missing = [name for name in only if name not in ready]
             if missing:
                 raise ValueError("Not Ready, so left alone: " + ", ".join(missing))
-            why = _busy_cluster() or next(filter(None, (_busy_host(name) for name in names)), "")
-            if why:
-                raise ValueError(why)
+        # The window too: _in_the_way does not cover host jobs, and _open_window turns this refusal into a skip and a retry.
+        why = _busy_cluster() or next(filter(None, (_busy_host(name) for name in names)), "")
+        if why:
+            raise ValueError(why)
         # The host Homestead's leader runs on goes last: draining it moves Homestead.
         names.sort(key=lambda name: name == own)
         if not names:
