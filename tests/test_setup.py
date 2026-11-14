@@ -1,5 +1,6 @@
 """The setup guide's memory: skips per person or for the cluster, never 'done'."""
 import io
+import os
 import json
 import sys
 import tempfile
@@ -143,6 +144,17 @@ class ReplicaTests(unittest.TestCase):
             route.handler(request)
         self.assertNotEqual(keys[0], keys[1], "the view cached before the skip is not the one answered after it")
         self.assertIn("hostname", SETUP.skips("ada"))
+
+
+class StampTests(unittest.TestCase):
+    def test_the_stamp_comes_from_an_open_file_not_a_stat_of_its_path(self):
+        """stat() of a path is answered from the attribute cache on NFS (#1320)."""
+        folder = tempfile.mkdtemp()
+        keep_bound(self, SETUP)
+        SETUP.bind(folder)
+        SETUP.skip("hostname", True, "ada", admin=True)
+        with mock.patch.object(os, "stat", side_effect=OSError("answered from the attribute cache")):
+            self.assertGreater(SETUP.stamp(), 0)
 
 
 class UniFiSetupStateTests(unittest.TestCase):

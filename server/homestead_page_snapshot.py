@@ -261,13 +261,21 @@ def _path():
     return os.path.join(SHARED.DIR, FILE)
 
 
+def _fstat(path):
+    """The file's status from an open handle, never a stat() of the path: replicas share
+    the data volume over NFS, where stat() answers from the attribute cache for seconds
+    and an open asks the server (#1320, as homestead_changes._version)."""
+    with open(path, "rb") as handle:
+        return os.fstat(handle.fileno())
+
+
 def _asked(mono):
     """Whether another replica asked for the parts within ASK_FRESH: whether
     WANTED changed (inode or mtime_ns) within ASK_FRESH of the leader's own
     monotonic clock (mono). A file first seen counts as one ask, so a leader
     that just started writes at once for a follower already asking."""
     try:
-        status = os.stat(os.path.join(SHARED.DIR, WANTED))
+        status = _fstat(os.path.join(SHARED.DIR, WANTED))
     except OSError:
         return False
     seen = (status.st_ino, status.st_mtime_ns)
@@ -364,7 +372,7 @@ def take_in(now=None, mono=None):
                 _floor[key] = now
     path = _path()
     try:
-        status = os.stat(path)
+        status = _fstat(path)
     except OSError:
         return
     # Each write replaces the file (homestead_shared.write_json), so a new
@@ -489,7 +497,7 @@ def hear(now=None):
     (_check_mine())."""
     path = _forgets_path()
     try:
-        status = os.stat(path)
+        status = _fstat(path)
     except OSError:
         return
     seen = (path, status.st_ino, status.st_mtime_ns, status.st_size)

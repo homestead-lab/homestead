@@ -46,6 +46,16 @@ class UsageTests(unittest.TestCase):
         keep_bound(self, usage)
         usage.bind(folder.name, server.KUBE_HELPERS.parse_cpu, server.KUBE_HELPERS.parse_mem)
 
+    def test_a_changed_file_is_read_again_without_a_stat_of_its_path(self):
+        """stat() of a path is answered from the attribute cache on NFS (#1320)."""
+        usage.record([("lab", "web", "web", 100, 400)], now=NOW)
+        with mock.patch.object(usage.os, "stat", side_effect=OSError("answered from the attribute cache")):
+            first = dict(usage._snapshot()["series"])
+        usage.record([("lab", "api", "api", 100, 400)], now=NOW + usage.STEP)
+        with mock.patch.object(usage.os, "stat", side_effect=OSError("answered from the attribute cache")):
+            second = usage._snapshot()["series"]
+        self.assertEqual((1, 2), (len(first), len(second)))
+
     def week(self, cpu_m=100, mem_mi=400, days=7, spikes=0, container="web"):
         """A reading every five minutes for days, the last few of them spikes."""
         per_day = DAY // usage.STEP
