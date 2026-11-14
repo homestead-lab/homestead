@@ -21,6 +21,7 @@ import homestead_disks as DISKS
 import homestead_files as FILES
 import homestead_fleet as FLEET
 import homestead_host_limits as HOST_LIMITS
+import homestead_apparmor_fix as APPARMOR_FIX
 import homestead_host_os as HOST_OS
 import homestead_isos as ISOS
 import homestead_job_errors as JOB_ERRORS
@@ -418,6 +419,12 @@ def _host_fix_loop():
                 with self_data_activity():
                     for node, change in HOST_LIMITS.tick().items():
                         print(f"platform: {node}: inotify limits raised ({change})", flush=True)
+                    # VMs start on kernels that stack AppArmor profiles (homestead_apparmor_fix).
+                    try:
+                        for node, change in APPARMOR_FIX.tick().items():
+                            print(f"platform: {node}: AppArmor setting for VMs ({change})", flush=True)
+                    except Exception as error:
+                        print(f"platform: AppArmor setting not checked: {str(error)[:160]}", flush=True)
                     # A node that joined later, set up as the others are.
                     for node, change in NODE_PARITY.tick():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)

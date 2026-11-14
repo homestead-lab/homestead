@@ -27,6 +27,9 @@ CONF = "/etc/sysctl.d/90-homestead.conf"
 def bind(_kget, _hostrun, _platform, data_dir="/data"):
     global kget, hostrun, platform, DATA_DIR
     kget, hostrun, platform, DATA_DIR = _kget, _hostrun, _platform, data_dir
+    # The other kernel setting the same loop keeps, on the same hosts: one bind serves both.
+    import homestead_apparmor_fix as APPARMOR_FIX
+    APPARMOR_FIX.bind(_kget, _hostrun, _platform, data_dir)
 
 
 def _path():
