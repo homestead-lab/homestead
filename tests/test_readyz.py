@@ -435,6 +435,34 @@ class ReadyzDataCheck(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual((200, {"ready": True}), self.asked("data"), "the write finished after all")
 
+    def test_a_hung_write_leaves_the_api_check_running(self):
+        """The write hangs for real (a thread blocked on an event); callers
+        meanwhile still check the API, so /metrics does not report an API
+        outage that is not there (#1323)."""
+        self.assertEqual(200, self.asked("data")[0])
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def hang(fd):
+            entered.set()
+            release.wait(30)
+
+        self.clock.now += READYZ.DATA_EVERY
+        with mock.patch.object(READYZ.os, "fsync", hang):
+            worker = threading.Thread(target=self.asked, args=("data",), daemon=True)
+            worker.start()
+            self.assertTrue(entered.wait(5))
+            self.api.reset_mock()
+            self.clock.now += READYZ.API_EVERY
+            self.assertTrue(READYZ.state(probe_data=False)["checks"]["kube_api"])
+            self.api.assert_called_once_with("/version", timeout=2)
+            self.assertEqual(self.clock.now, READYZ._state["api_ok_at"], "the API answer was refreshed")
+            self.clock.now += READYZ.API_FRESH + 1
+            self.assertTrue(READYZ.state()["checks"]["kube_api"], "plain /readyz checks the API too")
+            release.set()
+            worker.join(5)
+        self.assertFalse(worker.is_alive())
+
     def test_a_quiet_minute_is_not_a_stuck_write(self):
         """A write that finished long ago isn't in flight, however long nobody asks."""
         self.assertEqual(200, self.asked("data")[0])
