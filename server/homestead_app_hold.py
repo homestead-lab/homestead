@@ -210,7 +210,7 @@ def _ours(mark, job_kind, job_id):
     return mark == f"{job_kind}:{job_id}" or (":" not in mark and mark == str(job_id))
 
 
-def _ended(mark):
+def job_ended(mark):
     """Whether the job a mark names can no longer act on the app, by the job
     history: found there, of the kind the mark names, and succeeded, or failed
     or cancelled with nothing left to carry on (not resumable, no clean-up,
@@ -236,7 +236,7 @@ def _ended(mark):
         return False
 
 
-def _started_by_hand(obj, field):
+def started_by_hand(obj, field):
     """Whether an app with a mark runs again (a person's Start): not stopped,
     and a VM with its instance running unless its run strategy is Always
     (Manual, Once or RerunOnFailure say nothing of whether it runs now).
@@ -324,7 +324,7 @@ def hold(obj, job_kind, job_id, keep_template=False):
     if not all(meta.get(key) for key in ("name", "namespace", "uid", "resourceVersion")) or meta.get("deletionTimestamp"):
         raise Refused(f"{meta.get('name') or 'It'} is being removed or is incomplete")
     field, mark = FIELD[kind], _notes(obj).get(HELD_BY)
-    if mark and not _ours(mark, job_kind, job_id) and _started_by_hand(obj, field) and _ended(mark):
+    if mark and not _ours(mark, job_kind, job_id) and started_by_hand(obj, field) and job_ended(mark):
         # A mark a person's Start left on (nothing else takes it off). Held as
         # it runs now: the count that job recorded may undo a scale-down a
         # person made on purpose (one writer to a volume); fewer copies is safe.

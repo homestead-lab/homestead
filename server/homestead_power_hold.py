@@ -16,6 +16,7 @@ even if the job's record is lost.
 import urllib.error
 import urllib.parse
 
+import homestead_app_hold as APP_HOLD
 from homestead_reclass import deletes_volumes_when_stopped, stop_blocker
 
 HELD_BY = "homestead.io/held-for-power"
@@ -164,11 +165,28 @@ def _fence(item, meta):
     return {"resourceVersion": version} if item["kind"] == "StatefulSet" and version else {}
 
 
+def _left_by_ended_job(obj, item, mark):
+    """Whether another job's mark is only a leftover: the app runs again and
+    that job can no longer act on it. The same rule as homestead_app_hold.hold,
+    which owns it; a mark this module writes is a bare job id, a power job's."""
+    try:
+        field = APP_HOLD.FIELD[item["kind"]]
+        return (APP_HOLD.started_by_hand({**obj, "kind": item["kind"]}, field)
+                and APP_HOLD.job_ended(mark if ":" in mark else f"node-power:{mark}"))
+    except Exception:
+        return False
+
+
 def stop(item, job):
     """Stop one app or VM to wait for its host, marking what it was."""
     obj = kget(_path(item["kind"], item["ns"], item["name"]))
     meta = obj.get("metadata") or {}
     mark = (meta.get("annotations") or {}).get(HELD_BY)
+    if mark and mark != job and _left_by_ended_job(obj, item, mark):
+        # A mark a person's Start left on (nothing else takes it off), as for
+        # homestead_app_hold.hold (#1310): held as it runs now, never at the
+        # count that job recorded, which may undo a scale-down on purpose.
+        mark = None
     if mark and mark != job:
         raise ValueError(f"{item['ns']}/{item['name']} is already held by another job")
     if item["kind"] == "VirtualMachine":
