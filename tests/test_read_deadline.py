@@ -8,6 +8,7 @@ whose reads were cut short answers 503 (or the last complete copy kept in
 the cache), never a partial page as if it were complete. Background loops
 set no deadline and keep their own timeouts."""
 import contextlib
+import http.client
 import http.server
 import sys
 import threading
@@ -689,7 +690,7 @@ class AnswerThatEndsTheConnectionTests(unittest.TestCase):
                 status, body, extra = answers.pop(0)
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Length", extra.pop("Content-Length", str(len(body))))
                 self.send_header("Connection", "close")
                 for name, value in extra.items():
                     self.send_header(name, value)
@@ -722,6 +723,43 @@ class AnswerThatEndsTheConnectionTests(unittest.TestCase):
             K._request("GET", "/api/v1/pods", None, {}, 10)
         self.assertEqual(429, caught.exception.code)
         self.assertEqual(b'{"kind":"Status","code":429}', caught.exception.read())
+
+    def test_an_answer_cut_short_of_its_length_is_a_dropped_connection(self):
+        # 3 bytes of the 10 the answer said, then the connection ends (#1313):
+        # never a partial page handed back as a success.
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
+    def test_without_a_deadline_an_answer_cut_short_is_a_dropped_connection_too(self):
+        DEADLINE.end()
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
+    def test_a_capped_read_of_a_cut_short_answer_is_a_dropped_connection_with_a_deadline(self):
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=100)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
+    def test_a_capped_read_of_a_cut_short_answer_is_a_dropped_connection_without_a_deadline(self):
+        DEADLINE.end()
+        self.answers.append((200, b'{"k', {"Content-Length": "10"}))
+        with self.assertRaises(urllib.error.URLError) as caught:
+            K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=100)
+        self.assertIsInstance(caught.exception.reason, http.client.IncompleteRead)
+
+    def test_an_answer_read_only_to_its_first_bytes_is_not_short(self):
+        self.answers.append((200, b'0123456789', {}))
+        self.assertEqual(b'0123', K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=3))
+
+    def test_an_answer_read_only_to_its_first_bytes_is_not_short_without_a_deadline(self):
+        DEADLINE.end()
+        self.answers.append((200, b'0123456789', {}))
+        self.assertEqual(b'0123', K._request("GET", "/api/v1/pods", None, {}, 10, max_bytes=3))
 
     def test_kget_asks_again_after_a_429_that_ends_the_connection(self):
         self.answers.append((429, b'{"kind":"Status","code":429}', {"Retry-After": "1"}))

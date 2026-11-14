@@ -718,7 +718,15 @@ def _body(connection, response, max_bytes=None):
     piece given at most what is left: an API server trickling its answer is
     cut at the deadline, not after minutes."""
     if DEADLINE.remaining() is None:
-        return response.read() if max_bytes is None else response.read(max_bytes + 1)
+        if max_bytes is None:
+            return response.read()
+        payload = response.read(max_bytes + 1)
+        # read(n) returns what came when the server ends the connection early,
+        # where read() raises (#1313): fewer than asked, with bytes still due.
+        short = getattr(response, "length", None)
+        if isinstance(short, int) and short > 0 and len(payload) <= max_bytes:
+            raise http.client.IncompleteRead(payload, short)
+        return payload
     # An answer that ends the connection has left it (http.client): its
     # socket is then only the response's own.
     sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
@@ -744,6 +752,12 @@ def _body(connection, response, max_bytes=None):
         pieces.append(piece)
         size += len(piece)
     payload = b"".join(pieces)
+    # read1 gives b"" when the server ends the connection early, where read()
+    # raises: an answer short of its Content-Length is a dropped connection,
+    # never a partial page (#1313). http.client counts length down to 0.
+    short = getattr(response, "length", None)
+    if isinstance(short, int) and short > 0 and (max_bytes is None or size <= max_bytes):
+        raise http.client.IncompleteRead(payload, short)
     return payload if max_bytes is None else payload[:max_bytes + 1]
 
 
