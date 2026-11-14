@@ -46,6 +46,7 @@ import homestead_mcp as MCP
 import homestead_names as NAMES
 import homestead_network_inventory as INV
 import homestead_vip_registry as REG
+import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
@@ -55,6 +56,7 @@ import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
+import homestead_probe as PROBE
 import homestead_push as PUSH
 import homestead_timeline_summary as SUMMARY
 import homestead_recovery as RECOVERY
@@ -296,6 +298,22 @@ KEPT_SECONDS = 30
 _looked = [0.0]
 
 
+def _watchdog_facts():
+    """What the probes' watchdogs salvaged; None while the probes could not be
+    read, so a salvage already raised is held rather than cleared."""
+    if not PROBES.running():
+        # No loop reading them on this replica: read them now, as the
+        # other sources read the cluster.
+        try:
+            PROBES.run_round()
+        except Exception:
+            return None
+    temps = NODES.node_temps(wait=False, unreachable=True)
+    if not temps and PROBES.unread():
+        return None
+    return PROBE.watchdog_alert_facts(temps)
+
+
 def _alert_sources():
     """What each source sees now; None where it could not look."""
     results = {}
@@ -319,6 +337,7 @@ def _alert_sources():
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("held-volumes", lambda: LHCAP.held_alert_facts(LHCAP.held_status()))
     take("salvage-blocked", lambda: LHCAP.salvage_alert_facts(cached("salvage-blocked", 60, LHCAP.salvage_status)))
+    take("watchdog", _watchdog_facts)
     take("disks", lambda: DISKS.alert_facts(cached("disks", keep, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", keep, NODES.ports_report)))

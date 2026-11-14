@@ -52,7 +52,7 @@ class Cluster:
 
 
 class PolicyShapeTests(unittest.TestCase):
-    def test_it_lets_only_homesteads_pods_reach_the_manager_on_9500(self):
+    def test_it_lets_only_homesteads_pods_and_its_probes_reach_the_manager_on_9500(self):
         owner = longhorns_policy()
         policy = ACCESS.policy("lab", [owner])
         self.assertEqual("homestead-backend-access", policy["metadata"]["name"])
@@ -61,7 +61,8 @@ class PolicyShapeTests(unittest.TestCase):
         self.assertEqual({"podSelector": {"matchLabels": {"app": "longhorn-manager"}},
                           "policyTypes": ["Ingress"],
                           "ingress": [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "lab"}},
-                                                 "podSelector": {"matchLabels": {"app": "homestead"}}}],
+                                                 "podSelector": {"matchExpressions": [{"key": "app", "operator": "In",
+                                                                                       "values": ["homestead", "homestead-nodeprobe"]}]}}],
                                        "ports": [{"protocol": "TCP", "port": 9500}]}]},
                          policy["spec"])
         self.assertEqual([{"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",

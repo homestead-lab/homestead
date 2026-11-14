@@ -41,7 +41,8 @@ _lock = threading.Lock()         # the state
 _single = threading.Lock()       # one round at a time (the temperatures)
 _smart_single = threading.Lock() # one SMART pass at a time, on its own thread (#974)
 _state = {}                      # node -> {"payload", "at", "misses", "last_ok", "smart", "smart_at", "smart_stale", "absent"}
-_round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "stop": threading.Event()}
+_round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "stop": threading.Event(),
+          "failed": False}
 # The running SMART pass (its thread, when it started, whether its overrun was
 # said) and how many times read_smart_again() was called.
 _smart_pass = {"thread": None, "started": None, "said": False, "asked": 0}
@@ -163,6 +164,7 @@ def _run(now, smart):
                and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()
+        _round["failed"] = False
         asked = _smart_pass["asked"]
     for node in gone:
         SMART.drop_host(node)        # its kept SMART readings too, on the data volume
@@ -287,7 +289,7 @@ def node_temps(namespace=None, wait=True, unreachable=False):
         try:
             run_round()
         except Exception:
-            pass                     # the listing failed: answer from what is known
+            _round["failed"] = True  # the listing failed: answer from what is known
     with _lock:
         return {node: _with_smart(entry) for node, entry in _state.items()
                 if entry["payload"] is not None and (unreachable or entry["misses"] < UNREACHABLE_AFTER)}
@@ -321,6 +323,13 @@ def read_smart_again():
         _round["read"] = None
 
 
+def unread():
+    """Whether the probes could not be listed in the last round, or have not
+    been read yet: no reading then is not "no probe", so an alert built from
+    the readings holds rather than clears."""
+    return _round["failed"] or _round["read"] is None
+
+
 def smart_settled(timeout=None):
     """Wait for the running SMART pass, if any; whether none is running now."""
     if not _smart_single.acquire(timeout=-1 if timeout is None else timeout):
@@ -334,6 +343,7 @@ def _loop():
         try:
             run_round()
         except Exception as error:
+            _round["failed"] = True
             _round["done"].set()
             print(f"node probes: {str(error)[:160]}", flush=True)
         _round["stop"].wait(INTERVAL)

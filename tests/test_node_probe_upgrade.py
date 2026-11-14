@@ -1,7 +1,11 @@
 """An upgrade has to finish itself: the probe reads scripts Homestead ships."""
+import copy
+import json
+import os
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 
@@ -17,7 +21,7 @@ class ShippedScriptTests(unittest.TestCase):
         """If this breaks, an upgrade would push a broken probe to every node."""
         scripts = probe.shipped_scripts(ROOT / "server" / "probe")
 
-        self.assertEqual({"probe.py", "smart.py", "homestead_http.py"}, set(scripts))
+        self.assertEqual({"probe.py", "smart.py", "homestead_http.py", "homestead_watchdog.py"}, set(scripts))
         for name, body in scripts.items():
             with self.subTest(script=name):
                 compile(body, name, "exec")
@@ -129,9 +133,13 @@ class ReconcileTests(unittest.TestCase):
         self.sent.append((method, path.split("?")[0], body))
         return body or {}
 
-    def _install(self, name, scripts):
+    def _install(self, name, scripts, version="2.8.49"):
+        # As Kubernetes stores this release's DaemonSet, with a default of its own added.
+        spec = copy.deepcopy(probe.manifest(version)[1]["spec"])
+        spec["template"]["spec"]["containers"][0]["terminationMessagePath"] = "/dev/termination-log"
+        spec["template"]["spec"]["dnsPolicy"] = "ClusterFirst"
         self.objects[f"/apis/apps/v1/namespaces/lab/daemonsets/{name}"] = {
-            "metadata": {"name": name}}
+            "metadata": {"name": name, "resourceVersion": "7"}, "spec": spec}
         self.objects[f"/api/v1/namespaces/lab/configmaps/{name}"] = {
             "metadata": {"name": name}, "data": scripts}
 
@@ -196,6 +204,57 @@ class ReconcileTests(unittest.TestCase):
 
         written = next(b for m, p, b in self.sent if m == "PUT" and "configmaps" in p)
         self.assertEqual("keep me", written["data"]["local.conf"])
+
+
+class PodSpecTests(ReconcileTests):
+    """An installed probe's pod spec follows the release too: its images, and
+    the watchdog's record folder (homestead_watchdog.py)."""
+    def _patches(self):
+        return [b for m, p, b in self.sent if m == "PATCH" and isinstance(b, list)]
+
+    def test_a_probe_on_the_stock_image_gets_this_releases_spec_and_keeps_its_additions(self):
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        spec = self.objects["/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"]["spec"]["template"]["spec"]
+        spec["containers"][0]["image"] = "python:3.12-alpine"
+        spec["containers"][0]["volumeMounts"] = spec["containers"][0]["volumeMounts"][:4]
+        spec["volumes"] = [v for v in spec["volumes"] if v["name"] != "state"]
+        spec["nodeSelector"] = {"kubernetes.io/os": "linux"}
+        result = probe.reconcile("2.8.49")
+        self.assertEqual("updated", result["state"])
+        self.assertIn("pod spec updated", result["detail"])
+        (patch,) = self._patches()
+        self.assertEqual({"op": "test", "path": "/metadata/resourceVersion", "value": "7"}, patch[0])
+        written = patch[1]["value"]
+        self.assertEqual("ghcr.io/homestead-lab/homestead:2.8.49", written["containers"][0]["image"])
+        self.assertIn({"name": "state", "mountPath": "/state"}, written["containers"][0]["volumeMounts"])
+        self.assertIn({"name": "state", "hostPath": {"path": probe.STATE_DIR, "type": "DirectoryOrCreate"}}, written["volumes"])
+        self.assertEqual({"kubernetes.io/os": "linux"}, written["nodeSelector"])
+
+    def test_a_custom_image_is_kept(self):
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        spec = self.objects["/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"]["spec"]["template"]["spec"]
+        spec["containers"][0]["image"] = "registry.example.com/my-probe:1"
+        self.assertEqual("current", probe.reconcile("2.8.50")["state"])
+        self.assertEqual([], self._patches())
+
+    def test_the_watchdog_is_told_homesteads_data_without_restarting_the_probe(self):
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        self.objects["/api/v1/namespaces/lab/pods/homestead-7d9f8-abcde"] = {
+            "metadata": {"ownerReferences": [{"kind": "ReplicaSet", "name": "homestead-7d9f8", "controller": True}]},
+            "spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}},
+                                 {"name": "tmp", "emptyDir": {}}]}}
+        with mock.patch.dict(os.environ, {"HOSTNAME": "homestead-7d9f8-abcde"}):
+            result = probe.reconcile("2.8.49")
+            self.assertEqual("updated", result["state"])
+            written = next(b for m, p, b in self.sent if m == "PUT" and "configmaps" in p)
+            self.assertEqual({"namespace": "lab", "deployment": "homestead", "claims": ["homestead-data"]},
+                             json.loads(written["data"][probe.CONF]))
+            self.assertEqual([], [p for m, p, b in self.sent if m == "PATCH"], "the probe rereads it: no restart")
+            # Told once: the next start changes nothing.
+            self.objects["/api/v1/namespaces/lab/configmaps/homestead-nodeprobe"]["data"] = written["data"]
+            self.sent.clear()
+            self.assertEqual("current", probe.reconcile("2.8.49")["state"])
+            self.assertEqual([], self.sent)
 
 
 if __name__ == "__main__":
