@@ -33,7 +33,10 @@ class OwnImageTests(unittest.TestCase):
         self.assertEqual(NAMES.IMAGE + ":" + homestead_version.VERSION, pod["spec"]["containers"][0]["image"])
 
     def test_no_stock_python_image_is_pulled_or_shipped(self):
-        for rel in ("server/homestead_probe.py", "server/homestead_runtime.py", "deploy/nodeprobe.yaml",
+        # homestead_probe names it only to replace it in a probe installed before.
+        self.assertNotIn("python:3.12-alpine", repr(PROBE.manifest("2.8.400")))
+        self.assertEqual(("python:3.12-alpine",), PROBE.MANAGED_IMAGES)
+        for rel in ("server/homestead_runtime.py", "deploy/nodeprobe.yaml",
                     "charts/homestead/templates/nodeprobe.yaml", "charts/homestead/Chart.yaml"):
             with self.subTest(rel=rel):
                 self.assertNotIn("python:3.12-alpine", (ROOT / rel).read_text(encoding="utf-8"))

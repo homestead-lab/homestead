@@ -63,6 +63,8 @@ spec:
             - name: proc
               mountPath: "/host/proc"
               readOnly: true
+            - name: state
+              mountPath: "/state"
         - name: smart
           image: {{ include "homestead.image" . }}
           imagePullPolicy: IfNotPresent
@@ -123,6 +125,10 @@ spec:
           hostPath:
             path: "/proc"
             type: Directory
+        - name: state
+          hostPath:
+            path: "/var/lib/homestead-nodeprobe"
+            type: DirectoryOrCreate
         - name: auth
           secret:
             secretName: homestead-smart-key

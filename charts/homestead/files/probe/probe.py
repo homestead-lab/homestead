@@ -3,6 +3,7 @@
 import json, os, platform, re, socket, stat, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from homestead_http import BoundedHTTPServer, LimitedHandler
+import homestead_watchdog as WATCHDOG
 
 SYS = "/host/sys"
 DEV = "/host/dev"
@@ -617,7 +618,11 @@ def payload(caller=""):
             "default_interface": default_interface(),
             "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts(),
             # Sessions to iSCSI targets: a stale one keeps a volume from attaching (#932).
-            "iscsi": iscsi_sessions()}
+            "iscsi": iscsi_sessions(),
+            # What the watchdog last saw, and what it salvaged (homestead_watchdog.py).
+            "watchdog": _DOG[0].snapshot() if _DOG[0] else None}
+
+_DOG = [None]
 
 class H(LimitedHandler):
     protocol_version = "HTTP/1.1"
@@ -635,4 +640,5 @@ if __name__ == "__main__":
     # host shutting down would wait out its whole stop timeout for this.
     import signal
     signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
+    _DOG[0] = WATCHDOG.start(os.environ.get("NODE_NAME", socket.gethostname()))
     BoundedHTTPServer(("0.0.0.0", 9099), H, max_connections=8).serve_forever()

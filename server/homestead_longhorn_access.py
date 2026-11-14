@@ -63,7 +63,9 @@ def fences(policy, labels):
 
 
 def policy(namespace, owners):
-    """Homestead's policy: its pods may reach longhorn-manager on 9500. Owned
+    """Homestead's policy: its pods, and its node probe's, may reach
+    longhorn-manager on 9500. The probe's watchdog salvages Homestead's data
+    volume through it while Homestead is down (homestead_watchdog.py). Owned
     by each of Longhorn's policies that fences the manager in."""
     return {"apiVersion": "networking.k8s.io/v1", "kind": "NetworkPolicy",
             "metadata": {"name": POLICY, "namespace": LHNS, "labels": {NAMES.key("managed"): "true"},
@@ -73,7 +75,8 @@ def policy(namespace, owners):
             "spec": {"podSelector": {"matchLabels": {"app": "longhorn-manager"}},
                      "policyTypes": ["Ingress"],
                      "ingress": [{"from": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": namespace}},
-                                            "podSelector": {"matchLabels": {"app": NAMES.BRAND}}}],
+                                            "podSelector": {"matchExpressions": [{"key": "app", "operator": "In",
+                                                                                  "values": [NAMES.BRAND, NAMES.NODEPROBE]}]}}],
                                   "ports": [{"protocol": "TCP", "port": PORT}]}]}}
 
 
