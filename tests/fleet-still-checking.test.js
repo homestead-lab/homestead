@@ -120,6 +120,7 @@ test("the demo's view of all clusters names the lab as waiting, as the server do
   const src = fs.readFileSync("web/js/demo.js", "utf8");
   const flow = between(src, '"/api/fleet/all/flow"', "\n");
   assert.match(flow, /\{id:"d4ab1e",name:"Lab",error:"has not answered yet",state:"waiting"\}/);
+  assert.match(flow, /\{id:"c3beef",name:"DR site",error:"not answering",state:"not answering"\}/, "the DR site reads like the server's, lowercase, with its state");
   const t = setup();
   assert.match(t.ctx.fleetMissingSentence({ name: "Lab", state: "waiting", error: "has not answered yet" }), /^Lab has not responded yet/);
 });

@@ -219,7 +219,7 @@
           read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) })] } },
   ];
   // How long each has been up, and what the history says of the last 90 days.
-  [[41 * 86400 + 5 * 3600], [9 * 86400 + 2 * 3600], [2 * 86400 + 7 * 3600]].forEach(([up], i) => {
+  [[12 * 86400 + 5 * 3600], [9 * 86400 + 2 * 3600], [2 * 86400 + 7 * 3600]].forEach(([up], i) => {
     nodes[i].uptime_s = up;
     nodes[i].ready_since = new Date(Date.now() - up * 1000 + 95000).toISOString();
   });
@@ -3596,7 +3596,7 @@ ssh_pwauth: true
     },
     "/api/fleet/legacy": [{ name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
     "/api/fleet/link-legacy": { ok: true, member: { name: "Staging" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
-    "/api/fleet/all/flow": () => ({clusters:[{...responses["/api/flow"],site:siteTag("a1f00d")},{...responses["/api/flow"],site:siteTag("b2c0de")}],missing:[{id:"c3beef",name:"DR site",error:"Not answering"},{id:"d4ab1e",name:"Lab",error:"has not answered yet",state:"waiting"}]}),
+    "/api/fleet/all/flow": () => ({clusters:[{...responses["/api/flow"],site:siteTag("a1f00d")},{...responses["/api/flow"],site:siteTag("b2c0de")}],missing:[{id:"c3beef",name:"DR site",error:"not answering",state:"not answering"},{id:"d4ab1e",name:"Lab",error:"has not answered yet",state:"waiting"}]}),
     "/api/fleet/all/workloads": () => [...mine(workloads), ...branch(branchWorkloads)],
     "/api/fleet/all/nodes": () => [...mine(nodes), ...branch(branchNodes.map((name, i) => ({ ...nodes[i], name })))],
     "/api/fleet/all/vms": () => [...mine(demoVms), ...branch([{ ...demoVms[0], name: "pfsense", node: branchNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
