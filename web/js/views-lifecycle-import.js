@@ -113,6 +113,20 @@ window.importRemove = async (name, state, namespace = defaultNamespace()) => {
     modal(`Remove import · ${name}`, UI.callout("bad", "Homestead could not check what this import created", esc(plan.unread)) + UI.actions(UI.cancel("Close")));
     return;
   }
+  // A failed or cancelled import (#1301): what it made and stamped goes, volumes only when ticked.
+  if (plan.journalled && plan.removable) {
+    const made = [plan.workload && `The app · ${plan.workload}`, ...(plan.services || []).map(n => `Its address · ${n}`), plan.copy_job && "The copy job"].filter(Boolean);
+    modal(`Remove import · ${name}`, UI.lead("Removes what this import made. Anything else with the same name is kept.")
+      + (plan.kept_app ? `<p class="ui-help">The app · ${esc(plan.kept_app)} is kept, since it does not carry this import's stamp.</p>` : "")
+      + `<ul class="ui-list">${made.map(m => `<li>${esc(m)}</li>`).join("")}</ul>`
+      + (plan.volumes?.length ? UI.section("Volumes", `<div class="volume-delete-grid">${plan.volumes.map(claim => `
+        <label class="volume-delete-option danger"><input type="checkbox" class="imr-volume" value="${esc(claim.name)}">
+          <span><b>The volume · ${esc(claim.name)}</b><small>Deletes the volume and everything copied into it. It is kept unless ticked.</small></span></label>`).join("")}</div>`) : "")
+      + UI.actions(`<button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this,${jsq(namespace)})">Remove import</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`));
+    if (window.applyRole) window.applyRole();
+    return;
+  }
   if (plan.journalled) {
     modal(`Remove import job · ${name}`, UI.lead("Remove the copy job after a successful import. The app, its network addresses and all volumes are kept.") +
       UI.callout("info", "Import not finished", "To check an import, open Recent jobs and choose Inspect import. A copy that is running, or whose result is unknown, cannot be removed here.") +

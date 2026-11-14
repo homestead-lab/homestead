@@ -820,11 +820,11 @@ def import_cleanup_plan(name, ns=None):
         job = I.kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}")
     except Exception:
         if IMPORT_JOB.journalled(ns, name, {}, OPS):
-            return {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
+            return IMPORT_JOB.cleanup_plan(ns, name, {}, I.kget, OPS)
         return {"job": name, "workload": "", "volume": "", "volume_created": False,
                 "volumes": [], "namespace": ns, "known": False}
     if IMPORT_JOB.journalled(ns, name, job, OPS):
-        return {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
+        return IMPORT_JOB.cleanup_plan(ns, name, job, I.kget, OPS)
     meta = job.get("metadata", {}) or {}
     annotations = meta.get("annotations", {}) or {}
     app = NAMES.label_of(meta, "app")
@@ -863,7 +863,7 @@ def _plan_volumes(annotations, volume, created):
     return [{"name": claim, "created": claim in made} for claim in used]
 
 
-def delete_import(name, ns=None, uid=""):
+def delete_import(name, ns=None, uid="", volumes=()):
     """Remove an import Job, cancelling the copy if it is still running. uid: only
     that Job, from a cancel run again, which must not take a new import of the name.
 
@@ -881,6 +881,10 @@ def delete_import(name, ns=None, uid=""):
     except ValueError:
         job = {}  # legacy client reports a missing Job this way
     if IMPORT_JOB.journalled(ns, name, job, OPS):
+        if IMPORT_JOB.cleanup_plan(ns, name, job, I.kget, OPS)["removable"]:
+            result = IMPORT_JOB.remove_failed(ns, name, job, I.kget, I.ksend, OPS, volumes)
+            I._bust("wl", "ov")
+            return result
         return IMPORT_JOB.remove_completed_job(ns, name, job, I.kget, I.ksend, OPS)
     complete = any(c.get("type") == "Complete" and c.get("status") == "True"
                    for c in (job.get("status") or {}).get("conditions") or [])

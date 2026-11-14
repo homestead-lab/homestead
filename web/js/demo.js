@@ -1559,6 +1559,7 @@ ssh_pwauth: true
     "/api/imports/delete": { ok: true, message: "Import removed", removed: [] },
     "/api/imports/cleanup-plan": (url, init) => {
       if (JSON.parse(init.body).name === "homestead-import-photos") return {journalled:true,known:true,volumes:[]};
+      if (JSON.parse(init.body).name === "homestead-import-notes") return {journalled:true,known:true,removable:true,workload:"notes",services:["notes"],volumes:[{name:"notes-appdata",created:true}]};
       const name = JSON.parse(init?.body || "{}").name || "";
       return name.includes("obsidian")
         ? { job: name, namespace: "lab", workload: "obsidian", volume: "obsidian-appdata",
