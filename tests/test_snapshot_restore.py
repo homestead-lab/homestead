@@ -62,15 +62,20 @@ class RestoreTests(unittest.TestCase):
         self.addCleanup(S.ACTIVE_RESTORES.clear)
         self.addCleanup(S.CLOSE_AFTER_RESTORE.clear)
         self.addCleanup(R.FILES.BUSY_CLAIMS.clear)
+        self.other_copy = []   # holds as_another_copy set aside
+        self.threads_before = set(threading.enumerate())
         self.addCleanup(self.stop_renewing)
 
     def stop_renewing(self):
         """Restores the tests leave running keep renewing their claim: stop
-        them before the fake API server goes."""
-        for hold in list(R._HOLDERS.values()):
+        them before the fake API server goes. A claim thread still alive
+        after this would call the real API server once the fakes are gone."""
+        for hold in list(R._HOLDERS.values()) + self.other_copy:
             hold['stop'].set()
             hold['thread'].join(2)
         R._HOLDERS.clear()
+        alive = [t for t in set(threading.enumerate()) - self.threads_before if t.name == 'snapshot-restore-claim']
+        self.assertEqual([], alive, 'a restore claim thread outlived the test: stop it in stop_renewing')
 
     def body(self, **extra):
         return {'namespace': 'lab', 'session': NAME, 'folder': 'config', 'paths': ['config/app.conf', 'config/conf.d'],
@@ -231,7 +236,12 @@ class RestoreTests(unittest.TestCase):
 
     def as_another_copy(self):
         """From here on the calls come from a second copy of Homestead: its own
-        process memory, which knows nothing of the first copy's restore."""
+        process memory, which knows nothing of the first copy's restore. The
+        first copy's claim threads are set aside, still renewing, and stopped
+        at the end of the test."""
+        with R._LOCK:
+            self.other_copy += R._HOLDERS.values()
+            R._HOLDERS.clear()
         R._RUNNING.clear()
         R.FILES.BUSY_CLAIMS.clear()
         S.ACTIVE_RESTORES.clear()
@@ -371,10 +381,14 @@ class RestoreTests(unittest.TestCase):
     def test_a_claim_that_ran_out_is_taken_over(self):
         token = R.restore_plan(self.body())['review_token']
         R.restore(self.body(review_token=token))
+        self.as_another_copy()
+        # The first copy stopped: no renewal of its comes after the claim ran out.
+        for hold in self.other_copy:
+            hold['stop'].set()
+            hold['thread'].join(2)
         lease = self.claim()
         lease['spec'].update(renewTime='2020-01-01T00:00:00.000000Z', leaseDurationSeconds=60)
         K.ksend('PUT', f"/apis/coordination.k8s.io/v1/namespaces/{LEADER.NS}/leases/{lease['metadata']['name']}", lease)
-        self.as_another_copy()
         self.assertEqual(202, R.restore(self.body(review_token=token)).code)
         self.assertTrue(self.claim()['spec']['holderIdentity'].startswith('homestead-b/'))
 
