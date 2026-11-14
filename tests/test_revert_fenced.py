@@ -504,6 +504,45 @@ class WhoHoldsIt(Base):
         self.assertEqual("feedc0de", self.notes(A)[HOLD.HELD_BY])
 
 
+class EndedJobsMark(Base):
+    """A person's Start leaves a hold mark on (#1310): a rollback goes ahead past
+    the mark of a job that has ended once the app runs again, and never past a
+    job that may still act, or an app that is still stopped."""
+
+    def mark(self, status="succeeded"):
+        patch = mock.patch.object(REVERT.OPS, "stored", return_value=[
+            {"id": "feedc0de", "kind": "node-power", "status": status}])
+        patch.start()
+        self.addCleanup(patch.stop)
+        K.ksend("PATCH", A, {"metadata": {"annotations": {HOLD.HELD_BY: "feedc0de", HOLD.HELD_AS: "3"}}}, ctype=MERGE)
+
+    def test_an_ended_jobs_mark_on_an_app_started_by_hand_lets_the_rollback_go_ahead(self):
+        self.mark()
+        item = self.begin()
+        REVERT.resolve(item)
+        self.assertEqual(0, self.replicas(A))
+        self.assertEqual((MARK, "2"), (self.notes(A)[HOLD.HELD_BY], self.notes(A)[HOLD.HELD_AS]))
+        status, _, message = self.rounds(item)
+        self.assertEqual("succeeded", status, message)
+        self.assertEqual(2, self.replicas(A), "started again as it ran now, never at the old job's 3")
+        self.assertNotIn(HOLD.HELD_BY, self.notes(A))
+
+    def test_a_running_jobs_mark_is_still_refused(self):
+        self.mark("running")
+        before = len(self.kube.writes)
+        with self.assertRaisesRegex(ValueError, "app-a is held by another job \\(feedc0de\\). Nothing was changed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, self.review())
+        self.assertEqual(before, len(self.kube.writes))
+
+    def test_an_ended_jobs_mark_on_an_app_still_stopped_is_still_refused(self):
+        self.person_scales(A, 0)
+        self.mark()
+        before = len(self.kube.writes)
+        with self.assertRaisesRegex(ValueError, "app-a is held by another job \\(feedc0de\\). Nothing was changed"):
+            REVERT.start(VOLUME, "snap-a", self.ops, self.review())
+        self.assertEqual(before, len(self.kube.writes))
+
+
 class ChangedOnceTheJobStarted(Base):
     def test_a_scale_before_the_first_round_stops_nothing_and_says_so(self):
         item = self.begin()
