@@ -49,6 +49,12 @@ TEMP_SUFFIX = "-reclass"
 # A copy that has not begun by then never will: the new volume could not be
 # made or attached. Everything is put back rather than left stopped.
 START_LIMIT = 600
+# A rollback that cannot start an app again keeps the volume locked and tries
+# again. After NEEDS_ATTENTION seconds it says the move needs attention and
+# tries only once every RETRY_EVERY seconds (#1311): a refusal that lasts would
+# otherwise send a write every round for as long as it lasts.
+NEEDS_ATTENTION = 30 * 60
+RETRY_EVERY = 60
 _clock = time.time   # a seam for the tests
 GiB = 1024 ** 3
 STEPS = [("stop", "Stop what uses it"), ("create", "Make the new volume"), ("copy", "Copy the data"),
@@ -774,6 +780,8 @@ def _rollback(ns, ref, why, item=None):
         ref.update(rollback_from=ref.get("phase", "stop"), rollback_why=why, phase="rolling-back")
         if item is not None:
             OPS.checkpoint(item)
+    if item is not None and _clock() < ref.get("rollback_next", 0):
+        return "running", item.get("progress", 0), item.get("message", "")
     notes, removed = [], not _made_nothing(ref)
     if not _made_nothing(ref):
         job = ref.get("job") or ref.get("job_name")
@@ -805,6 +813,14 @@ def _rollback(ns, ref, why, item=None):
                 "What could be started has been.")
         if item is None:
             raise ValueError(said)
+        now = _clock()
+        if now - ref.setdefault("rollback_since", now) >= NEEDS_ATTENTION:
+            names, one = ", ".join(down), len(down) == 1
+            it = "it" if one else "them"
+            said = (f"This move needs attention. {names} {'is' if one else 'are'} still down ({next(iter(down.values()))}). "
+                    f"Homestead tries to start {it} again once a minute, and the volume stays locked until then. "
+                    f"Fix what stops {names} from starting, and the move ends.")
+            ref["rollback_next"] = now + RETRY_EVERY
         return "running", item.get("progress", 0), said
     ref["phase"] = "rolled-back"
     # Put back: nothing of this move is left to hold, or the volume stays locked for good.
