@@ -375,11 +375,9 @@ def watchdog_alert_facts(temps, now=None):
     Homestead is back to read it from the probe (homestead_watchdog.py):
     what it did, why Longhorn could not, and how to keep the next restart
     from needing it. temps: each host's probe reading (NODES.node_temps)."""
-    if not temps:
-        return None          # no probe reading: unread, so a raised alert is held, not cleared
     now = time.time() if now is None else now
     facts = []
-    for host, reading in sorted(temps.items()):
+    for host, reading in sorted((temps or {}).items()):
         for entry in ((reading or {}).get("watchdog") or {}).get("salvaged") or []:
             try:
                 at = float(entry.get("at"))

@@ -3,6 +3,9 @@
 import json, os, platform, re, socket, stat, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from homestead_http import BoundedHTTPServer, LimitedHandler
+import sys as _sys
+# The watchdog ships beside this script (/srv in the probe's pod), however it is loaded.
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import homestead_watchdog as WATCHDOG
 
 SYS = "/host/sys"
