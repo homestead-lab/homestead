@@ -37,6 +37,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 import urllib.error
 
@@ -264,7 +265,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
 
     req: {action: create | change | remove, members, mode, primary, allow_down, lacp_confirmed}
     busy: another host's network change in progress (its title), or "".
-    servers_ready: (ready, total) of the cluster's other servers, or None.
+    servers_ready: (ready, total[, down by their clock]) of the cluster's other servers, or None.
     """
     shape = describe(facts)
     action = str(req.get("action") or ("change" if shape["bond"] else "create"))
@@ -625,8 +626,20 @@ def status(item, now=None):
 # which is only after netplan is applied. Replicas share it, so two changes
 # sent at once to two hosts cannot both pass the guard. One left by a replica
 # that stopped runs out after CLAIM_SECONDS and is taken over.
+#
+# Its age is counted from when this replica first saw it as it is now (holder,
+# renewTime, resourceVersion), on this replica's monotonic clock, as client-go's
+# leader election does (#1318). Its stamps are on the writer's clock, so a
+# replica whose clock ran ahead would take over a fresh claim. A replica that
+# restarts, or first sees a claim late, waits CLAIM_SECONDS from then: later,
+# never sooner. A start holds it for about 5 minutes at most (the look and the
+# change script, each with its own time limit), well inside CLAIM_SECONDS, so
+# it is not renewed.
 CLAIM = "homestead-network-change"
 CLAIM_SECONDS = 600
+claim_clock = time.monotonic
+_SEEN = {"claim": None, "since": 0.0}
+_SEEN_LOCK = threading.Lock()
 STARTING = "another host's network change is starting: try again in a moment"
 
 
@@ -635,11 +648,15 @@ def _claim_path(name=""):
     return f"{base}/{name}" if name else base
 
 
-def _when(value):
-    try:
-        return datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")) if value else None
-    except ValueError:
-        return None
+def _seen_for(lease):
+    """How long this replica has seen lease as it is now, in seconds."""
+    meta, spec = lease.get("metadata") or {}, lease.get("spec") or {}
+    key = (spec.get("holderIdentity"), spec.get("renewTime"), meta.get("resourceVersion"))
+    now = claim_clock()
+    with _SEEN_LOCK:
+        if _SEEN["claim"] != key:
+            _SEEN.update(claim=key, since=now)
+        return now - _SEEN["since"]
 
 
 def claim_network(node, what):
@@ -647,7 +664,7 @@ def claim_network(node, what):
     the holder; raises ValueError while another change holds it and it has
     not run out. A write that loses a race (409) is refused the same way."""
     holder = f"{HOSTRUN.IDENTITY}/{secrets.token_hex(4)}"
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.timezone.utc)    # stamps only: never compared with another's
     stamp = now.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     lease = KUBE.get_optional(_claim_path(CLAIM), read=kget)
     try:
@@ -660,9 +677,7 @@ def claim_network(node, what):
                          "acquireTime": stamp, "renewTime": stamp, "leaseTransitions": 0}})
             return holder
         spec = lease.get("spec") or {}
-        renewed = _when(spec.get("renewTime")) or _when(spec.get("acquireTime"))
-        if spec.get("holderIdentity") and renewed and \
-                (now - renewed).total_seconds() <= int(spec.get("leaseDurationSeconds") or 0):
+        if spec.get("holderIdentity") and _seen_for(lease) <= int(spec.get("leaseDurationSeconds") or CLAIM_SECONDS):
             raise ValueError(f"{node}: {STARTING}")
         spec.update(holderIdentity=holder, leaseDurationSeconds=CLAIM_SECONDS, acquireTime=stamp, renewTime=stamp,
                     leaseTransitions=int(spec.get("leaseTransitions") or 0) + 1)
@@ -703,11 +718,12 @@ def network_change(node, what):
 
 def network_guard(node):
     """What a host network change waits for: another host's change still
-    being checked, and the other servers' readiness (ready, total)."""
+    being checked, and the other servers' readiness (ready, total, those down
+    because their clock disagrees with Homestead's)."""
     busy = next((op.get("title", "") for op in OPS.snapshot()
                  if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
-    servers, down = NETWORK_JOB.other_servers(kget("/api/v1/nodes").get("items", []), node)
-    return busy, (len(servers) - len(down), len(servers))
+    servers, down, clocks = NETWORK_JOB.other_servers(kget("/api/v1/nodes").get("items", []), node, kget, time.time())
+    return busy, (len(servers) - len(down), len(servers), len(clocks))
 
 
 def _host(body):

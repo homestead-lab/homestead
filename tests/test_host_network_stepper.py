@@ -190,6 +190,8 @@ class Steps(unittest.TestCase):
         keep_bound(self)
         for module in (BONDS, BRIDGE):
             module.bind(self.host, K.kget, K.ksend)
+        self.now = SINCE
+        DEADLINE.kubelets(self, "node-b")
 
     def each(self):
         for kind in KINDS:
@@ -197,7 +199,8 @@ class Steps(unittest.TestCase):
             yield kind
 
     def step(self, kind, ref, after):
-        return kind.module.status({"ref": ref}, now=SINCE + after)
+        self.now = SINCE + after
+        return kind.module.status({"ref": ref}, now=self.now)
 
 
 class AppliedStageTests(Steps):
@@ -941,7 +944,8 @@ class BothKindsWaitTests(DEADLINE.GuardBase):
 
     def test_both_wait_while_another_server_is_not_ready(self):
         self.kube.add(DEADLINE.node("node-c", ready=False, server=True))
-        self.refused("1 of the other servers is not Ready: if node-b went quiet too, the cluster could lose its quorum")
+        self.refused("1 other server is not Ready or has sent no recent heartbeat. If node-b stops answering "
+                     "too, the cluster could lose its quorum. Try again when every server is Ready")
 
     def test_a_bond_goes_ahead_on_a_quiet_cluster(self):
         self.assertIs(True, self.send(Bond)["ok"])
