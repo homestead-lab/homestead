@@ -495,6 +495,26 @@ shareable (RWX) Longhorn class. On a migratable class (Harvester's default)
 Redundancy says so and offers **Move data**, which copies it to a shareable class
 and restarts Homestead once onto it.
 
+One copy of Homestead needs no shared volume, and is safer without one: a
+shared volume is served by a share-manager pod, which a restart without a drain
+can leave down, and Homestead with it. When Homestead's data is shared while one
+copy runs, or its only copy is not on the system disk, Redundancy says so and
+offers the move that fixes it. **Use a volume one host mounts** opens **Move
+data** with **Mounted by one host at a time** chosen, on the class the data is
+on now or another.
+
+A new k3s install keeps Homestead's data on `local-path`, on the system disk,
+even with Longhorn: Homestead then starts whatever state Longhorn is in. Once a
+second host can keep a Longhorn copy of it, Homestead moves its data to
+`longhorn-r2`, two copies on different hosts, by itself: the same move a person
+makes here, at a quiet moment with no jobs running and no OS update rollout. It
+is unavailable for about a minute while the data is copied and it restarts, and
+an alert says before and after what it did. The `local-path` volume is kept.
+A move that fails is said with its reason and tried again six hours later,
+three times at most. It moves only data it found on `local-path` while the
+cluster had one host, and only once: data a person puts on `local-path` later
+stays there.
+
 Homestead's data can also have more than one copy itself. On a one-host
 Longhorn cluster it keeps one. Once two hosts Longhorn stores on have room for
 another, Redundancy (and Cluster Health) says "Homestead's data has one copy;

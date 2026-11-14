@@ -41,7 +41,9 @@ def class_expressions(script, variable, target):
     words = re.findall(r'-e ("s/(?:storageClassName|value): (?:[^"\\]|\\.)*")', text)
     if len(words) != 2:
         raise AssertionError(f"{script}: expected the two class expressions, found {words}")
-    out = subprocess.run([SH, "-c", f'{variable}={target}; for a in {" ".join(words)}; do printf "%s\\n" "$a"; done'],
+    # bootstrap-k3s.sh gives Homestead's own claim its own class (DATA_CLASS:
+    # local-path on k3s) and apps $CLASS; here both are the target.
+    out = subprocess.run([SH, "-c", f'{variable}={target}; DATA_CLASS={target}; for a in {" ".join(words)}; do printf "%s\\n" "$a"; done'],
                          capture_output=True, text=True, check=True).stdout
     return out.splitlines()
 
@@ -73,6 +75,12 @@ class ManifestClassTests(unittest.TestCase):
                         changed = [b for b, a in zip(before, after) if b != a]
                         expected = 0 if target in (claim_class(text),) else 2
                         self.assertEqual(expected, len(changed), changed)
+
+    def test_bootstrap_puts_homesteads_claim_on_data_class_and_apps_on_class(self):
+        text = (ROOT / "scripts" / "bootstrap-k3s.sh").read_text(encoding="utf-8")
+        self.assertIn('storageClassName: $DATA_CLASS/"', text)
+        self.assertIn('value: \\"$CLASS\\"/"', text)
+        self.assertIn('[ "$DIST" = k3s ] && DATA_CLASS=local-path', text)
 
     def test_old_manifest_helper_really_says_longhorn_r2(self):
         old = old_manifest(MANIFEST.read_text(encoding="utf-8"))
