@@ -549,13 +549,62 @@ def _no_job(item, ref, earlier=False):
                          "following it. Check that the controller is running. The Helm page shows what is installed.")
 
 
-def _job_failed(job):
+def job_failed(job):
     """Whether the Job itself has ended failed. Its `failed` count does not say: it
     counts lost pods, and the Job goes on making new ones. The controller's Jobs
     restart a failing container in its own pod, so a chart that fails adds nothing to
-    that count; only this condition covers both."""
+    that count; only this condition covers both. Platform upgrades read it too."""
     return any(condition.get("type") == "Failed" and condition.get("status") == "True"
                for condition in (job.get("status") or {}).get("conditions") or [])
+
+
+# Container restarts in the Job's own pod that read as a chart that keeps failing,
+# not a single slip: the kubelet's back-off makes these minutes apart.
+FAILING_RESTARTS = 3
+# Failed tries after which a Helm job ends as failed, so its put-back is offered
+# (Andreas, 10 Nov). The Job itself is left alone and Kubernetes keeps trying it.
+GIVE_UP_RESTARTS = 5
+
+
+def failing_words(tries, job_name, namespace):
+    return (f"Helm keeps failing: {tries} tries so far, and Kubernetes keeps trying. "
+            f"The log of the {job_name} job in {namespace} says why.")
+
+
+def restarts(namespace, job_name, job, read=None):
+    """How many times the Job's container has failed in its pod, or 0. The Job writes
+    Failed only at its backoffLimit (1000 restarts, about 3.5 days at the kubelet's
+    5-minute cap), so only the pod shows a chart that keeps failing. A pod of another
+    Job of that name does not count, and a pod read that fails says nothing."""
+    uid = (job.get("metadata") or {}).get("uid")
+    selector = urllib.parse.quote(f"job-name={job_name}", safe="")
+    try:
+        pods = (read or kget)(f"/api/v1/namespaces/{namespace}/pods?labelSelector={selector}").get("items") or []
+    except (urllib.error.HTTPError, OSError, ValueError):
+        return 0
+    most = 0
+    for pod in pods:
+        owners = (pod.get("metadata") or {}).get("ownerReferences") or []
+        if not uid or not any(owner.get("uid") == uid for owner in owners):
+            continue
+        for container in (pod.get("status") or {}).get("containerStatuses") or []:
+            most = max(most, _failures(container))
+    return most
+
+
+def _failures(container):
+    """Failed tries of one container. Kubernetes counts a restart when the new container
+    starts: while it runs, its restarts are its failures so far; while it waits in
+    back-off after a failure, or has just failed, that failure is one more. Only a
+    non-zero exit is a failure."""
+    count = int(container.get("restartCount") or 0)
+    state = container.get("state") or {}
+    last = (container.get("lastState") or {}).get("terminated") or {}
+    if (state.get("terminated") or {}).get("exitCode"):
+        return count + 1
+    if not last.get("exitCode"):
+        return 0
+    return count + 1 if state.get("waiting") else count
 
 
 def job_status(item):
@@ -578,9 +627,15 @@ def job_status(item):
     status = job.get("status") or {}
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
-    if _job_failed(job):
+    if job_failed(job):
         return "failed", 100, f"Helm failed. The log of the {ref['name']} job in {ref['namespace']} says why."
     if status.get("active"):
+        tries = restarts(ref["namespace"], ref["name"], job)
+        if tries >= GIVE_UP_RESTARTS:
+            return "failed", 100, (f"Helm failed {tries} times, so Homestead stopped waiting for it. Kubernetes keeps "
+                                   f"trying it. The log of the {ref['name']} job in {ref['namespace']} says why.")
+        if tries >= FAILING_RESTARTS:
+            return "running", 40, failing_words(tries, ref["name"], ref["namespace"])
         return "running", 40, "Helm is running"
     if status.get("failed"):
         return "running", 10, "A Helm pod failed and Kubernetes is trying again"

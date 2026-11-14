@@ -656,6 +656,102 @@ class HelmJobTests(unittest.TestCase):
         self.assertTrue(job["cleanable"])
         self.assertEqual("Helm failed. The log of the helm-install-grafana job in kube-system says why.", job["message"])
 
+    # #1307: the controller's Jobs restart a failing container in its own pod
+    # (restartPolicy OnFailure), so the Job reads active for days; only the pod counts.
+    # Kubernetes counts a restart when the new container starts: while it waits in
+    # back-off, or has just ended, the failure it ended with is not in restartCount yet.
+    STATES = {"waiting": {"waiting": {"reason": "CrashLoopBackOff"}},
+              "running": {"running": {"startedAt": "2026-11-10T10:00:00Z"}},
+              "terminated": {"terminated": {"exitCode": 1, "reason": "Error"}}}
+
+    def pod(self, restarts, owner=None, exit_code=1, state="waiting"):
+        job = self.kube.object(self.JOB_PATH)
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": "kube-system", "name": "helm-install-grafana-x7k2p",
+            "labels": {"job-name": "helm-install-grafana", "batch.kubernetes.io/job-name": "helm-install-grafana"},
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": "helm-install-grafana",
+                                 "uid": owner or job["metadata"]["uid"], "controller": True}]},
+            "status": {"phase": "Running", "containerStatuses": [{
+                "name": "helm", "restartCount": restarts, "ready": False,
+                "state": self.STATES[state],
+                "lastState": {"terminated": {"exitCode": exit_code, "reason": "Error"}}}]}})
+
+    JOB_PATH = "/apis/batch/v1/namespaces/kube-system/jobs/helm-install-grafana"
+
+    def test_a_chart_that_keeps_failing_says_so_while_it_runs(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(3)                              # the 4th failure, waiting in back-off
+        job = self.look(ident)
+        self.assertEqual("running", job["status"], "Kubernetes is still trying it")
+        self.assertEqual("Helm keeps failing: 4 tries so far, and Kubernetes keeps trying. "
+                         "The log of the helm-install-grafana job in kube-system says why.", job["message"])
+        self.assertFalse(job["cleanable"], "nothing to put back while it is still trying")
+
+    def test_a_chart_that_failed_five_times_ends_failed_and_offers_the_put_back(self):
+        # Andreas, 10 Nov: after 5 failed tries the job ends as failed; the Job itself keeps trying.
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(4)                              # the 5th failure, waiting in back-off
+        self.kube.writes.clear()
+        job = self.look(ident)
+        self.assertEqual("failed", job["status"])
+        self.assertEqual("Helm failed 5 times, so Homestead stopped waiting for it. Kubernetes keeps trying it. "
+                         "The log of the helm-install-grafana job in kube-system says why.", job["message"])
+        self.assertTrue(job["cleanable"], "its earlier settings can be put back")
+        self.assertEqual("rollback", OPS.cancel_plan(ident)["mode"])
+        self.assertEqual([], self.kube.writes, "the Job is left alone")
+        self.assertIsNotNone(self.kube.object(self.JOB_PATH))
+
+    def tries_read(self, restarts, state):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(restarts, state=state)
+        return self.look(ident)
+
+    def test_a_running_container_has_failed_as_often_as_it_restarted(self):
+        self.assertIn("4 tries so far", self.tries_read(4, "running")["message"])
+
+    def test_a_container_that_just_failed_counts_that_failure(self):
+        self.assertIn("4 tries so far", self.tries_read(3, "terminated")["message"])
+
+    def test_the_fifth_failure_ends_it_in_each_shape(self):
+        for restarts, state in ((5, "running"), (4, "waiting"), (4, "terminated")):
+            with self.subTest(state=state):
+                self.setUp()
+                self.assertEqual("failed", self.tries_read(restarts, state)["status"])
+
+    def test_four_failures_do_not_end_it_in_each_shape(self):
+        for restarts, state in ((4, "running"), (3, "waiting"), (3, "terminated")):
+            with self.subTest(state=state):
+                self.setUp()
+                self.assertEqual("running", self.tries_read(restarts, state)["status"])
+
+    def test_a_pod_of_the_job_from_before_the_upgrade_does_not_end_it(self):
+        ident = self.upgraded()                  # the Complete Job from before is still there
+        self.pod(9)                              # and a pod of it once failed many times
+        self.assertEqual("running", self.look(ident)["status"])
+
+    def test_one_restart_is_not_called_failing(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(1)
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_a_pod_of_another_job_is_not_read_as_this_ones(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(9, owner="uid-of-an-older-job")
+        self.assertEqual("Helm is running", self.look(ident)["message"])
+
+    def test_pods_that_cannot_be_read_leave_it_running(self):
+        ident = self.upgraded()
+        self.job_object({"active": 1})
+        self.pod(4)
+        self.kube.fail("/api/v1/namespaces/kube-system/pods", 500, times=5)
+        job = self.look(ident)
+        self.assertEqual(("running", "Helm is running"), (job["status"], job["message"]))
+
     def test_a_failed_condition_that_is_false_does_not_end_it(self):
         ident = self.upgraded()
         conditions = self.POD_LOST["conditions"] + [{"type": "Failed", "status": "False"}]

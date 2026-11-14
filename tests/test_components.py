@@ -891,5 +891,99 @@ class HarvesterTests(unittest.TestCase):
         self.assertEqual(("POST", {"version": "v1.5.1"}), (method, body["spec"]))
 
 
+class LostHelmPodTests(unittest.TestCase):
+    """#1307: a platform upgrade's Helm Job counts a pod lost to an eviction, a drain or
+    a delete as failed until its replacement starts. Only the Job's own Failed condition
+    ends it, as #1256 did for Helm jobs."""
+    POD_LOST = {"failed": 1, "active": 0, "ready": 0, "terminating": 0, "uncountedTerminatedPods": {},
+                "conditions": [{"type": "Suspended", "status": "False", "reason": "JobResumed"}]}
+    JOB_FAILED = {"failed": 1, "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}
+
+    def setUp(self):
+        self.kube = self.enterContext(Kube())
+        self.enterContext(mock.patch.object(C, "kget", K.kget))
+        self.enterContext(mock.patch.object(C, "HELM_NS", "kube-system"))
+
+    def job(self, name, status, created=None):
+        meta = {"namespace": "kube-system", "name": name}
+        if created is not None:
+            meta["creationTimestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(created))
+        self.kube.add({"apiVersion": "batch/v1", "kind": "Job", "metadata": meta, "status": status})
+        return self.kube.object(f"/apis/batch/v1/namespaces/kube-system/jobs/{name}")
+
+    # A Failed Job left from an earlier attempt, read before the controller replaces it.
+    def test_a_failed_job_from_before_the_upgrade_does_not_fail_it(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        self.job(f"helm-install-{C.CHARTS['kubevirt']}", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("kubevirt"))[0])
+
+    def test_a_failed_job_from_before_does_not_fail_a_network_chart_upgrade(self):
+        self.network_chart()
+        self.job("helm-install-kube-vip", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("kube-vip"))[0])
+
+    def test_a_failed_job_from_before_does_not_fail_a_longhorn_v2_upgrade(self):
+        self.enterContext(mock.patch.object(V2, "progress", lambda item: ("running", 30, "V2 going")))
+        self.job("helm-install-longhorn", self.JOB_FAILED, created=time.time() - 3600)
+        self.assertEqual("running", C.status(self.item("longhorn", v2_mode="live"))[0])
+
+    def test_a_platform_chart_that_keeps_failing_says_so(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        name = f"helm-install-{C.CHARTS['kubevirt']}"
+        job = self.job(name, {"active": 1})
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": "kube-system", "name": f"{name}-x7k2p", "labels": {"job-name": name},
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": name,
+                                 "uid": job["metadata"]["uid"], "controller": True}]},
+            "status": {"containerStatuses": [{"name": "helm", "restartCount": 4,
+                                              "lastState": {"terminated": {"exitCode": 1}}}]}})
+        status, _, message = C.status(self.item("kubevirt"))
+        self.assertEqual("running", status)
+        self.assertEqual(f"Helm keeps failing: 4 tries so far, and Kubernetes keeps trying. "
+                         f"The log of the {name} job in kube-system says why.", message)
+
+    def item(self, component, **ref):
+        return {"ref": {"component": component, "to": "v1.2.0", "started": time.time() - 600, **ref}}
+
+    def test_a_lost_pod_does_not_fail_an_operator_upgrade(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        self.job(f"helm-install-{C.CHARTS['kubevirt']}", self.POD_LOST)
+        self.assertEqual("running", C.status(self.item("kubevirt"))[0])
+
+    def test_a_failed_job_still_fails_an_operator_upgrade(self):
+        self.enterContext(mock.patch.object(C, "kubevirt_version", lambda: ("v1.1.0", "Deployed")))
+        self.job(f"helm-install-{C.CHARTS['kubevirt']}", self.JOB_FAILED)
+        status, _, message = C.status(self.item("kubevirt"))
+        self.assertEqual("failed", status)
+        self.assertIn("log of the helm-install", message)
+
+    def network_chart(self):
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": "kube-system", "name": "kube-vip"}, "spec": {"chart": "kube-vip"}})
+
+    def test_a_lost_pod_does_not_fail_a_network_chart_upgrade(self):
+        self.network_chart()
+        self.job("helm-install-kube-vip", self.POD_LOST)
+        status, _, message = C.status(self.item("kube-vip"))
+        self.assertEqual("running", status, message)
+
+    def test_a_failed_job_still_fails_a_network_chart_upgrade(self):
+        self.network_chart()
+        self.job("helm-install-kube-vip", self.JOB_FAILED)
+        status, _, message = C.status(self.item("kube-vip"))
+        self.assertEqual("failed", status, message)
+        self.assertIn("helm-install-kube-vip", message)
+
+    def test_a_lost_pod_does_not_fail_a_longhorn_v2_upgrade(self):
+        self.enterContext(mock.patch.object(V2, "progress", lambda item: ("running", 30, "V2 going")))
+        self.job("helm-install-longhorn", self.POD_LOST)
+        self.assertEqual(("running", 30, "V2 going"), C.status(self.item("longhorn", v2_mode="live")))
+
+    def test_a_failed_job_still_fails_a_longhorn_v2_upgrade(self):
+        self.enterContext(mock.patch.object(V2, "progress", lambda item: ("running", 30, "V2 going")))
+        self.job("helm-install-longhorn", self.JOB_FAILED)
+        self.assertEqual("failed", C.status(self.item("longhorn", v2_mode="live"))[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1018,6 +1018,39 @@ def _elapsed(item):
         return 0
 
 
+# A clock gap between Homestead and the API server, when telling an earlier attempt's
+# Job from this upgrade's.
+JOB_CLOCK_SKEW = 10
+
+
+def _upgrade_job(item, job):
+    """Whether this Job is this upgrade's: made at or after the upgrade started. A
+    Failed Job from an earlier attempt stays until the controller replaces it, and
+    must not fail this one in the seconds before (#1307). With no time to compare,
+    a Job read after 120 s counts, as before."""
+    try:
+        made = calendar.timegm(time.strptime((job.get("metadata") or {}).get("creationTimestamp"), "%Y-%m-%dT%H:%M:%SZ"))
+        started = float(item["ref"]["started"])
+    except (KeyError, TypeError, ValueError):
+        return _elapsed(item) > 120
+    return made >= started - JOB_CLOCK_SKEW
+
+
+def _helm_failed(item, job):
+    """This upgrade's Helm Job has ended failed. Not its failed count: a lost pod is
+    counted there until its replacement starts (#1256, #1307)."""
+    return HELM.job_failed(job) and _upgrade_job(item, job)
+
+
+def _helm_waiting(item, job, job_name, words):
+    """The words while it runs: the Helm job's own when its chart keeps failing."""
+    if (job.get("status") or {}).get("active") and _upgrade_job(item, job):
+        tries = HELM.restarts(HELM_NS, job_name, job, read=kget)
+        if tries >= HELM.FAILING_RESTARTS:
+            return HELM.failing_words(tries, job_name, HELM_NS)
+    return words
+
+
 def _network_upgrade_status(item):
     ref = item["ref"]
     component, target = ref["component"], ref.get("to", "")
@@ -1050,9 +1083,10 @@ def _network_upgrade_status(item):
         job_status = job.get("status") or {}
         if now.lstrip("v") == target.lstrip("v") and state == "failed" and not job_status.get("active"):
             return "failed", 50, f"Helm could not deploy {name} chart {target}. Check its Helm release and install job."
-        if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
+        if _helm_failed(item, job):
             return "failed", 50, f"Helm could not apply {name} chart {target}. Check {job_name} in {HELM_NS}."
-        return "running", 50 if job_status.get("active") else 20, f"{name} chart {now} → {target}. Waiting for Helm to deploy it."
+        return "running", 50 if job_status.get("active") else 20, _helm_waiting(
+            item, job, job_name, f"{name} chart {now} → {target}. Waiting for Helm to deploy it.")
     paths = next(paths for key, _, paths in NETWORK_PARTS if key == component)
     agents = []
     try:
@@ -1141,7 +1175,7 @@ def status(item):
     if component == "longhorn":
         if ref.get("v2_mode"):
             job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-longhorn") or {}
-            if (job.get("status") or {}).get("failed") and not (job.get("status") or {}).get("active") and _elapsed(item) > 120:
+            if _helm_failed(item, job):
                 return "failed", 20, "Helm could not apply Longhorn. Check its install job in kube-system."
             import homestead_lhv2_upgrade as V2
             return V2.progress(item)
@@ -1168,9 +1202,10 @@ def status(item):
         return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
     job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-{CHARTS.get(component, component)}") or {}
     job_status = job.get("status") or {}
-    if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
+    if _helm_failed(item, job):
         return "failed", 50, f"Helm could not apply it. The log of the helm-install-{CHARTS.get(component)} job in kube-system says why."
-    return "running", 50 if job_status.get("active") else 20, f"{ref.get('name', component)} {now or '…'} → {target}"
+    return "running", 50 if job_status.get("active") else 20, _helm_waiting(
+        item, job, f"helm-install-{CHARTS.get(component, component)}", f"{ref.get('name', component)} {now or '…'} → {target}")
 
 
 def cancel_plan(item):
