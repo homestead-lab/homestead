@@ -3,6 +3,7 @@ import hmac
 import json
 import sys
 import time
+import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -113,7 +114,8 @@ class SmartTests(unittest.TestCase):
         self.assertIn("secretName: homestead-smart-key", manifest)
         self.assertIn('["-d", device_type(name), "-a", "-j", path]', manifest)
         self.assertIn('["-d", device_type(name), "-t", test, "-j", path]', manifest)
-        script = manifest.split("  smart.py: |\n", 1)[1].split("\n  homestead_http.py:", 1)[0].split("\n---", 1)[0]
+        # Up to the next script in the ConfigMap, whichever it is.
+        script = re.split(r"\n  [\w.]+: \|\n", manifest.split("  smart.py: |\n", 1)[1], 1)[0].split("\n---", 1)[0]
         source = "\n".join(line[4:] if line.startswith("    ") else line
                            for line in script.splitlines())
         compile(source, "smart.py", "exec")
