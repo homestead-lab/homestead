@@ -766,6 +766,8 @@ def _no_put_back(item, action, name, chart):
         return f"{name}'s chart is gone, so there is nothing to put back"
     kept = HELM.previous_spec(chart)
     if kept is None:
+        if ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
+            return f"The earlier settings kept on {name} cannot be read, so there is nothing to put back"
         return f"No earlier settings of {name} were kept to go back to"
     if not ref.get("chart_uid"):
         return f"This upgrade is from an older Homestead and kept no record of the chart it wrote, so {name} is not put back from here"
@@ -773,7 +775,20 @@ def _no_put_back(item, action, name, chart):
         return f"{name}'s settings are already the ones that were kept, so there is nothing to put back"
     if _moved_since_written(item, chart):
         return _changed_words(name)
+    if _finished_since(item):
+        return f"Helm has since finished this upgrade of {name}, so there is nothing to put back"
     return ""
+
+
+def _finished_since(item):
+    """Whether the chart's Job is done after all: one the controller made after the
+    job failed at its wait, or made again after a Job that failed. The Job from before
+    this job's write is not that, and a chart moved since is refused before this."""
+    ref = item["ref"]
+    job = KUBE.get_optional(f"/apis/batch/v1/namespaces/{_q(ref.get('namespace') or HELM.CONTROLLER_NS)}/jobs/"
+                            f"{_q(ref.get('name', ''))}", read=kget) or {}
+    uid = (job.get("metadata") or {}).get("uid")
+    return bool(uid) and uid != ref.get("earlier_job") and bool((job.get("status") or {}).get("succeeded"))
 
 
 def _went_back(item, chart):
@@ -832,6 +847,8 @@ def helm_plan(item):
         if not ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
             return {"mode": "forget", "needs": "admin", "keeps": [
                 f"No earlier settings of {name} were kept to restore, so the upgrade continues."]}
+        if HELM.previous_spec(chart) is None:
+            return {"mode": "forget", "needs": "admin", "keeps": [_unreadable_words(name)]}
         # The settings kept are from before the latest upgrade, not this one's: going back
         # to them would undo that. A cancel of a failed job's put-back has its own path.
         if not _was_failed(item) and _moved_since_written(item, chart):
@@ -862,7 +879,32 @@ def _helm_view(item, out):
         out["cleanable"] = _helm_action(item) == "upgrade" and bool(ref.get("chart_uid")) and not ref.get("chart_gone")
 
 
-def helm_cancel(item, _options):
+def _unreadable_words(name):
+    return f"The earlier settings kept on {name} cannot be read, so nothing is put back and the upgrade continues."
+
+
+def helm_cancel(item, options):
+    """The Helm controller's status writes move the chart's resourceVersion between
+    this read and the put-back's write, and change nothing anyone decided: a 409 reads
+    the chart again and runs the cancel once more, with every check on the fresh read.
+    Only an upgrade's cancel writes the chart; the other actions keep their answer."""
+    try:
+        return _helm_cancel(item, options)
+    except urllib.error.HTTPError as error:
+        if error.code != 409 or _helm_action(item) != "upgrade":
+            raise
+        error.close()
+    try:
+        return _helm_cancel(item, options)
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        error.close()
+    raise ValueError(f"{item['resource'].get('name', '')} kept being updated while its settings were restored. "
+                     "Nothing was put back. Try again in a moment.")
+
+
+def _helm_cancel(item, _options):
     action = _helm_action(item)
     name, chart = _helmchart(item)
     # Read again here: the review read the chart a moment ago, and this is its own read. So
@@ -884,6 +926,10 @@ def helm_cancel(item, _options):
         if _moved_since_written(item, chart) and HELM.previous_spec(chart) is not None:
             raise ValueError(_changed_words(name))
         if not HELM.restore_previous(chart):
+            # Still there and unreadable: nothing was written, whatever was reviewed.
+            if ((chart.get("metadata") or {}).get("annotations") or {}).get(HELM.PREVIOUS_SPEC):
+                return (f"Stopped following it. Nothing was put back: the earlier settings kept on {name} "
+                        "cannot be read. The upgrade continues.")
             # Restoring drops the settings kept, in the same write: a rollback was
             # reviewed, so a run cut off after it finds them gone, and it went back.
             if (item.get("cancel_record") or {}).get("mode") == "rollback":
