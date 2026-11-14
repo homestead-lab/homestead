@@ -429,6 +429,18 @@ BUDGET_WAIT = 300
 # run elsewhere (and their orphan records) before the drain stops waiting:
 # an engine that just moved can be listed here for a moment.
 STALE_GRACE = 30
+# How often the drain reads Longhorn's orphans, instance-managers and engines
+# while it waits on an instance-manager: often enough for STALE_GRACE.
+ENGINES_EVERY = 10
+# Longhorn's setting for the orphan records it removes by itself; "instance"
+# among its values (separated by ";") covers engine-instance records.
+AUTO_DELETION = LH + "/settings/orphan-resource-auto-deletion"
+# How long Longhorn waits before it removes them (longhorn-manager
+# types/setting.go: SettingNameOrphanResourceAutoDeletionGracePeriod, an int
+# in seconds, default "300"); the drain waits that much longer, at most
+# GRACE_MOST.
+AUTO_DELETION_GRACE = AUTO_DELETION + "-grace-period"
+GRACE_DEFAULT, GRACE_MOST = 300, 1800
 
 PDB = "/apis/policy/v1/namespaces/{ns}/poddisruptionbudgets/{name}"
 # The cause Kubernetes gives an eviction a budget refuses
@@ -441,6 +453,22 @@ UNREAD_WHY = "could not read why"
 # out (pkg/controller/disruption/disruption.go failSafe; policy/v1
 # DisruptionAllowedCondition and SyncFailedReason).
 SYNC_CONDITION, SYNC_FAILED = "DisruptionAllowed", "SyncFailed"
+SYNC_SAID = 200     # characters of the controller's SyncFailed message a refusal quotes
+THROTTLED = "the API server asked Homestead to slow down"
+
+
+def _retry_after(error, status):
+    """The seconds a 429 asks to wait: its Retry-After header in seconds, else
+    the Status body's details.retryAfterSeconds; 0 for neither."""
+    for value in ((getattr(error, "headers", None) or {}).get("Retry-After"),
+                  ((status or {}).get("details") or {}).get("retryAfterSeconds")):
+        try:
+            seconds = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if seconds > 0:
+            return seconds
+    return 0
 
 
 def refusal(error, pod, read=None):
@@ -453,7 +481,8 @@ def refusal(error, pod, read=None):
     so waiting can let the eviction through. A body or
     budget that can't be read is not passing, with why "couldn't read why".
     A budget Kubernetes cannot update (SyncFailed) is not passing either.
-    plain: the 429 is the API server's own Status with no budget cause."""
+    plain: the 429 is the API server's own Status with no budget cause, and
+    retry_after the seconds it asks to wait (0 when it names none)."""
     unknown = {"budget": None, "passing": False, "starting": 0, "expected": 0, "why": UNREAD_WHY}
     try:
         status = json.loads(error.read() or b"null")
@@ -463,8 +492,10 @@ def refusal(error, pod, read=None):
     budget_causes = [c for c in causes if isinstance(c, dict) and c.get("reason") == BUDGET_CAUSE]
     if isinstance(status, dict) and status.get("kind") == "Status" and not budget_causes:
         # The API server's own 429 (such as API priority and fairness): no
-        # budget refused it, so the drain tries it again in its normal wait.
-        return {**unknown, "plain": True, "why": "the API server asked Homestead to slow down"}
+        # budget refused it, so the drain tries it again in its normal wait,
+        # after the time the answer asks for (Retry-After, else its body's
+        # retryAfterSeconds).
+        return {**unknown, "plain": True, "why": THROTTLED, "retry_after": _retry_after(error, status)}
     named = [_BUDGET_NAMED.match(c.get("message") or "") for c in budget_causes]
     named = [m.group(1) for m in named if m]
     ns = (pod.get("metadata") or {}).get("namespace") or ""
@@ -490,9 +521,11 @@ def refusal(error, pod, read=None):
         return unknown
     budget = f"{ns}/{named[0]}"
     if failed_sync:
+        # The controller's own error text, which can be long: the start of it.
+        said = str(failed_sync.get("message") or "no reason given")
+        said = said if len(said) <= SYNC_SAID else said[:SYNC_SAID] + "…"
         return {"budget": budget, "passing": False, "starting": 0, "expected": expected,
-                "why": f"disruption budget {budget}, which allows no disruption because Kubernetes cannot update it: "
-                       f"{failed_sync.get('message') or 'no reason given'}"}
+                "why": f"disruption budget {budget}, which allows no disruption because Kubernetes cannot update it: {said}"}
     starting = max(0, expected - healthy)
     if starting:
         why = (f"disruption budget {budget}, which has {healthy} of {expected} copies healthy and needs "
@@ -520,7 +553,12 @@ def engines_here(node, read=None):
     try:
         orphans, managers = got["orphans"] or [], got["instancemanagers"] or []
         engines = _engines_by_name(got["engines"] or [])
-        rows = [row for row in _orphan_rows(node, orphans, engines) if row["kind"] == "engine-orphans"]
+        # Only a record whose engine the instance-manager still lists holds
+        # it; one whose process has gone already holds nothing.
+        listed = {name for im in managers if (im.get("spec") or {}).get("nodeID") == node
+                  for name in (im.get("status") or {}).get("instanceEngines") or {}}
+        holding = [o for o in orphans if ((o.get("spec") or {}).get("parameters") or {}).get(INSTANCE_NAME) in listed]
+        rows = [row for row in _orphan_rows(node, holding, engines) if row["kind"] == "engine-orphans"]
         # Records being removed are Longhorn's to finish: not counted as what
         # nothing more will let go, and named when the drain times out.
         named = {r["engine"] for row in rows for r in row["records"]} | _removing_engines(node, orphans)
@@ -529,6 +567,27 @@ def engines_here(node, read=None):
     except Exception:  # data not shaped as Longhorn writes it: couldn't check, as unread
         return None
     return len(live), rows
+
+
+def removes_instance_orphans(read=None):
+    """The seconds Longhorn waits before it removes engine-instance orphan
+    records by itself (orphan-resource-auto-deletion includes "instance"),
+    or None when it does not. Then the drain does not stop early on them and
+    waits that much longer: Longhorn lets the instance-manager go once they
+    are removed. A setting that cannot be read counts as off, as before; a
+    grace period that cannot be read is Longhorn's default, and at most
+    GRACE_MOST counts."""
+    try:
+        value = str(((read or kget)(AUTO_DELETION) or {}).get("value") or "")
+    except Exception:
+        return None
+    if "instance" not in [part.strip() for part in value.split(";")]:
+        return None
+    try:
+        grace = int(str(((read or kget)(AUTO_DELETION_GRACE) or {}).get("value")).strip())
+    except Exception:
+        grace = GRACE_DEFAULT
+    return min(max(grace, 0), GRACE_MOST)
 
 
 GENERAL_ADVICE = "Check the Longhorn volumes, disruption budgets and pod events"
