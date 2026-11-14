@@ -37,6 +37,7 @@ import urllib.error
 import homestead_alerts as ALERTS
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
+import homestead_lhcapacity as LHCAP
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
@@ -841,6 +842,10 @@ def preview(names):
     state = _load()
     config = settings(state)
     nodes, own = _nodes(), own_node()
+    try:
+        lone = LHCAP.salvage_status()["rows"]
+    except Exception:
+        lone = []   # the alert says it too
     hosts = []
     for name in sorted(names, key=lambda name: (name == own, name)):
         facts = host_os.stored(name) or {}
@@ -856,7 +861,7 @@ def preview(names):
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
                       "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
                       "homestead_here": name == own, "restart_refusal": refusal, "restart_may_clear": may_clear, "restart_unread": unread,
-                      "busy": _busy_host(name)})
+                      "busy": _busy_host(name), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
     missing = [h["node"] for h in hosts if not h["ready"]]
     blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \
         or ("Not Ready, so left alone: " + ", ".join(missing) if missing else "") \

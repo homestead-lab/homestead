@@ -9,6 +9,7 @@ import urllib.error
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_kube as KUBE
+import homestead_lhcapacity as LHCAP
 import homestead_maintenance as MAINTENANCE
 import homestead_operations as OPS
 import homestead_os_rollout as ROLLOUT
@@ -238,6 +239,15 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                             "they stop and wait for this one")
     if affected:
         warnings.append(f"{len(affected)} volume(s) lose a replica until this host returns or Longhorn rebuilds")
+    if not maintain and volumes is not None:
+        # Said, never a block: a drained restart detaches them cleanly.
+        try:
+            lone = LHCAP.salvage_blocked(volumes, replicas, _items(f"{LH}/nodes", absent_ok=True) or [], LHCAP._own_claims())
+            unclean = LHCAP.unclean_restart_warning(lone, node)
+        except Exception:
+            unclean = ""   # the alert says it too
+        if unclean:
+            warnings.append(unclean)
     if not affected and not storage_unknown:
         warnings.append("Non-Longhorn or host-local volumes are not covered by replica checks")
     boot_id = ((node_obj.get("status") or {}).get("nodeInfo") or {}).get("bootID", "")

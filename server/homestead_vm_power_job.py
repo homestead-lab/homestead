@@ -1,4 +1,5 @@
 """Durable, one-shot VM power dispatch; monitoring never sends a power request."""
+import calendar
 import hashlib
 import re
 import time
@@ -8,6 +9,9 @@ import homestead_shared as SHARED
 import homestead_kube as KUBE
 
 API = "/apis/kubevirt.io/v1"
+# virt-handler's event when QEMU exits under a running instance.
+CRASHED = "VirtualMachineInstance crashed"
+FULL_TEXT = 8000   # KubeVirt's own words kept for the job's log
 
 
 def worker_lock(ident, ops, timeout=10):
@@ -16,7 +20,7 @@ def worker_lock(ident, ops, timeout=10):
     return SHARED.SharedLock("vm-power-" + ident, strict=True, directory=lambda: ops.DATA_DIR, timeout=timeout)
 
 
-def dispatch(body, context, ops, send, before_send):
+def dispatch(body, context, ops, send, before_send, run_strategy=""):
     action = body["action"]
     if action not in ("start", "restart", "reset", "unpause"):
         raise ValueError("Only reviewed start, restart, reset and resume use this dispatch journal")
@@ -29,7 +33,9 @@ def dispatch(body, context, ops, send, before_send):
            "device_nodes": list(observations.get("device_nodes") or []),
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0]),
-           "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "dispatch_protocol": 1}
+           "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "dispatch_protocol": 1,
+           # As the job found it, so that a start that crashes can put it back.
+           "run_strategy": str(run_strategy or "")[:40]}
     job = ops.start("vm-power", f"{action.capitalize()} VM {vm['name']}",
                     {"kind": "VirtualMachine", "namespace": vm["namespace"], "name": vm["name"]},
                     "/vms", ref, "Power request recorded. Checking again before sending it.")
@@ -69,7 +75,133 @@ def _dispatch_owned(ident, name, ops, send, before_send):
     return {**result, "detail": f"Power request accepted for {name}. Follow its job to see when it is ready.", "operation": operation}
 
 
-def status(item, read):
+def status(item, read, send=None):
+    """Where the power request has got to. A start, restart or reset whose
+    instance crashes stops here, at once, with KubeVirt's reason: otherwise the
+    job would wait for ever while KubeVirt recreates the instance (November
+    2026: a kernel's AppArmor change made QEMU exit at every start)."""
+    result = _status(item, read)
+    ref = item["ref"]
+    if result[0] != "running" or ref.get("phase") != "accepted" or ref.get("action") not in ("start", "restart", "reset"):
+        return result
+    try:
+        vm = read(f"{API}/namespaces/{quote(ref['namespace'], safe='')}/virtualmachines/{quote(ref['name'], safe='')}")
+    except urllib.error.HTTPError:
+        return result
+    meta = vm.get("metadata") or {}
+    if (meta.get("uid"), meta.get("name")) != (ref["uid"], ref["name"]):
+        return result
+    rows = _crash(ref, vm, read)
+    if rows is None:
+        return result
+    return _fail_fast(ref, vm, rows, read, send)
+
+
+def _when(stamp):
+    try:
+        return calendar.timegm(time.strptime(str(stamp)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _crash(ref, vm, read):
+    """KubeVirt's events for this VM since the request was accepted, if its
+    instance crashed in that time (a crash event, or KubeVirt's backoff
+    between restarts), else None."""
+    since = float(ref.get("phase_at") or 0) - 5   # the API's clock, in whole seconds
+    selector = quote(f"involvedObject.name={ref['name']}", safe="")
+    try:
+        rows = read(f"/api/v1/namespaces/{quote(ref['namespace'], safe='')}/events?fieldSelector={selector}").get("items") or []
+    except Exception:
+        rows = []   # unreadable events: the VM's own status still decides
+    rows = [row for row in rows
+            if (row.get("involvedObject") or {}).get("kind") in ("VirtualMachineInstance", "VirtualMachine")
+            and _when(row.get("lastTimestamp") or row.get("eventTime")) >= since]
+    rows.sort(key=lambda row: row.get("lastTimestamp") or row.get("eventTime") or "")
+    looping = (vm.get("status") or {}).get("printableStatus") == "CrashLoopBackOff"
+    if not looping and not any(CRASHED in str(row.get("message") or "") for row in rows):
+        return None
+    return rows
+
+
+def _cause(text, kernel):
+    """A cause for a failure Homestead knows, or ""."""
+    if "Permission denied" in text and ("kick_thread" in text or "signal" in text.lower()):
+        on = f" The host runs kernel {kernel}." if kernel else ""
+        return ("QEMU was refused permission to signal its own threads. This is how a kernel's AppArmor change "
+                f"shows itself (Ubuntu's 7.0.0-43, November 2026).{on} Booting the host's previous kernel works around it.")
+    return ""
+
+
+def _kernel(rows, read):
+    """The kernel of the host KubeVirt reported the failure from, or ""."""
+    hosts = [str((row.get("source") or {}).get("host") or "") for row in rows]
+    host = next((name for name in reversed(hosts) if name), "")
+    if not host:
+        return ""
+    try:
+        node = read(f"/api/v1/nodes/{quote(host, safe='')}") or {}
+    except Exception:
+        return ""
+    return str(((node.get("status") or {}).get("nodeInfo") or {}).get("kernelVersion") or "")[:80]
+
+
+def _put_back(ref, vm, send):
+    """Return a start's run strategy to the one the job found, once, fenced
+    on the VM's version so that a person's own change since is never
+    overwritten. A restart or reset found the VM running, so there is nothing
+    to put back."""
+    stay = "KubeVirt keeps trying to start it. Stop the VM to end the retries."
+    if ref.get("action") != "start" or ref.get("run_strategy") != "Halted":
+        return stay
+    spec, meta = vm.get("spec") or {}, vm.get("metadata") or {}
+    if "runStrategy" in spec:
+        path, now, before = "/spec/runStrategy", spec["runStrategy"], "Halted"
+    else:
+        path, now, before = "/spec/running", bool(spec.get("running")), False
+    if now == before:
+        return "The VM is set to stay off."
+    if send is None:
+        return stay
+    try:
+        send("PATCH", f"{API}/namespaces/{quote(ref['namespace'], safe='')}/virtualmachines/{quote(ref['name'], safe='')}", [
+            {"op": "test", "path": "/metadata/uid", "value": ref["uid"]},
+            {"op": "test", "path": "/metadata/resourceVersion", "value": meta.get("resourceVersion")},
+            {"op": "test", "path": path, "value": now},
+            {"op": "replace", "path": path, "value": before}], ctype="application/json-patch+json")
+    except Exception as error:
+        code = f" (HTTP {error.code})" if isinstance(error, urllib.error.HTTPError) else ""
+        return f"Homestead could not set it back to stay off{code}. Stop the VM to end the retries."
+    return "It is set back to stay off, as it was before the start."
+
+
+def _fail_fast(ref, vm, rows, read, send):
+    failures = []
+    for row in rows:
+        words = " ".join(str(row.get("message") or "").split())
+        if row.get("reason") == "SyncFailed" and words and words not in failures:
+            failures.append(words)
+    text = "\n".join(failures)[-FULL_TEXT:]
+    if "crash" not in ref:   # once: a later read of the ended job changes nothing
+        ref["crash"] = {"text": text, "cause": _cause(text, _kernel(rows, read) if text else ""),
+                        "put_back": _put_back(ref, vm, send)}
+    ref["retain_resources"] = False
+    first = (text.split(". ")[0][:160].rstrip(".") + ".") if text else ""
+    reason = ref["crash"]["cause"] or (f"KubeVirt says: {first}" if first else "KubeVirt gave no reason.")
+    more = " Open the log for KubeVirt's full message." if text else ""
+    return "failed", 60, f"The VM crashed while starting, so this job stopped. {reason} {ref['crash']['put_back']}{more}"
+
+
+def log_sources(item):
+    """Why a start stopped: KubeVirt's full messages, as the job kept them."""
+    crash = (item.get("ref") or {}).get("crash")
+    if not crash:
+        return []
+    return [{"title": "Why the VM stopped", "text": crash.get("text") or "",
+             "note": "" if crash.get("text") else "KubeVirt recorded no failure message. The VM's events may say more."}]
+
+
+def _status(item, read):
     ref = item["ref"]
     phase = ref.get("phase")
     if phase in ("prepared", "dispatching", "uncertain"):
@@ -139,5 +271,6 @@ def cancel_run(item, options):
 def register(ops):
     """The job store's entries for a VM power request (#622). The client is
     looked up when asked, so a test that patches homestead_kube is the one used."""
-    ops.RESOLVERS["vm-power"] = lambda item: status(item, KUBE.kget)
+    ops.RESOLVERS["vm-power"] = lambda item: status(item, KUBE.kget, KUBE.ksend)
     ops.CANCELLERS["vm-power"] = (cancel_plan, cancel_run)
+    ops.LOGGERS["vm-power"] = log_sources

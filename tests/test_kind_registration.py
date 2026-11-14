@@ -174,9 +174,10 @@ class RestKindTests(unittest.TestCase):
         for module, _, _ in REST:
             module.register(ops)
         item, read = {"id": "j1", "ref": {}}, object()
-        with mock.patch.object(KUBE, "kget", read):
+        send = object()
+        with mock.patch.object(KUBE, "kget", read), mock.patch.object(KUBE, "ksend", send):
             for module, name, kind, args in [
-                    (VM_POWER_JOB, "status", "vm-power", (item, read)),
+                    (VM_POWER_JOB, "status", "vm-power", (item, read, send)),
                     (IMPORT_JOB, "status", IMPORT_JOB.KIND, (item, read)),
                     (RENAME, "status", RENAME.KIND, (item, ops)),
                     (AUTOUPDATE, "resolve", AUTOUPDATE.KIND, (item, ops.checkpoint)),
