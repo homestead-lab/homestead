@@ -85,15 +85,18 @@ function shutdownPaint(state, disconnected = false) {
     UI.table([{label:'Host'}, {label:'Last known state'}], state.plan.nodes.map(n => [esc(n.name), `${esc(state.hosts?.find(h => h.name === n.name)?.state || 'Waiting for the helper')}${left(n.name) ? ` · ${left(n.name)} pod${left(n.name) === 1 ? '' : 's'} still stopping` : ''}<span class="sub">${n.name === state.plan.own_node ? 'Last · Homestead\'s host' : 'Turned off after all apps and volumes stop'}</span>`]));
 }
 /* A poll (#983), every 2 s. It reads on in a hidden tab (background: a shutdown is followed as it
-   happens), and closing the dialog stops it. api() leaves its own `timeout` to a
-   caller that passes a signal, so the 10 s limit on a read joins the poll's signal here. */
+   happens). Closing the dialog does not stop it (dialog: false): the closed body keeps
+   #shutdownLive, so it reads on, and a phase change or an overrun opens the dialog again, as
+   before. It ends when another dialog replaces that body, or by shutdownStop() when the
+   shutdown is opened again. api() leaves its own `timeout` to a caller that passes a signal,
+   so the 10 s limit on a read joins the poll's signal here. */
 function shutdownPoll(last) {
   shutdownStop();
   if (!$('#shutdownLive')) return;
   shutdownTimer = UI.poll(async signal => {
     if (!$('#shutdownLive')) return false;
     try {
-      // Without AbortSignal.any the 10 s limit alone; closing still ends the poll through its own race.
+      // Without AbortSignal.any the 10 s limit alone; shutdownStop() still ends the poll through its own race.
       const timeout = typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(10000) : null;
       const limit = timeout && AbortSignal.any ? AbortSignal.any([signal, timeout]) : timeout || signal;
       const result = await api('/api/cluster/shutdown', {keep:true, signal:limit});
@@ -104,7 +107,7 @@ function shutdownPoll(last) {
       shutdownPaint(next);
       last = next;
     } catch (_) { if (UI.pollCancelled(signal)) return false; shutdownPaint(last, true); }
-  }, 2000, { later: true, background: true });
+  }, 2000, { later: true, background: true, dialog: false });
 }
 window.clusterShutdownCancel = async () => {
   try {

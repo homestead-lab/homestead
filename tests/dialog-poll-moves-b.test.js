@@ -30,8 +30,9 @@ const LOOPS = [
     name: "cluster shutdown", files: "cluster-shutdown.js", path: "/api/cluster/shutdown", exact: true, every: 2000, host: "#shutdownLive", later: true,
     open: async w => { w.ctx.clusterShutdownProgress(SHUTDOWN); },
     running: () => ({ state: { ...SHUTDOWN, progress: 40 } }),
-    done: null,   // it follows every phase until the dialog is left
+    done: null,   // it follows every phase until another dialog replaces it
     failed: /Connection lost/, failedShowsCause: false, afterFailure: "retry", background: true,
+    readsOnClosed: true,   // closed, it reads on and opens again when the shutdown moves on (tests below)
   },
   {
     name: "new host joining", files: "onboard.js", path: "/api/nodes", every: 10000, host: "#guideWatch",
@@ -118,6 +119,67 @@ test("cluster shutdown: a read still waiting after 10 s is \"Connection lost\", 
   assert.match(w.fields["#shutdownLive"].innerHTML, /Connection lost/);
   await w.clock.advance(2000);
   assert.equal(shutdownReads(w).length, 2, "and it reads again 2 s later");
+});
+
+// Closed, the shutdown dialog reads on, and opens itself again on a phase change or an overrun,
+// as on dev (owner's decision, 14 Nov). Another dialog in its place ends the loop.
+const opened = async () => {
+  const w = shutdownWorld();
+  await w.clock.advance(2000);
+  shutdownReads(w)[0].answer({ state: { ...SHUTDOWN, progress: 40 } }); await w.clock.settle();
+  w.close();
+  assert.equal(w.open, false);
+  return w;
+};
+
+test("cluster shutdown: closed, it reads on and stays closed while the phase holds", async () => {
+  const w = await opened();
+  await w.clock.advance(2000);
+  assert.equal(shutdownReads(w).length, 2, "it reads on after the dialog closed");
+  shutdownReads(w)[1].answer({ state: { ...SHUTDOWN, progress: 45 } }); await w.clock.settle();
+  assert.equal(w.open, false, "the same phase does not open it");
+  assert.match(w.fields["#shutdownLive"].innerHTML, /aria-valuenow="45"/, "the closed body stays current");
+});
+
+test("cluster shutdown: closed, a phase change opens the dialog again with the new phase, and one loop runs", async () => {
+  const w = await opened();
+  await w.clock.advance(2000);
+  shutdownReads(w)[1].answer({ state: { ...SHUTDOWN, phase: "stopping-homestead", progress: 70, message: "Stopping Homestead" } }); await w.clock.settle();
+  assert.equal(w.open, true, "the dialog is shown again");
+  assert.equal(w.title, "Cluster shutdown progress");
+  assert.match(w.fields["#shutdownLive"].innerHTML, /Stopping Homestead/);
+  const before = shutdownReads(w).length;
+  w.pollAuto = null; w.answers.auto = r => r.answer({ state: { ...SHUTDOWN, phase: "stopping-homestead", progress: 70 } });
+  await w.clock.advance(3 * 2000);
+  assert.equal(shutdownReads(w).length - before, 3, "one read per interval, not two");
+});
+
+test("cluster shutdown: closed, an overrun past the deadline opens the dialog again to uncordon", async () => {
+  const w = await opened();
+  await w.clock.advance(2000);
+  shutdownReads(w)[1].answer({ state: { ...SHUTDOWN, progress: 40, deadline: 1 } }); await w.clock.settle();
+  assert.equal(w.open, true, "the dialog is shown again");
+  assert.ok(w.fields["#shutdownLive"], "with the progress");
+  assert.equal(w.fields["#shutdownCancel"], undefined, "no Cancel once overrun");
+});
+
+test("cluster shutdown: another dialog in its place ends the loop, with no timer left", async () => {
+  const w = await opened();
+  w.ctx.modal("Something else", '<div id="other"></div>');
+  await w.clock.advance(10 * 2000);
+  assert.equal(shutdownReads(w).length, 1, "no read once its body is gone");
+  assert.equal(w.clock.pending(), 0, "no timer is left behind");
+});
+
+test("cluster shutdown: another dialog drawn during a read drops its answer and ends the loop", async () => {
+  const w = await opened();
+  await w.clock.advance(2000);
+  w.ctx.modal("Something else", '<div id="other"></div>');
+  shutdownReads(w)[1].answer({ state: { ...SHUTDOWN, phase: "stopping-homestead", progress: 70 } }); await w.clock.settle();
+  assert.equal(w.title, "Something else", "the other dialog is not replaced");
+  await w.clock.advance(10 * 2000);
+  assert.equal(shutdownReads(w).length, 2);
+  assert.equal(w.clock.pending(), 0, "no timer is left behind");
 });
 
 test("OS update run: the buttons are redrawn when the run changes, not on every read", async () => {

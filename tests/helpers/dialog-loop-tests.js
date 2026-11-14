@@ -8,7 +8,9 @@
 //   read paints; null: it shows nothing), firstFailed (the first read's own failure text),
 //   failedAt (another element the failure is written to), failedShowsCause (false: a fixed text, not
 //   the error), afterFailure ("retry" or "stop"), side(read) (answers for the opener's other reads),
-//   background (it follows a dangerous operation and reads on in a hidden tab; decided 12 Nov).
+//   background (it follows a dangerous operation and reads on in a hidden tab; decided 12 Nov),
+//   readsOnClosed (closing the dialog does not stop it: the cluster shutdown reads on and opens its
+//   dialog again when the shutdown moves on, as on dev; its own file tests that instead).
 const assert = require("node:assert/strict");
 const world = require("./dialog-poll-world");
 
@@ -102,6 +104,7 @@ module.exports = function dialogLoopCases(LOOPS) {
       w.close();
       return { w, read, before };
     };
+    if (!loop.readsOnClosed) {
     test(`${loop.name}: closing the dialog reads no more`, async () => {
       const { w, read } = await closedMidRead();
       read.answer(loop.running()); await w.clock.settle();
@@ -117,6 +120,7 @@ module.exports = function dialogLoopCases(LOOPS) {
       read.answer(loop.running()); await w.clock.settle();
       assert.equal(shown(w), before, "its answer is not painted");
     });
+    }
 
     test(`${loop.name}: closed and opened again, it runs one loop`, async () => {
       const w = await opened();
