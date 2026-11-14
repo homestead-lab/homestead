@@ -133,13 +133,31 @@ class ReviewFixTests(unittest.TestCase):
         self.assertEqual(["KubeVirt 1.9 is not tested on Kubernetes 1.33"],
                          self.titles(U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 33), (1, 35)}, {})))
 
-    def test_a_patch_upgrade_inside_an_already_outside_pair_is_not_blocked(self):
+    def test_a_patch_upgrade_inside_an_already_outside_pair_adds_no_problem(self):
         result = U.check("cluster", "v1.37.1+k3s1", "v1.37.2+k3s1", {(1, 37)}, {"kubevirt": "v1.9.1"})
-        self.assertEqual("check", result["verdict"])
+        self.assertEqual("unchanged", result["verdict"])
+        self.assertEqual("already", result["findings"][0]["level"])
         self.assertIn("already outside", result["findings"][0]["title"])
+        self.assertIn("Upgrade KubeVirt when a release lists Kubernetes 1.37.", result["findings"][0]["detail"])
 
-    def test_a_kubevirt_patch_that_stays_outside_is_not_blocked(self):
-        self.assertEqual("check", U.check("kubevirt", "v1.9.0", "v1.9.1", {(1, 37)}, {})["verdict"])
+    def test_a_kubevirt_patch_that_stays_outside_adds_no_problem(self):
+        self.assertEqual("unchanged", U.check("kubevirt", "v1.9.0", "v1.9.1", {(1, 37)}, {})["verdict"])
+
+    def test_an_end_of_life_the_upgrade_leaves_as_it_is_is_already_true(self):
+        result = U.check("kubevirt", "v1.8.1", "v1.8.2", {(1, 33)}, {})
+        self.assertEqual(["already"], [f["level"] for f in result["findings"]])
+        self.assertEqual("unchanged", result["verdict"])
+
+    def test_a_new_end_of_life_or_another_warning_still_asks_for_a_look(self):
+        # Kubernetes 1.33 is past its end of life, and the cluster upgrade moves to it from a supported minor.
+        result = U.check("cluster", "v1.35.1+k3s1", "v1.33.9+k3s1", {(1, 35)}, {"kubevirt": "v1.8.1"})
+        self.assertEqual(["warn"], [f["level"] for f in result["findings"]])
+        self.assertEqual("check", result["verdict"])
+
+    def test_an_already_true_finding_beside_a_real_warning_keeps_the_look(self):
+        result = U.check("cluster", "v1.37.1+k3s1", "v1.37.2+k3s1", {(1, 37)}, {"kubevirt": "v1.9.1"})
+        result["findings"].append({"level": "warn", "title": "t", "detail": "d", "source": ""})
+        self.assertEqual("check", U.verdict_of(result["findings"]))
 
     def test_moving_a_pair_outside_is_still_blocked(self):
         self.assertEqual("blocked", U.check("kubevirt", "v1.8.2", "v1.9.1", {(1, 33)}, {})["verdict"])

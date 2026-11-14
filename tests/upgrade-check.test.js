@@ -29,6 +29,21 @@ test("an upgradable row says the verdict and its top finding", () => {
   assert.match(card({ components: [row({ check: check("clear", [finding("info", "Fine")]) })] }), /ui-chip ok[^"]*">No known breaks</);
 });
 
+test("a problem already true and left as it is reads as no new problems, with its own level", () => {
+  const f = finding("already", "KubeVirt 1.9 on Kubernetes 1.37 is already outside its support matrix; this upgrade does not change that");
+  const unchanged = { ...check("unchanged", [f]), to: "v1.37.2+k3s1" };
+  const html = page()("componentsCard")({ components: [row({ check: unchanged })] });
+  assert.match(html, /ui-chip ok[^"]*">No new problems</);
+  assert.match(html, /Nothing in Homestead(?:'|&#39;)s table gets worse with v1\.37\.2\./);
+  assert.doesNotMatch(html, /Worth checking|Read first/);
+  const section = page()("componentCheckSection")(unchanged);
+  assert.match(section, /ui-chip neutral[^"]*">Already true</);
+  assert.doesNotMatch(section, /cmp_check_ack/);
+  const mixed = page()("componentsCard")({ components: [row({ check: check("check", [f, finding("warn", "Something new")]) })] });
+  assert.match(mixed, /Something new/);
+  assert.doesNotMatch(mixed, /gets worse/);
+});
+
 test("a check with nothing checked reads as not checked, never as a pass", () => {
   const html = page()("componentsCard")({ components: [row({ check: check("unchecked", []) })] });
   assert.match(html, />Not checked</);

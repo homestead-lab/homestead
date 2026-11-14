@@ -2266,7 +2266,7 @@ ssh_pwauth: true
       return { distribution: "k3s", harvester: false, checked: now, pairs: kubevirt ? [eol("1.6")] : [], components: [
           { id: "cluster", name: "k3s", installed: "v1.31.4+k3s1", newest: "v1.33.4+k3s1", next: "v1.31.12+k3s1", behind: true, how: "suc",
             steps_left: true, note: suc, notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" },
-            check: kubevirt ? { to: "v1.31.12+k3s1", verdict: "check", checked, findings: [{ level: "warn", title: "Kubernetes 1.31 is past its end of life", detail: eol("1.6").detail, source: matrix }] }
+            check: kubevirt ? { to: "v1.31.12+k3s1", verdict: "unchanged", checked, findings: [{ level: "already", title: "Kubernetes 1.31 is past its end of life", detail: eol("1.6").detail, source: matrix }] }
               : { to: "v1.31.12+k3s1", verdict: "unchecked", checked, findings: [] } },
           ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
             how: "helmchart", phase: "Deployed", note: "" }] : [])] };
