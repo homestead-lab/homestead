@@ -57,6 +57,8 @@ SAFE = {
 
 # kind -> what a person is told: why it was not run again.
 PERSON = {
+    "addon-remove": ("Removing an add-on deletes what it installed across the cluster; a person reviews it again "
+                     "before running it once more."),
     "vm-disk-remove": "A removal stops at what a person reviewed; its cancel only says what is left, so a person looks again.",
     "host-promote": ("Cancelling this job uncordons the host, and nothing marks the cordon as this job's, so running "
                      "it again could lift a cordon someone set since. The host is left as it is now."),
