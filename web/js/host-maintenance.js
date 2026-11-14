@@ -88,6 +88,7 @@
 
   function renderReview(plan, node) {
     if (plan.operation?.id) return follow(plan.operation.id, node);
+    window.__hostMaintenancePlan = plan;    // the leftover-record review (nodePowerRemoveOrphans) reads it
     const outage = !!plan.planned_outage, hold = plan.hold || [], volumes = plan.volumes || [], drain = plan.drain_blockers || [];
     const budgets = plan.maintenance?.budgets || [], local = plan.maintenance?.local_storage || [];
     const lead = outage
@@ -113,7 +114,9 @@
     const copies = volumes.length ? UI.table([{ label: "Volume" }, { label: "Copies elsewhere" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(String(v.healthy_elsewhere), v.risk === "unavailable" ? "bad" : v.risk === "single-copy" ? "warn" : "ok")]))
       : `<div class="ui-empty">No Longhorn copy on this host was found.</div>`;
     const blockers = `<p class="ui-help">Each can stall the drain. Fix it and review again, or tick it to drain anyway.</p>` + drain.map((b, i) =>
-      `<div>${UI.ack(`mm_blocker_${i}`, b.what, { onchange: "hostMaintenanceReady()", attrs: `data-mm-ack="1" data-drain-ack="${esc(b.id)}"` })}${UI.more("Why", `${esc(b.why)} ${esc(b.fix)}`, false, `mm_blocker_fix_${i}`)}</div>`).join("");
+      `<div>${UI.ack(`mm_blocker_${i}`, b.what, { onchange: "hostMaintenanceReady()", attrs: `data-mm-ack="1" data-drain-ack="${esc(b.id)}"` })}${UI.more("Why", `${esc(b.why)} ${esc(b.fix)}`, false, `mm_blocker_fix_${i}`)}${!b.can_remove || outage ? ""    // a planned outage has no drain, so the shared review has nothing to remove
+        : can("admin") ? UI.button("Remove leftover records", `nodePowerRemoveOrphans(${i},'maintenance')`, { id: `mm_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"` })
+        : `<p class="ui-help">An admin can remove these leftover records here.</p>`}</div>`).join("");
     const sections = [{ key: "summary", title: "Summary", html: summary },
       drain.length ? { key: "drain", title: `Before draining · ${drain.length}`, html: blockers } : null,
       { key: "apps", title: `Apps and VMs · ${hold.length}`, html: apps },

@@ -7,7 +7,9 @@ cluster, its cache and the few collectors it shares with other pages
 (workloads, volumes, settings); the background loops that relabel hardware
 and watch ports stay there and call in here.
 """
+import calendar
 import json
+import time
 import urllib.parse
 
 import homestead_disks as DISKS
@@ -48,6 +50,17 @@ def bind(_kget, _ksend, namespace, system_namespaces, settings, default_settings
     kget, ksend, DEFAULT_NS, SYS_NS = _kget, _ksend, namespace, system_namespaces
     get_app_settings, DEFAULT_APP_SETTINGS = settings, default_settings
     get_workloads, get_volumes, parse_cpu, parse_mem, _dns_name = workloads, volumes, cpu, memory, dns_name
+
+
+def _transition_time(node, kind):
+    """When the node's condition last changed, in seconds since the epoch; None if not recorded."""
+    for condition in (node.get("status") or {}).get("conditions") or []:
+        if condition.get("type") == kind:
+            try:
+                return calendar.timegm(time.strptime(str(condition.get("lastTransitionTime"))[:19], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                return None
+    return None
 
 
 def node_temps(wait=True, unreachable=False):
@@ -400,6 +413,7 @@ def get_nodes(pods=None, vols=None):
             "uid": n["metadata"].get("uid"),
             "maintenance": harvester_maintenance(n),
             "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
+            "ready_since": _transition_time(n, "Ready"),
             "roles": roles or ["worker"],
             "cpu_pct": round(ucpu / ccpu * 100, 1) if ccpu else 0,
             "cpu_used": round(ucpu, 2), "cpu_cap": ccpu,

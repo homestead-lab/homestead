@@ -394,11 +394,18 @@ def health_facts(overview):
             ran_out = declared["ran_out"].get(name)
             if ran_out:
                 # A person said when this host would be back, and it isn't:
-                # one loud alert, in place of the plain "not ready".
+                # one loud alert, in place of the plain "not ready". The words
+                # say which came first, when the host's own record tells.
+                down_at = next((n.get("ready_since") for n in overview.get("nodes") or [] if n.get("name") == name), None)
+                later = bool(down_at) and ran_out.get("end") is not None and down_at > ran_out["end"]
                 facts.append({"urgent": True, "key": f"maintenance-ran-out:{name}", "category": "outage",
-                              "severity": "critical", "title": f"Maintenance on {name} ran out with the host down",
+                              "severity": "critical",
+                              "title": (f"Host {name} went down after its maintenance ran out" if later
+                                        else f"Maintenance on {name} ran out with the host down"),
                               "resolved": f"Maintenance on {name} no longer ran out: extended, ended or the host returned",
-                              "body": f"{ran_out['reason']}. Its downtime counts as an outage from when it ran out.",
+                              "body": (f"{ran_out['reason']}. The host was ready again after the maintenance ran out, and then went down. "
+                                       "Its downtime counts as an outage from when it went down." if later else
+                                       f"{ran_out['reason']}. Its downtime counts as an outage from when it ran out."),
                               "signals": signals, "href": f"/nodes?node={name}"})
                 continue
             if name in overran:

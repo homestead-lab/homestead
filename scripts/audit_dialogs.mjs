@@ -362,6 +362,7 @@ const DIALOGS = [
   ["node-maintenance-extend", "nodes", "hostMaintenanceExtend('harvester-node1')"],
   ["node-maintenance-end", "nodes", "hostMaintenanceEnd('harvester-node1')"],
   ["node-reboot-before-draining", "nodes", "nodePowerReview('harvester-node1','reboot')", "UI.selectSection('hostPower','drain')"],
+  ["node-maintenance-remove-orphans", "nodes", "hostMaintenanceReview('harvester-node1')", "nodePowerRemoveOrphans(0,'maintenance')"],
   ["node-remove-orphans", "nodes", "nodePowerReview('harvester-node1','reboot')", "nodePowerRemoveOrphans(0)"],
   ["node-promote", "nodes", "nodePromoteReview('harvester-node1')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],

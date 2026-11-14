@@ -3,7 +3,7 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 
 const NOW = () => Math.floor(Date.now() / 1000);
-function setup({ answers = {}, uptime = null, nodes = [] } = {}) {
+function setup({ answers = {}, uptime = null, nodes = [], power = false } = {}) {
   const shown = { modal: [], toasts: [], sent: [] }, elements = {};
   const element = id => (elements[id] ??= { id, value: "", checked: false, disabled: false, dataset: {} });
   const c = { console, Set, Map, Promise, URLSearchParams, AbortController, setTimeout, clearTimeout, Date, Math,
@@ -26,6 +26,7 @@ function setup({ answers = {}, uptime = null, nodes = [] } = {}) {
   c.window = c; vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => c.esc(c.jsArg(s));
   for (const f of ["web/js/ui.js", "web/js/views-overview.js", "web/js/host-maintenance.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  if (power) vm.runInContext(fs.readFileSync("web/js/views-lifecycle-node-power.js", "utf8"), c);
   return { c, shown, element, elements };
 }
 const review = (extra = {}) => ({ node: "node1", action: "maintenance", review_token: "t", ready: true, pods: 3, vms: [], blockers: [], warnings: ["Check this"],
@@ -62,6 +63,32 @@ test("the send button stays disabled until the name is typed, a reason is given 
   assert.equal(ready(), true);
   reason.value = "x".repeat(121);
   assert.equal(ready(), false, "too long");
+});
+
+const ORPHANS = { id: "engine-orphans:node1", kind: "engine-orphans", what: "3 orphan records for engines that now run on node2", why: "w", fix: "f",
+  can_remove: true, records: [{ name: "orphan-1", uid: "u-1", resourceVersion: "7", engine: "vol-a-e-0", engine_node: "node2" }] };
+
+test("the review offers Remove leftover records for a blocker that has them, and removing reviews the host again", async () => {
+  const t = setup({ power: true, answers: { [PLAN]: review({ drain_blockers: [ORPHANS, { id: "b2", what: "A budget", why: "w", fix: "f" }] }),
+    "/api/node/orphans/remove": { removed: ["orphan-1"], refused: [] } } });
+  await t.c.hostMaintenanceReview("node1");
+  const html = t.shown.modal.at(-1)[1];
+  assert.match(html, /id="mm_blocker_remove_0"[^>]*data-drain-blocker="engine-orphans:node1"/);
+  assert.doesNotMatch(html, /mm_blocker_remove_1/, "only a blocker with records that can go");
+  t.c.window.nodePowerRemoveOrphans(0, "maintenance");
+  const [title, body] = t.shown.modal.at(-1);
+  assert.match(title, /Remove leftover records · node1/);
+  assert.match(body, /orphan-1[\s\S]*vol-a-e-0[\s\S]*node2/);
+  assert.equal(0, t.shown.sent.length, "opening the review removes nothing");
+  await t.c.window.nodePowerRemoveOrphansConfirm(0, "maintenance");
+  assert.deepEqual(t.shown.sent[0], ["/api/node/orphans/remove", { node: "node1", records: [{ name: "orphan-1", uid: "u-1", resourceVersion: "7" }] }]);
+  assert.equal(t.shown.modal.at(-1)[0].startsWith("Maintenance · node1"), true, "the Maintenance review is drawn again, not the restart review");
+});
+
+test("a planned outage offers no Remove leftover records, since it drains nothing", async () => {
+  const t = setup({ power: true, answers: { [PLAN]: review({ planned_outage: true, drain_blockers: [ORPHANS] }) } });
+  await t.c.hostMaintenanceReview("node1");
+  assert.doesNotMatch(t.shown.modal.at(-1)[1], /mm_blocker_remove_0|Remove leftover records/);
 });
 
 test("a blocked review offers no way to send", async () => {

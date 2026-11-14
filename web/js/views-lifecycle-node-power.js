@@ -123,8 +123,13 @@ window.nodePowerReady = () => {
 // Longhorn's leftover engine records on this host whose engine runs on another
 // host: reviewed one by one (record, engine, where it runs), removed by an
 // admin, then the restart is reviewed again so the row goes.
-window.nodePowerRemoveOrphans = i => {
-  const plan = window.__nodePowerPlan;
+// Both reviews use it: the restart review (the default) and the Maintenance
+// dialog ("maintenance"), each with its own plan and its own way to review again.
+const orphanReview = from => from === "maintenance"
+  ? { plan: window.__hostMaintenancePlan, again: plan => window.hostMaintenanceReview(plan.node) }
+  : { plan: window.__nodePowerPlan, again: plan => window.nodePowerReview(plan.node, plan.action, !!plan.force) };
+window.nodePowerRemoveOrphans = (i, from) => {
+  const plan = orphanReview(from).plan;
   const row = nodePowerDrainBlockers(plan)[i];
   if (!row || !row.can_remove) return toast("Review the host again", "bad");
   const records = row.records || [];
@@ -132,11 +137,11 @@ window.nodePowerRemoveOrphans = i => {
     + "The volumes keep running on the hosts where their engines run. Homestead checks each record again before removing it.")
     + UI.table([{ label: "Leftover record" }, { label: "Engine" }, { label: "Runs on" }],
       records.map(r => [`<span class="mono">${esc(r.name)}</span>`, `<span class="mono">${esc(r.engine)}</span>`, esc(r.engine_node)]))
-    + UI.actions(UI.button(`Remove ${plural(records.length, "leftover record")}`, `nodePowerRemoveOrphansConfirm(${i})`, { kind: "danger", id: "pw_orphans_remove" })
+    + UI.actions(UI.button(`Remove ${plural(records.length, "leftover record")}`, `nodePowerRemoveOrphansConfirm(${i}, ${jsArg(from || "")})`, { kind: "danger", id: "pw_orphans_remove" })
       + UI.cancel("Back")), true);
 };
-window.nodePowerRemoveOrphansConfirm = async i => {
-  const plan = window.__nodePowerPlan;
+window.nodePowerRemoveOrphansConfirm = async (i, from) => {
+  const { plan, again } = orphanReview(from);
   const row = nodePowerDrainBlockers(plan)[i];
   if (!row || !row.can_remove) return toast("Review the host again", "bad");
   const button = $("#pw_orphans_remove");
@@ -156,7 +161,7 @@ window.nodePowerRemoveOrphansConfirm = async i => {
   // Back to the review before it is drawn again, so Back can't bring back
   // the old review (its ticks) or this spent dialog.
   modalBack();
-  return window.nodePowerReview(plan.node, plan.action, !!plan.force);
+  return again(plan);
 };
 /* Review, then reboot or shut down a host (#909), on the shared review flow: it keeps the sequence, the busy flag
    and the one-shot send. This view keeps its words and each gate's own message. */
@@ -313,6 +318,14 @@ window.nodePower = async (node, action) => {
 let NODE_POWER_FOLLOW = 0;
 function nodePowerSteps(power) {
   const reboot = power.action === "reboot";
+  // A declared maintenance sends no power: it ends once the host is marked.
+  if (power.action === "maintenance") return [
+    ["cordoning", "Stop new apps starting on the host (cordon)"],
+    ...(power.holds ? [["holding", "Stop what waits for the host, and move VMs while they run"]] : []),
+    ["draining", "Move apps and VMs off the host (drain)"],
+    ["verifying", "Check the cluster votes, VMs and volume copies again"],
+    ["maintained", "Mark the host in maintenance"],
+  ];
   return [
     ...(power.direct ? [["verifying", "Check the host again"], ...(power.holds ? [["holding", "Stop the apps and VMs so their volumes are released"]] : [])] : [
       ["cordoning", "Stop new apps starting on the host (cordon)"],
@@ -391,6 +404,6 @@ window.nodePowerFollow = async (id, intro = "", initial = null) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  nodePowerDrainBlockers, nodePowerTickedIds, nodePowerBlockersTicked, NODE_POWER, NODE_POWER_FOLLOW, nodePowerSteps,
+  nodePowerDrainBlockers, nodePowerTickedIds, nodePowerBlockersTicked, orphanReview, NODE_POWER, NODE_POWER_FOLLOW, nodePowerSteps,
   nodePowerProgressMarkup
 };
