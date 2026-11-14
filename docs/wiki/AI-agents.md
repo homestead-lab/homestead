@@ -156,7 +156,7 @@ Tools come in three classes:
 | `set_image_update_mode` | How an app's image updates are made: settings with ns, name and mode, as list_image_updates shows the modes | `containers:manage` | change |
 | `set_managed_by` | Marks an app as updated by something else (Flux, Argo CD, a person) so Homestead offers no updates, or clears it with an empty by | `containers:manage` | change |
 | `set_primary_port` | The port the app's link opens; 0 to let Homestead choose | `containers:manage` | change |
-| `set_failover` | For many apps: items, each {ns, name, mode} with mode move, wait or default | `containers:manage` | change |
+| `set_failover` | For many apps: items, each {ns, name, mode} with mode move (15 seconds), slow (90 seconds), wait or default | `containers:manage` | change |
 | `set_container_groups` | The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group; renamed_from, the old name, when renaming a group so its tier moves) | `containers:manage` | change |
 | `set_group_tier` | The tier the apps that follow a group take: group, and tier critical, normal, low or none. Only the tier is saved and nothing restarts; preview_priority_tiers then lists the apps that need a restart | `containers:manage` | change |
 | `set_container_logos` | Logos for many apps: items, each {ns, name, icon} with icon a URL or an App Store logo | `containers:manage` | change |

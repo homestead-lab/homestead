@@ -151,7 +151,7 @@ def _read_state(ns, name, node):
 
     sts = _read(f"/apis/apps/v1/namespaces/{_q(ns)}/statefulsets/{_q(name)}", f"StatefulSet {ns}/{name}")
     spec = sts.get("spec") or {}
-    wait = FAILOVER.mode_of((spec.get("template") or {}).get("spec")) == "wait"
+    wait = FAILOVER.waits_when_unreachable((spec.get("template") or {}).get("spec"))
     labels = (spec.get("selector") or {}).get("matchLabels") or {}
     if not labels:
         raise Unread(f"StatefulSet {ns}/{name} has no label selector, so Homestead cannot find its pods.")

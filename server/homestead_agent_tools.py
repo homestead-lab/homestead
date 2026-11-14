@@ -876,7 +876,7 @@ TOOLS = [
          "The port the app's link opens; 0 to let Homestead choose.", {"namespace": NS, "name": NAME_ARG, "port": I},
          ["namespace", "name", "port"], run=_post("/api/workload/primary-port", {"namespace": "ns", "name": "name", "port": "port"})),
     Tool("set_failover", "Set what happens when a host fails", "containers:manage", CHANGE,
-         "For many apps: items, each {ns, name, mode} with mode move, wait or default.",
+         "For many apps: items, each {ns, name, mode} with mode move (15 seconds), slow (90 seconds), wait or default.",
          {"items": {"type": "array", "items": SETTINGS}}, ["items"], run=_guarded(_post("/api/workloads/failover", {"items": "items"}))),
     Tool("set_container_groups", "Group apps", "containers:manage", CHANGE,
          "The groups apps are shown in: settings as the Containers page sends them (items, each with ns, name and group; "

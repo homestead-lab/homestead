@@ -28,9 +28,21 @@ import homestead_roles as ROLES
 
 FAILOVER_WORDS = {
     "move": ("moves", "about 15 seconds after the host stops answering"),
+    "slow": ("moves", "about 90 seconds after the host stops answering"),
     "wait": ("waits", "set to wait for its host to come back"),
     "default": ("moves", "after about 5 minutes, Kubernetes' default"),
 }
+
+
+
+def _when(mode, seconds):
+    """When an app set to mode leaves a failed host; a time of its own
+    ("custom") in its seconds."""
+    if mode == "custom" and seconds is None:
+        return FAILOVER_WORDS["wait"][1]
+    if mode == "custom" and seconds:
+        return FAILOVER.after(int(seconds))
+    return FAILOVER_WORDS.get(mode, FAILOVER_WORDS["default"])[1]
 
 # A StatefulSet's pod on a host that stops answering (#440): Kubernetes
 # never starts it elsewhere while the old one might still run, so it moves
@@ -151,7 +163,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
     # Longhorn deletes only pods that hold its volumes: one with none, or with
     # any other, waits for a person whatever the policy says.
     all_longhorn = bool(claims) and len(longhorn) == len(claims)
-    mode = FAILOVER.mode_of(spec)
+    mode = "wait" if FAILOVER.waits_when_unreachable(spec) else FAILOVER.mode_of(spec)
     unread = []
     if pvs is None and len(longhorn) < len(claims):
         unread.append("where its volumes are stored")
@@ -177,7 +189,7 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
         if all_longhorn:
             row["setting"] = "node_down"
     else:
-        row.update(outcome="moves", why=SET_MOVES + FAILOVER_WORDS[mode][1], to=hosts)
+        row.update(outcome="moves", why=SET_MOVES + _when(mode, FAILOVER.seconds_of(spec)), to=hosts)
     return row
 
 
@@ -232,7 +244,10 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
             row.update(outcome="unknown", why="could not be checked: where its volumes' copies are")
         else:
             mode = w.get("failover") or "default"
+            if mode == "custom" and w.get("failover_seconds") is None:
+                mode = "wait"   # a time of its own that never runs out
             verb, when = FAILOVER_WORDS.get(mode, FAILOVER_WORDS["default"])
+            when = _when(mode, w.get("failover_seconds"))
             held = [] if verb == "waits" else _single_host_claims(volumes, ns, w.get("claims"))
             if held and node_down is None:
                 row.update(outcome="unknown", why="could not be checked: whether apps with storage can move off a failed host")
