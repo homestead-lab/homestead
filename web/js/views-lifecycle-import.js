@@ -1087,17 +1087,29 @@ const moveBody = (cluster, kind, name) => ({
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
   source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES, stop_source: MOVE_STOP_SOURCE });
 
+// The request being sent keeps the choices it was made with, so a change now would be shown and not sent (#1317).
+// The dialog is drawn again from the kept choices if the send is refused.
+// The shown value of each control when the send began, so a blocked change puts its control back (a class chosen
+// in the page is read from the page, and would otherwise be what a plan read again after a refusal used).
+let MOVE_HELD = new Map();
+const moveHold = () => {
+  MOVE_HELD = new Map([...($("#mv_plan")?.querySelectorAll?.("select,input") || []), $("#mv_sc")].filter(Boolean)
+    .map(control => [control, control.type === "checkbox" ? control.checked : control.value]));
+};
+const moveChoiceLocked = control => {
+  if (!MOVE_PLAN.busy) return false;
+  toast("A transfer is being sent. Change the choice after it has been accepted or refused.", "bad");
+  if (control && MOVE_HELD.has(control)) control[control.type === "checkbox" ? "checked" : "value"] = MOVE_HELD.get(control);
+  return true;
+};
 window.moveStopSource = (cluster, kind, name, stop) => {
-  // The request being sent keeps the choice it was made with, so a flip now would be shown and not sent (#1317).
-  if (MOVE_PLAN.busy) {
-    if ($("#mv_stop")) $("#mv_stop").checked = MOVE_STOP_SOURCE;
-    return toast("A transfer is being sent. Change the choice after it has been accepted or refused.", "bad");
-  }
+  if (moveChoiceLocked()) { if ($("#mv_stop")) $("#mv_stop").checked = MOVE_STOP_SOURCE; return; }
   MOVE_STOP_SOURCE = stop === true;
   if ($("#mv_go")) $("#mv_go").disabled = true;
   movePlan(cluster, kind, name);
 };
-window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
+window.moveDeviceSet = (cluster, kind, name, device, field, value, control) => {
+  if (moveChoiceLocked(control)) return;
   MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), [field]: value };
   if (field === "rom") delete MOVE_ROM_NAMES[device];
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1105,7 +1117,7 @@ window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
 };
 window.moveDeviceRom = async (cluster, kind, name, device, input) => {
   const file = input.files?.[0];
-  if (!file) return;
+  if (!file || moveChoiceLocked(input)) return;
   invalidateMovePlan();
   const edit = MOVE_PLAN_EDITS;
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1125,11 +1137,11 @@ function moveDevicesTable(plan, cluster, kind, name) {
     const handler = `${args},${jsq(d.name)}`;
     const uploaded = choice.rom && !["source", ""].includes(choice.rom);
     return `<tr><td data-label="Source device"><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.resource)}</div></td>
-      <td data-label="Destination device" data-wide><select aria-label="Destination device for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'resource',this.value)">
+      <td data-label="Destination device" data-wide><select aria-label="Destination device for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'resource',this.value,this)">
         <option value="" disabled ${!("resource" in choice) ? "selected" : ""}>Choose a device</option>
         <option value="" ${choice.resource === "" ? "selected" : ""}>Leave out</option>
         ${resources.map(r => `<option value="${esc(r.resource)}" ${r.resource === choice.resource ? "selected" : ""}>${esc(r.label || r.resource)} · ${esc(r.nodes?.join(", ") || "unavailable")}</option>`).join("")}</select></td>
-      <td data-label="vBIOS" data-wide><select aria-label="vBIOS for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'rom',this.value)" ${choice.resource === "" ? "disabled" : ""}>
+      <td data-label="vBIOS" data-wide><select aria-label="vBIOS for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'rom',this.value,this)" ${choice.resource === "" ? "disabled" : ""}>
         ${d.rom ? `<option value="source" ${!("rom" in choice) || choice.rom === "source" ? "selected" : ""}>Keep source vBIOS</option>` : ""}
         <option value="" ${choice.rom === "" || !d.rom && !uploaded ? "selected" : ""}>Use the device's own ROM</option>
         ${uploaded ? `<option selected disabled>${esc(MOVE_ROM_NAMES[d.name] || "Supplied vBIOS")}</option>` : ""}</select>
@@ -1141,7 +1153,8 @@ function moveDevicesTable(plan, cluster, kind, name) {
 }
 
 /* One volume's choice changed: remembered, and the move checked again. */
-window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
+window.moveVolumeSet = (cluster, kind, name, claim, field, value, control) => {
+  if (moveChoiceLocked(control)) return;
   MOVE_VOLUMES[claim] = { ...(MOVE_VOLUMES[claim] || {}), [field]: value };
   if (field === "action") { delete MOVE_VOLUMES[claim].storage_class; delete MOVE_VOLUMES[claim].size_gb; }
   if ($("#mv_go")) $("#mv_go").disabled = true;
@@ -1161,14 +1174,14 @@ function moveVolumesTable(plan, cluster, kind, name) {
     const classes = c.action === "move" ? plan.storage_classes || [] : plan.all_storage_classes || [];
     const pick = (MOVE_VOLUMES[c.claim] || {}).storage_class || c.storage_class || plan.storage_class || "";
     return `<tr><td><b class="mono">${esc(c.claim)}</b><div class="dim xs">${c.size_gb} GiB${c.volume_mode === "Block" ? " · disk" : ""}${c.source_class ? ` · ${esc(c.source_class)} on ${esc(cluster)}` : ""}</div></td>
-      <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
+      <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value,this)">
         ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${value === "move" && MOVE_TRANSFER_MODE === "copy" ? "Copy its data" : label}</option>`).join("")}</select></td>
       <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
-        : `<select id="mv_volsc_${esc(c.claim)}" aria-label="${esc(`Storage class for ${c.claim}`)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
+        : `<select id="mv_volsc_${esc(c.claim)}" aria-label="${esc(`Storage class for ${c.claim}`)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value,this)">
           ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
       <td>${c.action === "blank"
         ? `<input id="mv_volsize_${esc(c.claim)}" type="number" min="1" max="16384" style="width:90px" value="${esc((MOVE_VOLUMES[c.claim] || {}).size_gb || c.target_size_gb || c.size_gb)}"
-            onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value)"> GiB`
+            onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'size_gb',+this.value,this)"> GiB`
         : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GiB, as it is` : "as it is here"}</span>`}</td></tr>`;
   }).join("");
   return `<div class="f"><label>Volumes ${tip("Move its data backs up the volume there and restores it here. Create empty makes an empty volume of the size chosen, for example for a cache. Use the volume already here uses a volume with the same name on this cluster. A moved volume needs a Longhorn storage class. An empty one can use any.")}</label>
@@ -1201,7 +1214,7 @@ const MOVE_PLAN = UI.reviewFlow({
       const selected = classes.value || plan.storage_class;
       classes.innerHTML = plan.storage_classes.map(c => `<option value="${esc(c)}" ${c === selected ? "selected" : ""}>${esc(c)}</option>`).join("");
       classes.disabled = !plan.storage_classes.length;
-      classes.onchange = () => { if (go) go.disabled = true; window.movePlan(cluster, kind, name); };
+      classes.onchange = () => { if (moveChoiceLocked(classes)) return; if (go) go.disabled = true; window.movePlan(cluster, kind, name); };
       // A cluster without Homestead's old default can still choose another
       // valid class. Review the actual selection before enabling Start.
       if (classes.value && classes.value !== plan.storage_class) return window.movePlan(cluster, kind, name);
@@ -1242,8 +1255,15 @@ const MOVE_PLAN = UI.reviewFlow({
   },
   after: () => {
     const again = MOVE_REPLAN && MOVE_TARGET; MOVE_REPLAN = false;
-    // Only while the dialog is still open: a plan read for a closed one would be drawn nowhere (#1317).
-    if (again && $("#mv_plan")) window.movePlan(again.cluster, again.kind, again.name);
+    if (!again) return;
+    // Only for a dialog that is on screen: a closed one keeps its hidden plan, and a plan read for it would be wasted (#1317).
+    if ($("#mv_plan") && !$("#modal")?.classList?.contains("hidden")) return window.movePlan(again.cluster, again.kind, again.name);
+    // Under a child dialog, its waiting line would stay once that closes: the plan is read again when it comes back.
+    const under = (typeof MODAL_STACK !== "undefined" ? MODAL_STACK : []).find(frame => frame.fragment?.querySelector("#mv_plan"));
+    if (under) {
+      const previous = under.onReturn;      // whatever was to run on return still does
+      under.onReturn = () => { previous?.(); window.movePlan(again.cluster, again.kind, again.name); };
+    }
   },
 });
 let MOVE_STARTING = null, MOVE_REPLAN = false;
@@ -1274,6 +1294,7 @@ window.moveStart = async (cluster, kind, name) => {
   if (!(await ask(question, { title: copy ? "Copy to this cluster" : "Move to this cluster", ok: copy ? `Copy ${name}` : kind === "volume" ? "Move volume" : `Stop and move ${name}`, danger: !copy && kind !== "volume" }))) return;
   if (!review || MOVE_PLAN.review !== review) return toast("The transfer settings changed. Review them again.", "bad");
   MOVE_STARTING = { body, copy, cluster, name };
+  moveHold();
   await MOVE_PLAN.apply();
 };
 
@@ -1617,6 +1638,6 @@ if (typeof module === "object" && module.exports) module.exports = {
   SOURCE_LEADS, SOURCE_KEY, importMappingRows, importFolderName, importMappingRow, importVolumeRow,
   importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS,
   clusterVolumesHtml, MOVE_PLAN_EDITS, invalidateMovePlan, MOVE_VOLUMES, MOVE_TRANSFER_MODE,
-  MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, moveDevicesTable, MOVE_VOLUME_ACTIONS,
+  MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, MOVE_HELD, moveHold, moveChoiceLocked, moveDevicesTable, MOVE_VOLUME_ACTIONS,
   moveVolumesTable, moveLoading, MOVE_PLAN, MOVE_STARTING, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };
