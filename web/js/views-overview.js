@@ -1173,9 +1173,28 @@ window.hardwareFeatureDelete = async id => {
   catch (e) { toast(e.message, "bad"); }
 };
 
+/* After a host restart (#1290): whether the apps it moved run again and every
+   volume has its copies, so the next host can be restarted. "" with no recent
+   restart, or when it could not be read ({unread}): the restart review still
+   warns, so the page stays as it was rather than adding a line of its own. */
+window.restartReadyNotice = r => {
+  if (!r?.node || r.unread) return "";
+  if (r.ready) return UI.callout("ok", "Ready for the next host restart.",
+    `The apps the restart of ${esc(r.node)} moved are running, and no volume is short of copies.`);
+  const count = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const named = list => esc(list.slice(0, 5).join(", ")) + (list.length > 5 ? ` and ${list.length - 5} more` : "");
+  const waiting = r.not_running || [], short = r.short_of_copies || [];
+  return UI.callout("warn", "Not ready for the next host restart.", `<ul>${[
+    waiting.length ? `<li>${count(waiting.length, "app", "apps")} moved by the restart of ${esc(r.node)} ${waiting.length === 1 ? "is" : "are"} not running yet: ${named(waiting)}.</li>` : "",
+    short.length ? `<li>${count(short.length, "volume is", "volumes are")} short of copies: ${named(short)}.</li>` : "",
+  ].join("")}</ul>`);
+};
+
 async function viewNodes() {
   const page = new URLSearchParams(location.search).get("node");
   if (page) return nodePage(page);
+  // Read beside the page, never waited for: it can take a few cluster-wide lists.
+  const ready = api("/api/nodes/restart-ready").catch(e => ({ unread: e.message }));
   const [n, up] = await Promise.all([api("/api/nodes"), api("/api/nodes/uptime").catch(e => ({ unread: e.message })), loadHardwareFeatures()]);
   STATE.data.nodes = n;
   noteNodeUptime(up);
@@ -1187,7 +1206,9 @@ async function viewNodes() {
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}
       ${n.length > 1 ? `<button class="btn" data-need="operator" onclick="balanceHosts()" data-tip="Move apps and volume copies so that hosts carry similar loads.">${icon("layers")}Balance hosts…</button>` : ""}`)}
+   <div id="restartReady"></div>
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
+  ready.then(answer => { const slot = $("#restartReady"); if (slot) slot.innerHTML = restartReadyNotice(answer); });
 }
 
 /* ---------------- a node's own terminal ----------------

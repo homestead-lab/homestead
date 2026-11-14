@@ -28,6 +28,7 @@ import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_ports as PORTS
+import homestead_restart_ready as RESTART_READY
 import homestead_routes as ROUTER
 import homestead_smart as SMART
 import homestead_vm_list as VM_LIST
@@ -694,6 +695,9 @@ ROUTES = {
     ("GET", "/api/node/smart"): ("viewer", _smart),
     ("GET", "/api/node/impact"): ("viewer", _impact),
     ("GET", "/api/nodes/impact"): ("viewer", lambda request: node_impact(_one(request.query, "node"))),
+    # Whether the last host restart has settled (#1290): kept a short while, as the page reads it each time.
+    ("GET", "/api/nodes/restart-ready"): ("viewer", lambda request: ROUTER.cached(
+        "restart-ready", 15, lambda: RESTART_READY.state(kget, OPS.stored()))),
     ("POST", "/api/node/smart/test"): ("admin", _smart_test),
     ("POST", "/api/node/hardware"): ("admin", lambda request: set_node_hardware(request.body)),
     ("POST", "/api/hardware/rescan"): ("operator", lambda request: {"ok": True, "nodes": reconcile_hardware(fresh=True)}),
