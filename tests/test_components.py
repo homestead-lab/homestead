@@ -732,6 +732,47 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         C.cancel_run(self.item(), {})
         self.assertTrue(self.cordoned("node-1"))
 
+    def test_a_host_cordoned_by_hand_while_the_upgrade_prepares_stays_cordoned(self):
+        # #1330: the agent Plan's prepare step holds its pod for minutes before
+        # the cordon step; a person cordons the host then; the job fails later.
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()                        # prepare running, cordon waiting
+        self.c.kube.add({**self.node("node-1"), "spec": cordon(300)})  # a person, 300 s ago
+        suc.cordon_step(ago=200)           # "already cordoned": no new taint
+        suc.fail(ago=60)
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned: it was not cordoned by this upgrade's own job", message)
+
+    def test_a_host_cordoned_by_hand_before_the_cordon_step_starts_is_not_claimed(self):
+        # The upgrade ends while its pod still prepares: its cordon step never ran.
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()
+        self.c.kube.add({**self.node("node-1"), "spec": cordon(300)})
+        self.assertEqual({"node-1": "it was not cordoned by this upgrade's own job"},
+                         C._claim(self.item(), lambda _item: None))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+
+    def test_a_host_the_cordon_step_cordoned_is_released(self):
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()
+        suc.cordon_step(ago=200)           # the controller's own cordon
+        suc.fail(ago=60)
+        message = C.cancel_run(self.item(), {})
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_cordon_a_moment_before_the_step_start_by_another_clock_still_counts(self):
+        # The taint's time comes from the control plane, the step's from the
+        # host's kubelet: a clock a little behind is still the step's own cordon.
+        suc = UpgradeController(self, "node-1", "homestead-agent")
+        suc.start()
+        suc.cordon_step(ago=200, taint_ago=200 + C.CORDON_CLOCK_SKEW - 1)
+        suc.fail(ago=60)
+        C.cancel_run(self.item(), {})
+        self.assertFalse(self.cordoned("node-1"))
+
     def test_a_v2_clean_up_on_the_host_blocks_its_release(self):
         self.cluster([node("node-1", unschedulable=True)],
                      job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
@@ -747,6 +788,60 @@ class ClusterUpgradeEndTests(unittest.TestCase):
         self.cluster([node("node-1")])
         plan_ = C.cancel_plan(self.item())
         self.assertTrue(any("uncordon" in line.lower() for line in plan_["undo"]))
+
+
+class UpgradeController:
+    """A small system-upgrade-controller for one host and Plan: it makes the
+    job and its pod, runs the pod's init containers in order (prepare, then
+    cordon - kubectl cordon, which adds the cordon only when the host is not
+    cordoned already) and fails the job, writing each step to the fake API
+    the way the controller and the kubelet do. It also builds the cluster."""
+
+    def __init__(self, test, node_name, plan_name):
+        self.node_name, self.plan_name = node_name, plan_name
+        self.job_name = f"apply-{plan_name}-on-{node_name}"
+        self.pod_name, self.ran_cordon = f"{self.job_name}-x1", None
+        test.cluster([node(node_name)])
+        self.kube = test.c.kube
+
+    def _pod(self, phase, prepare, cordon_state):
+        return {"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": C.SUC_NS, "name": self.pod_name, "creationTimestamp": stamp(600),
+            "labels": {"upgrade.cattle.io/plan": self.plan_name, "upgrade.cattle.io/node": self.node_name,
+                       "job-name": self.job_name}},
+            "spec": {"nodeName": self.node_name,
+                     "initContainers": [{"name": "prepare"}, {"name": "cordon", "args": ["cordon", self.node_name]}],
+                     "containers": [{"name": "upgrade"}]},
+            "status": {"phase": phase, "startTime": stamp(600), "initContainerStatuses": [
+                {"name": "prepare", "ready": False, "restartCount": 0, "state": prepare},
+                {"name": "cordon", "ready": False, "restartCount": 0, "state": cordon_state}]}}
+
+    def _prepared(self):
+        return {"terminated": {"exitCode": 0, "reason": "Completed", "startedAt": stamp(595),
+                               "finishedAt": stamp(self.ran_cordon + 1)}}
+
+    def start(self):
+        self.kube.add(job(self.job_name, self.plan_name, self.node_name, active=1))
+        self.kube.add(self._pod("Pending", {"running": {"startedAt": stamp(595)}},
+                                {"waiting": {"reason": "PodInitializing"}}))
+
+    def cordon_step(self, ago, taint_ago=None):
+        self.ran_cordon = ago
+        self.kube.add(self._pod("Pending", self._prepared(), {"running": {"startedAt": stamp(ago)}}))
+        host = self.kube.object(f"/api/v1/nodes/{self.node_name}")
+        if not (host.get("spec") or {}).get("unschedulable"):
+            self.kube.add({**host, "spec": cordon(ago - 1 if taint_ago is None else taint_ago)})
+
+    def fail(self, ago):
+        """The cordon step done, the upgrade container failed, and the job with it."""
+        cordoned = {"terminated": {"exitCode": 0, "reason": "Completed", "startedAt": stamp(self.ran_cordon),
+                                   "finishedAt": stamp(self.ran_cordon - 1)}}
+        self.kube.add(self._pod("Failed", self._prepared(), cordoned))
+        failed = job(self.job_name, self.plan_name, self.node_name, failed=1,
+                     conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded",
+                                  "lastTransitionTime": stamp(ago)}])
+        failed["status"].pop("completionTime", None)  # a failed Job has none
+        self.kube.add(failed)
 
 
 class UpgradeCheckWiringTests(unittest.TestCase):

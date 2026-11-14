@@ -97,6 +97,9 @@ HOST_CORDON_KINDS = JOB_KINDS.HOST_CORDON_KINDS
 # Of those, the ones that work across hosts in turn: every host counts as theirs.
 EVERY_HOST = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
 UNSCHEDULABLE_TAINT = "node.kubernetes.io/unschedulable"
+# A cordon taint's time comes from the control plane's clock, an upgrade pod's
+# cordon step start from its host's kubelet: allow this much between the two.
+CORDON_CLOCK_SKEW = 5
 WRITE_ATTEMPTS = 4
 
 
@@ -647,9 +650,10 @@ def _when(stamp):
 
 
 def _upgrade_runs():
-    """node -> [(started, ended or None, still running, cordon step done)] for
-    each upgrade job and pod of our Plans there (the last is always False for
-    a job). Read strictly - an unread list proves nothing."""
+    """node -> [(started, ended or None, still running, cordon step done,
+    when the cordon step started)] for each upgrade job and pod of our Plans
+    there (for a job the last two are always False and None: only its pod
+    shows its steps). Read strictly - an unread list proves nothing."""
     out = {}
     for job in _strict_items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
         labels = (job.get("metadata") or {}).get("labels") or {}
@@ -661,7 +665,7 @@ def _upgrade_runs():
         ended = bool(status.get("succeeded") or ends)
         end = _when(status.get("completionTime")) or (_when(ends[0].get("lastTransitionTime")) if ends else None)
         out.setdefault(name, []).append((_when(status.get("startTime")), end if ended else None,
-                                         bool(status.get("active")) or not ended, False))
+                                         bool(status.get("active")) or not ended, False, None))
     for pod in _strict_items(f"/api/v1/namespaces/{SUC_NS}/pods"):
         labels = (pod.get("metadata") or {}).get("labels") or {}
         name = (pod.get("spec") or {}).get("nodeName") or labels.get("upgrade.cattle.io/node")
@@ -669,8 +673,29 @@ def _upgrade_runs():
             continue
         status = pod.get("status") or {}
         running = status.get("phase") not in ("Succeeded", "Failed")
-        out.setdefault(name, []).append((_when(status.get("startTime")), None, running, _cordon_step(status)))
+        out.setdefault(name, []).append((_when(status.get("startTime")), None, running, _cordon_step(status),
+                                         _cordon_started(status)))
     return out
+
+
+def _cordon_started(status):
+    """When an upgrade pod's own cordon step started (epoch seconds, from the
+    kubelet's container status - no log read); infinity while it waits its
+    turn (the agent Plan's prepare step runs first, for minutes at times);
+    None when the pod does not say, or has succeeded (its job's end undid
+    that cordon, as in _cordon_step). A restarted step counts from its first start."""
+    if status.get("phase") == "Succeeded":
+        return None
+    for container in status.get("initContainerStatuses") or []:
+        if container.get("name") != "cordon":
+            continue
+        states = (container.get("state") or {}, container.get("lastState") or {})
+        started = [_when((state.get("running") or state.get("terminated") or {}).get("startedAt")) for state in states]
+        started = [when for when in started if when is not None]
+        if started:
+            return min(started)
+        return float("inf") if "waiting" in states[0] else None
+    return None
 
 
 def _cordon_step(status):
@@ -702,13 +727,22 @@ def _cordoned_by_upgrade(node, rows):
     registered cordoned) - or no unschedulable taint at all yet, in the
     moment before the controller adds it - is ours only when an upgrade pod
     of ours on the host, not succeeded, shows its own cordon step done. A
-    cordon from before, or with neither to go by, is someone else's."""
+    cordon from before, or with neither to go by, is someone else's.
+    Where an upgrade pod there shows when its cordon step started, the
+    window is not enough: the job runs for minutes before that step (the
+    prepare step first), and a cordon made by hand then would be taken for
+    the job's own - so the time must also fall at or after that start
+    (less CORDON_CLOCK_SKEW). A pod whose cordon step has not started yet
+    cordoned nothing."""
     added = next((_when(t.get("timeAdded")) for t in (node.get("spec") or {}).get("taints") or []
                   if t.get("key") == UNSCHEDULABLE_TAINT), None)
     if added is None:
-        return any(step for _start, _end, _running, step in rows)
+        return any(step for _start, _end, _running, step, _at in rows)
+    steps = [at for *_row, at in rows if at is not None]
+    if steps and not any(added >= at - CORDON_CLOCK_SKEW for at in steps):
+        return False
     return any(start is not None and start <= added and (running or (end is not None and added <= end))
-               for start, end, running, _step in rows)
+               for start, end, running, _step, _at in rows)
 
 
 def _newest_upgrade_pod():
