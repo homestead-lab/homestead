@@ -82,9 +82,15 @@ def admission(read, ref, *, clock=time.time):
 
 def review(read, namespace, deployment, body, *, actor, image, access_mode, threshold, clock=time.time):
     import homestead_self_data_anchor as A
-    if not isinstance(body, dict) or not {"operation", "storage_class", "node"} <= set(body) <= {"operation", "storage_class", "node", "capacity_token", "confirm_capacity"}:
+    if not isinstance(body, dict) or not {"operation", "storage_class", "node"} <= set(body) <= {"operation", "storage_class", "node", "one_host", "capacity_token", "confirm_capacity"}:
         raise J.Held("Choose the destination storage class and preparation host")
     cfg = {key: body[key] for key in ("operation", "storage_class", "node")}
+    if "one_host" in body:
+        # A volume one host mounts at a time, on a class every host could share
+        # (design 3.1): part of what is reviewed, so the token covers it.
+        if not isinstance(body["one_host"], bool):
+            raise J.Held("Choose whether the new volume is mounted by one host at a time")
+        cfg["one_host"] = body["one_host"]
     for value in (namespace, deployment, cfg["storage_class"], cfg["node"]): A._name(value)
     if (not isinstance(cfg["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", cfg["operation"])
             or not isinstance(actor, str) or not actor or access_mode not in ("ReadWriteOnce", "ReadWriteMany")
