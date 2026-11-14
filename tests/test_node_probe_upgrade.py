@@ -161,6 +161,32 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual("absent", result["state"])
         self.assertEqual([], self.sent)
 
+    def test_a_failed_read_is_unknown_not_absent(self):
+        """installed() answers "" only on the API's own 404; None says it could not tell."""
+        for failure in (urllib.error.HTTPError("/ds", 500, "down", {}, None), TimeoutError("timed out")):
+            with self.subTest(failure=failure):
+                probe.bind(lambda path, failure=failure: (_ for _ in ()).throw(failure), self._send, "lab")
+                self.assertIsNone(probe.installed())
+        probe.bind(self._get, self._send, "lab")
+        self.assertEqual("", probe.installed())
+
+    def test_a_probe_that_cannot_be_read_is_neither_installed_over_nor_reported_absent(self):
+        probe.bind(lambda path: (_ for _ in ()).throw(TimeoutError("timed out")), self._send, "lab")
+
+        self.assertEqual("unknown", probe.reconcile("2.8.49")["state"])
+        with self.assertRaises(ValueError) as refused:
+            probe.install("2.8.51")
+        self.assertEqual([], self.sent)
+        for text in (str(refused.exception), probe.status()["detail"]):
+            self.assertIn("(timed out)", text)
+            self.assertIn("Check Homestead's permissions and try again.", text)
+            self.assertLess(len(text.split(". ")[0]), 90)
+
+    def test_the_error_of_an_unread_probe_is_kept_apart_from_the_404(self):
+        probe.bind(lambda path: (_ for _ in ()).throw(urllib.error.HTTPError("/ds", 403, "Forbidden", {}, None)), self._send, "lab")
+        self.assertIsNone(probe.installed())
+        self.assertIn("(HTTP 403)", probe.unread_reason())
+
     def test_other_keys_in_the_configmap_survive(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(0)" + chr(10) + "",
                                               "smart.py": "print(0)" + chr(10) + "",

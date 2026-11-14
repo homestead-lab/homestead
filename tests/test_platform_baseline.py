@@ -449,6 +449,8 @@ class StandInProbe:
         self.unreadable = False
 
     def installed(self):
+        if self.unreadable:
+            return None
         return "homestead-nodeprobe" if self.present else ""
 
     def presence(self):
@@ -531,6 +533,19 @@ class ProbeAfterReinstallTests(unittest.TestCase):
         self.assertTrue(BASELINE.probe_tick()["ok"])
         self.assertEqual(["2.9.0"], self.probe.made)
         self.assertEqual(("reinstalled", "new", ""), tuple(self.saved()[key] for key in ("reason", "install", "error")))
+
+    def test_a_failed_read_of_the_probe_keeps_the_last_answer(self):
+        """installed() cannot tell: nothing is installed over a running probe and no row changes."""
+        self.probe.unreadable = True
+        self.assertIsNone(BASELINE.probe_tick(), "first install: nothing recorded")
+        self.assertNotIn("node-probe", BASELINE._load().get("done", {}))
+        self.row(install="old", error="API temporarily unavailable")
+        before = self.saved()
+        self.assertIsNone(BASELINE.probe_tick(), "a retry after an error waits")
+        self.assertEqual((before, []), (self.saved(), self.probe.made))
+        self.probe.unreadable, self.probe.present = False, True
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertEqual(("present", []), (self.saved()["reason"], self.probe.made))
 
     def test_the_same_install_leaves_a_missing_probe_alone_and_records_the_removal(self):
         """Deleted with kubectl: the first look of the next process sees it, so a reinstall leaves it away."""
