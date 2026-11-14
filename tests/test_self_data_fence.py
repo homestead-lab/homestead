@@ -1,7 +1,12 @@
 import copy
+import json
+import re
+import threading
 import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import urllib.error
 from pathlib import Path
@@ -162,6 +167,244 @@ class FenceTests(unittest.TestCase):
         self.c.step()
         self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["containers"][0]["image"] = "later-release"
         self.fence.require_write()
+
+
+# Another replica, as a separate process with its own locks: it enters an
+# activity (described when kind is given) and waits for a line on stdin.
+# "crash" ends it inside the activity with no clean-up; "norecord" makes
+# its record write fail.
+HOLDER = """
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import homestead_self_data_fence as F
+from contextlib import nullcontext
+directory, kind, user, host, how = sys.argv[2:7]
+if how == "norecord":
+    os.rename = lambda *_: (_ for _ in ()).throw(OSError("read-only"))
+describe = getattr(F, "described", None)  # absent before #1305: the plain activity
+with describe(kind, user=user or None, host=host or None) if kind and describe else nullcontext():
+    with F.WriteBarrier(directory, lambda: None).activity():
+        print("active", flush=True)
+        if how == "crash":
+            os._exit(1)
+        sys.stdin.readline()
+"""
+
+
+@unittest.skipUnless(F.fcntl is not None, "Linux shared locking")
+class HolderRecordTests(unittest.TestCase):
+    """#1305: a data move held back by open activity names what holds it."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.directory = temp.name
+        self.barrier = F.WriteBarrier(self.directory, lambda: None)
+
+    def holder(self, kind="", user="", host="", how=""):
+        proc = subprocess.Popen([sys.executable, "-u", "-c", HOLDER, str(Path(F.__file__).parent), self.directory,
+                                 kind, user, host, how],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        def finish():
+            try:
+                proc.communicate("done\n", timeout=10)
+            except (subprocess.TimeoutExpired, ValueError, OSError):
+                proc.kill()
+                proc.communicate()
+        self.addCleanup(finish)
+        self.assertEqual("active", proc.stdout.readline().strip())
+        if how == "crash":
+            proc.wait(timeout=10)
+        return proc
+
+    def refusal(self):
+        with self.assertRaises(Held) as caught:
+            with self.barrier.freeze(timeout=.05): self.fail("froze past an open activity")
+        return str(caught.exception)
+
+    def records(self):
+        return sorted(name for name in os.listdir(self.directory) if name.startswith(".self-data-holder-v1-"))
+
+    def test_a_freeze_names_the_terminal_that_holds_it(self):
+        self.holder("terminal", "alice", "node-a")
+        message = self.refusal()
+        self.assertTrue(message.startswith("Current Homestead activity has not finished. "), message)
+        self.assertTrue(re.search(r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.", message), message)
+        self.assertIn("Close the open session, then start the move again.", message)
+        self.assertTrue(message.endswith("No copy or shutdown was authorized"), message)
+
+    def test_only_sessions_are_named_and_other_activity_writes_no_record(self):
+        self.holder()
+        self.assertEqual([], self.records(), "plain activity (a write, a cache) writes no record")
+        self.assertEqual("Current Homestead activity has not finished. No copy or shutdown was authorized",
+                         self.refusal())
+        self.holder("vm-console", "bob")
+        self.holder("app-console", "carol")
+        message = self.refusal()
+        self.assertTrue(re.search(r"A VM console, opened by bob at [^,]+ UTC, is still open\.", message), message)
+        self.assertTrue(re.search(r"An app console, opened by carol at [^,]+ UTC, is still open\.", message), message)
+        self.assertIn("Close the open sessions, then start the move again.", message)
+        self.assertNotIn("task", message)
+
+    def test_a_crashed_holders_record_is_not_named_and_is_removed(self):
+        self.holder("terminal", "alice", "node-a", how="crash")
+        self.assertEqual(1, len(self.records()), "a crash leaves its record behind")
+        self.holder("vm-console", "bob")
+        message = self.refusal()
+        self.assertNotIn("terminal", message.lower())
+        self.assertTrue("A VM console, opened by bob" in message, message)
+        self.assertEqual(1, len(self.records()), "only the running holder's record is left")
+
+    def test_a_record_alone_never_refuses(self):
+        self.holder("terminal", "alice", "node-a", how="crash")
+        with self.barrier.freeze(timeout=.05):
+            pass
+
+    def test_with_no_record_to_read_the_refusal_is_the_plain_sentence(self):
+        self.holder("terminal", "alice", "node-a", how="norecord")
+        self.assertEqual([], self.records())
+        self.assertEqual("Current Homestead activity has not finished. No copy or shutdown was authorized",
+                         self.refusal())
+
+    def test_a_record_holds_only_kind_user_host_and_since_and_goes_at_the_end(self):
+        with F.described("terminal", user="alice", host="node-a"):
+            with self.barrier.activity():
+                [name] = self.records()
+                self.assertTrue(name.endswith(".json"), "written to a temporary name, then renamed")
+                record = json.loads(Path(self.directory, name).read_text())
+                self.assertEqual({"kind", "user", "host", "since"}, set(record))
+                self.assertEqual(("terminal", "alice", "node-a"), (record["kind"], record["user"], record["host"]))
+                self.assertEqual([record], self.barrier.holders(), "its own process's record is named too")
+        self.assertEqual([], self.records())
+
+    def test_a_record_goes_when_the_work_inside_fails(self):
+        with self.assertRaises(RuntimeError), F.described("terminal", user="alice", host="node-a"):
+            with self.barrier.activity():
+                self.assertEqual(1, len(self.records()))
+                raise RuntimeError("the work failed")
+        self.assertEqual([], self.records())
+        with self.barrier.freeze(timeout=.05):
+            pass
+
+    def test_a_record_that_cannot_be_read_names_nothing(self):
+        bad = Path(self.directory, ".self-data-holder-v1-" + "x" * 24 + ".json")
+        for text in ("not json", json.dumps({"kind": "terminal", "user": "alice", "host": "node-a", "since": 1, "extra": 1}),
+                     json.dumps({"kind": "rm -rf", "user": None, "host": None, "since": 1})):
+            with self.subTest(text):
+                bad.write_text(text)
+                with open(bad) as held:
+                    F.fcntl.flock(held, F.fcntl.LOCK_EX)   # its holder still runs
+                    self.assertEqual([], self.barrier.holders())
+
+    def test_a_bad_host_or_user_is_left_out_not_the_record(self):
+        with F.described("terminal", user="alice\nbob", host="node a; rm"):
+            with self.barrier.activity():
+                [record] = self.barrier.holders()
+        self.assertEqual(("terminal", None, None), (record["kind"], record["user"], record["host"]))
+
+    def test_a_terminal_request_is_described_by_its_host_and_its_signed_in_person(self):
+        import homestead_self_data_server as SD
+        seen = {}
+
+        def method(_handler):
+            seen["records"] = self.barrier.holders()
+
+        handler = mock.Mock(path="/api/node/shell?node=node-a", command="GET")
+        handler._cookies.return_value = {SD.AUTH.COOKIE: "a-token"}
+        with mock.patch.object(SD, "self_data_activity", self.barrier.activity, create=True), \
+                mock.patch.object(SD.AUTH, "verify_token", lambda token: {"user": "alice"} if token == "a-token" else None):
+            SD.request_scope(method, lambda: False)(handler)
+            self.assertEqual([("terminal", "alice", "node-a")], [(r["kind"], r["user"], r["host"]) for r in seen["records"]])
+            handler.path, handler.command = "/api/apps/restart", "POST"
+            SD.request_scope(method, lambda: False)(handler)
+            self.assertEqual([], seen["records"], "a change is not a session: no record")
+        self.assertEqual([], self.records())
+
+    def test_a_holders_read_never_opens_this_processs_own_records(self):
+        # On NFS flock is a POSIX lock, and closing any handle to the file
+        # drops it: a read that opened and closed our own record would let
+        # another replica take a live terminal's record as stale.
+        with F.described("terminal", user="alice", host="node-a"):
+            with self.barrier.activity():
+                [name] = self.records()
+                opened, real_open = [], os.open
+
+                def watched(path, *args, **kwargs):
+                    opened.append(os.path.basename(str(path)))
+                    return real_open(path, *args, **kwargs)
+
+                with mock.patch.object(F.os, "open", watched):
+                    [record] = self.barrier.holders()
+                self.assertEqual("alice", record["user"])
+                self.assertNotIn(name, opened)
+                self.assertEqual([name], self.records(), "still there while it is held")
+
+    def test_a_temporary_record_left_for_minutes_is_removed(self):
+        old = Path(self.directory, ".self-data-holder-v1-" + "a" * 24 + ".tmp")
+        fresh = Path(self.directory, ".self-data-holder-v1-" + "b" * 24 + ".tmp")
+        old.write_text("{}"); fresh.write_text("{}")
+        os.utime(old, (time.time() - 600, time.time() - 600))
+        self.assertEqual([], self.barrier.holders())
+        self.assertEqual([fresh.name], self.records())
+
+
+@unittest.skipUnless(F.fcntl is not None, "Linux shared locking")
+class OpenSessionsHoldAMoveBack(unittest.TestCase):
+    """#1305 through what a person does: a terminal opened through the request
+    scope stays open while a data move tries to freeze, and the move's
+    refusal names it. Only entry points older than #1305 are used here."""
+
+    def setUp(self):
+        import homestead_auth as AUTH
+        import homestead_self_data_server as SD
+        temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.directory = temp.name
+        self.session_barrier = F.WriteBarrier(self.directory, lambda: None)
+        self.mover = F.WriteBarrier(self.directory, lambda: None)   # its own lock handle, as a move has
+        self.AUTH, self.SD = AUTH, SD
+        self.enterContext(mock.patch.object(SD, "self_data_activity", self.session_barrier.activity, create=True))
+        self.enterContext(mock.patch.object(AUTH, "verify_token",
+                                            lambda token, force=False: {"user": "alice"} if token == "a-token" else None))
+
+    def open_terminal(self, node="node-a"):
+        """A terminal on node, opened by alice, kept open until the test ends."""
+        opened, close = threading.Event(), threading.Event()
+
+        def session(_handler):
+            opened.set()
+            close.wait(10)
+
+        handler = mock.Mock(path=f"/api/node/shell?node={node}", command="GET")
+        handler._cookies.return_value = {self.AUTH.COOKIE: "a-token"}
+        thread = threading.Thread(target=self.SD.request_scope(session, lambda: False), args=(handler,), daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(close.set)
+        self.assertTrue(opened.wait(10), "the terminal never opened")
+
+    def refusal(self):
+        with self.assertRaises(Held) as caught:
+            with self.mover.freeze(timeout=.05): self.fail("froze past an open terminal")
+        return str(caught.exception)
+
+    def test_the_move_names_the_open_terminal(self):
+        self.open_terminal()
+        message = self.refusal()
+        named = re.search(r"A terminal on host node-a, opened by alice at \d{4}-\d\d-\d\d \d\d:\d\d UTC, is still open\.", message)
+        self.assertTrue(named, message)
+        self.assertTrue("Close the open session, then start the move again." in message, message)
+
+    def test_the_terminal_is_still_named_after_a_refusal_has_read_it(self):
+        self.open_terminal()
+        self.refusal()
+        message = self.refusal()
+        self.assertTrue("A terminal on host node-a, opened by alice" in message, message)
+
+    def test_a_record_left_by_a_crash_never_holds_a_move_back(self):
+        Path(self.directory, ".self-data-holder-v1-" + "c" * 24 + ".json").write_text(
+            json.dumps({"kind": "terminal", "user": "alice", "host": "node-a", "since": int(time.time())}))
+        with self.mover.freeze(timeout=.05):
+            pass
 
 
 if __name__ == "__main__":

@@ -25,6 +25,77 @@ from homestead_storage_journal import Held, identity, shape
 
 
 MARKER = ".self-data-handoff-v1.json"
+# Who holds the activity lock (#1305): each session's activity (a terminal,
+# an app console, a VM console) writes a small record beside the lock - its
+# kind, the person, the host, since when - and holds its own lock on that
+# record while it runs. Other activity (a write, a cache) writes none. A
+# refusal names only records whose lock is still held: a crashed holder's
+# record is stale, skipped and removed. A record never refuses anything by itself.
+HOLDER_PREFIX = ".self-data-holder-v1-"
+HOLDER_KINDS = ("terminal", "app-console", "vm-console")
+HOLDER_BYTES = 1024
+HOLDER_TMP_STALE = 300   # seconds: a temporary record left this long was never renamed
+HOLDERS_READ = 64
+HOLDER_HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
+_described = threading.local()
+_live_lock = threading.Lock()
+# This process's own records, ident -> record. They are never opened again
+# while held: on NFS flock is a POSIX lock, and closing any handle to the
+# file drops it, so another replica would take the record as stale.
+_live = {}
+
+
+@contextmanager
+def described(kind, user=None, host=None):
+    """What the activity this thread enters next is, for its holder record."""
+    previous = getattr(_described, "value", None)
+    _described.value = {"kind": kind, "user": user, "host": host}
+    try:
+        yield
+    finally:
+        _described.value = previous
+
+
+def _holder_fields(value):
+    """Only kind, user, host and since, each checked; None when not a record."""
+    if not isinstance(value, dict) or set(value) != {"kind", "user", "host", "since"}:
+        return None
+    kind, user, host, since = value["kind"], value["user"], value["host"], value["since"]
+    if (kind not in HOLDER_KINDS or type(since) is not int or since <= 0
+            or not (user is None or _good_user(user)) or not (host is None or _good_host(host))):
+        return None
+    return {"kind": kind, "user": user, "host": host, "since": since}
+
+
+def _good_user(user):
+    return isinstance(user, str) and 0 < len(user) <= 128 and user.isprintable()
+
+
+def _good_host(host):
+    return isinstance(host, str) and HOLDER_HOST.fullmatch(host) is not None
+
+
+def _when(since):
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(since))
+
+
+def _session_words(record):
+    what = {"terminal": "A terminal", "app-console": "An app console", "vm-console": "A VM console"}[record["kind"]]
+    where = f" on host {record['host']}" if record["host"] else ""
+    who = f" by {record['user']}" if record["user"] else ""
+    return f"{what}{where}, opened{who} at {_when(record['since'])}, is still open."
+
+
+def holder_words(records, shown=3):
+    """The refusal's sentences naming what holds the lock, or "" for none."""
+    sessions = sorted(records, key=lambda r: r["since"])
+    words = [_session_words(r) for r in sessions[:shown]]
+    if len(sessions) > shown:
+        more = len(sessions) - shown
+        words.append(f"{more} more {'session is' if more == 1 else 'sessions are'} still open.")
+    if sessions:
+        words.append(f"Close the open {'session' if len(sessions) == 1 else 'sessions'}, then start the move again.")
+    return " ".join(words)
 
 
 class MoveHeld(Held):
@@ -101,10 +172,139 @@ class WriteBarrier:
                 raise DataUnavailable("The shared data lock is unavailable, so no change was allowed") from None
             self.local.depth = 1
             _as_move(self.check)  # Fence may have been published while opening the lock.
-            yield
+            record = self._hold()
+            try:
+                yield
+            finally:
+                self._unhold(record)
         finally:
             self.local.depth = 0
             os.close(fd)
+
+    def _holder_path(self, ident, suffix=".json"):
+        return os.path.join(self.directory, f"{HOLDER_PREFIX}{ident}{suffix}")
+
+    def _hold(self):
+        """Write this activity's holder record, locked before it is visible:
+        a temporary file, locked, written, then renamed into place (the lock
+        stays with the file). Best effort: a record that cannot be written
+        costs only the name in a refusal. Only a session writes one.
+        -> (fd, ident) or None."""
+        value = getattr(_described, "value", None) or {}
+        if value.get("kind") not in HOLDER_KINDS:
+            return None
+        user, host = value.get("user"), value.get("host")
+        record = {"kind": value["kind"],
+                  "user": user if _good_user(user) else None, "host": host if _good_host(host) else None,
+                  "since": int(time.time())}
+        ident, fd = os.urandom(12).hex(), None
+        temporary = self._holder_path(ident, ".tmp")
+        try:
+            fd = os.open(temporary, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.write(fd, json.dumps(record, separators=(",", ":")).encode())
+            with _live_lock:
+                _live[ident] = dict(record)
+            os.rename(temporary, self._holder_path(ident))
+            return fd, ident
+        except OSError:
+            with _live_lock:
+                _live.pop(ident, None)
+            if fd is not None:
+                os.close(fd)
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+            return None
+
+    def _unhold(self, record):
+        """Remove the record while still holding its lock, then let it go."""
+        if record is None:
+            return
+        fd, ident = record
+        try:
+            os.unlink(self._holder_path(ident))
+        except OSError:
+            pass  # left behind, it is stale once its lock goes: skipped and removed
+        finally:
+            with _live_lock:
+                _live.pop(ident, None)
+            os.close(fd)
+
+    def holders(self):
+        """The holder records whose holder still runs, as far as can be read.
+        A record whose lock nobody holds is a crashed holder's: removed.
+        This process's own records come from memory, never from their files;
+        another's is judged only by trying its lock on a handle opened here."""
+        try:
+            names = sorted(name for name in os.listdir(self.directory) if name.startswith(HOLDER_PREFIX))
+        except OSError:
+            return []
+        self._drop_old_temporaries([name for name in names if name.endswith(".tmp")])
+        found = []
+        for name in [name for name in names if name.endswith(".json")][:HOLDERS_READ]:
+            ident, path = name[len(HOLDER_PREFIX):-len(".json")], os.path.join(self.directory, name)
+            with _live_lock:
+                ours = _live.get(ident)
+            if ours is not None:
+                found.append(dict(ours))
+                continue
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            except OSError:
+                continue
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_size > HOLDER_BYTES:
+                    continue
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass  # its holder still runs
+                except OSError:
+                    continue
+                else:
+                    current = os.lstat(path)
+                    if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                        os.unlink(path)
+                    continue
+                try:
+                    record = _holder_fields(json.loads(os.read(fd, HOLDER_BYTES + 1)))
+                except (ValueError, UnicodeError):
+                    record = None
+                if record is not None:
+                    found.append(record)
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
+        return found
+
+    def _drop_old_temporaries(self, names):
+        """A temporary record is renamed within moments of being written: one
+        left for minutes is a crashed writer's. This process's own are kept."""
+        for name in names:
+            ident = name[len(HOLDER_PREFIX):-len(".tmp")]
+            with _live_lock:
+                if ident in _live:
+                    continue
+            path = os.path.join(self.directory, name)
+            try:
+                if time.time() - os.lstat(path).st_mtime > HOLDER_TMP_STALE:
+                    os.unlink(path)
+            except OSError:
+                continue
+
+    def _not_finished(self):
+        """The refusal when activity outlasts the freeze: what holds it, when
+        records say, else the plain sentence."""
+        try:
+            named = holder_words(self.holders())
+        except Exception:
+            named = ""
+        return " ".join(filter(None, ("Current Homestead activity has not finished.", named,
+                                      "No copy or shutdown was authorized")))
 
     @contextmanager
     def freeze(self, timeout=30):
@@ -123,7 +323,7 @@ class WriteBarrier:
                     break
                 except BlockingIOError:
                     if time.monotonic() >= deadline:
-                        raise Held("Current Homestead activity has not finished. No copy or shutdown was authorized") from None
+                        raise Held(self._not_finished()) from None
                     time.sleep(.05)
                 except OSError:
                     raise Held("The data lock could not be taken, so no copy or shutdown was allowed") from None

@@ -17,6 +17,7 @@ import os
 import re
 import time
 import urllib.request, urllib.parse, urllib.error
+import homestead_auth as AUTH
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_kube as KUBE
 import homestead_names as NAMES
@@ -96,11 +97,33 @@ def request_scope(method, boot_pending):
         if boot_pending() or not path.startswith("/api/") or progress or path in ("/api/auth/state", "/api/self/data/abandon"):
             return method(handler)
         try:
-            with nullcontext() if get and path not in LONG_GETS else self_data_activity():
+            with _described(handler, path), nullcontext() if get and path not in LONG_GETS else self_data_activity():
                 return method(handler)
         except SELF_DATA_FENCE.Held as error:
             return held_reply(handler, error)
     return guarded
+
+
+SESSION_KINDS = {"/api/node/shell": "terminal", "/api/console": "app-console", "/api/vm/console": "vm-console"}
+
+
+def _described(handler, path):
+    """A session's holder record (#1305): which kind, whose and, for a
+    terminal, on which host - so a data move it holds back names it. The
+    person is read from the sign-in cookie only (none read, no one named);
+    nothing else of the request is kept."""
+    kind = SESSION_KINDS.get(path)
+    if kind is None:
+        return nullcontext()
+    try:
+        token = handler._cookies().get(AUTH.COOKIE)
+        user = (AUTH.verify_token(token) or {}).get("user") if token else None
+    except Exception:
+        user = None
+    host = None
+    if kind == "terminal":
+        host = (urllib.parse.parse_qs(urllib.parse.urlparse(handler.path).query).get("node") or [None])[0]
+    return SELF_DATA_FENCE.described(kind, user=user, host=host)
 
 
 def held_reply(handler, error):
