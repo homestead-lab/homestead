@@ -718,17 +718,41 @@ def copy_progress(log, size_bytes):
             "verified": "==> verified" in log}
 
 
+# The job's id on the temporary claim it creates (#1314): labels are the same
+# for every move of a claim, so they alone cannot tell this move's claim from a
+# leftover of an earlier one.
+TEMP_STAMP = NAMES.key("reclass-job")
+
+
+def _ours(found, ref):
+    """Whether a claim of the temporary name is this move's. With the uid it
+    kept, that uid; without, this job's stamp, on the class and size this move
+    asks for. Either way with the move's labels. A claim an older Homestead
+    created carries no stamp, so a move that lost its uid treats it as not its own."""
+    meta = found.get("metadata") or {}
+    labels = meta.get("labels") or {}
+    if any(labels.get(key) != value for key, value in NAMES.labels("reclass", ref["claim"]).items()):
+        return False
+    if ref.get("temp_uid"):
+        return meta.get("uid") == ref["temp_uid"]
+    spec = found.get("spec") or {}
+    return (bool(ref.get("temp_stamp")) and (meta.get("annotations") or {}).get(TEMP_STAMP) == ref["temp_stamp"]
+            and spec.get("storageClassName") == ref.get("target")
+            and ((spec.get("resources") or {}).get("requests") or {}).get("storage") == ref.get("size"))
+
+
+def _not_ours(ref):
+    return f"A volume named {ref['temp']} is there that this move did not create"
+
+
 def _remove_temp(ns, ref):
-    """Remove the temporary claim if it is this move's: it carries this move's
-    labels and, where the uid was kept, that uid. False if one of that name stays."""
+    """Remove the temporary claim if it is this move's (_ours). False if one of that name stays."""
     path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}"
     found = KUBE.get_optional(path, read=kget)
     if not found:
         return True
     meta = found.get("metadata") or {}
-    labels = meta.get("labels") or {}
-    if (any(labels.get(key) != value for key, value in NAMES.labels("reclass", ref["claim"]).items())
-            or (ref.get("temp_uid") and meta.get("uid") != ref["temp_uid"])):
+    if not _ours(found, ref):
         return False
     try:
         ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta.get("uid")}})
@@ -742,7 +766,7 @@ def _remove_temp(ns, ref):
 
 def _made_nothing(ref):
     """Rolling back from here, this move has no claim or copy job of its own yet."""
-    return ref.get("rollback_from", ref.get("phase", "stop")) in ("stop", "stopping")
+    return ref.get("temp_taken") or ref.get("rollback_from", ref.get("phase", "stop")) in ("stop", "stopping")
 
 
 def _put_apps_back(ns, ref):
@@ -803,7 +827,7 @@ def _rollback(ns, ref, why, item=None):
         try:
             if not _remove_temp(ns, ref):
                 removed = False
-                notes.append(f"A volume named {ref['temp']} is there that this move did not make, so it was left.")
+                notes.append(f"{_not_ours(ref)}, so it was left.")
         except Exception as error:
             removed = False
             notes.append(f"The new volume {ref['temp']} could not be confirmed removed ({error}), so it may still be there.")
@@ -1095,8 +1119,10 @@ def _resolve(item):
         return "running", 10, f"{claim} is free"
     if phase == "create":
         _steps(item, "create")
+        ref["temp_stamp"] = item["id"]
         body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
-                "metadata": {"name": ref["temp"], "namespace": ns, "labels": NAMES.labels("reclass", claim)},
+                "metadata": {"name": ref["temp"], "namespace": ns, "labels": NAMES.labels("reclass", claim),
+                             "annotations": {TEMP_STAMP: item["id"]}},
                 "spec": {**ref["claim_spec"], "storageClassName": ref["target"],
                          "resources": {"requests": {"storage": ref["size"]}}}}
         try:
@@ -1105,6 +1131,17 @@ def _resolve(item):
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 return _rollback(ns, ref, f"The new volume could not be made (HTTP {error.code}).", item)
+            # Its name is taken: carry on only with this move's own claim, made
+            # by an earlier try whose reply was lost (#1314).
+            found = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{ref['temp']}", read=kget)
+            if not found:
+                return "running", 10, f"{claim} is free"
+            if not _ours(found, ref):
+                # Nothing of this move's was made, so nothing is deleted.
+                ref["temp_taken"] = True
+                return _rollback(ns, ref, f"{_not_ours(ref)}, so the move stopped. Delete {ref['temp']} if nothing "
+                                 "needs it, then move the volume again.", item)
+            ref.setdefault("temp_uid", (found.get("metadata") or {}).get("uid", ""))
         name, job = job_body(ns, ref)
         try:
             ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", job)
@@ -1182,6 +1219,9 @@ def _swap(item, ns, ref):
     claim, temp = ref["claim"], ref["temp"]
     if not ref.get("new_pv"):
         tmp = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}", read=kget) or {}
+        if tmp and not _ours(tmp, ref):
+            # Its volume is not this move's copy: never recorded as the new volume.
+            return _swap_stopped(item, ref)
         if not (tmp.get("spec") or {}).get("volumeName"):
             return "running", 82, "Waiting for the new volume to be bound"
         ref["new_pv"] = tmp["spec"]["volumeName"]
@@ -1200,8 +1240,18 @@ def _swap(item, ns, ref):
     except urllib.error.HTTPError:
         pass
     # 2. The temporary claim goes, and its volume is freed to be claimed again.
-    if KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}", read=kget):
-        ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}")
+    # Only this move's own, and only by its uid: one of that name made by
+    # anyone else is left, and the move stops there (#1314).
+    found = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}", read=kget)
+    if found:
+        if not _ours(found, ref):
+            return _swap_stopped(item, ref)
+        try:
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{temp}",
+                  {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": (found.get("metadata") or {}).get("uid")}})
+        except urllib.error.HTTPError as error:
+            if error.code not in (404, 409):    # gone, or replaced since: the next round looks again
+                raise
         return "running", 84, "Releasing the new volume from its temporary name"
     pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{new_pv}", read=kget) or {}
     ref_claim = (pv.get("spec") or {}).get("claimRef") or {}
@@ -1232,6 +1282,12 @@ def _swap(item, ns, ref):
           ctype="application/merge-patch+json")
     ref["phase"] = "start"
     return "running", 90, f"{claim} is on {ref['target']}"
+
+
+def _swap_stopped(item, ref):
+    return "failed", item.get("progress", 0), (
+        f"{_not_ours(ref)}, so the move stopped at 'swap'. The apps stay stopped, and the original volume is kept. "
+        f"Delete {ref['temp']} if nothing needs it. Resume the job to carry on from this step.")
 
 
 def _held(ns, ref, claim_obj):
