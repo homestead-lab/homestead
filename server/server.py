@@ -543,7 +543,6 @@ import homestead_vmstore as VMSTORE
 import homestead_nodeshell as NODESHELL
 import homestead_hostrun as HOSTRUN
 import homestead_host_limits as HOST_LIMITS
-import homestead_apparmor_fix as APPARMOR_FIX
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
@@ -662,7 +661,6 @@ for _module in (REBALANCE, COPY_MOVE, HOST_MOVE, CREBALANCE, VM_MUTATION_JOB, CO
     _module.register(OPS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
-APPARMOR_FIX.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, NODES.node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
