@@ -112,6 +112,79 @@ test("a page whose failed /api/icons/ icon is due a retry is painted again, so t
   assert.equal(t.calls.morphed, before + 1, "due: painted, so loadAppIcons asks again");
 });
 
+// paint() with the real morph and a stand-in page watcher. The stand-in records only what a test tells it
+// changed (record()), and hands its records to the callback a microtask later unless paint() took them
+// first, as a browser's MutationObserver does. The markup paint() is given names a tree to build.
+function paintMorphWorld(trees, extra = {}) {
+  const observers = [];
+  class Watcher {
+    constructor(callback) { this.callback = callback; this.queue = []; observers.push(this); }
+    observe() {}
+    takeRecords() { const out = this.queue; this.queue = []; return out; }
+    record(entry) { this.queue.push(entry); queueMicrotask(() => { if (this.queue.length) this.callback(this.takeRecords()); }); }
+  }
+  const host = mount(el("div", { "data-painted": "1" }, trees.first()));
+  Object.defineProperty(host, "classList", { value: { remove() {}, add() {}, contains: () => false } });
+  const createElement = () => {
+    const box = el("div");
+    Object.defineProperty(box, "innerHTML", { set(html) { box.appendChild(trees[html]()); } });
+    return box;
+  };
+  const ctx = paintWorld({ location: { search: "" }, STATE: { view: "nodes" }, V: () => host, pageTabs: () => "", filterBar: () => "", ROLE: "admin",
+    MutationObserver: Watcher, enhanceActions() {}, loadAppIcons() {}, dropOrphanTooltip() {}, applyRole() {},
+    document: Object.assign(Object.create(DOC), { createElement }), ...extra });
+  vm.runInContext(between(paintSrc, "const PAGE_SNAPSHOT =", "function pageSkeleton(view)"), ctx);
+  vm.runInContext(between(paintSrc, "function paint(html)", "/* A cheap signature") + between(paintSrc, "/* A cheap signature", "/* data-mkey"), ctx);
+  return { host, watcher: () => observers[0], paint: html => vm.runInContext(`paint(${JSON.stringify(html)})`, ctx) };
+}
+
+test("a change a focus handler makes while paint() gives focus back is seen: the next paint of the same data undoes it", async () => {
+  const w = paintMorphWorld({ first: () => list(row("a", "A"), row("b", "B"), row("c", "C")), bac: () => list(row("b", "B"), row("a", "A"), row("c", "C")) });
+  const ul = w.host.childNodes[0], buttonB = ul.childNodes[1].childNodes[0];
+  buttonB.focus();   // the paint below moves b, so a browser blurs it and morph gives its focus back
+  let given = 0;
+  buttonB.focus = function () {
+    DOC.activeElement = this; given++;
+    ul.appendChild(row("stray", "S")); w.watcher().record({ type: "childList" });   // the handler changes the page
+  };
+  w.paint("bac");
+  await Promise.resolve();
+  assert.equal(given, 1, "focus was given back once");
+  assert.equal(DOC.activeElement, buttonB, "the reader keeps their place");
+  w.paint("bac");
+  assert.deepEqual(keys(ul), ["b", "a", "c"], "the next paint of the same data morphs and takes the handler's row away");
+});
+
+const abc = () => list(row("a", "A"), row("b", "B"), row("c", "C")), bac = () => list(row("b", "B"), row("a", "A"), row("c", "C"));
+
+test("focus a moved row lost comes back even when paint() fails after the move", () => {
+  const w = paintMorphWorld({ first: abc, bac }, { loadAppIcons() { throw new Error("icons broke"); } });
+  const buttonB = w.host.childNodes[0].childNodes[1].childNodes[0];
+  buttonB.focus();
+  assert.throws(() => w.paint("bac"), /icons broke/);
+  assert.equal(DOC.activeElement, buttonB, "the reader keeps their place on a failed paint");
+});
+
+test("paint() does not give focus back to a row its own work took off the page", () => {
+  let ul;
+  const w = paintMorphWorld({ first: abc, bac }, { loadAppIcons() { ul.childNodes.find(n => n.getAttribute("data-mkey") === "b").remove(); } });
+  ul = w.host.childNodes[0];
+  const buttonB = ul.childNodes[1].childNodes[0];
+  buttonB.focus();
+  w.paint("bac");
+  assert.notEqual(DOC.activeElement, buttonB, "a row taken off the page is not focused");
+});
+
+test("paint() does not take back focus that moved elsewhere during the paint", () => {
+  let other;
+  const w = paintMorphWorld({ first: abc, bac }, { loadAppIcons() { other.focus(); } });
+  const ul = w.host.childNodes[0], buttonB = ul.childNodes[1].childNodes[0];
+  other = ul.childNodes[2].childNodes[0];
+  buttonB.focus();
+  w.paint("bac");
+  assert.equal(DOC.activeElement, other, "focus taken during the paint stays where it went");
+});
+
 // Only iconRetryDue is tested here (node has no MutationObserver, so no page watcher). In a browser a
 // broken external icon still repaints the page: its error handler removes the <img> outside paint().
 test("iconRetryDue: an app showing initials for an icon from elsewhere does not by itself force a repaint", () => {

@@ -51,16 +51,38 @@ try {
 
   // The same data painted again does no DOM work, on every refresh, not every other one: the page
   // watcher (a real MutationObserver, which node tests do not have) must not count paint's own marks.
+  // paint() is counted too: no morph is only a skip when each refresh did paint.
   const morphs = await page.evaluate(async () => {
     await refresh(true); await new Promise(r => setTimeout(r, 50));   // let any change since settle once
-    const real = window.morph; let calls = 0;
+    const real = window.morph, realPaint = window.paint; let calls = 0;
+    const paints = [];
     const views = document.querySelector("#views");   // the page; the bell and widgets morph their own parts
     window.morph = (...args) => { if (args[0] === views) calls++; return real(...args); };
-    try { for (let tick = 0; tick < 3; tick++) { await refresh(true); await new Promise(r => setTimeout(r, 50)); } }
-    finally { window.morph = real; }
-    return { calls, hash: !!document.querySelector("#views").dataset.hash };
+    window.paint = (...args) => { paints[paints.length - 1]++; return realPaint(...args); };
+    try { for (let tick = 0; tick < 3; tick++) { paints.push(0); await refresh(true); await new Promise(r => setTimeout(r, 50)); } }
+    finally { window.morph = real; window.paint = realPaint; }
+    return { paints, calls, hash: !!document.querySelector("#views").dataset.hash };
   });
-  assert.deepEqual(morphs, { calls: 0, hash: true }, "three refreshes of the same data morph the page not once");
+  assert.ok(morphs.paints.every(n => n > 0), `each of the three refreshes paints the page: ${JSON.stringify(morphs.paints)}`);
+  assert.deepEqual({ calls: morphs.calls, hash: morphs.hash }, { calls: 0, hash: true }, "three refreshes of the same data morph the page not once");
+
+  // A repaint that moves the row the reader is on gives focus back through paint(), the path every
+  // keyed page takes (the section above calls morph() directly).
+  const moved = await page.evaluate(async () => {
+    // home-assistant follows frigate in its group: brought to the front, its own row is the one moved
+    // (a row moved later stays put while the others move round it, and keeps focus without help).
+    const rowOf = () => document.querySelector(`#views .wl-row[data-mkey*='"home-assistant"']`);
+    const row = rowOf(), button = row?.querySelector("details.actionmenu > summary");
+    if (!button) return { found: false };
+    const at = () => [...row.parentNode.children].indexOf(row);
+    const start = at();
+    button.focus();
+    const list = window.__demoWorkloads;
+    list.unshift(...list.splice(list.findIndex(w => w.name === "home-assistant"), 1));
+    await refresh(true);
+    return { found: true, sameRow: rowOf() === row, moved: at() !== start, focus: document.activeElement === button };
+  });
+  assert.deepEqual(moved, { found: true, sameRow: true, moved: true, focus: true }, "a row moved by a repaint keeps its node and the reader's focus");
 
   // An app that stops while its "…" menu is open: the open menu is left alone, and once it closes
   // the next refresh brings it up to date, though the data has not changed again since.
@@ -73,10 +95,20 @@ try {
   assert.ok(before?.includes("Stop") && !before.includes("Start"), `frigate's menu offers Stop: ${JSON.stringify(before)}`);
   await page.locator(`${MENU} > summary`).click();
   await page.locator("details.actionmenu-portal[open]").waitFor({ state: "attached" });
-  await page.evaluate(async () => {
+  // Closing the menu puts it back in its row, a change the page watcher would see and so make the
+  // next paint morph by itself. The watcher is stopped right after the paint with the menu open, and
+  // across the close (paint() starts a new one), so only paint()'s own note of the part it left behind
+  // (report.skipped) can bring the menu up to date. That note is what has forgotten the hash by then.
+  const stopped = await page.evaluate(async () => {
     Object.assign(window.__demoWorkloads.find(w => w.name === "frigate"), { desired: 0, ready: 0 });
     await refresh(true);
+    const views = document.querySelector("#views"), watcher = views.paintWatcher;
+    if (!watcher) return { watcher: false };
+    watcher.disconnect(); delete views.paintWatcher;
+    return { watcher: true, hashForgotten: !views.dataset.hash };
   });
+  assert.deepEqual(stopped, { watcher: true, hashForgotten: true },
+    "the page has a paint watcher to stop, and the paint that left the open menu behind forgot its hash");
   assert.ok((await items()).includes("Stop"), "the open menu is left as it was");
   await page.keyboard.press("Escape");
   await page.locator("details.actionmenu-portal").waitFor({ state: "detached" });
