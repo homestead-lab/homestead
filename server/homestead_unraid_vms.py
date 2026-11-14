@@ -1071,6 +1071,122 @@ def _stop_following(ref, item, phases):
         words(_count(unfinished), _count(finished), "is" if len(finished) == 1 else "are")))
 
 
+def _journalled(ref, item):
+    """The VM create's writes, recorded in the job as they go (#1329): each POST
+    is saved as an intent before it is sent, then with the uid Kubernetes
+    answered with, so a restart part way knows what this try created. A DELETE
+    commit_vm sends for a refused VM marks its object removed."""
+    journal = ref["vm_writes"]
+
+    def send(method, path, body=None, **kwargs):
+        if method == "POST" and isinstance(body, dict):
+            entry = {"path": f"{path.partition('?')[0]}/{(body.get('metadata') or {}).get('name', '')}",
+                     "kind": body.get("kind", ""), "phase": "intent"}
+            journal.append(entry)
+            OPS.checkpoint(item)
+            try:
+                answer = ksend(method, path, body, **kwargs)
+            except urllib.error.HTTPError as error:
+                entry["phase"] = "refused" if KUBE.definite_refusal(error.code) else "uncertain"
+                OPS.checkpoint(item)
+                raise
+            except Exception:
+                entry["phase"] = "uncertain"
+                OPS.checkpoint(item)
+                raise
+            entry.update(phase="accepted", uid=((answer or {}).get("metadata") or {}).get("uid", "") if isinstance(answer, dict) else "")
+            OPS.checkpoint(item)
+            return answer
+        answer = ksend(method, path, body, **kwargs)
+        if method == "DELETE":
+            for entry in journal:
+                if entry["path"] == path.partition("?")[0] and entry["phase"] == "accepted":
+                    entry["phase"] = "removed"
+        return answer
+    return send
+
+
+class MayExist(ValueError):
+    """A VM create cut off once the VM was sent: the VM may exist. Its words are the whole ending."""
+
+
+def _vm_sent(ref):
+    """The record of the VM itself, when this try sent it and it was not refused outright."""
+    return next((e for e in ref.get("vm_writes") or [] if e["kind"] == "VirtualMachine" and e["phase"] != "refused"), None)
+
+
+def _named(entry):
+    return entry["path"].rsplit("/", 1)[-1]
+
+
+def _left(ref):
+    """What this try created and is still there, as far as its record shows."""
+    return ", ".join(_named(e) for e in ref.get("vm_writes") or [] if e["phase"] in ("accepted", "intent", "uncertain"))
+
+
+def _after_cut_off(ref, item):
+    """An earlier try of the VM create was cut off part way. Once the VM itself
+    was sent it may have been created, so everything is kept and a person
+    checks it. Before that, what the try created is removed, each by the uid
+    its POST answered with (one created again under the name since is not
+    this one's); one sent with no answer may be there, so it is kept. Raises
+    ValueError, the import's refused ending, when anything is kept."""
+    journal = ref.get("vm_writes")
+    if not journal:
+        return
+    # A VM refused outright made no VM; one sent with any other outcome may have.
+    vm = _vm_sent(ref)
+    if vm:
+        how = "Kubernetes accepted" if vm["phase"] in ("accepted", "removed") else "was sent with no answer"
+        name = _named(vm)
+        said = (f"The VM create was cut off after Kubernetes accepted {name}." if how == "Kubernetes accepted" else
+                f"The VM create was cut off after {name} was sent with no answer.")
+        raise MayExist(f"{said} {name} may exist, so it is kept with everything created for it. "
+                       "Check it under Virtual machines.")
+    for entry in journal:
+        if entry["phase"] != "accepted" or not entry.get("uid"):
+            continue
+        try:
+            KUBE.delete_if_present(entry["path"], {"apiVersion": "v1", "kind": "DeleteOptions",
+                                                    "preconditions": {"uid": entry["uid"]}}, send=ksend)
+            entry["phase"] = "removed"
+        except urllib.error.HTTPError as error:
+            if error.code != 409 and not KUBE.definite_refusal(error.code):
+                raise           # not known to be refused: the round is asked again
+            error.close()
+            if error.code == 409:   # created again under the name since: not this try's
+                entry["phase"] = "removed"
+        OPS.checkpoint(item)
+    left = _left(ref)
+    ref.pop("vm_writes", None)
+    if left:
+        raise ValueError(f"The VM create was cut off part way. {left} may be what it created, so "
+                         f"{'it is' if ', ' not in left else 'they are'} kept. Check before creating the VM")
+
+
+# The waits with a limit, by phase: a pause there counts toward it (#1329).
+PAUSE_LIMITS = {"disks": ("ready_since", READY_LIMIT), "convert": ("finish_since", FINISH_LIMIT)}
+
+
+def _paused(ref, item, hold):
+    """The import cannot check its temporary storage (CDI_CLEANUP.track). In a
+    wait with a limit, that time counts toward it, so a refusal that lasts ends
+    the import there instead of pausing it for ever. What it cannot check, it
+    does not remove: the import ends keeping the disks."""
+    wait = PAUSE_LIMITS.get(ref["phase"])
+    if not wait or not _waited(ref, *wait):
+        return hold
+    limit = wait[1]
+    how_long = f"{limit // 3600} hours" if limit >= 3600 else f"{limit // 60} minutes"
+    reason = hold[2].removeprefix("Import paused: ")[:160].rstrip(".")
+    vm = _vm_sent(ref)    # an earlier create cut off once the VM was sent: it may exist
+    stopped = (f"This import has stopped. {_named(vm)} may exist, so it is kept. Check it under Virtual machines."
+               if vm else "This import has stopped, and no VM was created.")
+    return _end_keeping_disks(ref, item, (
+        f"Homestead could not check the import's temporary storage for {how_long}. The last check said {reason}. "
+        f"{stopped} The VM on {_where(ref)} is unchanged. Nothing of the disks was removed. {REMOVE_THERE}"))
+
+
 def _end_keeping_disks(ref, item, detail):
     """End the import and let go of its name, removing only its own copy Job and Secret."""
     if not ref.get("cdi_cleanup"):
@@ -1147,7 +1263,7 @@ def status(item):
             return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
         hold = CDI_CLEANUP.track(item, kget, OPS.checkpoint)
         if hold:
-            return hold
+            return _paused(ref, item, hold)
     if ref.get("cdi_cleanup"):
         dvs = [CDI_CLEANUP.RESOURCES.optional(kget, f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
         if any(dv is None for dv in dvs):
@@ -1217,11 +1333,21 @@ def status(item):
             if _waited(ref, "finish_since", FINISH_LIMIT):
                 return _stop_following(ref, item, phases)
             return "running", 96, "CDI is finishing the disk"
+        # A platform that cannot be read (just after a restart, the API not
+        # answering) says nothing about the VM: the round is asked again, as any
+        # failed read is (homestead_job_errors), and the disks wait (#1329).
         try:
-            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), platform() or {}, "")
+            found = platform() or {}
+        except ValueError as error:
+            raise RuntimeError(f"The cluster's platform could not be read, so the VM is not created yet ({error})") from None
+        try:
+            # An earlier try cut off part way (a restart) left a record of what it sent.
+            _after_cut_off(ref, item)
+            prepared = IMP.prepare_vm(dict(ref["vm_cfg"]), found, "")
             IMP._recheck_vm_creation(prepared)
+            ref["vm_writes"] = []
             try:
-                IMP.commit_vm(prepared, send=ksend)
+                IMP.commit_vm(prepared, send=_journalled(ref, item))
             except urllib.error.HTTPError as error:
                 # Refused: commit_vm removed what it made for the VM, and the
                 # next round would only make and remove it again. Anything else
@@ -1229,16 +1355,23 @@ def status(item):
                 if not KUBE.definite_refusal(error.code):
                     raise
                 error.close()
-                raise ValueError(f"Kubernetes refused it (HTTP {error.code})") from None
+                left = _left(ref)
+                raise ValueError(f"Kubernetes refused it (HTTP {error.code})"
+                                 + (f". {left} that this try created could not be removed, so "
+                                    f"{'it is' if ', ' not in left else 'they are'} kept" if left else "")) from None
         except ValueError as error:
+            ref.pop("vm_writes", None)
             # The disks are whole: keep them, and say how to finish by hand.
-            detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
-                      f"{', '.join(d['dv'] for d in ref['disks'])}. Create the VM from them under Import.")
+            disks = ", ".join(d["dv"] for d in ref["disks"])
+            detail = (f"{error} The disks are kept as {disks}." if isinstance(error, MayExist) else
+                      f"The disks arrived, but the VM could not be created: {error}. They are kept as "
+                      f"{disks}. Create the VM from them under Import.")
             if ref.get("cdi_cleanup"):
                 ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
                 return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
             ref["phase"] = "failed"
             return "failed", 100, detail
+        ref.pop("vm_writes", None)
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
                          f"{ref.get('vm_name', ref['vm'])} on {ref['source']} is untouched")

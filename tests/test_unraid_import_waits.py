@@ -28,6 +28,10 @@ JOB_API = f"/apis/batch/v1/namespaces/{NS}/jobs/"
 SECRETS = f"/api/v1/namespaces/{NS}/secrets/"
 
 
+class Restart(BaseException):
+    """Homestead going away part way: nothing in the jobs loop catches this."""
+
+
 def owned_by(kind, name, uid):
     return [{"kind": kind, "name": name, "uid": uid, "controller": True}]
 
@@ -475,6 +479,174 @@ class ImportWaitTests(unittest.TestCase):
         self.now += 1
         self.look()
         self.imp.commit_vm.assert_called_once()
+
+    def finished_disks(self):
+        self.to_convert()
+        self.look()
+        self.phase("Succeeded")
+        self.imp.prepare_vm = lambda cfg, platform, source: cfg
+        self.imp._recheck_vm_creation = lambda prepared: None
+        self.imp.commit_vm = mock.Mock()
+
+    def test_a_platform_that_cannot_be_read_waits_and_does_not_fail_the_import(self):
+        # #1329: right after a restart, with no cached answer and the API unreachable,
+        # reading the platform raises ValueError. That says nothing about the VM.
+        self.finished_disks()
+
+        def unread():
+            raise ValueError("Homestead could not read the cluster's platform")
+        with mock.patch.object(UVMS, "platform", unread):
+            job = self.look()
+        self.assertEqual("running", job["status"], job["message"])
+        self.assertEqual("convert", self.ref()["phase"])
+        self.imp.commit_vm.assert_not_called()
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+        self.look()
+        self.imp.commit_vm.assert_called_once()
+
+    def test_a_refused_vm_says_it_could_not_be_created(self):
+        self.finished_disks()
+        self.imp.commit_vm = mock.Mock(side_effect=ValueError("Kubernetes refused it (HTTP 422)"))
+        job = self.look(3)
+        self.assertIn("The disks arrived, but the VM could not be created: Kubernetes refused it (HTTP 422).",
+                      job["message"])
+
+    def walk(self, seconds, every=4 * 60):
+        """Time passes with the jobs loop looking every few minutes."""
+        while seconds > every:
+            self.now += every
+            seconds -= every
+            self.look()
+        self.now += seconds
+
+    def refused(self):
+        def observe(read, ns, work):
+            raise ValueError("a temporary claim of the import is owned by something else")
+        return mock.patch.object(UVMS.CDI_CLEANUP, "observe", observe)
+
+    def test_a_lasting_refusal_while_cdi_finishes_counts_toward_its_limit(self):
+        self.to_convert()
+        self.look()
+        with self.refused():
+            self.assertTrue(self.look()["message"].startswith("Import paused: "))
+            self.walk(CONVERT_LIMIT - 1)
+            self.assertEqual("running", self.look()["status"])
+            self.walk(1)
+            job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertTrue(job["message"].startswith(
+            "Homestead could not check the import's temporary storage for 6 hours. The last check said a temporary "
+            "claim of the import is owned by something else. This import has stopped, and no VM was created."),
+            job["message"])
+        self.assertLess(len(job["message"].split(". ")[0]) + 1, 90, "the short version stands alone")
+        self.assertTrue(job["message"].endswith(UVMS.REMOVE_THERE), job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "nothing of the disks is removed")
+        self.assertFalse(self.ref()["retain_resources"], "the job lets go of the name")
+
+    def test_a_lasting_refusal_before_cdi_is_ready_counts_toward_its_limit(self):
+        self.phase("UploadScheduled")
+        self.look()
+        with self.refused():
+            self.walk(DISKS_LIMIT - 1)
+            self.assertEqual("running", self.look()["status"])
+            self.walk(1)
+            job = self.look()
+        self.assertEqual("failed", job["status"], job["message"])
+        self.assertIn("for 30 minutes", job["message"])
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "what it cannot check, it does not remove")
+
+    SECRET = SECRETS + "win11-cloudinit"
+    VM = f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachines/win11"
+
+    def cut_off_after(self, *bodies):
+        """A VM create that sends these POSTs and is then cut off (Homestead restarting)."""
+        def commit(prepared, send=None):
+            for path, body in bodies:
+                send("POST", path, body)
+            raise Restart()
+        self.imp.commit_vm = commit
+        with self.assertRaises(Restart):
+            self.look()
+
+    def secret_body(self):
+        return (SECRETS.rstrip("/"), {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "win11-cloudinit", "namespace": NS}})
+
+    def test_a_vm_create_cut_off_removes_what_it_created_by_uid_and_tries_again(self):
+        # #1329: commit_vm keeps no record, so a restart part way left what it had created.
+        self.finished_disks()
+        self.cut_off_after(self.secret_body())
+        made = self.kube.object(self.SECRET)["metadata"]["uid"]
+        self.kube.writes.clear()
+        self.imp.commit_vm = mock.Mock()
+        job = self.look()
+        deletes = [(path, body) for method, path, body, _ in self.kube.writes if method == "DELETE" and path == self.SECRET]
+        self.assertEqual([(self.SECRET, {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": made}})],
+                         deletes, "removed by the uid its POST answered with")
+        self.assertIsNone(self.kube.object(self.SECRET))
+        self.imp.commit_vm.assert_called_once()
+        self.assertNotEqual("failed", job["status"], job["message"])
+
+    def test_one_created_again_under_the_name_since_is_kept(self):
+        self.finished_disks()
+        self.cut_off_after(self.secret_body())
+        self.kube.discard(self.SECRET)
+        self.kube.add(self.secret_body()[1])      # someone's own, by the same name
+        theirs = self.kube.object(self.SECRET)["metadata"]["uid"]
+        self.imp.commit_vm = mock.Mock()
+        self.look()
+        self.assertEqual(theirs, self.kube.object(self.SECRET)["metadata"]["uid"])
+
+    def test_a_vm_create_cut_off_once_the_vm_was_sent_keeps_everything_and_says_so(self):
+        self.finished_disks()
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.cut_off_after(self.secret_body(), (self.VM.rsplit("/", 1)[0], vm))
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertNotEqual("done", self.ref()["phase"], "the import ends without claiming a VM")
+        self.assertTrue(job["message"].startswith(
+            "The VM create was cut off after Kubernetes accepted win11. win11 may exist, so it is kept with everything "
+            "created for it. Check it under Virtual machines. The disks are kept as win11-disk, win11-disk-2."),
+            job["message"])
+        self.assertNotIn("could not be created", job["message"])
+        self.assertTrue(self.kube.object(self.SECRET))
+        self.assertTrue(self.kube.object(self.VM))
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+
+    def test_a_vm_sent_with_no_answer_may_exist_and_is_kept(self):
+        self.finished_disks()
+        self.kube.fail(self.VM.rsplit("/", 1)[0], 500, method="POST", applied=True)
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.imp.commit_vm = lambda prepared, send=None: send("POST", self.VM.rsplit("/", 1)[0], vm)
+        self.look()
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.assertTrue(job["message"].startswith(
+            "The VM create was cut off after win11 was sent with no answer. win11 may exist, so it is kept with "
+            "everything created for it."), job["message"])
+
+    def test_a_pause_after_the_vm_was_accepted_does_not_say_no_vm_was_created(self):
+        self.finished_disks()
+        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
+        self.cut_off_after((self.VM.rsplit("/", 1)[0], vm))
+        with self.refused():
+            self.walk(CONVERT_LIMIT)
+            job = self.look()
+        self.assertIn("This import has stopped. win11 may exist, so it is kept. Check it under Virtual machines.",
+                      job["message"])
+        self.assertNotIn("no VM was created", job["message"])
+
+    def test_a_write_with_no_answer_is_kept_and_named(self):
+        self.finished_disks()
+        self.kube.fail(SECRETS.rstrip("/"), 500, method="POST", applied=True)   # landed, its answer lost
+        self.imp.commit_vm = lambda prepared, send=None: send("POST", *self.secret_body())
+        self.assertEqual("running", self.look()["status"], "no answer is no refusal: asked again")
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertTrue(self.kube.object(self.SECRET), "not known to be this try's: kept")
+        self.assertIn("The VM create was cut off part way. win11-cloudinit may be what it created, so it is kept. "
+                      "Check before creating the VM.", job["message"])
 
 
 if __name__ == "__main__":
