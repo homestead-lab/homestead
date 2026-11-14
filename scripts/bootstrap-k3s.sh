@@ -621,16 +621,17 @@ else
   CLASS=local-path
 fi
 
+if [ "$KUBEVIRT" = 1 ]; then install_kubevirt; fi
+
 # Homestead's data: a volume one host mounts at a time. A shared one needs a
 # share-manager, which an undrained restart can leave down with Homestead
 # waiting on it (2026-11-10); only several copies of Homestead need sharing,
 # and Settings > About > Redundancy moves the data when that is chosen. A
 # rerun keeps the claim's own mode: Kubernetes refuses a change after creation.
 MODE_RW=ReadWriteOnce
-EXISTING_MODE=$($KUBECTL -n lab get pvc homestead-data --ignore-not-found -o jsonpath='{.spec.accessModes[0]}')   || fail "Cannot check Homestead's data volume. Restore Kubernetes access and retry."
+EXISTING_MODE=$($KUBECTL -n lab get pvc homestead-data --ignore-not-found -o jsonpath='{.spec.accessModes[0]}') \
+  || fail "Cannot check Homestead's data volume. Restore Kubernetes access and retry."
 [ -n "$EXISTING_MODE" ] && MODE_RW=$EXISTING_MODE
-
-if [ "$KUBEVIRT" = 1 ]; then install_kubevirt; fi
 
 say "Downloading the Homestead manifest"
 REF=main

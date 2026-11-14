@@ -500,7 +500,8 @@ class KeepTwoCopiesTests(unittest.TestCase):
     def test_replicas_carry_data_copies(self):
         # Decision 4: the Redundancy card reads it from its own call.
         import homestead_self_health as SELF_HEALTH
-        with self.mock.patch.object(SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}):
+        with self.mock.patch.object(SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}), \
+                self.mock.patch.object(SELF_HEALTH, "placement", lambda: {"findings": []}):
             view = SELF_HEALTH.replicas_view()
         self.assertEqual("can-keep-two", view["data_copies"]["state"])
         self.assertEqual(1, view["desired"])
