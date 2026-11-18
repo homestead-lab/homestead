@@ -149,19 +149,21 @@ const COMPONENT_HOW = {
 function componentRow(c) {
   const running = (STATE.data.operations || []).find(op => op.kind === "platform-upgrade" && !["succeeded", "failed", "cancelled"].includes(op.status)
     && op.title.startsWith(`Upgrade ${c.name} `));
-  const state = c.id === "cluster" && c.how === "harvester" ? ""
-    : !c.installed ? UI.chip("not reported", "neutral", { size: "slim" })
-    : c.behind ? UI.chip(`${c.newest} is out`, c.next ? "warn" : "neutral", { size: "slim", tip: c.next ? "" : c.note || "" }) : UI.chip("up to date", "ok", { size: "slim" });
+  const harvester = c.id === "cluster" && c.how === "harvester";
+  // One line: the version it runs, the one offered next, and one reason.
+  const version = !c.installed ? UI.chip("not reported", "neutral", { size: "slim" })
+    : `<b class="mono">${esc(c.installed)}</b>${c.next ? ` → <b class="mono">${esc(c.next)}</b>`
+      : harvester || c.behind ? "" : ` ${UI.chip("up to date", "ok", { size: "slim" })}`}`;
+  const reason = componentReason(c);
   const nodes = c.mixed && c.nodes ? `<div class="dim xs">${Object.entries(c.nodes).map(([n, v]) => `${esc(n)} ${esc(v)}`).join(" · ")}</div>` : "";
   const action = running ? UI.chip("upgrading", "info", { size: "slim" })
-    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade to ${esc(c.next)}</button>`
+    : c.next ? `<button class="btn sm pri" data-need="admin" onclick="componentUpgrade(${jsq(c.id)})">Upgrade</button>`
     : c.can_manage ? `<button class="btn sm" data-need="admin" onclick="componentManageOperator(${jsq(c.id)})">Enable upgrades</button>` : "";
   return `<div class="release-row component-row"><div>
-      <span class="cluster-kicker">${esc(c.name.toUpperCase())}</span>
-      <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
-        ${c.phase && c.phase !== "Deployed" ? UI.chip(c.phase, "warn", { size: "slim" }) : ""}</div>
-      <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
-      ${nodes}${componentHeldLine(c)}${running ? "" : componentCheckLine(c)}</div>
+      <span class="cluster-kicker" title="${esc(c.note || COMPONENT_HOW[c.how] || "")}">${esc(c.name.toUpperCase())}</span>
+      <div>${version}${c.phase && c.phase !== "Deployed" ? ` ${UI.chip(c.phase, "warn", { size: "slim" })}` : ""}${reason ? ` <span class="dim xs">· ${reason}</span>` : ""}</div>
+      ${c.error ? `<div class="dim xs">Could not check for releases: ${esc(c.error)}</div>` : ""}
+      ${nodes}${running ? "" : componentCheckLine(c)}</div>
     <div class="row">${c.id === "longhorn" ? actionBar([
       !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
       {label:'V2 upgrade status',run:'lhV2Upgrade()'},
@@ -169,44 +171,71 @@ function componentRow(c) {
     ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}${action}`}</div></div>`;
 }
 
-/* Newer versions not offered, from the validated-versions list. */
-function componentHeldLine(c) {
+/* The one reason after the versions: the steps still to come, the newer
+   versions held back by the validated-versions list, or who upgrades it. */
+function componentReason(c) {
   const held = c.held || [];
-  const words = { untested: "not yet validated", bad: "known to break something" };
-  const list = held.slice(0, 4).map(h => `<span class="mono" title="${esc(h.reason || "")}">${esc(h.version)}</span> ${esc(words[h.status] || h.status)}`).join(" · ");
-  if (!list && !c.versions_note) return "";
-  return `<div class="dim xs">${list ? `Not offered: ${list}${held.length > 4 ? ` and ${held.length - 4} more` : ""}` : esc(c.versions_note)}</div>`;
+  const bad = held.find(h => h.status === "bad");
+  const untested = held.filter(h => h.status !== "bad");
+  const parts = [];
+  if (c.steps_left && c.next && !held.some(h => h.version === c.newest)) parts.push(`then on to ${esc(c.newest)}, one minor version at a time`);
+  if (bad) parts.push(`<span title="${esc(bad.reason || "")}">${esc(bad.version)} held back: ${esc(bad.reason && bad.reason.length <= 60 ? bad.reason : "known to break something")}</span>`);
+  if (untested.length) parts.push(`${esc(untested[0].version)}${untested.length > 1 ? ` and ${untested.length - 1} more` : ""} not tested yet`);
+  if (!held.length && c.versions_note) parts.push(esc(c.versions_note));
+  if (!parts.length && c.behind && !c.next) {
+    const how = c.note || COMPONENT_HOW[c.how] || "upgraded elsewhere";
+    parts.push(`${esc(c.newest)} is out, ${esc(how.charAt(0).toLowerCase() + how.slice(1))}`);
+  }
+  return parts.join(" · ");
 }
 
-/* Settings > Updates: validated versions only, or any version, for platform
-   parts and for host kernels, and how current the list is (homestead_validated). */
+/* Settings > Updates: one choice, validated versions only or the newest, for
+   the platform parts and the host kernels together; split on request
+   (homestead_validated keeps the two apart). */
 async function validatedVersionsPaint() {
   const host = $("#validatedVersionsCard");
   if (!host) return;
   let r;
   try { r = await api("/api/updates/validated"); }
-  catch (e) { host.innerHTML = `${UI.moduleHeader("Validated versions", "", "")}${UI.callout("bad", "Homestead could not read its validated-versions list.", esc(e.message))}`; return; }
-  const choice = (kind, label) => UI.field(label, `<select id="vv_${kind}" data-need="admin" onchange="validatedVersionsSave()">
-      <option value="validated" ${r.settings[kind] === "validated" ? "selected" : ""}>Validated versions only</option>
-      <option value="any" ${r.settings[kind] === "any" ? "selected" : ""}>Any version</option></select>`);
+  catch (e) { host.innerHTML = `${UI.moduleHeader("Which versions to install", "", "")}${UI.callout("bad", "Homestead could not read its list of tested versions.", esc(e.message))}`; return; }
+  STATE.data.validated = r;
+  const s = r.settings, split = STATE.validatedSplit || s.platform !== s.host;
+  const choose = kind => `<div class="answer-modes boxed">${[
+      ["validated", "Validated only", "Waits until Homestead has tested a version, and never offers one known to break something."],
+      ["any", "Newest", "Offers each version as soon as it is published, one minor version at a time."],
+    ].map(([value, label, help]) => `<label class="answer-mode"><input type="radio" name="vv_${kind}" value="${value}" ${s[kind] === value ? "checked" : ""} data-need="admin" onchange="validatedVersionsSave()">
+      <span><b>${label}${value === "validated" ? ` ${UI.chip("recommended", "ok", { size: "slim" })}` : ""}</b><span class="dim small">${help}</span></span></label>`).join("")}</div>`;
   const from = r.source === "downloaded" ? "downloaded" : "built into this release";
-  host.innerHTML = `${UI.moduleHeader("Validated versions",
-      "Homestead tests new kernels and platform versions before offering them. With validated versions only, a version that has not passed those tests waits, and one known to break something is not offered.",
+  host.innerHTML = `${UI.moduleHeader("Which versions to install",
+      split ? "" : "For k3s, RKE2, Longhorn, KubeVirt and CDI, and for host kernels.",
       r.stale ? UI.chip("list out of date", "warn") : "")}
-    ${UI.fields(choice("platform", "k3s, RKE2, Longhorn, KubeVirt and CDI"), choice("host", "Host kernels"))}
-    <div class="dim xs" style="margin-top:8px">The list is from ${esc(r.generated.slice(0, 10))}, ${esc(from)}.
-      Host kernels are validated on Ubuntu 26.04; on other systems, kernel updates work as before.
-      ${r.error ? `The last download failed: ${esc(r.error)}` : ""}</div>`;
+    ${split ? `<div class="cluster-kicker">K3S, RKE2, LONGHORN, KUBEVIRT AND CDI</div>${choose("platform")}
+      <div class="cluster-kicker" style="margin-top:12px">HOST KERNELS</div>${choose("host")}` : choose("platform")}
+    <div class="dim xs" style="margin-top:10px">Tested list from ${esc(r.generated.slice(0, 10))}, ${esc(from)}. Host kernels are tested on Ubuntu 26.04; on other systems, kernel updates work as before.
+      ${r.error ? `The last download failed: ${esc(r.error)}` : ""}
+      <button class="linkish" data-need="admin" onclick="validatedVersionsSplit(${split ? "false" : "true"})">${split ? "Use one choice for both" : "Choose separately for host kernels"}</button></div>`;
+  if (window.applyRole) applyRole();
 }
 window.validatedVersionsPaint = validatedVersionsPaint;
 
+window.validatedVersionsSplit = on => {
+  STATE.validatedSplit = on;
+  const s = STATE.data.validated?.settings;
+  if (!on && s && s.platform !== s.host) return validatedVersionsSave();
+  validatedVersionsPaint();
+};
+
 window.validatedVersionsSave = async () => {
+  const picked = kind => document.querySelector(`input[name="vv_${kind}"]:checked`)?.value;
+  const platform = picked("platform");
+  const host = STATE.validatedSplit ? picked("host") || platform : platform;
   try {
     await api("/api/updates/validated/settings", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: $("#vv_platform").value, host: $("#vv_host").value }) });
+      body: JSON.stringify({ platform, host }) });
     toast("Saved", "ok");
     clusterComponentsPaint(true);
-  } catch (e) { toast(e.message, "bad"); validatedVersionsPaint(); }
+  } catch (e) { toast(e.message, "bad"); }
+  validatedVersionsPaint();
 };
 
 function componentsCard(r, settings = false) {
@@ -430,21 +459,28 @@ function componentCheckList(r) {
       "No known breaks" is not a guarantee, so read the release notes too.</p>`;
 }
 
-function componentCheckLine(c) {
-  const r = c.check;
-  if (!r) return "";
+/* The verdict and its top finding, in one line. */
+function componentVerdict(r) {
   const [label, tone] = CHECK_VERDICT[r.verdict] || CHECK_VERDICT.unchecked;
   const top = ["block", "warn", "unknown"].map(level => (r.findings || []).find(f => f.level === level)).find(Boolean);
   const said = top ? top.title : r.verdict === "clear" ? `Nothing in Homestead's table breaks ${r.to} here`
     : r.verdict === "unchanged" ? `Nothing in Homestead's table gets worse with ${String(r.to).split("+")[0]}.` : `Homestead's table says nothing about ${r.to}`;
-  return `<div class="component-check">${UI.chip(label, tone, { size: "slim" })}<span class="dim xs">${esc(said)}</span></div>
+  return `<div class="component-check">${UI.chip(label, tone, { size: "slim" })}<span class="dim xs">${esc(said)}</span></div>`;
+}
+
+/* On the row, the verdict only when it asks for attention; the details are
+   one click away, and the upgrade review always shows the verdict. */
+function componentCheckLine(c) {
+  const r = c.check;
+  if (!r) return "";
+  return `${["blocked", "check"].includes(r.verdict) ? componentVerdict(r) : ""}
     ${(r.findings || []).length ? UI.more(`What ${r.to} changes`, componentCheckList(r), false, `component-check-${c.id}`) : ""}`;
 }
 
-/* The upgrade review's part: every finding, and a tick when one blocks. */
+/* The upgrade review's part: the verdict, every finding, and a tick when one blocks. */
 function componentCheckSection(r) {
   if (!r) return "";
-  return UI.section("Before upgrading", componentCheckList(r))
+  return UI.section("Before upgrading", componentVerdict(r) + componentCheckList(r))
     + (r.verdict === "blocked" ? UI.ack("cmp_check_ack", "The problems with this upgrade were read. Continue anyway.") : "");
 }
 

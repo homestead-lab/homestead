@@ -21,18 +21,20 @@ const check = (verdict, findings) => ({ to: "v1.37.1+k3s1", verdict, findings, c
 const row = c => ({ id: "cluster", name: "k3s", installed: "v1.36.4+k3s1", newest: "v1.37.1+k3s1", next: "v1.37.1+k3s1",
   behind: true, how: "suc", ...c });
 
-test("an upgradable row says the verdict and its top finding", () => {
+test("an upgradable row says the verdict and its top finding when it asks for attention", () => {
   const card = page()("componentsCard");
   const blocked = card({ components: [row({ check: check("blocked", [finding("info", "Fine"), finding("block", "KubeVirt 1.9 is not tested on Kubernetes 1.37")]) })] });
   assert.match(blocked, /ui-chip bad[^"]*">Check first</);
   assert.match(blocked, /KubeVirt 1\.9 is not tested on Kubernetes 1\.37/);
-  assert.match(card({ components: [row({ check: check("clear", [finding("info", "Fine")]) })] }), /ui-chip ok[^"]*">No known breaks</);
+  const clear = check("clear", [finding("info", "Fine")]);
+  assert.doesNotMatch(card({ components: [row({ check: clear })] }), /No known breaks</, "a reassuring verdict stays off the row");
+  assert.match(page()("componentCheckSection")(clear), /ui-chip ok[^"]*">No known breaks</, "the review always shows it");
 });
 
 test("a problem already true and left as it is reads as no new problems, with its own level", () => {
   const f = finding("already", "KubeVirt 1.9 on Kubernetes 1.37 is already outside its support matrix; this upgrade does not change that");
   const unchanged = { ...check("unchanged", [f]), to: "v1.37.2+k3s1" };
-  const html = page()("componentsCard")({ components: [row({ check: unchanged })] });
+  const html = page()("componentCheckSection")(unchanged);
   assert.match(html, /ui-chip ok[^"]*">No new problems</);
   assert.match(html, /Nothing in Homestead(?:'|&#39;)s table gets worse with v1\.37\.2\./);
   assert.doesNotMatch(html, /Worth checking|Read first/);
@@ -45,9 +47,10 @@ test("a problem already true and left as it is reads as no new problems, with it
 });
 
 test("a check with nothing checked reads as not checked, never as a pass", () => {
-  const html = page()("componentsCard")({ components: [row({ check: check("unchecked", []) })] });
+  const html = page()("componentCheckSection")(check("unchecked", []));
   assert.match(html, />Not checked</);
-  assert.doesNotMatch(html, /No known breaks/);
+  assert.doesNotMatch(html, /ui-chip ok/);
+  assert.doesNotMatch(page()("componentsCard")({ components: [row({ check: check("unchecked", []) })] }), /No known breaks/);
 });
 
 test("manifest installs offer explicit management even when their version is current", () => {
