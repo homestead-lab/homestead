@@ -23,6 +23,16 @@ function hostOsAge(at) {
   return seconds < 90 ? "just now" : fmtAgo(seconds);
 }
 
+/* The running kernel on the validated-versions list (homestead_validated). */
+function hostOsKernelStatus(k) {
+  if (!k) return "";
+  if (k.status === "validated") return UI.chip("validated", "ok");
+  if (k.status === "bad") return UI.chip(`breaks ${(k.affects || []).join(", ") || "something"}`, "bad", { tip: k.reason || "" });
+  if (k.status === "untested") return UI.chip("not yet validated", "neutral");
+  if (k.status === "not-covered") return '<span class="dim xs">Kernels are not validated on this system</span>';
+  return "";
+}
+
 function hostOsBody(node, f) {
   if (!f) return `${UI.lead("Not read yet. The leading Homestead reads each host within ten minutes of starting, then every six hours.")}
     ${UI.actions(UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }))}`;
@@ -33,7 +43,7 @@ function hostOsBody(node, f) {
   const failed = f.failed_units || [];
   const facts = UI.facts([
     ["System", esc(f.os || "—")],
-    ["Kernel", `<span class="mono">${esc(f.kernel || "—")}</span>`],
+    ["Kernel", `<span class="mono">${esc(f.kernel || "—")}</span> ${hostOsKernelStatus(f.kernel_status)}`],
     ["Updates", updateText],
     ["Restart", f.reboot ? `${UI.chip("needed", "warn")} <span class="dim xs">${esc(f.reboot_for || "to finish an update")}</span>` : "Not needed"],
     ["Services", failed.length ? `${UI.chip(`${failed.length} failed`, "bad")} <span class="mono xs">${esc(failed.join(", "))}</span>` : "All running"],

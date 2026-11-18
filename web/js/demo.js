@@ -948,6 +948,7 @@
       const updates = [["libc6", true], ["openssl", true], ["linux-image-6.8.0-86-generic", true], ["tzdata", false], ["curl", false], ["python3.12", false]]
         .map(([pkg, security]) => ({ name: pkg, security }));
       const facts = { os: "Ubuntu 24.04.3 LTS", id: "ubuntu", version: "24.04", kernel: "6.8.0-85-generic", uptime_s: 1728000,
+        kernel_status: { status: "not-covered", kernel: "6.8.0-85-generic", key: "ubuntu-24.04-amd64" },
         package_manager: "apt", lists_at: at - 30000, updates, security: 3, reboot: name === "harvester-node2",
         reboot_for: name === "harvester-node2" ? "linux-image-6.8.0-85-generic" : "", failed_units: [], ntp: true,
         root_total_gb: 97.9, root_used_pct: 41, upgrading: false,
@@ -2236,6 +2237,9 @@ ssh_pwauth: true
     // Each upgrade's check and the pairs running now are what
     // homestead_upgrade_check says for these versions. window.__demoUpgradeCheck
     // shows a newer k3s cluster whose next step leaves KubeVirt's support matrix.
+    "/api/updates/validated": { generated: "2026-11-18T00:00:00Z", source: "built-in", stale: false, age_days: 0, signed: false,
+      fetched: null, error: "", first_tier: ["ubuntu-26.04-amd64", "ubuntu-26.04-arm64"], settings: { platform: "validated", host: "validated" } },
+    "/api/updates/validated/settings": (url, init) => ({ settings: JSON.parse(init.body) }),
     "/api/cluster/components": () => {
       const matrix = "https://github.com/kubevirt/sig-release/blob/f3d8a41eb14bc3f7ee8b29e8fcf5b940523af7a4/releases/k8s-support-matrix.md";
       const lh = "https://github.com/longhorn/longhorn/tree/v1.12.1/chart", checked = "2026-10-23";
@@ -2253,7 +2257,8 @@ ssh_pwauth: true
             { level: "info", title: "Kubernetes 1.36 meets Longhorn v1.12.1's minimum (1.25)", detail: "Longhorn publishes a minimum Kubernetes version only.", source: lh },
             { level: "warn", title: "Longhorn fences its manager in with NetworkPolicies", source: lh,
               detail: "Longhorn v1.12.1's chart turns networkPolicies.restrictInternalTraffic on by default: only Longhorn's own pods may reach longhorn-backend:9500. Homestead keeps its own narrow policy beside Longhorn's (#794), so Trim now and snapshot rollback keep working. Anything else that calls that port, such as a metrics scraper, is cut off unless the chart values set it to false or allow it." }] } },
-        { id: "kubevirt", name: "KubeVirt", installed: "v1.9.1", newest: "v1.9.1", next: "", behind: false, how: "helmchart", phase: "Deployed", note: "" }],
+        { id: "kubevirt", name: "KubeVirt", installed: "v1.9.1", newest: "v1.10.0", next: "", behind: true, how: "helmchart", phase: "Deployed", note: "",
+          held: [{ version: "v1.10.0", status: "untested", reason: "" }], versions_note: "1 newer version not yet validated" }],
         pairs: [{ id: "kubevirt-kubernetes", status: "supported", title: "KubeVirt 1.9 on Kubernetes 1.36", source: matrix, checked,
           detail: "KubeVirt 1.9 supports Kubernetes 1.34, 1.35 and 1.36 (its support matrix, as of 2026-10-23)." }] };
       if (demoPlatform === "harvester") return { distribution: "harvester", harvester: true, checked: now, pairs: [eol("1.4")], components: [
