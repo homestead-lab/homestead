@@ -1731,7 +1731,7 @@ spec:
         - operator: Exists
       containers:
         - name: probe
-          image: ghcr.io/homestead-lab/homestead:2.8.335-dev.13
+          image: ghcr.io/homestead-lab/homestead:2.8.335-dev.14
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -1775,7 +1775,7 @@ spec:
             - name: state
               mountPath: "/state"
         - name: smart
-          image: ghcr.io/homestead-lab/homestead:2.8.335-dev.13
+          image: ghcr.io/homestead-lab/homestead:2.8.335-dev.14
           imagePullPolicy: IfNotPresent
           command:
             - python3
