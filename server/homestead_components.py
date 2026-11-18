@@ -44,6 +44,7 @@ import homestead_upgrade_check as UPGRADE_CHECK
 import homestead_routes
 import homestead_operator_manifests as OPERATOR_MANIFESTS
 import homestead_names as NAMES
+import homestead_validated as VALIDATED
 
 kget = ksend = None
 ktext = None            # path -> plain text: a pod's log
@@ -340,13 +341,18 @@ def network_rows(p):
 def _row(component, name, installed, kind, how, note="", extra=None):
     available, error = releases(kind) if kind else ([], "")
     target = next_step(installed, available) if how in ("helmchart", "suc", "manifests") else None
+    held, versions_note = [], ""
+    if target is not None and kind in VALIDATED.PLATFORM_PARTS:
+        # Validated versions only, as Settings > Updates says (homestead_validated).
+        target, held, versions_note = VALIDATED.platform_offer(kind, installed, available, next_step, parse)
     newest = available[0] if available else ""
     ahead = bool(newest and parse(installed) and parse(newest) > parse(installed))
     row = {"id": component, "name": name, "installed": installed, "newest": newest,
            "next": target or "", "behind": ahead, "how": how, "note": note, "error": error,
            "notes_url": NOTES[kind].format(target or newest) if kind in NOTES and (target or newest) else "",
            # More than one step to the newest: say so, as each is its own upgrade.
-           "steps_left": bool(target and newest and target != newest)}
+           "steps_left": bool(target and newest and target != newest),
+           "held": held, "versions_note": versions_note}
     row.update(extra or {})
     return row
 

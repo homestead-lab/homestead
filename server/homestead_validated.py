@@ -218,6 +218,120 @@ def validated_tier(key):
     return key in BUNDLED.FIRST_TIER
 
 
+# ------------------------------------------------------------------ settings
+MODES = ("validated", "any")
+# Files an install that ran before this release has on its data volume: such
+# an install keeps today's behaviour (any version) until someone chooses.
+EARLIER = ("history.json", "alerts.json", "os-rollout.json")
+
+
+def _settings_path():
+    return os.path.join(_dir(), "validated-versions-settings.json")
+
+
+def settings():
+    """{"platform": mode, "host": mode}. A new install starts on validated
+    versions only (#1348, decision 3); one that ran before this release keeps
+    any version. The first read records which, so it holds."""
+    try:
+        saved = SHARED.read_json(_settings_path(), {})
+    except SHARED.Unreadable:
+        return {"platform": "any", "host": "any"}
+    if all(saved.get(kind) in MODES for kind in ("platform", "host")):
+        return {"platform": saved["platform"], "host": saved["host"]}
+    earlier = any(os.path.exists(os.path.join(_dir(), name)) for name in EARLIER)
+    chosen = {"platform": "any" if earlier else "validated", "host": "any" if earlier else "validated"}
+    try:
+        SHARED.write_json(_settings_path(), chosen, indent=1, sort_keys=True)
+    except Exception:
+        pass
+    return chosen
+
+
+def save_settings(body):
+    chosen = {kind: (body or {}).get(kind) for kind in ("platform", "host")}
+    for kind, mode in chosen.items():
+        if mode not in MODES:
+            raise ValueError(f"Choose validated or any for {kind} updates.")
+    SHARED.write_json(_settings_path(), chosen, indent=1, sort_keys=True)
+    return {**summary(), "settings": chosen}
+
+
+# ------------------------------------------------------------------ platform
+def covered(part):
+    """Whether the list has validated any version of this part yet. Until it
+    has, "validated only" cannot apply to it and Homestead says so."""
+    document, _ = current()
+    return any(e.get("status") == "validated" for e in (document.get("platform") or {}).get(part) or [])
+
+
+def platform_offer(part, installed, available, next_step, parse):
+    """The next version to offer for a platform part, as settings say.
+    Returns (target or None, held, note): held lists the newer versions not
+    offered, each with its status and reason."""
+    target = next_step(installed, available)
+    mode, here = settings()["platform"], parse(installed)
+    newer = [v for v in available if parse(v) and here and parse(v) > here]
+    looked = {v: status("platform", part, v) for v in newer}
+    if mode == "validated" and covered(part):
+        allowed = [v for v in available if v not in looked or looked[v]["status"] == "validated"]
+        target = next_step(installed, allowed)
+        held = [{"version": v, "status": e["status"], "reason": e.get("reason", "")}
+                for v, e in looked.items() if e["status"] != "validated"]
+        note = f"{len(held)} newer version{'s' if len(held) != 1 else ''} not yet validated" if held else ""
+        return target, held, note
+    held = [{"version": v, "status": "bad", "reason": e.get("reason", "")} for v, e in looked.items() if e["status"] == "bad"]
+    note = ""
+    if mode == "validated":
+        note = "Homestead has not validated any version of this yet, so newer versions are offered as before"
+    if target and looked.get(target, {}).get("status") == "bad":
+        note = f"{target} is known to break something: {looked[target].get('reason') or 'see the validated-versions list'}"
+    return target, held, note
+
+
+# ------------------------------------------------------------------ hosts
+ARCH = {"x86_64": "amd64", "amd64": "amd64", "aarch64": "arm64", "arm64": "arm64"}
+
+
+def host_key(facts):
+    """ubuntu-26.04-amd64 for a host's OS facts (homestead_host_os), or ""."""
+    arch = ARCH.get(str((facts or {}).get("arch") or ""))
+    os_id, version = str((facts or {}).get("id") or ""), str((facts or {}).get("version") or "")
+    return f"{os_id}-{version}-{arch}" if os_id and version and arch else ""
+
+
+def kernel_status(facts):
+    """The running kernel's status on the list, for the Host OS card and
+    alerts: validated, bad or untested, or not-covered off the validated tier."""
+    key, kernel = host_key(facts), str((facts or {}).get("kernel") or "")
+    if not kernel:
+        return {"status": "unknown"}
+    if not validated_tier(key):
+        return {"status": "not-covered", "kernel": kernel, "key": key}
+    package, version = f"linux-image-{kernel}", str((facts or {}).get("kernel_package_version") or "")
+    if not version:
+        return {"status": "unknown", "kernel": kernel, "key": key}
+    found = status("host", key, version, package)
+    return {**found, "kernel": kernel, "key": key, "mode": settings()["host"]}
+
+
+def kernel_alert(node, facts, href):
+    """An alert condition for a host running a bad kernel, or None."""
+    found = kernel_status(facts)
+    if found["status"] != "bad":
+        return None
+    affects = ", ".join(found.get("affects") or []) or "Homestead"
+    workaround = found.get("workaround") or {}
+    fix = (" Homestead applies its workaround on hosts that need it." if workaround.get("sysctl") else "")
+    return {"key": f"validated:{node}:kernel", "category": "updates", "severity": "degraded",
+            "title": f"{node} runs kernel {found['kernel']}, which breaks {affects}",
+            "resolved": f"{node} no longer runs kernel {found['kernel']}",
+            "body": f"{found.get('reason') or 'Homestead found this kernel breaks something.'}.{fix} "
+                    f"Boot an earlier kernel, or wait for a fixed one.", "href": href,
+            "signals": {"bad_kernel": 1}}
+
+
 ROUTES = {
-    ("GET", "/api/updates/validated"): ("viewer", lambda request: summary()),
+    ("GET", "/api/updates/validated"): ("viewer", lambda request: {**summary(), "settings": settings()}),
+    ("POST", "/api/updates/validated/settings"): ("admin", lambda request: save_settings(request.body)),
 }

@@ -161,13 +161,53 @@ function componentRow(c) {
       <div><b class="mono">${esc(c.installed || "—")}</b> ${state}
         ${c.phase && c.phase !== "Deployed" ? UI.chip(c.phase, "warn", { size: "slim" }) : ""}</div>
       <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
-      ${nodes}${running ? "" : componentCheckLine(c)}</div>
+      ${nodes}${componentHeldLine(c)}${running ? "" : componentCheckLine(c)}</div>
     <div class="row">${c.id === "longhorn" ? actionBar([
       !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
       {label:'V2 upgrade status',run:'lhV2Upgrade()'},
       c.notes_url && {label:'Release notes',run:`window.open(${jsq(safeHref(c.notes_url))},'_blank','noopener,noreferrer')`}
     ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Release notes</a>` : ""}${action}`}</div></div>`;
 }
+
+/* Newer versions not offered, from the validated-versions list. */
+function componentHeldLine(c) {
+  const held = c.held || [];
+  const words = { untested: "not yet validated", bad: "known to break something" };
+  const list = held.slice(0, 4).map(h => `<span class="mono" title="${esc(h.reason || "")}">${esc(h.version)}</span> ${esc(words[h.status] || h.status)}`).join(" · ");
+  if (!list && !c.versions_note) return "";
+  return `<div class="dim xs">${list ? `Not offered: ${list}${held.length > 4 ? ` and ${held.length - 4} more` : ""}` : esc(c.versions_note)}</div>`;
+}
+
+/* Settings > Updates: validated versions only, or any version, for platform
+   parts and for host kernels, and how current the list is (homestead_validated). */
+async function validatedVersionsPaint() {
+  const host = $("#validatedVersionsCard");
+  if (!host) return;
+  let r;
+  try { r = await api("/api/updates/validated"); }
+  catch (e) { host.innerHTML = `${UI.moduleHeader("Validated versions", "", "")}${UI.callout("bad", "Homestead could not read its validated-versions list.", esc(e.message))}`; return; }
+  const choice = (kind, label) => UI.field(label, `<select id="vv_${kind}" data-need="admin" onchange="validatedVersionsSave()">
+      <option value="validated" ${r.settings[kind] === "validated" ? "selected" : ""}>Validated versions only</option>
+      <option value="any" ${r.settings[kind] === "any" ? "selected" : ""}>Any version</option></select>`);
+  const from = r.source === "downloaded" ? "downloaded" : "built into this release";
+  host.innerHTML = `${UI.moduleHeader("Validated versions",
+      "Homestead tests new kernels and platform versions before offering them. With validated versions only, a version that has not passed those tests waits, and one known to break something is not offered.",
+      r.stale ? UI.chip("list out of date", "warn") : "")}
+    ${UI.fields(choice("platform", "k3s, RKE2, Longhorn, KubeVirt and CDI"), choice("host", "Host kernels"))}
+    <div class="dim xs" style="margin-top:8px">The list is from ${esc(r.generated.slice(0, 10))}, ${esc(from)}.
+      Host kernels are validated on Ubuntu 26.04; on other systems, kernel updates work as before.
+      ${r.error ? `The last download failed: ${esc(r.error)}` : ""}</div>`;
+}
+window.validatedVersionsPaint = validatedVersionsPaint;
+
+window.validatedVersionsSave = async () => {
+  try {
+    await api("/api/updates/validated/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: $("#vv_platform").value, host: $("#vv_host").value }) });
+    toast("Saved", "ok");
+    clusterComponentsPaint(true);
+  } catch (e) { toast(e.message, "bad"); validatedVersionsPaint(); }
+};
 
 function componentsCard(r, settings = false) {
   const rows = (r.components || []).filter(c => !(r.harvester && c.id === "cluster"));

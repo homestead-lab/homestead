@@ -342,6 +342,7 @@ async function viewSettings() {
         ${UI.moduleHeader(`Platform versions`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> checking platform versions</div>
       `, {tab:`updates`, id:`settingsComponents`})}
+      ${UI.settingsCard(``, {tab:`updates`, id:`validatedVersionsCard`})}
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Host updates`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> reading host update status</div>
@@ -367,7 +368,7 @@ const SETTINGS_LOADERS = {
   homestead: [() => replicasPaint(), () => homesteadDataPaint(), () => selfHealthPaint()],
   updates: [
     () => { if (window.homesteadUpdateCardPaint) { homesteadUpdateCardPaint(); if (!STATE.data.imageUpdates) loadImageUpdates(false, true); } },
-    () => clusterComponentsPaint(), () => window.osUpdatesCardPaint?.(),
+    () => clusterComponentsPaint(), () => window.osUpdatesCardPaint?.(), () => window.validatedVersionsPaint?.(),
   ],
   // Every host's preview at once is not cheap: only when it is to be seen.
   placement: [() => capacityForecastLoad(), () => rebalanceStatusLoad()],

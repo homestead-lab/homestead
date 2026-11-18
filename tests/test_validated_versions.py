@@ -144,6 +144,99 @@ class StatusTests(Store):
         self.assertFalse(VALIDATED.validated_tier("debian-13-amd64"))
 
 
+class SettingsTests(Store):
+    def test_a_new_install_starts_on_validated_versions_and_an_earlier_one_keeps_any(self):
+        self.assertEqual({"platform": "validated", "host": "validated"}, VALIDATED.settings())
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        VALIDATED.DATA_DIR = folder.name
+        Path(folder.name, "history.json").write_text("{}")
+        self.assertEqual({"platform": "any", "host": "any"}, VALIDATED.settings())
+        Path(folder.name, "history.json").unlink()
+        self.assertEqual({"platform": "any", "host": "any"}, VALIDATED.settings(), "recorded on first read, so it holds")
+
+    def test_saved_choices_are_checked(self):
+        VALIDATED.save_settings({"platform": "any", "host": "validated"})
+        self.assertEqual({"platform": "any", "host": "validated"}, VALIDATED.settings())
+        with self.assertRaisesRegex(ValueError, "validated or any"):
+            VALIDATED.save_settings({"platform": "newest", "host": "any"})
+
+
+def _parse(version):
+    import homestead_components as COMPONENTS
+    return COMPONENTS.parse(version)
+
+
+def _next(current, available):
+    import homestead_components as COMPONENTS
+    return COMPONENTS.next_step(current, available)
+
+
+class PlatformOfferTests(Store):
+    AVAILABLE = ["v1.10.2", "v1.10.1", "v1.9.3", "v1.9.2", "v1.9.1"]
+
+    def listing(self, **platform):
+        self.answer = signed(newer(platform=platform))
+        VALIDATED.tick(now=T)
+
+    def test_validated_only_offers_the_newest_validated_step_and_names_the_rest(self):
+        self.listing(kubevirt=[{"version": "v1.9.2", "status": "validated"},
+                               {"version": "v1.9.3", "status": "bad", "reason": "VMs do not start"}])
+        target, held, note = VALIDATED.platform_offer("kubevirt", "v1.9.1", self.AVAILABLE, _next, _parse)
+        self.assertEqual("v1.9.2", target)
+        self.assertEqual({"v1.9.3": "bad", "v1.10.1": "untested", "v1.10.2": "untested"}, {h["version"]: h["status"] for h in held})
+        self.assertIn("3 newer versions not yet validated", note)
+
+    def test_a_part_the_list_has_not_covered_is_offered_as_before_with_a_note(self):
+        self.listing(kubevirt=[])
+        target, held, note = VALIDATED.platform_offer("kubevirt", "v1.9.1", self.AVAILABLE, _next, _parse)
+        self.assertEqual(("v1.9.3", []), (target, held))
+        self.assertIn("has not validated any version", note)
+
+    def test_any_version_offers_the_next_step_but_says_when_it_is_bad(self):
+        self.listing(kubevirt=[{"version": "v1.9.2", "status": "validated"},
+                               {"version": "v1.9.3", "status": "bad", "reason": "VMs do not start"}])
+        VALIDATED.save_settings({"platform": "any", "host": "any"})
+        target, held, note = VALIDATED.platform_offer("kubevirt", "v1.9.1", self.AVAILABLE, _next, _parse)
+        self.assertEqual("v1.9.3", target)
+        self.assertEqual(["v1.9.3"], [h["version"] for h in held])
+        self.assertIn("known to break something: VMs do not start", note)
+
+    def test_the_components_report_offers_only_what_the_list_allows(self):
+        import homestead_components as COMPONENTS
+        self.listing(longhorn=[{"version": "v1.12.1", "status": "validated"}])
+        with mock.patch.object(COMPONENTS, "releases", lambda kind, force=False: (["v1.12.2", "v1.12.1"], "")):
+            row = COMPONENTS._row("longhorn", "Longhorn", "v1.12.0", "longhorn", "helmchart")
+        self.assertEqual(("v1.12.1", ["v1.12.2"]), (row["next"], [h["version"] for h in row["held"]]))
+
+
+class KernelTests(Store):
+    FACTS = {"id": "ubuntu", "version": "26.04", "arch": "x86_64", "kernel": "7.0.0-43-generic",
+             "kernel_package_version": "7.0.0-43.43"}
+
+    def test_the_running_kernel_s_status_and_its_alert(self):
+        found = VALIDATED.kernel_status(self.FACTS)
+        self.assertEqual(("bad", "ubuntu-26.04-amd64"), (found["status"], found["key"]))
+        alert = VALIDATED.kernel_alert("node-a", self.FACTS, "/nodes")
+        self.assertEqual("node-a runs kernel 7.0.0-43-generic, which breaks kubevirt", alert["title"])
+        self.assertEqual("degraded", alert["severity"])
+        good = {**self.FACTS, "kernel": "7.0.0-44-generic", "kernel_package_version": "7.0.0-44.44"}
+        self.assertEqual("untested", VALIDATED.kernel_status(good)["status"])
+        self.assertIsNone(VALIDATED.kernel_alert("node-a", good, "/nodes"))
+
+    def test_off_the_validated_tier_kernels_are_not_covered(self):
+        other = {**self.FACTS, "version": "24.04"}
+        self.assertEqual("not-covered", VALIDATED.kernel_status(other)["status"])
+        self.assertIsNone(VALIDATED.kernel_alert("node-a", other, "/nodes"))
+        self.assertEqual("unknown", VALIDATED.kernel_status({**self.FACTS, "kernel_package_version": ""})["status"])
+
+    def test_the_host_read_carries_the_architecture_and_kernel_package(self):
+        import homestead_host_os as HOST_OS
+        facts = HOST_OS.parse("OSID ubuntu 26.04\nKERNEL 7.0.0-43-generic\nARCH x86_64\nPKG apt\nKPKG 7.0.0-43.43\nEND\n")
+        self.assertEqual(("x86_64", "7.0.0-43.43"), (facts["arch"], facts["kernel_package_version"]))
+        self.assertIn("""dpkg-query -W -f='${Version}' "linux-image-$(uname -r)\"""", HOST_OS.SCRIPT)
+
+
 class ScriptTests(unittest.TestCase):
     def test_sign_then_verify_and_keygen_keeps_the_private_key_off_disk(self):
         folder = tempfile.TemporaryDirectory()

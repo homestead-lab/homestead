@@ -740,6 +740,7 @@ class CatalogueTests(unittest.TestCase):
     # is named, so a new admin route still fails until someone decides.
     ADMIN_UI_ONLY = {
         "/api/recovery/resume": "resuming after a stop means a person has looked",
+        "/api/updates/validated/settings": "whether untested kernels and platform versions may be installed is a person's call",
         **dict.fromkeys(("/api/addons/kubevirt/remove", "/api/addons/kubevirt/remove/review"),
                         "removes an add-on cluster-wide: a person reviews and types its name"),
         **dict.fromkeys((

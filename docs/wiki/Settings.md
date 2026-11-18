@@ -120,6 +120,28 @@ or refreshing its status installs nothing.
 On Harvester, the card links to Cluster because the hosts' operating system
 is upgraded with Harvester.
 
+## Validated versions
+
+Homestead tests new kernels and platform versions (k3s, RKE2, Longhorn,
+KubeVirt and CDI) before offering them, and keeps the results in a signed
+list it downloads twice a day. **Settings → Updates → Validated versions** has
+one choice for platform parts and one for host kernels:
+
+- **Validated versions only** offers a version once it has passed those tests.
+  Newer versions that have not are listed under the part as not offered, with
+  the reason when one is known to break something. A new installation starts
+  here.
+- **Any version** offers the next version as before, and says so when the list
+  knows it breaks something. An installation from before this setting keeps
+  this until an administrator changes it.
+
+Until the list covers a part, every version of it is offered, and the card says
+so. Host kernels are validated on Ubuntu 26.04 only; on other systems kernel
+updates work as before. The **Host OS** section of each host shows its running
+kernel's status, and a host running a kernel the list marks as broken raises an
+alert. Offline, Homestead uses the copy of the list built into its release, and
+a list older than 30 days is marked out of date.
+
 ## Homestead updates
 
 **Release channel** chooses **Prod · stable** (the default) or **Dev · preview**

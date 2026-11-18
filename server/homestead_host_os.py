@@ -32,6 +32,7 @@ import urllib.error
 import homestead_host_reads as READS
 import homestead_job_cadence as CADENCE
 import homestead_operations as OPS
+import homestead_validated as VALIDATED
 import homestead_pod_exec as POD_EXEC
 import homestead_shared as SHARED
 
@@ -54,10 +55,12 @@ if [ -r /etc/os-release ]; then . /etc/os-release; fi
 echo "OS ${PRETTY_NAME:-${ID:-Linux}}"
 echo "OSID ${ID:-} ${VERSION_ID:-}"
 echo "KERNEL $(uname -r)"
+echo "ARCH $(uname -m)"
 echo "UP $(cut -d. -f1 /proc/uptime)"
 [ -f /var/run/reboot-required ] && echo "REBOOT $(tr '\n' ' ' < /var/run/reboot-required.pkgs 2>/dev/null | cut -c1-300)"
 if command -v apt-get >/dev/null 2>&1; then
   echo "PKG apt"
+  echo "KPKG $(dpkg-query -W -f='${Version}' "linux-image-$(uname -r)" 2>/dev/null)"
   [ "$REFRESH" = 1 ] && DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=60 update >/dev/null 2>&1 && echo "REFRESHED"
   echo "LISTS $(ls -t /var/lib/apt/lists/*_Packages 2>/dev/null | head -n 1 | xargs -r stat -c %Y 2>/dev/null)"
   apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs 2>/dev/null | awk '/^Inst /{s=($0 ~ /-security/) ? "security" : ""; print "UPD " $2 "|" s}' | head -n 800
@@ -147,7 +150,8 @@ def _unescape(value):
 
 def parse(out, now=None):
     """The script's lines, as facts."""
-    facts = {"os": "", "id": "", "version": "", "kernel": "", "uptime_s": None, "package_manager": "",
+    facts = {"os": "", "id": "", "version": "", "kernel": "", "arch": "", "kernel_package_version": "",
+             "uptime_s": None, "package_manager": "",
              "lists_at": None, "refreshed": False, "updates": [], "security": 0, "reboot": False, "reboot_for": "",
              "failed_units": [], "ntp": None, "root_total_gb": 0, "root_used_pct": 0, "upgrading": False,
              "last_upgrade": None, "disks": [], "complete": False,
@@ -162,6 +166,10 @@ def parse(out, now=None):
             facts["id"], _, facts["version"] = value.partition(" ")
         elif key == "KERNEL":
             facts["kernel"] = value
+        elif key == "ARCH":
+            facts["arch"] = value
+        elif key == "KPKG":
+            facts["kernel_package_version"] = value
         elif key == "UP" and value.isdigit():
             facts["uptime_s"] = int(value)
         elif key == "REBOOT":
@@ -325,7 +333,7 @@ def report(node=None):
     for name, facts in state.items():
         if node is None or name == node:
             facts = current(facts, boots.get(name, ""))
-            rows[name] = {**facts, "summary": summary(facts)}
+            rows[name] = {**facts, "summary": summary(facts), "kernel_status": VALIDATED.kernel_status(facts)}
     return {"applies": applies(p), "hosts": rows, "every_s": EVERY, "checking": checking()}
 
 
@@ -612,6 +620,9 @@ def alert_facts(state=None):
                           "title": f"{node}: {', '.join(host['failed_units'][:3])} failed",
                           "resolved": f"No failed services reported on {node}", "body": "Review failed services on the host.", "signals": {unit: 1 for unit in host["failed_units"]},
                           "href": f"/nodes?node={node}&section=hostos"})
+        bad_kernel = VALIDATED.kernel_alert(node, host, f"/nodes?node={node}&section=hostos")
+        if bad_kernel:
+            facts.append(bad_kernel)
         if host.get("root_used_pct", 0) >= 90:
             facts.append({"key": f"hostos:{node}:root", "category": "degraded", "severity": "degraded",
                           "title": f"{node}'s root filesystem is {host['root_used_pct']}% full",
