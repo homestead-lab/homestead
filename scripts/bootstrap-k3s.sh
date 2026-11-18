@@ -626,12 +626,18 @@ if [ "$KUBEVIRT" = 1 ]; then install_kubevirt; fi
 # Homestead's data: a volume one host mounts at a time. A shared one needs a
 # share-manager, which an undrained restart can leave down with Homestead
 # waiting on it (2026-11-10); only several copies of Homestead need sharing,
-# and Settings > About > Redundancy moves the data when that is chosen. A
-# rerun keeps the claim's own mode: Kubernetes refuses a change after creation.
-MODE_RW=ReadWriteOnce
-EXISTING_MODE=$($KUBECTL -n lab get pvc homestead-data --ignore-not-found -o jsonpath='{.spec.accessModes[0]}') \
+# and Settings > About > Redundancy moves the data when that is chosen. On
+# k3s it is on local-path, on the system disk, even with Longhorn: Homestead
+# then starts whatever state Longhorn is in, and moves its data to Longhorn by
+# itself once a second host can keep a copy (homestead_self_data_grow). RKE2
+# has no local-path, so there it is Longhorn's. Apps default to $CLASS either
+# way. A rerun keeps the claim's own class and mode: Kubernetes refuses a
+# change to either after creation.
+DATA_CLASS=$CLASS; MODE_RW=ReadWriteOnce
+[ "$DIST" = k3s ] && DATA_CLASS=local-path
+EXISTING_DATA=$($KUBECTL -n lab get pvc homestead-data --ignore-not-found -o jsonpath='{.spec.storageClassName} {.spec.accessModes[0]}') \
   || fail "Cannot check Homestead's data volume. Restore Kubernetes access and retry."
-[ -n "$EXISTING_MODE" ] && MODE_RW=$EXISTING_MODE
+if [ -n "$EXISTING_DATA" ]; then DATA_CLASS=${EXISTING_DATA%% *}; MODE_RW=${EXISTING_DATA#* }; fi
 
 say "Downloading the Homestead manifest"
 REF=main
@@ -644,7 +650,7 @@ curl -sfL "$RAW/$REF/deploy/deploy.yaml" -o "$TMP" || fail "Could not download $
 # its two lines only (a bare "longhorn" would hit longhorn.io and
 # longhorn-system), for this manifest's longhorn and an older release's
 # longhorn-r2 (#731).
-sed -e "s/storageClassName: longhorn\(-r2\)\{0,1\}$/storageClassName: $CLASS/" \
+sed -e "s/storageClassName: longhorn\(-r2\)\{0,1\}$/storageClassName: $DATA_CLASS/" \
     -e "s/value: \"longhorn\(-r2\)\{0,1\}\"$/value: \"$CLASS\"/" \
     -e "s/accessModes: \[ReadWriteMany\]/accessModes: [$MODE_RW]/" \
     -e "s/192\.0\.2\.242/$IP/g" \

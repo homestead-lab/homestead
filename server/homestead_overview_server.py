@@ -55,6 +55,7 @@ import homestead_outage_sweep as OUTAGE_SWEEP
 import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_self_data_placement as SELF_PLACEMENT
+import homestead_self_data_grow as SELF_DATA_GROW
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
 import homestead_probe as PROBE
@@ -337,6 +338,7 @@ def _alert_sources():
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("held-volumes", lambda: LHCAP.held_alert_facts(LHCAP.held_status()))
+    take("self-data-grow", SELF_DATA_GROW.alert_facts)
     take("self-data-placement", lambda: SELF_PLACEMENT.alert_facts(cached("self-data-placement", 60, SELF_PLACEMENT.status)))
     take("salvage-blocked", lambda: LHCAP.salvage_alert_facts(cached("salvage-blocked", 60, LHCAP.salvage_status)))
     take("watchdog", _watchdog_facts)

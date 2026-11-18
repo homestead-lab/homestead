@@ -57,6 +57,7 @@ ALLOWED = {
     ("outage", "*"): "the outage loop's state file in the data dir",
     ("rootguard", "*"): "the root-disk guard's state file in the data dir",
     ("schedules", "*"): "scheduled stop/start results, from the data dir",
+    ("self-data-grow", "*"): "the automatic move of Homestead's data to Longhorn, its record in the data dir",
     ("updates", "*"): "the last update report, in memory, which here lists no update. Its scan reads the "
                       "cluster's Deployments, but a failed read raises and the last report is kept, so "
                       "a failed read clears nothing",

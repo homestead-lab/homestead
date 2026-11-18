@@ -17,6 +17,7 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_cancel as CANCEL
 import homestead_copy_job as COPY_JOB
 import homestead_data_copies as DATA_COPIES
+import homestead_self_data_grow as SELF_DATA_GROW
 import homestead_disks as DISKS
 import homestead_files as FILES
 import homestead_fleet as FLEET
@@ -385,6 +386,15 @@ def _longhorn_copies_loop():
                     print(f"platform: {note}", flush=True)
             except Exception as error:
                 print(f"platform: Homestead's data copies not fitted: {str(error)[:160]}", flush=True)
+            try:
+                # Homestead's data off local-path once a second host can keep a
+                # copy (homestead_self_data_grow): never inside the data-move
+                # fence, which the move it starts waits on.
+                note = SELF_DATA_GROW.tick()
+                if note:
+                    print(f"platform: {note}", flush=True)
+            except Exception as error:
+                print(f"platform: Homestead's data move to Longhorn not checked: {str(error)[:160]}", flush=True)
             try:
                 note = NODE_PARITY.copies_tick()
                 if note:
