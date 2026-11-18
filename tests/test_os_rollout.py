@@ -21,6 +21,24 @@ def node(name, ready=True, cordoned=False):
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
+
+# These tests are about everything in a run but its canary
+# (tests/test_os_canary.py): no host is picked as one.
+# Swapped by hand, not with mock.patch: a test here calls mock.patch.stopall().
+_PICK = []
+
+
+def setUpModule():
+    import homestead_os_canary as _CANARY
+    _PICK.append(_CANARY.pick)
+    _CANARY.pick = lambda names, own: None
+
+
+def tearDownModule():
+    import homestead_os_canary as _CANARY
+    _CANARY.pick = _PICK.pop()
+
+
 class Hosts:
     """Each host's OS as homestead_host_os would say, and what was done to it."""
     LOG = "/var/log/homestead-os-upgrade.log"

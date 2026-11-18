@@ -57,6 +57,24 @@ def stuck_pod_on_node_a():
     return [pod(deleting_at=time.time() - 3600), claim(), attachment()]
 
 
+
+# These tests are about everything in a run but its canary
+# (tests/test_os_canary.py): no host is picked as one.
+# Swapped by hand, not with mock.patch: a test here calls mock.patch.stopall().
+_PICK = []
+
+
+def setUpModule():
+    import homestead_os_canary as _CANARY
+    _PICK.append(_CANARY.pick)
+    _CANARY.pick = lambda names, own: None
+
+
+def tearDownModule():
+    import homestead_os_canary as _CANARY
+    _CANARY.pick = _PICK.pop()
+
+
 class FakeCluster(unittest.TestCase):
     """Three hosts on the fake, the real review, and a stand-in for sending
     power: what would be restarted is recorded, nothing else is stubbed."""

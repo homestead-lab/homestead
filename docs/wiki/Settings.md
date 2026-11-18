@@ -117,6 +117,14 @@ configure restarts, or review an update of one host, several or every host. Only
 administrators can change these settings or start an update. Opening Settings
 or refreshing its status installs nothing.
 
+An update of more than one host starts with one of them, the canary: the host
+with the fewest apps that is not running Homestead's leader. Once it is updated
+and restarted, the run waits a day, checking that the host is Ready, that
+Longhorn's manager, KubeVirt's handler and the node probe on it are Ready, and
+that nothing on it keeps crashing. If those checks keep passing and no new
+degraded or critical alert is raised in that day, the other hosts follow, one at
+a time. If a check fails, the run stops and the other hosts keep what they run.
+
 On Harvester, the card links to Cluster because the hosts' operating system
 is upgraded with Harvester.
 
