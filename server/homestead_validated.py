@@ -41,10 +41,11 @@ import homestead_shared as SHARED
 import homestead_validated_bundled as BUNDLED
 
 URL = "https://github.com/homestead-lab/homestead/releases/download/validated-versions/validated-versions.json"
-# The list's public key, hex. Empty until the key is made: Homestead then
-# uses the built-in list only and fetches nothing (a list it cannot check
-# is no better than none).
-PUBLIC_KEY = ""
+# The list's public key, hex (made 2026-11-18; its private half is the
+# VALIDATED_VERSIONS_KEY Actions secret). Empty, Homestead would use the
+# built-in list only and fetch nothing: a list it cannot check is no better
+# than none.
+PUBLIC_KEY = "3d6f171a7da481ea6e31191dfeb788df65a113df21990646eb3872ea767a7906"
 EVERY = 12 * 3600
 STALE_DAYS = 30
 MAX_BYTES = 1 << 20
