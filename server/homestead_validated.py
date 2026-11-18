@@ -321,7 +321,8 @@ def kernel_alert(node, facts, href):
     found = kernel_status(facts)
     if found["status"] != "bad":
         return None
-    affects = ", ".join(found.get("affects") or []) or "Homestead"
+    names = {"kubevirt": "KubeVirt VMs", "longhorn": "Longhorn volumes", "homestead": "Homestead"}
+    affects = ", ".join(names.get(a, a) for a in found.get("affects") or []) or "Homestead"
     workaround = found.get("workaround") or {}
     fix = (" Homestead applies its workaround on hosts that need it." if workaround.get("sysctl") else "")
     return {"key": f"validated:{node}:kernel", "category": "updates", "severity": "degraded",

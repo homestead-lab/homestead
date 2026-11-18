@@ -27,7 +27,8 @@ function hostOsAge(at) {
 function hostOsKernelStatus(k) {
   if (!k) return "";
   if (k.status === "validated") return UI.chip("validated", "ok");
-  if (k.status === "bad") return UI.chip(`breaks ${(k.affects || []).join(", ") || "something"}`, "bad", { tip: k.reason || "" });
+  const names = { kubevirt: "KubeVirt", longhorn: "Longhorn", homestead: "Homestead" };
+  if (k.status === "bad") return UI.chip(`breaks ${(k.affects || []).map(a => names[a] || a).join(", ") || "something"}`, "bad", { tip: k.reason || "" });
   if (k.status === "untested") return UI.chip("not yet validated", "neutral");
   if (k.status === "not-covered") return '<span class="dim xs">Kernels are not validated on this system</span>';
   return "";

@@ -218,7 +218,7 @@ class KernelTests(Store):
         found = VALIDATED.kernel_status(self.FACTS)
         self.assertEqual(("bad", "ubuntu-26.04-amd64"), (found["status"], found["key"]))
         alert = VALIDATED.kernel_alert("node-a", self.FACTS, "/nodes")
-        self.assertEqual("node-a runs kernel 7.0.0-43-generic, which breaks kubevirt", alert["title"])
+        self.assertEqual("node-a runs kernel 7.0.0-43-generic, which breaks KubeVirt VMs", alert["title"])
         self.assertEqual("degraded", alert["severity"])
         good = {**self.FACTS, "kernel": "7.0.0-44-generic", "kernel_package_version": "7.0.0-44.44"}
         self.assertEqual("untested", VALIDATED.kernel_status(good)["status"])
