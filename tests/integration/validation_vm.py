@@ -106,8 +106,8 @@ def boot(work, release, kernel, sysctls=()):
     runcmd = ["echo 1 > /proc/sys/kernel/sysrq"]
     for setting in sysctls:
         # A workaround the list records, tried as it would be on a host: now and for every boot.
-        key, value = setting.split("=", 1)
-        runcmd += [f"echo '{key} = {value}' >> /etc/sysctl.d/90-validation.conf", f"sysctl -w {key}={value}"]
+        name, value = setting.split("=", 1)
+        runcmd += [f"echo '{name} = {value}' >> /etc/sysctl.d/90-validation.conf", f"sysctl -w {name}={value}"]
     if kernel:
         package, version = kernel.split("=", 1)
         abi = package[len("linux-image-"):]
