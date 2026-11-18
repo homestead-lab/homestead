@@ -351,10 +351,10 @@ class StuckImportTests(unittest.TestCase):
         self.assertEqual(["/apis/batch/v1/namespaces/lab/jobs/homestead-vmimport-test-w1-1"], self.deleted)
         self.assertIn("VM win11 uses test-disk, so it is kept.", message)
 
-    def test_another_cdi_job_is_still_not_cancellable(self):
+    def test_a_url_disk_import_is_cancellable_too(self):
+        # #1338: a URL disk import is cancellable now; its own plan says what it removes.
         other = {**self.item, "kind": "vm-disk-import"}
-        self.assertFalse(self.OPS._public(other)["cancellable"])
-        self.assertFalse(self.OPS._plan_for(other)["can"])
+        self.assertTrue(self.OPS._public(other)["cancellable"])
 
 
 if __name__ == "__main__":
