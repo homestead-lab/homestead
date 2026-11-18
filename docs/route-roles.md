@@ -646,6 +646,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/timeline/seen` | viewer |  | homestead_timeline |
 | GET | `/api/timeline/summary` | viewer |  | homestead_timeline_summary |
 | POST | `/api/timeline/summary` | viewer |  | homestead_timeline_summary |
+| GET | `/api/updates/validated` | viewer |  | homestead_validated |
 | GET | `/api/uptime` | viewer |  | homestead_uptime |
 | POST | `/api/uptime/setting` | operator |  | homestead_uptime |
 | DELETE | `/api/v1/*` | operator | yes | homestead_api_v1 |

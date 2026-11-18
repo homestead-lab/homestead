@@ -39,6 +39,8 @@ import homestead_upgrades as UPGRADES
 import homestead_vmstore as VMSTORE
 import homestead_update_checks as CHECKS
 import homestead_update_registry as REGISTRY
+import homestead_ed25519 as ED25519
+import homestead_validated as VALIDATED
 import homestead_updates as UPDATES
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from rebind import keep_bound
@@ -57,12 +59,18 @@ COVERED = {
     "homestead_vmstore": "OutboundFetchTests.test_vm_store_addresses",
     "homestead_ipam": "OutboundFetchTests.test_unifi_console",
     "homestead_move": "OutboundFetchTests.test_another_homestead",
+    "homestead_validated": "OutboundFetchTests.test_validated_versions_list",
 }
 
 TOKEN = "t0ken"
+# The validated-versions list, signed with a key made for these tests.
+LIST_KEY = bytes(range(32))
+LIST = {"generated": "2030-01-01T00:00:00Z", "host": {}, "images": {},
+        "platform": {"k3s": [{"version": "v1.37.1+k3s1", "status": "validated"}]}}
 OLD, NEW, CHILD = ("sha256:" + c * 64 for c in "abc")
 # Past one CHUNK of homestead_fetch, so the body arrives in several reads.
 PADDING = "x" * (200 << 10)
+LIST["padding"] = PADDING   # several reads of the capped fetch
 
 
 def _certificate(folder):
@@ -152,6 +160,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "/releases/tag/v1.2.3")
             self.send_header("Content-Length", "0")
             self.end_headers()
+            return True
+        if route == "/validated-versions.json":
+            import base64
+            signed = dict(LIST, signature=base64.b64encode(ED25519.sign(LIST_KEY, VALIDATED.canonical(LIST))).decode())
+            self.answer(signed, chunked=True)
             return True
         if route == "/releases/tag/v1.2.3":
             self.answer(b"release page")
@@ -347,6 +360,26 @@ class OutboundFetchTests(Served):
         self.ends_soon(lambda: ADDONS._fetch(f"https://{self.host}/slow"), TimeoutError)
         self.quick(ADDONS, "FETCH_MAX_BYTES", 1000)
         self.ends_soon(lambda: ADDONS._fetch(f"https://{self.host}/huge"), FETCH.TooLarge)
+
+    def test_validated_versions_list(self):
+        keep_bound(self, VALIDATED)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        VALIDATED.DATA_DIR, VALIDATED.fetch = folder.name, None
+        self.quick(VALIDATED, "PUBLIC_KEY", ED25519.public_key(LIST_KEY).hex())
+        self.quick(VALIDATED, "URL", f"https://{self.host}/validated-versions.json")
+        now = 1_900_000_000
+        self.assertIn("downloaded", VALIDATED.tick(now=now))
+        self.assertEqual("validated", VALIDATED.status("platform", "k3s", "v1.37.1+k3s1")["status"])
+        self.quick(VALIDATED, "DEADLINE")
+        self.quick(VALIDATED, "URL", f"https://{self.host}/slow")
+        started = time.monotonic()
+        self.assertIn("could not be downloaded", VALIDATED.tick(now=now + VALIDATED.EVERY))
+        self.assertLess(time.monotonic() - started, 4, "the fetch ends at its deadline")
+        self.quick(VALIDATED, "MAX_BYTES", 1000)
+        self.quick(VALIDATED, "URL", f"https://{self.host}/huge")
+        self.assertIn("could not be downloaded", VALIDATED.tick(now=now + 2 * VALIDATED.EVERY))
+        self.assertEqual("downloaded", VALIDATED.current()[1], "the good copy is kept")
 
     def test_platform_release_lists(self):
         self.quick(COMPONENTS, "fetch_json", COMPONENTS._get_json)
