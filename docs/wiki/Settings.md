@@ -132,16 +132,19 @@ is upgraded with Harvester.
 
 Homestead tests new kernels and platform versions (k3s, RKE2, Longhorn,
 KubeVirt and CDI) before offering them, and keeps the results in a signed
-list it downloads twice a day. **Settings → Updates → Validated versions** has
-one choice for platform parts and one for host kernels:
+list it downloads twice a day. **Settings → Updates → Which versions to
+install** is one choice, for the platform parts and the host kernels together:
 
-- **Validated versions only** offers a version once it has passed those tests.
-  Newer versions that have not are listed under the part as not offered, with
-  the reason when one is known to break something. A new installation starts
-  here.
-- **Any version** offers the next version as before, and says so when the list
-  knows it breaks something. An installation from before this setting keeps
-  this until an administrator changes it.
+- **Validated only** (recommended) offers a version once it has passed those
+  tests. Under **Platform versions**, each part names the newer versions it
+  holds back: not tested yet, or held back with the reason when one is known to
+  break something. A new installation starts here.
+- **Newest** offers each version as soon as it is published, one minor version
+  at a time, and says so when the list knows it breaks something. An
+  installation from before this setting keeps this until an administrator
+  changes it.
+
+**Choose separately for host kernels** gives the kernels a choice of their own.
 
 Until the list covers a part, every version of it is offered, and the card says
 so. Host kernels are validated on Ubuntu 26.04 only; on other systems kernel
@@ -150,7 +153,7 @@ kernel's status, and a host running a kernel the list marks as broken raises an
 alert. Offline, Homestead uses the copy of the list built into its release, and
 a list older than 30 days is marked out of date.
 
-On Ubuntu 26.04 with **Host kernels** on validated versions only, once the list
+On Ubuntu 26.04 with host kernels on **Validated only**, once the list
 has validated a kernel for that release:
 
 - Homestead holds the packages that bring in new kernels (`linux-generic` and
@@ -163,7 +166,7 @@ has validated a kernel for that release:
   validated kernel it has, in its **Host OS** section. Homestead sets GRUB's
   default to that kernel, then opens the host's normal restart review.
 
-Choosing **Any version** lets go of the holds Homestead made.
+Choosing **Newest** for host kernels lets go of the holds Homestead made.
 
 ## Homestead updates
 

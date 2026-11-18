@@ -3817,6 +3817,9 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .answer-modes{display:grid;gap:8px}
 .answer-mode{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 .answer-mode input{margin-top:3px;flex:none}.answer-mode>span{display:grid;gap:1px}
+.answer-modes.boxed{grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.answer-modes.boxed .answer-mode{border:1px solid var(--line2);border-radius:var(--r);padding:10px 12px}
+.answer-modes.boxed .answer-mode:has(input:checked){border-color:var(--focus);box-shadow:inset 0 0 0 1px var(--focus)}
 .answer-path{margin-left:26px}
 /* A VM's logo beside its name in rows. */
 .tbl td.cell-name>.vm-name-cell,.tbl.stack.compact td.cell-name>.vm-name-cell{display:flex;align-items:center;gap:10px;min-width:0}

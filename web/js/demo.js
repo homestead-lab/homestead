@@ -2245,9 +2245,10 @@ ssh_pwauth: true
     // Each upgrade's check and the pairs running now are what
     // homestead_upgrade_check says for these versions. window.__demoUpgradeCheck
     // shows a newer k3s cluster whose next step leaves KubeVirt's support matrix.
-    "/api/updates/validated": { generated: "2026-11-18T00:00:00Z", source: "built-in", stale: false, age_days: 0, signed: false,
-      fetched: null, error: "", first_tier: ["ubuntu-26.04-amd64", "ubuntu-26.04-arm64"], settings: { platform: "validated", host: "validated" } },
-    "/api/updates/validated/settings": (url, init) => ({ settings: JSON.parse(init.body) }),
+    "/api/updates/validated": () => ({ generated: "2026-11-18T00:00:00Z", source: "built-in", stale: false, age_days: 0, signed: false,
+      fetched: null, error: "", first_tier: ["ubuntu-26.04-amd64", "ubuntu-26.04-arm64"],
+      settings: { platform: "validated", host: "validated", ...(window.__demoValidated || {}) } }),
+    "/api/updates/validated/settings": (url, init) => ({ settings: (window.__demoValidated = JSON.parse(init.body)) }),
     "/api/node/kernel/boot-validated": (url, init) => ({ ok: true, node: JSON.parse(init.body).node, kernel: "7.0.0-38-generic",
       detail: `${JSON.parse(init.body).node} boots on 7.0.0-38-generic at its next restart. Restart it now to switch.` }),
     "/api/cluster/components": () => {

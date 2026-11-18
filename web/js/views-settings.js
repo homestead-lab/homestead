@@ -338,11 +338,11 @@ async function viewSettings() {
       `, {tab:`about`, save:`app`})}
 
       ${UI.settingsCard(``, {tab:`updates`, id:`homesteadUpdateCard`})}
+      ${UI.settingsCard(``, {tab:`updates`, id:`validatedVersionsCard`})}
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Platform versions`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> checking platform versions</div>
       `, {tab:`updates`, id:`settingsComponents`})}
-      ${UI.settingsCard(``, {tab:`updates`, id:`validatedVersionsCard`})}
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Host updates`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> reading host update status</div>
