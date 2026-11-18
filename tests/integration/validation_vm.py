@@ -93,7 +93,7 @@ class Guest:
         raise RuntimeError(f"{what} did not happen within {seconds // 60} minutes; last seen: {last}")
 
 
-def boot(work, release, kernel):
+def boot(work, release, kernel, sysctls=()):
     """The cloud image, a cloud-init seed, and QEMU started with KVM."""
     base = work / f"{release}.img"
     if not base.exists():
@@ -104,6 +104,10 @@ def boot(work, release, kernel):
     key = work / "key"
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
     runcmd = ["echo 1 > /proc/sys/kernel/sysrq"]
+    for setting in sysctls:
+        # A workaround the list records, tried as it would be on a host: now and for every boot.
+        key, value = setting.split("=", 1)
+        runcmd += [f"echo '{key} = {value}' >> /etc/sysctl.d/90-validation.conf", f"sysctl -w {key}={value}"]
     if kernel:
         package, version = kernel.split("=", 1)
         abi = package[len("linux-image-"):]
@@ -230,7 +234,7 @@ def run(args):
     work.mkdir(parents=True, exist_ok=True)
     results, qemu = [], None
     try:
-        qemu, guest = boot(work, args.release, args.kernel)
+        qemu, guest = boot(work, args.release, args.kernel, [s for s in args.sysctl if s])
         guest.wait_ssh(900)
         pin = ""
         if args.platform:
@@ -275,6 +279,7 @@ def main():
     parser.add_argument("--release", default="resolute", help="the Ubuntu cloud image release (26.04: resolute)")
     parser.add_argument("--platform", default="", help="a platform candidate, as part=version (k3s, rke2, longhorn, kubevirt, cdi)")
     parser.add_argument("--candidate", default="{}", help="the candidate as the daily workflow found it, kept in the results")
+    parser.add_argument("--sysctl", action="append", default=[], help="a kernel setting to apply first, as key=value")
     parser.add_argument("--work", default="")
     args = parser.parse_args()
     if args.kernel and not args.kernel.startswith("linux-image-"):
@@ -282,7 +287,7 @@ def main():
     if args.platform and args.platform.split("=", 1)[0] not in PINS:
         sys.exit(f"--platform is one of {', '.join(PINS)}, as part=version")
     results, work = run(args)
-    report = {"release": args.release, "kernel": args.kernel, "platform": args.platform,
+    report = {"release": args.release, "kernel": args.kernel, "platform": args.platform, "sysctl": args.sysctl,
               "candidate": json.loads(args.candidate), "passed": all(r["passed"] for r in results),
               "checks": results, "run": os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "")
               + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")}

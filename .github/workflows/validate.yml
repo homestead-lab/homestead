@@ -16,6 +16,10 @@ on:
         description: "Ubuntu cloud image release"
         required: false
         default: "resolute"
+      sysctl:
+        description: "A kernel setting to apply first, as key=value (a workaround to confirm)"
+        required: false
+        default: ""
   pull_request:
     paths:
       - tests/integration/validation_vm.py
@@ -26,13 +30,20 @@ permissions:
 
 concurrency:
   # Its own group: a long validation never holds up CI or a publish.
-  group: validate-${{ github.ref }}-${{ inputs.kernel || 'image' }}
+  group: validate-${{ github.ref }}-${{ inputs.kernel || 'image' }}-${{ inputs.sysctl || 'plain' }}
   cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        # On a pull request, the image as it is and with the AppArmor
+        # workaround the list records for kernel 7.0.0-43 (#1348).
+        sysctl: ${{ github.event_name == 'pull_request' && fromJSON('["", "kernel.apparmor_restrict_unprivileged_unconfined=0"]') || fromJSON(format('["{0}"]', inputs.sysctl)) }}
+    name: validate${{ matrix.sysctl && ' with the workaround' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: KVM and QEMU on the runner
@@ -47,12 +58,13 @@ jobs:
         env:
           KERNEL: ${{ inputs.kernel }}
           RELEASE: ${{ inputs.release || 'resolute' }}
-        run: python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --release "$RELEASE" ${KERNEL:+--kernel "$KERNEL"}
+          SYSCTL: ${{ matrix.sysctl }}
+        run: python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --release "$RELEASE" ${KERNEL:+--kernel "$KERNEL"} ${SYSCTL:+--sysctl "$SYSCTL"}
       - name: Keep the results and the console
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: validation
+          name: validation${{ matrix.sysctl && '-workaround' || '' }}
           path: |
             ${{ runner.temp }}/validation/results.json
             ${{ runner.temp }}/validation/console.log
