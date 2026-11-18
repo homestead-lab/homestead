@@ -1,0 +1,81 @@
+name: Validate versions
+
+# Runs a kernel or platform version through Homestead's own install and smoke
+# checks, in an Ubuntu VM on the runner (issue #1348, section 5.4,
+# tests/integration/validation_vm.py). On a pull request that changes the
+# harness it runs once with the cloud image's own kernel, as its proof.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel:
+        description: "A candidate kernel, as linux-image-<abi>=<version> (empty: the image's own)"
+        required: false
+        default: ""
+      release:
+        description: "Ubuntu cloud image release"
+        required: false
+        default: "resolute"
+      sysctl:
+        description: "A kernel setting to apply first, as key=value (a workaround to confirm)"
+        required: false
+        default: ""
+      homestead:
+        description: "The Homestead release to install, as 2.8.335 or 2.8.335-dev.14 (empty: the newest stable)"
+        required: false
+        default: ""
+  pull_request:
+    paths:
+      - tests/integration/validation_vm.py
+      - .github/workflows/validate.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  # Its own group: a long validation never holds up CI or a publish.
+  group: validate-${{ github.ref }}-${{ inputs.kernel || 'image' }}-${{ inputs.sysctl || 'plain' }}-${{ inputs.homestead || 'stable' }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    # On a pull request, the plain run is a record, not a gate, until the
+    # newest stable release applies the AppArmor fix by itself (#1419): before
+    # then its VM check fails on kernel 7.0.0-43, as it should.
+    continue-on-error: ${{ github.event_name == 'pull_request' && matrix.sysctl == '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # On a pull request, the image as it is and with the AppArmor
+        # workaround the list records for kernel 7.0.0-43 (#1348).
+        sysctl: ${{ github.event_name == 'pull_request' && fromJSON('["", "kernel.apparmor_restrict_unprivileged_unconfined=0"]') || fromJSON(format('["{0}"]', inputs.sysctl)) }}
+    name: validate${{ matrix.sysctl && ' with the workaround' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: KVM and QEMU on the runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+          ls -l /dev/kvm
+      - name: Install and smoke checks
+        env:
+          KERNEL: ${{ inputs.kernel }}
+          RELEASE: ${{ inputs.release || 'resolute' }}
+          SYSCTL: ${{ matrix.sysctl }}
+          HOMESTEAD: ${{ inputs.homestead }}
+        run: python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --release "$RELEASE" ${KERNEL:+--kernel "$KERNEL"} ${SYSCTL:+--sysctl "$SYSCTL"} ${HOMESTEAD:+--homestead "$HOMESTEAD"}
+      - name: Keep the results and the console
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validation${{ matrix.sysctl && '-workaround' || '' }}
+          path: |
+            ${{ runner.temp }}/validation/results.json
+            ${{ runner.temp }}/validation/console.log
+            ${{ runner.temp }}/validation/cluster.txt
+          if-no-files-found: ignore

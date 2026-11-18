@@ -1,0 +1,30 @@
+{
+ "generated": "2026-11-18T00:00:00Z",
+ "host": {
+  "ubuntu-26.04-amd64": [
+   {
+    "affects": [
+     "kubevirt"
+    ],
+    "evidence": "https://github.com/homestead-lab/homestead/issues/1348",
+    "package": "linux-image-7.0.0-43-generic",
+    "reason": "AppArmor stacks unprivileged profile changes, so QEMU in KubeVirt cannot signal its own threads and every VM exits at start",
+    "status": "bad",
+    "version": "7.0.0-43.43",
+    "workaround": {
+     "sysctl": {
+      "kernel.apparmor_restrict_unprivileged_unconfined": "0"
+     }
+    }
+   }
+  ]
+ },
+ "images": {},
+ "platform": {
+  "cdi": [],
+  "k3s": [],
+  "kubevirt": [],
+  "longhorn": [],
+  "rke2": []
+ }
+}
