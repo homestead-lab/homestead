@@ -832,6 +832,23 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=0", out)
         self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=2", out)
 
+    def test_a_vm_host_with_apparmors_restriction_on_is_told_and_its_fix_asks_first(self):
+        # Ahead of the stand-in's other node reads, which would answer first.
+        text = STUBS["k3s"].replace('case "$*" in\n', 'case "$*" in\n  *"kubevirt\\.io/schedulable"*) echo true ;;\n', 1)
+        self.assertNotEqual(STUBS["k3s"], text)
+        Path(self.bin, "k3s").write_text(text + "\n", encoding="utf-8", newline="\n")
+        check = ('KC="k3s kubectl"; NODE=node1; FOUND="$TMPDIR/found"; APPARMOR_SETTING="$TMPDIR/setting"; '
+                 'echo {} > "$APPARMOR_SETTING"; : > "$FOUND"; check_apparmor; cat "$FOUND"')
+        code, out = functions(check.format(1), path_extra=self.bin)
+        self.assertIn("apparmor|warn|VMs may not start on this kernel|", out)
+        self.assertIn("Ubuntu 7.0.0-43", out)
+        self.assertTrue(out.rstrip().endswith("fix_apparmor|no"), "never one of the safe fixes")
+        code, out = functions(check.format(0), path_extra=self.bin)
+        self.assertIn("apparmor|ok|AppArmor lets VMs start|", out)
+        code, out = functions('fix_apparmor', path_extra=self.bin)
+        self.assertIn("91-homestead-apparmor.conf", out)
+        self.assertIn("+ sysctl -q -w kernel.apparmor_restrict_unprivileged_unconfined=0", out)
+
     def test_a_one_host_cluster_with_a_faulted_volume_says_both(self):
         out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\npvc-b faulted <none>\\n")
         self.assertIn("[WARN] Longhorn volumes are not healthy", out)

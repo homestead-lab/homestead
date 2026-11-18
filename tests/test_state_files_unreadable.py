@@ -24,6 +24,7 @@ import homestead_baseline as BASELINE
 import homestead_forecast as FORECAST
 import homestead_host_console as HOST_CONSOLE
 import homestead_host_limits as HOST_LIMITS
+import homestead_apparmor_fix as APPARMOR_FIX
 import homestead_host_os as HOST_OS
 import homestead_image_cleanup as CLEANUP
 import homestead_manifests as MANIFESTS
@@ -55,6 +56,7 @@ STORES = [
     (NODE_PARITY, "_load", "node-parity.json"),
     (MANIFESTS, "_load", "manifests-skipped.json"),
     (HOST_LIMITS, "_load", "host-limits.json"),
+    (APPARMOR_FIX, "_load", "apparmor-fix.json"),
     (SETUP, "load", "setup.json"),
     (HOST_CONSOLE, "_read", "host-consoles.json"),
 ]
@@ -208,6 +210,7 @@ class LoopsDoNothingAndSaveNothingOver(Base):
         self.patch(ROOT_GUARD, platform=lambda *a: self.K3S, probes=lambda: {"node-a": {"mounts": [{"mountpoint": "/"}]}},
                    kget=kget, ksend=lambda *a, **k: self.ran.append(a))
         self.patch(HOST_LIMITS, platform=lambda *a: self.K3S, kget=kget, hostrun=runner)
+        self.patch(APPARMOR_FIX, platform=lambda *a: self.K3S, kget=kget, hostrun=runner)
         self.patch(MANIFESTS, platform=lambda *a: self.K3S, servers=lambda: [("node-a", True)], hostrun=runner)
         self.patch(NODE_PARITY, platform=lambda *a: self.K3S, _ready_nodes=lambda: ["node-a"], kget=kget, hostrun=runner,
                    ksend=lambda *a, **k: self.ran.append(a))
@@ -216,6 +219,7 @@ class LoopsDoNothingAndSaveNothingOver(Base):
     def test_the_host_fixes_ticks_return_nothing_run_nothing_and_keep_the_file(self):
         """They share one loop: one unreadable store must not stop the others, so each returns."""
         for module, name, nothing in ((ROOT_GUARD, "root-guard.json", []), (HOST_LIMITS, "host-limits.json", {}),
+                                      (APPARMOR_FIX, "apparmor-fix.json", {}),
                                       (MANIFESTS, "manifests-skipped.json", {}), (NODE_PARITY, "node-parity.json", []),
                                       (HOST_OS, "host-os.json", [])):
             with self.subTest(store=name):

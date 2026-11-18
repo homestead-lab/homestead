@@ -1573,9 +1573,26 @@ fix_reattach_homestead() {
   run $KC -n lab scale deployment/homestead --replicas="$copies"
 }
 
+# Some kernels (Ubuntu 7.0.0-43) stack AppArmor profiles when this is 1, and
+# QEMU in KubeVirt then cannot signal its own threads: every VM exits at start.
+# Homestead sets it to 0 on hosts that run VMs (homestead_apparmor_fix.py).
+APPARMOR_SETTING=/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined
+APPARMOR_CONF=/etc/sysctl.d/91-homestead-apparmor.conf
+check_apparmor() {
+  [ -r "$APPARMOR_SETTING" ] || return 0
+  [ -n "$KC" ] && [ "$(kc get node "$NODE" -o jsonpath='{.metadata.labels.kubevirt\.io/schedulable}')" = true ] || return 0
+  if [ "$(cat "$APPARMOR_SETTING")" = 1 ]; then
+    found apparmor warn "VMs may not start on this kernel" "kernel.apparmor_restrict_unprivileged_unconfined is 1. On some kernels (Ubuntu 7.0.0-43, November 2026) AppArmor then stacks QEMU's profile, QEMU cannot signal its own threads (qemu:cpus_kick_thread: Permission denied), and every VM exits at start. Homestead sets it to 0 on hosts that run VMs. The fix does the same: it writes $APPARMOR_CONF, so that it holds after a restart, and sets it now. It relaxes one AppArmor hardening rule, about unprivileged processes leaving their profile." fix_apparmor no
+  else found apparmor ok "AppArmor lets VMs start" "kernel.apparmor_restrict_unprivileged_unconfined is 0, so QEMU can start VMs on kernels that stack AppArmor profiles."; fi
+}
+fix_apparmor() {
+  run sh -c "printf '# Homestead: QEMU in KubeVirt cannot start VMs with this at 1 on some kernels (Ubuntu 7.0.0-43).\\nkernel.apparmor_restrict_unprivileged_unconfined = 0\\n' > $APPARMOR_CONF" &&
+    run sysctl -q -w kernel.apparmor_restrict_unprivileged_unconfined=0
+}
+
 run_checks() {
   : > "$FOUND"
-  steps="check_service check_disk check_memory check_clock check_runtime check_certs check_iscsi check_cluster"
+  steps="check_service check_disk check_memory check_clock check_runtime check_certs check_iscsi check_cluster check_apparmor"
   if [ "$UI" = text ]; then
     for s in $steps; do
       [ "$DMODE" = menu ] && printf 'Checking %s...\n' "$(printf '%s' "${s#check_}" | tr _ ' ')" > "$TTY" 2>/dev/null

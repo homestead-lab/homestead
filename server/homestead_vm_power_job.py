@@ -129,7 +129,8 @@ def _cause(text, kernel):
     if "Permission denied" in text and ("kick_thread" in text or "signal" in text.lower()):
         on = f" The host runs kernel {kernel}." if kernel else ""
         return ("QEMU was refused permission to signal its own threads. This is how a kernel's AppArmor change "
-                f"shows itself (Ubuntu's 7.0.0-43, November 2026).{on} Booting the host's previous kernel works around it.")
+                f"shows itself (Ubuntu's 7.0.0-43, November 2026).{on} Setting kernel.apparmor_restrict_unprivileged_unconfined "
+                "to 0 fixes it, and Homestead does so on hosts that run VMs. Check node health shows it.")
     return ""
 
 
