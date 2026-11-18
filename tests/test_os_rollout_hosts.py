@@ -33,6 +33,7 @@ import homestead_power as power
 import homestead_power_jobs as POWER_JOBS
 from fakes.kube import Kube
 from test_drain_blockers import attachment, claim, engine, engine_orphan, instance_manager, pod
+import own_pod
 from rebind import keep_bound
 from test_os_rollout import Hosts, facts as host_facts
 
@@ -66,6 +67,7 @@ class FakeCluster(unittest.TestCase):
         keep_bound(self, power)
         power.bind(K.kget, lambda node: {"workloads": [], "stranded": []},
                    lambda: {"members": ["node-a", "node-b", "node-c"], "can_lose": 1}, lambda: True)
+        self.kube.add(own_pod.runs_as(self, K.kget))
         self.sent = []
 
         def send(plan, *args, **kwargs):
@@ -81,6 +83,9 @@ class FakeCluster(unittest.TestCase):
 
 
 class UnattendedRestartTests(FakeCluster):
+    def test_the_review_s_read_of_homestead_s_own_pod_is_answered_by_this_cluster(self):
+        self.assertEqual([own_pod.claim()], power.LHCAP._own_claims())
+
     def test_a_host_with_nothing_in_the_way_still_restarts(self):
         self.assertEqual("op-node-a", POWER_JOBS.rollout_reboot("node-a"))
         self.assertEqual(["node-a"], self.sent)

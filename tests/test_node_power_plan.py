@@ -8,6 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power as power
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import own_pod
 from rebind import keep_bound
 
 
@@ -51,11 +52,15 @@ class PowerPlanTests(unittest.TestCase):
         keep_bound(self, power)
         power.bind(self.get, lambda node: copy.deepcopy(self.impact),
                    lambda: {"members": ["node1", "node2", "node3"], "can_lose": 1}, lambda: True)
+        self.objects[own_pod.path()] = own_pod.runs_as(self, self.get)
 
     def get(self, path):
         if path not in self.objects:
             raise urllib.error.HTTPError(path, 404, "not found", {}, None)
         return copy.deepcopy(self.objects[path])
+
+    def test_the_review_s_read_of_homestead_s_own_pod_is_answered_by_this_cluster(self):
+        self.assertEqual([own_pod.claim()], power.LHCAP._own_claims())
 
     def test_plan_names_single_copy_and_unavailable_volumes_and_vms(self):
         plan = power.plan("node1", "reboot")

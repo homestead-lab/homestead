@@ -24,6 +24,7 @@ import homestead_drain_blockers as BLOCKERS
 import homestead_kube as K
 import homestead_power as power
 from fakes.kube import Kube
+import own_pod
 from rebind import keep_bound
 from test_drain_blockers import attachment, claim, engine, engine_orphan, instance_manager, pod
 
@@ -56,6 +57,7 @@ class DrainBlockerReviewTests(unittest.TestCase):
         self.addCleanup(self.kube.__exit__, None, None, None)
         power.bind(K.kget, lambda node: {"workloads": [], "stranded": []},
                    lambda: {"members": ["node-a", "node-b", "node-c"], "can_lose": 1}, lambda: True)
+        self.kube.add(own_pod.runs_as(self, K.kget))
 
     def post(self, **body):
         """The route's answer: (code, body), with the job's start stubbed out."""
