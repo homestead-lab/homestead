@@ -27,6 +27,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import shlex
 import socket
 import subprocess
@@ -132,7 +133,7 @@ def boot(work, release, kernel, sysctls=()):
     return qemu, Guest(work, key)
 
 
-def install(guest, kernel, pin=""):
+def install(guest, kernel, pin="", homestead=""):
     if kernel:
         package = kernel.split("=", 1)[0]
         guest.wait("the candidate kernel's boot",
@@ -145,6 +146,8 @@ def install(guest, kernel, pin=""):
            "HS_LONGHORN_VOLUME=0 HS_NODE_IP=$(hostname -I | cut -d' ' -f1) HS_YES=1")
     if pin:
         env = env.replace("HS_DIST=k3s ", "") + " " + pin
+    if homestead:
+        env += f" HS_VERSION={homestead}"
     guest.ssh(f"curl -sfL {INSTALLER} -o /tmp/install.sh && sudo {env} sh /tmp/install.sh > /tmp/install.log 2>&1 "
               "|| (tail -n 60 /tmp/install.log; exit 1)", timeout=3600)
 
@@ -241,7 +244,7 @@ def run(args):
             part, version = args.platform.split("=", 1)
             pin = f"{PINS[part]}={version}"
             guest.rke2 = part == "rke2"
-        check(results, "install", lambda: install(guest, args.kernel, pin))
+        check(results, "install", lambda: install(guest, args.kernel, pin, args.homestead))
         if not results[-1]["passed"]:
             return results, work
         check(results, "homestead", lambda: guest.wait("Homestead Ready", lambda: homestead_ready(guest), 1800))
@@ -280,14 +283,18 @@ def main():
     parser.add_argument("--platform", default="", help="a platform candidate, as part=version (k3s, rke2, longhorn, kubevirt, cdi)")
     parser.add_argument("--candidate", default="{}", help="the candidate as the daily workflow found it, kept in the results")
     parser.add_argument("--sysctl", action="append", default=[], help="a kernel setting to apply first, as key=value")
+    parser.add_argument("--homestead", default="", help="the Homestead release to install, as 2.8.335 (empty: the newest stable)")
     parser.add_argument("--work", default="")
     args = parser.parse_args()
     if args.kernel and not args.kernel.startswith("linux-image-"):
         sys.exit("--kernel is linux-image-<abi>=<version>")
+    if args.homestead and not re.fullmatch(r"\d+\.\d+\.\d+(-dev\.\d+)?", args.homestead):
+        sys.exit("--homestead is a release, as 2.8.335 or 2.8.335-dev.14")
     if args.platform and args.platform.split("=", 1)[0] not in PINS:
         sys.exit(f"--platform is one of {', '.join(PINS)}, as part=version")
     results, work = run(args)
     report = {"release": args.release, "kernel": args.kernel, "platform": args.platform, "sysctl": args.sysctl,
+              "homestead": args.homestead,
               "candidate": json.loads(args.candidate), "passed": all(r["passed"] for r in results),
               "checks": results, "run": os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "")
               + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")}

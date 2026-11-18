@@ -20,6 +20,10 @@ on:
         description: "A kernel setting to apply first, as key=value (a workaround to confirm)"
         required: false
         default: ""
+      homestead:
+        description: "The Homestead release to install, as 2.8.335 or 2.8.335-dev.14 (empty: the newest stable)"
+        required: false
+        default: ""
   pull_request:
     paths:
       - tests/integration/validation_vm.py
@@ -30,13 +34,17 @@ permissions:
 
 concurrency:
   # Its own group: a long validation never holds up CI or a publish.
-  group: validate-${{ github.ref }}-${{ inputs.kernel || 'image' }}-${{ inputs.sysctl || 'plain' }}
+  group: validate-${{ github.ref }}-${{ inputs.kernel || 'image' }}-${{ inputs.sysctl || 'plain' }}-${{ inputs.homestead || 'stable' }}
   cancel-in-progress: true
 
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 150
+    # On a pull request, the plain run is a record, not a gate, until the
+    # newest stable release applies the AppArmor fix by itself (#1419): before
+    # then its VM check fails on kernel 7.0.0-43, as it should.
+    continue-on-error: ${{ github.event_name == 'pull_request' && matrix.sysctl == '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +67,8 @@ jobs:
           KERNEL: ${{ inputs.kernel }}
           RELEASE: ${{ inputs.release || 'resolute' }}
           SYSCTL: ${{ matrix.sysctl }}
-        run: python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --release "$RELEASE" ${KERNEL:+--kernel "$KERNEL"} ${SYSCTL:+--sysctl "$SYSCTL"}
+          HOMESTEAD: ${{ inputs.homestead }}
+        run: python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --release "$RELEASE" ${KERNEL:+--kernel "$KERNEL"} ${SYSCTL:+--sysctl "$SYSCTL"} ${HOMESTEAD:+--homestead "$HOMESTEAD"}
       - name: Keep the results and the console
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
