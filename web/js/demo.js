@@ -947,8 +947,16 @@
       const name = url.searchParams.get("name") || "harvester-node1", at = Math.floor(Date.now() / 1000) - 5400, gb = 1024 ** 3;
       const updates = [["libc6", true], ["openssl", true], ["linux-image-6.8.0-86-generic", true], ["tzdata", false], ["curl", false], ["python3.12", false]]
         .map(([pkg, security]) => ({ name: pkg, security }));
-      const facts = { os: "Ubuntu 24.04.3 LTS", id: "ubuntu", version: "24.04", kernel: "6.8.0-85-generic", uptime_s: 1728000,
-        kernel_status: { status: "not-covered", kernel: "6.8.0-85-generic", key: "ubuntu-24.04-amd64" },
+      // On k3s, Ubuntu 26.04: one host on a validated kernel, one on 7.0.0-43 (known to break VMs), one not yet validated.
+      const k3s = demoPlatform !== "harvester", n = name.slice(-1);
+      const kernel = !k3s ? "6.8.0-85-generic" : n === "1" ? "7.0.0-38-generic" : n === "2" ? "7.0.0-43-generic" : "7.0.0-44-generic";
+      const kernelStatus = !k3s ? { status: "not-covered", kernel, key: "ubuntu-24.04-amd64" }
+        : n === "1" ? { status: "validated", kernel, key: "ubuntu-26.04-amd64", tested: "2026-11-02" }
+        : n === "2" ? { status: "bad", kernel, key: "ubuntu-26.04-amd64", affects: ["kubevirt"],
+            reason: "AppArmor stacks unprivileged profile changes, so QEMU in KubeVirt cannot signal its own threads and every VM exits at start" }
+        : { status: "untested", kernel, key: "ubuntu-26.04-amd64" };
+      const facts = { os: k3s ? "Ubuntu 26.04.1 LTS" : "Ubuntu 24.04.3 LTS", id: "ubuntu", version: k3s ? "26.04" : "24.04", kernel, uptime_s: 1728000,
+        kernel_status: kernelStatus, kernel_fallback: k3s && n === "2" ? "7.0.0-38-generic" : "",
         package_manager: "apt", lists_at: at - 30000, updates, security: 3, reboot: name === "harvester-node2",
         reboot_for: name === "harvester-node2" ? "linux-image-6.8.0-85-generic" : "", failed_units: [], ntp: true,
         root_total_gb: 97.9, root_used_pct: 41, upgrading: false,
@@ -2277,8 +2285,12 @@ ssh_pwauth: true
             steps_left: true, note: suc, notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" },
             check: kubevirt ? { to: "v1.31.12+k3s1", verdict: "unchanged", checked, findings: [{ level: "already", title: "Kubernetes 1.31 is past its end of life", detail: eol("1.6").detail, source: matrix }] }
               : { to: "v1.31.12+k3s1", verdict: "unchecked", checked, findings: [] } },
-          ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
-            how: "helmchart", phase: "Deployed", note: "" }] : [])] };
+          { id: "longhorn", name: "Longhorn", installed: "v1.12.1", newest: "v1.13.0", next: "v1.12.2", behind: true, how: "helmchart", note: "",
+            notes_url: "https://github.com/longhorn/longhorn/releases/tag/v1.12.2", steps_left: true,
+            held: [{ version: "v1.13.0", status: "untested", reason: "" }], versions_note: "1 newer version not yet validated" },
+          ...(kubevirt ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.1", next: "", behind: true,
+            how: "helmchart", phase: "Deployed", note: "",
+            held: [{ version: "v1.6.1", status: "bad", reason: "VMs with a TPM do not start" }], versions_note: "1 newer version not yet validated" }] : [])] };
     },
     "/api/longhorn/v2/upgrade": url => {
       const state=window.__demoV2UpgradeState || 'ready', running=['running','failed'].includes(state), blocked=state==='blocked';
