@@ -47,6 +47,7 @@ import homestead_updates as UPDATES
 import homestead_update_rollouts as ROLLOUTS
 import homestead_update_checks as CHECKS
 import homestead_upgrades as UPGRADES
+import homestead_validated as VALIDATED
 import homestead_job_errors as ERRORS
 import homestead_uptime as UPTIME
 import homestead_workloads as WORKLOADS
@@ -338,8 +339,12 @@ def _os_updates_loop():
             try:
                 with self_data_activity():
                     moved = OS_ROLLOUT.tick()
+                    # The validated-versions list, twice a day (homestead_validated).
+                    note = VALIDATED.tick()
                 if moved:
                     print(f"OS updates: {moved.get('message', '')[:200]}", flush=True)
+                if note:
+                    print(note, flush=True)
                 beat("os-updates", 20, leader_only=True)
             except Exception as error:
                 beat("os-updates", 20, error, leader_only=True)
