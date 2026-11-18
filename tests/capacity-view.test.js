@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
+const between = require("./helpers/between");
 
 async function review(plan) {
   let html = "";
@@ -46,6 +47,25 @@ test("topology conflicts identify the next pod without claiming all resource slo
   assert.match(html, /Cannot run here: required pod anti-affinity/);
   assert.match(html, /zone=&lt;west&gt;/);
   assert.doesNotMatch(html, /Start anyway/);
+});
+
+test("a VM blocked only by memory says so in one line, and its routine notes wait under Details", async () => {
+  const html = await review({ blocked: true, additional: 1, topology_status: "blocked", pod_request_gb: 23.08, unbounded: ["vm-launcher-estimate"],
+    warnings: ["LAN network default/lan exists. The host bridge, plugin and physical link must also be ready.",
+      "The VM's state is kept on volume persistent-state-for-win-dev. Keep it with the VM's disks when moving or recovering this VM.",
+      "no ready host satisfies this workload's placement requirements",
+      "no scheduling order fits all requested replicas. The observed pod affinity and topology spread rules rule it out",
+      "Power requests address the VM by name. Identity is rechecked immediately before sending, but this is not an atomic scheduler reservation or a cross-resource transaction."],
+    candidates: [{ name: "k3s-test", eligible: false, reasons: ["memory request exceeds remaining scheduler capacity"], allocatable_gb: 30.6, reserved_gb: 22.4 }] });
+  const notice = between(html, 'class="ui-lead"', "<section");
+  assert.match(notice, /until the problem below is resolved/);
+  assert.match(notice, /ui-notice-first[^>]*>No host has enough memory left for it\. It reserves 23\.08 GiB\./);
+  assert.doesNotMatch(notice, /LAN network|state is kept|Power requests|no ready host|no scheduling order|spread rules|vm-launcher-estimate/);
+  assert.match(html, /<h4>Hosts<\/h4>/, "no host has room, so not Hosts with room");
+  assert.match(html, /not enough memory: 8\.2 of 30\.6 GiB is left, and it reserves 23\.08 GiB/);
+  const details = between(html, "<summary>Details", "</details>");
+  assert.match(details, /LAN network default\/lan exists/);
+  assert.match(details, /Power requests address the VM by name/);
 });
 
 test("inconclusive topology remains an explicit warning", async () => {

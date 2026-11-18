@@ -321,7 +321,7 @@ const UI = (() => {
   };
 
   const statusDot = kind => `<i class="ui-status-dot ${["ok","bad","warn","info","neutral"].includes(kind)?kind:"neutral"}" aria-hidden="true"></i>`;
-  const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${chip(r.label,r.tone)}${r.actionsHtml || (r.onclick?button(r.action || "Review",r.onclick):"")}</div></div>`).join("")}</div>`;
+  const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${r.label ? chip(r.label,r.tone) : ""}${r.actionsHtml || (r.onclick?button(r.action || "Review",r.onclick):"")}</div></div>`).join("")}</div>`;
 
   // #543: one tone set for every chip; med, crit and low are the older names.
   const CHIP_TONES = new Set(["ok", "warn", "bad", "info", "hw", "link", "neutral"]);
