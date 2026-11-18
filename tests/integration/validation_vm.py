@@ -128,7 +128,10 @@ def install(guest, kernel):
                    lambda: package[len("linux-image-"):] in guest.ssh("test -f /var/lib/cloud/candidate-installed && uname -r", check=False) or "not yet",
                    1500, every=15)
     log("running the installer, as a person would")
-    env = "HS_ROLE=new HS_KUBEVIRT=yes HS_YES=1"
+    # The answers a person accepting the defaults gives; unattended, the
+    # installer asks for each one it would otherwise show.
+    env = ("HS_ROLE=new HS_DIST=k3s HS_LONGHORN=yes HS_KUBEVIRT=yes HS_NODEPROBE=yes HS_CONSOLE=yes "
+           "HS_LONGHORN_VOLUME=0 HS_NODE_IP=$(hostname -I | cut -d' ' -f1) HS_YES=1")
     guest.ssh(f"curl -sfL {INSTALLER} -o /tmp/install.sh && sudo {env} sh /tmp/install.sh > /tmp/install.log 2>&1 "
               "|| (tail -n 60 /tmp/install.log; exit 1)", timeout=3600)
 
