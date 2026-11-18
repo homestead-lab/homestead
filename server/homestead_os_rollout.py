@@ -38,6 +38,7 @@ import homestead_alerts as ALERTS
 import homestead_drain_blockers as DRAIN_BLOCKERS
 import homestead_history as HISTORY
 import homestead_lhcapacity as LHCAP
+import homestead_os_canary as CANARY
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
@@ -89,6 +90,7 @@ def bind(_kget, _platform, _host_os, _reboot, _operation, _set_cordon, _own_node
          _power_job=None, _restart_check=None):
     global kget, platform, host_os, reboot, operation, set_cordon, own_node, DATA_DIR, announce, power_job, restart_check
     kget, platform, host_os, reboot, operation, set_cordon = _kget, _platform, _host_os, _reboot, _operation, _set_cordon
+    CANARY.kget = _kget
     own_node, DATA_DIR = _own_node, data_dir
     announce = _announce or (lambda rollout: None)
     power_job, restart_check = _power_job, _restart_check
@@ -257,8 +259,15 @@ def start(reason="asked", now=None, only=None, restart=None):
         names.sort(key=lambda name: name == own)
         if not names:
             raise ValueError("no host is Ready")
+        # On more than one host the least loaded goes first, as the canary
+        # (homestead_os_canary): the others wait for a day of it passing.
+        canary = CANARY.pick(names, own)
+        if canary:
+            names.remove(canary)
+            names.insert(0, canary)
         now = now or time.time()
         rollout = {"id": f"os-{int(now)}", "reason": reason, "started": int(now), "nodes": names, "index": 0,
+                   "canary": canary or "",
                    "phase": "hold", "status": "running", "results": [], "message": "Holding automatic updates off",
                    "stop": False, "node": {},
                    # Not only the run's hosts: another host's own automatic update
@@ -447,7 +456,27 @@ def step(state, now=None):
     if phase == "hold":
         rollout["phase"], rollout["message"] = "next", "Starting with " + rollout["nodes"][0]
         return True
+    if phase == "canary":
+        if rollout.get("stop"):
+            rollout["phase"] = "next"
+            return True
+        verdict, words = CANARY.watch(rollout["soak"], now)
+        if verdict == "go":
+            rollout["canary_passed"], rollout["phase"] = True, "next"
+        elif verdict == "stop":
+            rollout["stop"], rollout["failed"], rollout["phase"] = True, True, "next"
+            rollout["canary_failed"] = words
+        changed = rollout.get("message") != words
+        rollout["message"] = words[:300]
+        return verdict != "wait" or changed
     if phase == "next":
+        # The canary updated and restarted: the other hosts wait for its soak.
+        first = (rollout.get("results") or [{}])[0]
+        if (rollout.get("canary") and rollout["index"] == 1 and len(rollout["nodes"]) > 1 and not rollout.get("stop")
+                and not rollout.get("canary_passed") and first.get("node") == rollout["canary"] and first.get("ok")):
+            rollout["phase"], rollout["soak"] = "canary", {"name": rollout["canary"], "since": now}
+            rollout["message"] = f"{rollout['canary']} is the canary: the other hosts follow after a day of it passing"
+            return True
         if rollout.get("stop") or rollout["index"] >= len(rollout["nodes"]):
             return _finish(state, rollout, now)
         name = rollout["nodes"][rollout["index"]]
@@ -629,6 +658,8 @@ def _finish(state, rollout, now):
     failed = [r for r in results if not r["ok"]]
     if failed:
         words.append(f"{failed[-1]['node']}: {failed[-1]['note']}")
+    if rollout.get("canary_failed"):
+        words.append(f"stopped: {rollout['canary_failed']}")
     for name, row in sorted((rollout.get("hold_failed") or {}).items()):
         words.append(f"automatic updates could not be held on {name} ({row.get('error')})")
     rollout["message"] = "; ".join(words)
