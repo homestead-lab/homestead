@@ -32,6 +32,7 @@ import urllib.error
 import homestead_host_reads as READS
 import homestead_job_cadence as CADENCE
 import homestead_operations as OPS
+import homestead_kernel_hold as KERNEL_HOLD
 import homestead_validated as VALIDATED
 import homestead_pod_exec as POD_EXEC
 import homestead_shared as SHARED
@@ -61,6 +62,8 @@ echo "UP $(cut -d. -f1 /proc/uptime)"
 if command -v apt-get >/dev/null 2>&1; then
   echo "PKG apt"
   echo "KPKG $(dpkg-query -W -f='${Version}' "linux-image-$(uname -r)" 2>/dev/null)"
+  echo "KINST $(dpkg-query -W -f='${db:Status-Status} ${Package}=${Version}\n' 'linux-image-[0-9]*' 'linux-headers-[0-9]*' 2>/dev/null | awk '$1=="installed" {printf "%s ", $2}')"
+  echo "HOLDS $(apt-mark showhold 2>/dev/null | tr '\n' ' ')"
   [ "$REFRESH" = 1 ] && DEBIAN_FRONTEND=noninteractive apt-get -qq -o DPkg::Lock::Timeout=60 update >/dev/null 2>&1 && echo "REFRESHED"
   echo "LISTS $(ls -t /var/lib/apt/lists/*_Packages 2>/dev/null | head -n 1 | xargs -r stat -c %Y 2>/dev/null)"
   apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs 2>/dev/null | awk '/^Inst /{s=($0 ~ /-security/) ? "security" : ""; print "UPD " $2 "|" s}' | head -n 800
@@ -151,6 +154,7 @@ def _unescape(value):
 def parse(out, now=None):
     """The script's lines, as facts."""
     facts = {"os": "", "id": "", "version": "", "kernel": "", "arch": "", "kernel_package_version": "",
+             "kernels": [], "held": [],
              "uptime_s": None, "package_manager": "",
              "lists_at": None, "refreshed": False, "updates": [], "security": 0, "reboot": False, "reboot_for": "",
              "failed_units": [], "ntp": None, "root_total_gb": 0, "root_used_pct": 0, "upgrading": False,
@@ -170,6 +174,10 @@ def parse(out, now=None):
             facts["arch"] = value
         elif key == "KPKG":
             facts["kernel_package_version"] = value
+        elif key == "KINST":
+            facts["kernels"] = value.split()
+        elif key == "HOLDS":
+            facts["held"] = value.split()
         elif key == "UP" and value.isdigit():
             facts["uptime_s"] = int(value)
         elif key == "REBOOT":
@@ -277,6 +285,15 @@ def read(node, refresh=False, now=None):
     return facts
 
 
+def facts_by_host():
+    """Every host's last read facts, for what acts on them (homestead_kernel_hold).
+    Empty when the record cannot be read: nothing is done from it."""
+    try:
+        return _load()
+    except SHARED.Unreadable:
+        return {}
+
+
 def stored(node):
     """What was last read of node's OS, without looking again."""
     return _load().get(node)
@@ -333,7 +350,8 @@ def report(node=None):
     for name, facts in state.items():
         if node is None or name == node:
             facts = current(facts, boots.get(name, ""))
-            rows[name] = {**facts, "summary": summary(facts), "kernel_status": VALIDATED.kernel_status(facts)}
+            rows[name] = {**facts, "summary": summary(facts), "kernel_status": VALIDATED.kernel_status(facts),
+                          "kernel_fallback": KERNEL_HOLD.fallback(facts)}
     return {"applies": applies(p), "hosts": rows, "every_s": EVERY, "checking": checking()}
 
 
@@ -474,6 +492,11 @@ def upgrade_begin(node, facts=None, ref=None):
     if facts.get("upgrading"):
         raise ValueError(f"{node} is installing updates already")
     command = UPGRADE[manager]
+    kernel = KERNEL_HOLD.install_command(facts) if manager == "apt" else ""
+    if kernel:
+        # The newest validated kernel by its exact version, after the package
+        # lists are fresh: the held meta packages would bring in no kernel.
+        command = command.replace(" && ", f" && {kernel} && ", 1)
     # This launch's own id goes into the result, so a result left by an
     # earlier install is never read as this one's (upgrade_state(run=)).
     run = secrets.token_hex(6)

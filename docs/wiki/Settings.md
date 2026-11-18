@@ -142,6 +142,21 @@ kernel's status, and a host running a kernel the list marks as broken raises an
 alert. Offline, Homestead uses the copy of the list built into its release, and
 a list older than 30 days is marked out of date.
 
+On Ubuntu 26.04 with **Host kernels** on validated versions only, once the list
+has validated a kernel for that release:
+
+- Homestead holds the packages that bring in new kernels (`linux-generic` and
+  the other kernel meta packages), `apparmor` and `linux-firmware` with
+  `apt-mark hold`, so that unattended-upgrades and plain upgrades leave them.
+  A hold made by a person is left as it is.
+- A host update Homestead runs first installs the newest validated kernel by its
+  exact version. Earlier kernels stay installed as the fallback.
+- A host running a kernel the list marks as broken shows **Boot** with the newest
+  validated kernel it has, in its **Host OS** section. Homestead sets GRUB's
+  default to that kernel, then opens the host's normal restart review.
+
+Choosing **Any version** lets go of the holds Homestead made.
+
 ## Homestead updates
 
 **Release channel** chooses **Prod · stable** (the default) or **Dev · preview**
