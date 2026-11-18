@@ -427,6 +427,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | GET | `/api/node/hardware` | admin |  | homestead_route_policy |
 | POST | `/api/node/hardware` | admin |  | homestead_nodes |
 | GET | `/api/node/impact` | viewer |  | homestead_nodes |
+| POST | `/api/node/kernel/boot-validated` | admin |  | homestead_kernel_hold |
 | GET | `/api/node/maintenance` | viewer |  | homestead_host_maintenance |
 | POST | `/api/node/maintenance/end` | admin |  | homestead_host_maintenance |
 | POST | `/api/node/maintenance/extend` | admin |  | homestead_host_maintenance |

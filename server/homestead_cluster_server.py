@@ -47,6 +47,8 @@ import homestead_updates as UPDATES
 import homestead_update_rollouts as ROLLOUTS
 import homestead_update_checks as CHECKS
 import homestead_upgrades as UPGRADES
+import homestead_host_os as HOST_OS_STORE
+import homestead_kernel_hold as KERNEL_HOLD
 import homestead_validated as VALIDATED
 import homestead_job_errors as ERRORS
 import homestead_uptime as UPTIME
@@ -341,6 +343,9 @@ def _os_updates_loop():
                     moved = OS_ROLLOUT.tick()
                     # The validated-versions list, twice a day (homestead_validated).
                     note = VALIDATED.tick()
+                    # Kernel packages held, or let go, as Settings > Updates says.
+                    for node, what in KERNEL_HOLD.tick(HOST_OS_STORE.facts_by_host()).items():
+                        print(f"OS updates: {node}: kernel packages {what}", flush=True)
                 if moved:
                     print(f"OS updates: {moved.get('message', '')[:200]}", flush=True)
                 if note:

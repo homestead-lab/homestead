@@ -121,6 +121,7 @@ MODULES = (
     "homestead_imports",
     "homestead_ipam",
     "homestead_isos",
+    "homestead_kernel_hold",
     "homestead_lhcapacity",
     "homestead_lhrebuild",
     "homestead_lhv2_setup",

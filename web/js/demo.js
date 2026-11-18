@@ -2240,6 +2240,8 @@ ssh_pwauth: true
     "/api/updates/validated": { generated: "2026-11-18T00:00:00Z", source: "built-in", stale: false, age_days: 0, signed: false,
       fetched: null, error: "", first_tier: ["ubuntu-26.04-amd64", "ubuntu-26.04-arm64"], settings: { platform: "validated", host: "validated" } },
     "/api/updates/validated/settings": (url, init) => ({ settings: JSON.parse(init.body) }),
+    "/api/node/kernel/boot-validated": (url, init) => ({ ok: true, node: JSON.parse(init.body).node, kernel: "7.0.0-38-generic",
+      detail: `${JSON.parse(init.body).node} boots on 7.0.0-38-generic at its next restart. Restart it now to switch.` }),
     "/api/cluster/components": () => {
       const matrix = "https://github.com/kubevirt/sig-release/blob/f3d8a41eb14bc3f7ee8b29e8fcf5b940523af7a4/releases/k8s-support-matrix.md";
       const lh = "https://github.com/longhorn/longhorn/tree/v1.12.1/chart", checked = "2026-10-23";

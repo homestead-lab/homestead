@@ -741,6 +741,7 @@ class CatalogueTests(unittest.TestCase):
     ADMIN_UI_ONLY = {
         "/api/recovery/resume": "resuming after a stop means a person has looked",
         "/api/updates/validated/settings": "whether untested kernels and platform versions may be installed is a person's call",
+        "/api/node/kernel/boot-validated": "changes which kernel a host boots; a person then reviews its restart",
         **dict.fromkeys(("/api/addons/kubevirt/remove", "/api/addons/kubevirt/remove/review"),
                         "removes an add-on cluster-wide: a person reviews and types its name"),
         **dict.fromkeys((

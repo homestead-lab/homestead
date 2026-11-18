@@ -33,6 +33,19 @@ function hostOsKernelStatus(k) {
   return "";
 }
 
+/* Boot the last validated kernel: GRUB is pointed at it here, and the
+   restart is the host's normal restart review. */
+window.hostOsBootValidated = async (node, kernel) => {
+  if (!(await ask(`${node} boots on ${kernel}, the newest validated kernel it has, at its next restart. The restart review opens next.`,
+    { title: "Boot the last validated kernel", ok: `Boot ${kernel}` }))) return;
+  try {
+    const r = await api("/api/node/kernel/boot-validated", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node }) });
+    toast(r.detail, "ok");
+    window.nodePowerReview(node, "reboot");
+  } catch (e) { toast(e.message, "bad"); }
+};
+
 function hostOsBody(node, f) {
   if (!f) return `${UI.lead("Not read yet. The leading Homestead reads each host within ten minutes of starting, then every six hours.")}
     ${UI.actions(UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }))}`;
@@ -59,6 +72,8 @@ function hostOsBody(node, f) {
   return `${facts}${list}
     <div class="dim xs" style="margin-top:8px">Read ${hostOsAge(f.at)}${lists}${last}</div>
     ${UI.actions([
+      f.kernel_status?.status === "bad" && f.kernel_fallback ? UI.button(`Boot ${f.kernel_fallback}…`,
+        `hostOsBootValidated(${jsArg(node)}, ${jsArg(f.kernel_fallback)})`, { kind: "pri", attrs: 'data-need="admin"' }) : "",
       f.reboot ? UI.button("Restart host…", `nodeActions(${jsArg(node)})`, { attrs: 'data-need="admin"' }) : "",
       UI.button("Check now", `hostOsCheck(${jsArg(node)})`, { id: "hosCheck", attrs: 'data-need="admin"' }),
       // The OS updates review: it holds automatic updates and refuses while a run is on.
