@@ -1,0 +1,42 @@
+name: Publish the validated-versions list
+
+# data/validated-versions.json is the list Homestead checks kernels and
+# platform versions against (issue #1348, server/homestead_validated.py). Once
+# a change to it is merged, this signs it with the VALIDATED_VERSIONS_KEY
+# secret and publishes it as the asset of the standing validated-versions
+# release, apart from Homestead's own releases: Homestead fetches it from
+# there twice a day.
+
+on:
+  push:
+    branches: [main, dev]
+    paths: [data/validated-versions.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: validated-list
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sign
+        env:
+          VALIDATED_VERSIONS_KEY: ${{ secrets.VALIDATED_VERSIONS_KEY }}
+        run: |
+          cp data/validated-versions.json "$RUNNER_TEMP/validated-versions.json"
+          python3 scripts/validated_versions.py sign "$RUNNER_TEMP/validated-versions.json"
+          python3 scripts/validated_versions.py verify "$RUNNER_TEMP/validated-versions.json"
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view validated-versions >/dev/null 2>&1 || gh release create validated-versions --prerelease \
+            --target "$GITHUB_SHA" --title "Validated versions" \
+            --notes "The signed list of kernels and platform versions Homestead has validated (issue #1348). Homestead downloads validated-versions.json from here twice a day. This release is updated in place."
+          gh release upload validated-versions "$RUNNER_TEMP/validated-versions.json" --clobber

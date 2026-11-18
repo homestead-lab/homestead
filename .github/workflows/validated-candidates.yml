@@ -1,0 +1,111 @@
+name: Validate new versions
+
+# Daily: the newest Ubuntu 26.04 kernels and k3s, RKE2, Longhorn, KubeVirt and
+# CDI releases that data/validated-versions.json does not name yet, each run
+# through the harness (tests/integration/validation_vm.py), and a pull request
+# that records each as validated or bad (issue #1348, section 5.5). A
+# maintainer merges it; "Publish the validated-versions list" then signs and
+# publishes the list.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validated-candidates
+  cancel-in-progress: false
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    outputs:
+      candidates: ${{ steps.find.outputs.candidates }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          found=$(python3 scripts/validated_candidates.py find --token "$GH_TOKEN")
+          echo "$found"
+          echo "candidates=$found" >> "$GITHUB_OUTPUT"
+
+  validate:
+    needs: find
+    if: needs.find.outputs.candidates != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: ${{ fromJSON(needs.find.outputs.candidates) }}
+    name: validate ${{ matrix.candidate.title }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: KVM and QEMU on the runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils
+      - name: Install and smoke checks
+        env:
+          CANDIDATE: ${{ toJSON(matrix.candidate) }}
+          KERNEL: ${{ matrix.candidate.kernel }}
+          PLATFORM: ${{ matrix.candidate.part && format('{0}={1}', matrix.candidate.part, matrix.candidate.version) || '' }}
+        run: |
+          python3 -u tests/integration/validation_vm.py --work "$RUNNER_TEMP/validation" --candidate "$CANDIDATE" \
+            ${KERNEL:+--kernel "$KERNEL"} ${PLATFORM:+--platform "$PLATFORM"} || true
+          test -f "$RUNNER_TEMP/validation/results.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: result-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/validation/results.json
+            ${{ runner.temp }}/validation/console.log
+          if-no-files-found: ignore
+
+  record:
+    needs: validate
+    if: always() && needs.validate.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: dev
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: ${{ runner.temp }}/results
+      - name: Record and open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          files=$(find "$RUNNER_TEMP/results" -name results.json)
+          [ -n "$files" ] || { echo "No results to record."; exit 0; }
+          summary=$(python3 scripts/validated_candidates.py record $files)
+          echo "$summary"
+          git diff --quiet data/validated-versions.json && { echo "Nothing changed."; exit 0; }
+          branch="validated/$(date -u +%Y-%m-%d-%H%M)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add data/validated-versions.json
+          git commit -q -s -m "Validated versions: $(echo "$summary" | tr '\n' ';' | sed 's/;$//')"
+          git push -q origin "$branch"
+          gh pr create --base dev --head "$branch" \
+            --title "No change for people using Homestead until merged: validation results for $(date -u +%Y-%m-%d)" \
+            --body "The daily harness run ($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) recorded:
+
+          $summary
+
+          Merging publishes the signed list (Publish the validated-versions list). A failed check marks the version bad; read the run's console log before merging a bad verdict."

@@ -40,6 +40,9 @@ import urllib.request
 IMAGE = "https://cloud-images.ubuntu.com/minimal/daily/{release}/current/{release}-minimal-cloudimg-amd64.img"
 INSTALLER = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh"
 SSH_PORT = 2222
+# A platform candidate is installed through the installer's own version options.
+PINS = {"k3s": "HS_DIST=k3s HS_K8S_VERSION", "rke2": "HS_DIST=rke2 HS_K8S_VERSION", "longhorn": "HS_LONGHORN_VERSION",
+        "kubevirt": "HS_KUBEVIRT_VERSION", "cdi": "HS_CDI_VERSION"}
 AFFECTS = {"homestead": ["homestead"], "volumes": ["longhorn"], "vm": ["kubevirt"], "unclean-restart": ["homestead", "longhorn"]}
 
 
@@ -59,8 +62,12 @@ class Guest:
             raise RuntimeError(f"{command[:80]}: exit {done.returncode}: {(done.stderr or done.stdout)[-600:]}")
         return done.stdout
 
+    rke2 = False
+
     def kubectl(self, args, **options):
-        return self.ssh("sudo k3s kubectl " + args, **options)
+        tool = ("sudo /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml " if self.rke2
+                else "sudo k3s kubectl ")
+        return self.ssh(tool + args, **options)
 
     def wait_ssh(self, seconds):
         deadline = time.time() + seconds
@@ -121,7 +128,7 @@ def boot(work, release, kernel):
     return qemu, Guest(work, key)
 
 
-def install(guest, kernel):
+def install(guest, kernel, pin=""):
     if kernel:
         package = kernel.split("=", 1)[0]
         guest.wait("the candidate kernel's boot",
@@ -132,6 +139,8 @@ def install(guest, kernel):
     # installer asks for each one it would otherwise show.
     env = ("HS_ROLE=new HS_DIST=k3s HS_LONGHORN=yes HS_KUBEVIRT=yes HS_NODEPROBE=yes HS_CONSOLE=yes "
            "HS_LONGHORN_VOLUME=0 HS_NODE_IP=$(hostname -I | cut -d' ' -f1) HS_YES=1")
+    if pin:
+        env = env.replace("HS_DIST=k3s ", "") + " " + pin
     guest.ssh(f"curl -sfL {INSTALLER} -o /tmp/install.sh && sudo {env} sh /tmp/install.sh > /tmp/install.log 2>&1 "
               "|| (tail -n 60 /tmp/install.log; exit 1)", timeout=3600)
 
@@ -182,7 +191,7 @@ spec:
 
 
 def apply(guest, manifest):
-    guest.ssh("sudo k3s kubectl apply -f - <<'EOF'\n" + textwrap.dedent(manifest) + "\nEOF")
+    guest.kubectl("apply -f - <<'EOF'\n" + textwrap.dedent(manifest) + "\nEOF")
 
 
 def volumes_written(guest):
@@ -223,7 +232,12 @@ def run(args):
     try:
         qemu, guest = boot(work, args.release, args.kernel)
         guest.wait_ssh(900)
-        check(results, "install", lambda: install(guest, args.kernel))
+        pin = ""
+        if args.platform:
+            part, version = args.platform.split("=", 1)
+            pin = f"{PINS[part]}={version}"
+            guest.rke2 = part == "rke2"
+        check(results, "install", lambda: install(guest, args.kernel, pin))
         if not results[-1]["passed"]:
             return results, work
         check(results, "homestead", lambda: guest.wait("Homestead Ready", lambda: homestead_ready(guest), 1800))
@@ -243,7 +257,7 @@ def run(args):
         check(results, "unclean-restart", unclean)
         try:
             (work / "cluster.txt").write_text(guest.kubectl("get nodes,pods -A -o wide", check=False)
-                                              + guest.ssh("uname -r; sudo k3s --version", check=False))
+                                              + guest.ssh("uname -r", check=False))
         except Exception:
             pass
         return results, work
@@ -259,12 +273,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--kernel", default="", help="a candidate kernel, as linux-image-<abi>=<version>")
     parser.add_argument("--release", default="resolute", help="the Ubuntu cloud image release (26.04: resolute)")
+    parser.add_argument("--platform", default="", help="a platform candidate, as part=version (k3s, rke2, longhorn, kubevirt, cdi)")
+    parser.add_argument("--candidate", default="{}", help="the candidate as the daily workflow found it, kept in the results")
     parser.add_argument("--work", default="")
     args = parser.parse_args()
     if args.kernel and not args.kernel.startswith("linux-image-"):
         sys.exit("--kernel is linux-image-<abi>=<version>")
+    if args.platform and args.platform.split("=", 1)[0] not in PINS:
+        sys.exit(f"--platform is one of {', '.join(PINS)}, as part=version")
     results, work = run(args)
-    report = {"release": args.release, "kernel": args.kernel, "passed": all(r["passed"] for r in results),
+    report = {"release": args.release, "kernel": args.kernel, "platform": args.platform,
+              "candidate": json.loads(args.candidate), "passed": all(r["passed"] for r in results),
               "checks": results, "run": os.environ.get("GITHUB_SERVER_URL", "") + "/" + os.environ.get("GITHUB_REPOSITORY", "")
               + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")}
     (work / "results.json").write_text(json.dumps(report, indent=1))
