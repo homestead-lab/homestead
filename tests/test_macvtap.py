@@ -291,8 +291,10 @@ class ManagedChartTests(unittest.TestCase):
 
 class HostLimitTests(unittest.TestCase):
     def setUp(self):
+        import homestead_apparmor_fix as APPARMOR_FIX
         import homestead_host_limits as LIMITS
         keep_bound(self, LIMITS)
+        keep_bound(self, APPARMOR_FIX)   # LIMITS.bind binds the AppArmor fix too
 
     def test_limits_are_raised_once_per_node_and_never_lowered(self):
         import homestead_host_limits as LIMITS
