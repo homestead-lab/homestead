@@ -7,8 +7,8 @@ function setup(){
   const plan={namespace:'lab',nodes:[{node:'k3s-test',required_mib:2048,target_pages:1024,capacity_mib:0,can_prepare:true,review_token:'host-token',problems:['Capacity is zero']}],required_mib:2048,blockers:['k3s-test: capacity is zero'],can_enable:false,review_token:'enable-token'};
   const c={window:null,console,crypto:webcrypto,Uint8Array, $:s=>fields[s],esc:s=>String(s??'').replaceAll('<','&lt;').replaceAll('>','&gt;'),jsq:s=>JSON.stringify(s).replaceAll('"','&quot;'),
     modal:(title,body)=>{html=body;closed=false;},childModal:(title,body)=>{html=body;},toast(){},
-    actionBar:actions=>actions.filter(Boolean).map(a=>a.label).join(' '),setTimeout:f=>{timer=f;return 1;},clearTimeout(){},
-    api:async(path,opts)=>{if(!opts)return plan;sent.push({path,body:JSON.parse(opts.body)});return new Promise(r=>{postResolve=r;});},
+    actionBar:actions=>actions.filter(Boolean).map(a=>a.label).join(' '),setTimeout:(f,ms)=>{if(ms!==30000)timer=f;return 1;},clearTimeout(){},
+    api:async(path,opts)=>{if(!opts?.method)return plan;sent.push({path,body:JSON.parse(opts.body)});return new Promise(r=>{postResolve=r;});},
     nodePowerReview:async(...args)=>{sent.push(args);}};
   c.window=c;vm.createContext(c);vm.runInContext(fs.readFileSync('web/js/ui.js','utf8'),c);vm.runInContext(fs.readFileSync('web/js/longhorn-v2-setup.js','utf8'),c);
   return {c,fields,sent,plan,html:()=>html,poll:()=>timer(),resolve:()=>postResolve({}),close:()=>{closed=true;delete fields['#lhV2Confirm'];}};

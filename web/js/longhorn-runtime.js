@@ -1,7 +1,7 @@
 /* Runtime stays at its fixed host path; the original store is retained. */
 let runtimeSequence=0, runtimeTimer=null, runtimeApproval=null, runtimeBusy=false;
 const runtimePost=(path,body)=>api('/api/disks/runtime/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-function runtimeReset(){clearTimeout(runtimeTimer);runtimeApproval=null;++runtimeSequence;}
+function runtimeReset(){runtimeTimer?.stop();runtimeTimer=null;runtimeApproval=null;++runtimeSequence;}
 function runtimeScope(plan,retire=false){
   return UI.facts([
     ['Host',esc(plan.node)],['Selected logical volume',`<span class="mono">${esc(plan.device)}</span>`],
@@ -60,12 +60,13 @@ window.runtimeMoveWatch=async id=>{
   runtimeReset();const sequence=runtimeSequence;
   modal('Longhorn runtime maintenance','<div id="runtimeStatus"><div class="empty"><span class="spin2"></span>Reading saved maintenance</div></div>',true,'disk-v2');
   const host=$('#runtimeStatus');
-  async function poll(){
-    if(sequence!==runtimeSequence||$('#runtimeStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
-    try{const item=await api('/api/disks/runtime/status?id='+encodeURIComponent(id));if(sequence!==runtimeSequence||$('#runtimeStatus')!==host)return;runtimePaint(item);if(item.status==='succeeded'||item.status==='failed')return;}
-    catch(e){if($('#runtimeStatus')===host)host.innerHTML=UI.callout('info','Waiting for host maintenance','The original logical volume is kept. Reconnect when the host returns. Completion is not assumed.')+UI.actions(UI.cancel('Close'));}
-    runtimeTimer=setTimeout(poll,5000);
-  }await poll();
+  // A poll (#983): none in a hidden tab, and closing the dialog cancels its read. Returning false ends it.
+  const poll=runtimeTimer=UI.poll(async signal=>{
+    if(sequence!==runtimeSequence||$('#runtimeStatus')!==host||$('#modal')?.classList.contains('hidden'))return false;
+    try{const item=await api('/api/disks/runtime/status?id='+encodeURIComponent(id),{signal});if(sequence!==runtimeSequence||$('#runtimeStatus')!==host)return false;runtimePaint(item);if(item.status==='succeeded'||item.status==='failed')return false;}
+    catch(e){if(UI.pollCancelled(signal))return false;if($('#runtimeStatus')===host)host.innerHTML=UI.callout('info','Waiting for host maintenance','The original logical volume is kept. Reconnect when the host returns. Completion is not assumed.')+UI.actions(UI.cancel('Close'));}
+  },5000);
+  await poll.first;
 };
 window.runtimeRecheck=async id=>{try{await runtimePost('recheck',{id});await runtimeMoveWatch(id);}catch(e){toast(e.message,'bad');}};
 window.runtimeRetireReview=async id=>{

@@ -7,7 +7,7 @@ function setup(){
   function register(body){for(const [tag,id]of body.matchAll(/<[^>]*\bid="([^"]+)"[^>]*>/g)){
     let value='';const el={checked:false,disabled:tag.includes('disabled')};Object.defineProperty(el,'innerHTML',{get:()=>value,set:v=>{value=v;register(v);}});fields['#'+id]=el;
   }}
-  const c={window:null,console,esc:v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsArg:v=>JSON.stringify(v),$:s=>fields[s],clearTimeout(){},setTimeout:f=>timers.push(f),toast(){},modal(title,body){Object.keys(fields).forEach(k=>delete fields[k]);closed=false;fields['#modal']={classList:{contains:()=>closed}};register(body);},api:async(path,opts)=>{if(!opts)return path.includes('/status')?item:plan;sent.push(JSON.parse(opts.body));return new Promise(r=>{resolve=r;});}};
+  const c={window:null,console,esc:v=>String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),jsArg:v=>JSON.stringify(v),$:s=>fields[s],clearTimeout(){},setTimeout:(f,ms)=>ms===30000?0:timers.push(f),toast(){},modal(title,body){Object.keys(fields).forEach(k=>delete fields[k]);closed=false;fields['#modal']={classList:{contains:()=>closed}};register(body);},api:async(path,opts)=>{if(!opts?.method)return path.includes('/status')?item:plan;sent.push(JSON.parse(opts.body));return new Promise(r=>{resolve=r;});}};
   c.window=c;vm.createContext(c);for(const name of ['ui','longhorn-v2-setup'])vm.runInContext(fs.readFileSync('web/js/'+name+'.js','utf8'),c);
   return {c,fields,sent,timers,plan,item,close:()=>{closed=true;},resolve:()=>resolve(item)};
 }

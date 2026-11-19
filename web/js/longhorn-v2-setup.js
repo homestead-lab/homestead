@@ -1,19 +1,28 @@
 /* Explicit host preparation, reviewed maintenance, then engine enablement. */
 let lhV2Plan=null, lhV2Approval=null, lhV2Timer=null, lhV2Sequence=0;
+const lhV2Stop = () => { lhV2Timer?.stop(); lhV2Timer=null; };
 const lhV2Footer = main => UI.actions(UI.cancel('Close') + main, UI.button('Check again','lhV2Setup()'), { attrs: 'id="lhV2Foot"' });
 window.lhV2Setup = async () => {
   const sequence=++lhV2Sequence;
   if(window.__logTimer) {window.__logTimer.stop?.();window.__logTimer=null;}
-  clearTimeout(lhV2Timer); lhV2Approval=null;
+  lhV2Stop(); lhV2Approval=null;
   // Setup is a resumable root dialog; discard completed child reviews.
   if(typeof MODAL_STACK!=='undefined') MODAL_STACK.length=0;
   modal('Set up Longhorn V2', '<div id="lhV2Setup"><div class="empty"><span class="spin2"></span>Checking hosts</div></div>' + lhV2Footer(''), true, 'longhorn-v2');
-  try {
-    const plan=await api('/api/longhorn/v2/plan');
-    if(sequence!==lhV2Sequence || !$('#lhV2Setup')) return;
-    lhV2Paint(plan);
-  } catch(e) { if(sequence===lhV2Sequence && $('#lhV2Setup')) $('#lhV2Setup').innerHTML=UI.callout('bad','The setup could not be checked',esc(e.message)); }
-  if($('#lhV2Setup')) lhV2Timer=setTimeout(lhV2Poll,4000);
+  // One poll (#983) for the first check and the ones after it: none in a hidden
+  // tab, and closing the dialog cancels its read. Returning false ends it.
+  let first=true;
+  const poll=lhV2Timer=UI.poll(async signal => {
+    if(!first) return lhV2Poll(signal);
+    first=false;
+    try {
+      const plan=await api('/api/longhorn/v2/plan',{signal});
+      if(sequence!==lhV2Sequence || !$('#lhV2Setup')) return false;
+      lhV2Paint(plan);
+    } catch(e) { if(UI.pollCancelled(signal)) return false; if(sequence===lhV2Sequence && $('#lhV2Setup')) $('#lhV2Setup').innerHTML=UI.callout('bad','The setup could not be checked',esc(e.message)); }
+    if(!$('#lhV2Setup')) return false;
+  },4000);
+  await poll.first;
 };
 function lhV2Paint(plan) {
   lhV2Plan=plan;
@@ -46,21 +55,23 @@ function lhV2Paint(plan) {
     : UI.button(plan.harvester?'Review Harvester change':'Review V2','lhV2ReviewEnable()',{kind:'pri',disabled:!plan.can_enable,attrs:'data-need="admin"'}));
   window.applyRole?.();
 }
-async function lhV2Poll() {
+// Each later check of the setup poll; false ends it.
+async function lhV2Poll(signal) {
   const host=$('#lhV2Setup'),sequence=lhV2Sequence;
-  if(!host || $('#modal')?.classList.contains('hidden')) return;
+  if(!host || $('#modal')?.classList.contains('hidden')) return false;
   try {
-    const plan=await api('/api/longhorn/v2/plan');
-    if(sequence!==lhV2Sequence || $('#lhV2Setup')!==host) return;
+    const plan=await api('/api/longhorn/v2/plan',{signal});
+    if(sequence!==lhV2Sequence || $('#lhV2Setup')!==host) return false;
     lhV2Paint(plan);
   } catch(e) {
+    if(UI.pollCancelled(signal)) return false;
     if($('#lhV2Setup')===host) {host.__lhV2Snapshot=null;host.innerHTML=UI.callout('warn','Setup status unavailable',esc(e.message)+'. Trying again. Completion is not assumed.');}
   }
-  if($('#lhV2Setup')===host) lhV2Timer=setTimeout(lhV2Poll,4000);
+  if($('#lhV2Setup')!==host) return false;
 }
 window.lhV2ReviewHost = node => {
   const row=lhV2Plan?.nodes.find(n=>n.node===node); if(!row?.can_prepare) return;
-  clearTimeout(lhV2Timer); ++lhV2Sequence;
+  lhV2Stop(); ++lhV2Sequence;
   lhV2Approval={action:'prepare',node,review_token:row.review_token};
   childModal(`Prepare V2 · ${node}`, UI.lead(`Set up <b>${esc(node)}</b> for Longhorn V2.`) +
     UI.checklist([{title:'Install nvme-cli if missing',state:'todo'},{title:'Load vfio_pci, uio_pci_generic and nvme_tcp, and keep them loaded',state:'todo'},
@@ -72,7 +83,7 @@ window.lhV2ReviewHost = node => {
 };
 window.lhV2ReviewEnable = () => {
   if(!lhV2Plan?.can_enable) return;
-  clearTimeout(lhV2Timer); ++lhV2Sequence;
+  lhV2Stop(); ++lhV2Sequence;
   lhV2Approval={action:'enable',review_token:lhV2Plan.review_token};
   childModal('Enable Longhorn V2', UI.lead(lhV2Plan.harvester ? 'Harvester sets up its hosts and turns on Longhorn V2 through its own setting.' : 'The host requirements are checked. Longhorn starts its V2 instance managers.') +
     UI.callout('warn','CPU and memory stay reserved','V2 uses CPU and memory even before any V2 volume is created.' + (lhV2Plan.harvester?' Harvester may restart hosts to apply its configuration.':'') +
@@ -96,12 +107,12 @@ function lhV2ReturnToSetup() {
   if(typeof MODAL_STACK!=='undefined' && MODAL_STACK.length) MODAL_STACK[MODAL_STACK.length-1].onReturn=()=>lhV2Setup();
 }
 window.lhV2TaskLog = (namespace,name) => {
-  clearTimeout(lhV2Timer); ++lhV2Sequence;
+  lhV2Stop(); ++lhV2Sequence;
   pushModal(()=>lhV2Setup());
   jobLogs(namespace,name);
 };
 window.lhV2Reboot = async node => {
-  clearTimeout(lhV2Timer); ++lhV2Sequence;
+  lhV2Stop(); ++lhV2Sequence;
   await nodePowerReview(node,'reboot');
   lhV2ReturnToSetup();
 };
@@ -115,6 +126,7 @@ window.lhV2Disable = async () => {
 };
 
 let v2CleanupSeq=0,v2CleanupTimer=null,v2CleanupApproval=null,v2CleanupBusy=false;
+const v2CleanupStop=()=>{v2CleanupTimer?.stop();v2CleanupTimer=null;};
 const v2CleanupPost=(path,body)=>api('/api/longhorn/v2/cleanup'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 function v2CleanupHosts(rows){
   return UI.table([{label:'Host'},{label:'Memory reserved for V2'},{label:'Result'}],rows.map(row=>[
@@ -125,7 +137,7 @@ function v2CleanupHosts(rows){
   ]));
 }
 window.lhV2CleanupOpen=async()=>{
-  const seq=++v2CleanupSeq;clearTimeout(v2CleanupTimer);v2CleanupApproval=null;
+  const seq=++v2CleanupSeq;v2CleanupStop();v2CleanupApproval=null;
   modal('Turn off V2 and release resources','<div id="v2Cleanup"><div class="empty"><span class="spin2"></span>Checking V2 and its memory reservations</div></div>',true,'longhorn-v2');
   const host=$('#v2Cleanup');
   try{
@@ -148,17 +160,23 @@ window.lhV2CleanupStart=async()=>{
   finally{v2CleanupBusy=false;}
 };
 window.lhV2CleanupWatch=async id=>{
-  const seq=++v2CleanupSeq;clearTimeout(v2CleanupTimer);v2CleanupApproval=null;
+  const seq=++v2CleanupSeq;v2CleanupStop();v2CleanupApproval=null;
   modal('V2 resource cleanup','<div id="v2CleanupStatus"></div>',true,'longhorn-v2');const host=$('#v2CleanupStatus');
-  async function poll(){
-    if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
-    try{const item=await api('/api/longhorn/v2/cleanup/status?id='+encodeURIComponent(id));
-      if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host)return;
+  // A poll (#983): none in a hidden tab, and closing the dialog cancels its read. A failed read ends it, as before.
+  const poll=v2CleanupTimer=UI.poll(async signal=>{
+    if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host||$('#modal')?.classList.contains('hidden'))return false;
+    try{const item=await api('/api/longhorn/v2/cleanup/status?id='+encodeURIComponent(id),{signal});
+      if(seq!==v2CleanupSeq||$('#v2CleanupStatus')!==host)return false;
       host.innerHTML=UI.lead(esc(item.message))+v2CleanupHosts(item.nodes)+
         UI.actions(UI.cancel('Close')+UI.button('Recheck',`lhV2CleanupRecheck(${jsArg(id)})`));
-      window.applyRole?.();if(['succeeded','failed'].includes(item.status))return;
-    }catch(e){if($('#v2CleanupStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message))+UI.actions(UI.cancel('Close')+UI.button('Recheck',`lhV2CleanupRecheck(${jsArg(id)})`));return;}
-    v2CleanupTimer=setTimeout(poll,4000);
-  }await poll();
+      window.applyRole?.();if(['succeeded','failed'].includes(item.status))return false;
+    }catch(e){
+      if(UI.pollCancelled(signal))return false;
+      if($('#v2CleanupStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message))+UI.actions(UI.cancel('Close')+UI.button('Recheck',`lhV2CleanupRecheck(${jsArg(id)})`));
+      // Stopped, not just false: a read given up after 30 s ends the poll too.
+      if(seq===v2CleanupSeq)v2CleanupStop();return false;
+    }
+  },4000);
+  await poll.first;
 };
 window.lhV2CleanupRecheck=async id=>{try{await v2CleanupPost('/recheck',{id});await lhV2CleanupWatch(id);}catch(e){toast(e.message,'bad');}};

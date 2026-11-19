@@ -2,7 +2,7 @@
 let diskAllocationSequence=0,diskAllocationTimer=null,diskAllocationPlan=null,diskAllocationBusy=false;
 const allocationGiB=value=>`${(Number(value)/1073741824).toFixed(1)} GiB`;
 const allocationPost=(path,body)=>api(`/api/disks/allocation/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-function allocationReset() {++diskAllocationSequence;clearTimeout(diskAllocationTimer);diskAllocationPlan=null;}
+function allocationReset() {++diskAllocationSequence;diskAllocationTimer?.stop();diskAllocationTimer=null;diskAllocationPlan=null;}
 function allocationDiagram(plan,role,target) {
   const current=plan.areas.map(a=>({label:a.name,size:a.size_bytes,role:a.role}));
   const known=current.reduce((sum,a)=>sum+a.size,0),other=Math.max(0,plan.total_bytes-plan.free_bytes-known);
@@ -86,21 +86,23 @@ window.diskAllocationWatch=async id=>{
   allocationReset();const sequence=diskAllocationSequence;
   modal('Storage allocation','<div id="allocationStatus"><div class="empty"><span class="spin2"></span>Reading saved job</div>'+UI.actions(UI.cancel('Close'))+'</div>',true,'disk-allocation');
   const host=$('#allocationStatus');
-  async function poll() {
-    if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
+  // A poll (#983): closing the dialog cancels its read; returning false ends it. It reads on in a
+  // hidden tab (background): a filesystem being grown is followed as it happens.
+  const poll=diskAllocationTimer=UI.poll(async signal=>{
+    if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host||$('#modal')?.classList.contains('hidden'))return false;
     try {
-      const item=await api('/api/disks/allocation/status?id='+encodeURIComponent(id));
-      if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host||$('#modal')?.classList.contains('hidden'))return;
+      const item=await api('/api/disks/allocation/status?id='+encodeURIComponent(id),{signal});
+      if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host||$('#modal')?.classList.contains('hidden'))return false;
       const done=item.phase==='complete',failed=item.status==='failed',settled=done||item.phase==='cancelled';
       host.innerHTML=UI.lead(esc(item.message))+UI.facts([['Host',esc(item.node)],['Mount folder',esc(item.mountpoint)],['Approved total',esc(allocationGiB(item.target_bytes))],['State',UI.chip(done?'Complete':settled?'No growth applied':failed?'Needs inspection':'Growing',done?'ok':failed&&!settled?'warn':'')]])+
         (!settled&&!failed?UI.progress(item.progress,{label:'Storage growth'}):'')+
         (failed&&!settled?UI.callout('warn','Check before changing allocation','The logical volume may have grown before its filesystem. Checking again reads the saved job and the current sizes, and does not repeat the command that grows it.'):'')+
         UI.actions(UI.cancel('Close')+(failed&&!settled?UI.button('Recheck outcome',`diskAllocationRecheck(${jsArg(id)})`,{kind:'pri',attrs:'data-need="admin"'}):settled?UI.button('View allocation',`diskAllocationOpen(${jsArg(item.node)})`,{kind:'pri'}):''),UI.button('Job log',`diskAllocationLog(${jsArg(id)})`));
-      window.noteOperation?.(item);window.applyRole?.();if(['succeeded','failed','cancelled'].includes(item.status))return;
-    }catch(e){if($('#allocationStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message)+' Completion is not assumed.')+UI.actions(UI.cancel('Close'));}
-    if(sequence===diskAllocationSequence&&$('#allocationStatus')===host)diskAllocationTimer=setTimeout(poll,4000);
-  }
-  await poll();
+      window.noteOperation?.(item);window.applyRole?.();if(['succeeded','failed','cancelled'].includes(item.status))return false;
+    }catch(e){if(UI.pollCancelled(signal))return false;if($('#allocationStatus')===host)host.innerHTML=UI.callout('warn','Status unavailable',esc(e.message)+' Completion is not assumed.')+UI.actions(UI.cancel('Close'));}
+    if(sequence!==diskAllocationSequence||$('#allocationStatus')!==host)return false;
+  },4000,{background:true});
+  await poll.first;
 };
 window.diskAllocationRecheck=async id=>{
   if(diskAllocationBusy)return;diskAllocationBusy=true;const sequence=diskAllocationSequence;

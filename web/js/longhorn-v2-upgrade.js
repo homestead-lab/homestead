@@ -17,7 +17,7 @@ const LH_V2_UPGRADE = UI.reviewFlow({
   loading: input => {
     const { target } = input;
     LH_V2_OPEN = input;
-    clearTimeout(LH_V2_UPGRADE_TIMER);
+    LH_V2_UPGRADE_TIMER?.stop(); LH_V2_UPGRADE_TIMER = null;
     LH_V2_SETTINGS.back();
     modal(target ? `Upgrade to ${target} · Longhorn` : 'Live upgrade · Longhorn V2', '<div id="lhV2UpgradeBody">Checking volumes and hosts…</div>', true);
   },
@@ -37,19 +37,25 @@ const LH_V2_UPGRADE = UI.reviewFlow({
 const lhV2Busy = () => LH_V2_STARTING || LH_V2_SETTINGS.busy || LH_V2_REVIEWING;
 window.lhV2Upgrade = (target = '') => LH_V2_UPGRADE.open({ target });
 
+/* A poll (#983), 5 s after the dialog's own read. It reads on in a hidden tab (background: an
+   upgrade is followed as it happens); closing the dialog ends it and cancels its read (the body
+   stays in the closed dialog, so the checks below never did). */
 function lhV2UpgradePoll(view) {
-  LH_V2_UPGRADE_TIMER = setTimeout(async () => {
-    if (LH_V2_UPGRADE.review !== view || LH_V2_OPEN !== view.input || !$('#lhV2UpgradeBody')) return;
+  LH_V2_UPGRADE_TIMER?.stop();
+  const shown = () => LH_V2_UPGRADE.review === view && LH_V2_OPEN === view.input && !!$('#lhV2UpgradeBody');
+  LH_V2_UPGRADE_TIMER = UI.poll(async signal => {
+    if (!shown()) return false;
     try {
-      const report = await api('/api/longhorn/v2/upgrade');
-      if (LH_V2_UPGRADE.review !== view || LH_V2_OPEN !== view.input || !$('#lhV2UpgradeBody')) return;
+      const report = await api('/api/longhorn/v2/upgrade', { signal });
+      if (!shown()) return false;
       view.report = report;
       lhV2UpgradePaint();
     } catch (e) {
+      if (UI.pollCancelled(signal)) return false;
       if ($('#lhV2UpgradeError')) $('#lhV2UpgradeError').textContent = `Status could not be refreshed: ${e.message}`;
     }
-    if (LH_V2_UPGRADE.review === view && LH_V2_OPEN === view.input && $('#lhV2UpgradeBody')) lhV2UpgradePoll(view);
-  }, 5000);
+    if (!shown()) return false;
+  }, 5000, { later: true, background: true });
 }
 
 function lhV2UpgradePaint() {
@@ -118,7 +124,7 @@ window.lhV2UpgradeStart = async () => {
 window.lhV2UpgradeSettings = (enabled, timeoutOnly = false) => {
   const view = LH_V2_UPGRADE.review;
   if (!view || lhV2Busy()) return;
-  clearTimeout(LH_V2_UPGRADE_TIMER);
+  LH_V2_UPGRADE_TIMER?.stop(); LH_V2_UPGRADE_TIMER = null;
   childModal(timeoutOnly ? 'V2 host upgrade timeout' : enabled ? 'Enable V2 live upgrades' : 'Pause V2 live upgrades',
     UI.lead(enabled ? 'Longhorn can upgrade V2 instance managers automatically after future manager upgrades. Check volume backups and replica health before each upgrade.' : 'The current host upgrade can finish. Longhorn will wait before upgrading another host.')
     + UI.fields(UI.field('Host timeout (minutes)',`<input id="lhV2UpgradeTimeout" type="number" min="1" max="1440" value="${view.report.upgrade.timeout}">`,{help:'Changes also affect the current upgrade. Waiting for healthy volumes has no timeout.'}))

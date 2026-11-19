@@ -435,13 +435,7 @@ test("going to another page stops that page's polls at once", async () => {
    api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
 const HAND_POLLS_LEFT = [
   "cluster-shutdown.js shutdownPoll",
-  "disk-allocation.js poll",
-  "disk-v2.js poll",
   "host-os.js osUpdatesFollow",
-  "longhorn-runtime.js poll",
-  "longhorn-v2-setup.js lhV2Poll",
-  "longhorn-v2-setup.js poll",
-  "longhorn-v2-upgrade.js lhV2UpgradePoll",
   "onboard.js guideWatch",
   "snapshot-files.js snapshotFilesPoll",
   "views-lifecycle-images.js viewImages",

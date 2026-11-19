@@ -1,9 +1,6 @@
 {
  "upgradeGateAndStartOnce": [
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -71,9 +68,6 @@
  ],
  "offlineBlockersAreDisabledAndEscaped": [
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -96,9 +90,6 @@
   ]
  ],
  "theUpgradeCheckNeedsItsTick": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
@@ -162,9 +153,6 @@
  ],
  "aRefusedStart": [
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -218,9 +206,6 @@
  ],
  "statusViewPollsAndStops": [
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -239,6 +224,9 @@
    0
   ],
   [
+   "clearTimeout"
+  ],
+  [
    "api",
    "/api/longhorn/v2/upgrade"
   ],
@@ -250,6 +238,9 @@
    "polled",
    "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up the V2 volumes and leave disk space for rebuilding volume copies. Do not expand volumes or move running VMs until all host upgrades finish and the volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing lets the current host finish, and does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pausing and resuming does not reset the retries. Resetting the controller is a manual recovery step in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
    0
+  ],
+  [
+   "clearTimeout"
   ],
   [
    "api",
@@ -265,6 +256,9 @@
    0
   ],
   [
+   "clearTimeout"
+  ],
+  [
    "state",
    "closed",
    "<p class=\"ui-lead\">Longhorn upgrades V2 storage one host at a time. Volumes stay attached while engines move temporarily.</p><dl class=\"ui-facts\"><div><dt>Installed</dt><dd>v1.13.0</dd></div><div><dt>V2 volumes</dt><dd>3</dd></div><div><dt>Live upgrades</dt><dd><span class=\"ui-chip \">Paused</span></dd></div><div><dt>Current host</dt><dd>node-2</dd></div></dl><section class=\"ui-section\">\n    <header><h4>Host progress</h4></header>\n    <div class=\"ui-table-wrap\"><table class=\"ui-table stack\"><thead><tr><th class=\"\"></th><th class=\"\"></th></tr></thead>\n      <tbody><tr><td class=\"\" data-label=\"\">node-2</td><td class=\"\" data-label=\"\"><span class=\"ui-chip \">Waiting for healthy volumes</span><div class=\"small\">&lt;img src=x&gt;</div><div class=\"dim small\">2 retries</div></td></tr></tbody></table></div></section><div class=\"ui-actions\" >\n      <div class=\"ui-actions-end\"><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(true)\" >Enable / resume live upgrades</button><button type=\"button\" class=\"btn\" onclick=\"lhV2UpgradeSettings(false,true)\" >Change timeout</button></div></div><details class=\"ui-more\" data-disclosure=\"Requirements and recovery\">\n    <summary>Requirements and recovery</summary><div class=\"ui-more-body\"><p class=\"ui-lead\">Live upgrade requires Longhorn 1.12.2 or later as the source, Kubernetes 1.34+, and healthy RW replicas on at least two eligible hosts. Single-host, ublk and sharded configurations use offline upgrade.</p><p class=\"ui-lead\">Back up the V2 volumes and leave disk space for rebuilding volume copies. Do not expand volumes or move running VMs until all host upgrades finish and the volumes are healthy.</p><p class=\"ui-lead\">The host timeout is 60 minutes. It does not apply while waiting for healthy volumes. Pausing lets the current host finish, and does not roll back the manager or storage version.</p><p class=\"ui-lead\">Longhorn retries failed hosts up to five times. Resolve the reported error first. Pausing and resuming does not reset the retries. Resetting the controller is a manual recovery step in Longhorn.</p><a href=\"https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/\" target=\"_blank\" rel=\"noopener noreferrer\">Longhorn upgrade documentation</a></div></details><div id=\"lhV2UpgradeError\" class=\"small\" role=\"status\"></div>",
@@ -272,9 +266,6 @@
   ]
  ],
  "statusReportFailure": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
@@ -292,9 +283,6 @@
   ]
  ],
  "settingsReviewApplyOnce": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Live upgrade · Longhorn V2",
@@ -356,9 +344,6 @@
    "ok"
   ],
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -378,9 +363,6 @@
   ]
  ],
  "settingsRefusedAndTimeoutOnly": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Live upgrade · Longhorn V2",
@@ -438,9 +420,6 @@
  ],
  "settingsReviewStopsAndDropsTheStatusView": [
   [
-   "clearTimeout"
-  ],
-  [
    "modal",
    "Live upgrade · Longhorn V2",
    "<div id=\"lhV2UpgradeBody\">Checking volumes and hosts…</div>"
@@ -476,9 +455,6 @@
   ]
  ],
  "oneSendBlocksTheOthers": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Upgrade to v1.13.0 · Longhorn",
@@ -529,9 +505,6 @@
   ]
  ],
  "statusViewWithNoTargetCannotStart": [
-  [
-   "clearTimeout"
-  ],
   [
    "modal",
    "Live upgrade · Longhorn V2",

@@ -6,8 +6,8 @@ function setup() {
   const report={installed:'v1.12.2',target:'v1.13.0',v2_volumes:3,live_ready:true,offline_ready:false,live_blockers:[],offline_blockers:['Stop and detach disks'],upgrade:{enabled:false,timeout:60,nodes:[]}};
   const c={window:null,console,document:{addEventListener(){},getElementById:id=>closed?null:fields['#'+id]||null},$:s=>closed?null:fields[s],esc:s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'),
     can:()=>true,icon:()=>'',modal:(_,h)=>{html=h;closed=false;},childModal:(_,h)=>{html=h;},closeModal:()=>{closed=true;},toast(){},clusterComponentsPaint(){},
-    setTimeout:f=>{timer=f;return 1;},clearTimeout(){},api:async(path,opts)=>{
-      if(!opts)return report;
+    setTimeout:(f,ms)=>{if(ms!==30000)timer=f;return 1;},clearTimeout(){},api:async(path,opts)=>{
+      if(!opts?.method)return report;
       const body=JSON.parse(opts.body);sent.push({path,body});
       if(path.endsWith('/review'))return {capacity_token:'review-token',plan:report};
       return new Promise(r=>{resolvePost=r;});
