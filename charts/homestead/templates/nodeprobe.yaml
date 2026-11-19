@@ -17,6 +17,9 @@ spec:
       annotations:
         checksum/scripts: {{ (.Files.Glob "files/probe/*").AsConfig | sha256sum }}
     spec:
+      {{- if .Values.rbac.create }}
+      serviceAccountName: homestead-nodeprobe
+      {{- end }}
       terminationGracePeriodSeconds: 2
       tolerations:
         - operator: Exists

@@ -121,13 +121,37 @@ kubectl -n longhorn-system patch settings.longhorn.io storage-minimal-available-
 
 **Its data volume is stuck attaching or detaching, or its health is unknown.**
 Longhorn can keep its engine or a copy in that state until whatever uses the
-volume lets go. Stop Homestead, wait for the volume to detach, and start it
-again:
+volume lets go. Longhorn may still list the volume as attached even though its
+engine is not running, because the instance manager that came back with the
+host runs none. The node probe's watchdog handles that case by itself, once
+per boot. If the volume stays attached with no running engine for five
+minutes, the probe on that host stops Homestead and waits for the volume to
+detach. If Homestead's pods are still there after a minute, it removes them
+outright. Then it starts Homestead again with the number of copies it had.
+Whatever happens, Homestead is started again within ten minutes, and an alert
+says what was done. By hand, stop Homestead, wait for the volume to detach,
+and start it again. Remove pods left from before the restart if they hold the
+volume:
 
 ```bash
 kubectl -n lab scale deployment/homestead --replicas=0
-kubectl -n longhorn-system get volumes.longhorn.io   # wait until it is detached
+kubectl -n lab get pods -l app=homestead            # any left after a minute:
+kubectl -n lab delete pod <name> --force --grace-period=0
+kubectl -n longhorn-system get volumes.longhorn.io  # wait until it is detached
 kubectl -n lab scale deployment/homestead --replicas=1
+```
+
+For this, the node probe has its own account, `homestead-nodeprobe`, with a
+Role in Homestead's namespace. The Role lets it read and scale Homestead's
+Deployment, and read and remove pods there. Kubernetes cannot limit removing
+pods to Homestead's own, so the watchdog checks each pod's owner before it
+removes it. The account and its Role ship with Homestead, and Homestead never
+creates or changes them itself. An installation from before 2.8.335 gets them
+by applying Homestead's permissions file once, and the probe then switches to
+its own account within a few minutes:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/rbac.yaml
 ```
 
 To keep this from happening again, Homestead warns before a restart when a

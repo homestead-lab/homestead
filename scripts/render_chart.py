@@ -406,6 +406,12 @@ def rbac():
         if not kind or kind.group(1) not in RBAC_KINDS:
             continue
         # metadata.namespace sits at two spaces, a subject's at four.
+        if re.search(r"(?m)^  name: homestead-nodeprobe$", doc):
+            # The probe's account runs beside it, with the apps; its Role and
+            # binding reach Homestead's Deployment and pods, in the release's namespace.
+            doc = re.sub(r"(?m)^  namespace: lab$", f"  namespace: {APPS if kind.group(1) == 'ServiceAccount' else SELF}", doc)
+            out.append(re.sub(r"(?m)^    namespace: lab$", f"    namespace: {APPS}", doc))
+            continue
         if kind.group(1) in ("Role", "RoleBinding") and not re.search(r"(?m)^  name: (?:%s)$" % "|".join(OWN_ROLES), doc):
             doc = re.sub(r"(?m)^  namespace: lab$", f"  namespace: {APPS}", doc)
         else:
@@ -425,6 +431,12 @@ def probe_daemonset(release):
     assert marker in text, "the probe's pod template changed shape"
     text = text.replace(marker, marker + "      annotations:\n"
                         "        checksum/scripts: {{ (.Files.Glob \"files/probe/*\").AsConfig | sha256sum }}\n", 1)
+    # The probe's own account comes with the chart's RBAC (rbac()): named only
+    # when the chart creates it, as a pod naming a missing account never starts.
+    spec_marker = "    spec:\n      terminationGracePeriodSeconds: 2\n"
+    assert spec_marker in text, "the probe's pod spec changed shape"
+    text = text.replace(spec_marker, "    spec:\n      {{- if .Values.rbac.create }}\n      serviceAccountName: homestead-nodeprobe\n"
+                        "      {{- end }}\n      terminationGracePeriodSeconds: 2\n", 1)
     return "{{- if .Values.nodeprobe.enabled }}\n" + text + "{{- end }}\n"
 
 

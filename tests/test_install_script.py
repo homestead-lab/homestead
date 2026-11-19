@@ -832,6 +832,20 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=0", out)
         self.assertIn("+ k3s kubectl -n lab scale deployment/homestead --replicas=2", out)
 
+    def test_attached_with_its_health_unknown_is_stuck_but_a_stopped_homestead_is_not(self):
+        """k3s, 18 November 2026: attached, unknown, no engine running. A
+        detached volume's health is always unknown, which is a stopped Homestead."""
+        check = ('KC="k3s kubectl"; NODE=node1; KIND=k3s-server; SERVICE=k3s; FOUND="$TMPDIR/found"; '
+                 ': > "$FOUND"; check_cluster; cat "$FOUND"')
+        self.homestead_down("attached unknown")
+        code, out = functions(check, path_extra=self.bin)
+        self.assertIn("homestead-data|bad|Homestead cannot start: its data volume is stuck after a restart|", out)
+        self.assertIn("The node probe's watchdog does this by itself once per boot", out)
+        self.assertIn("--force --grace-period=0", out)
+        self.homestead_down("detached unknown")
+        code, out = functions(check, path_extra=self.bin)
+        self.assertNotIn("homestead-data|", out)
+
     def test_a_vm_host_with_apparmors_restriction_on_is_told_and_its_fix_asks_first(self):
         # Ahead of the stand-in's other node reads, which would answer first.
         text = STUBS["k3s"].replace('case "$*" in\n', 'case "$*" in\n  *"kubevirt\\.io/schedulable"*) echo true ;;\n', 1)
