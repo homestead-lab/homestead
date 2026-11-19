@@ -299,6 +299,18 @@ class PodSpecTests(ReconcileTests):
         self.assertEqual("current", probe.reconcile("2.8.50")["state"])
         self.assertEqual([], self._patches())
 
+    def test_a_probe_from_before_the_repository_moved_is_updated(self):
+        """2.8.293's SMART sidecar runs ghcr.io/wjcloudy/homestead, the name
+        from before homestead-lab: Homestead's own image, so it is updated."""
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        spec = self.objects["/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"]["spec"]["template"]["spec"]
+        spec["containers"][0]["image"] = "python:3.12-alpine"
+        spec["containers"][1]["image"] = "ghcr.io/wjcloudy/homestead:2.8.293"
+        result = probe.reconcile("2.8.50")
+        self.assertIn("pod spec updated", result["detail"])
+        written = self._patches()[0][1]["value"]["containers"]
+        self.assertEqual(["ghcr.io/homestead-lab/homestead:2.8.50"] * 2, [c["image"] for c in written])
+
     def test_the_watchdog_is_told_homesteads_data_without_restarting_the_probe(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
         self.objects["/api/v1/namespaces/lab/pods/homestead-7d9f8-abcde"] = {

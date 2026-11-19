@@ -306,6 +306,10 @@ def _within(want, have):
 # Images an installed probe may run that are still Homestead's to replace:
 # its own, and the stock one it ran before 2.8.336.
 MANAGED_IMAGES = ("python:3.12-alpine",)
+# Homestead's own image under the name it had before the repository moved to
+# homestead-lab (2.8.303): a probe installed before then still runs it, and is
+# Homestead's to update, not a custom image someone chose.
+EARLIER_IMAGES = ("ghcr.io/wjcloudy/homestead:",)
 
 
 def _template(name, version):
@@ -318,7 +322,7 @@ def _template(name, version):
     have = ((ds.get("spec") or {}).get("template") or {}).get("spec") or {}
     for row in have.get("containers") or []:
         image = str(row.get("image") or "")
-        if not image.startswith(NAMES.IMAGE + ":") and image not in MANAGED_IMAGES:
+        if not image.startswith((NAMES.IMAGE + ":", *EARLIER_IMAGES)) and image not in MANAGED_IMAGES:
             return "custom image kept, so its pod spec was not updated"
     ACCOUNT[0] = account_ready()
     want = _with_account(manifest(version)[1]["spec"]["template"]["spec"], ACCOUNT[0])
