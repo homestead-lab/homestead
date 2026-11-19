@@ -20,7 +20,12 @@ a hash of the web folder instead (asset_version), and the page is served with th
 name in place of the source version, so these builds are kept for good too. A
 vendored library file asked for as /vendor/@<version>/... is kept for good while
 <version> is the one the page names (noVNC and Monaco load many files by relative path
-that no ?v= can reach).
+that no ?v= can reach). Such a build answers with that name too (header_version), so a
+page compares like with like and offers a reload only when the build really changed.
+
+A source checkout started without HOMESTEAD_VERSION (CONTRIBUTING.md) runs under the
+release string it was cut from, but its files change with every edit: they are named
+by the web folder's hash as well, while it still says it is that release.
 
 The page's big per-tick reads (COMPRESSED_ANSWERS) are gzipped as well (#982).
 Nothing else from /api is: compressing an answer that holds a secret next to
@@ -55,6 +60,8 @@ ANSWER_LEVEL = 5
 
 RELEASE = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.]+)?")
 PAGE_VERSION = re.compile(rb"\?v=[0-9A-Za-z._+-]+")
+# Read as the server starts: every image sets HOMESTEAD_VERSION (the Dockerfile).
+SOURCE_CHECKOUT = not os.environ.get("HOMESTEAD_VERSION")
 
 _files = {}
 _tree = {}
@@ -84,11 +91,11 @@ def _signature(webroot):
 
 
 def asset_version(version, webroot, refresh=False):
-    """The name the page gives its files. A release names itself; any other build
-    ("ci", "dev", ...) is named by a hash of the web folder's bytes, so two builds
-    never share a name. The hash is kept and read again only when refresh is set (the
-    page is asked for) and a file changed on disk."""
-    if not webroot or RELEASE.fullmatch(version or ""):
+    """The name the page gives its files. A release image names itself; any other build
+    ("ci", "dev", a source checkout) is named by a hash of the web folder's bytes, so two
+    builds never share a name. The hash is kept and read again only when refresh is set
+    (the page is asked for) and a file changed on disk."""
+    if not webroot or (RELEASE.fullmatch(version or "") and not SOURCE_CHECKOUT):
         return version or ""
     with _lock:
         kept = _tree.get(webroot)
@@ -109,6 +116,13 @@ def asset_version(version, webroot, refresh=False):
     with _lock:
         _tree[webroot] = {"signature": signature, "token": token}
     return token
+
+
+def header_version(version, webroot):
+    """What X-Homestead-Version says: a release (a source checkout's too) names itself,
+    which linked clusters and the update checks read; any other build names the hash
+    its page names its files by, so auth.js compares it with the page's own name."""
+    return version if RELEASE.fullmatch(version or "") else asset_version(version, webroot)
 
 
 def _without_demo(page):
