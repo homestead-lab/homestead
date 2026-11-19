@@ -839,7 +839,8 @@ UNCONFIRMED_WAIT = 1800
 LETTING_GO_WAIT = 1800
 # What a retire's waits have saved; carrying on starts them all again.
 WAITS = ("letting_go_since", "letting_go_for", "records_since", "remove_since", "recheck_since",
-         "unconfirmed_since", "unconfirmed_last")
+         "unconfirmed_since", "unconfirmed_last", "stop_since", "release_since",
+         "cleanup_since")
 _clock = time.time
 
 
@@ -874,13 +875,16 @@ def _back_on(ref):
     return "It already took no new volume copies when this job started. Hosts > Disks > Allow new copies changes that."
 
 
-def _still_held(what, ref, disk_id):
+def _go_on(ref):
+    """How a failed retire goes on: a forced one before removal needs a fresh review."""
     if ref.get("force") and ref.get("phase") != "remove":
-        on = "To go on, start the retire again for a fresh review."
-    else:
-        on = "Resume job tries again from here."
+        return "To go on, start the retire again for a fresh review."
+    return "Resume job tries again from here."
+
+
+def _still_held(what, ref, disk_id):
     return (f"Longhorn has not let go of {what} after {LETTING_GO_WAIT // 60} minutes. {ref.get('path') or disk_id} takes "
-            f"no new replicas and stays in Longhorn. {_back_on(ref)} {on}")
+            f"no new replicas and stays in Longhorn. {_back_on(ref)} {_go_on(ref)}")
 
 
 
@@ -922,7 +926,21 @@ def retire_step(item):
         ref.pop("recheck")
         return "running", progress, "No new replicas go to the disk"
     if phase == "stop":
-        _patch(f"{LH}/nodes/{node}", stop_new, "stopping new replicas")
+        # Refused, it waits as long as the steps after it. A write that landed and
+        # lost its reply shows in this round's read of the disk, taken before it.
+        try:
+            _patch(f"{LH}/nodes/{node}", stop_new, "stopping new volume copies")
+        except ValueError as refused:
+            said = str(refused)[:160]
+            if _waited_out(ref, "stop_since"):
+                path = ref.get("path") or disk_id
+                if disk.get("allowScheduling") is False and ref.get("was_scheduling", True):
+                    now = (f"{path} already takes no new volume copies and stays in Longhorn. {_back_on(ref)}")
+                else:
+                    now = f"This retire changed nothing, and {path} stays in Longhorn."
+                return "failed", 5, (f"Longhorn has refused to stop new volume copies on {path} for "
+                                     f"{LETTING_GO_WAIT // 60} minutes ({said}). {now} {_go_on(ref)}")
+            return "running", 5, f"Stopping new volume copies first: {said}"
         ref["phase"] = "replicas"
         return "running", 10, "No new replicas go to the disk"
     if phase == "replicas":
@@ -1010,7 +1028,16 @@ def retire_step(item):
             spec = bd.get("spec") or {}
             body = ({"spec": {"provision": False}} if "provision" in spec or "provisioner" in spec
                     else {"spec": {"fileSystem": {"provisioned": False}}})
-            _patch(f"{BD}/{disk_id}", body, "releasing the drive")
+            # Its own wait, so a slow release does not use up the removal's after it.
+            try:
+                _patch(f"{BD}/{disk_id}", body, "releasing the drive")
+            except ValueError as refused:
+                said = str(refused)[:160]
+                if _waited_out(ref, "release_since"):
+                    return "failed", 65, (f"Harvester has not released the drive after {LETTING_GO_WAIT // 60} minutes "
+                                          f"({said}). {ref.get('path') or disk_id} takes no new volume copies and stays "
+                                          f"in Longhorn. {_back_on(ref)} {_go_on(ref)}")
+                return "running", 65, f"Harvester has not released the drive yet: {said}"
         # Harvester takes a disk out of Longhorn itself when its drive is
         # there to unmount; a missing one it may not, so this does.
         try:
@@ -1035,7 +1062,12 @@ def retire_step(item):
                 ksend("DELETE", f"{BD}/{disk_id}")
             except urllib.error.HTTPError as error:
                 if error.code != 404:
-                    raise
+                    said = str(_refused(error, "removing the drive's record"))[:160]
+                    if _waited_out(ref, "cleanup_since"):
+                        return "failed", 90, (f"Harvester has not removed the drive's record after {LETTING_GO_WAIT // 60} "
+                                              f"minutes ({said}). {ref.get('path') or disk_id} is already out of Longhorn "
+                                              f"on {node}. Resume job tries again from here.")
+                    return "running", 90, f"Harvester has not removed the drive's record yet: {said}"
         ref["phase"] = "done"
         return "succeeded", 100, (
             f"{ref.get('path') or disk_id} is out of Longhorn on {node}. Add the new drive there (Hosts > Disks > "

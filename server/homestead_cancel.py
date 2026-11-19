@@ -753,8 +753,8 @@ def disk_retire_plan(item):
     phase = ref.get("phase", "stop")
     if phase in ("remove", "cleanup"):
         return {"can": False, "needs": "admin",
-                "why_not": "The disk is being removed from Longhorn. That finishes in moments and "
-                           "cannot be stopped part-way."}
+                "why_not": "The disk is being removed from Longhorn, which cannot be stopped part-way. If Longhorn or "
+                           "Harvester keeps refusing it, the job stops after 30 minutes and Resume job tries again."}
     # A failed retire holds nothing. The cancel asks this under the job store's lock
     # and marks it active in the same hold (DISKS.retire_held); the review before it
     # asks too, as a preview.
