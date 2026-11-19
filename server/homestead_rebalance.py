@@ -96,7 +96,8 @@ def _app(volume):
 
 
 def inventory():
-    """Hosts that may take a copy, and each volume with where its copies are."""
+    """Hosts that may take a copy, each volume with where its copies are, and
+    the names of every Kubernetes node (Longhorn may not run on each one)."""
     lh_nodes = _items(f"{LH}/nodes")
     k8s_nodes = {(n.get("metadata") or {}).get("name"): n for n in _items("/api/v1/nodes")}
     all_volumes = _items(f"{LH}/volumes")
@@ -149,7 +150,7 @@ def inventory():
                         "app": _app(volume), "size": size, "attached": status.get("currentNodeID") or "",
                         "hosts": sorted({(r.get("spec") or {}).get("nodeID") for r in whole}), "why": why,
                         "node_tags": set(spec.get("nodeSelector") or []), "disk_tags": set(spec.get("diskSelector") or [])})
-    return hosts, volumes
+    return hosts, volumes, set(k8s_nodes)
 
 
 def plan(exclude=(), follow=()):
@@ -157,8 +158,11 @@ def plan(exclude=(), follow=()):
     follow is the container moves reviewed beside it, (app, host) pairs:
     first, each of those apps' volumes gets a copy on its new host, so its
     reads stay local there - moved from the fullest host holding one that
-    it is not attached to."""
-    hosts, volumes = inventory()
+    it is not attached to. Every app asked for gets an answer: a move, a
+    line under skipped when no copy can follow, one under nothing_to_follow
+    when none needs to, or one under unmatched when the name (in follow or
+    exclude) matches no app with a volume."""
+    hosts, volumes, nodes = inventory()
     exclude = set(exclude or ())
     load = {name: h["load"] for name, h in hosts.items()}
     room = {name: h["available"] for name, h in hosts.items()}
@@ -194,10 +198,40 @@ def plan(exclude=(), follow=()):
         planned[(target, id(disk))] = planned.get((target, id(disk)), 0) + best["size"]
         best["hosts"] = [h for h in best["hosts"] if h != source] + [target]
 
-    unfollowed = []
+    unfollowed, nothing_to_follow, unmatched = [], [], []
+    named = {v["app"] for v in volumes}
+    def no_app(field, given, app):
+        # A volume whose pod is not running may be listed under its claim instead.
+        hint = "" if "/" in app else ". Apps are named namespace/app"
+        unmatched.append({"field": field, "given": given, "why": f"no volume is listed under an app named {app}{hint}"})
+    for app in sorted(exclude - named):
+        no_app("exclude", app, app)
     for app, target in follow or ():
-        for v in movable:
-            if v["app"] != app or v["name"] in moved or target in v["hosts"] or len(moves) >= MAX_MOVES:
+        if not app or not target:
+            unmatched.append({"field": "follow", "given": f"{app}:{target}" if target else app,
+                              "why": f"it names no {'host' if app else 'app'}. Write it as namespace/app:host"})
+            continue
+        if app not in named:
+            no_app("follow", f"{app}:{target}", app)
+            continue
+        for v in volumes:
+            if v["app"] != app or v["why"]:     # one with a reason of its own is under skipped already
+                continue
+            needless = ("it is left out of this plan" if app in exclude else
+                        "it is empty, so there is nothing to copy" if v["size"] <= 0 else
+                        f"a copy of it already moves to {target} in this plan"
+                        if any(m["volume"] == v["name"] and m["to"] == target for m in moves) else
+                        f"it already has a copy on {target}" if target in v["hosts"] else "")
+            if needless:
+                nothing_to_follow.append({"claim": v["claim"], "app": app, "to": target, "why": needless})
+                continue
+            if target not in hosts or v["name"] in moved or len(moves) >= MAX_MOVES:
+                # A container may move to a node Longhorn does not run on.
+                why = (f"Longhorn lists no host named {target}" if target not in hosts and target in nodes else
+                       f"Kubernetes lists no host named {target}" if target not in hosts else
+                       "a copy of it already moves in this plan" if v["name"] in moved
+                       else f"the plan is full at {MAX_MOVES} moves")
+                unfollowed.append({"claim": v["claim"], "why": f"no copy follows {app} to {target}: {why}"})
                 continue
             sources = [h for h in v["hosts"] if h != v["attached"]]
             why = ("" if target in takers and sources and disk_room(target, v) > v["size"] else
@@ -234,6 +268,9 @@ def plan(exclude=(), follow=()):
             # Why nothing moves when the emptiest host is the one that cannot take copies.
             "closed": sorted(name for name, h in hosts.items() if not h["takes"]),
             "skipped": [{"claim": v["claim"], "why": v["why"]} for v in volumes if v["why"]] + unfollowed,
+            # Answers the page may leave out: no copy needed to follow, and
+            # names given that match no app with a volume.
+            "nothing_to_follow": nothing_to_follow, "unmatched": unmatched,
             "review_token": token}
 
 
@@ -257,7 +294,7 @@ def reviewed(moves, exclude, token):
         raise ValueError("Review the copies to move again")
     if review_token(moves, exclude) != token:
         raise ValueError("The moves differ from the review. Review again.")
-    hosts, volumes = inventory()
+    hosts, volumes, _ = inventory()
     by_name = {v["name"]: v for v in volumes}
     out = []
     for m in moves:
@@ -403,6 +440,9 @@ def cancel_run(work, chosen):
 def start_reviewed(b):
     """Start the rebalance someone reviewed, as a job; a 409 with the plan as
     it is now when it no longer holds, a 202 with the job when it starts."""
+    if isinstance(b.get("exclude"), list):
+        # Trimmed as the preview trims them, so the token matches.
+        b = {**b, "exclude": [a.strip() if isinstance(a, str) else a for a in b["exclude"]]}
     running = next((i for i in OPS.snapshot() if i.get("kind") == KIND
                     and i.get("status") not in OPS.TERMINAL), None)
     if running:
@@ -428,11 +468,17 @@ def start_reviewed(b):
     return ROUTER.Reply(202, {"operation": operation})
 
 
+def _listed(request, key):
+    """A comma list from the query, each item trimmed of spaces."""
+    return [a.strip() for a in (request.query.get(key) or [""])[0].split(",") if a.strip()]
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan(
-        [a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
-        [tuple(pair.rsplit(":", 1)) for pair in (request.query.get("follow") or [""])[0].split(",") if pair.count(":") >= 1])),
+        _listed(request, "exclude"),
+        # An item with no host is passed on too, so the plan can say so.
+        [tuple(x.strip() for x in pair.rsplit(":", 1)) if ":" in pair else (pair, "") for pair in _listed(request, "follow")])),
     ("POST", "/api/longhorn/rebalance"): ("operator", lambda request: start_reviewed(request.body)),
 }
 
