@@ -254,7 +254,12 @@ def run_deploy(b, *, reviewed_current=None):
     if b.get("network_mode") == "lan" and target_mode == "new":
         LAN.ensure_nad(ns, target, b["lan"])
     masked = {item.get("key") for item in b.get("env_meta") or [] if item.get("masked")}
-    ENVSEC.externalize(ns, dep, kget, ksend, masked)
+    if target_mode == "existing":
+        # Joining an app never deletes a stored value (#1396): unused ones stay
+        # until an Edit save, which lists them and asks. stage() changes dep in place.
+        ENVSEC.stage(ns, dep, kget, ksend, masked)
+    else:
+        ENVSEC.externalize(ns, dep, kget, ksend, masked)
     if target_mode == "existing":
         ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
     else:
