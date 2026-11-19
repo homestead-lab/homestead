@@ -21,6 +21,12 @@ kind's limit, the job ends one of two ways:
 
 A kind neither table names keeps its guards (the safe side); a ratchet test
 holds every kind in one of them.
+
+That limit is for a resolver that fails. A resolver that answers "running"
+for ever is another matter: DEADLINES names, for each kind, the number that
+ends its wait, and NO_DEADLINE says why a kind has none. Nothing here reads
+them: tests/test_job_deadlines.py holds every kind in one of the two, and
+checks each named number is still there.
 """
 import time
 
@@ -117,6 +123,92 @@ KEEPS_GUARDS = {
     "volume-restore": "a volume is being restored",
     "workload-copy": "volume data is being copied",
     "workload-rename": "an app is being renamed with its volumes",
+}
+
+# kind -> the number that ends its "running": (module, constant), or
+# (module, function, seconds) for a number written in that function. A
+# comment names a wait the number does not cover.
+DEADLINES = {
+    "addon-remove": ("homestead_addon_removal", "WAIT_LIMIT"),  # each step's wait; counted while Homestead looks (GAP)
+    "auto-update": ("homestead_autoupdate", "ROLLOUT_WAIT"),  # then ANSWER_WAIT
+    "cluster-shutdown": ("homestead_cluster_shutdown", "LIFETIME"),
+    "container-rebalance": ("homestead_container_rebalance", "status", 600),  # each app's restart; pulls: PULL_WAIT
+    "disk-allocation": ("homestead_disk_allocation", "_job_body", 900),  # the helper Job's activeDeadlineSeconds
+    "disk-retire": ("homestead_disks", "UNCONFIRMED_WAIT"),  # and LETTING_GO_WAIT
+    # The helper Job's activeDeadlineSeconds. The erase review waits for a person.
+    "disk-v2-convert": ("homestead_disk_v2", "_job_body", 600),
+    "harvester-uplink": ("homestead_uplinks", "WAIT"),
+    # The unconfirmed stage waits for a person (it says the job needs attention).
+    "host-bond": ("homestead_host_bonds", "RESTART_SECONDS"),
+    "host-bridge": ("homestead_host_bridge", "RESTART_SECONDS"),
+    # The pull; then the rollout ends on the Deployment's progressDeadlineSeconds.
+    "host-move": ("homestead_host_move", "PULL_WAIT"),
+    "host-os": ("homestead_host_os", "_step", 7200),
+    "host-promote": ("homestead_promote", "RUN_LIMIT"),  # and JOIN_LIMIT
+    "image-cleanup": ("homestead_image_cache", "CLEAN_DEADLINE"),  # the pods' activeDeadlineSeconds
+    "image-pull": ("homestead_image_cache", "PULL_STUCK_FOR"),  # a failing pull; a slow one is never failed
+    "import-create": ("homestead_copy_job", "DEADLINE_CEILING"),  # the copy Job; setup waits for Check outcome
+    "k3s-cluster": ("homestead_k3scluster", "START_LIMIT"),
+    "longhorn-v2-prepare": ("homestead_lhv2_setup", "_body", 900),  # the helper Job's activeDeadlineSeconds
+    "multus": ("homestead_addons", "multus_progress", 1200),
+    # A host that is off with apps waiting for it waits for the host or a person.
+    "node-power": ("homestead_power", "_status", 600),
+    "os-rollout": ("homestead_os_rollout", "INSTALL_LIMIT"),  # and RESTART_LIMIT, ERROR_LIMIT
+    "platform-upgrade": ("homestead_components", "NODE_WAIT"),  # and CONTROLLER_WAIT, JOB_FINISH_WAIT
+    "reclass": ("homestead_reclass_handoff", "WAITS"),  # each wait's limit; a move from before: reclass START_LIMIT
+    "restore-swap": ("homestead_restore_swap", "STOP_WAIT"),  # then autoupdate ROLLOUT_WAIT, ANSWER_WAIT
+    "restore-test": ("homestead_restore_test", "resolve", 1800),  # the restore, plus 120 s a GiB; then READY_WAIT
+    # A host that is down: until the start request; after it, no limit by design.
+    "self-data-handoff": ("homestead_self_data_worker", "HOST_LIMIT"),
+    "self-data-prepare": ("homestead_self_data_prepare", "manifests", 3600),  # the binding pod's activeDeadlineSeconds
+    "set-priority": ("homestead_priority", "PER_POD"),
+    "set-requests": ("homestead_requests", "status", 600),
+    "set-restart": ("homestead_set_restart", "LIMIT"),
+    "share-remove": ("homestead_shares", "removal_progress", 1200),
+    "smart-test": ("homestead_smart", "_progress", 600),  # once the drive no longer says the test runs
+    "snapshot-delete": ("homestead_snapshot_delete", "TIMEOUT"),
+    "snapshot-revert": ("homestead_revert", "WAIT"),  # one limit per phase
+    "unraid-vm-import": ("homestead_unraid_vms", "FINISH_LIMIT"),  # and READY_LIMIT
+    "volume-copy-move": ("homestead_copy_move", "status", 3600),  # plus 120 s a GiB
+    "volume-rebalance": ("homestead_rebalance", "status", 3600),  # plus 120 s a GiB
+    # The copy Job. Waiting for the app's pods to stop, and to be ready after, has no limit.
+    "workload-copy": ("homestead_copy_job", "DEADLINE_CEILING"),
+}
+
+# kind -> why it has no number of its own. "No limit" marks a kind that can
+# wait for ever.
+NO_DEADLINE = {
+    "backup": "no limit: it follows Longhorn's backup state, and one Longhorn leaves pending or in progress waits",
+    "cluster-cleanup": "it ends on its first round",
+    "deployment": "Kubernetes ends a stalled rollout at the Deployment's progressDeadlineSeconds, read as failed",
+    "harvester-upgrade": "no limit: UPGRADE_MISSING_LIMIT covers only an upgrade Harvester never took; "
+                         "one Harvester has taken is followed until Harvester ends it",
+    "helm": "no limit: JOB_MISSING_LIMIT covers only a missing Job; one Kubernetes keeps retrying is followed",
+    "host-console": "it ends on its first round",
+    "image-rollback": "Kubernetes ends a stalled rollout at the Deployment's progressDeadlineSeconds, read as failed",
+    "image-update": "Kubernetes ends a stalled rollout at the Deployment's progressDeadlineSeconds, read as failed",
+    "import": "no limit: its copy Job has no activeDeadlineSeconds, and the job follows it until it ends",
+    "longhorn-runtime": "it waits for a person to restart the host, by design, looked at every CADENCE interval",
+    "longhorn-v2-cleanup": "no limit: it waits for the V2 instance managers to stop and for hosts that are away "
+                           "to return, with the hosts cordoned",
+    "move": "the move engine runs it and writes its record (homestead_move_state); the job only reads that record",
+    "network-service": "no limit: a LoadBalancer Service waits for kube-vip to give it an address",
+    "onboard": "it ends on its first round",
+    "protect-run": "no limit: Homestead gives the run's Job no activeDeadlineSeconds (the CronJob's template may)",
+    "restructure": "an older job: it ends failed on its first round",
+    "self-data-move": "an older job: it ends failed on its first round",
+    "vm-create": "the change runs in its request; the job waits for a person's Check outcome, by design",
+    "vm-disk-import": "no limit: it follows CDI's import, and its clean-up waits until the objects are gone",
+    "vm-disk-remove": "no limit: its clean-up waits until the DataVolume and its storage are gone",
+    "vm-edit": "the change runs in its request; the job waits for a person's Check outcome, by design",
+    "vm-migration": "KubeVirt fails a migration that stalls (its progress and completion timeouts)",
+    "vm-power": "no limit: it waits for the VM instance to run and be ready, or for a person to check an "
+                "uncertain request",
+    "volume-delete": "no limit: it waits for workloads to let go of the claim, and for the volume to go",
+    "volume-restore": "no limit once started: _restore_then_tidy gives a restore 15 min to start, then it "
+                      "follows Longhorn's restore",
+    "weekly-trim": "one volume a round from a fixed list, then it ends",
+    "workload-rename": "the rename runs in its request; the job waits for a person's Check outcome, by design",
 }
 
 
