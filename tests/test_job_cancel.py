@@ -321,25 +321,29 @@ class K3sClusterTests(Store):
     def test_a_build_that_fails_part_way_retains_vms_and_records_the_uncertain_target(self):
         removed, made = [], []
 
-        def create(vm):
+        def create(vm, send):
             if vm["name"].endswith("agent-1"):
                 raise ValueError("no room")
             made.append(vm["name"])
-            return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": "made-uid", "resourceVersion": "1"}}
+            return {"vm_identity": send("POST", "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines", {
+                "apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"namespace": "lab", "name": vm["name"]}})["metadata"]}
+
+        def send(method, path, body, **kw):
+            return dict(body, metadata=dict(body["metadata"], uid="made-uid", resourceVersion="1"))
         keep_bound(self, K3SC)
-        K3SC.bind(lambda path: {}, create, lambda ip: "", lambda ns, node: removed.append(node["name"]))
-        try:
+        K3SC.bind(lambda path: {}, lambda ip: "")
+        prepared = K3SC.prepare({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
+                                 "addresses": ["192.0.2.60", "192.0.2.61"], "password": "a-long-password"})
+        with mock.patch.object(VMS, "delete", side_effect=lambda ns, name, **kw: removed.append(name)):
             with self.assertRaisesRegex(ValueError, "Stopped at k3s-lab-agent-1. 1 creation record"):
-                K3SC.start({"name": "k3s-lab", "servers": 1, "agents": 1, "network": "default/lan",
-                            "addresses": ["192.0.2.60", "192.0.2.61"], "password": "a-long-password"}, OPS)
-        finally:
-            K3SC.bind(None, None, None)
+                K3SC.commit(prepared, OPS, create_one=create, send=send,
+                            review={"capacity_token": f"{int(time.time()) + 600}.test-batch-approval"})
         self.assertEqual([], removed)
         item = OPS.stored()[-1]
         self.assertEqual("failed", item["status"])
         self.assertEqual("k3s-lab-agent-1", item["ref"]["attempted"])
         self.assertEqual("made-uid", item["ref"]["created"][0]["identity"]["uid"])
-        self.assertTrue(OPS._public(item)["cleanable"])
+        self.assertTrue(OPS._public(item)["mutation_recovery"])
         self.assertTrue(OPS._public(item)["tracking_only"])
 
 

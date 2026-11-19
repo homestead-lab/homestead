@@ -98,12 +98,9 @@ class K3sClusterTests(unittest.TestCase):
            "prefix": 24, "gateway": "192.0.2.1"}
 
     def setUp(self):
-        self.made, self.taken = [], {}
-        def create(cfg):
-            self.made.append(cfg)
-            return {"vm_identity": {"namespace": "lab", "name": cfg["name"], "uid": cfg["name"] + "-uid", "resourceVersion": "1"}}
+        self.taken = {}
         keep_bound(self, K3S)
-        K3S.bind(lambda path: {}, create, lambda ip: self.taken.get(ip, ""))
+        K3S.bind(lambda path: {}, lambda ip: self.taken.get(ip, ""))
 
     def test_the_plan_gives_each_node_a_role_and_address(self):
         plan = K3S.plan(self.CFG)
@@ -145,17 +142,12 @@ class K3sClusterTests(unittest.TestCase):
 
     def test_nothing_is_made_when_an_address_is_taken(self):
         self.taken["192.0.2.62"] = "192.0.2.62 is taken: printer in IP addresses"
+        self.assertFalse(K3S.review(self.CFG)["ok"])
         with self.assertRaisesRegex(ValueError, "agent-2: 192.0.2.62 is taken"):
-            K3S.start(self.CFG, None)
-        self.assertEqual([], self.made)
+            K3S.prepare(self.CFG)
 
     def test_servers_start_the_cluster_and_workers_join_it_with_one_token(self):
-        class Ops:
-            def start(self, *args, **kw):
-                return {"id": "op"}
-            def record_phase(self, *args, **kw):
-                return {"id": "op"}
-        K3S.start(self.CFG, Ops())
+        self.made = K3S.prepare(self.CFG)["configs"]
         server, agent = self.made[0]["cloud_init"], self.made[1]["cloud_init"]
         token = server.split("K3S_TOKEN=")[1].split(" ")[0]
         self.assertIn("bootstrap-k3s.sh | K3S_TOKEN=%s sh -s - server" % token, server)

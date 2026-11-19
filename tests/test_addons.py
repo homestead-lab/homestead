@@ -7,6 +7,7 @@ import tarfile
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_addons as ADDONS
@@ -234,22 +235,11 @@ class ClusterCreatorTests(Kept):
         self.assertNotIn("--kubevirt", agent)
 
     def test_nodes_get_the_hosts_cpu_for_vms_inside(self):
-        made = []
-        def create(vm):
-            made.append(vm)
-            return {"vm_identity": {"namespace": "lab", "name": vm["name"], "uid": vm["name"] + "-uid", "resourceVersion": "1"}}
-        K3S.bind(None, create, lambda address: "")
-
-        class Ops:
-            def start(self, *args):
-                return {"id": "op"}
-            def record_phase(self, *args, **kwargs):
-                return {"id": "op"}
-        K3S.start(dict(self.CFG, kubevirt=True), Ops())
-        self.assertEqual(["host-passthrough"] * 2, [vm.get("cpu_model") for vm in made])
-        made.clear()
-        K3S.start(dict(self.CFG), Ops())
-        self.assertEqual([None, None], [vm.get("cpu_model") for vm in made])
+        with mock.patch.object(K3S, "check", return_value=""):
+            made = K3S.prepare(dict(self.CFG, kubevirt=True))["configs"]
+            self.assertEqual(["host-passthrough"] * 2, [vm.get("cpu_model") for vm in made])
+            made = K3S.prepare(dict(self.CFG))["configs"]
+            self.assertEqual([None, None], [vm.get("cpu_model") for vm in made])
 
     def test_k3s_alone_takes_no_kubevirt(self):
         with self.assertRaisesRegex(ValueError, "k3s alone"):

@@ -160,8 +160,7 @@ MOVED.update(dict.fromkeys(("cleanup_restores", "ensure_claim", "storage_helper_
 STORAGE_ROUTES.bind_routes(_late(*STORAGE_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in STORAGE_ROUTES.VALUES})
 import homestead_vm_server as VM_ROUTES
 from homestead_vm_server import (
-    _remove_cluster_vm, _vm_image_disks, _vmstore_loop, api_vm_power, create_vm_with_address,
-    set_vm_logos, vm_create_options, vm_default_class,
+    _vm_image_disks, _vmstore_loop, api_vm_power, set_vm_logos, vm_create_options, vm_default_class,
 )
 MOVED.update(dict.fromkeys(("prepare_lan", "vm_address_problem", "vm_default_class"), VM_ROUTES))
 VM_ROUTES.bind_routes(_late(*VM_ROUTES.ROUTE_NEEDS), **{name: globals()[name] for name in VM_ROUTES.VALUES})
@@ -514,7 +513,7 @@ PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATE_REGISTRY.image_l
 
 
 UPDATES.pull_progress = _pull_progress
-K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: VM_ROUTES.vm_address_problem(ip), _remove_cluster_vm)
+K3SC.bind(kget, lambda ip: VM_ROUTES.vm_address_problem(ip))
 
 
 MOVE_ENGINE.after_finish = cleanup_restores
