@@ -3620,6 +3620,9 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .ui-insight-row:last-child{border-bottom:0}.ui-insight-row>.ui-status-dot{margin:6px 0 0}.ui-insight-row>div:first-of-type{flex:1;min-width:0}
 .ui-insight-row b,.ui-insight-row small{display:block;overflow-wrap:anywhere}.ui-insight-row small{color:var(--mut);font-size:12px;margin-top:4px}
 .ui-insight-action{display:flex;align-items:flex-end;flex-direction:column;gap:6px}.ui-insight-action .btn{padding:5px 9px;font-size:12px}
+#pwaAlertsDialog .ui-insight-action{flex-direction:row;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+#pwaAlertsDialog .ui-insight-row{padding:9px 0}#pwaAlertsDialog .ui-insight-row small{margin-top:2px}
+#pwaAlertsDialog .alerts-group{margin-top:10px}
 .insight-summary{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;font-weight:600;margin:10px 0}.insight-summary span{color:var(--mut);font-weight:400}
 .insight-widget{height:100%;min-width:0}.insight-widget .settings-card-head .btn{font-size:12px;padding:5px 8px}
 #clusterHealth{margin-bottom:var(--page-gap,14px)}

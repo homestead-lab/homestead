@@ -8,7 +8,7 @@ try{for(const width of [1440,390,320])for(const theme of ["dark","light"]){
  await page.goto(`${base}/?demo=1&demo-scenario=incidents`);await page.waitForSelector(".dashboard-widget");
  await page.evaluate(async theme=>{SET.theme=theme;applySettings();await pwaAlertsDialog();},theme);
  await page.waitForSelector("#pwaAlertsDialog .ui-insight-row");assert.equal(await page.locator('#pwaAlertsDialog .ui-insight-row').count(),3);
- await page.getByRole('button',{name:'Acknowledge',exact:true}).first().click();await page.waitForFunction(()=>document.querySelector('#pwaAlertsDialog details')?.textContent.includes('24 reallocated'));
+ await page.locator('#pwaAlertsDialog .ui-insight-row',{hasText:'24 reallocated'}).getByRole('button',{name:'Acknowledge',exact:true}).click();await page.waitForFunction(()=>document.querySelector('#pwaAlertsDialog details')?.textContent.includes('24 reallocated'));
  assert.equal(await page.locator('#pwaAlertsDialog > .ui-insight-list .ui-insight-row').count(),2);
  await page.locator('#pwaAlertsDialog summary').click();await page.waitForTimeout(180);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);

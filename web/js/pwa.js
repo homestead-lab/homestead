@@ -225,14 +225,22 @@ function pwaCard() {
   `, {tab:`device`, id:`pwaCard`})}`;
 }
 const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0,unread:"",health:null};
+/* Grouped by severity, critical first, and newest first within each group;
+   the group's heading names the severity, so a row is its title, its detail
+   and its two buttons on one line beside them. */
+const ALERT_LEVELS=[["critical","Critical","bad"],["degraded","Warnings","warn"],["info","Information","info"]];
+const alertLevel=a=>ALERT_LEVELS.some(([level])=>level===a.severity)?a.severity:"degraded";
 function pwaAlertsHtml(report) {
   const active=report?.active || [], pending=active.filter(a=>!a.acknowledged), acknowledged=active.filter(a=>a.acknowledged);
-  const rows=items=>UI.insightList(items.map(a=>({title:a.title,detail:a.body,
-    tone:a.acknowledged?"info":a.severity==="critical"?"bad":a.severity==="info"?"info":"warn",label:a.acknowledged?"Acknowledged":a.severity==="critical"?"Critical":a.severity==="info"?"Information":"Warning",
+  const newest=items=>[...items].sort((a,b)=>(Number(b.since)||0)-(Number(a.since)||0));
+  const rows=items=>UI.insightList(newest(items).map(a=>({title:a.title,detail:a.body,
+    tone:a.acknowledged?"info":(ALERT_LEVELS.find(([level])=>level===alertLevel(a))||[])[2],label:"",
     actionsHtml:UI.button("Review",`closeModal();openOperation(${jsArg(a.href || '/')})`)+UI.button(a.acknowledged?"Undo":"Acknowledge",`pwaAcknowledge(${jsArg(a.key)},${jsArg(a.version)},${!!a.acknowledged})`)
   })));
-  return UI.lead("Acknowledging silences this condition on every device until it gets worse. Health checks stay visible.")+
-    (pending.length?rows(pending):'<div class="empty small">No unacknowledged conditions.</div>')+
+  const groups=items=>ALERT_LEVELS.map(([level,name])=>{const these=items.filter(a=>alertLevel(a)===level);
+    return these.length?`<div class="sec alerts-group">${name} · ${these.length}</div>${rows(these)}`:"";}).join("");
+  return UI.lead("Critical first, then warnings and information, newest first in each. Acknowledging silences a condition on every device until it gets worse.")+
+    (pending.length?groups(pending):'<div class="empty small">No unacknowledged conditions.</div>')+
     (acknowledged.length?UI.more(`Acknowledged · ${acknowledged.length}`,rows(acknowledged)):"");
 }
 /* The sidebar pill's verdict (#940): the last one an alerts read carried,

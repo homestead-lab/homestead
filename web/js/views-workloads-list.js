@@ -407,7 +407,30 @@ function capacityHostTable(plan) {
   return UI.table([{ label: "Host" }, { label: "Memory after it starts", className: "grow" }], [
     ...hosts.filter(host => host.eligible).map(host => [`<span class="mono">${esc(host.name)}</span> ${tag(host)}`, memory(host)]),
     ...hosts.filter(host => !host.eligible).map(host => [`<span class="mono">${esc(host.name)}</span>`,
-      `<span class="ui-help">Cannot run here: ${esc((host.reasons || []).join(" · ") || "not suitable")}</span>`])]);
+      `<span class="ui-help">Cannot run here: ${esc(hostReasonWords(host, plan))}</span>`])]);
+}
+
+/* Why a host is out, in words: the scheduler's "memory request exceeds
+   remaining scheduler capacity" says how much is left when that is known. */
+const HOST_MEMORY = /memory request exceeds remaining scheduler capacity/;
+function hostReasonWords(host, plan) {
+  const reasons = host.reasons || [];
+  const left = Number(host.allocatable_gb) - Number(host.reserved_gb);
+  return reasons.map(reason => !HOST_MEMORY.test(reason) ? reason
+    : Number.isFinite(left) && host.allocatable_gb != null && host.reserved_gb != null
+      ? `not enough memory: ${Math.max(0, Math.round(left * 10) / 10)} of ${host.allocatable_gb} GiB is left, and it reserves ${plan.pod_request_gb ?? "?"} GiB`
+      : "not enough memory left").join(" · ") || "not suitable";
+}
+window.hostReasonWords = hostReasonWords;
+
+/* The one reason a blocked start has when every host is out for lack of
+   memory: the scheduler's and the spread rules' lines then only repeat it. */
+const SCHEDULER_ECHO = [/^no ready host satisfies this workload's placement requirements$/, /^no scheduling order fits all requested replicas/];
+function noRoomLine(plan) {
+  const hosts = plan.candidates || [];
+  if (!hosts.length || hosts.some(host => host.eligible)) return "";
+  return hosts.every(host => (host.reasons || []).some(reason => HOST_MEMORY.test(reason)))
+    ? `No host has enough memory left for it. It reserves ${plan.pod_request_gb ?? "?"} GiB.` : "";
 }
 window.capacityHostTable = capacityHostTable;
 
@@ -418,11 +441,23 @@ window.reviewAck = reviewAck;
 /* What a start review asks to be accepted; it draws the tickbox only when there is something (#1317). */
 function startProblems(plan, warnings = []) {
   const { concerns } = capacityNotes(plan);
-  const topology = plan.topology_status === "blocked" ? "Its placement and spread rules do not allow all its copies to fit."
+  const noRoom = noRoomLine(plan);
+  // With every host out, the scheduler's and the spread rules' lines only repeat why.
+  const echo = w => noRoom && SCHEDULER_ECHO.some(re => re.test(w));
+  const topology = noRoom ? ""
+    : plan.topology_status === "blocked" ? "Its placement and spread rules do not allow all its copies to fit."
     : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its placement and spread rules have not been checked." : "";
-  return [...new Set([...(plan.blockers || []), ...concerns,
-    ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
+  const unbounded = (plan.unbounded || []).filter(name => name !== VM_LAUNCHER);
+  return [...new Set([...(noRoom ? [noRoom] : []), ...(plan.blockers || []), ...concerns.filter(w => !echo(w)),
+    ...(unbounded.length ? [`${unbounded.join(", ")} ${unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
     ...(topology ? [topology] : []), ...warnings])];
+}
+/* The VM launcher's own estimate (homestead_vm_resources) is never limited:
+   Details says so ("VM launcher memory is not explicitly limited"). */
+const VM_LAUNCHER = "vm-launcher-estimate";
+/* What only explains the estimate: under Details, never a problem to accept. */
+function startCaveats(plan) {
+  return capacityNotes(plan).caveats;
 }
 window.startReviewAsks = (plan, warnings = []) => startProblems(plan, warnings).length > 0;
 /* The review before a container or VM starts, is created or saved
@@ -432,7 +467,7 @@ window.startReviewAsks = (plan, warnings = []) => startProblems(plan, warnings).
    caller's buttons. actions is UI.dialog's (a blocked review offers only
    the way out); more is HTML shown after the objects (a fresh-state check). */
 function startReview(plan, { what = "Starts", name, kind = "", where: place = "", extra = "", ackId, onAck = "", details = "", objects = "", more = "", warnings = [], actions = { dismiss: false } }) {
-  const { concerns, caveats } = capacityNotes(plan);
+  const caveats = startCaveats(plan);
   const placement = plan.placement || {}, hosts = plan.candidates || [];
   const ok = hosts.filter(host => host.eligible);
   const fixed = placement.resident || placement.pinned || plan.vm?.resident_node;
@@ -447,10 +482,10 @@ function startReview(plan, { what = "Starts", name, kind = "", where: place = ""
     .concat(ok.filter(host => !host.reservations_known).map(host => `<li>${esc(host.name)}: reservations unavailable</li>`));
   return UI.dialog({ shape: "review",
     subject: { kind: kind || (plan.vm ? "VM" : "App"), name, where: place },
-    lead: plan.blocked ? `It cannot ${verb} until the problems below are resolved.` : `${what} it${where}.${extra}`,
+    lead: plan.blocked ? `It cannot ${verb} ${problems.length > 1 ? "until the problems below are resolved" : "until the problem below is resolved"}.` : `${what} it${where}.${extra}`,
     issues: plan.blocked ? (problems.length ? problems : ["No host that may run it has room for it."]).map(p => ["bad", p]) : problems.map(p => ["warn", p]),
     issuesTitle: plan.blocked ? `Cannot ${verb}` : "",
-    body: `${objects}${more}${hosts.length ? UI.section("Hosts with room", capacityHostTable(plan)) : ""}`,
+    body: `${objects}${more}${hosts.length ? UI.section(ok.length ? "Hosts with room" : "Hosts", capacityHostTable(plan)) : ""}`,
     details: `${UI.facts([
         [plan.vm ? "VM reserves" : `Each copy reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB memory${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
         ["Memory estimate", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB${plan.vm ? " with its launcher" : " per copy"}` : "Unknown"],
@@ -497,5 +532,5 @@ window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  renderWorkloads, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadExpanded, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, reviewAck, startProblems, startReview
+  renderWorkloads, imageLabel, imageShortLabel, imageTitle, imageShort, imagePullRef, imagePullNote, platformTag, workloadActions, startsWords, startsSpan, startWaitText, startsAfterNames, startWaitsLine, startsAfterFact, startWaitChip, workloadStateTags, workloadCard, workloadTable, uncheckedMark, workloadExpanded, workloadRowKey, workloadTableRows, accessPorts, capacityPlacementHtml, capacityHosts, capacityHostTable, HOST_MEMORY, hostReasonWords, SCHEDULER_ECHO, noRoomLine, reviewAck, startProblems, VM_LAUNCHER, startCaveats, startReview
 };

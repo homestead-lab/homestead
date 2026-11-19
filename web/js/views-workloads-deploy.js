@@ -360,6 +360,10 @@ const CAPACITY_ROUTINE = [
   /^RAM projection includes /, /^VM launcher memory is not explicitly limited$/,
   /^memory is not limited for vm-launcher-estimate$/, /^unrecognised\/injected helpers, admission defaults/,
   /^Image import\/provisioning may start before the guest/, /^If a later step fails, created images/,
+  // True of every VM with a LAN or a TPM, and how power requests work: worth
+  // knowing, never a reason the VM cannot start.
+  /^LAN network \S+ exists\. /, /^LAN network \S+ is defined\. /, /^The VM's state is kept on volume /,
+  /^Power requests address the VM by name\./,
 ];
 const CAPACITY_ROLLOUT_ROUTINE = [
   /^updated pod estimates include every container, not only the added container$/,
