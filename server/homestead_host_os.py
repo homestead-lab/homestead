@@ -57,6 +57,8 @@ echo "OS ${PRETTY_NAME:-${ID:-Linux}}"
 echo "OSID ${ID:-} ${VERSION_ID:-}"
 echo "KERNEL $(uname -r)"
 echo "ARCH $(uname -m)"
+# A kernel setting a validated-versions workaround needs (homestead_validated.fixed).
+echo "SYSCTL kernel.apparmor_restrict_unprivileged_unconfined=$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_unconfined 2>/dev/null)"
 echo "UP $(cut -d. -f1 /proc/uptime)"
 [ -f /var/run/reboot-required ] && echo "REBOOT $(tr '\n' ' ' < /var/run/reboot-required.pkgs 2>/dev/null | cut -c1-300)"
 if command -v apt-get >/dev/null 2>&1; then
@@ -154,7 +156,7 @@ def _unescape(value):
 def parse(out, now=None):
     """The script's lines, as facts."""
     facts = {"os": "", "id": "", "version": "", "kernel": "", "arch": "", "kernel_package_version": "",
-             "kernels": [], "held": [],
+             "kernels": [], "held": [], "sysctl": {},
              "uptime_s": None, "package_manager": "",
              "lists_at": None, "refreshed": False, "updates": [], "security": 0, "reboot": False, "reboot_for": "",
              "failed_units": [], "ntp": None, "root_total_gb": 0, "root_used_pct": 0, "upgrading": False,
@@ -178,6 +180,10 @@ def parse(out, now=None):
             facts["kernels"] = value.split()
         elif key == "HOLDS":
             facts["held"] = value.split()
+        elif key == "SYSCTL":
+            name, _, setting = value.partition("=")
+            if name and setting:
+                facts["sysctl"][name] = setting
         elif key == "UP" and value.isdigit():
             facts["uptime_s"] = int(value)
         elif key == "REBOOT":

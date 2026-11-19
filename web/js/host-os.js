@@ -26,8 +26,12 @@ function hostOsAge(at) {
 /* The running kernel on the validated-versions list (homestead_validated). */
 function hostOsKernelStatus(k) {
   if (!k) return "";
-  if (k.status === "validated") return UI.chip("validated", "ok");
   const names = { kubevirt: "KubeVirt", longhorn: "Longhorn", homestead: "Homestead" };
+  // Known to break something, until Homestead's own workaround, which is in place on this host.
+  if (k.status === "validated" && k.was === "bad") return UI.chip("validated with Homestead's fix", "ok", { tip:
+    `Without the fix this kernel breaks ${(k.affects || []).map(a => names[a] || a).join(", ") || "something"}: ${k.reason || ""}. `
+    + `Homestead applies the fix by itself from ${k.fixed_in}, and it is in place on this host.` });
+  if (k.status === "validated") return UI.chip("validated", "ok");
   if (k.status === "bad") return UI.chip(`breaks ${(k.affects || []).map(a => names[a] || a).join(", ") || "something"}`, "bad", { tip: k.reason || "" });
   if (k.status === "untested") return UI.chip("not yet validated", "neutral");
   if (k.status === "not-covered") return '<span class="dim xs">Kernels are not validated on this system</span>';
