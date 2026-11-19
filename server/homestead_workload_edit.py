@@ -752,9 +752,10 @@ def edit_workload(cfg, hold=False, prepared=None):
     # that fails part way leaves every value the app refers to in place.
     staged = ENVSEC.stage(ns, dep, L.kget, L.ksend, cfg.get("masked_env") or ())
     saved = L.ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    ENVSEC.prune(ns, dep, staged, L.ksend)
+    removed = ENVSEC.prune(ns, dep, staged, L.ksend)
     L._bust("wl", "ov", "flow", "impact:")
-    return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
+    return {"ok": True, "name": name, **({"secret_removed": removed} if removed else {}),
+            **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
 
 
 # homestead_lifecycle holds the bound state, so it is imported last.

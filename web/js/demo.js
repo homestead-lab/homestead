@@ -3373,7 +3373,13 @@ ssh_pwauth: true
       if (back) return new Response(JSON.stringify({ error: `a cycle: ${body.name} → ${back.app} → ${body.name}` }),
         { status: 400, headers: { "Content-Type": "application/json" } });
       const rename = body.workload_name && body.workload_name !== body.name;
-      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
+      // The values stored in the app's Secret that the save deletes: those the form showed and no longer sends, and
+      // a removed container's (window.__demoStoredValues: {container: [names]}). __demoSecretUnread: not readable.
+      const stored = (container, name) => ({ key: `${container}.${name}`, container, name, value_kept: false });
+      const secretRemoved = rename ? [] : window.__demoSecretUnread ? null : [
+        ...(body.containers || []).flatMap(c => (c.secret_env || []).filter(n => !(n in (c.env || {}))).map(n => stored(c.name, n))),
+        ...(body.remove_containers || []).flatMap(c => (window.__demoStoredValues?.[c] || []).map(n => stored(c, n)))];
+      return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", secret_removed: secretRemoved, capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
       candidates: [
         { name: "harvester-node2", eligible: true, reasons: [], used_gb: 8.4, capacity_gb: 15.6, projected_gb: 10.9, projected_percent: 70,

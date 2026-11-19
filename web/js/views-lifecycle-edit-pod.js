@@ -579,9 +579,16 @@ function readEditedContainer(panel) {
 function editContainerListChanged() {
   appFormPodContainers("e", $$("#e_basics_containers .edit-container").map(panel => $("#e_container_name_" + panel.dataset.index).value));
 }
+// A removed container's values stored in the app's Secret go with it.
+const containerStoredCount = entry => {
+  const panel = entry.panels.find(card => card.dataset.secretEnv);
+  return panel ? JSON.parse(panel.dataset.secretEnv).length : 0;
+};
 function containerRemovedPaint() {
   $("#e_removed_containers").innerHTML = [...EDIT_REMOVED_PANELS].map(([index, entry]) =>
-    `<div class="row"><span>Removed when saved: ${esc(entry.name)}. Volumes and data are kept.</span>
+    `<div class="row"><span>Removed when saved: ${esc(entry.name)}. ${containerStoredCount(entry)
+      ? `Volumes are kept. ${plural(containerStoredCount(entry), "value")} stored in the app's Secret ${containerStoredCount(entry) === 1 ? "is" : "are"} deleted.`
+      : "Volumes and data are kept."}</span>
       <button class="btn sm" type="button" onclick="containerRestore(${index})">Undo removal</button></div>`).join("");
 }
 window.containerRestore = index => {
@@ -667,7 +674,8 @@ window.editSave = async (ns, name) => {
   }
   await window.editReview(body);
 };
-function storageCopyReview(config, capacity) {
+function storageCopyReview(config, capacity, review = {}) {
+  const removed = editRemovedLine(review);
   const where = (claim, folder) => esc(folder ? `${claim}/${folder}` : claim);
   const rows = (config.containers || []).flatMap(c => (c.volumes || []).filter(v => v.copy_from).map(v => [
     `<b>${esc(c.name)}</b><br>${esc(v.path)}`, where(v.copy_from.claim, v.copy_from.sub_path),
@@ -675,15 +683,44 @@ function storageCopyReview(config, capacity) {
   ]));
   return UI.lead('The app stops while its storage changes. The progress is shown in <b>Recent jobs</b>.') +
     UI.callout(capacity.blocked ? "bad" : "warn", capacity.blocked ? "This move cannot start" : "Check the backup first",
-      'Files that already exist at the destination may be overwritten. Volumes are kept, but this is not a backup.') +
+      removed ? `<ul class="ui-list"><li>Files that already exist at the destination may be overwritten. Volumes are kept, but this is not a backup.</li><li>${esc(removed)}</li></ul>`
+        : 'Files that already exist at the destination may be overwritten. Volumes are kept, but this is not a backup.') +
     UI.section("Storage changes", UI.table([{label:"Container path"},{label:"From"},{label:"To"}],rows)) +
     UI.lead("Placement is checked again before copying and restarting. A step that fails, or whose result is unknown, stops so it can be checked. Nothing is retried or undone automatically.") +
     UI.more("Copy safety checks", "The copy helper checks the destination paths and estimates the free space before copying. Estimates that are not available are listed in its log, and an estimate does not guarantee that the data fits. A failed copy keeps both volumes, and the app stays stopped. Check Recent jobs before trying again.") +
     UI.more("Capacity and placement details", UI.section("After the move",deployCapacityHtml(capacity)) +
       UI.section("Temporary copy helper",deployCapacityHtml(capacity.copy_helper)), capacity.blocked) +
-    (!capacity.blocked ? UI.ack("editCapacityConfirm","Move its storage despite the outage and the warnings") : "") +
-    UI.actions(UI.button("Back to edit","modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
+    (!capacity.blocked ? editRemovedAck(review) + UI.ack("editCapacityConfirm","Move its storage despite the outage and the warnings") : "") +
+    UI.actions(UI.button("Back to edit","modalBack()", { attrs: 'data-dialog-dismiss="true"' }) + (editRemovedUnread(review) ? editGoButton(review)
+      : UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked})));
 }
+/* The values stored in the app's Secret that the save deletes (secret_removed
+   from the review: one entry per key the save removes, and per variable using
+   it). Only values not kept under another name are lost. null means the Secret
+   could not be read: the review cannot check, so it cannot be saved from. */
+const editRemovedLost = review => (review.secret_removed || []).filter(v => !v.value_kept);
+const editRemovedUnread = review => review.secret_removed === null;
+function editRemovedLine(review) {
+  if (editRemovedUnread(review)) return "Homestead could not read this app's Secret. Review again to see which stored values the save deletes.";
+  const lost = editRemovedLost(review);
+  if (!lost.length) return "";
+  const several = new Set(lost.map(v => v.container)).size > 1;
+  // A key no variable names (left by an earlier save) is named by the key itself.
+  const names = lost.map(v => several && v.container ? `${v.name} (${v.container})` : v.name);
+  const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? ` and ${names.length - 4} more` : "");
+  // The first sentence stays short whatever the names (a notice's short line); they follow it.
+  return `Saving deletes ${plural(lost.length, "value")} stored in this app's Secret. Homestead cannot restore ${lost.length === 1 ? "it" : "them"}: ${shown}.`;
+}
+const editRemovedCount = review => editRemovedLost(review).length;
+// Deleting them cannot be undone, so it has its own tick (checked by this page only).
+const editRemovedAck = review => editRemovedCount(review) ? UI.ack("editRemovedConfirm", `Delete ${plural(editRemovedCount(review), "stored value")}`) : "";
+// A removed container whose stored values go (or may go) is not "data are kept".
+const editContainersLoseValues = (review, removed) => editRemovedUnread(review) ? removed.length > 0
+  : editRemovedLost(review).some(v => removed.includes(v.container));
+// The send button, or, when the review could not read the Secret, one that runs the review again.
+const editGoButton = (review, label, blocked) => editRemovedUnread(review)
+  ? `<button id="editGo" class="btn pri" onclick="editReviewAgain()">Review changes again</button>`
+  : `<button id="editGo" class="btn pri" ${blocked ? "disabled" : ""} onclick="confirmEdit()">${label}</button>`;
 /* Review, then save an Edit (#909), on the shared review flow: it keeps the sequence, the busy flag and the
    one-shot send. This view keeps its words, the managed-rename tick, and what happens when a save is refused. */
 const EDIT_REVIEW = UI.reviewFlow({
@@ -694,23 +731,23 @@ const EDIT_REVIEW = UI.reviewFlow({
   },
   render: (review, config) => {
     const rename = review.capacity.rename;
-    const concerns = capacityNotes(review.capacity).concerns;
+    const concerns = [...capacityNotes(review.capacity).concerns, editRemovedLine(review)].filter(Boolean);
     const copying = !!review.capacity.copy_helper;
     if (copying) {
-      childModal("Move container data", UI.head({ kind: "App", name: config.name, where: config.namespace || config.ns || "" }) + gitopsNote(review.managed) + storageCopyReview(config,review.capacity), true, "operation-review");
+      childModal("Move container data", UI.head({ kind: "App", name: config.name, where: config.namespace || config.ns || "" }) + gitopsNote(review.managed) + storageCopyReview(config,review.capacity,review), true, "operation-review");
       return;
     }
     childModal(rename ? "Rename app" : "Review app changes", `${UI.head({ kind: "App", name: config.name, where: config.namespace || config.ns || "" })}
       ${gitopsNote(review.managed, { rename: !!rename, yaml: review.yaml })}
       ${!rename && config.starts_after ? `<p>${esc(startsAfterReviewLine(config.name, config.starts_after))}</p>` : ""}
       ${!rename && startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty) ? `<p>${esc(startsAfterManagedNote(EDIT_STARTS.form, EDIT_STARTS.dirty))}</p>` : ""}
-      ${!rename && review.capacity.container_changes ? `<p data-whole>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. The app restarts. Volumes and data are kept.</p>` : ""}
+      ${!rename && review.capacity.container_changes ? `<p data-whole>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. The app restarts. ${editContainersLoseValues(review, review.capacity.container_changes.removed) ? "Volumes are kept." : "Volumes and data are kept."}</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the app name changes. Save other changes separately. There is a short outage. Volumes and network addresses are kept.</p>` : ""}
       ${rename ? `${UI.callout(review.capacity.blocked ? "bad" : "", "", `${review.capacity.blocked ? "The placement check prevents the rename. See the details below." : "If a step fails, check both app names in Recent jobs. Homestead does not restart the old copy or remove the new one automatically."}`)}
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${plural((review.capacity.warnings || []).length, "warning")}</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "The changes cannot be saved" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${gitopsYamlBlock(review.yaml, review.secret)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename app" : "Save changes"}</button>`)}`, true, "operation-review");
+      ${!review.capacity.blocked ? `${editRemovedAck(review)}<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "Rename it despite the outage" : concerns.length ? "Restart it anyway" : "Restart it now"}</label>` : ""}
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button>${editGoButton(review, rename ? "Rename app" : "Save changes", review.capacity.blocked)}`)}`, true, "operation-review");
   },
   failed: (e, config) => {
     // A refusal about Starts after (a loop, say) is shown beside it too.
@@ -718,6 +755,7 @@ const EDIT_REVIEW = UI.reviewFlow({
     toast(e.message, "bad");
   },
   blocked: review => review.capacity.blocked, ack: "editCapacityConfirm",
+  check: review => !editRemovedUnread(review) && (!editRemovedCount(review) || !!$("#editRemovedConfirm")?.checked),
   apply: async review => {
     const body = { ...review.config, capacity_token: review.capacity_token, confirm_capacity: true };
     const { ns, name, workload_name: workloadName } = body;
@@ -753,6 +791,10 @@ const EDIT_REVIEW = UI.reviewFlow({
 window.editReview = async body => {
   if (EDIT_SAVE_UNCERTAIN) return toast("Reload the app before reviewing another save", "bad");
   return EDIT_REVIEW.open(JSON.parse(JSON.stringify(body)));
+};
+window.editReviewAgain = () => {
+  const review = EDIT_REVIEW.review;
+  if (review) return window.editReview(review.config);
 };
 window.confirmEdit = async () => {
   if (!EDIT_REVIEW.ready()) return toast("First review the changes and accept their warnings", "bad");
@@ -790,5 +832,7 @@ if (typeof module === "object" && module.exports) module.exports = {
   startsAfterRow, startsAfterPorts, startsAfterBlock, startsAfterValue, startsAfterRows, readStartsAfter,
   startsAfterProblem, startsAfterManagedNote, startsAfterStopped, startsAfterReviewLine, startsAfterRefusal,
   startsAfterNote, editPortSignature, editSecretUnreadNotice, editReviewButton, readEditedContainer,
-  editContainerListChanged, containerRemovedPaint, containerRemoveButtons, storageCopyReview, EDIT_REVIEW
+  editContainerListChanged, containerStoredCount, containerRemovedPaint, containerRemoveButtons, storageCopyReview,
+  editRemovedLost, editRemovedUnread, editRemovedLine, editRemovedCount, editRemovedAck, editContainersLoseValues,
+  editGoButton, EDIT_REVIEW
 };
