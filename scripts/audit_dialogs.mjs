@@ -144,7 +144,7 @@ const DIALOGS = [
   ["cluster-shutdown-review", "cluster", "window.__demoShutdown=null;window.__demoShutdownBlocked=false;clusterShutdown()"],
   ["cluster-shutdown-blocked", "cluster", "window.__demoShutdown=null;window.__demoShutdownBlocked=true;clusterShutdown()"],
   ["cluster-shutdown-progress", "cluster", "api('/api/cluster/shutdown',{method:'POST'}).then(r=>clusterShutdownProgress(r.state))"],
-  ["cluster-shutdown-disconnected", "cluster", "api('/api/cluster/shutdown',{method:'POST'}).then(r=>{clusterShutdownProgress(r.state);clearTimeout(shutdownTimer);shutdownPaint(r.state,true)})"],
+  ["cluster-shutdown-disconnected", "cluster", "api('/api/cluster/shutdown',{method:'POST'}).then(r=>{clusterShutdownProgress(r.state);shutdownStop();shutdownPaint(r.state,true)})"],
   ["bug-record", "settings", "bugStart()"],
   ["bug-comment", "settings", "bugDescribe('0123456789abcdef0123456789abcdef')"],
   ["bug-review", "settings", "bugReview('0123456789abcdef0123456789abcdef')"],

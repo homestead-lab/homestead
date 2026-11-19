@@ -460,22 +460,25 @@ window.osUpdatesReviewedApply = async () => {
 /* While an update runs, its progress, the hosts and the buttons follow it -
    without redrawing the settings someone may be editing. */
 let osUpdatesTimer = null;
+// A poll (#983), every 3 s from the dialog's own read. It reads on in a hidden tab (background: an update
+// run is followed as it happens); closing the dialog stops it (its body stays in the closed dialog, so the
+// check below alone never did).
 function osUpdatesFollow(run) {
-  clearTimeout(osUpdatesTimer);
+  osUpdatesTimer?.stop(); osUpdatesTimer = null;
   if (!run) return;
-  osUpdatesTimer = setTimeout(async () => {
-    if (!$("#osu_status")) return;                       // the dialog was closed
+  osUpdatesTimer = UI.poll(async signal => {
+    if (!$("#osu_status")) return false;                 // the dialog was replaced
     let r;
-    try { r = await api("/api/os-updates", { keep: true }); } catch (e) { return osUpdatesFollow(run); }
-    if (!$("#osu_status")) return;
+    try { r = await api("/api/os-updates", { keep: true, signal }); } catch (e) { return UI.pollCancelled(signal) ? false : undefined; }
+    if (UI.pollCancelled(signal) || !$("#osu_status")) return false;
     const now = osUpdatesRunning(r);
     $("#osu_status").innerHTML = osUpdatesStatusHtml(r);
     $("#osu_hosts").innerHTML = osUpdatesHostsHtml(r, true);
     if (window.applyRole) applyRole();
     if (!now !== !run || !now?.node?.waiting !== !run?.node?.waiting) { $("#osu_run").innerHTML = osUpdatesRunActions(now); if (window.applyRole) applyRole(); }
-    if (!now) { osUpdatesCardPaint(); return; }
-    osUpdatesFollow(now);
-  }, 3000);
+    if (!now) { osUpdatesCardPaint(); return false; }
+    run = now;
+  }, 3000, { later: true, background: true });
 }
 window.osUpdatesWindow = () => { $("#osu_window").hidden = !$("#osu_on").checked; };
 window.osUpdatesSave = async () => {

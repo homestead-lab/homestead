@@ -620,7 +620,7 @@ try {
       modal("Add a host", '<div id="guideWatch"></div>');
       ONBOARD.known = new Set();
       await guideWatch();
-      clearTimeout(ONBOARD.timer);
+      ONBOARD.timer?.stop();
       return document.querySelector("#guideWatch").innerText;
     });
     assert.match(watching, /The hosts could not be read[\s\S]*timed out/);

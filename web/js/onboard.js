@@ -76,20 +76,23 @@ window.clusterOnboarding = async () => {
   guideWatch();
 };
 
+/* A poll (#983), every 10 s: none in a hidden tab, and closing the dialog cancels its read. */
 async function guideWatch() {
-  clearTimeout(ONBOARD.timer);
-  const host = $("#guideWatch");
-  if (!host || $("#modal").classList.contains("hidden")) return;
-  let nodes = null, unread = "";
-  try { nodes = await api("/api/nodes", { keep: true }); } catch (e) { unread = e.message; }
-  if (!$("#guideWatch")) return;
-  const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
-  // Unread hosts are not "waiting for a new host"; it keeps trying (#620).
-  host.innerHTML = unread ? UI.callout("warn", "The hosts could not be read", `${esc(unread)} Homestead tries again every 10 seconds.`) : fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
-      <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
-      <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
-    : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here when Harvester registers it, about a minute after it restarts.</div>';
-  ONBOARD.timer = setTimeout(guideWatch, 10000);
+  ONBOARD.timer?.stop?.();
+  const watch = ONBOARD.timer = UI.poll(async signal => {
+    const host = $("#guideWatch");
+    if (!host || $("#modal").classList.contains("hidden")) return false;
+    let nodes = null, unread = "";
+    try { nodes = await api("/api/nodes", { keep: true, signal }); } catch (e) { if (UI.pollCancelled(signal)) return false; unread = e.message; }
+    if (UI.pollCancelled(signal) || !$("#guideWatch")) return false;
+    const fresh = (nodes || []).filter(n => !ONBOARD.known.has(n.name));
+    // Unread hosts are not "waiting for a new host"; it keeps trying (#620).
+    host.innerHTML = unread ? UI.callout("warn", "The hosts could not be read", `${esc(unread)} Homestead tries again every 10 seconds.`) : fresh.length ? fresh.map(n => `<div class="guide-joined ${n.status === "Ready" ? "ok" : ""}">
+        <b>${esc(n.name)}</b><span>${n.status === "Ready" ? "joined and Ready" : "registered - finishing setup"}</span>
+        <button class="btn sm" onclick="closeModal();go('nodes')">Hosts</button></div>`).join("")
+      : '<div class="dim xs"><span class="spin2"></span> Waiting for a new host. It appears here when Harvester registers it, about a minute after it restarts.</div>';
+  }, 10000);
+  await watch.first;
 }
 
 /* After a removal: what the cluster still holds of hosts that are gone, with
