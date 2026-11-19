@@ -358,7 +358,7 @@ def cancel_plan(item):
         return {"mode": "forget", "needs": "admin",
                 "keeps": [f"Homestead cannot tell how far the change got on {node}. Check its network first.",
                           f"Other changes on {node} can start again at once"]}
-    if item["ref"].get("stage") == "confirmed":
+    if item["ref"].get("stage") in NETWORK_JOB.DISARMED:
         # Its rollback is disarmed; the job alone was going to do what is left.
         return {"mode": "forget", "needs": "admin", "keeps": NETWORK_JOB.confirmed_keeps(node)}
     return {"mode": "forget", "needs": "admin",

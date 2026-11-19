@@ -14,6 +14,7 @@ This code can take a host off the network: a change here is a change to what
 it does, on purpose.
 
 On the shared Kubernetes fake (tests/fakes/kube.py) and a recording host."""
+import copy
 import sys
 import time
 import types
@@ -192,6 +193,9 @@ class Steps(unittest.TestCase):
             module.bind(self.host, K.kget, K.ksend)
         self.now = SINCE
         DEADLINE.kubelets(self, "node-b")
+        # The job store's checkpoint, which saves the job before the restart is sent.
+        self.checkpoints = []
+        self.enterContext(mock.patch.object(OPS, "checkpoint", lambda item: self.checkpoints.append(copy.deepcopy(item))))
 
     def each(self):
         for kind in KINDS:
@@ -200,7 +204,7 @@ class Steps(unittest.TestCase):
 
     def step(self, kind, ref, after):
         self.now = SINCE + after
-        return kind.module.status({"ref": ref}, now=self.now)
+        return kind.module.status({"id": "job-1", "ref": ref}, now=self.now)
 
 
 class AppliedStageTests(Steps):
@@ -502,7 +506,9 @@ class ConfirmedStageTests(Steps):
             self.step(kind, ref, 5)
             self.assertEqual(1, len(self.host.ran))
 
-    def test_a_restart_that_fails_otherwise_goes_to_the_job_store_and_is_asked_again(self):
+    def test_a_restart_that_fails_otherwise_goes_to_the_job_store_and_is_not_asked_again(self):
+        # Before, it was asked again. The command may have run before the
+        # error, so the request was saved as asked before it was sent.
         for kind in self.each():
             self.host.raises["systemctl restart"] = RuntimeError("the helper is gone")
             ref = kind.saved(stage="confirmed")
@@ -510,6 +516,21 @@ class ConfirmedStageTests(Steps):
                 self.step(kind, ref, 0)
             self.assertEqual(("confirmed", LEASE), (ref["stage"], ref["lease"]))
             self.assertEqual([], self.host.let_go_of)
+            self.assertEqual(SINCE, self.checkpoints[-1]["ref"]["restart_asked"], "saved before it was sent")
+            self.step(kind, ref, 5)
+            self.assertEqual(("restarting", True, 1), (ref["stage"], ref.get("restart_unsure"), len(self.host.ran)))
+
+    def test_a_restart_refused_before_the_command_started_is_asked_again(self):
+        for kind in self.each():
+            self.host.raises["systemctl restart"] = ValueError("the host helper on node-a did not start within 60 seconds")
+            ref = kind.saved(stage="confirmed")
+            with self.assertRaises(ValueError):
+                self.step(kind, ref, 0)
+            self.assertNotIn("restart_asked", self.checkpoints[-1]["ref"], "the mark is taken back in the job store")
+            del self.host.raises["systemctl restart"]
+            self.step(kind, ref, 5)
+            self.assertEqual(("restarting", 2), (ref["stage"], len(self.host.ran)))
+            self.assertNotIn("restart_unsure", ref)
 
 
 class RestartingStageTests(Steps):
