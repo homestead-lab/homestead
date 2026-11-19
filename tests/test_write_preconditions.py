@@ -57,7 +57,8 @@ WHAT_TO_DO = (
     "homestead_kube.update_json, which does. "
     "When a write is fixed, lower its file's count in COUNTS in tests/test_write_preconditions.py. "
     "When a new write truly needs no precondition (a PUT that is not to Kubernetes, such as an object-store "
-    "bucket create, or a create that cannot collide), raise that file's entry in COUNTS in "
+    "bucket create, or a create that cannot collide), or carries one this guard cannot see (the object was "
+    "read in another function), raise that file's entry in COUNTS in "
     "tests/test_write_preconditions.py by one, with a comment on the line saying why.")
 
 # file under server/ -> writes in it with no precondition seen, when the guard came in.
@@ -75,7 +76,7 @@ COUNTS = {
     "homestead_deploy.py": 1,
     "homestead_deploy_server.py": 1,
     "homestead_disks.py": 2,
-    "homestead_env_secrets.py": 1,
+    "homestead_env_secrets.py": 2,   # prune() PUTs the Secret stage() handed it, resourceVersion and all: not seen here
     "homestead_failover.py": 1,
     "homestead_files.py": 1,
     "homestead_firewall.py": 1,
