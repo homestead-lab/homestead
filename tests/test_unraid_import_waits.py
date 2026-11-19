@@ -548,6 +548,13 @@ class ImportWaitTests(unittest.TestCase):
         self.assertIn("The disks arrived, but the VM could not be created: Kubernetes refused it (HTTP 422).",
                       job["message"])
 
+    def test_an_ending_from_a_message_with_its_own_full_stop_has_one(self):
+        self.finished_disks()
+        self.imp.commit_vm = mock.Mock(side_effect=ValueError(
+            "A VM or something it needs already exists. Check it and review the creation again."))
+        job = self.look(3)
+        self.assertIn("review the creation again. They are kept as", job["message"])
+
     def walk(self, seconds, every=4 * 60):
         """Time passes with the jobs loop looking every few minutes."""
         while seconds > every:
@@ -633,34 +640,160 @@ class ImportWaitTests(unittest.TestCase):
         self.look()
         self.assertEqual(theirs, self.kube.object(self.SECRET)["metadata"]["uid"])
 
-    def test_a_vm_create_cut_off_once_the_vm_was_sent_keeps_everything_and_says_so(self):
+    VMS = VM.rsplit("/", 1)[0]
+
+    def vm_body(self, labels=None):
+        return {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                "metadata": {"name": "win11", "namespace": NS, **({"labels": labels} if labels else {})}}
+
+    def send_vm(self, prepared, send=None):
+        """commit_vm's VM POST as prepare_vm makes it: its labels are the ones the import gave."""
+        send("POST", self.VMS, self.vm_body(prepared.get("labels")))
+
+    def assert_imported(self, job):
+        self.imp.commit_vm.assert_not_called()
+        self.assertIn("win11 is ready, stopped: start it in Virtual machines.", job["message"])
+        self.assertNotEqual("failed", job["status"], job["message"])
+        self.assertTrue(self.kube.object(self.VM))
+
+    def test_the_vm_create_carries_this_imports_job_id(self):
         self.finished_disks()
-        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
-        self.cut_off_after(self.secret_body(), (self.VM.rsplit("/", 1)[0], vm))
+        self.imp.commit_vm = self.send_vm
+        self.look()
+        labels = self.kube.object(self.VM)["metadata"]["labels"]
+        self.assertEqual(self.ident, labels[UVMS.IMPORT_JOB_LABEL])
+        self.assertEqual("nas", labels[UVMS.NAMES.key("imported-from")], "the source label is kept")
+        self.assertNotIn(UVMS.IMPORT_JOB_LABEL, self.ref()["vm_cfg"]["labels"], "stamped on a copy, at the create")
+
+    def test_a_vm_whose_create_reply_was_lost_is_this_imports_and_the_import_finishes(self):
+        # The VM POST landed and its answer was lost (a 5xx, a timeout, the API server restarting).
+        self.finished_disks()
+        self.kube.fail(self.VMS, 500, method="POST", applied=True)
+        self.imp.commit_vm = self.send_vm
+        self.assertEqual("running", self.look()["status"], "no answer is no refusal: asked again")
+        self.imp.commit_vm = mock.Mock()
+        self.assert_imported(self.look(3))
+
+    def test_a_restart_during_the_vm_create_finds_the_vm_it_made(self):
+        # The "VM sent" mark is saved before the POST, so a restart mid-POST does not lose it.
+        self.finished_disks()
+
+        def landed_then_restart(method, path, body):
+            if self.kube.object(self.VM):
+                return None
+            self.kube.add(body)
+            raise Restart()
+        self.kube.react("POST", self.VMS, landed_then_restart)
+        self.imp.commit_vm = self.send_vm
+        with self.assertRaises(Restart):
+            self.look()
+        self.assertEqual("intent", self.ref()["vm_writes"][0]["phase"], "saved before the POST")
+        self.imp.commit_vm = mock.Mock()
+        self.assert_imported(self.look(3))
+
+    def test_a_vm_create_that_made_nothing_is_sent_again(self):
+        self.finished_disks()
+        self.kube.fail(self.VMS, 500, method="POST")      # refused with no VM made, but not definitely
+        self.imp.commit_vm = self.send_vm
+        self.assertEqual("running", self.look()["status"])
+        self.assertIsNone(self.kube.object(self.VM))
+        self.imp.commit_vm = mock.Mock()
+        job = self.look()
+        self.imp.commit_vm.assert_called_once()
+        self.assertNotEqual("failed", job["status"], job["message"])
+
+    def test_a_first_create_that_lands_late_is_found_and_not_failed_on(self):
+        # Nothing was there when the next round read, so it sends again; the first
+        # POST lands in between and the new create's own check says it exists.
+        self.finished_disks()
+        self.kube.fail(self.VMS, 500, method="POST")
+        self.imp.commit_vm = self.send_vm
+        self.look()
+
+        def landed_late(cfg, platform, source):
+            self.kube.add(self.vm_body(cfg["labels"]))
+            raise ValueError("a VM named win11 already exists in lab")
+        self.imp.prepare_vm = landed_late
+        self.imp.commit_vm = mock.Mock()
+        self.assert_imported(self.look(3))
+
+    def refused_as_somebody_elses(self, labels):
+        """A VM create with no answer that made nothing, then a VM of the same name made by someone else."""
+        self.finished_disks()
+        self.kube.fail(self.VMS, 500, method="POST")
+        self.imp.commit_vm = self.send_vm
+        self.look()
+        self.kube.add(self.vm_body(labels))
+        theirs = self.kube.object(self.VM)["metadata"]["uid"]
+        self.kube.writes.clear()
         self.imp.commit_vm = mock.Mock()
         job = self.look(3)
         self.imp.commit_vm.assert_not_called()
-        self.assertNotEqual("done", self.ref()["phase"], "the import ends without claiming a VM")
+        self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
         self.assertTrue(job["message"].startswith(
-            "The VM create was cut off after Kubernetes accepted win11. win11 may exist, so it is kept with everything "
-            "created for it. Check it under Virtual machines. The disks are kept as win11-disk, win11-disk-2."),
-            job["message"])
-        self.assertNotIn("could not be created", job["message"])
-        self.assertTrue(self.kube.object(self.SECRET))
-        self.assertTrue(self.kube.object(self.VM))
-        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are kept")
+            "A VM named win11 already exists, and nothing on it shows that this import created it. It is left as it "
+            "is. The disks are kept as win11-disk, win11-disk-2. Create the VM from them under Import with another "
+            "name."), job["message"])
+        self.assertEqual(theirs, self.kube.object(self.VM)["metadata"]["uid"], "never adopted, never replaced")
+        self.assertFalse([w for w in self.kube.writes if w[1] == self.VM], "nothing is sent to it")
+        self.assertNotEqual("done", self.ref()["phase"])
 
-    def test_a_vm_sent_with_no_answer_may_exist_and_is_kept(self):
+    def test_a_vm_of_that_name_without_this_imports_job_id_is_refused(self):
+        self.refused_as_somebody_elses({UVMS.NAMES.key("imported-from"): "nas"})
+
+    def test_a_vm_of_that_name_with_another_imports_job_id_is_refused(self):
+        self.refused_as_somebody_elses({UVMS.IMPORT_JOB_LABEL: "0123456789abcdef01234567"})
+
+    def test_a_vm_create_cut_off_once_kubernetes_accepted_the_vm_finishes_the_import(self):
+        # Its POST answered with the VM's uid: the VM that is there with that uid is this import's.
         self.finished_disks()
-        self.kube.fail(self.VM.rsplit("/", 1)[0], 500, method="POST", applied=True)
-        vm = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"name": "win11", "namespace": NS}}
-        self.imp.commit_vm = lambda prepared, send=None: send("POST", self.VM.rsplit("/", 1)[0], vm)
-        self.look()
+        self.cut_off_after(self.secret_body(), (self.VMS, self.vm_body()))
+        self.imp.commit_vm = mock.Mock()
+        self.assert_imported(self.look(3))
+        self.assertTrue(self.kube.object(self.SECRET), "what was made for the VM stays with it")
+        self.assertTrue(self.kube.object(self.path(DVS[0])), "the disks are the VM's")
+
+    def test_a_vm_accepted_then_replaced_by_one_of_the_same_name_is_refused(self):
+        self.finished_disks()
+        self.cut_off_after((self.VMS, self.vm_body()))
+        self.kube.discard(self.VM)
+        self.kube.add(self.vm_body())               # someone's own, by the same name, another uid
+        theirs = self.kube.object(self.VM)["metadata"]["uid"]
         self.imp.commit_vm = mock.Mock()
         job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertIn("A VM named win11 already exists, and nothing on it shows that this import created it.",
+                      job["message"])
+        self.assertEqual(theirs, self.kube.object(self.VM)["metadata"]["uid"])
+
+    def test_a_vm_whose_known_uid_does_not_match_is_refused_even_with_this_jobs_id(self):
+        # The POST answered with a uid: that alone decides. Another uid is another VM
+        # (removed and applied again, restored from a backup), whatever its labels say.
+        self.finished_disks()
+        self.cut_off_after((self.VMS, self.vm_body()))
+        self.kube.discard(self.VM)
+        self.kube.add(self.vm_body({UVMS.IMPORT_JOB_LABEL: self.ident}))
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
+        self.assertIn("A VM named win11 already exists, and nothing on it shows that this import created it.",
+                      job["message"])
+
+    def test_a_vm_accepted_then_removed_is_not_created_again(self):
+        self.finished_disks()
+        self.cut_off_after((self.VMS, self.vm_body()))
+        self.kube.discard(self.VM)
+        # The API in trouble again: any second read of the VM fails, once.
+        self.kube.fail(self.VM, 503, method="GET", skip=1)
+        self.imp.commit_vm = mock.Mock()
+        job = self.look(3)
+        self.imp.commit_vm.assert_not_called()
+        self.assertEqual("failed", self.ref().get("cleanup_outcome"), job["message"])
         self.assertTrue(job["message"].startswith(
-            "The VM create was cut off after win11 was sent with no answer. win11 may exist, so it is kept with "
-            "everything created for it."), job["message"])
+            "The VM win11 was created, then removed before the import finished, so it is not created again. The "
+            "disks are kept as win11-disk, win11-disk-2. Create the VM from them under Import."), job["message"])
+        self.assertIsNone(self.kube.object(self.VM))
 
     def test_a_pause_after_the_vm_was_accepted_does_not_say_no_vm_was_created(self):
         self.finished_disks()

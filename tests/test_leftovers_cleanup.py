@@ -804,7 +804,7 @@ class UnraidImportVmRefusedTests(unittest.TestCase):
         self.imp = imp
         ref = {"namespace": "lab", "phase": "convert", "name": "win", "vm": "Win", "source": "nas",
                "vm_cfg": {"name": "win"}, "disks": [{"dv": "win-disk", "bytes": 1}]}
-        return UVMS.status({"ref": ref}), ref
+        return UVMS.status({"id": "job-1", "ref": ref}), ref
 
     def test_a_refused_vm_fails_the_import_and_keeps_its_disks(self):
         (state, _, message), ref = self.status(Kube._error(422, "Invalid", "spec: invalid", VMS))
@@ -813,9 +813,35 @@ class UnraidImportVmRefusedTests(unittest.TestCase):
         self.assertIn("refused it (HTTP 422)", message)
         self.imp.commit_vm.assert_called_once()
 
-    def test_a_vm_with_no_definite_answer_is_asked_again_as_before(self):
+    def test_a_vm_with_no_definite_answer_is_asked_again_and_sent_again_only_once_none_is_there(self):
+        # The round is still asked again (the job keeps running), but the next
+        # round no longer sends the create blindly: it reads the VM first and
+        # sends again only when no VM of that name was made.
+        answers = [Kube._error(503, "Unavailable", "try later", VMS), {"metadata": {"uid": "u-1"}}]
+
+        def ksend(method, path, body=None, **_):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        def kget(path):
+            if "/virtualmachines/" in path:
+                raise Kube._error(404, "NotFound", "not found", path)
+            return {"status": {"phase": "Succeeded"}}
+        imp = mock.Mock()
+        imp.prepare_vm.side_effect = lambda cfg, platform, source: cfg
+        imp.commit_vm.side_effect = lambda prepared, send=None: send(
+            "POST", VMS, {"kind": "VirtualMachine", "metadata": {"name": "win"}})
+        UVMS.bind(imp, kget, ksend, mock.Mock(), lambda: {"harvester": False, "cdi": True})
+        item = {"id": "job-1", "ref": {"namespace": "lab", "phase": "convert", "name": "win", "vm": "Win",
+                                       "source": "nas", "vm_cfg": {"name": "win"},
+                                       "disks": [{"dv": "win-disk", "bytes": 1}]}}
         with self.assertRaises(urllib.error.HTTPError):
-            self.status(Kube._error(503, "Unavailable", "try later", VMS))
+            UVMS.status(item)
+        state, _, message = UVMS.status(item)
+        self.assertEqual(2, imp.commit_vm.call_count, "nothing was there, so it was sent again")
+        self.assertEqual("succeeded", state, message)
 
 
 if __name__ == "__main__":
