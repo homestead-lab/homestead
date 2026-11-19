@@ -205,6 +205,18 @@ class ReconcileTests(unittest.TestCase):
         patch = next(b for m, p, b in self.sent if m == "PATCH")
         self.assertEqual("homestead-nodeprobe", patch[1]["value"]["serviceAccountName"])
 
+    def test_settings_shows_the_one_command_while_the_account_is_missing(self):
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        self.addCleanup(probe.ACCOUNT.__setitem__, 0, None)
+        probe.reconcile("2.8.49")
+        status = probe.status()
+        self.assertIs(False, status["account"])
+        self.assertRegex(status["account_command"],
+                         r"^kubectl apply -f https://raw\.githubusercontent\.com/homestead-lab/homestead/v[0-9.]+(-dev\.\d+)?/deploy/rbac\.yaml$")
+        self.objects["/api/v1/namespaces/lab/serviceaccounts/homestead-nodeprobe"] = {"metadata": {"name": "homestead-nodeprobe"}}
+        probe.reconcile("2.8.49")
+        self.assertNotIn("account_command", probe.status(), "gone once it is there")
+
     def test_a_probe_already_current_is_left_alone(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10),
                                               "smart.py": "print(2)" + chr(10)})
