@@ -28,6 +28,8 @@ function hostOsKernelStatus(k) {
   if (!k) return "";
   const names = { kubevirt: "KubeVirt", longhorn: "Longhorn", homestead: "Homestead" };
   // Known to break something, until Homestead's own workaround, which is in place on this host.
+  if (k.status === "validated" && k.unaffected) return UI.chip("validated: no VMs here", "ok", { tip:
+    `This kernel breaks ${(k.affects || []).map(a => names[a] || a).join(", ") || "something"} (${k.reason || "see the validated-versions list"}), and this host runs no VMs.` });
   if (k.status === "validated" && k.was === "bad") return UI.chip("validated with Homestead's fix", "ok", { tip:
     `Without the fix this kernel breaks ${(k.affects || []).map(a => names[a] || a).join(", ") || "something"}: ${k.reason || ""}. `
     + `Homestead applies the fix by itself from ${k.fixed_in}, and it is in place on this host.` });

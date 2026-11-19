@@ -235,18 +235,37 @@ def fixed(entry, facts=None):
     return all(str(have.get(name)) == str(value) for name, value in wanted.items())
 
 
+# What a host must do for each feature a list entry can say it breaks: a
+# version that breaks only what a host does not use does not matter there
+# (issue #1348, section 5.3). A feature not listed here always counts as used.
+FEATURE_USED = {"kubevirt": "runs_vms"}
+
+
+def unused(entry, facts=None):
+    """Whether a bad entry breaks only features this host does not use: each
+    one it affects is known, and the host's facts say plainly that it does not
+    use it (runs_vms False, not merely unknown)."""
+    affects = set((entry or {}).get("affects") or [])
+    if (entry or {}).get("status") != "bad" or not affects or facts is None:
+        return False
+    return all(feature in FEATURE_USED and (facts or {}).get(FEATURE_USED[feature]) is False for feature in affects)
+
+
 def status(kind, key, version, package=None, facts=None):
     """A version's status and its entry: kind "host" (key: ubuntu-26.04-amd64,
     with package) or "platform" (key: k3s, longhorn...), or "images". Untested
     when the list does not name it, and for a host on a distribution outside
-    the validated tier. A bad version this release copes with (fixed) is
-    validated, with "fixed_in" saying since when."""
+    the validated tier. A bad version this release copes with (fixed), or
+    one that breaks only what this host does not use (unused, with its
+    facts), is validated, with "was" saying it is bad elsewhere."""
     document, _ = current()
     entries = (document.get(kind) or {}).get(key) or []
     for entry in entries:
         if entry.get("version") == version and (package is None or entry.get("package") == package):
             if fixed(entry, facts):
                 return {**entry, "status": "validated", "was": "bad"}
+            if unused(entry, facts):
+                return {**entry, "status": "validated", "was": "bad", "unaffected": True}
             return {"status": entry["status"], **entry}
     return {"status": "untested", "version": version, **({"package": package} if package else {})}
 

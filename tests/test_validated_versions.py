@@ -273,6 +273,22 @@ class FixedInTests(Store):
             with self.subTest(release), self.release(release):
                 self.assertEqual("bad", VALIDATED.kernel_status({**self.FACTS, "sysctl": self.APPLIED})["status"])
 
+    def test_on_a_host_that_runs_no_vms_a_kernel_that_breaks_only_vms_is_validated(self):
+        with self.release("2.8.334"):
+            found = VALIDATED.kernel_status({**self.FACTS, "runs_vms": False})
+            self.assertEqual(("validated", "bad", True), (found["status"], found["was"], found["unaffected"]))
+            self.assertIsNone(VALIDATED.kernel_alert("node-a", {**self.FACTS, "runs_vms": False}, "/nodes"))
+            for runs_vms in (True, None):
+                with self.subTest(runs_vms=runs_vms):
+                    self.assertEqual("bad", VALIDATED.kernel_status({**self.FACTS, "runs_vms": runs_vms})["status"],
+                                     "running VMs, or not known: still bad")
+
+    def test_a_version_that_breaks_something_else_too_still_matters(self):
+        entry = {"status": "bad", "affects": ["kubevirt", "longhorn"]}
+        self.assertFalse(VALIDATED.unused(entry, {"runs_vms": False}), "Longhorn is used on every host")
+        self.assertFalse(VALIDATED.unused({"status": "bad", "affects": []}, {"runs_vms": False}), "breaks something unnamed")
+        self.assertFalse(VALIDATED.unused({"status": "bad", "affects": ["kubevirt"]}), "no facts, no exception")
+
     def test_fixed_in_is_a_release_on_a_bad_version_only(self):
         entry = {"package": "linux-image-x", "version": "1", "affects": []}
         for bad_entry, words in (({**entry, "status": "validated", "fixed_in": "2.8.335"}, "fixed_in"),

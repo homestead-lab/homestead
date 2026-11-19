@@ -71,7 +71,8 @@ def _validated(facts):
     entries = (document.get("host") or {}).get(VALIDATED.host_key(facts)) or []
     # A kernel the list marks bad that this release copes with counts as
     # validated: Homestead sets its workaround on the host by itself.
-    rows = [e for e in entries if (e.get("status") == "validated" or VALIDATED.fixed(e))
+    # So does one that breaks only what this host does not use (VMs, on a host that runs none).
+    rows = [e for e in entries if (e.get("status") == "validated" or VALIDATED.fixed(e) or VALIDATED.unused(e, facts))
             and str(e.get("package", "")).startswith("linux-image-")]
     return sorted(rows, key=lambda e: _version_key(e["version"]), reverse=True)
 

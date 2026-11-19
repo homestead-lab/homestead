@@ -177,6 +177,18 @@ class StateTests(unittest.TestCase):
         self.assertNotIn("hostos:node-1:reboot", {fact["key"] for fact in HOST_OS.alert_facts()})
         self.assertEqual(["node-1"], HOST_OS.tick(now=10 ** 10 + 120), "a restarted host is read again at once")
 
+    def test_the_read_says_whether_the_host_runs_vms(self):
+        node = {"metadata": {"name": "node-1", "labels": {}}, "status": {"nodeInfo": {"bootID": "boot-a"}}}
+        HOST_OS.bind(lambda path: node, Host(UBUNTU), lambda force=False: {"distribution": "k3s"}, self.data)
+        self.assertIs(False, HOST_OS.read("node-1")["runs_vms"])
+        node["metadata"]["labels"]["kubevirt.io/schedulable"] = "true"
+        self.assertIs(True, HOST_OS.read("node-1")["runs_vms"])
+
+        def unreadable(path):
+            raise TimeoutError("timed out")
+        HOST_OS.bind(unreadable, Host(UBUNTU), lambda force=False: {"distribution": "k3s"}, self.data)
+        self.assertIsNone(HOST_OS.read("node-1")["runs_vms"], "unread: counts as running VMs")
+
     def test_what_needs_someone_is_an_alert(self):
         self.bind(Host(UBUNTU))
         HOST_OS.read("node-1")
