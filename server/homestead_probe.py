@@ -173,9 +173,19 @@ def _note(result):
     return result
 
 
+ACCOUNT = [None]   # whether the probe's own account was there at the last reconcile, None unread
+
+
 def status():
-    """What the last reconcile did, so an automatic action is not invisible."""
-    return dict(LAST)
+    """What the last reconcile did, so an automatic action is not invisible;
+    and, while the probe's own account is missing on an installed probe, the
+    one command that adds it (deploy/rbac.yaml of this release)."""
+    result = dict(LAST, account=ACCOUNT[0])
+    if ACCOUNT[0] is False and LAST.get("state") not in ("absent", "unknown", "pending"):
+        import homestead_self as SELF
+        import homestead_version as RELEASE
+        result["account_command"] = f"kubectl apply -f {SELF.RBAC_URL.format(ref='v' + RELEASE.VERSION)}"
+    return result
 
 
 UNREAD = [""]    # why installed() last answered None, "" after an answer
@@ -310,7 +320,8 @@ def _template(name, version):
         image = str(row.get("image") or "")
         if not image.startswith(NAMES.IMAGE + ":") and image not in MANAGED_IMAGES:
             return "custom image kept, so its pod spec was not updated"
-    want = _with_account(manifest(version)[1]["spec"]["template"]["spec"], account_ready())
+    ACCOUNT[0] = account_ready()
+    want = _with_account(manifest(version)[1]["spec"]["template"]["spec"], ACCOUNT[0])
     for volume in want["volumes"]:
         if volume["name"] == "auth":
             volume["secret"]["secretName"] = NAMES.object_name("smart-key")

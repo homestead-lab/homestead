@@ -331,7 +331,8 @@ async function viewSettings() {
           <div><span>Cluster VIP</span><b class="mono">${esc(clusterVipText(overview, info, hostsUnread))}</b></div>
           <div><span>Hosts ready</span><b>${hostsUnread ? `<span class="dim" title="${esc(hostsUnread)}">not read</span>` : `${overview.nodes_ready}/${overview.nodes_total}`}</b></div>
           <div><span>Node probe ${tip("Homestead updates the probe together with its own release, so no manual step is needed. It is installed and removed under Cluster → Add-ons, because its drive-health part needs extra permissions.")}</span>
-            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
+            <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small>
+            ${info.node_probe?.account_command && can("admin") ? `<div class="dim xs" style="margin-top:6px">One feature needs a one-time command: freeing Homestead's data volume when it is stuck after a restart. Run once, wherever you use kubectl:</div>${commandBlock(info.node_probe.account_command)}` : ""}</div>
           ${permissionsCell(info.permissions)}
         </div>
         <div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Open setup guide</button></div>
