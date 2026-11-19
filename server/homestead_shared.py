@@ -279,14 +279,21 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
         os.makedirs(folder, exist_ok=True)
     tmp = temporary(path)
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode if mode is not None else 0o666)
-    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
-        if mode is not None:
-            os.chmod(tmp, mode)
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-        inode = os.fstat(handle.fileno()).st_ino
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            if mode is not None:
+                os.chmod(tmp, mode)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+            inode = os.fstat(handle.fileno()).st_ino
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)               # a failed save must not leave a full copy of the store behind
+        except OSError:
+            pass
+        raise
     if durable and os.name == "posix":
         # fsync(file) alone does not make the replacement directory entry
         # durable across a host crash. Failure must prevent the next mutation.
