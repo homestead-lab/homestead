@@ -12,6 +12,7 @@ import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
 import server
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakes import confirmed_edit as CONFIRMED
 from fakes.kube import no_cluster
 
 
@@ -206,9 +207,9 @@ class EditRoundTripTests(unittest.TestCase):
                          (data["cloudflared.LOGIN"], data["cloudflared.DATABASE_URL"]))
 
     def test_removing_the_variable_in_the_form_removes_it(self):
-        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        CONFIRMED.save({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TZ": "UTC"},
-             "secret_env": ["TUNNEL_TOKEN"]}]})
+             "secret_env": ["TUNNEL_TOKEN"]}]}, ["cloudflared.TUNNEL_TOKEN"])
         env = self.saved()["spec"]["template"]["spec"]["containers"][0]["env"]
         self.assertEqual([{"name": "TZ", "value": "UTC"}], env)
         self.assertEqual({}, self.store.objects[SECRET]["data"])

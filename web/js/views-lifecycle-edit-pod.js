@@ -762,6 +762,9 @@ const EDIT_REVIEW = UI.reviewFlow({
     const renaming = workloadName && workloadName !== name;
     // Flux or Argo CD brings the old name back (#734): its own tick, checked before this, sent so the server knows.
     if (renaming && review.managed?.by) body.confirm_managed = true;
+    // The stored values it deletes: the review's own token for that list, only once ticked; the server checks it.
+    if (review.secret_removed_token && editRemovedCount(review) && $("#editRemovedConfirm")?.checked)
+      body.confirm_secret_removed = review.secret_removed_token;
     const button = $("#editGo");
     button.disabled = true;
     button.textContent = renaming ? "Renaming… follow Recent jobs" : "Saving changes…";
@@ -774,6 +777,13 @@ const EDIT_REVIEW = UI.reviewFlow({
         result.network || (renaming ? `${name} renamed to ${activeName}` : `${activeName} updated`), "ok");
       closeModal(); setTimeout(() => refresh(true), 1200);
     } catch (e) {
+      // Refused before anything was written: the stored values changed since the review. Its way out is a new review.
+      if (e.status === 409 && e.body?.refused === "secret_removed") {
+        toast(e.message, "bad");
+        Object.assign(button, { disabled: false, textContent: "Review changes again", onclick: () => window.editReview(review.config) });
+        $("#mbody").insertAdjacentHTML("beforeend", UI.callout("warn", e.message, "", { id: "editSaveNotice", attrs: 'role="alert"' }));
+        return;
+      }
       window.startOperationChecks?.();
       EDIT_SAVE_UNCERTAIN = true;
       toast(e.message, "bad");

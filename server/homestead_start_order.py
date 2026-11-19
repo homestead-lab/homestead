@@ -501,6 +501,9 @@ def save(body):
         return ROUTER.Reply(409, {"error": managed_message(name, owner), "git": git_lines(dep, setting)})
     cfg = {"ns": ns, "name": name, "starts_after": value}
     prepared = WORKLOAD_EDIT.prepare_edit(cfg, dep)
+    # It changes no variable, so it deletes no stored value: a key nothing
+    # uses stays for an Edit save, whose review lists it.
+    prepared["secret_removal"] = ()
     restarts = WORKLOAD_EDIT.restarts(dep, prepared["deployment"])
     if prepared["deployment"] != dep:
         WORKLOAD_EDIT.edit_workload(cfg, prepared=prepared)

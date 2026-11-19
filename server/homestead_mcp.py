@@ -170,13 +170,14 @@ def call_tool(name, args, key, addr):
     try:
         answer = tool.run(args, ctx)
     except TOOLS.NeedsApproval as needed:
-        request = REQUESTS.create(tool, args, {"action": f"{tool.title}: {needed.reason}", "settings": args},
+        shown = needed.summary if needed.summary is not None else {"settings": args}
+        request = REQUESTS.create(tool, args, {"action": f"{tool.title}: {needed.reason}", **shown},
                                   needed.role, key, needed.reason, addr, escalated=True)
         AUDIT.record(key, "mcp", name, args, "pending", detail=f"{request['id']}: {needed.reason}", addr=addr)
         AUDIT_LOG.note(held=request["id"])
         return {"status": "pending_approval", "request": request["id"], "action": request["action"],
-                "note": f"This needs the {needed.role} role, so a person must approve it in Homestead. "
-                        "Follow it with get_agent_request."}
+                "note": needed.note or f"This needs the {needed.role} role, so a person must approve it in Homestead. "
+                                       "Follow it with get_agent_request."}
     AUDIT.record(key, "mcp", name, args, "ok", addr=addr)
     return answer
 

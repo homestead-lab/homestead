@@ -202,8 +202,10 @@ def approve(rid, user, role):
     tool = TOOLS.BY_NAME.get(row["tool"])
     # In a form no account can have (a username cannot contain ':'). A key's
     # name may hold ':', written as the look-alike '\u2236' so the name ends at the next ':'.
+    # summary: what the person was shown, for a run that must still match it (edit_container's stored values).
     ctx = {"user": f"approving:{str(row['key'].get('name')).replace(':', chr(0x2236))}:{user}", "role": role, "fresh": True,
-           "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]}}
+           "auth": {"name": user, "kind": "session", "expires": None, "scopes": [s for s in ("read",)]},
+           "summary": row.get("summary") or {}}
     try:
         if tool is None:
             raise TOOLS.ToolError("this Homestead no longer has that tool")
@@ -220,8 +222,11 @@ def approve(rid, user, role):
                      addr=row.get("addr", ""), approved_by=user)
         return public(_end(rid, status="failed", detail=str(error)[:400]))
     clipped, _ = TOOLS.clip(result)
-    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", detail=f"approved by {FLEET.words(user)}",
-                 addr=row.get("addr", ""), approved_by=user)
+    # Which stored values an approved edit deleted: names only, as the save answers them.
+    deleted = result.get("secret_removed") if isinstance(result, dict) else None
+    AUDIT.record(row["key"], "mcp", row["tool"], row["args"], "approved", addr=row.get("addr", ""), approved_by=user,
+                 detail=f"approved by {FLEET.words(user)}" + (f"; deleted stored values: {', '.join(map(str, deleted))}"
+                                                              if deleted else ""))
     return public(_end(rid, status="done", result=clipped, detail=f"Approved by {FLEET.words(user)}"))
 
 

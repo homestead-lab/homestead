@@ -21,6 +21,7 @@ import homestead_workload_edit as WEDIT
 import server  # noqa: F401  (binds the modules the Edit form reads through)
 import homestead_workloads as WORKLOADS
 from fakes.kube import Kube
+from fakes import confirmed_edit as CONFIRMED
 
 DEP = "/apis/apps/v1/namespaces/lab/deployments/tunnel"
 SECRET = "/api/v1/namespaces/lab/secrets/tunnel-env"
@@ -172,7 +173,8 @@ class TheReviewListsExactlyWhatTheSaveDeletes(Fixture):
                     self.open(kube)
                     body = self.body(env, worker)
                     listed = sorted({entry["key"] for entry in self.review(copy.deepcopy(body))["secret_removed"]})
-                    answer = WEDIT.edit_workload(copy.deepcopy(body))
+                    # Every key the Secret holds confirmed: the save deletes what unused() says.
+                    answer = CONFIRMED.save(copy.deepcopy(body), secret["data"])
                     self.assertEqual(expected, listed)
                     self.assertEqual(listed, answer.get("secret_removed", []))
                     self.assertEqual(expected, sorted(set(secret["data"]) - set(kube.object(SECRET)["data"])))
@@ -180,7 +182,8 @@ class TheReviewListsExactlyWhatTheSaveDeletes(Fixture):
 
 class TheSaveAnswerListsWhatItDeleted(Fixture):
     def test_the_answer_lists_the_removed_keys(self):
-        answer = WEDIT.edit_workload(self.body({"TUNNEL_TOKEN": "first", "TZ": "UTC"}, worker=False))
+        answer = CONFIRMED.save(self.body({"TUNNEL_TOKEN": "first", "TZ": "UTC"}, worker=False),
+                                ["cloudflared.OLD_TOKEN", "worker.DB_PASSWORD"])
         self.assertEqual(["cloudflared.OLD_TOKEN", "worker.DB_PASSWORD"], answer["secret_removed"])
         self.assertEqual({"cloudflared.TUNNEL_TOKEN": b64("first")}, self.kube.object(SECRET)["data"])
 

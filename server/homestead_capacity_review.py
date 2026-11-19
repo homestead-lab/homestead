@@ -14,7 +14,10 @@ _key = None
 TTL = 600
 CONTROL_FIELDS = {"capacity_token", "confirm_capacity", "ack_state_initialization", "confirm_state_name",
                   # A rename of an app git applies (#734): an acknowledgement, given after the review.
-                  "confirm_managed"}
+                  "confirm_managed",
+                  # Deleting values stored in the app's Secret: the review's own token for that list
+                  # (homestead_workloads.secret_removal_token), sent after the person ticks it.
+                  "confirm_secret_removed"}
 
 
 def bind(key_provider):
