@@ -63,8 +63,29 @@ def _mount(name, path, read_only=True):
     return row
 
 
+def account_ready():
+    """Whether the probe's own account is there (deploy/deploy.yaml and
+    deploy/rbac.yaml ship it, with its Role). Homestead never creates it: an
+    install from before it gets it by applying rbac.yaml once. Until then the
+    probe keeps the namespace's default account, and the watchdog's second
+    case (probe/homestead_watchdog.py) cannot act."""
+    try:
+        kget(f"/api/v1/namespaces/{NS}/serviceaccounts/{NAME}")
+    except Exception:
+        return False        # unread or absent: the probe keeps the account it has
+    return True
+
+
+def _with_account(spec, ready):
+    """The pod spec with the probe's own account when it is there."""
+    if ready:
+        spec["serviceAccountName"] = NAME
+    return spec
+
+
 def manifest(version="dev", namespace=None, scripts=None):
-    """The ConfigMap and DaemonSet that together are the probe."""
+    """The ConfigMap and DaemonSet that together are the probe. Its own
+    account (account_ready) is added where it is known to exist."""
     namespace = namespace or NS
     node_name = {"name": "NODE_NAME",
                  "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}}}
@@ -215,6 +236,7 @@ def install(version="dev"):
         raise ValueError("this image carries no probe scripts")
     ensure_helper_key()
     configmap, daemonset = manifest(version)
+    _with_account(daemonset["spec"]["template"]["spec"], account_ready())
     # The helper receives its own key, separate from the account store.
     daemonset["spec"]["template"]["spec"]["volumes"][-1]["secret"]["secretName"] = NAMES.object_name("smart-key", NS, kind="secrets")
     for body, path in ((configmap, "/api/v1/namespaces/" + NS + "/configmaps"),
@@ -288,7 +310,7 @@ def _template(name, version):
         image = str(row.get("image") or "")
         if not image.startswith(NAMES.IMAGE + ":") and image not in MANAGED_IMAGES:
             return "custom image kept, so its pod spec was not updated"
-    want = manifest(version)[1]["spec"]["template"]["spec"]
+    want = _with_account(manifest(version)[1]["spec"]["template"]["spec"], account_ready())
     for volume in want["volumes"]:
         if volume["name"] == "auth":
             volume["secret"]["secretName"] = NAMES.object_name("smart-key")
@@ -408,6 +430,37 @@ def watchdog_alert_facts(temps, now=None):
                           "category": "degraded", "severity": "degraded", "title": title,
                           "resolved": f"The salvage of Homestead's data volume at {when} is over a week old",
                           "body": body, "href": "/volumes"})
+        facts += _reset_facts(host, ((reading or {}).get("watchdog") or {}).get("reset") or [], now)
+    return facts
+
+
+def _reset_facts(host, entries, now):
+    """An alert for each time the watchdog stopped and started Homestead to
+    free its data volume after a restart, in the last week."""
+    facts = []
+    for entry in entries:
+        try:
+            at = float(entry.get("at"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if not 0 <= now - at <= SALVAGE_SHOWN or entry.get("phase") != "done":
+            continue
+        node, result = entry.get("node") or host, str(entry.get("result") or "")
+        when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(at))
+        why = (f"After {node} restarted without a drain, Longhorn kept Homestead's data volume {entry.get('volume')} attached "
+               "without running it, so Homestead could not start.")
+        avoid = "Restart hosts with Restart host on the host's page, which drains it first, so that Longhorn lets go of its volumes."
+        if result == "accepted":
+            title = "Homestead was stopped and started again to free its data volume after a restart"
+            body = (f"{why} At {when} the node probe on {host} stopped Homestead, waited for the volume to detach, "
+                    f"and started Homestead again. {avoid}")
+        else:
+            title = "Homestead's data volume was stuck after a restart, and freeing it did not finish"
+            body = (f"{why} At {when} the node probe on {host} stopped Homestead to free the volume, and Homestead was "
+                    f"{result or 'started again without confirmation'}. It is not tried again until that host restarts. {avoid}")
+        facts.append({"signals": {"reset": 1}, "key": f"watchdog-reset:{entry.get('volume')}:{int(at)}",
+                      "category": "degraded", "severity": "degraded", "title": title,
+                      "resolved": f"Freeing Homestead's data volume at {when} is over a week old", "body": body, "href": "/volumes"})
     return facts
 
 

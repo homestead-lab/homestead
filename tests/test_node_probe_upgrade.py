@@ -110,6 +110,47 @@ class InstallTests(unittest.TestCase):
         self.assertEqual("absent", result["state"])
         deleted = [p for m, p, _ in self.sent if m == "DELETE"]
         self.assertIn("/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe", deleted)
+        self.assertFalse([p for p in deleted if "serviceaccounts" in p or "rbac" in p],
+                         "the probe's account and Role ship with Homestead, and stay")
+
+    def test_the_probe_gets_its_own_account_only_once_it_exists(self):
+        probe.install("2.8.51")
+        self.assertNotIn("serviceAccountName", self.sent[1][2]["spec"]["template"]["spec"],
+                         "a pod naming a missing account never starts")
+        self.sent.clear()
+        self.objects.clear()
+        self.objects["/api/v1/namespaces/lab/serviceaccounts/homestead-nodeprobe"] = {"metadata": {"name": "homestead-nodeprobe"}}
+        probe.install("2.8.51")
+        self.assertEqual("homestead-nodeprobe", self.sent[1][2]["spec"]["template"]["spec"]["serviceAccountName"])
+        self.assertEqual(["/api/v1/namespaces/lab/configmaps", "/apis/apps/v1/namespaces/lab/daemonsets"],
+                         [p for _, p, _ in self.sent], "Homestead creates no account, Role or binding")
+
+
+class ProbeAccountTests(unittest.TestCase):
+    """The probe's own account, Role and binding ship with Homestead
+    (deploy.yaml, rbac.yaml, the chart); Homestead never writes them."""
+
+    def docs(self, path):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        return [d for d in text.split("\n---\n") if "name: homestead-nodeprobe\n" in d and "kind: DaemonSet" not in d
+                and "kind: ConfigMap" not in d]
+
+    def test_deploy_and_rbac_ship_the_account_and_a_role_reaching_homesteads_deployment_and_pods(self):
+        for path in ("deploy/deploy.yaml", "deploy/rbac.yaml"):
+            with self.subTest(path):
+                docs = self.docs(path)
+                self.assertEqual(["ServiceAccount", "Role", "RoleBinding"],
+                                 [d.split("kind: ", 1)[1].split("\n", 1)[0] for d in docs])
+                role = docs[1]
+                self.assertIn("resources: [deployments]\n    resourceNames: [homestead]\n    verbs: [get, patch]", role)
+                self.assertIn("resources: [pods]\n    verbs: [get, list, delete]", role)
+                self.assertNotIn("kind: ClusterRole", role, "a Role, so nothing outside Homestead's namespace")
+
+    def test_homestead_may_only_read_the_probes_account(self):
+        import homestead_self as SELF
+        rules = [r for r in SELF.desired_rules() if "serviceaccounts" in (r.get("resources") or [])]
+        self.assertEqual([{"apiGroups": [""], "resources": ["serviceaccounts"], "resourceNames": ["homestead-nodeprobe"], "verbs": ["get"]}],
+                         rules)
 
 
 class ReconcileTests(unittest.TestCase):
@@ -154,6 +195,15 @@ class ReconcileTests(unittest.TestCase):
         self.assertEqual("print(1)" + chr(10), written["data"]["probe.py"])
         self.assertIn(("PATCH", "/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"),
                       [(m, p) for m, p, _ in self.sent])
+
+    def test_a_probe_from_before_its_account_gets_it_once_rbac_yaml_is_applied(self):
+        self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10), "smart.py": "print(2)" + chr(10)})
+        self.assertEqual("current", probe.reconcile("2.8.49")["state"], "no account yet: left as it is")
+        self.objects["/api/v1/namespaces/lab/serviceaccounts/homestead-nodeprobe"] = {"metadata": {"name": "homestead-nodeprobe"}}
+        result = probe.reconcile("2.8.49")
+        self.assertIn("pod spec updated", result["detail"])
+        patch = next(b for m, p, b in self.sent if m == "PATCH")
+        self.assertEqual("homestead-nodeprobe", patch[1]["value"]["serviceAccountName"])
 
     def test_a_probe_already_current_is_left_alone(self):
         self._install("homestead-nodeprobe", {"probe.py": "print(1)" + chr(10),

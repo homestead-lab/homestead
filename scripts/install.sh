@@ -1542,8 +1542,9 @@ check_homestead_data() {
   if [ "$robust" = faulted ]; then
     min=$(kc -n longhorn-system get settings.longhorn.io "$MINIMAL" -o jsonpath='{.value}')
     found homestead-data bad "Homestead cannot start: its data volume is faulted" "Its data volume $HS_DATA_PV ($claim) went down without a clean stop, so Longhorn marked its copies failed. Longhorn brings such a volume back by itself only from a copy on a disk that takes new copies, and a disk below Longhorn's minimal free space (${min:-25}%) takes none. The node probe's watchdog salvages it once per boot when that is the reason. The fix lowers the minimal free space to $(salvage_low "${min:-25}")% until the volume is back, and then sets it to ${min:-25}% again. Freeing space on that disk instead works too. It runs: $KC -n longhorn-system patch settings.longhorn.io $MINIMAL --type merge -p '{\"value\":\"$(salvage_low "${min:-25}")\"}', then waits up to 5 minutes for $HS_DATA_PV to be salvaged, then $KC -n longhorn-system patch settings.longhorn.io $MINIMAL --type merge -p '{\"value\":\"${min:-25}\"}'" fix_salvage_threshold no
-  elif [ "$robust" = unknown ] || [ "$state" = attaching ] || [ "$state" = detaching ]; then
-    found homestead-data bad "Homestead cannot start: its data volume is stuck after a restart" "Its data volume $HS_DATA_PV ($claim) is $state with its health $robust, so Homestead waits on its mount. After a restart without a drain Longhorn can keep its engine or a copy in this state until whatever uses the volume lets go. The fix stops Homestead, waits up to 3 minutes for the volume to detach, and starts Homestead again. It runs: $KC -n lab scale deployment/homestead --replicas=0, then waits for $HS_DATA_PV to detach, then $KC -n lab scale deployment/homestead --replicas=<the copies it had>" fix_reattach_homestead no
+  # A detached volume's health is always unknown: that is a stopped Homestead, not a stuck one.
+  elif { [ "$robust" = unknown ] && [ "$state" != detached ]; } || [ "$state" = attaching ] || [ "$state" = detaching ]; then
+    found homestead-data bad "Homestead cannot start: its data volume is stuck after a restart" "Its data volume $HS_DATA_PV ($claim) is $state with its health $robust, so Homestead waits on its mount. After a restart without a drain Longhorn can keep its engine or a copy in this state until whatever uses the volume lets go. The node probe's watchdog does this by itself once per boot when the volume's engine is not running. The fix stops Homestead, waits up to 3 minutes for the volume to detach, removing Homestead's pods outright after a minute if they are still there, and starts Homestead again. It runs: $KC -n lab scale deployment/homestead --replicas=0, then waits for $HS_DATA_PV to detach (after a minute, $KC -n lab delete pod <Homestead's pods> --force --grace-period=0), then $KC -n lab scale deployment/homestead --replicas=<the copies it had>" fix_reattach_homestead no
   fi
 }
 salvage_low() { if [ "${1:-25}" -gt 10 ] 2>/dev/null; then echo 10; else echo 5; fi; }
@@ -1568,6 +1569,13 @@ fix_reattach_homestead() {
   i=0
   while [ "$DRY" = 0 ] && [ $i -lt 36 ]; do
     [ "$(kc -n longhorn-system get volumes.longhorn.io "$HS_DATA_PV" -o jsonpath='{.status.state}')" = detached ] && break
+    # A pod from before the restart can stay Unknown and hold the volume (k3s,
+    # 18 November 2026): after a minute, Homestead's pods are removed outright.
+    if [ $i = 12 ]; then
+      left=$(kc -n lab get pods -l app=homestead -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}')
+      # shellcheck disable=SC2086
+      [ -z "$left" ] || run $KC -n lab delete pod $left --force --grace-period=0
+    fi
     i=$((i+1)); sleep 5
   done
   run $KC -n lab scale deployment/homestead --replicas="$copies"

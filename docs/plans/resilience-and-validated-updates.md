@@ -109,6 +109,17 @@ under DiskPressure too.
   disk *path* is below Longhorn's free space threshold").
 - **Limits:** at most once per boot of the host, and never while a self-data move
   or restore holds the volume.
+- **Second case (added 18 November 2026, k3s):** the volume is attached, but none
+  of its engines runs, because the instance manager that came back with the host
+  runs none and Longhorn never noticed. If no Homestead pod is Ready for five
+  minutes, the probe on that host scales Homestead to zero and waits for the
+  detach. Homestead's pods that are still there after a minute are removed
+  outright. It then scales Homestead back to the copies it had, within ten
+  minutes whatever happens. The limits are the same as the first case. It needs
+  the probe's own account and a Role in Homestead's namespace (get and patch on
+  Homestead's Deployment; get, list and delete on pods). These ship with
+  Homestead (deploy.yaml, rbac.yaml and the chart), and Homestead never writes
+  them: an install from before them gets them by applying rbac.yaml once.
 
 ### 3.4 Recovery by a person
 
@@ -321,6 +332,6 @@ Agreed on 2026-11-10.
 | 3 | Default for new installs | **Validated versions only** |
 | 4 | Harness | **CI with nested virtualisation only**. GPU passthrough and real disks are marked as not covered |
 | 5 | Signing the list | **Reuse the release signing key** |
-| 6 | Watchdog | **Allowed** to salvage Homestead's data volume without a person, within the limits in 3.3 |
+| 6 | Watchdog | **Allowed** to salvage Homestead's data volume without a person, within the limits in 3.3; since 18 November 2026 also to stop and start Homestead when that volume is stuck attached with no running engine (3.3), with the probe's own Role |
 | 7 | Single host | **`local-path` by default**, moved to Longhorn **automatically** once the cluster grows past one host (3.1) |
 | 8 | Security fixes | **24-hour turnaround accepted**, and clusters that do not use the affected feature may take a version that failed only for that feature |
