@@ -69,7 +69,10 @@ def _validated(facts):
     """The validated kernel entries for this host's distribution, newest first."""
     document, _ = VALIDATED.current()
     entries = (document.get("host") or {}).get(VALIDATED.host_key(facts)) or []
-    rows = [e for e in entries if e.get("status") == "validated" and str(e.get("package", "")).startswith("linux-image-")]
+    # A kernel the list marks bad that this release copes with counts as
+    # validated: Homestead sets its workaround on the host by itself.
+    rows = [e for e in entries if (e.get("status") == "validated" or VALIDATED.fixed(e))
+            and str(e.get("package", "")).startswith("linux-image-")]
     return sorted(rows, key=lambda e: _version_key(e["version"]), reverse=True)
 
 

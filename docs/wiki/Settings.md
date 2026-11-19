@@ -153,6 +153,15 @@ kernel's status, and a host running a kernel the list marks as broken raises an
 alert. Offline, Homestead uses the copy of the list built into its release, and
 a list older than 30 days is marked out of date.
 
+Some broken versions have a workaround that Homestead applies itself, and the
+list names the first release that does. From that release on, the version
+counts as validated on a host once the workaround is in place there. The host
+shows **validated with Homestead's fix**, and the version can be installed.
+Kernel 7.0.0-43 on Ubuntu 26.04 breaks KubeVirt VMs unless the AppArmor
+setting `kernel.apparmor_restrict_unprivileged_unconfined` is 0. Homestead sets
+it on hosts that run VMs from 2.8.335 on, so from that release 7.0.0-43 counts
+as validated there. An earlier release still treats it as broken.
+
 On Ubuntu 26.04 with host kernels on **Validated only**, once the list
 has validated a kernel for that release:
 

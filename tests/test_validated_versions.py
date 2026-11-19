@@ -135,8 +135,9 @@ class FetchTests(Store):
 
 class StatusTests(Store):
     def test_a_version_the_list_does_not_name_is_untested_never_validated(self):
-        self.assertEqual("bad", VALIDATED.status("host", "ubuntu-26.04-amd64", "7.0.0-43.43",
-                                                 "linux-image-7.0.0-43-generic")["status"])
+        with mock.patch.object(VALIDATED.RELEASE_VERSION, "VERSION", "2.8.334"):
+            self.assertEqual("bad", VALIDATED.status("host", "ubuntu-26.04-amd64", "7.0.0-43.43",
+                                                     "linux-image-7.0.0-43-generic")["status"])
         self.assertEqual("untested", VALIDATED.status("host", "ubuntu-26.04-amd64", "7.0.0-44.44",
                                                       "linux-image-7.0.0-44-generic")["status"])
         self.assertEqual("untested", VALIDATED.status("platform", "longhorn", "v1.13.0")["status"])
@@ -235,6 +236,50 @@ class KernelTests(Store):
         facts = HOST_OS.parse("OSID ubuntu 26.04\nKERNEL 7.0.0-43-generic\nARCH x86_64\nPKG apt\nKPKG 7.0.0-43.43\nEND\n")
         self.assertEqual(("x86_64", "7.0.0-43.43"), (facts["arch"], facts["kernel_package_version"]))
         self.assertIn("""dpkg-query -W -f='${Version}' "linux-image-$(uname -r)\"""", HOST_OS.SCRIPT)
+        facts = HOST_OS.parse("SYSCTL kernel.apparmor_restrict_unprivileged_unconfined=0\nSYSCTL kernel.other=\nEND\n")
+        self.assertEqual({"kernel.apparmor_restrict_unprivileged_unconfined": "0"}, facts["sysctl"], "an unread setting is left out")
+
+
+class FixedInTests(Store):
+    """A version the list marks bad, which a later Homestead copes with by
+    applying the workaround itself (7.0.0-43: the AppArmor setting, #1419)."""
+    FACTS = {"id": "ubuntu", "version": "26.04", "arch": "x86_64", "kernel": "7.0.0-43-generic",
+             "kernel_package_version": "7.0.0-43.43"}
+    APPLIED = {"kernel.apparmor_restrict_unprivileged_unconfined": "0"}
+
+    def release(self, version):
+        return mock.patch.object(VALIDATED.RELEASE_VERSION, "VERSION", version)
+
+    def test_releases_compare_with_dev_before_their_release(self):
+        order = ["2.8.334", "2.8.335-dev.13", "2.8.335-dev.14", "2.8.335-dev.15", "2.8.335", "2.8.336-dev.1"]
+        self.assertEqual(order, sorted(order, key=VALIDATED._release_key))
+        self.assertIsNone(VALIDATED._release_key("next"))
+
+    def test_from_its_release_on_a_host_with_the_fix_in_place_runs_a_validated_kernel(self):
+        with self.release("2.8.335-dev.15"):
+            found = VALIDATED.kernel_status({**self.FACTS, "sysctl": self.APPLIED})
+            self.assertEqual(("validated", "bad", "2.8.335-dev.14"), (found["status"], found["was"], found["fixed_in"]))
+            self.assertIsNone(VALIDATED.kernel_alert("node-a", {**self.FACTS, "sysctl": self.APPLIED}, "/nodes"))
+
+    def test_until_the_fix_is_in_place_the_host_still_runs_a_bad_kernel(self):
+        with self.release("2.8.335"):
+            for facts in (self.FACTS, {**self.FACTS, "sysctl": {"kernel.apparmor_restrict_unprivileged_unconfined": "1"}}):
+                with self.subTest(facts=facts.get("sysctl")):
+                    self.assertEqual("bad", VALIDATED.kernel_status(facts)["status"])
+                    self.assertIsNotNone(VALIDATED.kernel_alert("node-a", facts, "/nodes"))
+
+    def test_an_earlier_release_still_treats_it_as_bad(self):
+        for release in ("2.8.334", "2.8.335-dev.13"):
+            with self.subTest(release), self.release(release):
+                self.assertEqual("bad", VALIDATED.kernel_status({**self.FACTS, "sysctl": self.APPLIED})["status"])
+
+    def test_fixed_in_is_a_release_on_a_bad_version_only(self):
+        entry = {"package": "linux-image-x", "version": "1", "affects": []}
+        for bad_entry, words in (({**entry, "status": "validated", "fixed_in": "2.8.335"}, "fixed_in"),
+                                 ({**entry, "status": "bad", "fixed_in": "soon"}, "fixed_in")):
+            with self.subTest(bad_entry), self.assertRaisesRegex(ValueError, words):
+                VALIDATED.check(newer(host={"ubuntu-26.04-amd64": [bad_entry]}))
+        VALIDATED.check(newer(host={"ubuntu-26.04-amd64": [{**entry, "status": "bad", "fixed_in": "2.8.335-dev.14"}]}))
 
 
 class ScriptTests(unittest.TestCase):

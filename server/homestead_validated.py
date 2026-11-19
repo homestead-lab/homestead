@@ -39,6 +39,7 @@ import homestead_ed25519 as ED25519
 import homestead_fetch as FETCH
 import homestead_shared as SHARED
 import homestead_validated_bundled as BUNDLED
+import homestead_version as RELEASE_VERSION
 
 URL = "https://github.com/homestead-lab/homestead/releases/download/validated-versions/validated-versions.json"
 # The list's public key, hex (made 2026-11-18; its private half is the
@@ -107,6 +108,9 @@ def _entries(entries, where, required):
             raise ValueError(f"An entry for {where} has status {entry.get('status')!r}; it is one of {', '.join(STATUSES)}.")
         if not isinstance(entry.get("affects", []), list):
             raise ValueError(f"An entry for {where} lists what it affects as something other than a list.")
+        if "fixed_in" in entry and (entry.get("status") != "bad" or not RELEASE.fullmatch(str(entry["fixed_in"]))):
+            raise ValueError(f"An entry for {where} has fixed_in {entry['fixed_in']!r}: a release like 2.8.335, "
+                             "on a version known to break something.")
 
 
 def _when(stamp):
@@ -201,15 +205,48 @@ def summary(now=None):
             "error": state.get("error", ""), "first_tier": BUNDLED.FIRST_TIER}
 
 
-def status(kind, key, version, package=None):
+RELEASE = re.compile(r"\d+\.\d+\.\d+(?:-dev\.\d+)?")
+
+
+def _release_key(release):
+    """2.8.335-dev.14 < 2.8.335-dev.15 < 2.8.335 < 2.8.336-dev.1."""
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?", str(release or "").lstrip("v"))
+    if not match:
+        return None
+    major, minor, patch, dev = match.groups()
+    return (int(major), int(minor), int(patch), int(dev) if dev is not None else float("inf"))
+
+
+def fixed(entry, facts=None):
+    """Whether this release copes with a version the list marks bad: the
+    entry names fixed_in, the first release that applies its workaround by
+    itself, and this release is that one or later. With a host's facts, its
+    workaround must also be in place there (a kernel setting it reads), so a
+    host is not called fine before Homestead has set it."""
+    if (entry or {}).get("status") != "bad" or not entry.get("fixed_in"):
+        return False
+    since, here = _release_key(entry["fixed_in"]), _release_key(RELEASE_VERSION.VERSION)
+    if since is None or here is None or here < since:
+        return False
+    wanted = ((entry.get("workaround") or {}).get("sysctl") or {})
+    if facts is None or not wanted:
+        return True
+    have = (facts or {}).get("sysctl") or {}
+    return all(str(have.get(name)) == str(value) for name, value in wanted.items())
+
+
+def status(kind, key, version, package=None, facts=None):
     """A version's status and its entry: kind "host" (key: ubuntu-26.04-amd64,
     with package) or "platform" (key: k3s, longhorn...), or "images". Untested
     when the list does not name it, and for a host on a distribution outside
-    the validated tier."""
+    the validated tier. A bad version this release copes with (fixed) is
+    validated, with "fixed_in" saying since when."""
     document, _ = current()
     entries = (document.get(kind) or {}).get(key) or []
     for entry in entries:
         if entry.get("version") == version and (package is None or entry.get("package") == package):
+            if fixed(entry, facts):
+                return {**entry, "status": "validated", "was": "bad"}
             return {"status": entry["status"], **entry}
     return {"status": "untested", "version": version, **({"package": package} if package else {})}
 
@@ -312,7 +349,7 @@ def kernel_status(facts):
     package, version = f"linux-image-{kernel}", str((facts or {}).get("kernel_package_version") or "")
     if not version:
         return {"status": "unknown", "kernel": kernel, "key": key}
-    found = status("host", key, version, package)
+    found = status("host", key, version, package, facts=facts)
     return {**found, "kernel": kernel, "key": key, "mode": settings()["host"]}
 
 

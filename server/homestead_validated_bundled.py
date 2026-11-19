@@ -10,7 +10,7 @@ this copy is refreshed from the published one when a release is made.
 FIRST_TIER = ("ubuntu-26.04-amd64", "ubuntu-26.04-arm64")
 
 LIST = {
-    "generated": "2026-11-18T00:00:00Z",
+    "generated": "2026-11-19T00:00:00Z",
     "host": {
         "ubuntu-26.04-amd64": [
             {"package": "linux-image-7.0.0-43-generic", "version": "7.0.0-43.43", "status": "bad",
@@ -18,6 +18,10 @@ LIST = {
              "reason": "AppArmor stacks unprivileged profile changes, so QEMU in KubeVirt cannot signal its own threads "
                        "and every VM exits at start",
              "workaround": {"sysctl": {"kernel.apparmor_restrict_unprivileged_unconfined": "0"}},
+             # Homestead sets that itself on hosts that run VMs from this release on
+             # (homestead_apparmor_fix), proven by the harness on 7.0.0-43.
+             "fixed_in": "2.8.335-dev.14",
+             "fixed_evidence": "https://github.com/homestead-lab/homestead/actions/runs/44352614259",
              "evidence": "https://github.com/homestead-lab/homestead/issues/1348"},
         ],
     },
