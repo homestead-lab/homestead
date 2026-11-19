@@ -3510,7 +3510,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.335-dev.15"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.335-dev.15"}`, candidate: "ghcr.io/homestead-lab/homestead:2.10.0", candidate_tag: "2.10.0", remote_digest: "sha256:ghi", available: true }] },
       // Deployed by Flux from git: its update is a notice, made in git (#296).
       { ns: "monitoring", name: "loki", available: true, can_rollback: false,
         managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
@@ -4112,7 +4112,7 @@ ssh_pwauth: true
     if (cluster && key === "/api/image-updates") {
       const branchReport = { checked_at: new Date().toISOString(), updates: 0, errors: 0, workloads: [
         { ns: "lab", name: "homestead", available: true, can_rollback: true, images: [{ container: "homestead",
-          deployed: "ghcr.io/homestead-lab/homestead:2.8.200", candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", available: true }] },
+          deployed: "ghcr.io/homestead-lab/homestead:2.8.200", candidate: "ghcr.io/homestead-lab/homestead:2.10.0", candidate_tag: "2.10.0", available: true }] },
         { ns: "lab", name: "jellyfin", available: false, can_rollback: false, images: [] }] };
       return new Response(JSON.stringify(branchReport), { status: 200, headers: { "Content-Type": "application/json" } });
     }
