@@ -17,8 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 
-# Absolute paths the scripts build themselves, which a <base> does not reach.
-SCRIPT_PATHS = re.compile(r"""(["'`])/(assets|icons)/""")
+# Absolute paths the scripts build themselves, which a <base> does not reach. /vendor is also
+# written bare ("/vendor", what vendorBase() returns on the demo), so it may end at the quote.
+SCRIPT_PATHS = re.compile(r"""(["'`])/(assets/|icons/|vendor(?=/|\1))""")
 
 
 def build(base, out):
@@ -41,7 +42,7 @@ def build(base, out):
 
     for script in (out / "js").glob("*.js"):
         text = script.read_text(encoding="utf-8")
-        changed = SCRIPT_PATHS.sub(lambda m: f"{m.group(1)}{base}{m.group(2)}/", text)
+        changed = SCRIPT_PATHS.sub(lambda m: f"{m.group(1)}{base}{m.group(2)}", text)
         if changed != text:
             script.write_text(changed, encoding="utf-8")
     # Pages would otherwise run the site through Jekyll.
