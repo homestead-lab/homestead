@@ -793,10 +793,11 @@ def _volume_restore(item):
     if volume is None:
         return "running", 16, "Waiting for Longhorn to create the volume"
     status = volume.get("status", {}) or {}
-    for condition in status.get("conditions", []) or []:
-        if condition.get("type") == "Scheduled" and condition.get("status") == "False":
-            detail = condition.get("message") or condition.get("reason")
-            return "failed", 18, detail or "Longhorn cannot schedule the restored volume"
+    # Longhorn restores onto the copies it could place and adds the rest later:
+    # not every copy placed fails the job only when no copy was placed at all.
+    unplaced = next(((c.get("message") or c.get("reason") or "Longhorn cannot schedule the restored volume")
+                     for c in status.get("conditions", []) or []
+                     if c.get("type") == "Scheduled" and c.get("status") == "False"), "")
     robustness = str(status.get("robustness", "") or "").lower()
     if robustness == "faulted":
         return "failed", 20, "The restored Longhorn volume is faulted"
@@ -814,6 +815,15 @@ def _volume_restore(item):
     errors = [str(row.get("error")) for row in restore_rows if row.get("error")]
     if errors:
         return "failed", min([int(row.get("progress", 0) or 0) for row in restore_rows] or [20]), errors[0]
+    # Read once, and only when a decision below needs them; None: not read.
+    replicas = (_volume_replicas(volume_name)
+                if (unplaced and not restore_rows) or robustness == "degraded" else None)
+    # Longhorn sets restoreInitiated before it works out Scheduled, so only the
+    # copies tell "none placed" (fail now) from "some placed" (follow the
+    # restore). Unread, the job waits rather than fail on a guess.
+    if unplaced and not restore_rows and replicas is not None and not any(
+            (r.get("spec") or {}).get("nodeID") and not (r.get("spec") or {}).get("failedAt") for r in replicas):
+        return "failed", 18, unplaced
     restoring = any(bool(row.get("isRestoring")) for row in restore_rows)
     progresses = [int(row.get("progress", 0) or 0) for row in restore_rows]
     restore_progress = min(progresses) if progresses else 0
@@ -840,13 +850,45 @@ def _volume_restore(item):
         return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound. Longhorn completed the restore"
     if restored and phase == "Bound" and robustness == "healthy":
         return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound and healthy"
+    if completed and phase == "Bound" and robustness == "degraded":
+        # Finished is what Longhorn says: the missing copies are Longhorn's to add,
+        # and the volume shows as degraded until it has.
+        return "succeeded", 100, f"Restored PVC {namespace}/{name} is bound.{_copies_so_far(volume, replicas)}"
+    why = f". Longhorn has not placed all volume copies yet: {unplaced[:200]}" if unplaced else ""
     if restoring or restore_progress:
-        return "running", operation_progress, f"Restoring backup data · {restore_progress}%"
+        return "running", operation_progress, f"Restoring backup data · {restore_progress}%{why}"
     if restored:
-        return "running", 96, f"Data restored. Waiting for {robustness or 'healthy'} volume copies."
+        return "running", 96, f"Data restored. Waiting for {robustness or 'healthy'} volume copies{why or '.'}"
     if status.get("restoreInitiated"):
-        return "running", 20, "Longhorn initialized the backup restore"
-    return "running", 18, "Waiting for Longhorn restore engines"
+        return "running", 20, f"Longhorn initialized the backup restore{why}"
+    return "running", 18, f"Waiting for Longhorn restore engines{why}"
+
+
+def _volume_replicas(volume_name):
+    """Longhorn's replicas (copies) of a volume, or None when they cannot be read."""
+    selector = urllib.parse.quote(f"longhornvolume={volume_name}", safe="")
+    try:
+        return kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"
+                    f"?labelSelector={selector}").get("items", [])
+    except Exception:
+        return None
+
+
+def _copies_so_far(volume, replicas):
+    """What a restore that ended degraded says about its copies, from the same
+    read of the replicas the job decided on."""
+    rest = " Longhorn adds the rest when a host can take them."
+    wanted = int((volume.get("spec") or {}).get("numberOfReplicas") or 0)
+    if replicas is None or not wanted:
+        return " Not every volume copy is placed yet." + rest
+    healthy = sum(1 for r in replicas if (r.get("spec") or {}).get("healthyAt")
+                  and not (r.get("spec") or {}).get("failedAt")
+                  and (r.get("status") or {}).get("currentState") == "running")
+    if healthy >= wanted:
+        return ""   # Longhorn finished the last copy since the volume was read
+    if not healthy:
+        return " Not every volume copy is placed yet." + rest
+    return f" {healthy} of {wanted} volume copies {'is' if healthy == 1 else 'are'} ready so far." + rest
 
 
 def _image_cleanup(item):
