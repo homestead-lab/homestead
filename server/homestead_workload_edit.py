@@ -748,8 +748,11 @@ def edit_workload(cfg, hold=False, prepared=None):
         L.ksend("PUT", path, cm)
     _create_pending_pvcs(ns, prepared["claims"])
     held = RESTRUCTURE.hold(dep) if hold else None
-    ENVSEC.externalize(ns, dep, L.kget, L.ksend, cfg.get("masked_env") or ())
+    # New values first, then the app, then the values it no longer uses: a save
+    # that fails part way leaves every value the app refers to in place.
+    staged = ENVSEC.stage(ns, dep, L.kget, L.ksend, cfg.get("masked_env") or ())
     saved = L.ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
+    ENVSEC.prune(ns, dep, staged, L.ksend)
     L._bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
 
