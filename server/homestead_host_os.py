@@ -279,11 +279,16 @@ def read(node, refresh=False, now=None):
                          + (f": {err.strip()[-160:]}" if (err or "").strip() else
                             ". The host's kernel log (dmesg) says whether it ran out of memory"))
     facts["at"] = int(now or time.time())
-    # The boot this read saw: a later restart makes its "restart needed" old news.
+    # The boot this read saw: a later restart makes its "restart needed" old
+    # news. And whether it runs VMs (KubeVirt labels the hosts it schedules
+    # VMs on), for a version that breaks only VMs (homestead_validated.unused):
+    # unread, it is None, which counts as running them.
     try:
-        facts["boot_id"] = ((kget(f"/api/v1/nodes/{node}") or {}).get("status") or {}).get("nodeInfo", {}).get("bootID", "")
+        item = kget(f"/api/v1/nodes/{node}") or {}
+        facts["boot_id"] = ((item.get("status") or {}).get("nodeInfo") or {}).get("bootID", "")
+        facts["runs_vms"] = ((item.get("metadata") or {}).get("labels") or {}).get("kubevirt.io/schedulable") == "true"
     except Exception:
-        facts["boot_id"] = ""
+        facts["boot_id"], facts["runs_vms"] = "", None
     with _lock:
         state = _load()
         state[node] = facts

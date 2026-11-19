@@ -58,13 +58,15 @@ class Base(unittest.TestCase):
 
 class InstallTests(Base):
     def test_a_bad_kernel_this_release_copes_with_counts_as_validated(self):
-        fixed_43 = {"package": "linux-image-7.0.0-43-generic", "version": "7.0.0-43.43", "status": "bad",
+        fixed_43 = {"package": "linux-image-7.0.0-43-generic", "version": "7.0.0-43.43", "status": "bad", "affects": ["kubevirt"],
                     "fixed_in": "2.8.335-dev.14", "workaround": {"sysctl": {"kernel.apparmor_restrict_unprivileged_unconfined": "0"}}}
         self.listing(VALIDATED_38, fixed_43)
         with mock.patch.object(VALIDATED.RELEASE_VERSION, "VERSION", "2.8.335"):
             self.assertEqual("7.0.0-43-generic", KERNEL.fallback(FACTS))
         with mock.patch.object(VALIDATED.RELEASE_VERSION, "VERSION", "2.8.334"):
             self.assertEqual("7.0.0-38-generic", KERNEL.fallback(FACTS), "an earlier release falls back past it")
+            self.assertEqual("7.0.0-43-generic", KERNEL.fallback({**FACTS, "runs_vms": False}),
+                             "it breaks only VMs, and this host runs none")
 
     def test_an_update_installs_the_newest_validated_kernel_by_its_exact_version(self):
         self.listing(VALIDATED_38, VALIDATED_45)

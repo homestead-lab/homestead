@@ -162,6 +162,11 @@ setting `kernel.apparmor_restrict_unprivileged_unconfined` is 0. Homestead sets
 it on hosts that run VMs from 2.8.335 on, so from that release 7.0.0-43 counts
 as validated there. An earlier release still treats it as broken.
 
+A version that breaks only VMs counts as validated on a host that runs none.
+A host runs VMs when KubeVirt schedules VMs there. Such a host shows
+**validated: no VMs here**, raises no alert, and can install the version. A host
+whose VM status Homestead could not read counts as running VMs.
+
 On Ubuntu 26.04 with host kernels on **Validated only**, once the list
 has validated a kernel for that release:
 
