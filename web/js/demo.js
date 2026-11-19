@@ -865,7 +865,12 @@
       const report = demoPorts();
       const node = url.searchParams.get("node");
       return node ? report.hosts[node] || { node, available: false, ports: [], conditions: [], reason: "No node probe answers on this host." } : report;
-    }, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
+    }, "/api/node": url => {
+      const host = nodes.find(n => n.name === url.searchParams.get("name")) || {};
+      // A host an ended cluster upgrade left cordoned (scripts/audit_pages.mjs, node-page-cordoned-by-job).
+      const by = window.__demoCordonedByJob;
+      return by && by.node === host.name ? { ...host, schedulable: false, cordoned_by: by.holder } : host;
+    },
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
     // Homestead's own services, on node addresses until put on a virtual IP (views-network.js).
     "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [

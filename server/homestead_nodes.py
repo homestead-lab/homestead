@@ -12,6 +12,7 @@ import json
 import time
 import urllib.parse
 
+import homestead_cordon as CORDON
 import homestead_disks as DISKS
 import homestead_hardware as HW
 import homestead_kube_metrics as KUBE_METRICS
@@ -344,6 +345,29 @@ def harvester_maintenance(node):
                for c in ((node or {}).get("status") or {}).get("conditions") or [])
 
 
+def cordon_holder(node, jobs):
+    """Which Homestead job holds this host's cordon, from the marks the jobs
+    write (homestead_cordon.holders): {"job", "kind", "title", "running"}, a
+    running holder first; job "" when its job is no longer in the list, title
+    "" when the job has none (never its raw kind). None when the
+    host is not cordoned, carries no Homestead mark (a person's own cordon, or
+    another tool's), or the job list (jobs None) could not be read."""
+    if jobs is None or not (node.get("spec") or {}).get("unschedulable"):
+        return None
+    found = []
+    for holder in sorted(CORDON.holders(node)):
+        kind, _, ident = holder.partition(":")
+        # A cluster shutdown's mark holds its run id, as homestead_cordon._live
+        # reads it; a cordon left for a person names the job that left it.
+        item = next((j for j in jobs if (kind == CORDON.PERSON_KIND or j.get("kind") == kind) and (
+            str(j.get("id")) == ident or kind == "cluster-shutdown" and str((j.get("ref") or {}).get("run")) == ident)), None)
+        running = bool(item) and kind != CORDON.PERSON_KIND and item.get("status") not in OPS.TERMINAL
+        found.append({"job": str(item["id"]) if item else "", "kind": (item or {}).get("kind") or kind,
+                      "title": (item or {}).get("title") or "", "running": running})
+    running, known = [f for f in found if f["running"]], [f for f in found if f["job"]]
+    return (running or known or found or [None])[0]
+
+
 def get_nodes(pods=None, vols=None):
     """Every host for the Hosts page. pods (the pod list) and vols
     (get_volumes()): when the caller has read them already (the leader's
@@ -379,6 +403,12 @@ def get_nodes(pods=None, vols=None):
     # Each host's kubelet summary, as the background loop last read it: the
     # build never waits on a kubelet once that loop runs (#976).
     KSTATS.readings(kget, [n["metadata"]["name"] for n in nodes.get("items", [])], wait=False)
+    jobs = []
+    if any((n.get("spec") or {}).get("unschedulable") for n in nodes.get("items", [])):
+        try:
+            jobs = OPS.stored()     # one read for every host's cordon holder
+        except Exception:
+            jobs = None             # unread: each cordon shows as plain cordoned, never as a job's
     out = []
     hardware_definitions = HW.features()    # one read for every host, not two each (#977)
     for n in nodes.get("items", []):
@@ -435,6 +465,7 @@ def get_nodes(pods=None, vols=None):
             "kernel": n["status"].get("nodeInfo", {}).get("kernelVersion", ""),
             "os": n["status"].get("nodeInfo", {}).get("osImage", ""),
             "schedulable": not n.get("spec", {}).get("unschedulable", False),
+            "cordoned_by": cordon_holder(n, jobs),
             "addresses": {a["type"]: a["address"] for a in n["status"].get("addresses", [])},
             "allocatable": n["status"].get("allocatable", {}),
             "taints": n.get("spec", {}).get("taints", []),

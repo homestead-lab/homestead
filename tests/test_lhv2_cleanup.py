@@ -306,6 +306,49 @@ class RefusalEndsTests(unittest.TestCase):
         power['status']='succeeded'
         self.assertEqual('failed',C.progress(item)[0]); self.assertFalse(self.cordoned('node-a')); self.assertIsNone(C.pending())
 
+    def test_a_power_jobs_cordon_on_its_host_leaves_the_refused_clean_up_its_uncordon(self):
+        # The clean-up refused while a power job held node-a; that job's own
+        # cordon step (a reviewed restart) ran on the already-cordoned host. It
+        # keeps the clean-up's mark, as on dev, so the clean-up still gives the
+        # host back once the power job ends. Only a person's Cordon or Uncordon
+        # on the Hosts page takes a job's mark away.
+        import homestead_lifecycle as L
+        import homestead_node_actions as NODE_ACTIONS
+        item=self.start_and_stop_v2()
+        power={'id':'power-1','kind':'node-power','status':'running','ref':{'node':'node-a','action':'reboot'}}
+        def cordon(m,p,b):
+            if power not in self.saved: self.kube.add(self.hugepage_pod('node-a')); self.saved.append(power)
+        self.kube.react('PATCH','/api/v1/nodes/node-a',cordon)
+        self.assertEqual('running',C.progress(item)[0]); self.assertTrue(self.cordoned('node-a'))
+        class Stop(Exception): pass
+        def drain(node,**kwargs): raise Stop()
+        with patch.object(L,'ksend',K.ksend),patch.object(L,'kget',K.kget),patch.object(L,'_bust',lambda *keys:None), \
+                patch.object(L,'NODE_POWER_ENABLED',True),patch.object(NODE_ACTIONS,'drain',drain):
+            with self.assertRaises(Stop):
+                NODE_ACTIONS.node_power('node-a','reboot',before_send=lambda:None,reviewed_pods=[])
+        self.assertEqual('cleanup-1',self.annotations('node-a').get(C.CORDONED_BY))
+        power['status']='succeeded'
+        self.assertEqual('failed',C.progress(item)[0]); self.assertFalse(self.cordoned('node-a'))
+        self.assertNotIn(C.CORDONED_BY,self.annotations('node-a')); self.assertIsNone(C.pending())
+
+    def test_a_hosts_page_uncordon_while_the_job_holds_the_host_lets_the_job_end(self):
+        # The person's Uncordon on the Hosts page clears the clean-up's mark with
+        # the cordon. The clean-up then finds no mark of its own: nothing to undo,
+        # no error, no second cordon, and the job still ends.
+        import homestead_lifecycle as L
+        from types import SimpleNamespace
+        item=self.start_and_stop_v2()
+        power={'id':'power-1','kind':'node-power','status':'running','ref':{'node':'node-a','action':'drain'}}
+        def cordon(m,p,b):
+            if power not in self.saved: self.kube.add(self.hugepage_pod('node-a')); self.saved.append(power)
+        self.kube.react('PATCH','/api/v1/nodes/node-a',cordon)
+        self.assertEqual('running',C.progress(item)[0]); self.assertTrue(self.cordoned('node-a'))
+        with patch.object(L,'ksend',K.ksend),patch.object(L,'_bust',lambda *keys:None):
+            L.ROUTES[('POST','/api/node/cordon')][1](SimpleNamespace(body={'node':'node-a','cordon':False},query={}))
+        self.assertNotIn(C.CORDONED_BY,self.annotations('node-a'))
+        power['status']='succeeded'
+        self.assertEqual('failed',C.progress(item)[0]); self.assertFalse(self.cordoned('node-a')); self.assertIsNone(C.pending())
+
     def test_a_host_someone_already_uncordoned_still_lets_the_job_end(self):
         item=self.start_and_stop_v2()
         power={'id':'power-1','kind':'node-power','status':'running','ref':{'node':'node-a','action':'drain'}}

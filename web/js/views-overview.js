@@ -436,6 +436,25 @@ function nodeAddressTags(n) {
     ...vips.map(ip => `<span class="mono">${UI.chip(`Virtual IP ${ip}`, "info", { tip: `${n.name} holds the virtual IP ${ip}. If it goes down, another host takes over the address.` })}</span>`)].join(" ");
 }
 
+/* Which Homestead job holds a cordoned host (n.cordoned_by, read from the
+   jobs' cordon marks): plain words for a tip, or with html a button that
+   opens the job. "" for a person's own cordon, another tool's, or when the
+   job list could not be read: the host then shows cordoned alone. A cluster
+   shutdown that has ended is recovered with Uncordon hosts in its job, which
+   checks that every host is back and every shutdown helper has ended; the
+   Hosts page's Uncordon host checks none of that. */
+window.nodeCordonWords = (n, html = false) => {
+  const by = n.schedulable === false && n.cordoned_by;
+  if (!by) return "";
+  const open = label => `<button type="button" class="linkish" onclick="event.stopPropagation();openJob(${jsq(by.job)})">${esc(label)}</button>`;
+  const name = by.title ? `: ${html ? open(by.title) : by.title}` : "";
+  const more = html && by.job && !by.title ? ` ${open("Open job")}` : "";
+  if (by.running) return `Cordoned by a job that is still running${name}.${more}`;
+  if (!by.job) return "Cordoned by a job that has ended. Check the host, then uncordon it.";
+  const next = by.kind === "cluster-shutdown" ? "Use Uncordon hosts in the job." : "Check the job, then uncordon the host.";
+  return `Cordoned by a job that has ended${name}. ${next}${more}`;
+};
+
 /* A node at a glance. The head is the same shape on every card - name, roles
    and how long it has been up on two lines, then thirty days of uptime - so
    the meters below line up across a row; what falls to one node alone (a
@@ -459,7 +478,7 @@ function nodeCard(n) {
           <div class="dim xs" title="${esc(n.roles.join(" · "))}">${esc([n.roles.join(" · "), up].filter(Boolean).join(" · "))}</div></div>
       </div>
       <div class="row nodehead-acts" style="gap:7px">
-        ${window.hostMaintenanceChip?.(n.name) || (n.schedulable === false ? UI.chip("cordoned", "warn") : "")}
+        ${window.hostMaintenanceChip?.(n.name) || (n.schedulable === false ? UI.chip("cordoned", "warn", { tip: nodeCordonWords(n) }) : "")}
         ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? UI.chip("host OS", n.host_os.tone === "bad" ? "bad" : "warn", { tip: n.host_os.text }) : ""}
         ${UI.chip(n.status, bad ? "bad" : "ok")}
         <button class="btn sm" onclick="event.stopPropagation();nodeActions(${jsq(n.name)})">⋯</button>
@@ -790,7 +809,8 @@ async function nodePage(name) {
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
         ${fact("CPU", cpuSummary(n))}
         ${fact("Serves", nodeDutyTags(n) || "—")}
-        ${fact("Takes new apps", n.schedulable ? "yes" : UI.chip("no", "warn", { tip: "The host is cordoned: it takes no new apps." }))}
+        ${fact("Takes new apps", n.schedulable ? "yes" : UI.chip("no", "warn", { tip: "The host is cordoned: it takes no new apps." }) +
+          (n.cordoned_by ? ` <span class="small">${nodeCordonWords(n, true)}</span>` : ""))}
       </div>${odd.length ? `${UI.callout("warn", "", `${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}`, { attrs: 'style="margin-top:10px"' })}` : ""}</div>`],
     ["workloads", "Apps and VMs", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
       <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} apps · ${n.pods_sys} system components`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
@@ -858,13 +878,14 @@ async function nodePage(name) {
 }
 function nodePageSummary(n) {
   const h = nodeHealth(n), known = value => h.ready && value != null && value !== "";
+  const byJob = nodeCordonWords(n);
   const pair = (used, cap) => known(used) && known(cap) ? `${esc(used)}/${esc(cap)} GiB` : "—";
   return `<span class="sumitem">${UI.chip(h.status, h.tone, { tip: [n.status, ...h.issues].join(" · ") })}</span>
     <span class="sumitem">CPU <b>${known(n.cpu_pct) ? `${esc(n.cpu_pct)}%` : "—"}</b> of ${esc(n.cpu_cap ?? "—")}</span>
     <span class="sumitem">RAM <b>${pair(n.mem_used_gb, n.mem_cap_gb)}</b></span>
     <span class="sumitem" data-tip="${esc(NODE_FS_TIP)}">Node filesystem <b>${pair(n.fs_used_gb, n.fs_cap_gb)}</b></span>
     ${h.ready && nodeTemp(n).value != null ? `<span class="sumitem">${nodeTemp(n).label} <b class="${tempCls(nodeTemp(n).value)}">${esc(nodeTemp(n).text)}</b>${nodeTemp(n).extra ? ` <span class="dim xs">${esc(nodeTemp(n).extra)}</span>` : ""}</span>` : ""}
-    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip("cordoned", "warn")}</span>`}
+    ${n.schedulable ? "" : `<span class="sumitem">${UI.chip(byJob ? "cordoned by a job" : "cordoned", "warn", { tip: byJob })}</span>`}
     ${window.hostMaintenanceChip?.(n.name) ? `<span class="sumitem">${window.hostMaintenanceChip(n.name)}</span>` : ""}`;
 }
 /* One section at a time, as in Settings; on a phone the list comes first. */

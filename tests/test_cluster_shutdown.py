@@ -838,5 +838,28 @@ class RestoreRaceTests(unittest.TestCase):
                 self.shutdown().restore(self.plan("node-a", "node-b"), self.RUN)
             self.assertTrue(kube.object("/api/v1/nodes/node-b")["spec"]["unschedulable"])
 
+    def test_a_host_a_person_cordoned_on_the_hosts_page_during_the_shutdown_stays_cordoned(self):
+        # A person's Cordon (or Move apps off) on the Hosts page takes the
+        # host over: the route clears the run's mark in the same patch, so
+        # the shutdown's restore leaves that host as the person set it,
+        # raises nothing, and still restores the other hosts.
+        from types import SimpleNamespace
+        from unittest import mock
+        from fakes.kube import Kube
+        import homestead_kube as K
+        import homestead_lifecycle as L
+        with Kube(self.node("node-a"), self.node("node-b")) as kube, \
+                mock.patch.object(L, "ksend", K.ksend), mock.patch.object(L, "_bust", lambda *keys: None):
+            route = L.ROUTES[("POST", "/api/node/cordon")][1]
+            route(SimpleNamespace(body={"node": "node-b", "cordon": True}, query={}))
+            self.assertNotIn(S.ANNOTATION, kube.object("/api/v1/nodes/node-b")["metadata"].get("annotations") or {})
+            self.shutdown().restore(self.plan("node-a", "node-b"), self.RUN)
+            node_a, node_b = (kube.object("/api/v1/nodes/" + n) for n in ("node-a", "node-b"))
+            self.assertFalse(node_a["spec"]["unschedulable"], "the run's own host is restored")
+            self.assertNotIn(S.ANNOTATION, node_a["metadata"].get("annotations") or {})
+            self.assertTrue(node_b["spec"]["unschedulable"], "the person's cordon stays")
+            self.assertEqual(1, len([w for w in kube.writes if w[1] == "/api/v1/nodes/node-b"]),
+                             "only the person's own patch: restore writes nothing to that host")
+
 
 if __name__ == "__main__": unittest.main()
