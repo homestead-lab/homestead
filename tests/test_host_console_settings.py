@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -81,6 +82,61 @@ class ConsoleSettingsTests(unittest.TestCase):
         result = OPS.list_operations()[0]
         self.assertEqual("failed", result["status"])
         self.assertIn("curses unavailable", result["message"])
+
+    def test_a_console_job_leaves_the_job_store_free_while_its_host_runs_the_script(self):
+        # The script may run for minutes: under the store's lock every start,
+        # cancel and save would wait with it, and no other job would move.
+        free = []
+
+        def run(*args, **kwargs):
+            took = []
+
+            def another_request():
+                with OPS._lock:
+                    took.append(True)
+            other = threading.Thread(target=another_request, daemon=True)
+            other.start()
+            other.join(2)
+            free.append(bool(took))
+            return self.report()
+        self.runner.run.side_effect = run
+        CONSOLE.start("node1", "enable")
+        self.assertEqual("succeeded", OPS.list_operations()[0]["status"])
+        self.assertEqual([True], free, "another request took the store's lock while the script ran")
+        self.assertEqual({("host", "node1")}, OPS.step_claims(OPS.snapshot()[0]),
+                         "one console change at a time on a host, beside its OS, bond and bridge jobs")
+
+    def test_a_console_job_waits_its_turn_behind_the_add_ons_own_pass_without_blocking(self):
+        held, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def the_add_ons_pass():
+            with CONSOLE._lock:
+                held.set()
+                release.wait(10)
+        passing = threading.Thread(target=the_add_ons_pass, daemon=True)
+        passing.start()
+        self.assertTrue(held.wait(5))
+        said_while_running = []
+
+        def run(*args, **kwargs):
+            said_while_running.append(OPS.snapshot()[0]["message"])
+            return self.report()
+        self.runner.run.side_effect = run
+        CONSOLE.start("node1", "enable")
+        rounds = []
+        loop = threading.Thread(target=lambda: rounds.append(OPS.list_operations()[0]), daemon=True)
+        loop.start()
+        loop.join(3)
+        self.assertEqual(1, len(rounds), "the job's step must not wait for the add-on's pass to end")
+        self.assertEqual(("queued", "Waiting for another host console action to finish."),
+                         (rounds[0]["status"], rounds[0]["message"]))
+        self.runner.run.assert_not_called()
+        release.set()
+        passing.join(5)
+        self.assertEqual("succeeded", OPS.list_operations()[0]["status"], "its turn comes once the pass ends")
+        self.assertEqual(["Installing the host console on node1."], said_while_running,
+                         "while its own script runs, the job says so, not that it waits for another")
 
     def addon(self, platform=None):
         CONSOLE.VERSION = "2.8.244"

@@ -189,17 +189,40 @@ def _apply(node, uid, action):
     return saved
 
 
+def _busy():
+    """Whether another console action holds _lock now: the add-on's own pass,
+    or a job on another host. Asked on a lock of its own that never waits,
+    since _lock waits without a limit for a holder in this process."""
+    try:
+        with SHARED.SharedLock(_lock.name, directory=lambda: DATA_DIR, strict=True, timeout=0):
+            return False
+    except TimeoutError:
+        return True
+
+
 def status(item):
     ref = item["ref"]
     if ref.get("done"):
         return "succeeded", 100, ref["detail"]
     if ref["version"] != VERSION:
         return "failed", 0, "Homestead changed version while this console job was queued. Run it again from Add-ons."
+    if _busy():
+        # tick() can hold _lock for a couple of hosts' scripts: the job says so
+        # and asks again next round, rather than its step waiting minutes.
+        return "queued", 0, "Waiting for another host console action to finish."
     # Host-run uses one helper per node. Serialize console jobs across replicas.
+    # (Taken just after _busy() by someone else, this waits for them, as before.)
     with _lock:
         node = kget("/api/v1/nodes/" + urllib.parse.quote(ref["node"], safe=""))
         if node["metadata"].get("uid") != ref["uid"]:
             return "failed", 0, "The original host was replaced. Refresh Add-ons."
+        # Nothing else is saved until the script ends (up to minutes): say now
+        # what runs, so an earlier "Waiting for another…" is not left showing.
+        item.update(status="running", message={
+            "enable": f"Installing the host console on {ref['node']}.",
+            "disable": f"Removing the host console from {ref['node']}."}.get(
+                ref["action"], f"Checking the host console on {ref['node']}."))
+        ops.checkpoint(item)
         try:
             saved = _apply(ref["node"], ref["uid"], ref["action"])
         except Exception as error:
