@@ -157,7 +157,7 @@ DEADLINES = {
     "platform-upgrade": ("homestead_components", "NODE_WAIT"),  # and CONTROLLER_WAIT, JOB_FINISH_WAIT
     "reclass": ("homestead_reclass_handoff", "WAITS"),  # each wait's limit; a move from before: reclass START_LIMIT
     "restore-swap": ("homestead_restore_swap", "STOP_WAIT"),  # then autoupdate ROLLOUT_WAIT, ANSWER_WAIT
-    "restore-test": ("homestead_restore_test", "resolve", 1800),  # the restore, plus 120 s a GiB; then READY_WAIT
+    "restore-test": ("homestead_restore_test", "_resolve", 1800),  # the restore, plus 120 s a GiB; then READY_WAIT
     # A host that is down: until the start request; after it, no limit by design.
     "self-data-handoff": ("homestead_self_data_worker", "HOST_LIMIT"),
     "self-data-prepare": ("homestead_self_data_prepare", "manifests", 3600),  # the binding pod's activeDeadlineSeconds
