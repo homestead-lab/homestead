@@ -809,21 +809,25 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
         raise ValueError(self_stop_warning())
 
 
-# What the snapshot hands get_overview when its volumes part failed, so the
-# overview neither reads Longhorn again nor takes the failure for no volumes.
-VOLUMES_UNREAD = object()
-_volumes_failed = {"reason": ""}    # why the last read of Longhorn's volumes here failed, plain (no address)
+class VolumesUnread:
+    """What get_overview is handed when its read of Longhorn's volumes failed,
+    so the overview neither reads Longhorn again nor takes the failure for no
+    volumes. It carries why, plain (no address), for the alert to say (#1082):
+    the reason travels with its own read, so a read on another thread (a
+    request's, or one cut by the request's deadline) can neither clear it nor
+    put its own error in its place."""
+
+    def __init__(self):
+        self.reason = ""
 
 
-def _volumes(**pods):
-    """STORAGE.get_volumes, keeping why it failed for the overview to say (#1082)."""
+def _volumes(unread, **pods):
+    """STORAGE.get_volumes, noting why it failed in unread."""
     try:
-        vols = STORAGE.get_volumes(**pods)
+        return STORAGE.get_volumes(**pods)
     except Exception as error:
-        _volumes_failed["reason"] = ALERTS.read_failure(error)
+        unread.reason = ALERTS.read_failure(error)
         raise
-    _volumes_failed["reason"] = ""
-    return vols
 
 
 def _jobs_read():
@@ -865,13 +869,15 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     nodes = NODES.get_nodes() if nodes is None else nodes
     wl = WORKLOADS.get_workloads() if wl is None else wl
     if vols is None:
+        unread = VolumesUnread()
         try:
-            vols = _volumes()
+            vols = _volumes(unread)
         except Exception:
-            vols = VOLUMES_UNREAD
+            vols = unread
     # Longhorn that did not answer is not a cluster with no volume issues: the
     # overview says so, and the alerts keep the volume ones open (#1002).
-    volumes_unread = vols is VOLUMES_UNREAD
+    volumes_unread = isinstance(vols, VolumesUnread)
+    unread_reason = vols.reason if volumes_unread else ""
     vols = [] if volumes_unread else vols
     pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
@@ -919,7 +925,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
         "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "volumes_unread": volumes_unread,
-        "volumes_unread_reason": _volumes_failed["reason"] if volumes_unread else "",
+        "volumes_unread_reason": unread_reason,
         "protection_unread": protection_unread,
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
@@ -954,14 +960,16 @@ def _pods_seen():
 def page_builders():
     """The snapshot's parts, in the order a cycle builds them; Longhorn's
     volumes are read once, for the Volumes page, the hosts' duties, storage
-    and the overview."""
+    and the overview. A failed read hands the overview this cycle's own
+    failure, with why."""
+    unread = VolumesUnread()
     return [
-        ("vol", lambda got: _volumes(pods=got.get("pods"))),
+        ("vol", lambda got: _volumes(unread, pods=got.get("pods"))),
         ("nodes", lambda got: NODES.get_nodes(pods=got["pods"], vols=got.get("vol"))),
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),
         ("lhcap", lambda got: LHCAP.status()),
-        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got.get("vol", VOLUMES_UNREAD),
+        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got.get("vol", unread),
                                         pods=got["pods"])),
     ]
 

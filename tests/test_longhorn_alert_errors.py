@@ -59,7 +59,14 @@ class KindTests(unittest.TestCase):
         self.assertEqual("the cluster's API did not answer (timed out)", self.says(TimeoutError("timed out")))
         self.assertEqual("the cluster's API did not answer (TimeoutError)", self.says(TimeoutError()),
                          "an empty message names its kind")
-        self.assertTrue(self.says(DEADLINE.spent()).startswith("the cluster's API did not answer ("))
+
+    def test_a_request_s_spent_time_is_worded_for_an_alert_not_a_page(self):
+        """A read cut by a request's deadline (#984) carries the page's
+        message ("this page could not be read in full. Try again"), which
+        an alert must not repeat."""
+        self.addCleanup(DEADLINE.end)      # spent() counts a cut read on this thread
+        self.assertEqual("the cluster's API did not answer in time", self.says(DEADLINE.spent()))
+        self.assertEqual("the cluster's API did not answer in time", ALERTS.read_failure(DEADLINE.Spent(DEADLINE.MESSAGE)))
 
     def test_a_dropped_connection_did_not_answer(self):
         error = urllib.error.URLError(http.client.RemoteDisconnected("Remote end closed connection without response"))

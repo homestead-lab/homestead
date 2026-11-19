@@ -12,6 +12,7 @@ import re
 import time
 import urllib.error
 import homestead_history as HISTORY
+import homestead_read_deadline as DEADLINE
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -482,6 +483,8 @@ def read_failure(error):
     text = str(cause)
     if not text or isinstance(cause, KeyError):
         text = f"{type(cause).__name__} {text}".strip()
+    if isinstance(cause, DEADLINE.Spent):               # its message is the page's ("Try again"), not an alert's
+        return "the cluster's API did not answer in time"
     if isinstance(cause, _NO_ANSWER):                   # URLError is an OSError too
         return f"the cluster's API did not answer ({plain_error(text)})"
     return f"the read failed ({plain_error(text)})"
