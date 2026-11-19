@@ -17,13 +17,13 @@ test("every Playwright install names one version, 1.63 or later", () => {
   // Before 1.63 (Chromium 153) a garbage collection could lose a settled
   // page.evaluate answer, which read as "Execution context was destroyed"
   // (tests/integration/evaluate-survives-gc.mjs). The CI cache key must follow.
-  const places = [...fs.readdirSync(".github/workflows").map(f => `.github/workflows/${f}`), "CONTRIBUTING.md", "Dockerfile",
+  const places = [...fs.readdirSync(".github/workflows").map(f => `.github/workflows/${f}`), "scripts/ci_install_browser.sh", "CONTRIBUTING.md", "Dockerfile",
     ...fs.readdirSync("docs").filter(f => f.endsWith(".md")).map(f => `docs/${f}`)];
   const pins = places.flatMap(file => [...read(file).matchAll(/playwright(?:[@-]|:v)(\d+\.\d+\.\d+)/g)].map(m => `${file}: ${m[1]}`));
   const count = file => pins.filter(pin => pin.startsWith(`${file}: `)).length;
-  // Both installs in ci.yml and their two browser cache keys, the demo and release builds, and the contributors' guide.
-  assert.deepEqual([".github/workflows/ci.yml", ".github/workflows/demo.yml", ".github/workflows/release.yml", "CONTRIBUTING.md"].map(count),
-    [4, 1, 1, 1], pins.join("\n"));
+  // The two browser cache keys in ci.yml, the one install every job shares (scripts/ci_install_browser.sh), and the contributors' guide.
+  assert.deepEqual([".github/workflows/ci.yml", ".github/workflows/demo.yml", ".github/workflows/release.yml", "scripts/ci_install_browser.sh", "CONTRIBUTING.md"].map(count),
+    [2, 0, 0, 1, 1], pins.join("\n"));
   const unpinned = places.flatMap(file => read(file).split("\n").filter(line => /npm (install|i) .*\bplaywright\b(?![@-])/.test(line)).map(line => `${file}: ${line.trim()}`));
   assert.deepEqual(unpinned, [], "every install names its version");
   const versions = new Set(pins.map(pin => pin.split(": ")[1]));
