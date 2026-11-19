@@ -2963,7 +2963,7 @@ ssh_pwauth: true
         apps[key] = [
           { state: "up", since: now - 86400 * 4, target, last: { ok: true, ms: 38, code: 200, error: "" }, strip: day(), uptime_24h: 100, uptime_30d: 99.98 },
           { state: "slow", since: now - 900, target, last: { ok: true, ms: 2840, code: 200, error: "" }, strip: [...day([9]).slice(0, 23), "slow"], uptime_24h: 99.4, uptime_30d: 99.71 },
-          { state: "down", since: now - 960, target, last: { ok: false, ms: null, code: 502, error: "HTTP 502" }, strip: [...day([14]).slice(0, 23), "down"], uptime_24h: 96.5, uptime_30d: 99.2 },
+          { state: "down", since: (window.__demoDownSince ??= now - 960), target, last: { ok: false, ms: null, code: 502, error: "HTTP 502" }, strip: [...day([14]).slice(0, 23), "down"], uptime_24h: 96.5, uptime_30d: 99.2 },
         ][i] || { state: "off", why: "checks are off for this app", target: "", last: {}, strip: [], uptime_24h: null, uptime_30d: null };
       });
       const month = (bad = [], dips = []) => Array.from({ length: 30 }, (_, i) => i < 4 ? null : bad.includes(i) ? "down" : dips.includes(i) ? "dip" : "up");
