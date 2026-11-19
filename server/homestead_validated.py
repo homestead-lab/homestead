@@ -109,8 +109,8 @@ def _entries(entries, where, required):
         if not isinstance(entry.get("affects", []), list):
             raise ValueError(f"An entry for {where} lists what it affects as something other than a list.")
         if "fixed_in" in entry and (entry.get("status") != "bad" or not RELEASE.fullmatch(str(entry["fixed_in"]))):
-            raise ValueError(f"An entry for {where} has fixed_in {entry['fixed_in']!r}: a release like 2.8.335, "
-                             "on a version known to break something.")
+            raise ValueError(f"An entry for {where} has an unusable fixed_in. It is {entry['fixed_in']!r}, and it must be "
+                             "a release like 2.8.335, on a version known to break something.")
 
 
 def _when(stamp):
