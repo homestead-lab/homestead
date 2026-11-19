@@ -27,7 +27,7 @@ try {
     });
     await picker.selectOption("dev");
     await page.waitForFunction(() => STATE.data.appSettings?.updates?.channel === "dev" && STATE.data.imageUpdates?.channel === "dev" && !HOMESTEAD_CHANNEL_SAVING);
-    assert.match(await page.locator("#homesteadUpdateCard").innerText(), /2\.9\.0-dev\.1/);
+    assert.match(await page.locator("#homesteadUpdateCard").innerText(), /2\.10\.0-dev\.1/);
     assert.equal(await picker.inputValue(), "dev");
     assert.ok(!(await page.evaluate(() => channelCalls)).some(path => /\/(apply|rollback)$/.test(path)));
     await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });

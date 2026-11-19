@@ -4128,7 +4128,10 @@ ssh_pwauth: true
       const report = responses["/api/image-updates"];
       report.channel = channel;
       const image = report.workloads.find(w => w.homestead === "self").images[0];
-      image.candidate_tag = channel === "dev" ? "2.9.0-dev.2" : "2.9.0";
+      // Samples ahead of any release cut so far: a version bump rewrites the
+      // running version everywhere in this file, and a sample equal to it was
+      // offered as an update to itself.
+      image.candidate_tag = channel === "dev" ? "2.10.0-dev.1" : "2.10.0";
       image.candidate = "ghcr.io/homestead-lab/homestead:" + image.candidate_tag;
       return new Response(JSON.stringify(responses["/api/settings"]), { status: 200, headers: { "Content-Type": "application/json" } });
     }
