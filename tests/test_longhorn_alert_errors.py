@@ -254,15 +254,18 @@ def trace(chars, keeping):
     """_PLAIN's rules applied as re.sub applies them, to (character, where
     it came from) pairs: what a rule writes comes from nowhere (None), what
     it copies from a group keeps where it came from. keeping: a match that
-    is a kept name becomes one ("kept", where its characters came from,
-    the marker the rule would have written)."""
+    is a kept name becomes one private-use character, the next after those
+    already set aside, from ("kept", where its characters came from, the
+    marker the rule would have written)."""
+    slots = 0
     for index, (pattern, word) in enumerate(ALERTS._PLAIN):
         text, out, at = "".join(c for c, _ in chars), [], 0
         keep = ALERTS._KEPT.get(index) if keeping else None
         for m in pattern.finditer(text):
             out += chars[at:m.start()]
             if keep and keep(m.group(0)):
-                out.append(("\ue000", ("kept", chars[m.start():m.end()], m.expand(word))))
+                out.append((chr(0xe000 + slots), ("kept", chars[m.start():m.end()], m.expand(word))))
+                slots += 1
             else:
                 for i, part in enumerate(re.split(r"\\(\d)", word)):
                     out += chars[m.start(int(part)):m.end(int(part))] if i % 2 else [(c, None) for c in part]
@@ -271,18 +274,43 @@ def trace(chars, keeping):
     return chars
 
 
+def hidden_more(chars):
+    """Dev's _hidden_more applied to (character, where it came from) pairs:
+    the spans it hides are read from the module's own function (the list it
+    sorts at its end), each becomes the marker from nowhere, the rest keeps
+    where it came from. Checked against the function's own output, so a
+    change to how it hides fails here, not silently."""
+    text, found = "".join(c for c, _ in chars), []
+
+    def capture(spans):
+        found.append(list(spans))
+        return sorted(found[-1])
+    with mock.patch.object(ALERTS, "sorted", capture, create=True):
+        plain = ALERTS._hidden_more(text)
+    assert len(found) == 1, "_hidden_more no longer sorts its spans once: update hidden_more()"
+    out, shown = [], 0
+    for start, end in sorted(s for s in found[0] if s[1] > s[0]):
+        if start > shown or not out:
+            out += chars[shown:start] + [(c, None) for c in "<hidden>"]
+        shown = max(shown, end)
+    out += chars[shown:]
+    assert "".join(c for c, _ in out) == plain, f"hidden_more() is not _hidden_more on {text!r}"
+    return out
+
+
 def outcomes(raw):
-    """For one input: dev's output and where its characters came from; the
-    branch's text with kept names, the same with each kept name's marker
-    instead (it must equal dev's output for the names to be kept), and
-    where the branch's characters and its kept names came from."""
+    """For one input: dev's output (_PLAIN's rules, then _hidden_more) and
+    where its characters came from; the branch's text with kept names, the
+    same with each kept name's marker instead (it must equal dev's output
+    for the names to be kept), and where the branch's characters and its
+    kept names came from."""
     text = " ".join(raw.split())
-    dev_chars = trace(list(zip(text, range(len(text)))), False)
+    dev_chars = hidden_more(trace(list(zip(text, range(len(text)))), False))
     dev_out = "".join(c for c, _ in dev_chars)
     dev = {o for _, o in dev_chars if o is not None}
     slotted = re.sub("[\ue000-\uf8ff]", "\ufffd", text)
     named, marked, branch, kept_at = [], [], set(), set()
-    for c, o in trace(list(zip(slotted, range(len(slotted)))), True):
+    for c, o in hidden_more(trace(list(zip(slotted, range(len(slotted)))), True)):
         if isinstance(o, tuple):
             named += [k for k, _ in o[1]]
             marked.append(o[2])
@@ -296,8 +324,9 @@ def outcomes(raw):
 
 
 class SecretsStayHiddenTests(unittest.TestCase):
-    """The branch shows exactly what dev's rules show, plus the kept names:
-    every character dev hid is hidden, unless it lies inside a kept name."""
+    """The branch shows exactly what dev shows (_PLAIN's rules, then
+    _hidden_more), plus the kept names: every character dev hid is hidden,
+    unless it lies inside a kept name."""
 
     # Texts with a secret in them that dev's rules hide; whatever the branch
     # keeps, these stay hidden.
@@ -415,6 +444,33 @@ class SecretsStayHiddenTests(unittest.TestCase):
                           name + mark + SECRET, SECRET + mark + name, "Bearer " + name + mark, mark + name + ":443"]
         for raw in texts:
             with self.subTest(raw=raw):
+                self.assertIsNone(self.fault(raw))
+
+    def test_dev_s_extra_hiding_takes_a_kept_name_with_what_it_hides(self):
+        """_hidden_more runs on the text with names set aside: a kept name
+        next to ordinary text stays, one that is the value of a field named
+        like a secret or part of a login before an @ goes with it."""
+        field = "tok" + "en: "                          # with "=" the last rule hides field and name as one run
+        cases = (
+            (f"volume {VOLUME} is degraded; see the Longhorn UI", (VOLUME,), ()),
+            (f"replica {VOLUME}-r-1a2b3c4d on node-a, engine {VOLUME}-e-0 stopped",
+             (VOLUME + "-r-1a2b3c4d", VOLUME + "-e-0"), ()),
+            (f"refused {field}{VOLUME} for the volume", ("refused", "for the volume"), (UUID,)),
+            ('refused {"pass' + 'word": "longhorn.io"} twice', ("refused",), ("longhorn.io",)),
+            ("refused pass" + 'word: "longhorn.io" twice', ("refused",), ("longhorn.io",)),
+            (f"dial {VOLUME}:pw@db.example.com failed", ("db.example.com failed",), (UUID, "pw")),
+            ('dial ann:"longhorn.io"@db.example.com failed', ("db.example.com failed",), ("longhorn.io", "ann")),
+            (f'volumes.longhorn.io "{VOLUME}" is forbidden: User "system:serviceaccount:homestead:homestead" '
+             'cannot get resource "volumes" in API group "longhorn.io" in the namespace "longhorn-system"',
+             (f'"{VOLUME}"', 'API group "longhorn.io"'), ()),
+        )
+        for raw, shown, hidden in cases:
+            with self.subTest(raw=raw[:50]):
+                text = ALERTS.plain_error(raw, limit=400)
+                for part in shown:
+                    self.assertIn(part, text)
+                for part in hidden:
+                    self.assertNotIn(part, text)
                 self.assertIsNone(self.fault(raw))
 
     def test_a_name_whose_marker_would_read_differently_is_not_kept(self):

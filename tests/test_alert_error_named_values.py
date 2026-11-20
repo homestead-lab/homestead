@@ -44,12 +44,25 @@ BEFORE = [
 ]
 
 
-def before(raw):
-    """What plain_error showed before this change, without the cut."""
+def before(raw, keeping=False):
+    """What plain_error showed before this change, without the cut.
+    keeping: the two kinds of name the earlier rules hide but plain_error
+    keeps (test_longhorn_alert_errors) left where the rule's marker would
+    be: a quoted API group of Homestead's closed list, and a whole run that
+    is a Longhorn volume's name, its replica's or its engine's."""
     text = " ".join(str(raw or "").split())
-    for pattern, flags, word in BEFORE:
-        text = re.sub(pattern, word, text, flags=flags)
+    for index, (pattern, flags, word) in enumerate(BEFORE):
+        kept = None
+        if keeping and index == 2:
+            kept = lambda m: m.group(0)[1:-1] in ALERTS._API_GROUPS
+        elif keeping and index == len(BEFORE) - 1:
+            kept = lambda m: KEPT_VOLUME.fullmatch(m.group(0))
+        text = re.sub(pattern, (lambda m, kept=kept, word=word: m.group(0) if kept(m) else m.expand(word))
+                      if kept else word, text, flags=flags)
     return text
+
+
+KEPT_VOLUME = re.compile(r"pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-r-[0-9a-f]{8}|-e-\d{1,3})?")
 
 
 def only_more_hidden(old, new):
@@ -208,12 +221,17 @@ class PlainTextTests(unittest.TestCase):
     def test_ordinary_errors_pass_as_before(self):
         for raw in PLAIN:
             with self.subTest(raw=raw):
-                self.assertEqual(before(raw), ALERTS.plain_error(raw, limit=WIDE))
+                self.assertEqual(before(raw, keeping=True), ALERTS.plain_error(raw, limit=WIDE))
 
 
 class OnlyMoreHiddenTests(unittest.TestCase):
     """Whatever the input, the output is the earlier output with some parts
-    turned into the marker: never a character the earlier rules hid."""
+    turned into the marker: never a character the earlier rules hid, but for
+    the kept names standing where the earlier rules wrote their marker
+    (before(raw, keeping=True); either all a text's kept names stand or none)."""
+
+    def shows_no_more(self, raw, new):
+        return only_more_hidden(before(raw), new) or only_more_hidden(before(raw, keeping=True), new)
 
     PARTS = ["password", "Password", "token", "pass", "auth", "Authorization", "Cookie", "X-Api-Key", "secret_key",
              "signal", "eyJ", "eyJhbGciOi", ".", ":", "=", ": ", " ", "  ", '"', "'", "@", "/", "+", "&", ";", ",",
@@ -240,15 +258,15 @@ class OnlyMoreHiddenTests(unittest.TestCase):
     def test_every_output_only_hides_more(self):
         for raw in self.inputs():
             old, new = before(raw), ALERTS.plain_error(raw, limit=WIDE)
-            self.assertTrue(only_more_hidden(old, new), f"{raw!r}\nbefore: {old!r}\nnow:    {new!r}")
+            self.assertTrue(self.shows_no_more(raw, new), f"{raw!r}\nbefore: {old!r}\nnow:    {new!r}")
 
     def test_with_the_cut_every_shown_character_is_one_shown_before(self):
         """The cut text is the start of the uncut text, which only hides
         more than the earlier rules did on the whole input: so every
         character the cut text shows, the earlier rules showed too."""
         for raw in self.inputs():
-            old, full = before(raw), ALERTS.plain_error(raw, limit=WIDE)
-            self.assertTrue(only_more_hidden(old, full), raw)
+            full = ALERTS.plain_error(raw, limit=WIDE)
+            self.assertTrue(self.shows_no_more(raw, full), raw)
             for limit in (40, 160):
                 cut = ALERTS.plain_error(raw, limit=limit)
                 self.assertEqual(full if len(full) <= limit else full[:limit - 1] + "…", cut, raw)
@@ -258,6 +276,12 @@ class OnlyMoreHiddenTests(unittest.TestCase):
         self.assertFalse(only_more_hidden("a <hidden> b", "a xyz b"))
         self.assertFalse(only_more_hidden("a <hidden> b", "a <hidden>x b"))
         self.assertFalse(only_more_hidden("a b", "a b c"))
+        volume = "pvc-" + "3f1c2a9e" + "-5b7d-4e21-9c0a-" + "1d2e3f4a5b6c"
+        self.assertTrue(self.shows_no_more('in "longhorn.io" ' + volume, 'in "longhorn.io" ' + volume))
+        self.assertFalse(self.shows_no_more('in "kube.example.com"', 'in "kube.example.com"'))
+        self.assertFalse(self.shows_no_more(volume + "-x", volume + "-x"))
+        self.assertFalse(self.shows_no_more(volume + "-x", volume + "<hidden>"))
+        self.assertFalse(self.shows_no_more('"longhorn.io" password=' + "a1b2" * 6, '"longhorn.io" password=a1b2'))
 
     def test_made_plain_twice_is_made_plain_once(self):
         for raw in self.inputs():
