@@ -104,6 +104,7 @@ for (const loop of LOOPS) {
     w.document.show(false);
     await w.clock.advance(20 * loop.every);
     assert.equal(loopReads(w), 1, "no read while the tab is hidden");
+    assert.equal(w.clock.pending(), 0, "and no timer is left ticking while it is hidden");
     w.document.show(true); await w.clock.settle();
     assert.equal(loopReads(w), 2, "one read when it is shown again");
     w.document.show(false); w.document.show(true); w.document.show(false); w.document.show(true); await w.clock.settle();
