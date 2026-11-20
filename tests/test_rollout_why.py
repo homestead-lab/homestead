@@ -7,8 +7,15 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
+import homestead_kube as KUBE
+import homestead_node_probes as NODE_PROBES
+import homestead_operations as OPS
+import homestead_routes
 import homestead_updates as UPDATES
 import homestead_update_rollouts as ROLLOUTS
+sys.path.insert(0, str(ROOT / "tests"))
+from fakes.kube import Kube
+from rebind import keep_bound
 
 
 def pod(age):
@@ -56,6 +63,189 @@ class RolloutWhyTests(unittest.TestCase):
     def test_no_warnings_no_reason(self):
         with mock.patch.object(UPDATES, "kget", lambda path: {"items": []}):
             self.assertIsNone(ROLLOUTS._why_waiting("lab", pod(400)))
+
+
+# A host lost while a Longhorn engine ran on it keeps its iSCSI session to the
+# old instance-manager's address (192.0.2.40) once it is back; the one there now
+# is 192.0.2.41. Kubernetes' attach failure names the volume (the PV) in the form
+# the attach/detach controller writes on the pod: 'AttachVolume.Attach failed for
+# volume "<pv>" : <the driver's error>'.
+STALE = "192.0.2.40"
+ATTACH_TIMEOUT = ('AttachVolume.Attach failed for volume "pvc-7d1e" : timed out waiting for external-attacher '
+                  'of driver.longhorn.io CSI driver to attach volume pvc-7d1e')
+KUBELET_UNATTACHED = ("Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[data "
+                      "kube-api-access-8x2lq]: timed out waiting for the condition")
+SENTENCE = ("Volume notes-data cannot attach, because node-2 keeps an old connection to it through an address "
+            "that is gone. End that connection on node-2 (Cluster Health lists the steps), or drain node-2 from "
+            "Hosts and restart it.")
+
+
+def stale_cluster(age=300, node="node-2", reason="FailedAttachVolume", message=ATTACH_TIMEOUT,
+                  sessions=(("node-2", "pvc-7d1e"),), handle="pvc-7d1e", im_pods=True, waiting="ContainerCreating",
+                  kubelet_after=None):
+    """The kube fake with a Longhorn volume, its claim, the instance-manager
+    of each host, the app's waiting pod and its newest warning; and the node
+    probes' iSCSI reading."""
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age))
+    pod = {"apiVersion": "v1", "kind": "Pod",
+           "metadata": {"name": "notes-6c9f7-x2k7p", "namespace": "lab", "labels": {"app": "notes"}, "creationTimestamp": stamp},
+           "spec": {"nodeName": node, "containers": [{"name": "notes", "image": "registry.example.com/notes:1"}],
+                    "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "notes-data"}}]},
+           "status": {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "True"},
+                                                         {"type": "Ready", "status": "False"}],
+                      "containerStatuses": [{"name": "notes", "ready": False, "image": "registry.example.com/notes:1",
+                                             "state": {"waiting": {"reason": waiting}}}]}}
+    pv = {"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": "pvc-7d1e"},
+          "spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": handle},
+                   "claimRef": {"namespace": "lab", "name": "notes-data"}}, "status": {"phase": "Bound"}}
+    event = {"apiVersion": "v1", "kind": "Event", "metadata": {"name": "notes.1", "namespace": "lab"},
+             "involvedObject": {"kind": "Pod", "name": pod["metadata"]["name"], "namespace": "lab"},
+             "type": "Warning", "reason": reason, "message": message, "lastTimestamp": stamp}
+    events = [event]
+    if kubelet_after is not None:
+        # The kubelet's own warning about the same pod, every ~2 minutes while
+        # the volume is not attached: newer or older than the controller's.
+        at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age + 60 + kubelet_after))
+        event["lastTimestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - age + 60))
+        events.append({"apiVersion": "v1", "kind": "Event", "metadata": {"name": "notes.2", "namespace": "lab"},
+                       "involvedObject": {"kind": "Pod", "name": pod["metadata"]["name"], "namespace": "lab"},
+                       "type": "Warning", "reason": "FailedMount", "message": KUBELET_UNATTACHED, "lastTimestamp": at})
+    ims = [{"apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": f"instance-manager-{n}", "namespace": "longhorn-system",
+                         "labels": {"longhorn.io/component": "instance-manager"}},
+            "spec": {"nodeName": n}, "status": {"phase": "Running", "podIP": ip, "podIPs": [{"ip": ip}]}}
+           for n, ip in (("node-1", "192.0.2.31"), ("node-2", "192.0.2.41"))] if im_pods else []
+    probes = {}
+    for host, volume in sessions:
+        probes.setdefault(host, {"iscsi": []})["iscsi"].append(
+            {"sid": 67, "target": "iqn.2019-10.io.longhorn:" + volume, "state": "LOGGED_IN",
+             "address": STALE, "port": 3260, "disks": ["sdj"]})
+    return Kube(pod, pv, *events, *ims), pod, probes
+
+
+class StaleSessionTests(unittest.TestCase):
+    """An app whose volume cannot attach because its host keeps a stale iSCSI
+    session says so, cause first, wherever Homestead says why a pod waits."""
+
+    def setUp(self):
+        keep_bound(self, UPDATES)
+        UPDATES.kget = KUBE.kget
+
+    def why(self, **cluster):
+        kube, pod, probes = stale_cluster(**cluster)
+        with kube, mock.patch.object(NODE_PROBES, "node_temps", lambda *a, **k: probes), \
+                mock.patch.object(homestead_routes, "cached", lambda key, seconds, fn: fn()):
+            return ROLLOUTS._why_waiting("lab", kube.object("/api/v1/namespaces/lab/pods/" + pod["metadata"]["name"]))
+
+    def test_a_stale_session_on_the_pod_s_host_to_its_volume_is_named_cause_first(self):
+        found = self.why()
+        self.assertEqual(SENTENCE, found["message"])
+        self.assertTrue(found["stale_session"])
+        self.assertTrue(found["stuck"], "stuck after three minutes, as any volume that cannot attach")
+        self.assertNotIn("hint", found, "a hint fails a rollout at once; this waits its three minutes")
+        self.assertFalse(self.why(age=90)["stuck"])
+
+    def test_the_volume_is_matched_by_its_pv_name_not_by_longhorn_s_volume_name(self):
+        # A volume made by hand keeps its own Longhorn name under another PV name.
+        found = self.why(handle="notes-by-hand", sessions=(("node-2", "notes-by-hand"),))
+        self.assertTrue(found.get("stale_session"))
+        self.assertIn("Volume notes-data cannot attach", found["message"])
+
+    def test_without_the_session_the_kubernetes_text_stays(self):
+        for case, cluster in {
+                "a session on another host": {"sessions": (("node-1", "pvc-7d1e"),)},
+                "a session to another volume": {"sessions": (("node-2", "pvc-other"),)},
+                "no probe reading": {"sessions": ()},
+                "no instance-manager running": {"im_pods": False},
+                "a mount failure, not an attach failure": {
+                    "reason": "FailedMount",
+                    "message": 'MountVolume.MountDevice failed for volume "pvc-7d1e" : rpc error: code = Internal'}}.items():
+            with self.subTest(case):
+                found = self.why(**cluster)
+                self.assertFalse(found.get("stale_session"))
+                self.assertEqual(cluster.get("message", ATTACH_TIMEOUT), found["message"])
+
+    def test_the_kubelet_s_own_warning_in_between_does_not_hide_it(self):
+        for order, after in (("kubelet newer", 30), ("kubelet older", -30)):
+            with self.subTest(order):
+                found = self.why(kubelet_after=after)
+                self.assertTrue(found.get("stale_session"), found["message"])
+                self.assertEqual(SENTENCE, found["message"])
+
+    def test_an_attach_failure_that_names_another_cause_keeps_kubernetes_text(self):
+        # The same outage can leave the volume faulted or held elsewhere:
+        # a restart of the host would not fix that, so nothing is claimed.
+        prefix = 'AttachVolume.Attach failed for volume "pvc-7d1e" : '
+        for tail in ("rpc error: code = Aborted desc = volume pvc-7d1e is not ready for workloads",
+                     "rpc error: code = Internal desc = volume pvc-7d1e is faulted",
+                     "rpc error: code = FailedPrecondition desc = volume pvc-7d1e is already attached to node node-1",
+                     "rpc error: code = Aborted desc = volume pvc-7d1e is attached to another node node-1"):
+            with self.subTest(tail):
+                found = self.why(message=prefix + tail)
+                self.assertFalse(found.get("stale_session"))
+                self.assertEqual(prefix + tail, found["message"])
+                found = self.why(message=prefix + tail, kubelet_after=30)
+                self.assertFalse(found.get("stale_session"), "behind the kubelet's warning too")
+
+    def test_the_two_longhorn_texts_keep_their_own_reason_over_a_stale_session(self):
+        prefix = 'AttachVolume.Attach failed for volume "pvc-7d1e" : '
+        found = self.why(message=prefix + "CSINode node-2 does not contain driver driver.longhorn.io")
+        self.assertIn("Longhorn is not running on node-2 yet", found["message"])
+        self.assertFalse(found.get("stale_session"))
+        found = self.why(message=prefix + "rpc error: invalid controller count 2")
+        self.assertIn("Scale the workload to 0", found["hint"])
+        self.assertFalse(found.get("stale_session"))
+        self.assertNotIn("old connection", found["message"])
+
+    def test_the_rollout_and_its_job_say_it_without_failing_early(self):
+        kube, pod, probes = stale_cluster(age=90)
+        dep = {"metadata": {"name": "notes", "namespace": "lab", "generation": 2},
+               "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "notes"}}},
+               "status": {"replicas": 1, "observedGeneration": 2}}
+        with kube, mock.patch.object(NODE_PROBES, "node_temps", lambda *a, **k: probes), \
+                mock.patch.object(homestead_routes, "cached", lambda key, seconds, fn: fn()), \
+                mock.patch.object(ROLLOUTS, "pull_state", return_value={}):
+            state = ROLLOUTS.progress("lab", "notes", dep)
+        self.assertEqual("progressing", state["phase"])
+        self.assertEqual(SENTENCE, state["pods"][0]["blocked"])
+        self.addCleanup(setattr, OPS, "deployment_progress", OPS.deployment_progress)
+        OPS.deployment_progress = lambda ns, name: state
+        _, _, message = OPS._deployment({"ref": {"namespace": "lab", "name": "notes"}})
+        self.assertTrue(message.startswith("New pod waiting on node-2: Volume notes-data cannot attach, because"), message)
+
+    def app_page(self, **cluster):
+        import server  # binds the modules the way the app does
+        kube, pod, probes = stale_cluster(**cluster)
+        kube.add({"apiVersion": "apps/v1", "kind": "Deployment",
+                  "metadata": {"name": "notes", "namespace": "lab", "generation": 1},
+                  "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "notes"}},
+                           "template": {"metadata": {"labels": {"app": "notes"}}, "spec": pod["spec"]}},
+                  "status": {"replicas": 1, "observedGeneration": 1}})
+        with kube, mock.patch.object(NODE_PROBES, "node_temps", lambda *a, **k: probes), \
+                mock.patch.object(homestead_routes, "cached", lambda key, seconds, fn: fn()), \
+                mock.patch.object(ROLLOUTS, "pull_state", return_value={}):
+            app = next(w for w in server.WORKLOADS.get_workloads() if w["name"] == "notes")
+        return app["pods"][0], kube
+
+    def test_the_app_s_own_page_says_it_too(self):
+        row, _ = self.app_page()
+        self.assertEqual(self.why()["message"], row["stale_session"], "one reason, worked out in one place")
+
+    def test_a_pod_starting_normally_costs_the_app_s_page_no_storage_read(self):
+        row, kube = self.app_page(age=30)
+        self.assertEqual("", row["stale_session"])
+        self.assertFalse([path for path, _ in kube.reads if "persistentvolumes" in path or "instance-manager" in path],
+                         "a pod under a minute old is not matched against Cluster Health's reading")
+
+    def test_only_a_pod_still_being_created_is_matched(self):
+        row, _ = self.app_page(waiting="CrashLoopBackOff")
+        self.assertEqual("", row["stale_session"])
+
+    def test_the_app_s_page_says_nothing_new_without_the_session_and_reads_no_events_for_it(self):
+        row, kube = self.app_page(sessions=(("node-1", "pvc-7d1e"),))
+        self.assertEqual("", row["stale_session"])
+        self.assertFalse([path for path, _ in kube.reads if "/events" in path],
+                         "no stale session on the pod's host: its events are not read for one")
 
 
 if __name__ == "__main__":

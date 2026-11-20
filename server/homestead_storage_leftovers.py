@@ -125,7 +125,9 @@ def _stale_sessions(pvs):
     for pv in pvs or []:
         csi, claim = (pv.get("spec") or {}).get("csi") or {}, (pv.get("spec") or {}).get("claimRef") or {}
         if csi.get("driver") == LONGHORN_DRIVER and csi.get("volumeHandle"):
-            claims[csi["volumeHandle"]] = (claim.get("namespace", ""), claim.get("name", ""))
+            # The PV's own name too: Kubernetes names a volume that cannot attach by it.
+            claims[csi["volumeHandle"]] = (claim.get("namespace", ""), claim.get("name", ""),
+                                           (pv.get("metadata") or {}).get("name", ""))
     hosts = []
     for node in sorted(readings):
         if node not in running:
@@ -136,8 +138,9 @@ def _stale_sessions(pvs):
             if not target.startswith(LONGHORN_TARGET) or not s.get("address") or s["address"] in current:
                 continue
             volume = target[len(LONGHORN_TARGET):]
-            namespace, claim = claims.get(volume, ("", ""))
-            stale.append({"sid": s.get("sid"), "target": target, "volume": volume, "namespace": namespace, "claim": claim,
+            namespace, claim, pv = claims.get(volume, ("", "", ""))
+            stale.append({"sid": s.get("sid"), "target": target, "volume": volume, "pv": pv,
+                          "namespace": namespace, "claim": claim,
                           "state": s.get("state", ""), "address": s["address"], "port": s.get("port"),
                           "disks": list(s.get("disks") or [])})
         if stale:
@@ -161,6 +164,25 @@ def facts():
     return {"released": released, "iscsi": iscsi}
 
 
+def reading():
+    """facts() as Cluster Health last read it, kept 30 seconds: what an app
+    that waits on its volume is matched against, so the two always agree."""
+    return homestead_routes.cached(CACHE, 30, facts)
+
+
+def stale_session(node, pv=None):
+    """The stale session the latest reading names on node, to the volume of
+    PV name pv (any volume when pv is None); None when there is none, or the
+    check could not run there."""
+    iscsi = (reading() or {}).get("iscsi") or {}
+    if iscsi.get("state") != "ok" or not node:
+        return None
+    for host in iscsi.get("hosts") or []:
+        if host.get("node") == node:
+            return next((s for s in host.get("sessions") or [] if pv is None or (pv and s.get("pv") == pv)), None)
+    return None
+
+
 ROUTES = {
-    ("GET", "/api/storage/leftovers"): ("viewer", lambda request: homestead_routes.cached(CACHE, 30, facts)),
+    ("GET", "/api/storage/leftovers"): ("viewer", lambda request: reading()),
 }

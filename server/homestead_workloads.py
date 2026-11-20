@@ -586,13 +586,17 @@ def get_workloads(pods=None):
                         pull = {}
                 except Exception:
                     pull = {}
+            # A volume that cannot attach because its host keeps a stale iSCSI
+            # session: the reason rollouts and the job give too (#932's finding).
+            stale = (ROLLOUTS.stale_session_reason(ns, p) if not ready and not p["metadata"].get("deletionTimestamp")
+                     and any(w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits) else "")
             pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
                              "ip": (p.get("status") or {}).get("podIP", ""),
                              "phase": p["status"].get("phase"),
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
                              # Told to stop, and not stopped yet.
                              "terminating": bool(p["metadata"].get("deletionTimestamp")),
-                             "unplaced": unplaced,
+                             "unplaced": unplaced, "stale_session": stale,
                              "pull": pull,
                              "waiting": waits,
                              "uptime": age_secs(p["status"].get("startTime")),

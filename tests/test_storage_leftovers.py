@@ -143,7 +143,7 @@ class StaleSessions(unittest.TestCase):
             found = LEFTOVERS.facts()["iscsi"]
         self.assertEqual("ok", found["state"])
         self.assertEqual([{"node": "node-2", "sessions": [{
-            "sid": 67, "target": "iqn.2019-10.io.longhorn:pvc-a", "volume": "pvc-a", "namespace": "media",
+            "sid": 67, "target": "iqn.2019-10.io.longhorn:pvc-a", "volume": "pvc-a", "pv": "pvc-a", "namespace": "media",
             "claim": "photos", "state": "LOGGED_IN", "address": "192.0.2.40", "port": 3260, "disks": ["sdj"]}]}],
             found["hosts"])
 
