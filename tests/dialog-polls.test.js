@@ -403,12 +403,11 @@ test("going to another page stops that page's polls at once", async () => {
    read that never answers stops it for good. New ones go on UI.poll. The
    list is what is left today, by file and function; moving one to UI.poll
    takes it off (the list must match exactly, so a move cannot be forgotten).
+   Since the page loops moved (#1406) it is empty: any find fails.
    It sees a setTimeout whose callback calls the function it sits in (the
    nearest function before it), where that function or the callback reads:
    api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
-const HAND_POLLS_LEFT = [
-  "views-lifecycle-import.js watchMoves",
-];
+const HAND_POLLS_LEFT = [];
 function handPolls(file, src) {
   const head = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)?\s*([A-Za-z_$][\w$.]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>/g;
   const found = [];

@@ -62,11 +62,14 @@ async function viewImport() {
     </tbody></table></div></div>` : ""}
 
 `);
-  // A copy under way moves faster than the page's 15-second refresh.
-  clearTimeout(window.__importFollow);
-  if (jobs.some(j => !["done", "failed", "complete", "completed", "succeeded"].includes(String(j.state || "").toLowerCase())))
-    window.__importFollow = setTimeout(() => { if (STATE.view === "imports") refresh(); }, 5000);
+  // A copy under way moves faster than the page's 15-second refresh: the page
+  // is drawn again 5 s after each draw. A page poll (#1406), so a hidden tab
+  // draws nothing and leaving the page ends it; each draw replaces the one before.
+  importFollow?.stop();
+  importFollow = jobs.some(j => !["done", "failed", "complete", "completed", "succeeded"].includes(String(j.state || "").toLowerCase()))
+    ? UI.poll(async () => { if (STATE.view !== "imports") return false; await refresh(); }, 5000, { page: true, later: true }) : null;
 }
+let importFollow = null;
 
 const SOURCE_KINDS = { unraid: "Unraid", proxmox: "Proxmox", ssh: "Docker host" };
 /* Servers are shared by both Import tabs: after a change, draw the one that is open. */
@@ -821,15 +824,25 @@ window.clusterCheck = async name => {
 /* What a move from this cluster still needs, as steps with the fix beside
    each: the connection, then backup storage over there that this cluster
    can reach. */
-window.clusterReady = async name => {
+/* While its backup storage starts, a cluster is checked again 15 s after each
+   answer: one page poll per cluster name (#1406). A check from outside the poll
+   (a button, the card drawn) starts or stops it; the poll's own check gets the
+   poll's signal and says whether to go on. A failed check is shown, and a
+   running poll tries again. */
+const clusterReadyPolls = new Map();
+window.clusterReady = async (name, signal) => {
   const host = $("#clready_" + name);
-  if (!host) return;
+  if (!host) return false;
   host.innerHTML = '<span class="dim xs"><span class="spin2"></span> checking what a move needs…</span>';
   let r;
   try {
     r = await api("/api/move/clusters/readiness", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }) });
-  } catch (e) { host.innerHTML = `<div class="dim xs">${esc(e.message)}</div>`; return; }
+      body: JSON.stringify({ name }), signal });
+  } catch (e) {
+    if (!UI.pollCancelled(signal)) host.innerHTML = `<div class="dim xs">${esc(e.message)}</div>`;
+    return;
+  }
+  if (UI.pollCancelled(signal)) return;
   const target = r.target || {}, store = r.storage || {};
   (window.__clusterReady ||= {})[name] = r;
   const step = (ok, text, action = "") => `<div class="clstep ${ok ? "done" : "todo"}"><span>${ok ? "✓" : "•"}</span><div>${text}${action}</div></div>`;
@@ -864,9 +877,11 @@ window.clusterReady = async name => {
             `<div><button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(name)})">Set it up on ${esc(name)}</button></div>`))
     + step(r.ready, "Browse its apps and move them here");
   if (window.applyRole) applyRole();
-  clearTimeout(window["__clready_" + name]);
-  if (store.deployed && (!store.ready || ["pending", "applying"].includes(store.longhorn?.state)))
-    window["__clready_" + name] = setTimeout(() => { if ($("#clready_" + name)) clusterReady(name); }, 15000);
+  const follow = !!(store.deployed && (!store.ready || ["pending", "applying"].includes(store.longhorn?.state)));
+  if (signal) return follow;
+  clusterReadyPolls.get(name)?.stop();
+  clusterReadyPolls.delete(name);
+  if (follow) clusterReadyPolls.set(name, UI.poll(own => clusterReady(name, own), 15000, { page: true, later: true }));
 };
 
 window.clusterPointTarget = async (name, after = null) => {
@@ -1347,16 +1362,37 @@ function movesUnreadHtml(error) {
 window.movesUnreadHtml = movesUnreadHtml;
 
 /* Only the moves section repaints while one runs, so a form half-filled
-   elsewhere on the page is left alone. */
-async function watchMoves() {
-  clearTimeout(window.__moveTimer);
-  if (!$("#movesList")) return;
-  const moves = await api("/api/move/moves").catch(e => ({ error: e.message }));
+   elsewhere on the page is left alone. One page poll follows the moves, every
+   4 s after each answer, wherever it was started (#1406): Linked clusters'
+   card (movesFollow) or an action on a move (watchMoves). A read from outside
+   the poll starts or stops it; the poll's own read gets the poll's signal and
+   says whether to go on. A failed read is shown with Retry, and a running poll
+   tries again. */
+let movesPoll = null;
+function movesFollow(on) {
+  movesPoll?.stop();
+  movesPoll = on ? UI.poll(signal => watchMoves(signal), 4000, { page: true, later: true }) : null;
+}
+window.movesFollow = movesFollow;
+async function watchMoves(signal) {
+  if (!$("#movesList")) { if (!signal) movesFollow(false); return false; }
+  const moves = await api("/api/move/moves", signal ? { signal } : undefined).catch(e => ({ error: e.message }));
+  if (UI.pollCancelled(signal)) return;
   const host = $("#movesList");
-  if (host) host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+  // The same failure already on show stays as it is: its alert drawn again
+  // every 4 s would be announced again, and a focused Retry would lose focus.
+  // The element remembers what it showed (as it reads back), so anything
+  // painted over it since is painted over again.
+  const shown = host?.__movesUnread;
+  if (host && !(moves.error && shown?.error === moves.error && shown.html === host.innerHTML)) {
+    host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+    host.__movesUnread = moves.error ? { error: moves.error, html: host.innerHTML } : null;
+  }
   if (moves.error) return;
   if (window.applyRole) window.applyRole();
-  if ((moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending)) window.__moveTimer = setTimeout(watchMoves, 4000);
+  const follow = (moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending);
+  if (signal) return follow;
+  movesFollow(follow);
 }
 window.watchMoves = watchMoves;
 
@@ -1634,10 +1670,10 @@ window.imStorageAnyway = () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  importProgressCell, viewImport, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps,
+  importProgressCell, viewImport, importFollow, SOURCE_KINDS, importRepaint, importSourceCard, importSourceSteps,
   SOURCE_LEADS, SOURCE_KEY, importMappingRows, importFolderName, importMappingRow, importVolumeRow,
-  importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS,
+  importMapPicture, importBytes, imMode, imSafetyMissing, clusterCardHtml, CLUSTER_VERSION_TAGS, clusterReadyPolls,
   clusterVolumesHtml, MOVE_PLAN_EDITS, invalidateMovePlan, MOVE_VOLUMES, MOVE_TRANSFER_MODE,
   MOVE_SOURCE_NAMESPACE, MOVE_DEVICES, MOVE_LIVE, MOVE_TARGET, moveBody, MOVE_HELD, moveHold, moveChoiceLocked, moveDevicesTable, MOVE_VOLUME_ACTIONS,
-  moveVolumesTable, moveLoading, MOVE_PLAN, MOVE_STARTING, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
+  moveVolumesTable, moveLoading, MOVE_PLAN, MOVE_STARTING, MOVE_PHASE_WORDS, movesHtml, movesUnreadHtml, movesPoll, movesFollow, watchMoves, IMPORT_REVIEW, HOLD_KINDS, moveHoldsHtml
 };

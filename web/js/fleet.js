@@ -493,8 +493,8 @@ window.fleetMovesPaint = async () => {
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.
   clusters.forEach(moveSourceCheck);
-  clearTimeout(window.__moveTimer);
-  if (moves.some(m => m.status === "running")) window.__moveTimer = setTimeout(watchMoves, 4000);
+  // A move running is followed from 4 s on, by the moves' page poll (views-lifecycle-import.js).
+  movesFollow(moves.some(m => m.status === "running"));
   fleetPendingMove();
 };
 
