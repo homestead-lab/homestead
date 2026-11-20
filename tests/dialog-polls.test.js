@@ -223,33 +223,6 @@ test("a stopped poll that is not a dialog's reads no more, however the tab chang
   assert.equal(clock.pending(), 0);
 });
 
-/* The Volumes progress watch reads the whole volume list every 4 s while a
-   volume rebuilds or restores, which can be hours. A hidden tab reads none. */
-test("a busy volume with a hidden tab makes no /api/volumes read in 60 s", async () => {
-  const clock = fakeClock(), document = Object.assign(fakeDocument(), { querySelector: () => null });
-  const reads = [];
-  const ctx = { console, document, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
-    STATE: { view: "storage", data: { vols: [{ name: "data", rebuilding: true }] } },
-    volumeBusy: x => !!x.rebuilding, CSS: { escape: String }, api: async path => { reads.push(path); return [{ name: "data", rebuilding: true }]; } };
-  ctx.window = ctx;
-  vm.createContext(ctx);
-  const src = require("./helpers/storage-source")();
-  vm.runInContext(between(src, "function volumeProgressWatch()", "/* Claims on classes that are not Longhorn"), ctx);
-  vm.runInContext("volumeProgressWatch()", ctx);
-  await clock.advance(8000);
-  assert.equal(reads.length, 2, "a visible tab follows the rebuild");
-  document.show(false);
-  await clock.advance(60000);
-  assert.equal(reads.length, 2, "a hidden one reads nothing");
-  assert.equal(clock.pending(), 0, "and leaves no timer ticking");
-  document.show(true);
-  await clock.advance(4000);
-  assert.equal(reads.length, 3, "showing the tab starts the watch again");
-  document.show(false); document.show(true); document.show(false); document.show(true);
-  await clock.advance(4000);
-  assert.equal(reads.length, 4, "however often the tab is shown, one watch");
-});
-
 /* The ratchet: a repeating timer that reads must be a poll, which waits for
    its last read and stops in a hidden tab. setInterval does neither. A
    callback that is async, or calls api(), fetch() or post(), is flagged; one
@@ -434,9 +407,7 @@ test("going to another page stops that page's polls at once", async () => {
    nearest function before it), where that function or the callback reads:
    api(), mustRead(), fetch(), post(), refresh() or a view*() page. */
 const HAND_POLLS_LEFT = [
-  "views-lifecycle-images.js viewImages",
   "views-lifecycle-import.js watchMoves",
-  "views-storage-volumes.js volumeProgressWatch",
 ];
 function handPolls(file, src) {
   const head = /(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(|(?:const|let|var)?\s*([A-Za-z_$][\w$.]*)\s*=\s*(?:async\s*)?(?:\([^()]*\)|[A-Za-z_$][\w$]*)\s*=>/g;

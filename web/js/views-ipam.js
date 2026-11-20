@@ -58,8 +58,8 @@ window.ipamFilter = value => { STATE.ipamFilter = value; ipamPicks().clear(); re
    to untick them all and hide the bar mid-choice. */
 const ipamPicks = () => (STATE.ipamPicked = STATE.ipamPicked || new Set());
 
-async function viewIpam() {
-  const data = await api("/api/ipam");
+async function viewIpam({ signal } = {}) {
+  const data = await api("/api/ipam", { signal });
   // Someone part-way through a bulk change - typing a tag, choosing a
   // category - keeps the page as it is; the next refresh catches up.
   if (document.activeElement?.closest?.("#ipamBulk")) return;
@@ -173,7 +173,21 @@ function renderIpam() {
       ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
         : `<tbody><tr><td colspan="7" class="empty">There are no addresses yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
       </table></div></div></div>`, { actions, actionsClass: "ipam-head-acts" });
-  if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
+  ipamScanFollow(scanning);
+}
+/* While the subnet shown is being scanned, the page is read again every 3 s
+   until the scan ends. A page poll (#1406): nothing is read in a hidden tab, a
+   read with no answer is given up and tried again, and leaving the page or
+   this section (networkTab moves NAV_TOKEN) stops it. Every draw calls this;
+   one poll follows the visit, however often the page is drawn. */
+let ipamScanPoll = null;
+function ipamScanFollow(scanning) {
+  const live = ipamScanPoll && !ipamScanPoll.stopped && ipamScanPoll.visit === window.NAV_TOKEN;
+  if (!scanning) { ipamScanPoll?.stop(); ipamScanPoll = null; return; }
+  if (live) return;
+  ipamScanPoll?.stop();
+  ipamScanPoll = UI.poll(signal => viewIpam({ signal }), 3000, { later: true, page: true });
+  ipamScanPoll.visit = window.NAV_TOKEN;
 }
 
 /* ---------------- the table ---------------- */

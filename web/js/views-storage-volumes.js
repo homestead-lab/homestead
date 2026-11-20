@@ -158,21 +158,20 @@ function volumeUsageCell(x) {
     <span class="dim xs mono volsizes"><span data-tip="The size the volume was created with. This is not the disk space it uses.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="The disk space Longhorn uses for one copy, including snapshots and space not yet given back. It can be larger than the volume size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
-/* While anything rebuilds or restores, re-read the volumes every few seconds
-   and repaint only their Health and Usage cells, so the percentages move
-   without the table jumping. The request is an ordinary one: leaving the page
-   abandons it, which ends the loop, and coming back starts it again. */
+/* While anything rebuilds or restores, re-read the volumes every 4 s and
+   repaint only their Health and Usage cells, so the percentages move without
+   the table jumping. A page poll (#1406): a hidden tab reads nothing (#983: a
+   rebuild can last hours) and reads once when shown, a read with no answer is
+   given up and tried again, and leaving the page stops it. Every paint of the
+   page calls this; one poll follows the visit, whatever the number of paints. */
+let volumeProgressPoll = null;
 function volumeProgressWatch() {
-  clearTimeout(window.__volProgressTimer);
-  if (!(STATE.data.vols || []).some(volumeBusy)) return;
-  window.__volProgressTimer = setTimeout(async () => {
-    if (STATE.view !== "storage") return;
-    // A hidden tab reads nothing (#983): a rebuild can last hours. Showing
-    // the tab starts the watch again.
-    if (document.hidden) return document.addEventListener("visibilitychange", volumeProgressResume);
-    let vols;
-    try { vols = await api("/api/volumes"); } catch (e) { return volumeProgressWatch(); }
-    if (STATE.view !== "storage") return;
+  const live = volumeProgressPoll && !volumeProgressPoll.stopped && volumeProgressPoll.visit === window.NAV_TOKEN;
+  if (!(STATE.data.vols || []).some(volumeBusy)) { volumeProgressPoll?.stop(); volumeProgressPoll = null; return; }
+  if (live) return;
+  volumeProgressPoll?.stop();
+  volumeProgressPoll = UI.poll(async signal => {
+    const vols = await api("/api/volumes", { signal });
     STATE.data.vols = vols;
     for (const x of vols) {
       const row = document.querySelector(`#views tr[data-vol="${CSS.escape(x.name)}"]`);
@@ -188,12 +187,8 @@ function volumeProgressWatch() {
       if (actions && !actions.querySelector("details[open]")) actions.innerHTML = volumeActions(x);
     }
     volumeProgressWatch();
-  }, 4000);
-}
-function volumeProgressResume() {
-  if (document.hidden) return;
-  document.removeEventListener("visibilitychange", volumeProgressResume);
-  if (STATE.view === "storage") volumeProgressWatch();
+  }, 4000, { later: true, page: true });
+  volumeProgressPoll.visit = window.NAV_TOKEN;
 }
 
 /* Claims on classes that are not Longhorn - k3s's local-path, NFS - which
@@ -973,7 +968,7 @@ const attachedWorkloads = volume => volume.attached
 if (typeof module === "object" && module.exports) module.exports = {
   volumeReason, volumeUse, volumeCopiesLine, volumeCopiesTip, volumeUseCell, volumeBusy, volumeProgressBar,
   volumeHealthCell, volumeShortCell, volumeActions, forecastWhen, forecastDate, forecastTone, forecastFor,
-  forecastCard, volumeUsageCell, volumeProgressWatch, volumeProgressResume, shareGuestWindowsNote, otherVolumesHtml,
+  forecastCard, volumeUsageCell, volumeProgressPoll, volumeProgressWatch, shareGuestWindowsNote, otherVolumesHtml,
   storageLoad, partReading, viewStorage, storagePaint, volumeDeleteConfirmationValid, releasedBesideCurrent,
   volumeDeleteTarget, v2Summary, V2_HOW, v2Mark, v2Item, storageClassesPaint, homesteadClassLine, storageClassCard,
   storageClassTags, fileSize, monacoBase, monacoLoading, monacoLanguage, loadMonaco, monacoTheme, mountEditor,
