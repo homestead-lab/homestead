@@ -362,7 +362,12 @@ finishing, before anything is cordoned:
   checked again before it is removed, and the review then runs again. Records
   for a volume's data copy are only explained: removing one deletes that copy.
   A removed record stays, shown as being removed, until Longhorn has cleaned
-  up after it; review again a minute later.
+  up after it; review again a minute later. Each row also says whether
+  Longhorn removes such records by itself on this cluster, read from Longhorn's
+  `orphan-resource-auto-deletion` setting (`orphan-auto-deletion` before
+  Longhorn 1.9). Homestead shows the setting, also under Settings, Hardware and
+  storage, and does not change it. When the setting cannot be read, the row
+  says Homestead cannot tell.
 - Engines the host's instance-manager still lists that run elsewhere, or have
   no engine record.
 - Pods stuck terminating more than 15 minutes past their grace period, and

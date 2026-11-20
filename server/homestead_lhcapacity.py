@@ -19,6 +19,7 @@ import time
 import urllib.error
 from datetime import datetime
 import homestead_disk_v2 as DISK_V2
+import homestead_drain_blockers as BLOCKERS
 import homestead_operations as OPS
 import homestead_routes
 import homestead_kube as KUBE
@@ -78,6 +79,8 @@ HELD_GRACE = 180
 # without a word, so it is not offered.
 REBUILD = "concurrent-replica-rebuild-per-node-limit"
 REBUILD_RANGE = (1, 10)
+# How long whether Longhorn removes orphan records by itself is kept (seconds).
+ORPHAN_KEEP = 300
 WARN_PCT, CRIT_PCT = 80, 95
 GiB = 1024 ** 3
 
@@ -330,6 +333,22 @@ def _int(text, default):
         return default
 
 
+def orphan_auto_removal():
+    """Whether Longhorn removes orphan records by itself, as the settings page
+    says it: {"setting": the name read or None, "said": a sentence}. Shown
+    only; Homestead does not change it (drain blockers say it per row)."""
+    auto = BLOCKERS.auto_removal(kget)
+    unsure = BLOCKERS.auto_unsure(auto, "orphan records")
+    if unsure:
+        return {"setting": auto and auto["setting"], "said": unsure}
+    on = [BLOCKERS.AUTO_WORDS[kind] for kind in BLOCKERS.AUTO_KINDS if auto[kind] is True]
+    off = [BLOCKERS.AUTO_WORDS[kind] for kind in BLOCKERS.AUTO_KINDS if auto[kind] is False]
+    said = (f"Longhorn removes records of {' and '.join(on)} by itself"
+            + (f", but not records of {' or '.join(off)}." if off else ".")
+            if on else f"Longhorn does not remove records of {' or '.join(off)} by itself.")
+    return {"setting": auto["setting"], "said": said}
+
+
 def settings():
     return {"over_provisioning": _int(_setting(OVER, 100), 100),
             "minimal_available": _int(_setting(MINIMAL, 25), 25),
@@ -398,6 +417,9 @@ def status():
     out["rwx_fast_failover"] = cfg["rwx_fast_failover"]
     out["replenish_wait"] = cfg["replenish_wait"]
     out["replenish_choices"] = list(REPLENISH_CHOICES)
+    # Only the settings card shows it, but its route serves the leader's snapshot
+    # of status(); kept a while, so status()'s other callers add no read each.
+    out["orphan_auto_removal"] = homestead_routes.cached("lh-orphan-auto-removal", ORPHAN_KEEP, orphan_auto_removal)
     return out
 
 

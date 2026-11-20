@@ -1,6 +1,7 @@
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -140,6 +141,72 @@ class NodeDownTests(unittest.TestCase):
         def missing(path):
             raise urllib.error.HTTPError(path, 404, "missing", None, None)
         self.assertIsNone(LHCAP.node_down(missing))
+
+
+class OrphanAutoRemovalTests(unittest.TestCase):
+    """Settings > Hardware and storage shows whether Longhorn removes orphan
+    records by itself. Shown only: Homestead does not change the setting."""
+
+    def said(self, *settings, fail=None):
+        c = Cluster(self)
+        for obj in settings:
+            c.kube.add(obj)
+        if fail:
+            c.kube.fail(f"{LHCAP.LH}/settings/{fail}", 500)
+        shown = LHCAP.orphan_auto_removal()
+        self.assertEqual([], c.sent, "shown only, never written")
+        return shown
+
+    def test_the_new_list_setting(self):
+        cases = {"": "Longhorn does not remove records of leftover processes or leftover volume data by itself.",
+                 "instance": "Longhorn removes records of leftover processes by itself, but not records of "
+                             "leftover volume data.",
+                 "replica-data;instance": "Longhorn removes records of leftover processes and leftover volume data "
+                                          "by itself."}
+        for value, said in cases.items():
+            with self.subTest(value=value):
+                shown = self.said(setting("orphan-resource-auto-deletion", value))
+                self.assertEqual(said, shown["said"])
+                self.assertEqual("orphan-resource-auto-deletion", shown["setting"])
+
+    def test_the_old_on_or_off_setting(self):
+        shown = self.said(setting("orphan-auto-deletion", "false"))
+        self.assertEqual("Longhorn does not remove records of leftover volume data by itself.", shown["said"])
+        self.assertEqual("orphan-auto-deletion", shown["setting"])
+        self.assertEqual("Longhorn removes records of leftover volume data by itself.",
+                         self.said(setting("orphan-auto-deletion", "true"))["said"])
+
+    def test_missing_or_unreadable_cannot_tell(self):
+        cannot = ("Homestead cannot tell whether Longhorn removes orphan records by itself. "
+                  "It could not read Longhorn's orphan-resource-auto-deletion setting.")
+        self.assertEqual(cannot, self.said()["said"])
+        # A leftover old setting that is on does not answer for a failed read of the new one.
+        self.assertEqual(cannot, self.said(setting("orphan-resource-auto-deletion", ""),
+                                           setting("orphan-auto-deletion", "true"),
+                                           fail="orphan-resource-auto-deletion")["said"])
+
+    def test_a_value_homestead_does_not_know_is_said_as_such(self):
+        self.assertEqual("Homestead cannot tell whether Longhorn removes orphan records by itself. Longhorn's "
+                         "orphan-resource-auto-deletion setting holds a value Homestead does not know: instance;all.",
+                         self.said(setting("orphan-resource-auto-deletion", "instance;all"))["said"])
+
+    def test_status_carries_it_kept_for_a_while(self):
+        # The settings card's route serves the leader's snapshot of status(),
+        # which the overview, the forecast and storage classes call too.
+        c = Cluster(self)
+        c.kube.add(setting("orphan-resource-auto-deletion", ""))
+        kept = {}
+
+        def cached(key, seconds, fn):
+            if (key, seconds) not in kept:
+                kept[(key, seconds)] = fn()
+            return kept[(key, seconds)]
+        with mock.patch.object(LHCAP.homestead_routes, "cached", cached):
+            first, second = LHCAP.status(), LHCAP.status()
+        self.assertEqual([("lh-orphan-auto-removal", LHCAP.ORPHAN_KEEP)], list(kept))
+        self.assertEqual("orphan-resource-auto-deletion", first["orphan_auto_removal"]["setting"])
+        self.assertIs(first["orphan_auto_removal"], second["orphan_auto_removal"])
+        self.assertEqual(1, len([p for p, _ in c.kube.reads if "orphan-resource" in p]))
 
 
 if __name__ == "__main__":
