@@ -217,9 +217,30 @@ class EndToEnd(unittest.TestCase):
                                                           ("POST", "/api/audit-test/save"): plain}))
         self.send("POST", "/api/audit-test/note", {})
         self.send("POST", "/api/audit-test/save", {})
-        first, second = self.wait_for(2)
-        self.assertEqual("container_restart", first.get("tool"))
-        self.assertNotIn("tool", second)
+        # By path, not by place: each request queues its hooks on its own thread
+        # after its answer is sent, so the second line can be written first.
+        written = self.wait_for(2)
+        self.assertEqual(2, len(written))
+        lines = {line["path"]: line for line in written}
+        self.assertEqual({"/api/audit-test/note", "/api/audit-test/save"}, set(lines))
+        self.assertEqual("container_restart", lines["/api/audit-test/note"].get("tool"))
+        self.assertNotIn("tool", lines["/api/audit-test/save"])
+
+    def test_what_one_request_noted_stays_its_own_when_the_next_line_is_written_first(self):
+        """The request that noted is held between its answer and the queueing of
+        its hooks, as a loaded machine can hold it, until the other request's
+        line is written: the lines swap places."""
+        take = ROUTES._take_notes
+
+        def held():
+            taken = take()
+            if "tool" in taken:     # the noting request, whichever thread gets here first
+                with self.arrived:
+                    self.arrived.wait_for(lambda: self.lines, timeout=5)
+            return taken
+        self.enterContext(mock.patch.object(ROUTES, "_take_notes", held))
+        self.test_what_one_request_noted_never_reaches_the_next()
+        self.assertEqual(["/api/audit-test/save", "/api/audit-test/note"], [line["path"] for line in self.lines])
 
     def test_no_line_is_lost_in_normal_use(self):
         route = ROUTES.Route("POST", "/api/audit-test/save", "operator", lambda request: {"ok": True}, "test")
