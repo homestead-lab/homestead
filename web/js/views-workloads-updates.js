@@ -176,7 +176,7 @@ const IMAGE_REVIEW = UI.reviewFlow({
       }
       if (IMAGE_REVIEW_OPEN !== input || !$("#imageReviewLoading")) throw new Error("This review was replaced");
       if (!preview.capacity || !preview.capacity_token || !Array.isArray(preview.images)) throw new Error("The capacity review is not available. No update was started.");
-      rows.push({config, preview});
+      rows.push({config, preview, reviewedAt: Date.now()});
     }
     if (!rows.length) throw new Error("Choose at least one image change");
     return rows;
@@ -260,10 +260,23 @@ const IMAGE_REVIEW = UI.reviewFlow({
       let complete = false;
       try {
         for (let index = start; index < rows.length; index++) {
-          const {config, preview} = rows[index], key = rolloutKey(config);
+          const {config} = rows[index], key = rolloutKey(config);
           if (!active()) return;
-          let job = "";
+          let job = "", preview = rows[index].preview;
           try {
+            // The server keeps a review for 10 minutes, and the queue waits for
+            // each app before the next: an app reached later is checked again
+            // first, and goes on only when nothing the person saw has changed.
+            if (Date.now() - rows[index].reviewedAt > REVIEW_FRESH_MS) {
+              states[key] = {phase: "checking again", ready: 0, desired: 0}; paint();
+              const fresh = await api("/api/image-updates/preview", {method: "POST",
+                headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
+              if (!active()) return;
+              const changed = reviewChanged(preview, fresh);
+              if (changed) throw new Error(`${config.name} changed since the review. ${changed}`);
+              rows[index] = {config, preview: fresh, reviewedAt: Date.now()};
+              preview = fresh;
+            }
             if (restartsHomestead(config) && !config.cluster && config.action !== "rollback") {
               try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
             }
@@ -356,6 +369,24 @@ let IMAGE_QUEUE = null;     // the stopped queue, while Skip and continue can re
 // Progress reads in a row with no answer before the queue stops: about a
 // minute and a half, with each read's own 10 s timeout and 3 s pause.
 const PROGRESS_MISSES = 20;
+// How old an app's review may be when the queue reaches it. The server keeps
+// a review for 10 minutes; older than this, the app is checked again first.
+const REVIEW_FRESH_MS = 5 * 60 * 1000;
+/* What differs between the review a person accepted and a fresh one for the
+   same app, as a sentence; "" when the fresh one shows nothing new: the same
+   images, not blocked, and no warning the person did not see. */
+function reviewChanged(reviewed, fresh) {
+  if (!fresh?.capacity || !fresh.capacity_token || !Array.isArray(fresh.images)) return "Its review could not be checked again.";
+  if (fresh.capacity.blocked) return imagePlacementBlocker(fresh.capacity);
+  const after = preview => JSON.stringify(Object.fromEntries((preview.images || []).map(i => [i.container, i.after])));
+  if (after(reviewed) !== after(fresh)) {
+    const now = (fresh.images || []).map(i => shortImage(i.after)).join(", ");
+    return `Its new image is now ${now || "different"}.`;
+  }
+  const seen = new Set(updateConcerns(reviewed.capacity || {}));
+  const added = updateConcerns(fresh.capacity).filter(text => !seen.has(text));
+  return added.length ? `A new warning: ${added.map(text => text.replace(/\.$/, "")).join("; ")}.` : "";
+}
 
 /* After a rollout: the list and the waiting updates as they are now, so the
    page shows the new image without a refresh. The server has re-asked about
@@ -392,7 +423,10 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const ready = items.filter(item => phaseOf(item) === "ready" && !failureMap[rolloutKey(item)]);
   const current = items.filter(item => phaseOf(item) === "up to date");
   const failedItems = items.filter(item => failureMap[rolloutKey(item)] || phaseOf(item) === "failed");
-  const notStarted = items.filter(item => phaseOf(item) === "not started");
+  // An app that failed to start is counted once, as failed.
+  const notStarted = items.filter(item => phaseOf(item) === "not started" && !failureMap[rolloutKey(item)]);
+  // Only the failure that stopped the queue can be skipped: an earlier one was skipped already.
+  const stopper = startFailures.length ? rolloutKey(startFailures[startFailures.length - 1]) : "";
   const done = ready.length + current.length;
   const pending = items.filter(item => !ready.includes(item) && !current.includes(item));
   const failed = failedItems.length > 0;
@@ -407,8 +441,8 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       // The ready count can be the old pod's: what the new one waits for says more.
       const waiting = !["ready", "up to date"].includes(phase) && (state?.pods || []).find(pod => pod.blocked);
       const actions = startError && queueMode ? [startError.job ? UI.button("Open job", `imageQueueJob(${jsArg(startError.job)})`) : "",
-        IMAGE_QUEUE && notStarted.length ? UI.button(`Skip and continue with ${notStarted.length} more`, "imageQueueSkip()") : ""].join("") : "";
-      return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
+        IMAGE_QUEUE && notStarted.length && key === stopper ? UI.button(`Skip and continue with ${notStarted.length} more`, "imageQueueSkip()") : ""].join("") : "";
+      return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired && !["not started", "queued"].includes(state.phase) ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
         ${UI.chip(phase, tone)}${startError ? `<div class="updateerror">${esc(startError.error)}</div>` : ""}
         ${actions ? `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">${actions}</div>` : ""}
         ${waiting ? `<div class="dim xs">New copy waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
@@ -419,12 +453,14 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
     : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the apps still waiting. Updates already started continue in Jobs.</p>' : "";
   // One track across the apps: the one updating fills its segment as it goes
   // through its stages; its stage and detail are said under the track.
-  const live = running && states[rolloutKey(running)], st = live && rolloutStages(live);
+  const live = running && states[rolloutKey(running)], checking = live?.phase === "checking again";
+  const st = live && !checking && rolloutStages(live);
   const at = running ? items.indexOf(running) : failed ? items.length : items.findIndex(item => pending.includes(item));
   const list = items.map(item => {
     const key = rolloutKey(item), phase = failureMap[key] ? "failed" : states[key]?.phase;
     return { title: item.name, state: phase === "failed" ? "failed" : ["ready", "up to date"].includes(phase) ? "done" : item === running ? "current" : "todo",
-      detailHtml: item === running && st ? `${esc(st.list[Math.min(st.current, 2)].title)}${st.list[Math.min(st.current, 2)].detailHtml ? `: ${st.list[Math.min(st.current, 2)].detailHtml}` : ""}` : "" };
+      detailHtml: item === running && checking ? "Checking the review again, since it is more than 5 minutes old"
+        : item === running && st ? `${esc(st.list[Math.min(st.current, 2)].title)}${st.list[Math.min(st.current, 2)].detailHtml ? `: ${st.list[Math.min(st.current, 2)].detailHtml}` : ""}` : "" };
   });
   const status = failed ? [queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention", "warn"]
     : done === items.length ? ["finished", "ok"] : reconnecting ? ["reconnecting", "warn"] : ["monitoring", "ok"];
@@ -589,6 +625,6 @@ window.jobLogs = (ns, job) => openLogs(job, `/api/logs?ns=${encodeURIComponent(n
 if (typeof module === "object" && module.exports) module.exports = {
   shortImage, imageVersion, imageChangeWords, imagePlacementBlocker, UNCHANGED_BY_UPDATE, updateConcerns,
   groupedConcerns, clusterHeaders, rolloutKey, rolloutBody, restartsHomestead, rolloutChanged,
-  IMAGE_REVIEW_OPEN, IMAGE_REVIEW, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, refreshAfterRollout,
+  IMAGE_REVIEW_OPEN, IMAGE_REVIEW, reviewImageActions, IMAGE_QUEUE, PROGRESS_MISSES, REVIEW_FRESH_MS, reviewChanged, refreshAfterRollout,
   asSentence, paintRollout, batchUpdateMarkup, pullElapsed, pullDetail, pullSize, rolloutStages, rolloutProgress, rolloutMarkup
 };

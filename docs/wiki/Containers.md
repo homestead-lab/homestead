@@ -1149,6 +1149,10 @@ workload, expired approval or newly insufficient capacity requires another revie
 The server rechecks capacity and update policy before applying the change.
 
 Staged updates run one at a time and wait for readiness, with Homestead last.
+When the queue reaches an app more than five minutes after the review, it
+reviews that app again first. It goes on only when the images are the same and
+there is no new warning; otherwise it stops and says what changed. A refusal of
+an expired approval says the review is too old rather than that something changed.
 Failure, lost contact or changed rollout identity stops the remaining queue.
 Closing the dialog also stops unstarted updates; submitted rollouts continue and
 can be followed in Jobs. After reconnecting or self-updating, check the active job
