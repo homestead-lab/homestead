@@ -242,13 +242,16 @@ function osUpdatesCheckFollow(running) {
   else if (!osUpdatesCheckPoll || osUpdatesCheckPoll.stopped) osUpdatesCheckPoll = UI.poll(signal => osUpdatesCardPaint(signal), 4000, { later: true, page: true });
 }
 // `signal` is the poll's own read; any other paint starts or ends the poll.
+// A card replaced while the read was on its way (Settings redrawn) drops the
+// answer but keeps the poll: the redraw's own paint has taken over the card,
+// and the next turn reads for the new one. Only no card at all ends it.
 window.osUpdatesCardPaint = async signal => {
   const card = $("#settingsHostUpdates");
   if (!card) return false;
   const header = actions => `${UI.moduleHeader(`Host updates`, `Operating system packages, security updates and restarts`, `${actions}`)}`;
   try {
     const r = await api("/api/os-updates", signal ? { signal } : undefined);
-    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return false;
+    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return UI.pollCancelled(signal) || !$("#settingsHostUpdates") ? false : undefined;
     const following = !!(r.applies && r.checking?.running);
     if (!signal) osUpdatesCheckFollow(following);
     if (!r.applies) { card.innerHTML = header("") + osUpdatesUnavailableHtml(); return false; }
@@ -277,7 +280,7 @@ window.osUpdatesCardPaint = async signal => {
     if (window.applyRole) applyRole();
     return following ? undefined : false;
   } catch (e) {
-    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return false;
+    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return UI.pollCancelled(signal) || !$("#settingsHostUpdates") ? false : undefined;
     osUpdatesCheckFollow(false);
     card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "The host update status could not be read.", esc(e.message));
     return false;

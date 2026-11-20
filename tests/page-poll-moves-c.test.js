@@ -103,13 +103,29 @@ test("host check: a read with no answer in 30 s is given up and shown, with Try 
 
 test("host check: painted again while it follows (Check now), it runs one loop", async () => {
   const w = await osFollowing();
-  w.pollAuto = r => r.answer(osReport(true));
-  w.answers.auto = r => w.pollAuto(r);
+  w.answers.auto = r => r.answer(osReport(true));
   w.ctx.osUpdatesCardPaint(); await w.clock.settle();
   w.ctx.osUpdatesCardPaint(); await w.clock.settle();
   const before = w.checks().length;
   await w.clock.advance(4 * OS_EVERY);
   assert.equal(w.checks().length - before, 4, "one read per interval, not two or three");
+});
+
+// Settings redrawn (a save, a role change, pull-to-refresh) replaces the card while the
+// poll's read is on its way; the redraw's own paint answers first. The poll goes on.
+test("host check: Settings redrawn while the poll reads, the poll goes on with the new card", async () => {
+  const w = await osFollowing();
+  await w.clock.advance(OS_EVERY);
+  const late = w.checks()[1];
+  w.fields[OS_CARD] = { innerHTML: "" };
+  w.ctx.osUpdatesCardPaint(); await w.clock.settle();
+  w.checks()[2].answer(osReport(true)); await w.clock.settle();
+  late.answer(osReport(true)); await w.clock.settle();
+  w.fields[OS_CARD].innerHTML = "";
+  await w.clock.advance(OS_EVERY);
+  assert.equal(w.checks().length, 4, "the next interval still reads");
+  w.checks()[3].answer(osReport(true)); await w.clock.settle();
+  assert.match(w.fields[OS_CARD].innerHTML, /Checking hosts/, "and paints the new card");
 });
 
 /* ---------------- Homestead's health (Settings > Homestead), every 15 s ---------------- */
@@ -208,4 +224,19 @@ test("health: painted again (a setting switched, Settings redrawn), it runs one 
   const before = w.checks().length;
   await w.clock.advance(4 * HEALTH_EVERY);
   assert.equal(w.checks().length - before, 4, "one read per interval, not two or three");
+});
+
+test("health: Settings redrawn while the poll reads, the poll goes on with the new card", async () => {
+  const w = await healthShown();
+  await w.clock.advance(HEALTH_EVERY);
+  const late = w.checks()[1];
+  w.fields[HEALTH_CARD] = { innerHTML: "" };
+  w.ctx.selfHealthPaint(); await w.clock.settle();
+  w.checks()[2].answer(HEALTH); await w.clock.settle();
+  late.answer(HEALTH); await w.clock.settle();
+  w.fields[HEALTH_CARD].innerHTML = "";
+  await w.clock.advance(HEALTH_EVERY);
+  assert.equal(w.checks().length, 4, "the next interval still reads");
+  w.checks()[3].answer(HEALTH); await w.clock.settle();
+  assert.match(w.fields[HEALTH_CARD].innerHTML, /all well/, "and paints the new card");
 });

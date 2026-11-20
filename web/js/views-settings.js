@@ -1211,18 +1211,19 @@ function selfHealthFollow() {
     15000, { later: true, page: true });
 }
 
-// `signal` is the poll's own read.
+// `signal` is the poll's own read. A card replaced while it was on its way
+// (Settings redrawn) drops the answer but keeps the poll; no card ends it.
 async function selfHealthPaint(signal) {
   const host = $("#selfHealthCard");
   if (!host) return false;
   let h;
   try { h = await api("/api/self/health", signal ? { signal } : undefined); }
   catch (e) {
-    if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return false;
+    if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return UI.pollCancelled(signal) || !$("#selfHealthCard") ? false : undefined;
     host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message));
     return selfHealthFollow();
   }
-  if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return false;
+  if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return UI.pollCancelled(signal) || !$("#selfHealthCard") ? false : undefined;
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   const auditFile = STATE.data.appSettings?.audit?.file !== false;
