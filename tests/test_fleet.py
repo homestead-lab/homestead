@@ -732,6 +732,21 @@ class MemberCallDeadlineTests(unittest.TestCase):
                 conn.sendall(b"X")
         self.ends_by_the_deadline(speak, method="POST")
 
+    def test_a_redirect_to_a_far_end_that_trickles_its_headers_ends_by_the_deadline(self):
+        """The connection a followed redirect makes is watched like the first one."""
+        def slow(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        there = self.far_end(slow)
+
+        def moved(conn, stop):
+            conn.recv(4096)
+            conn.sendall(f"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{there}/api/fleet/state\r\n"
+                         "Content-Length: 0\r\nConnection: close\r\n\r\n".encode())
+        self.ends_by_the_deadline(moved)
+
     def trickled_refusal(self, status):
         def speak(conn, stop):
             conn.recv(4096)
