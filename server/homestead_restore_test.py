@@ -256,7 +256,7 @@ def _waiting(pod):
         waiting = (status.get("state") or {}).get("waiting") or {}
         if waiting.get("reason") in ("CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "CreateContainerConfigError",
                                      "CreateContainerError"):
-            return f"{status.get('name')}: {waiting['reason']}" + (f" - {waiting.get('message')[:140]}" if waiting.get("message") else "")
+            return f"{status.get('name')}: {waiting['reason']}" + (f" - {MASKS.cut(waiting['message'], 140)}" if waiting.get("message") else "")
     for condition in ((pod or {}).get("status") or {}).get("conditions") or []:
         if condition.get("type") == "PodScheduled" and condition.get("status") == "False":
             return condition.get("message") or "it could not be scheduled"
@@ -265,6 +265,19 @@ def _waiting(pod):
 
 def resolve(item, checkpoint, now=None):
     """Move one restore test on a step: (status, progress, message)."""
+    status, progress, message = _resolve(item, checkpoint, now)
+    return status, progress, _shown(message)
+
+
+def _shown(text):
+    """A message as it is shown and kept. It quotes Kubernetes, Longhorn and
+    the copy's own answers, which can hold an address, so any address in it
+    has its login masked, for every role, as other job messages do (_said).
+    Masking twice changes nothing."""
+    return MASKS.strip_url_secrets(str(text))
+
+
+def _resolve(item, checkpoint, now=None):
     now = now or time.time()
     ref = item["ref"]
     ns, name = ref["namespace"], ref["name"]
@@ -308,7 +321,7 @@ def resolve(item, checkpoint, now=None):
                     return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {made.get('message') or 'restores are not supported here'}")
             except ValueError as error:
                 if "already exists" not in str(error):
-                    return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {str(error)[:160]}")
+                    return _finish(item, to, False, f"the backup of {row['claim']} could not be restored: {MASKS.cut(str(error), 160)}")
         # The backup too: a restore Longhorn finished on fewer copies ends only for its own backup.
         states = [restore_status({"ref": {"namespace": ns, "name": r["restored"], "backup": r["backup"]}})
                   for r in ref["rows"]]
@@ -385,9 +398,9 @@ def _make_copy(item, ns, dep):
                 return f"Kubernetes refused the test's {what}: {_said(error)}", True
             return f"the test's {what} could not be made yet: {_said(error)}", False
         except (KeyError, TypeError) as error:      # the app's spec is not what a copy can be built from
-            return f"the test's {what} could not be built from the app ({type(error).__name__}: {error})"[:200], True
+            return MASKS.cut(f"the test's {what} could not be built from the app ({type(error).__name__}: {error})", 200), True
         except (OSError, ValueError) as error:      # no answer, a timeout, a reply that was not JSON
-            return f"the test's {what} could not be made yet: {str(error)[:160] or type(error).__name__}", False
+            return f"the test's {what} could not be made yet: {MASKS.cut(str(error), 160) or type(error).__name__}", False
     return "", False
 
 
@@ -427,7 +440,7 @@ def _remove_made(item, saved=False):
             else:
                 _send("DELETE", path)
         except Exception as error:
-            left.append(f"{path.rsplit('/', 1)[-1]} ({str(error)[:60]})")
+            left.append(_shown(f"{path.rsplit('/', 1)[-1]} ({MASKS.cut(str(error), 60)})"))
     return left
 
 
@@ -460,12 +473,12 @@ def _finish(item, to, ok, why):
     took = int(now - ref.get("started", now))
     said = ", ".join(f"{r['claim']} from {r['backup']}" for r in ref.get("rows") or [])
     skipped = ref.get("without") or []
-    message = (("Restore test passed: " if ok else "Restore test failed: ") + why
-               + (f". Restored {said}." if said else ".")
-               + (" Not tested: " + "; ".join(f"{w['claim']} ({w['why']})" for w in skipped) + "." if skipped else "")
-               + (" The copy ran privileged, as the app does, so it could reach the host's devices. It had no network"
-                  " and none of the app's shares or host folders." if ref.get("privileged") else "")
-               + (" Homestead could not remove " + ", ".join(left) + ". Remove them manually." if left else ""))
+    message = _shown(("Restore test passed: " if ok else "Restore test failed: ") + why
+                     + (f". Restored {said}." if said else ".")
+                     + (" Not tested: " + "; ".join(f"{w['claim']} ({w['why']})" for w in skipped) + "." if skipped else "")
+                     + (" The copy ran privileged, as the app does, so it could reach the host's devices. It had no network"
+                        " and none of the app's shares or host folders." if ref.get("privileged") else "")
+                     + (" Homestead could not remove " + ", ".join(left) + ". Remove them manually." if left else ""))
     try:
         ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
               {"metadata": {"annotations": {names.key(RESULT): json.dumps(
