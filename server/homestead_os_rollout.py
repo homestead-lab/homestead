@@ -49,7 +49,7 @@ reboot = None           # (node, allow_data_risk) -> operation id; raises with t
 operation = None        # operation id -> the job-tray item, or None
 set_cordon = None       # (node, bool)
 power_job = None        # (node, since epoch) -> id of a power job for it not failed, or ""
-restart_check = None    # (node, allow_data_risk) -> (what the review would refuse with today or "", may it clear by itself)
+restart_check = None    # (node, allow_data_risk) -> (what the review would refuse with today or "", may it clear by itself[, its reasons as parts])
 own_node = lambda: ""
 announce = lambda rollout: None   # rollout -> its job-tray entry
 DATA_DIR = "/data"
@@ -864,8 +864,10 @@ def preview(names):
     """What an update of these hosts would do, for its review, and what the
     restart checks would say today. Read only. Hosts in the order they would
     run. blocked says why it can't start now; restart_refusal only means that
-    host would install and then wait for a person. The token follows what the
-    person would be agreeing to, not the time anything was read."""
+    host would install and then wait for a person, and restart_reasons says the
+    same one reason at a time. The token follows what the person would be
+    agreeing to, not the time anything was read; the reasons are not in it, as
+    the words already are."""
     names = _chosen(names)
     p = platform(30) or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
@@ -881,17 +883,19 @@ def preview(names):
     for name in sorted(names, key=lambda name: (name == own, name)):
         facts = host_os.stored(name) or {}
         ready = name in nodes and _ready(nodes[name])
-        refusal, may_clear, unread = "", False, ""
+        refusal, may_clear, reasons, unread = "", False, [], ""
         if ready:
             try:
                 if restart_check is None:
                     raise ValueError("the restart checks are not available")
-                refusal, may_clear = restart_check(name, config["single_copy"])
+                refusal, may_clear, *rest = restart_check(name, config["single_copy"])
+                reasons = list(rest[0]) if rest else []
             except Exception as error:
                 unread = str(error)[:200]
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),
                       "reboot": bool(facts.get("reboot")), "reboot_for": facts.get("reboot_for") or "", "at": facts.get("at"),
                       "homestead_here": name == own, "restart_refusal": refusal, "restart_may_clear": may_clear, "restart_unread": unread,
+                      "restart_reasons": reasons,
                       "busy": _busy_host(name), "unclean_restart": LHCAP.unclean_restart_warning(lone, name)})
     missing = [h["node"] for h in hosts if not h["ready"]]
     blocked = (RUNNING if (state.get("rollout") or {}).get("status") == "running" else "") or _busy_cluster() \

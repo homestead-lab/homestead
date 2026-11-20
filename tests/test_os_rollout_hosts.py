@@ -1713,3 +1713,153 @@ class StopBeforeAnyStepTests(Runs):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+SETTING = "Restart a host even when a volume has its only healthy copy there"
+
+
+class RestartReasonsTests(FakeCluster):
+    """#1494: the refusal's reasons as parts, for the review to show one line
+    each, beside the very words a refusal says today (the rollout's notes and
+    its wait use those words)."""
+    def plan(self, **extra):
+        return {**power.plan("node-a", "reboot"), **extra}
+
+    def answer(self, plan, allow_single_copy=False):
+        with mock.patch.object(POWER_JOBS.POWER, "plan", return_value=plan):
+            return POWER_JOBS.rollout_check("node-a", allow_single_copy)
+
+    def part(self, reasons, kind):
+        found = [r for r in reasons if r["kind"] == kind]
+        self.assertEqual(1, len(found), f"one {kind} part in {reasons}")
+        return found[0]
+
+    def test_nothing_in_the_way_has_no_reasons(self):
+        self.assertEqual(("", False, []), POWER_JOBS.rollout_check("node-a"))
+
+    def test_the_words_stay_as_they_were_and_each_reason_is_a_part(self):
+        hold = [{"kind": "VirtualMachine", "ns": "vms", "name": "win", "default": "move", "id": "v"},
+                {"kind": "Deployment", "ns": "apps", "name": "web", "default": "wait", "id": "w"}]
+        volumes = [{"claim": f"lab/v{n}", "risk": "single-copy"} for n in range(1, 6)]
+        kept = [{"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"},
+                {"pod": "apps/tmp", "kind": "emptyDir", "source": ""}]
+        text, may_clear, reasons = self.answer(self.plan(hold=hold, requires_data_ack=True, volumes=volumes,
+                                                         maintenance={"local_storage": kept}))
+        # Exactly what dev says for the same plan.
+        self.assertEqual("Running VMs are on this host. Migrate or stop them and review again.; These would have to stop "
+                         "and wait for the host: apps/web; a volume has its only healthy copy on this host: lab/v1, lab/v2, "
+                         "lab/v3, lab/v4; pods keep data on this host itself: apps/db (/srv/db) (the settings do not accept that)",
+                         text)
+        self.assertFalse(may_clear)
+        self.assertEqual(["vms", "would-wait", "single-copy", "host-data"], [r["kind"] for r in reasons])
+        vms = self.part(reasons, "vms")
+        self.assertEqual((1, ["vms/win"]), (vms["count"], vms["names"]))
+        waits = self.part(reasons, "would-wait")
+        self.assertEqual((1, ["apps/web"]), (waits["count"], waits["names"]))
+        self.assertIn("Restart host…", waits["clears"])
+        single = self.part(reasons, "single-copy")
+        self.assertEqual((5, ["lab/v1", "lab/v2", "lab/v3", "lab/v4"]), (single["count"], single["names"]), "counted all, names capped")
+        self.assertEqual("5 volumes have their only healthy copy on this host.", single["text"])
+        self.assertIn(SETTING, single["clears"])
+        self.assertIn("Host updates settings", single["clears"])
+        self.assertIn("second healthy copy", single["clears"])
+        data = self.part(reasons, "host-data")
+        self.assertEqual((1, ["apps/db (/srv/db)"]), (data["count"], data["names"]), "scratch space is no reason")
+        self.assertEqual("1 pod keeps data on this host itself.", data["text"])
+        self.assertIn(SETTING, data["clears"])
+        for part in reasons:
+            self.assertEqual({"kind", "text", "count", "names", "clears"}, set(part))
+            self.assertNotIn("lab/v1", part["text"], "names travel apart")
+            self.assertTrue(part["text"].endswith(".") and part["clears"].endswith("."))
+
+    def test_the_setting_skips_the_volume_and_the_pod_check_alike(self):
+        plan = self.plan(requires_data_ack=True, volumes=[{"claim": "lab/data", "risk": "single-copy"}],
+                         maintenance={"local_storage": [{"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"}]},
+                         storage_unknown=True)
+        self.assertEqual(("", False, []), self.answer(plan, allow_single_copy=True))
+        text, _, reasons = self.answer(plan)
+        self.assertEqual("a volume has its only healthy copy on this host: lab/data; pods keep data on this host itself: "
+                         "apps/db (/srv/db); Longhorn's volumes could not be read (the settings do not accept that)", text)
+        self.assertEqual(["single-copy", "host-data", "storage-unread"], [r["kind"] for r in reasons])
+
+    def test_volumes_unread_may_clear_and_say_so(self):
+        text, may_clear, reasons = self.answer(self.plan(requires_data_ack=True, storage_unknown=True, volumes=[],
+                                                         maintenance={"local_storage": []}))
+        self.assertEqual(("Longhorn's volumes could not be read (the settings do not accept that)", True), (text, may_clear))
+        unread = self.part(reasons, "storage-unread")
+        self.assertEqual((None, []), (unread["count"], unread["names"]))
+        self.assertIn("by itself", unread["clears"])
+
+    def test_workloads_with_nowhere_to_go(self):
+        text, _, reasons = self.answer(self.plan(stranded=[{"ns": "apps", "name": "db"}, {"ns": "apps", "name": "cache"}]))
+        self.assertEqual("some workloads have no other host to run on", text)
+        stranded = self.part(reasons, "stranded")
+        self.assertEqual((2, ["apps/db", "apps/cache"]), (stranded["count"], stranded["names"]))
+        self.assertEqual("2 workloads have no other host to run on.", stranded["text"])
+
+    def test_a_stop_the_review_itself_has_is_a_part_each(self):
+        text, _, reasons = self.answer(self.plan(ready=False, blockers=["The host boot ID is unavailable", "Quorum would be lost"]))
+        self.assertEqual("The host boot ID is unavailable; Quorum would be lost", text)
+        self.assertEqual([("not-ready", "The host boot ID is unavailable."), ("not-ready", "Quorum would be lost.")],
+                         [(r["kind"], r["text"]) for r in reasons])
+
+    def test_a_single_host_outage(self):
+        with mock.patch.object(POWER_JOBS.POWER, "plan", return_value=self.plan(planned_outage=True)):
+            with self.assertRaises(ValueError) as refused:
+                POWER_JOBS.rollout_reboot("node-a")
+        self.assertEqual("A single-host cluster outage needs a manual review and acknowledgement in Host actions",
+                         str(refused.exception))
+        self.assertEqual(["planned-outage"], [r["kind"] for r in refused.exception.reasons])
+        self.assertIn("Restart host…", refused.exception.reasons[0]["clears"])
+
+    def test_drain_blockers_a_person_ticks(self):
+        self.add(*orphans_on_node_a(), *stuck_pod_on_node_a())
+        text, may_clear, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertTrue(text.startswith("Something would keep this host from draining: 3 Longhorn orphan records"))
+        self.assertFalse(may_clear)
+        orphans = self.part(reasons, "drain-engine-orphans")
+        self.assertEqual(1, len(orphans["names"]))
+        self.assertIn("3 Longhorn orphan records on node-a", orphans["names"][0])
+        self.assertNotIn("vol-a", orphans["text"])
+        self.assertIn("Restart host…", orphans["clears"])
+        stuck = self.part(reasons, "drain-stuck-pod")
+        self.assertEqual(1, stuck["count"])
+        self.assertIn("apps/app-0", stuck["names"][0])
+        self.assertNotIn(" for 1 h", stuck["names"][0], "said as the review's token sees it")
+
+    def test_drain_blockers_that_clear_by_themselves_say_so(self):
+        self.add(*engines_elsewhere_on_node_a())
+        text, may_clear, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertTrue(may_clear)
+        self.assertIn("still lists engine", text)
+        elsewhere = self.part(reasons, "drain-engines-elsewhere")
+        self.assertIn("by itself", elsewhere["clears"])
+
+    def test_the_refusal_carries_its_parts(self):
+        self.add(*orphans_on_node_a())
+        with self.assertRaises(ValueError) as refused:
+            POWER_JOBS.rollout_reboot("node-a")
+        self.assertEqual(POWER_JOBS.rollout_check("node-a")[2], refused.exception.reasons)
+
+
+class ReasonsInThePreviewTests(Runs):
+    def test_each_host_carries_its_reasons_beside_the_sentence(self):
+        self.add(*orphans_on_node_a())
+        row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertIn("3 Longhorn orphan records", row["restart_refusal"])
+        self.assertEqual(["drain-engine-orphans"], [r["kind"] for r in row["restart_reasons"]])
+        self.assertEqual([], ROLLOUT.preview(["node-b"])["hosts"][0]["restart_reasons"])
+
+    def test_the_reasons_do_not_change_the_review_token(self):
+        part = {"kind": "single-copy", "text": "1 volume.", "count": 1, "names": ["lab/a"], "clears": "Wait."}
+        tokens = set()
+        for answer in (("same words", False), ("same words", False, []), ("same words", False, [part]),
+                       ("same words", False, [{**part, "names": ["lab/b"]}])):
+            with mock.patch.object(ROLLOUT, "restart_check", return_value=answer):
+                tokens.add(ROLLOUT.preview(["node-a"])["review_token"])
+        self.assertEqual(1, len(tokens), "the same facts, the same token")
+
+    def test_an_older_check_without_reasons_gives_none(self):
+        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", False)):
+            row = ROLLOUT.preview(["node-a"])["hosts"][0]
+        self.assertEqual(("same words", []), (row["restart_refusal"], row["restart_reasons"]))
