@@ -11,6 +11,7 @@ on:
       - "web/**"
       - "scripts/build_demo_site.py"
       - "scripts/check_demo_site.mjs"
+      - "scripts/ci_install_browser.sh"
       - ".github/workflows/demo.yml"
   workflow_dispatch:
 
@@ -32,9 +33,7 @@ jobs:
       - name: Build the site
         run: python scripts/build_demo_site.py --base "/${{ github.event.repository.name }}/" --out _site
       - name: Install a browser
-        run: |
-          npm install --no-save --no-package-lock playwright@1.64.1
-          npx playwright install --with-deps chromium
+        run: sh scripts/ci_install_browser.sh
       - name: Open every page, as Pages will serve it
         env:
           DEMO_SITE: _site

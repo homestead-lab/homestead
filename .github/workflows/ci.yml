@@ -68,8 +68,8 @@ jobs:
           }
           either() { [ "$1" = true ] || [ "$2" = true ] && echo true || echo false; }
           # The checks themselves count too: a PR that changes only one runs it.
-          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/audit_ready.mjs scripts/ci_ui_checks.sh 'scripts/check_*.mjs' 'tests/integration/*.mjs')" "$(job_changed dialogs)")
-          installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs)" "$(job_changed installer-screens)")
+          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/audit_ready.mjs scripts/ci_ui_checks.sh scripts/ci_install_browser.sh 'scripts/check_*.mjs' 'tests/integration/*.mjs')" "$(job_changed dialogs)")
+          installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs scripts/ci_install_browser.sh)" "$(job_changed installer-screens)")
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
           # server.py is in nearly every change: only its lines that wire the
@@ -123,13 +123,13 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-1.64.1-chromium-${{ runner.os }}
-      # A stalled download fails here in minutes, not at the 6-hour job limit.
+      # A stalled download fails here in minutes, not at the 6-hour job limit. The script
+      # installs the browser alone and uses apt only if the browser cannot start (a slow
+      # Ubuntu mirror hung `--with-deps` on every job, 18-19 Nov).
       - name: Install the browser
         if: always()
         timeout-minutes: 5
-        run: |
-          npm install --no-save --no-package-lock playwright@1.64.1 >/dev/null
-          npx playwright install --with-deps chromium >/dev/null
+        run: sh scripts/ci_install_browser.sh
       - name: Draw them as the wiki shows them
         if: always()
         run: node scripts/render_tui.mjs
@@ -164,12 +164,12 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-1.64.1-chromium-${{ runner.os }}
-      # A stalled download fails here in minutes, not at the 6-hour job limit.
+      # A stalled download fails here in minutes, not at the 6-hour job limit. The script
+      # installs the browser alone and uses apt only if the browser cannot start (a slow
+      # Ubuntu mirror hung `--with-deps` on every job, 18-19 Nov).
       - name: Install the browser
         timeout-minutes: 5
-        run: |
-          npm install --no-save --no-package-lock playwright@1.64.1 >/dev/null
-          npx playwright install --with-deps chromium >/dev/null
+        run: sh scripts/ci_install_browser.sh
       - name: Check ${{ matrix.group }}
         run: |
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
