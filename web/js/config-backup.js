@@ -137,6 +137,7 @@ window.configRestoreGo = async () => {
     const result = await api("/api/config/restore", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ file: state.doc, passphrase: state.pass, parts }) });
     window.__configRestore = null;
+    if (result.ok === false) return configRestoreResult(result);
     toast(result.detail, "ok");
     closeModal();
     if (parts.includes("users")) setTimeout(() => window.location.reload(), 1200);
@@ -146,6 +147,32 @@ window.configRestoreGo = async () => {
     go.disabled = false; configPartsChanged();
   }
 };
+
+/* A restore that stopped part way, or whose caches could not be cleared:
+   what happened to each part, so nothing restored goes unnoticed. */
+const CONFIG_RESULT_WORDS = { restored: ["Restored", "ok"], failed: ["Failed", "bad"], not_started: ["Not started", "todo"],
+  skipped: ["Nothing in the backup", "skip"] };
+
+window.configRestoreResult = result => {
+  const rows = result.parts || [];
+  const failed = rows.some(p => p.state === "failed");
+  // A users write that failed may still have been applied (a lost reply), so
+  // it leads to signing in again too.
+  const usersRow = rows.find(p => p.id === "users");
+  const users = usersRow && ["restored", "failed"].includes(usersRow.state);
+  modal("Restore configuration", `<div class="ui-stack">
+    ${UI.callout("bad", failed ? "The restore stopped part way" : "The restore finished with an error", esc(result.detail || ""))}
+    ${UI.checklist(rows.map(p => {
+      const [word, state] = CONFIG_RESULT_WORDS[p.state] || CONFIG_RESULT_WORDS.not_started;
+      return { state, title: `${p.label}: ${word}`, detailHtml: p.detail ? esc(p.detail) : "" };
+    }))}
+    ${users ? UI.lead(usersRow.state === "restored" ? "Everyone must sign in again." : "Everyone may need to sign in again.") : ""}
+    ${UI.actions(users ? UI.button("Reload to sign in", "configRestoreSignIn()", { kind: "pri" }) : UI.cancel("Close"))}
+  </div>`);
+  if (!users) { resetPaint(); configRefreshSettings(); }
+};
+
+window.configRestoreSignIn = () => window.location.reload();
 
 function configRefreshSettings() {
   if (STATE.view === "settings" && window.viewSettings) viewSettings();

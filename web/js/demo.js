@@ -3751,7 +3751,8 @@ ssh_pwauth: true
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
         state: id === "vmstore" ? "empty" : ["ipam", "vips", "portal"].includes(id) ? "differs" : "same", restorable: id !== "vmstore" })) },
-    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, virtual IPs, Portal" },
+    "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, virtual IPs, Portal",
+      parts: [["ipam", "IP addresses"], ["vips", "Virtual IPs"], ["portal", "Portal"]].map(([id, label]) => ({ id, label, state: "restored", detail: "" })) },
   });
   const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
   const demoKeys = { scopes: { read: "Read status: the cluster, nodes, containers, VMs, alerts and jobs",
