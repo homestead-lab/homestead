@@ -181,3 +181,14 @@ test("the demo timeline is a weekend away; a source it cannot read lists none of
   assert.equal(incidents.entries.filter(e => e.kind === "restart").length, 0);
   assert.equal(incidents.counts.restart, undefined);
 });
+
+test("the demo's down app keeps the time it went down while the clock moves on", async () => {
+  let offset = 0;
+  class Moving extends Date { static now() { return super.now() + offset; } }
+  const api = await fixture("", false, Moving);
+  const downSince = answer => Object.values(answer.apps).find(app => app.state === "down").since;
+  const first = downSince(await api("/api/uptime"));
+  offset = 61000;
+  const second = downSince(await api("/api/uptime"));
+  assert.equal(second, first, "a real outage's start does not move with the clock");
+});
