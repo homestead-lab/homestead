@@ -671,9 +671,9 @@ DRAIN_SAID = {
     "other-orphans": lambda n: "Other Longhorn orphan records keep this host from draining.",
     "removing-orphans": lambda n: "Longhorn is still removing orphan records on this host.",
     "engines-elsewhere": lambda n: "Longhorn on this host still lists volumes that have moved to another host.",
-    "stuck-pod": lambda n: f"{_counted(n, 'pod', 'pods')} still stopping long after {'it' if n == 1 else 'they'} should have, "
+    "stuck-pod": lambda n: f"{_counted(n, 'pod is', 'pods are')} still stopping long after {'it' if n == 1 else 'they'} should have, "
                            "which keeps this host from draining.",
-    "stuck-attachment": lambda n: f"{_counted(n, 'volume', 'volumes')} attached to this host with no pod using "
+    "stuck-attachment": lambda n: f"{_counted(n, 'volume is', 'volumes are')} still attached to this host with no pod using "
                                   f"{'it' if n == 1 else 'them'}.",
     "unread": lambda n: f"{n} of the drain checks could not be read.",
 }
@@ -708,20 +708,29 @@ def _drain_parts(rows):
     return parts
 
 
+# How homestead_power.plan starts its stops for Longhorn's drain rule, after the claim.
+LONGHORN_HOLDS = (": this host holds its only complete copy", " is detached with its only copy on this host",
+                  " keeps one copy, on this host")
+
+
 def _copy_parts(power_plan, blockers):
     """The volumes a restart leaves with too few copies, as parts: those with no
     healthy copy elsewhere, and those left with one. A volume a review stop
     names already (Longhorn's drain rule: neither the setting nor waiting
-    clears that) is said there only."""
-    def named(claim):
-        return any(str(b).startswith((claim + " ", claim + ":")) for b in blockers)
+    clears that) is said there only. Only Longhorn's own phrasings for a claim
+    count: a maintenance stop for a pod of the same name ("<ns>/<pod>: ...") is
+    no word on the volume. One copy elsewhere is refused too (requires_data_ack);
+    two healthy copies on other hosts make the risk "resync", which is not."""
+    def held(v):
+        claim = v["claim"]
+        return v.get("last_copy_here") and any(str(b).startswith(tuple(claim + said for said in LONGHORN_HOLDS)) for b in blockers)
     rows = [v for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
     parts = []
-    here = [v["claim"] for v in rows if v["risk"] == "unavailable" and not named(v["claim"])]
+    here = [v["claim"] for v in rows if v["risk"] == "unavailable" and not held(v)]
     if here:
         parts.append(_part("single-copy", _counted(len(here), "volume has its", "volumes have their") + " only healthy copy on this host.",
-                           f"Turn on {SINGLE_COPY_SETTING}, or wait for a second healthy copy.", here[:4], len(here)))
-    left = [v["claim"] for v in rows if v["risk"] == "single-copy" and not named(v["claim"])]
+                           f"Turn on {SINGLE_COPY_SETTING}, or wait until Longhorn has rebuilt copies on two other hosts.", here[:4], len(here)))
+    left = [v["claim"] for v in rows if v["risk"] == "single-copy"]
     if left:
         parts.append(_part("one-copy-left", _counted(len(left), "volume", "volumes")
                            + " would have one healthy copy left, on another host, while this host restarts.",

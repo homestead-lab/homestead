@@ -23,7 +23,7 @@
     { kind: "stranded", text: "1 workload has no other host to run on.", count: 1, names: ["lab/paperless"],
       clears: "Only a person can accept stopping it, in this host's Restart host… review." },
     { kind: "single-copy", text: "2 volumes have their only healthy copy on this host.", count: 2, names: ["lab/nextcloud-data", "lab/paperless-data"],
-      clears: `Turn on ${DEMO_OS_SETTING}, or wait for a second healthy copy.` },
+      clears: `Turn on ${DEMO_OS_SETTING}, or wait until Longhorn has rebuilt copies on two other hosts.` },
   ];
   // What would keep a host from draining (homestead_drain_blockers' rows), one of each kind.
   const demoDrainBlockers = node => {

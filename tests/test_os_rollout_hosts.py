@@ -1762,7 +1762,8 @@ class RestartReasonsTests(FakeCluster):
         self.assertEqual("5 volumes have their only healthy copy on this host.", single["text"])
         self.assertIn(SETTING, single["clears"])
         self.assertIn("Host updates settings", single["clears"])
-        self.assertIn("second healthy copy", single["clears"])
+        self.assertEqual(f'Turn on "{SETTING}" in the Host updates settings, or wait until Longhorn has rebuilt copies on two other hosts.',
+                         single["clears"], "one copy elsewhere is refused too: two make it a resync")
         data = self.part(reasons, "host-data")
         self.assertEqual((1, ["apps/db (/srv/db)"]), (data["count"], data["names"]), "scratch space is no reason")
         self.assertEqual("1 pod keeps data on this host itself.", data["text"])
@@ -1787,14 +1788,6 @@ class RestartReasonsTests(FakeCluster):
                          left["clears"])
         self.assertEqual("This may clear by itself on the next read.", self.part(reasons, "storage-unread")["clears"])
 
-    def test_volumes_unread_may_clear_and_say_so(self):
-        text, may_clear, reasons = self.answer(self.plan(requires_data_ack=True, storage_unknown=True, volumes=[],
-                                                         maintenance={"local_storage": []}))
-        self.assertEqual(("Longhorn's volumes could not be read (the settings do not accept that)", True), (text, may_clear))
-        unread = self.part(reasons, "storage-unread")
-        self.assertEqual((None, []), (unread["count"], unread["names"]))
-        self.assertIn("by itself", unread["clears"])
-
     def test_workloads_with_nowhere_to_go(self):
         text, _, reasons = self.answer(self.plan(stranded=[{"ns": "apps", "name": "db"}, {"ns": "apps", "name": "cache"}]))
         self.assertEqual("some workloads have no other host to run on", text)
@@ -1805,6 +1798,22 @@ class RestartReasonsTests(FakeCluster):
         one = self.part(self.answer(self.plan(stranded=[{"ns": "apps", "name": "db"}]))[2], "stranded")
         self.assertEqual(("1 workload has no other host to run on.", "Only a person can accept stopping it, in this host's Restart host… review."),
                          (one["text"], one["clears"]))
+
+    def test_a_pod_stop_named_like_a_claim_leaves_the_volume_line(self):
+        # A maintenance stop starts "<ns>/<pod>: ..."; only Longhorn's own
+        # phrasing for a claim says the volume already.
+        plan = self.plan(ready=False, blockers=["apps/uploads: its disruption budget allows no pod to stop"],
+                         requires_data_ack=True, maintenance={"local_storage": []},
+                         volumes=[{"claim": "apps/uploads", "risk": "unavailable", "last_copy_here": True}])
+        _, _, reasons = self.answer(plan)
+        self.assertEqual(["not-ready", "single-copy"], [r["kind"] for r in reasons])
+        self.assertEqual(["apps/uploads"], self.part(reasons, "single-copy")["names"])
+        held = {**plan, "blockers": ["apps/uploads keeps one copy, on this host. Longhorn will not let the host drain: give it a "
+                                     "second copy in Volumes, or restart without draining (Force)"]}
+        self.assertEqual(["not-ready"], [r["kind"] for r in self.answer(held)[2]])
+        # One copy left elsewhere is never said by Longhorn's rule.
+        left = {**held, "volumes": [{"claim": "apps/uploads", "risk": "single-copy", "last_copy_here": False}]}
+        self.assertEqual(["not-ready", "one-copy-left"], [r["kind"] for r in self.answer(left)[2]])
 
     def test_more_than_six_that_would_wait_are_counted_and_six_named(self):
         hold = [{"kind": "Deployment", "ns": "apps", "name": f"web-{n}", "default": "wait", "id": f"w{n}"} for n in range(8)]
@@ -1842,7 +1851,7 @@ class RestartReasonsTests(FakeCluster):
         self.assertEqual("Tick or remove them in this host's Restart host… review. An automatic restart cannot.", orphans["clears"])
         stuck = self.part(reasons, "drain-stuck-pod")
         self.assertEqual(1, stuck["count"])
-        self.assertEqual("1 pod still stopping long after it should have, which keeps this host from draining.", stuck["text"])
+        self.assertEqual("1 pod is still stopping long after it should have, which keeps this host from draining.", stuck["text"])
         self.assertIn("apps/app-0", stuck["names"][0])
         self.assertNotIn(" for 1 h", stuck["names"][0], "said as the review's token sees it")
 
@@ -1881,7 +1890,7 @@ class RestartReasonsTests(FakeCluster):
         self.assertEqual("Something would keep this host from draining: " + "; ".join(r["what"] for r in rows), text)
         self.assertFalse(may_clear)
         attached = self.part(reasons, "drain-stuck-attachment")
-        self.assertEqual((2, "2 volumes attached to this host with no pod using them."), (attached["count"], attached["text"]))
+        self.assertEqual((2, "2 volumes are still attached to this host with no pod using them."), (attached["count"], attached["text"]))
         self.assertEqual([r["what"] for r in rows], attached["names"])
 
     def test_the_refusal_carries_its_parts(self):

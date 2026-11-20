@@ -516,7 +516,7 @@ const REASONS = [
     names: ["2 Longhorn orphan records on node-a for volumes pvc-1, pvc-2, now running on node-b"],
     clears: "Tick or remove them in this host's Restart host… review. An automatic restart cannot." },
   { kind: "single-copy", text: "5 volumes have their only healthy copy on this host.", count: 5, names: ["apps/uploads", "apps/db", "data/metrics", "data/dumps"],
-    clears: `Turn on "${SETTING}" in the Host updates settings, or wait for a second healthy copy.` },
+    clears: `Turn on "${SETTING}" in the Host updates settings, or wait until Longhorn has rebuilt copies on two other hosts.` },
   { kind: "host-data", text: "1 pod keeps data on this host itself.", count: 1, names: ["dev/builder-0 (/srv/cache)"],
     clears: `Turning on "${SETTING}" in the Host updates settings accepts this.` },
 ];
@@ -549,7 +549,7 @@ test("one host: the verdict answers the choice, under it, a line per reason, and
   const lines = verdict.match(/<li class="ui-issue">[\s\S]*?<\/li>/g) || [];
   assert.equal(lines.length, 3, "a line each");
   assert.match(words(lines[0]), /keep this host from draining\. Tick or remove them in this host's Restart host… review\. An automatic restart cannot\. 2 Longhorn orphan records on node-a for volumes pvc-1, pvc-2, now running on node-b\./);
-  assert.match(words(lines[1]), /^ ?5 volumes have their only healthy copy on this host\. Turn on "Restart a host even when a volume has its only healthy copy there" in the Host updates settings, or wait for a second healthy copy\. The first 4: apps\/uploads, apps\/db, data\/metrics, data\/dumps\./);
+  assert.match(words(lines[1]), /^ ?5 volumes have their only healthy copy on this host\. Turn on "Restart a host even when a volume has its only healthy copy there" in the Host updates settings, or wait until Longhorn has rebuilt copies on two other hosts\. The first 4: apps\/uploads, apps\/db, data\/metrics, data\/dumps\./);
   assert.match(words(lines[2]), /1 pod keeps data on this host itself\. Turning on "Restart a host[^"]*" in the Host updates settings accepts this\. dev\/builder-0 \(\/srv\/cache\)\./);
   assert.match(lines[1], /<span class="ui-issue-short">5 volumes have their only healthy copy on this host\.<\/span>/, "the count is the short line");
   assert.doesNotMatch(verdict, /the settings do not accept that/, "not the one long sentence");
@@ -609,7 +609,7 @@ test("names and reasons from the cluster are escaped", async () => {
 });
 
 test("a drain blocker's rows are sentences each, not a list joined by commas", async () => {
-  const reasons = [{ kind: "drain-stuck-pod", text: "2 pods still stopping long after they should have, which keeps this host from draining.", count: 2,
+  const reasons = [{ kind: "drain-stuck-pod", text: "2 pods are still stopping long after they should have, which keeps this host from draining.", count: 2,
     names: ["Pod apps/a on node-a has been terminating past its grace period", "Pod apps/b on node-a has been terminating past its grace period, and its volumes could not be checked"],
     clears: "Tick or remove them in this host's Restart host… review. An automatic restart cannot." }];
   const html = (await reviewed(preview([previewHost("node-a", { restart_refusal: "stuck", restart_reasons: reasons })]))).html();
