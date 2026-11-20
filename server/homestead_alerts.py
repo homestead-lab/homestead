@@ -648,7 +648,7 @@ def _apply(index, text, kept):
 
 # The rules read at most this many characters of an error, once it is one
 # line: the first rule's time grows with the square of a run of joined words
-# (measured: 0.2 s at 10,000 characters, 20 s at 100,000), and at this length
+# (measured: about 20 seconds at 100,000 characters), and at this length
 # the slowest text found takes under 10 ms a pass. A real error from the API server
 # or Longhorn is a few hundred characters, and at most 240 are shown.
 _HEAD = 2000

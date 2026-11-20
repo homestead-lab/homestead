@@ -524,9 +524,11 @@ class SecretsStayHiddenTests(unittest.TestCase):
     def test_the_whole_call_stays_within_about_twice_dev_s_time(self):
         """Dev's work is _PLAIN's rules, then _hidden_more. With a name set
         aside the branch does that twice, once on the text with names set
-        aside and once as dev does, then compares; with none, once. On
-        100,000 characters, of which the rules read the head (LongTextTests):
-        under four times dev's time, with room for a busy machine."""
+        aside and once as dev does, then compares; with none, once. Each
+        text here is 100,000 characters, of which the rules read only the
+        head (about 2,000, LongTextTests): so this guards that with a name
+        kept the second pass on a text at the cap stays within four times
+        dev's work on it plus 50 ms, not the ratio on the whole text."""
         import time
         for text in (('"longhorn.io"' + " ") * 7142, (VOLUME + " ") * 2439, ('"kube.example.com"' + " ") * 5263,
                      ("x" * 30 + "1 ") * 3225, "pvc-" * 25000, "\ue000" * 100000):
@@ -627,7 +629,8 @@ class LongTextTests(unittest.TestCase):
         'host="kube example com" next', "server='a b c' next", 'ADDRESS="x y z" next',
         "host=\"a server='" + "kube.example.com" + "' b\" end",      # a closed match inside an open one
         'host="a b c://x"y d" end', "host=\"a b c://x'y d\" end",     # the first rule takes a quote
-        'host="a b" c" end', "x-host='a b' end",
+        'host="a b" c" end', "x-host='a b' end", "pass" + "word=b'" + "two words' next",
+        "pass" + "word = b'" + "two words' next", "token: [[a, b], c] next",
         "Bearer " + "s3cr" + "3tvalue next", "Bearer Bearer " + "s3cr" + "3t next", "x.Bearer " + "s3cr" + "3t",
         "bearer " + "s3cr" + "3t next",
         "Authorization: Basic " + "dXNl" + "cjpw" + " and more words", "Authorization: Custom a b c",
@@ -660,10 +663,19 @@ class LongTextTests(unittest.TestCase):
     @staticmethod
     def shows(text, head):
         """The characters the head's output shows that the whole text's does
-        not (dev's rules on the whole text), kept names aside."""
+        not (dev's rules on the whole text), kept names aside. The plain pass
+        on the head (dev's rules, which plain_error returns when nothing is
+        kept or its check fails) is always compared; the pass with names set
+        aside only when it is what plain_error returns (as fault() does)."""
         dev = outcomes(text)[1]
-        _, _, _, _, branch, kept_at, _ = outcomes(head)
-        return [text[i] for i in sorted(branch - dev - kept_at)]
+        dev_out, plain, named, marked, branch, kept_at, _ = outcomes(head)
+        shown = plain - dev
+        out = ALERTS.plain_error(head, limit=10 ** 7)
+        if out != dev_out:
+            if out != named or marked != dev_out:
+                return [f"output {out!r} is neither pass"]
+            shown |= branch - dev - kept_at
+        return [text[i] for i in sorted(shown)]
 
     def test_a_text_up_to_the_cap_is_not_cut(self):
         self.assertGreaterEqual(ALERTS._HEAD, 1000)             # well above a real error and the 240 shown
@@ -671,6 +683,18 @@ class LongTextTests(unittest.TestCase):
             with self.subTest(raw=raw[:20]):
                 self.assertEqual(raw.split(), self.check(raw).split())
                 self.assertNotIn("…", ALERTS.plain_error(raw, limit=10 ** 7))
+
+    def test_a_kept_name_near_the_start_of_a_long_text_is_kept(self):
+        """The cut comes before names are set aside, and both passes read the
+        same head: a kept name in it stays in the output."""
+        raw = (f'volumes.longhorn.io "{VOLUME}" is forbidden in API group "longhorn.io": '
+               + filler(3 * ALERTS._HEAD))
+        self.check(raw)
+        for limit in (160, 240):
+            said = ALERTS.plain_error(raw, limit=limit)
+            self.assertIn(f'"{VOLUME}"', said)
+            self.assertIn('API group "longhorn.io"', said)
+            self.assertTrue(said.endswith("…"), said)
 
     def test_what_crosses_the_cut_stays_hidden(self):
         """Each text above and each of _PLAIN's secrets, placed so the cut
@@ -687,7 +711,7 @@ class LongTextTests(unittest.TestCase):
                     naive += 1
         # A cut back to the last space alone shows what the whole text hides
         # (the address rule's quotes, Bearer): these texts reach that.
-        # 95 of 2766 when written.
+        # 95 of 2855 when written.
         self.assertGreaterEqual(naive, 50)
 
     def test_generated_long_texts_show_nothing_the_whole_text_hides(self):
@@ -710,15 +734,16 @@ class LongTextTests(unittest.TestCase):
                 cut += len(head) < len(text)
                 shortened += len(head) < text.rfind(" ", 0, ALERTS._HEAD + 1)
         # Every text is cut; some heads end before the last space in reach
-        # (an open host=" or a Bearer). Seeded: 400 and 56 when written.
+        # (an open host=" or a Bearer). Seeded: 400 and 59 when written.
         self.assertGreaterEqual(cut, 350)
         self.assertGreaterEqual(shortened, 25)
 
     def test_a_long_text_is_made_plain_quickly(self):
         """Joined words make the first rule's time grow with the square of
-        their length: 100,000 characters took 10 to 20 seconds, 1,000,000
-        would take half an hour. Now under a second; also as an HTTP reason
-        of the most http.client reads (65,536 bytes)."""
+        their length: 100,000 characters took about 20 seconds, 1,000,000
+        would take about a hundred times that. Now under a second; also with
+        a name kept (two passes on the head), and as an HTTP reason of the
+        most http.client reads (65,536 bytes)."""
         import time
         for size in (10 ** 5, 10 ** 6):
             for unit in ("a.", "a-", "pvc-", "eyJ.", "a1-", "a." * 999 + " "):
@@ -726,6 +751,11 @@ class LongTextTests(unittest.TestCase):
                 start = time.perf_counter()
                 ALERTS.plain_error(raw)
                 self.assertLess(time.perf_counter() - start, 1.0, (unit[:8], size))
+        raw = f"volume {VOLUME} " + ("a." * 999 + " ") * 500
+        start = time.perf_counter()
+        said = ALERTS.plain_error(raw, limit=10 ** 7)
+        self.assertLess(time.perf_counter() - start, 1.0)
+        self.assertTrue(said.startswith(f"volume {VOLUME} "), said[:80])
         start = time.perf_counter()
         said = ALERTS.read_failure(urllib.error.HTTPError("https://example.com/x", 500, "a." * 32768, {}, None))
         self.assertLess(time.perf_counter() - start, 1.0)
