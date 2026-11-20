@@ -84,6 +84,17 @@ def valid(config, context=None):
         return False
 
 
+def expired(config, context=None):
+    """Whether the token is one this review issued whose time ran out: signed
+    over the same input, older than TTL. Only says why a token is refused."""
+    try:
+        expires, signature = str(config.get("capacity_token") or "").split(".", 1)
+        expires = int(expires)
+        return expires < time.time() and hmac.compare_digest(signature, _signature(config, expires, context))
+    except (TypeError, ValueError):
+        return False
+
+
 class Rejected(ValueError):
     def __init__(self, message, plan):
         super().__init__(message)
@@ -95,6 +106,10 @@ def enforce(config, plan, context=None):
         raise Rejected("; ".join(plan["device_conflicts"]) if plan.get("device_conflicts") else
                        "Deployment cannot fit the checked placement constraints. Review capacity before deploying.", plan)
     if plan.get("requires_confirmation") and (config.get("confirm_capacity") is not True or not valid(config, context)):
+        if config.get("confirm_capacity") is True and expired(config, context):
+            # The same review, only older than TTL: say so, since nothing changed.
+            raise Rejected(f"Placement or memory needs a fresh review: the review is more than {TTL // 60} minutes old. "
+                           "Nothing has changed since it was made. Review it again.", plan)
         raise Rejected("Placement or memory needs a fresh review and explicit acknowledgement before deploying.", plan)
     state = (plan.get("vm") or {}).get("state_initialization")
     if state and (config.get("ack_state_initialization") is not True or

@@ -5,10 +5,16 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const updateState = require("../web/js/update-state.js");
 
-function setup({blocked = false, fail = "", missing = false, capacity = null} = {}) {
+function setup({blocked = false, fail = "", missing = false, capacity = null, advance = 0, again = null, failApply = null} = {}) {
+  // advance: ms the clock moves on at each progress read, as a long rollout does.
+  // again(body, preview): what a second review of the same app answers instead.
+  // failApply(body): an error to answer an apply with, or nothing.
+  const clock = {now: 1_800_000_000_000};
+  class FakeDate extends Date { static now() { return clock.now; } }
+  const reviewed = new Map();
   const sent = [], fields = {"#imageCapacityApprove": {checked:false}, "#imageCapacityApply": {},
     "#modal": {classList:{contains:()=>false}}};
-  const ctx = {console, URLSearchParams, Map, Date, Promise, encodeURIComponent,
+  const ctx = {console, URLSearchParams, Map, Date: FakeDate, Promise, encodeURIComponent,
     document:{addEventListener(){},getElementById:id=>fields["#"+id]||null}, STATE:{data:{}}, HomesteadUpdateState:updateState,
     $:id=>fields[id], $$:()=>[], esc:s=>String(s).replaceAll("<","&lt;"),
     toast:()=>{}, setTimeout:cb=>cb(),
@@ -21,9 +27,15 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
     api:async (path, options)=>{
       const body = options?.body ? JSON.parse(options.body) : null;
       sent.push({path,body});
-      if(path.endsWith("/preview")) return {capacity: missing ? null : capacity || {blocked, warnings:["High RAM"], candidates:[]},
-        capacity_token:"signed-"+body.name,images:[{container:"app",before:"old",after:"new@digest",rollback:"old@digest"}]};
+      if(path.endsWith("/preview")) {
+        const count = (reviewed.get(body.name) || 0) + 1;
+        reviewed.set(body.name, count);
+        const preview = {capacity: missing ? null : capacity || {blocked, warnings:["High RAM"], candidates:[]},
+          capacity_token:"signed-"+body.name+(count > 1 ? "-"+count : ""),images:[{container:"app",before:"old",after:"new@digest",rollback:"old@digest"}]};
+        return count > 1 && again ? again(body, preview) : preview;
+      }
       if(path.includes("/progress")) {
+        clock.now += advance;
         if(fail==="contact") throw new Error("connection lost");
         // A dropped connection twice (no answer, so no status), then answers.
         if(fail==="blip" && sent.filter(s=>s.path.includes("/progress")).length<=2) throw new TypeError("Failed to fetch");
@@ -31,6 +43,8 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
         return {uid: fail==="replacement" ? "different" : "workload-uid",generation:4,phase:fail==="rollout" ? "failed" : "ready",ready:1,desired:1};
       }
       if(fail==="apply") throw new Error("changed target");
+      const refused = failApply?.(body);
+      if(refused) throw new Error(refused);
       return {uid:"workload-uid",generation:4,phase:"starting",ready:0,desired:1};
     }};
   ctx.window=ctx;
@@ -39,7 +53,7 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), ctx);
   vm.runInContext(require("./helpers/workloads-source")(),ctx);
-  return {ctx,fields,sent};
+  return {ctx,fields,sent,clock};
 }
 test("single update requires preview and acknowledgement; exact token is submitted",async()=>{
   const t=setup();
@@ -227,4 +241,55 @@ test("the review shows what is in the update beside it, and a rollback does not"
   await t.ctx.imageRollback("lab", "app");
   assert.equal(asked.length, 1);
   assert.doesNotMatch(t.fields["#mbody"].innerHTML, /updNotes/);
+});
+
+test("an app the queue reaches more than 5 minutes after the review is checked again and uses the fresh token", async () => {
+  const t = setup({advance: 6 * 60 * 1000});
+  await t.ctx.reviewImageActions([{ns:"lab",name:"app"},{ns:"lab",name:"other"}]);
+  t.fields["#imageCapacityApprove"].checked = true;
+  await t.ctx.imageReviewedApply();
+  const applies = t.sent.filter(s => s.path.endsWith("/apply"));
+  assert.deepEqual(applies.map(s => s.body.capacity_token), ["signed-app", "signed-other-2"]);
+  // The first app went straight on: its review was new.
+  assert.equal(t.sent.filter(s => s.path.endsWith("/preview") && s.body.name === "app").length, 1);
+  assert.doesNotMatch(t.fields["#imageQueue"].innerHTML, /failed|not started/);
+});
+
+test("an app whose fresh review differs stops the queue and says what changed", async () => {
+  const cases = [
+    [(body, p) => ({...p, images:[{container:"app",before:"old",after:"newer@sha256:0123456789abcdef",rollback:"old@digest"}]}), /changed since the review\. Its new image is now newer/],
+    [(body, p) => ({...p, capacity:{blocked:false, warnings:["High RAM", "projected RAM reaches 97% (warning at 88%)"], candidates:[]}}), /changed since the review\. A new warning: /],
+    [(body, p) => ({...p, capacity:{blocked:true, warnings:[], candidates:[]}}), /changed since the review\. No host can take this update/],
+  ];
+  for (const [again, said] of cases) {
+    const t = setup({advance: 6 * 60 * 1000, again});
+    await t.ctx.reviewImageActions([{ns:"lab",name:"app"},{ns:"lab",name:"other"}]);
+    t.fields["#imageCapacityApprove"].checked = true;
+    await t.ctx.imageReviewedApply();
+    assert.deepEqual(t.sent.filter(s => s.path.endsWith("/apply")).map(s => s.body.name), ["app"]);
+    assert.match(t.fields["#imageQueue"].innerHTML, said);
+  }
+});
+
+test("reviewChanged names only what the person did not see", () => {
+  const t = setup();
+  const base = {capacity_token:"x", capacity:{blocked:false, warnings:["High RAM"], candidates:[]}, images:[{container:"app", after:"a@d"}]};
+  assert.equal(t.ctx.reviewChanged(base, {...base, capacity_token:"y"}), "");
+  assert.match(t.ctx.reviewChanged(base, {...base, capacity_token:""}), /could not be checked again/);
+});
+
+test("a stopped queue counts each app once and offers Skip only on the failure that stopped it", async () => {
+  const t = setup({failApply: body => ["app", "other"].includes(body.name) ? "Placement or memory needs a fresh review" : ""});
+  await t.ctx.reviewImageActions([{ns:"lab",name:"app"},{ns:"lab",name:"other"},{ns:"lab",name:"third"}]);
+  t.fields["#imageCapacityApprove"].checked = true;
+  await t.ctx.imageReviewedApply();
+  let html = t.fields["#imageQueue"].innerHTML;
+  assert.match(html, /3 apps · 1 failed · 2 not started/);
+  assert.equal((html.match(/Skip and continue/g) || []).length, 1);
+  await t.ctx.imageQueueSkip();
+  html = t.fields["#imageQueue"].innerHTML;
+  assert.match(html, /3 apps · 2 failed · 1 not started/);
+  assert.equal((html.match(/Skip and continue with 1 more/g) || []).length, 1, "only the newest failure can be skipped");
+  // An app the queue never started has no ready count of its own to show.
+  assert.doesNotMatch(html, /0\/1 ready/);
 });
