@@ -20,7 +20,8 @@ async function card(health) {
     api: () => Promise.resolve({ ...BASE, ...health }),
     esc: s => String(s ?? ""), can: () => true, fmtAgo: s => `${s} s`, agoText: s => `${s} s`,
     UI: { moduleHeader: title => `<h3>${title}</h3>`, callout: (tone, title, text) => `<p>${title}: ${text}</p>`,
-      chip: (label, tone) => `<span class="tag ${tone}">${label}</span>` },
+      chip: (label, tone) => `<span class="tag ${tone}">${label}</span>`,
+      poll: () => ({ stopped: false }), pollCancelled: () => false },
     setTimeout: () => 0, clearTimeout: () => { }, settingsTab: () => "other",
   };
   ctx.window = ctx;

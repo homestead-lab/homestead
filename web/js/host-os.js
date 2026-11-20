@@ -232,22 +232,35 @@ function osUpdatesUnavailableHtml() {
     ? UI.callout("info", "Harvester updates its own hosts.", `The hosts' operating system is part of Harvester. ${UI.actions(UI.button("Open Cluster", "go('cluster')"))}`)
     : UI.callout("info", "Host updates are managed here only on k3s and RKE2.", "Use the platform's own tools to update this cluster's operating systems.");
 }
-window.osUpdatesCardPaint = async () => {
+/* While a check of the hosts runs, the card reads again 4 s after each
+   answer: a page poll, so nothing is read in a hidden tab, once when it is
+   shown, and it stops when Settings is left. One poll whatever paints the
+   card; a failed read ends it, as before, since the card then offers Try again. */
+let osUpdatesCheckPoll = null;
+function osUpdatesCheckFollow(running) {
+  if (!running) { osUpdatesCheckPoll?.stop(); osUpdatesCheckPoll = null; }
+  else if (!osUpdatesCheckPoll || osUpdatesCheckPoll.stopped) osUpdatesCheckPoll = UI.poll(signal => osUpdatesCardPaint(signal), 4000, { later: true, page: true });
+}
+// `signal` is the poll's own read; any other paint starts or ends the poll.
+// A card replaced while the read was on its way (Settings redrawn) drops the
+// answer but keeps the poll: the redraw's own paint has taken over the card,
+// and the next turn reads for the new one. Only no card at all ends it.
+window.osUpdatesCardPaint = async signal => {
   const card = $("#settingsHostUpdates");
-  if (!card) return;
+  if (!card) return false;
   const header = actions => `${UI.moduleHeader(`Host updates`, `Operating system packages, security updates and restarts`, `${actions}`)}`;
   try {
-    const r = await api("/api/os-updates");
-    if ($("#settingsHostUpdates") !== card) return;
-    if (!r.applies) { card.innerHTML = header("") + osUpdatesUnavailableHtml(); return; }
+    const r = await api("/api/os-updates", signal ? { signal } : undefined);
+    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return UI.pollCancelled(signal) || !$("#settingsHostUpdates") ? false : undefined;
+    const following = !!(r.applies && r.checking?.running);
+    if (!signal) osUpdatesCheckFollow(following);
+    if (!r.applies) { card.innerHTML = header("") + osUpdatesUnavailableHtml(); return false; }
     const s = r.settings || {}, schedule = s.schedule || {};
     const run = r.rollout?.status === "running" ? r.rollout : null;
     const last = run ? null : r.rollout || r.last;
     const days = OSU_DAYS.filter(([id]) => (schedule.days || []).includes(id)).map(([, label]) => label).join(", ");
     const windowText = schedule.enabled ? `${days} at ${String(schedule.hour ?? 0).padStart(2, "0")}:00 ${schedule.tz || ""}` : "Weekly window off";
     const check = r.checking || {};
-    clearTimeout(window._osuCheckTimer);
-    if (check.running) window._osuCheckTimer = setTimeout(() => osUpdatesCardPaint(), 4000);
     card.innerHTML = header(`${can("admin")
       ? UI.button(check.running ? "Checking hosts…" : "Check now", "osUpdatesCheckAll()", { icon: check.running ? "" : "refresh", id: "osuCheckAll", attrs: `data-need="admin"${check.running ? " disabled" : ""}` })
       : UI.button("Reload", "osUpdatesCardPaint()")}${can("admin")
@@ -265,9 +278,12 @@ window.osUpdatesCardPaint = async () => {
           Manage host updates to change the schedule or start a reviewed update.</p>
       </div>`;
     if (window.applyRole) applyRole();
+    return following ? undefined : false;
   } catch (e) {
-    if ($("#settingsHostUpdates") !== card) return;
+    if (UI.pollCancelled(signal) || $("#settingsHostUpdates") !== card) return UI.pollCancelled(signal) || !$("#settingsHostUpdates") ? false : undefined;
+    osUpdatesCheckFollow(false);
     card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "The host update status could not be read.", esc(e.message));
+    return false;
   }
 };
 

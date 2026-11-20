@@ -1199,26 +1199,31 @@ const HEALTH_TONE = { ok: "ok", standby: "neutral", starting: "neutral", late: "
 const agoText = t => !t ? "not yet" : Date.now() / 1000 - t < 60 ? "just now" : fmtAgo(Math.round(Date.now() / 1000 - t));
 
 /* The card is read again every 15 seconds while Settings shows its section,
-   a failed read included: the next one may answer. On another section it
-   only waits, since coming back does not load the section again; leaving
-   Settings stops it, and Settings starts it again when it paints. */
-function selfHealthLater() {
-  clearTimeout(window.__selfHealthTimer);
-  window.__selfHealthTimer = setTimeout(() => {
-    if (STATE.view !== "settings") return;
-    if (settingsTab() === settingsSection("about")) selfHealthPaint(); else selfHealthLater();
-  }, 15000);
+   a failed read included: the next one may answer. On another section a turn
+   reads nothing, since coming back does not load the section again. A page
+   poll: nothing in a hidden tab, one read when it is shown (on this section),
+   stopped when Settings is left; Settings starts it again when it paints, and
+   a paint while it runs keeps the one poll. */
+let selfHealthPoll = null;
+function selfHealthFollow() {
+  if (selfHealthPoll && !selfHealthPoll.stopped) return;
+  selfHealthPoll = UI.poll(signal => settingsTab() === settingsSection("about") ? selfHealthPaint(signal) : undefined,
+    15000, { later: true, page: true });
 }
 
-async function selfHealthPaint() {
+// `signal` is the poll's own read. A card replaced while it was on its way
+// (Settings redrawn) drops the answer but keeps the poll; no card ends it.
+async function selfHealthPaint(signal) {
   const host = $("#selfHealthCard");
-  if (!host) return;
+  if (!host) return false;
   let h;
-  try { h = await api("/api/self/health"); }
+  try { h = await api("/api/self/health", signal ? { signal } : undefined); }
   catch (e) {
+    if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return UI.pollCancelled(signal) || !$("#selfHealthCard") ? false : undefined;
     host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message));
-    return selfHealthLater();
+    return selfHealthFollow();
   }
+  if (UI.pollCancelled(signal) || $("#selfHealthCard") !== host) return UI.pollCancelled(signal) || !$("#selfHealthCard") ? false : undefined;
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   const metricsOn = !!STATE.data.appSettings?.metrics?.enabled;
   const auditFile = STATE.data.appSettings?.audit?.file !== false;
@@ -1271,7 +1276,7 @@ async function selfHealthPaint() {
           : "When this is on, Prometheus or an uptime checker can read Homestead's health from /metrics with an API key.",
         admin ? `<button class="btn sm" onclick="metricsSet(${!metricsOn})">${metricsOn ? "Turn off" : "Turn on"}</button>` : "")}
     </div>`;
-  selfHealthLater();
+  selfHealthFollow();
 }
 window.selfHealthPaint = selfHealthPaint;
 
