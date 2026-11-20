@@ -664,18 +664,20 @@ SINGLE_COPY_SETTING = ('"Restart a host even when a volume has its only healthy 
                        "in the Host updates settings")
 IN_REVIEW = "Only a person can accept that, in this host's Restart host… review."
 BY_ITSELF = "This may clear by itself within minutes."
-DRAIN_TICKED = "A person deals with these in this host's Restart host… review. A restart with nobody there never does."
-# The drain blockers, per kind of row: what is said, and whether it counts the rows.
+DRAIN_TICKED = "Tick or remove them in this host's Restart host… review. An automatic restart cannot."
+# The drain blockers, per kind of row: what is said, given how many rows (None:
+# not counted by rows). Engine orphans are counted by their records instead.
 DRAIN_SAID = {
-    "engine-orphans": ("Longhorn orphan records for volumes that now run on another host keep this host from draining.", False),
-    "other-orphans": ("Other Longhorn orphan records keep this host from draining.", False),
-    "removing-orphans": ("Longhorn is still removing orphan records on this host.", False),
-    "engines-elsewhere": ("This host's Longhorn instance-manager still lists engines that run on another host.", False),
-    "stuck-pod": ("{n} stuck terminating, keeping this host from draining.", True),
-    "stuck-attachment": ("{n} attached to this host with no pod using it.", True),
-    "unread": ("{n} of what keeps this host from draining could not be read.", True),
+    "other-orphans": lambda n: "Other Longhorn orphan records keep this host from draining.",
+    "removing-orphans": lambda n: "Longhorn is still removing orphan records on this host.",
+    "engines-elsewhere": lambda n: "Longhorn on this host still lists volumes that have moved to another host.",
+    "stuck-pod": lambda n: f"{_counted(n, 'pod', 'pods')} still stopping long after {'it' if n == 1 else 'they'} should have, "
+                           "which keeps this host from draining.",
+    "stuck-attachment": lambda n: f"{_counted(n, 'volume', 'volumes')} attached to this host with no pod using "
+                                  f"{'it' if n == 1 else 'them'}.",
+    "unread": lambda n: f"{n} of the drain checks could not be read.",
 }
-DRAIN_NOUN = {"stuck-pod": ("pod", "pods"), "stuck-attachment": ("volume", "volumes"), "unread": ("check", "checks")}
+COUNTED_BY_ROWS = ("stuck-pod", "stuck-attachment", "unread")
 
 
 def _counted(n, one, many):
@@ -692,14 +694,39 @@ def _drain_parts(rows):
     said = dict(DRAIN_BLOCKERS.review(rows))
     kinds = {}
     for row in rows:
-        kinds.setdefault(row["kind"], []).append(said[row["id"]])
+        kinds.setdefault(row["kind"], []).append(row)
     parts = []
-    for kind, whats in kinds.items():
-        text, counted = DRAIN_SAID.get(kind, ("Something would keep this host from draining.", False))
-        if counted:
-            text = text.format(n=_counted(len(whats), *DRAIN_NOUN[kind]))
+    for kind, these in kinds.items():
+        count = len(these) if kind in COUNTED_BY_ROWS else None
+        if kind == "engine-orphans":
+            count = sum(len(row.get("records") or []) for row in these)
+            text = f"{_counted(count, 'Longhorn orphan record keeps', 'Longhorn orphan records keep')} this host from draining."
+        else:
+            text = DRAIN_SAID.get(kind, lambda n: "Something would keep this host from draining.")(count)
         parts.append(_part("drain-" + kind, text, BY_ITSELF if kind in DRAIN_BLOCKERS.CLEARS_BY_ITSELF else DRAIN_TICKED,
-                           whats, len(whats) if counted else None))
+                           [said[row["id"]] for row in these], count))
+    return parts
+
+
+def _copy_parts(power_plan, blockers):
+    """The volumes a restart leaves with too few copies, as parts: those with no
+    healthy copy elsewhere, and those left with one. A volume a review stop
+    names already (Longhorn's drain rule: neither the setting nor waiting
+    clears that) is said there only."""
+    def named(claim):
+        return any(str(b).startswith((claim + " ", claim + ":")) for b in blockers)
+    rows = [v for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
+    parts = []
+    here = [v["claim"] for v in rows if v["risk"] == "unavailable" and not named(v["claim"])]
+    if here:
+        parts.append(_part("single-copy", _counted(len(here), "volume has its", "volumes have their") + " only healthy copy on this host.",
+                           f"Turn on {SINGLE_COPY_SETTING}, or wait for a second healthy copy.", here[:4], len(here)))
+    left = [v["claim"] for v in rows if v["risk"] == "single-copy" and not named(v["claim"])]
+    if left:
+        parts.append(_part("one-copy-left", _counted(len(left), "volume", "volumes")
+                           + " would have one healthy copy left, on another host, while this host restarts.",
+                           f"Turn on {SINGLE_COPY_SETTING}, or wait until Longhorn has rebuilt more copies on other hosts.",
+                           left[:4], len(left)))
     return parts
 
 
@@ -717,9 +744,10 @@ def _unattended_plan(node, allow_single_copy):
         error = ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
         error.reasons = [_part("planned-outage", "This is the only host, so restarting it stops the whole cluster.", IN_REVIEW)]
         raise error
-    stays, may_clear = list(power_plan["blockers"]) if not power_plan["ready"] else [], []
+    blockers = list(power_plan["blockers"]) if not power_plan["ready"] else []
+    stays, may_clear = list(blockers), []
     stay_parts = [_part("not-ready", _sentence(b), "This has to be dealt with before any restart. The Restart host… review shows it too.")
-                  for b in stays]
+                  for b in blockers]
     clear_parts = []
     if power_plan.get("requires_blocker_ack"):
         # A person ticks each of these; with nobody there the drain would stall on
@@ -734,14 +762,15 @@ def _unattended_plan(node, allow_single_copy):
         stays.append("some workloads have no other host to run on")
         stranded = power_plan["stranded"]
         stay_parts.append(_part("stranded", _counted(len(stranded), "workload has", "workloads have") + " no other host to run on.",
-                                "Only a person can accept that they stop, in this host's Restart host… review.",
+                                f"Only a person can accept stopping {'it' if len(stranded) == 1 else 'them'}, "
+                                "in this host's Restart host… review.",
                                 [f"{w.get('ns', '')}/{w.get('name', '')}" for w in stranded[:6]], len(stranded)))
     hold = power_plan.get("hold") or []
     vms = [i for i in hold if i["kind"] == "VirtualMachine"]
     if vms:
         stays.append("Running VMs are on this host. Migrate or stop them and review again.")
         stay_parts.append(_part("vms", _counted(len(vms), "virtual machine is", "virtual machines are") + " running on this host.",
-                                "Migrate or stop them first.", [f"{i['ns']}/{i['name']}" for i in vms[:6]], len(vms)))
+                                f"Migrate or stop {'it' if len(vms) == 1 else 'them'} first.", [f"{i['ns']}/{i['name']}" for i in vms[:6]], len(vms)))
     waits = [f"{i['ns']}/{i['name']}" for i in hold if i["default"] != "move"]
     if waits:
         stays.append("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
@@ -755,8 +784,7 @@ def _unattended_plan(node, allow_single_copy):
         single = [v["claim"] for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
         if single:
             reasons.append("a volume has its only healthy copy on this host: " + ", ".join(single[:4]))
-            parts.append(_part("single-copy", _counted(len(single), "volume has its", "volumes have their") + " only healthy copy on this host.",
-                               f"Turn on {SINGLE_COPY_SETTING}, or wait for a second healthy copy.", single[:4], len(single)))
+            parts += _copy_parts(power_plan, blockers)
         # Nor are the host's own sockets and devices data: Longhorn's CSI
         # attacher mounts /var/lib/kubelet/plugins/driver.longhorn.io.
         kept = [f"{row['pod']} ({row['source']})" for row in (power_plan.get("maintenance") or {}).get("local_storage") or []
@@ -767,8 +795,11 @@ def _unattended_plan(node, allow_single_copy):
                                f"Turning on {SINGLE_COPY_SETTING} accepts this.", kept[:4], len(kept)))
         if power_plan.get("storage_unknown"):
             reasons.append("Longhorn's volumes could not be read")
-            parts.append(_part("storage-unread", "Longhorn's volumes could not be read.",
-                               f"This may clear by itself on the next read. Turning on {SINGLE_COPY_SETTING} accepts it too."))
+            # The review stops on the same fact (homestead_power.plan: "The list of
+            # volume copies is unavailable"), whatever the setting: said once, there.
+            if not any("volume copies is unavailable" in str(b) for b in blockers):
+                parts.append(_part("storage-unread", "Longhorn's volumes could not be read.",
+                                   "This may clear by itself on the next read."))
         if reasons:
             # Copies can rebuild and a read can answer; data kept on the host won't go by itself.
             (stays if kept else may_clear).append("; ".join(reasons) + " (the settings do not accept that)")

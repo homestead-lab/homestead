@@ -49,7 +49,7 @@ reboot = None           # (node, allow_data_risk) -> operation id; raises with t
 operation = None        # operation id -> the job-tray item, or None
 set_cordon = None       # (node, bool)
 power_job = None        # (node, since epoch) -> id of a power job for it not failed, or ""
-restart_check = None    # (node, allow_data_risk) -> (what the review would refuse with today or "", may it clear by itself[, its reasons as parts])
+restart_check = None    # (node, allow_data_risk) -> (what the review would refuse with today or "", may it clear by itself, its reasons as parts)
 own_node = lambda: ""
 announce = lambda rollout: None   # rollout -> its job-tray entry
 DATA_DIR = "/data"
@@ -888,8 +888,8 @@ def preview(names):
             try:
                 if restart_check is None:
                     raise ValueError("the restart checks are not available")
-                refusal, may_clear, *rest = restart_check(name, config["single_copy"])
-                reasons = list(rest[0]) if rest else []
+                refusal, may_clear, reasons = restart_check(name, config["single_copy"])
+                reasons = list(reasons)
             except Exception as error:
                 unread = str(error)[:200]
         hosts.append({"node": name, "ready": ready, "updates": facts.get("updates") or [], "security": facts.get("security", 0),

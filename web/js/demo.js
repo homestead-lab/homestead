@@ -21,7 +21,7 @@
   const DEMO_OS_SETTING = '"Restart a host even when a volume has its only healthy copy there" in the Host updates settings';
   const DEMO_OS_REASONS = [
     { kind: "stranded", text: "1 workload has no other host to run on.", count: 1, names: ["lab/paperless"],
-      clears: "Only a person can accept that they stop, in this host's Restart host… review." },
+      clears: "Only a person can accept stopping it, in this host's Restart host… review." },
     { kind: "single-copy", text: "2 volumes have their only healthy copy on this host.", count: 2, names: ["lab/nextcloud-data", "lab/paperless-data"],
       clears: `Turn on ${DEMO_OS_SETTING}, or wait for a second healthy copy.` },
   ];

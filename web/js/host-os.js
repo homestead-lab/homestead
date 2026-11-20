@@ -389,12 +389,13 @@ const OSU_REVIEW_LOADING = '<div id="osuReviewLoading" class="empty"><span class
    "After installing" (#1494). A restart refused is a line per reason: its
    count first, what clears it and the names once opened, and the next step
    as a line of its own. Several hosts' say the title, the rest behind More. */
-const OSU_NEXT = "After the updates install, open this host's Restart host… to review and restart it.";
-const OSU_NEXT_IF = "If it does not, open this host's Restart host… after the updates install to review and restart it.";
+const OSU_NEXT = "After the updates install, press Restart host… on this host's row to review and restart it.";
+const OSU_NEXT_IF = "If it does not, press Restart host… on this host's row after the updates install.";
+// A drain blocker's names are its rows, each a sentence; the others' are names.
 function osUpdatesReasonNames(r) {
   const names = r.names || [], count = r.count ?? null;
   if (!names.length) return "";
-  if (count === null) return names.map(n => /[.!?]$/.test(n) ? n : `${n}.`).join(" ");
+  if (String(r.kind || "").startsWith("drain-") || count === null) return names.map(n => /[.!?]$/.test(n) ? n : `${n}.`).join(" ");
   return `${names.length < count ? `The first ${names.length}: ` : ""}${names.join(", ")}.`;
 }
 function osUpdatesVerdict(h, plain) {

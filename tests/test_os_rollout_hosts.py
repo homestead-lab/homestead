@@ -841,8 +841,8 @@ class HeldEveryStepTests(Runs):
 class RealWiringTests(unittest.TestCase):
     """What server.py binds, not a copy of it."""
     def test_the_review_asks_the_real_restart_checks(self):
-        with mock.patch.object(server.POWER_JOBS, "rollout_check", return_value=("refused", False)) as asked:
-            self.assertEqual(("refused", False), server.OS_ROLLOUT.restart_check("node-a", True))
+        with mock.patch.object(server.POWER_JOBS, "rollout_check", return_value=("refused", False, [])) as asked:
+            self.assertEqual(("refused", False, []), server.OS_ROLLOUT.restart_check("node-a", True))
         asked.assert_called_once_with("node-a", True)
 
     def test_a_run_restarts_through_the_real_unattended_restart(self):
@@ -1506,9 +1506,9 @@ class MayWaitInTheReviewTests(Runs):
 
     def test_may_clear_changing_makes_the_review_stale(self):
         self.add(*engines_elsewhere_on_node_a())
-        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", True)):
+        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", True, [])):
             first = ROLLOUT.preview(["node-a"])["review_token"]
-        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", False)):
+        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", False, [])):
             self.assertNotEqual(first, ROLLOUT.preview(["node-a"])["review_token"])
 
 
@@ -1740,7 +1740,7 @@ class RestartReasonsTests(FakeCluster):
     def test_the_words_stay_as_they_were_and_each_reason_is_a_part(self):
         hold = [{"kind": "VirtualMachine", "ns": "vms", "name": "win", "default": "move", "id": "v"},
                 {"kind": "Deployment", "ns": "apps", "name": "web", "default": "wait", "id": "w"}]
-        volumes = [{"claim": f"lab/v{n}", "risk": "single-copy"} for n in range(1, 6)]
+        volumes = [{"claim": f"lab/v{n}", "risk": "unavailable"} for n in range(1, 6)]
         kept = [{"pod": "apps/db", "kind": "host-local path", "source": "/srv/db"},
                 {"pod": "apps/tmp", "kind": "emptyDir", "source": ""}]
         text, may_clear, reasons = self.answer(self.plan(hold=hold, requires_data_ack=True, volumes=volumes,
@@ -1780,7 +1780,12 @@ class RestartReasonsTests(FakeCluster):
         text, _, reasons = self.answer(plan)
         self.assertEqual("a volume has its only healthy copy on this host: lab/data; pods keep data on this host itself: "
                          "apps/db (/srv/db); Longhorn's volumes could not be read (the settings do not accept that)", text)
-        self.assertEqual(["single-copy", "host-data", "storage-unread"], [r["kind"] for r in reasons])
+        self.assertEqual(["one-copy-left", "host-data", "storage-unread"], [r["kind"] for r in reasons])
+        left = self.part(reasons, "one-copy-left")
+        self.assertEqual("1 volume would have one healthy copy left, on another host, while this host restarts.", left["text"])
+        self.assertEqual(f'Turn on "{SETTING}" in the Host updates settings, or wait until Longhorn has rebuilt more copies on other hosts.',
+                         left["clears"])
+        self.assertEqual("This may clear by itself on the next read.", self.part(reasons, "storage-unread")["clears"])
 
     def test_volumes_unread_may_clear_and_say_so(self):
         text, may_clear, reasons = self.answer(self.plan(requires_data_ack=True, storage_unknown=True, volumes=[],
@@ -1796,6 +1801,18 @@ class RestartReasonsTests(FakeCluster):
         stranded = self.part(reasons, "stranded")
         self.assertEqual((2, ["apps/db", "apps/cache"]), (stranded["count"], stranded["names"]))
         self.assertEqual("2 workloads have no other host to run on.", stranded["text"])
+        self.assertEqual("Only a person can accept stopping them, in this host's Restart host… review.", stranded["clears"])
+        one = self.part(self.answer(self.plan(stranded=[{"ns": "apps", "name": "db"}]))[2], "stranded")
+        self.assertEqual(("1 workload has no other host to run on.", "Only a person can accept stopping it, in this host's Restart host… review."),
+                         (one["text"], one["clears"]))
+
+    def test_more_than_six_that_would_wait_are_counted_and_six_named(self):
+        hold = [{"kind": "Deployment", "ns": "apps", "name": f"web-{n}", "default": "wait", "id": f"w{n}"} for n in range(8)]
+        text, _, reasons = self.answer(self.plan(hold=hold))
+        self.assertEqual("These would have to stop and wait for the host: " + ", ".join(f"apps/web-{n}" for n in range(6)), text)
+        waits = self.part(reasons, "would-wait")
+        self.assertEqual((8, [f"apps/web-{n}" for n in range(6)]), (waits["count"], waits["names"]))
+        self.assertEqual("8 workloads would have to stop and wait for this host.", waits["text"])
 
     def test_a_stop_the_review_itself_has_is_a_part_each(self):
         text, _, reasons = self.answer(self.plan(ready=False, blockers=["The host boot ID is unavailable", "Quorum would be lost"]))
@@ -1818,12 +1835,14 @@ class RestartReasonsTests(FakeCluster):
         self.assertTrue(text.startswith("Something would keep this host from draining: 3 Longhorn orphan records"))
         self.assertFalse(may_clear)
         orphans = self.part(reasons, "drain-engine-orphans")
+        self.assertEqual("3 Longhorn orphan records keep this host from draining.", orphans["text"], "the issue's own case: counted")
+        self.assertEqual(3, orphans["count"])
         self.assertEqual(1, len(orphans["names"]))
         self.assertIn("3 Longhorn orphan records on node-a", orphans["names"][0])
-        self.assertNotIn("vol-a", orphans["text"])
-        self.assertIn("Restart host…", orphans["clears"])
+        self.assertEqual("Tick or remove them in this host's Restart host… review. An automatic restart cannot.", orphans["clears"])
         stuck = self.part(reasons, "drain-stuck-pod")
         self.assertEqual(1, stuck["count"])
+        self.assertEqual("1 pod still stopping long after it should have, which keeps this host from draining.", stuck["text"])
         self.assertIn("apps/app-0", stuck["names"][0])
         self.assertNotIn(" for 1 h", stuck["names"][0], "said as the review's token sees it")
 
@@ -1833,7 +1852,37 @@ class RestartReasonsTests(FakeCluster):
         self.assertTrue(may_clear)
         self.assertIn("still lists engine", text)
         elsewhere = self.part(reasons, "drain-engines-elsewhere")
-        self.assertIn("by itself", elsewhere["clears"])
+        self.assertEqual("Longhorn on this host still lists volumes that have moved to another host.", elsewhere["text"])
+        self.assertEqual("This may clear by itself within minutes.", elsewhere["clears"])
+
+    def test_orphans_being_removed_say_they_may_clear(self):
+        self.add(*removing_orphan_on_node_a())
+        _, may_clear, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertTrue(may_clear)
+        removing = self.part(reasons, "drain-removing-orphans")
+        self.assertEqual(("Longhorn is still removing orphan records on this host.", "This may clear by itself within minutes."),
+                         (removing["text"], removing["clears"]))
+        self.assertIn("being removed", removing["names"][0])
+
+    def test_drain_checks_that_could_not_be_read(self):
+        self.kube.fail(BLOCKERS.ORPHANS, 503, times=100)
+        self.kube.fail(BLOCKERS.INSTANCE_MANAGERS, 503, times=100)
+        _, may_clear, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertTrue(may_clear)
+        unread = self.part(reasons, "drain-unread")
+        self.assertEqual((2, "2 of the drain checks could not be read."), (unread["count"], unread["text"]))
+        self.assertTrue(all(name.startswith("Homestead could not check") for name in unread["names"]))
+
+    def test_a_volume_attached_with_no_pod_using_it(self):
+        rows = [BLOCKERS._row(f"stuck-attachment:att-{n}", "stuck-attachment",
+                              f"Volume pvc-{n} is still attached to node-a (attachment att-{n}), but no pod on node-a uses it", "why", "fix")
+                for n in (1, 2)]
+        text, may_clear, reasons = self.answer(self.plan(requires_blocker_ack=True, drain_blockers=rows))
+        self.assertEqual("Something would keep this host from draining: " + "; ".join(r["what"] for r in rows), text)
+        self.assertFalse(may_clear)
+        attached = self.part(reasons, "drain-stuck-attachment")
+        self.assertEqual((2, "2 volumes attached to this host with no pod using them."), (attached["count"], attached["text"]))
+        self.assertEqual([r["what"] for r in rows], attached["names"])
 
     def test_the_refusal_carries_its_parts(self):
         self.add(*orphans_on_node_a())
@@ -1853,13 +1902,49 @@ class ReasonsInThePreviewTests(Runs):
     def test_the_reasons_do_not_change_the_review_token(self):
         part = {"kind": "single-copy", "text": "1 volume.", "count": 1, "names": ["lab/a"], "clears": "Wait."}
         tokens = set()
-        for answer in (("same words", False), ("same words", False, []), ("same words", False, [part]),
+        for answer in (("same words", False, []), ("same words", False, [part]),
                        ("same words", False, [{**part, "names": ["lab/b"]}])):
             with mock.patch.object(ROLLOUT, "restart_check", return_value=answer):
                 tokens.add(ROLLOUT.preview(["node-a"])["review_token"])
         self.assertEqual(1, len(tokens), "the same facts, the same token")
 
-    def test_an_older_check_without_reasons_gives_none(self):
-        with mock.patch.object(ROLLOUT, "restart_check", return_value=("same words", False)):
-            row = ROLLOUT.preview(["node-a"])["hosts"][0]
-        self.assertEqual(("same words", []), (row["restart_refusal"], row["restart_reasons"]))
+
+class RestartReasonsFromRealPlansTests(FakeCluster):
+    """The parts as the real review (homestead_power.plan) makes them: no line
+    promises what does not clear it, and no fact is said twice (#1494 review)."""
+    def longhorn(self, kind, name, **fields):
+        return {"apiVersion": "longhorn.io/v1beta2", "kind": kind,
+                "metadata": {"name": name, "namespace": "longhorn-system"}, **fields}
+
+    def test_volume_copies_that_could_not_be_read(self):
+        self.kube.fail(f"{power.LH}/replicas", 404, times=100)
+        text, _, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertEqual("The list of volume copies is unavailable, so the effect on volumes cannot be checked; "
+                         "Longhorn's volumes could not be read (the settings do not accept that)", text, "dev's words")
+        self.assertEqual(["not-ready"], [r["kind"] for r in reasons], "the same fact once")
+        self.assertEqual("The list of volume copies is unavailable, so the effect on volumes cannot be checked.", reasons[0]["text"])
+        self.assertFalse([r for r in reasons if SETTING in r["clears"]], "the setting does not clear it")
+        self.assertEqual("The list of volume copies is unavailable, so the effect on volumes cannot be checked",
+                         POWER_JOBS.rollout_check("node-a", True)[0], "with the setting on it is refused still")
+
+    def test_a_one_copy_volume_whose_copy_is_here(self):
+        self.add(self.longhorn("Setting", "node-drain-policy", value="block-if-contains-last-replica"),
+                 self.longhorn("Volume", "vol-one", spec={"numberOfReplicas": 1},
+                               status={"robustness": "healthy", "state": "attached",
+                                       "kubernetesStatus": {"namespace": "apps", "pvcName": "uploads"}}),
+                 self.longhorn("Replica", "vol-one-r-1", spec={"nodeID": "node-a", "volumeName": "vol-one",
+                                                               "healthyAt": "2026-10-01T00:00:00Z"},
+                               status={"currentState": "running"}),
+                 self.longhorn("Engine", "vol-one-e-0", spec={"volumeName": "vol-one", "nodeID": "node-a"},
+                               status={"currentState": "running", "replicaModeMap": {"vol-one-r-1": "RW"}}))
+        text, may_clear, reasons = POWER_JOBS.rollout_check("node-a")
+        self.assertEqual("apps/uploads keeps one copy, on this host. Longhorn will not let the host drain: give it a second copy "
+                         "in Volumes, or restart without draining (Force); a volume has its only healthy copy on this host: "
+                         "apps/uploads (the settings do not accept that)", text, "dev's words")
+        self.assertFalse(may_clear)
+        self.assertEqual(["not-ready"], [r["kind"] for r in reasons], "the volume once, where Longhorn's rule says it")
+        self.assertIn("give it a second copy in Volumes", reasons[0]["text"])
+        self.assertFalse([r for r in reasons if SETTING in r["clears"] or "second healthy copy" in r["clears"]],
+                         "neither the setting nor waiting clears Longhorn's rule")
+        refused, _, _ = POWER_JOBS.rollout_check("node-a", True)
+        self.assertIn("keeps one copy, on this host", refused, "the setting indeed leaves it refused")
