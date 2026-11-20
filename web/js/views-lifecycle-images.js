@@ -30,17 +30,30 @@ window.imageKeeperOpen = (page, name) => {
   if (search) search.value = name;
   go(page, { keepSearch: true });
 };
-async function viewImages() {
+/* While a host's scan runs, the page is drawn again every 4 s until it ends.
+   A page poll (#1406): nothing is read in a hidden tab, a read with no answer
+   is given up and tried again, and leaving the page stops it. Every draw of
+   the page calls this; one poll follows the visit, however often it is drawn. */
+let imageScanPoll = null;
+function imageScanFollow(scanning) {
+  const live = imageScanPoll && !imageScanPoll.stopped && imageScanPoll.visit === window.NAV_TOKEN;
+  if (!scanning) { imageScanPoll?.stop(); imageScanPoll = null; return; }
+  if (live) return;
+  imageScanPoll?.stop();
+  imageScanPoll = UI.poll(signal => viewImages({ signal }), 4000, { later: true, page: true });
+  imageScanPoll.visit = window.NAV_TOKEN;
+}
+async function viewImages({ signal } = {}) {
   // VM images that could not be read are said, not left out of the page (#620).
-  const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(e => ({ unread: e.message })),
-    api("/api/images/cleanup-auto").catch(error => ({ error: error.message }))]);
+  const [d, vm, auto] = await Promise.all([api("/api/images", { signal }), api("/api/images/vm", { signal }).catch(e => ({ unread: e.message })),
+    api("/api/images/cleanup-auto", { signal }).catch(error => ({ error: error.message }))]);
   STATE.data.imageCache = d;
   STATE.data.vmImages = vm;
   STATE.data.imageCleanupAuto = auto;
   // Kubernetes lists only each node's largest images; the full list is
   // containerd's. Homestead asks for it itself when its last answer is old,
   // so this only waits for a scan that is running to finish.
-  if ((d.scanning || []).length) setTimeout(() => { if (STATE.view === "images") viewImages(); }, 4000);
+  imageScanFollow((d.scanning || []).length > 0);
   const q = STATE.q.toLowerCase();
   const core = n => /(^|\/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|registry\.k8s\.io|pause|traefik|fleet|system-upgrade|k8snetworkplumbingwg|multus|whereabouts|kubeovn|calico|canal|flannel|coredns|etcd|rke2|neuvector|suse\/sles\/)/i.test(n);
   const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
@@ -241,5 +254,5 @@ window.prepullStop = async name => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  IMAGE_REASONS, IMAGE_KEEPER_PAGES, imageKeeper, viewImages, imageUnused, imageCleanupRow, vmImagesSection
+  IMAGE_REASONS, IMAGE_KEEPER_PAGES, imageKeeper, imageScanPoll, imageScanFollow, viewImages, imageUnused, imageCleanupRow, vmImagesSection
 };

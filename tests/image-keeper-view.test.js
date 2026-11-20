@@ -15,7 +15,7 @@ function load() {
   ctx.window = ctx;
   vm.createContext(ctx);
   const src = require("./helpers/lifecycle-source")();
-  vm.runInContext(between(src, "const IMAGE_REASONS = {", "async function viewImages()"), ctx);
+  vm.runInContext(between(src, "const IMAGE_REASONS = {", "/* While a host's scan runs"), ctx);
   return { ctx, opened };
 }
 const row = (kind, label, workload, extra = {}) => ({ reason: "stopped", kind, label, detail: "Because.", namespace: "lab", workload, container: "c", ...extra });
