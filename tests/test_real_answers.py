@@ -20,6 +20,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -148,6 +149,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route == "/echo-headers":
             self.answer({name.lower(): value for name, value in self.headers.items()})
             return True
+        if route == "/down":
+            self.answer({"error": "busy"}, status=503)
+            return True
+        if route == "/signed-only":
+            if self.headers.get(FLEET.H_SIG):
+                self.answer({"ok": True})
+            else:
+                self.answer({"error": "not signed"}, status=401)
+            return True
         if route == "/cf/cdn-cgi/access/certs":
             self.answer({"keys": [{"kid": "k1", "kty": "RSA", "n": "AQAB", "e": "AQAB"}]})
             return True
@@ -191,6 +201,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        if self.path.startswith("/moved?"):
+            self.send_response(307)
+            self.send_header("Location", urllib.parse.unquote(self.path.partition("?")[2]))
+            self.send_header("Content-Length", "0")
+            return self.end_headers()
         if self.path == "/api/auth/login":
             return self.answer({"ok": True}, headers=[("Set-Cookie", "homestead_session=s3ss; HttpOnly")])
         self.answer({"error": "not found"}, status=404)
@@ -470,6 +485,102 @@ class OutboundFetchTests(Served):
         seen, _ = MOVE._call({"url": f"https://{self.host}"}, f"/moved?https://{self.other}/echo-headers",
                              token=session)
         self.assertNotIn(session, json.dumps(seen))
+
+
+class LinkedClusterRedirectTests(Served):
+    """Calls between linked clusters follow redirects by the rule of every other outside read."""
+
+    session = "s" + "ess-" + "456"
+    NOT_FOLLOWED = ("the address redirects somewhere Homestead does not follow. "
+                    "A linked cluster's address must be an https address that answers by itself")
+    signature = {FLEET.H_FROM: "member-a", FLEET.H_SIG: "s" + "ig-" + "123"}
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.seen = []
+
+        class Plain(Handler):
+            def do_GET(self):
+                cls.seen.append(self.path)
+                super().do_GET()
+        cls.plain = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Plain)
+        cls.plain.daemon_threads = True
+        threading.Thread(target=cls.plain.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.plain.shutdown()
+        cls.plain.server_close()
+        super().tearDownClass()
+
+    def redirected(self, target, **sent):
+        seen, _ = FLEET._json(f"https://{self.host}", "GET", f"/moved?{target}/echo-headers", **sent)
+        return json.dumps(seen)
+
+    def test_the_sign_in_session_stays_on_its_host(self):
+        self.assertNotIn(self.session, self.redirected(f"https://{self.other}", token=self.session))
+
+    def test_the_signature_stays_on_its_host(self):
+        seen = self.redirected(f"https://{self.other}", headers=self.signature)
+        self.assertNotIn(self.signature[FLEET.H_SIG], seen)
+        self.assertNotIn("x-homestead-fleet", seen)
+
+    def test_a_redirect_on_the_same_host_keeps_both(self):
+        seen = json.loads(self.redirected(f"https://{self.host}", token=self.session, headers=self.signature))
+        self.assertEqual(f"homestead_session={self.session}", seen.get("cookie"))
+        self.assertEqual(self.signature[FLEET.H_SIG], seen.get("x-homestead-fleet-signature"))
+
+    def test_a_redirect_from_https_to_plain_http_is_refused(self):
+        plain = "http://%s:%d" % self.plain.server_address
+        with self.assertRaises(ValueError) as caught:
+            self.redirected(plain, token=self.session)
+        self.assertEqual([], self.seen, "nothing reaches the plain address")
+        self.assertEqual(self.NOT_FOLLOWED + " (HTTP 302).", str(caught.exception))
+
+    def test_a_member_whose_address_redirects_is_told_to_change_it(self):
+        member = {"name": "member-b", "url": f"https://{self.host}/moved?https://{self.other}"}
+        with mock.patch.object(FLEET, "sign", lambda *args, **kwargs: dict(self.signature)), \
+                self.assertRaises(ValueError) as caught:
+            FLEET.call(member, "GET", "/signed-only")
+        self.assertEqual(f"member-b: the address redirects to https://{self.other}. "
+                         "Change the address to that one (not signed).", str(caught.exception))
+
+    def test_a_member_that_redirects_and_fails_there_reads_as_not_answering(self):
+        member = {"name": "member-b", "url": f"https://{self.host}/moved?https://{self.other}"}
+        with mock.patch.object(FLEET, "sign", lambda *args, **kwargs: dict(self.signature)), \
+                self.assertRaises(FLEET.Unreachable) as caught:
+            FLEET.call(member, "GET", "/down")
+        self.assertEqual(f"member-b: the address redirects to https://{self.other}. "
+                         "Change the address to that one (busy).", str(caught.exception))
+
+    def sign_in(self, location):
+        """The sign-in to an address that answers it with a 307 to location (not followed on a POST)."""
+        with self.assertRaises(ValueError) as caught:
+            FLEET._login(f"https://{self.host}/moved?{urllib.parse.quote(location, safe='')}", "admin", "secret")
+        return str(caught.exception)
+
+    def test_a_sign_in_whose_address_redirects_is_told_to_change_it(self):
+        self.assertEqual(f"the address redirects to https://{self.other}. Change the address to that one (HTTP 307).",
+                         self.sign_in(f"https://{self.other}"))
+
+    def test_the_address_shown_leaves_out_a_login(self):
+        said = self.sign_in(f"https://admin:pw@{self.other}/x")
+        self.assertEqual(f"the address redirects to https://{self.other}. Change the address to that one (HTTP 307).",
+                         said)
+
+    def test_a_long_address_is_shown_cut_with_the_advice_whole(self):
+        said = self.sign_in("https://" + "a" * 300 + ".example.com/x")
+        shown = said.split("the address redirects to ", 1)[1].split(". Change", 1)[0]
+        self.assertLessEqual(len(shown), FLEET.SHOWN_ADDRESS_MAX)
+        self.assertTrue(shown.startswith("https://aaa") and shown.endswith("\u2026"), shown)
+        self.assertTrue(said.endswith(". Change the address to that one (HTTP 307)."), said)
+        self.assertEqual(1, said.count("https://"), "the address is shown once")
+
+    def test_an_address_that_is_not_a_plain_host_is_not_shown(self):
+        for location in ("https://192.0.2.1 see\there/x", "https://example.com\x01note/x", "ftp://example.com/x"):
+            with self.subTest(location=location):
+                self.assertEqual(self.NOT_FOLLOWED + " (HTTP 307).", self.sign_in(location))
 
 
 class CoverageTests(unittest.TestCase):
