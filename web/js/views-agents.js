@@ -116,11 +116,12 @@ function agentCard(r, target) {
       ["The agent says", r.reason ? esc(r.reason) : '<span class="dim">no reason given</span>'],
       ["Asked from", r.addr ? `<span class="mono">${esc(r.addr)}</span>` : '<span class="dim">unknown</span>'],
       pending ? ["Expires", esc(agentLeft(r.expires))] : ["Ended", esc(agentWhen(r.ended || r.created))],
+      r.app ? ["App", `<span class="mono">${esc(r.app)}</span>`] : null,
       r.decided_by ? ["Decided by", esc(UI.who(r.decided_by))] : null])}
-    ${agentPlanHtml(r.summary)}
+    ${r.details_hidden ? '<p class="small dim agent-req-detail">Details are shown to people who can approve this request.</p>' : agentPlanHtml(r.summary)}
     ${!pending && r.detail ? `<p class="small agent-req-detail">${esc(r.detail)}</p>` : ""}
     ${agentOutputHtml(r)}
-    ${UI.more("Raw details", `<pre class="mono small agent-raw">${esc(rawDetails)}</pre>`, false, `agent-raw-${r.id}`)}
+    ${r.details_hidden ? "" : UI.more("Raw details", `<pre class="mono small agent-raw">${esc(rawDetails)}</pre>`, false, `agent-raw-${r.id}`)}
     ${pending ? `<div class="agent-req-actions">${why ? `<span class="dim small">${esc(why)}</span>` : ""}${actionBar([
       { label: "Deny", run: `agentDeny(${jsq(r.id)})`, disabled: !r.can_decide, tip: why },
       { label: "Approve", run: `agentApprove(${jsq(r.id)})`, pri: !agentResult(r).risky, danger: agentResult(r).risky, disabled: !r.can_decide, tip: why }], { shown: 2 })}</div>` : ""}

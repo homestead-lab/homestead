@@ -3805,7 +3805,12 @@ ssh_pwauth: true
       decided_by: null, detail: "Nobody approved it in time. The agent can ask again.", role: "operator", escalated: false, key: "Ops agent", owner: "demo", addr: "198.51.100.7",
       action: "Delete the container lab/scratch", summary: { action: "Delete the container lab/scratch", replicas: 0 }, args: { namespace: "lab", name: "scratch" }, result: null }] };
   responses["/api/agents/requests"] = () => ({ pending: demoAgent.pending.length,
-    requests: [...demoAgent.pending, ...demoAgent.finished].map(r => ({ ...r, can_decide: r.role !== "admin" || ROLE === "admin" })) });
+    requests: [...demoAgent.pending, ...demoAgent.finished].map(r => {
+      // As the server does: only a person who can decide a request is given its settings.
+      if (can(r.role)) return { ...r, can_decide: true };
+      const { summary, args, result, ...rest } = r;
+      return { ...rest, can_decide: false, details_hidden: true, app: args?.namespace && args?.name ? `${args.namespace}/${args.name}` : "" };
+    }) });
   const demoAgentDecide = approve => (url, init) => {
     const id = JSON.parse(init?.body || "{}").id, at = demoAgent.pending.findIndex(r => r.id === id);
     if (at < 0) return { error: "it is not waiting" };
