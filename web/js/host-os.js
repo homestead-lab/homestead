@@ -385,14 +385,37 @@ window.osUpdatesReviewPicked = () => osUpdatesReview(osUpdatesTicked());
 const OSU_REVIEW_TITLE = nodes => nodes.length === 1 ? `Update ${nodes[0]}` : `Update ${osuHosts(nodes.length)}`;
 const OSU_REVIEW_LOADING = '<div id="osuReviewLoading" class="empty"><span class="spin2"></span> checking the hosts</div>';
 /* One notice per dialog: a lone host's verdict is the notice, while several
-   hosts', or one under "can't start", are plain lines. */
+   hosts', or one under "can't start", are plain lines. The verdict answers
+   "After installing" (#1494). A restart refused is a line per reason: its
+   count first, what clears it and the names once opened, and the next step
+   as a line of its own. Several hosts' say the title, the rest behind More. */
+const OSU_NEXT = "After the updates install, open this host's Restart host… to review and restart it.";
+const OSU_NEXT_IF = "If it does not, open this host's Restart host… after the updates install to review and restart it.";
+function osUpdatesReasonNames(r) {
+  const names = r.names || [], count = r.count ?? null;
+  if (!names.length) return "";
+  if (count === null) return names.map(n => /[.!?]$/.test(n) ? n : `${n}.`).join(" ");
+  return `${names.length < count ? `The first ${names.length}: ` : ""}${names.join(", ")}.`;
+}
 function osUpdatesVerdict(h, plain) {
-  const said = text => esc(text.replace(/^./, c => c.toUpperCase()).replace(/\.$/, ""));
+  if (h.restart_refusal && !h.restart_unread) {
+    const title = h.restart_may_clear ? `With this choice the updates install, and if ${h.node} needs a restart, Homestead may wait up to 15 minutes first.`
+      : `With this choice the updates install, but Homestead will not restart ${h.node} by itself.`;
+    const reasons = (h.restart_reasons || []).filter(r => r && r.text);
+    // Plain text: UI.notices and the lines below escape it.
+    const lines = reasons.length ? reasons.map(r => ({ short: r.text, more: [r.clears, osUpdatesReasonNames(r)].filter(Boolean).join(" ") }))
+      : [{ short: `${h.restart_refusal.replace(/^./, c => c.toUpperCase()).replace(/\.$/, "")}.`, whole: true }];
+    const next = h.restart_may_clear ? `This can clear by itself. ${OSU_NEXT_IF}` : OSU_NEXT;
+    // The next step stays under the bar, read before it is opened. An older
+    // server's one sentence: the notice cuts its short line itself.
+    if (!plain) return UI.notices(lines.map(line => [h.restart_may_clear ? "info" : "warn", line.whole ? line.short : line]), title,
+      { actions: `<p class="small osu-next">${esc(next)}</p>` });
+    const what = reasons.length ? `The ${reasons.length} reason${reasons.length === 1 ? "" : "s"}, and what to do` : "Why, and what to do";
+    return `<p class="small"><b>${esc(title)}</b></p>${UI.more(what, `<ul class="small osu-reasons">${lines.map(line =>
+      `<li class="osu-reason">${esc(line.short)}${line.more ? ` ${esc(line.more)}` : ""}</li>`).join("")}</ul><p class="small osu-next">${esc(next)}</p>`,
+      false, `osu-why-${h.node}`)}`;
+  }
   const [kind, title, body] = h.restart_unread ? ["warn", "The restart checks could not be read.", `${esc(h.restart_unread)} The updates still install, and a restart is checked when it is due.`]
-    : h.restart_refusal && h.restart_may_clear ? ["info", "If this host needs a restart, Homestead may wait up to 15 minutes first.",
-      `${said(h.restart_refusal)}. This can clear by itself. If it does not, the host waits for an admin to choose Restart host….`]
-    : h.restart_refusal ? ["warn", "If this host needs a restart, Homestead will not restart it automatically today.",
-      `${said(h.restart_refusal)}. The updates install, and the host then waits for an admin to choose Restart host….`]
     : ["info", "If this host needs a restart, it can go ahead.", plain ? "" : "It is drained, restarted, and uncordoned once it is ready with healthy volumes."];
   return plain ? `<p class="small"><b>${esc(title)}</b>${body ? ` ${body}` : ""}</p>` : UI.callout(kind, title, body);
 }
@@ -404,7 +427,7 @@ function osUpdatesReviewHost(h, several, plain) {
   return `${UI.facts([["Updates", count ? `${count} waiting ${h.security ? UI.chip(`${h.security} security`, "warn") : ""}` : "Up to date"], ["Restart", restart],
       h.homestead_here ? ["Homestead's leader", `${UI.chip("runs on this host", "info")} <span class="dim xs">A restart can stop this page from responding for a few minutes, but the update continues.${several ? " It is updated last." : ""}</span>`] : null])}
     ${count ? UI.more(`The ${count} update${count === 1 ? "" : "s"}`, `<div class="hos-updates">${h.updates.slice(0, 300).map(u => UI.chip(u.name, u.security ? "warn" : "neutral")).join("")}</div>`, false, `osu-${h.node}`) : ""}
-    <div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>
+    ${several ? `<div class="osu-verdict">${osUpdatesVerdict(h, plain)}</div>` : ""}
     ${h.unclean_restart ? `<p class="small dim">${esc(h.unclean_restart)}</p>` : ""}`;
 }
 function osUpdatesReviewHtml(review, restart) {
@@ -419,6 +442,7 @@ function osUpdatesReviewHtml(review, restart) {
     <div class="f"><label for="osu_review_restart">After installing</label><select id="osu_review_restart" onchange="osUpdatesReviewRestart()">
       <option value="when-needed"${restart === "when-needed" ? " selected" : ""}>Restart ${several ? "a host" : "it"} if an update needs one, drained first</option>
       <option value="never"${restart === "never" ? " selected" : ""}>Do not restart (restart manually)</option></select></div>
+    ${several ? "" : `<div class="osu-verdict">${osUpdatesVerdict(review.hosts[0], !!review.blocked)}</div>`}
     ${UI.actions(UI.button("Cancel", "modalBack()", { attrs: 'data-dialog-dismiss="true"' })
       + UI.button(OSU_REVIEW_TITLE(names), "osUpdatesReviewedApply()", { kind: "pri", id: "osu_review_go", attrs: 'data-need="admin"', disabled: !!review.blocked }))}
   </div>`;
