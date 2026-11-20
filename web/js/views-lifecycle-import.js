@@ -1379,7 +1379,15 @@ async function watchMoves(signal) {
   const moves = await api("/api/move/moves", signal ? { signal } : undefined).catch(e => ({ error: e.message }));
   if (UI.pollCancelled(signal)) return;
   const host = $("#movesList");
-  if (host) host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+  // The same failure already on show stays as it is: its alert drawn again
+  // every 4 s would be announced again, and a focused Retry would lose focus.
+  // The element remembers what it showed (as it reads back), so anything
+  // painted over it since is painted over again.
+  const shown = host?.__movesUnread;
+  if (host && !(moves.error && shown?.error === moves.error && shown.html === host.innerHTML)) {
+    host.innerHTML = moves.error ? movesUnreadHtml(moves.error) : movesHtml(moves);
+    host.__movesUnread = moves.error ? { error: moves.error, html: host.innerHTML } : null;
+  }
   if (moves.error) return;
   if (window.applyRole) window.applyRole();
   const follow = (moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending);

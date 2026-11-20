@@ -110,6 +110,30 @@ test("moves: a failed read is shown with Retry, and the loop tries again", async
   assert.equal(moveReads(w).length, 3);
 });
 
+// The failure is an alert (role="alert"): drawn again every 4 s it would be announced again
+// each time, and a focused Retry would lose its focus. A first failure and a recovery paint.
+test("moves: a failure already shown is left as it is while reads keep failing, and a recovery paints the list", async () => {
+  const w = await cardWithMoveRunning();
+  let content = "", paints = 0;
+  w.fields["#movesList"] = { dataset: {} };
+  Object.defineProperty(w.fields["#movesList"], "innerHTML", { get: () => content, set: value => { content = value; paints++; } });
+  await w.clock.advance(4000);
+  moveReads(w)[1].fail(new Error("HTTP 503")); await w.clock.settle();
+  assert.equal(paints, 1, "the first failure is shown");
+  assert.match(content, /could not be read: HTTP 503/);
+  await w.clock.advance(4000);
+  moveReads(w)[2].fail(new Error("HTTP 503")); await w.clock.settle();
+  assert.equal(paints, 1, "the same failure again leaves the alert and its Retry as they are");
+  await w.clock.advance(4000);
+  moveReads(w)[3].answer([{ ...move("running"), message: "Restoring again" }]); await w.clock.settle();
+  assert.equal(paints, 2, "a recovery paints the list again");
+  assert.match(content, /Restoring again/);
+  await w.clock.advance(4000);
+  moveReads(w)[4].fail(new Error("HTTP 503")); await w.clock.settle();
+  assert.equal(paints, 3, "a failure after the recovery is shown again");
+  assert.match(content, /could not be read: HTTP 503/);
+});
+
 test("moves: a read with no answer in 30 s is given up, said, and tried again", async () => {
   const w = await cardWithMoveRunning();
   await w.clock.advance(4000);
@@ -284,6 +308,17 @@ test("backup storage: a hidden tab checks nothing, and checks once when shown", 
   assert.equal(checks().length, 1, "no check while the tab is hidden");
   w.document.show(true); await w.clock.settle();
   assert.equal(checks().length, 2, "one check when it is shown again");
+});
+
+test("backup storage: a failed check is shown, and checked again at the next 15 s", async () => {
+  const { w, checks } = await storageStarting();
+  await w.clock.advance(15000);
+  checks()[1].fail(new Error("HTTP 502")); await w.clock.settle();
+  assert.match(w.fields["#clready_staging"].innerHTML, /HTTP 502/);
+  await w.clock.advance(14999);
+  assert.equal(checks().length, 2);
+  await w.clock.advance(1);
+  assert.equal(checks().length, 3, "the poll goes on after a failed check");
 });
 
 test("backup storage: a check with no answer in 75 s is given up, said, and tried again", async () => {
