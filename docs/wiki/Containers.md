@@ -1185,15 +1185,21 @@ named `<container>-lan`; it goes when the container does.
 
 ## If a node fails
 
-When a node stops answering, each container does one of three things -
-**If a node fails** on Containers sets them all in one list, and each
-container's editor has it under *Placement*:
+When a host stops answering, each container does one of four things -
+**If a host fails** on Containers sets them all in one list, and each
+container's editor has it under *Placement*. The times count from when
+Kubernetes marks the host as not ready, which is about a minute after the host
+stops answering:
 
 | Choice | What happens |
 |---|---|
-| **Move to another node** | about 15 seconds later it starts on another node - for apps that should come back quickly wherever there is room. New containers start with this |
-| **Wait for its node** | it stays with that node and starts again when the node is back - for apps tied to that host's hardware (a Coral, a Zigbee stick), or better restarted where they were |
-| **Kubernetes default** | Kubernetes moves it after five minutes - what anything Homestead did not deploy has |
+| **Move after 15 seconds** | about 15 seconds later it starts on another host - for apps that should come back quickly wherever there is room. New containers start with this |
+| **Move after 90 seconds** | about 90 seconds later it starts on another host - for apps that should ride out a short network drop where they are |
+| **Wait for its host** | it stays with that host and starts again when the host is back - for apps tied to that host's hardware (a Coral, a Zigbee stick), or better restarted where they were |
+| **Kubernetes default (5 min)** | Kubernetes moves it after five minutes - what anything Homestead did not deploy has |
+
+An app given another time outside Homestead shows that time ("Moves after 45
+seconds", say) and keeps it until another choice is saved.
 
 A container whose volume can be attached to only one host at a time can move
 only if Longhorn releases that volume from the failed host. This is the

@@ -81,11 +81,19 @@ def mode_of(podspec):
     return {None: "wait", FAST_SECONDS: "move", SLOW_SECONDS: "slow", DEFAULT_SECONDS: "default"}.get(seconds, "custom")
 
 
+# A toleration's time counts from the taint, which Kubernetes adds once it
+# marks the node not ready: node-monitor-grace-period (50 s by default since
+# Kubernetes 1.32) after the last heartbeat. So "15 seconds" is about a minute
+# and a quarter after the host goes silent. The help and the wiki say how
+# long marking it takes; the impact review names the moment only.
+AFTER_NOT_READY = "after the host is marked not ready"
+
+
 def after(seconds):
     """When a pod with this time leaves a node that stopped answering, in words."""
     if seconds >= 120 and seconds % 60 == 0:
-        return f"about {seconds // 60} minutes after the host stops answering"
-    return f"about {seconds} seconds after the host stops answering"
+        return f"about {seconds // 60} minutes {AFTER_NOT_READY}"
+    return f"about {seconds} seconds {AFTER_NOT_READY}"
 
 
 def tolerations(podspec, mode):
