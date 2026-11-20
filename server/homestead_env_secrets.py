@@ -278,8 +278,8 @@ def externalize(ns, dep, read, send, masked=()):
     the Secret first. Changes dep in place and returns it; a Deployment with
     nothing secret-looking, and no Secret yet, is left exactly as it was.
     Values dep no longer refers to are removed in the same write: for a new
-    app, or one that only gains a container, where nothing in use can go.
-    Edit uses stage() and prune() instead."""
+    app, where nothing in use can go. Deploy into an existing app uses stage()
+    and keeps them (#1396), as does Edit, which prunes after its save."""
     return _write(ns, dep, read, send, masked, drop_unused=True)[0]
 
 
