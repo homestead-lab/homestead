@@ -748,6 +748,59 @@ def _vm_disk_import(item):
     return "running", progress, message
 
 
+# A backup Longhorn has not started (no state yet, Pending, or in progress at
+# 0 %) is marked as needing attention after this long with no progress: a
+# queue behind Longhorn's concurrent-backup limit fits, and a stuck one is seen
+# the same day. It keeps running, and so its guards and its Cancel.
+BACKUP_START_LIMIT = 12 * 3600
+_NOT_STARTED = ("", "pending", "inprogress")
+# What Longhorn's Backup status shows of an upload in motion. progress is a
+# whole percent, so a large first backup can sit at 0 for a long time; the
+# sizes are counted too in case Longhorn fills them in as it goes.
+_MOVING = ("progress", "newlyUploadDataSize", "reUploadedDataSize")
+_clock = time.time   # a seam for the tests
+
+
+def _backup_waited(ref, seen):
+    """How long this backup has waited with no sign of movement, counting only
+    the time the jobs loop was looking. A gap in looking (Homestead down, the
+    clock stepped) pauses the wait: it says nothing about Longhorn, and a
+    Homestead that restarts often must still reach the limit. The look is
+    folded in at most once per LAST_EVERY, so the job is not written every round."""
+    now = _clock()
+    wait = ref.get("backup_wait") if isinstance(ref.get("backup_wait"), dict) else {}
+    watched, last = wait.get("watched"), wait.get("last")
+    if wait.get("seen") != seen or not isinstance(watched, (int, float)) or not isinstance(last, (int, float)):
+        watched, last = 0, now
+    elif last > now or now - last > ERRORS.GAP:
+        last = now
+    elif now - last >= ERRORS.LAST_EVERY:
+        watched, last = watched + now - last, now
+    ref["backup_wait"] = {"watched": watched, "last": last, "seen": seen}
+    return watched + (now - last)
+
+
+def _backup_not_started(ref, state, progress, status):
+    """The needs-attention answer for a backup that has not moved in time, or
+    None. It stays running: a backup may still be reading its snapshot, and
+    Cancel (homestead_cancel.backup_cancel) is the reviewed way to remove the
+    waiting Backup and its snapshot. Nothing is written to Longhorn here."""
+    if state not in _NOT_STARTED or (state == "inprogress" and progress > 0):
+        ref.pop("backup_wait", None)
+        return None
+    seen = [state, *(str(status.get(key, "") or "") for key in _MOVING)]
+    if _backup_waited(ref, seen) < BACKUP_START_LIMIT:
+        return None
+    messages = status.get("messages") if isinstance(status.get("messages"), dict) else {}
+    said = ". ".join(" ".join(str(text).split()).rstrip(".") for text in messages.values() if str(text).strip())[:240]
+    cause = (f"Longhorn says: {said.rstrip('.')}." if said else
+             "Longhorn gives no reason. This happens when the volume cannot be attached for the backup.")
+    return ("running", progress,
+            f"Needs attention: the backup has made no progress for {BACKUP_START_LIMIT // 3600} hours. {cause} "
+            "The job stays open because Longhorn may still start the backup and read its snapshot. "
+            "Cancel removes the waiting backup and its snapshot. Back up again once the cause has cleared.")
+
+
 def _backup(item):
     ref = item["ref"]
     obj = kget(f"/apis/longhorn.io/v1beta2/namespaces/{ref['namespace']}/backups/{ref['name']}")
@@ -765,7 +818,7 @@ def _backup(item):
         return "succeeded", 100, "Backup complete"
     if state in ("error", "failed", "unknown"):
         return "failed", progress, status.get("error") or f"Longhorn reports this backup as {state} and gave no detail"
-    return "running", progress, f"Backup {state or 'pending'}"
+    return _backup_not_started(ref, state, progress, status) or ("running", progress, f"Backup {state or 'pending'}")
 
 
 def _volume_restore(item):

@@ -598,5 +598,109 @@ class BackupJobEndsTests(unittest.TestCase):
         self.assertEqual([], self.kube.writes)
 
 
+class BackupThatNeverStartsTests(unittest.TestCase):
+    """A backup Longhorn does not move for BACKUP_START_LIMIT, counted only
+    while the jobs loop was looking, is marked as needing attention. It keeps
+    running (its guards, its Cancel) and gives Longhorn's own reason."""
+
+    STEP = 4 * 60   # one look per 4 minutes: under the gap that pauses a wait
+    WAIT = "Wait for backup nightly-0 to be deleted"   # a reason Longhorn's backup controller gives
+    NONE = "Longhorn gives no reason. This happens when the volume cannot be attached for the backup."
+    job_at = BackupJobEndsTests.job_at
+
+    def setUp(self):
+        BackupJobEndsTests.setUp(self)
+        self.now = 1_800_000_000.0
+        self.enterContext(mock.patch.object(operations, "_clock", lambda: self.now, create=True))
+
+    def watch(self, name, seconds):
+        """The jobs loop looks at the job every STEP for this long; its last look."""
+        for _ in range(int(seconds // self.STEP)):
+            self.now += self.STEP
+            operations.list_operations()
+        return self.find(name)
+
+    def find(self, name):
+        return next(job for job in operations.list_operations() if job["resource"]["name"] == name)
+
+    def moved(self, name, **status):
+        """Longhorn gives the Backup a new status."""
+        path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups/{name}"
+        backup = self.kube.object(path)
+        backup["status"] = status
+        self.kube.discard(path)
+        self.kube.add(backup)
+
+    def flagged(self, job):
+        return job["status"] == "running" and job["message"].startswith("Needs attention:")
+
+    def test_a_backup_with_no_progress_is_flagged_after_twelve_hours_with_longhorn_s_reason(self):
+        self.assertEqual(12 * 3600, getattr(operations, "BACKUP_START_LIMIT", None))
+        # Longhorn's states: "" is its new state; Pending carries its reason in status.messages.
+        for status, says in (({}, self.NONE), ({"state": ""}, self.NONE),
+                             ({"state": "Pending", "messages": {"ReconcileInfo": self.WAIT}}, f"Longhorn says: {self.WAIT}."),
+                             ({"state": "Pending", "messages": {"a": "Waiting for the engine e-1 to be ready", "b": "retry 2."}},
+                              "Longhorn says: Waiting for the engine e-1 to be ready. retry 2."),
+                             ({"state": "InProgress", "progress": 0}, self.NONE)):
+            with self.subTest(status=status):
+                name = self.job_at(**status)["resource"]["name"]
+                self.assertFalse(self.flagged(self.watch(name, 12 * 3600 - self.STEP)))
+                job = self.watch(name, self.STEP)
+                self.assertTrue(self.flagged(job), job["message"])
+                self.assertTrue(job["cancellable"], "Cancel stays offered")
+                self.assertIn("no progress for 12 hours", job["message"])
+                self.assertIn(says, job["message"])
+                self.assertIn("Cancel removes the waiting backup and its snapshot", job["message"])
+                self.assertIn("The job stays open because Longhorn may still start the backup and read its snapshot.", job["message"])
+                self.assertTrue(job["message"].endswith("Back up again once the cause has cleared."), job["message"])
+                self.assertNotIn("backup target", job["message"])
+        self.assertEqual([], self.kube.writes, "nothing is written to Longhorn")
+
+    def test_it_carries_on_by_itself_once_the_backup_starts(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.assertTrue(self.flagged(self.watch(name, 12 * 3600)))
+        self.moved(name, state="InProgress", progress=10)
+        job = self.watch(name, self.STEP)
+        self.assertEqual(("running", "Backup inprogress"), (job["status"], job["message"]))
+
+    def test_a_backup_uploading_however_slowly_is_not_flagged(self):
+        name = self.job_at(state="InProgress", progress=3)["resource"]["name"]
+        self.assertFalse(self.flagged(self.watch(name, 24 * 3600)))
+
+    def test_a_backup_at_zero_percent_whose_upload_size_grows_is_not_flagged(self):
+        name = self.job_at(state="InProgress", progress=0)["resource"]["name"]
+        for hour in range(1, 25):
+            self.moved(name, state="InProgress", progress=0, newlyUploadDataSize=str(hour * 1024 ** 2))
+            job = self.watch(name, 3600)
+        self.assertFalse(self.flagged(job))
+
+    def test_the_wait_starts_again_once_the_backup_moved_even_briefly(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.watch(name, 11 * 3600)
+        self.moved(name, state="InProgress", progress=20)
+        self.watch(name, self.STEP)
+        self.moved(name, state="Pending")
+        self.assertFalse(self.flagged(self.watch(name, 11 * 3600)))
+
+    def test_time_no_one_was_looking_pauses_the_wait(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        self.watch(name, 11 * 3600)
+        self.now += 2 * 3600   # Homestead down: no look in between
+        self.assertFalse(self.flagged(self.watch(name, 3600 - 2 * self.STEP)), "the 2 hours down do not count")
+        self.assertTrue(self.flagged(self.watch(name, 3 * self.STEP)), "the 11 hours before still count")
+
+    def test_a_flagged_backup_does_not_hand_its_snapshot_to_the_sweep(self):
+        name = self.job_at(state="Pending")["resource"]["name"]
+        with operations.transaction() as t:
+            items = t.items
+            row = next(item for item in items if item["ref"].get("name") == name)
+            row["ref"].update(snapshot="hs-backup-1", snapshot_uid="uid-1")
+            t.save(items)
+        job = self.watch(name, 12 * 3600)
+        self.assertTrue(self.flagged(job))
+        stored = next(item for item in operations.stored() if item["id"] == job["id"])
+        self.assertNotIn("snapshot_pending", stored["ref"])
+
+
 if __name__ == "__main__":
     unittest.main()
