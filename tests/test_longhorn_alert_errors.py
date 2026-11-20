@@ -249,18 +249,35 @@ DEV_PLAIN = [
     (r"(?<![A-Za-z0-9+_=-])(?=[A-Za-z0-9+_=-]*\d)[A-Za-z0-9+_=-]{20,}", 0, "<hidden>"),
 ]
 
+# What the branch may keep, copied here so a widened list or pattern in the
+# module fails the pin tests and the oracle below (which keeps only these).
+KEPT_GROUPS = {
+    "longhorn.io", "kubevirt.io", "cdi.kubevirt.io", "subresources.kubevirt.io", "upload.cdi.kubevirt.io",
+    "storage.k8s.io", "snapshot.storage.k8s.io", "coordination.k8s.io", "networking.k8s.io", "scheduling.k8s.io",
+    "metrics.k8s.io", "discovery.k8s.io", "rbac.authorization.k8s.io", "apiextensions.k8s.io",
+    "admissionregistration.k8s.io", "certificates.k8s.io", "cluster.x-k8s.io", "helm.cattle.io", "upgrade.cattle.io",
+    "k8s.cni.cncf.io", "harvesterhci.io", "network.harvesterhci.io", "loadbalancer.harvesterhci.io",
+    "devices.harvesterhci.io", "metallb.io", "cert-manager.io",
+    "volumes.longhorn.io", "engines.longhorn.io", "replicas.longhorn.io", "nodes.longhorn.io",
+    "settings.longhorn.io", "volumeattachments.longhorn.io",
+}
+KEPT_VOLUME = r"pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-r-[0-9a-f]{8}|-e-\d{1,3})?"
+# By the rule's place in DEV_PLAIN: the quoted dotted name rule and the run rule.
+KEEP = {2: lambda found: found[1:-1] in KEPT_GROUPS,
+        len(DEV_PLAIN) - 1: lambda found: re.fullmatch(KEPT_VOLUME, found)}
+
 
 def trace(chars, keeping):
     """_PLAIN's rules applied as re.sub applies them, to (character, where
     it came from) pairs: what a rule writes comes from nowhere (None), what
     it copies from a group keeps where it came from. keeping: a match that
-    is a kept name becomes one private-use character, the next after those
+    is a kept name by this file's own copies (KEEP, not the module's) becomes one private-use character, the next after those
     already set aside, from ("kept", where its characters came from, the
     marker the rule would have written)."""
     slots = 0
     for index, (pattern, word) in enumerate(ALERTS._PLAIN):
         text, out, at = "".join(c for c, _ in chars), [], 0
-        keep = ALERTS._KEPT.get(index) if keeping else None
+        keep = KEEP.get(index) if keeping else None
         for m in pattern.finditer(text):
             out += chars[at:m.start()]
             if keep and keep(m.group(0)):
@@ -287,14 +304,16 @@ def hidden_more(chars):
         return sorted(found[-1])
     with mock.patch.object(ALERTS, "sorted", capture, create=True):
         plain = ALERTS._hidden_more(text)
-    assert len(found) == 1, "_hidden_more no longer sorts its spans once: update hidden_more()"
+    if len(found) != 1:
+        raise AssertionError("_hidden_more no longer sorts its spans once: update hidden_more()")
     out, shown = [], 0
     for start, end in sorted(s for s in found[0] if s[1] > s[0]):
         if start > shown or not out:
             out += chars[shown:start] + [(c, None) for c in "<hidden>"]
         shown = max(shown, end)
     out += chars[shown:]
-    assert "".join(c for c, _ in out) == plain, f"hidden_more() is not _hidden_more on {text!r}"
+    if "".join(c for c, _ in out) != plain:
+        raise AssertionError(f"hidden_more() is not _hidden_more on {text!r}")
     return out
 
 
@@ -310,7 +329,9 @@ def outcomes(raw):
     dev = {o for _, o in dev_chars if o is not None}
     slotted = re.sub("[\ue000-\uf8ff]", "\ufffd", text)
     named, marked, branch, kept_at = [], [], set(), set()
-    for c, o in hidden_more(trace(list(zip(slotted, range(len(slotted)))), True)):
+    slots = trace(list(zip(slotted, range(len(slotted)))), True)
+    aside = sum(isinstance(o, tuple) for _, o in slots)
+    for c, o in hidden_more(slots):
         if isinstance(o, tuple):
             named += [k for k, _ in o[1]]
             marked.append(o[2])
@@ -320,7 +341,7 @@ def outcomes(raw):
             marked.append(c)
             if o is not None:
                 branch.add(o)
-    return dev_out, dev, "".join(named), "".join(marked), branch | kept_at, kept_at
+    return dev_out, dev, "".join(named), "".join(marked), branch | kept_at, kept_at, aside
 
 
 class SecretsStayHiddenTests(unittest.TestCase):
@@ -367,9 +388,12 @@ class SecretsStayHiddenTests(unittest.TestCase):
     def fault(self, raw):
         """None when plain_error's output is dev's output, or dev's output
         with kept names standing where dev wrote their markers, and every
-        character dev hid is hidden unless it lies in a kept name; else why."""
+        character dev hid is hidden unless it lies in a kept name; else why.
+        self.path: "kept" when the output differs from dev's, "fell back"
+        when a name was set aside and the output is dev's, else None."""
         out = ALERTS.plain_error(raw, limit=10 ** 7)
-        dev_out, dev, named, marked, branch, kept_at = outcomes(raw)
+        dev_out, dev, named, marked, branch, kept_at, aside = outcomes(raw)
+        self.path = "kept" if out != dev_out else "fell back" if aside else None
         if out == dev_out:
             return None
         if out != named or marked != dev_out:
@@ -380,6 +404,12 @@ class SecretsStayHiddenTests(unittest.TestCase):
 
     def test_the_rules_are_dev_s_unchanged(self):
         self.assertEqual(DEV_PLAIN, [(p.pattern, p.flags & re.I, w) for p, w in ALERTS._PLAIN])
+
+    def test_what_may_be_kept_is_the_closed_list_and_the_volume_pattern(self):
+        self.assertEqual(KEPT_GROUPS, ALERTS._API_GROUPS)
+        self.assertEqual(KEPT_VOLUME, ALERTS._VOLUME.pattern)
+        self.assertEqual(0, ALERTS._VOLUME.flags & re.I)
+        self.assertEqual(set(KEEP), set(ALERTS._KEPT))
 
     def test_nothing_dev_hides_is_shown_but_the_kept_names(self):
         glued = [a + g + b for g in list(self.GLUE) + [""]
@@ -413,17 +443,25 @@ class SecretsStayHiddenTests(unittest.TestCase):
                      "https://", "http://x/", "192.0.2.5", "[2001:db8::1]", "2001:db8::5", "kube.example.com",
                      ":6443", VOLUME, VOLUME + "-r-1a2b3c4d", VOLUME + "-e-0", "pvc-", UUID, '"longhorn.io"',
                      "'volumes.longhorn.io'", '"kube.example.com"', '"LONGHORN.IO"', "eyJ", "key-", "x.", "API group ",
-                     "\ue000", "\ue001", "\uf8ff", "auth", "session", "1.2.3", "abc", "_", "=", "a" * 20]
+                     "\ue000", "\ue001", "\uf8ff", "auth", "session", "1.2.3", "abc", "_", "=", "a" * 20,
+                     "<hidden>", "<address>"]
         separators = [" ", "", "+", "/", "=", "_", "-", ".", ":", "@", "%", "\x00", "\r", "\t", "\u200b", "\u200f",
                       "\u0301", "\uff1d", '\\"', "\\'", '"', "'", ",", ";", "(", ")", "[", "]", "{", "}", "<", ">",
                       "&", "?", "#", "!", "*", "|", "~", "^", "$", "`", "\n", "  ", ". "]
-        hits = []
+        hits, paths = [], {"kept": 0, "fell back": 0}
         for _ in range(50000):
             raw = "".join(rng.choice(separators) + (rng.choice(shapes)() if rng.random() < 0.5 else rng.choice(fragments))
                           for _ in range(rng.randint(1, 5)))
             if self.fault(raw):
                 hits.append(raw)
+            elif self.path:
+                paths[self.path] += 1
         self.assertEqual([], hits[:5], f"{len(hits)} of 50000 texts show what dev hides")
+        # The texts reach both sides of the check: names kept, and names set
+        # aside whose output is dev's (the check fell back, or what dev hides
+        # took the name with it). Seeded: 6199 and 1289 when written.
+        self.assertGreaterEqual(paths["kept"], 2000, paths)
+        self.assertGreaterEqual(paths["fell back"], 400, paths)
 
     def test_a_text_cannot_forge_a_kept_name(self):
         """A private-use character in the input is never read back as a kept
@@ -484,10 +522,11 @@ class SecretsStayHiddenTests(unittest.TestCase):
             self.assertEqual('is "longhorn.io"', ALERTS.plain_error('is "longhorn.io"'))
 
     def test_the_whole_call_stays_within_about_twice_dev_s_time(self):
-        """With a name set aside it runs dev's rules twice, once as they are,
-        then compares; with none, once. On 100,000 characters: under four
-        times dev's time (about two and a half measured, with room for a busy
-        machine)."""
+        """Dev's work is _PLAIN's rules, then _hidden_more. With a name set
+        aside the branch does that twice, once on the text with names set
+        aside and once as dev does, then compares; with none, once. On
+        100,000 characters: under four times dev's time, with room for a
+        busy machine."""
         import time
         for text in (('"longhorn.io"' + " ") * 7142, (VOLUME + " ") * 2439, ('"kube.example.com"' + " ") * 5263,
                      ("x" * 30 + "1 ") * 3225, "pvc-" * 25000, "\ue000" * 100000):
@@ -496,6 +535,7 @@ class SecretsStayHiddenTests(unittest.TestCase):
                 plain = " ".join(text.split())
                 for pattern, word in ALERTS._PLAIN:
                     plain = pattern.sub(word, plain)
+                ALERTS._hidden_more(plain)
                 dev = time.perf_counter() - start
                 start = time.perf_counter()
                 ALERTS.plain_error(text, limit=10 ** 7)
@@ -533,6 +573,7 @@ class NamesAreKeptTests(unittest.TestCase):
         ("snapshot " + UUID + " is not ready", UUID),
         (f"{VOLUME}+{SECRET}", UUID),
         (f"{VOLUME}-{UUID}", UUID),
+        ("volume pvc-" + "3f1c2a9g" + "-5b7d-4e21-9c0a-" + "1d2e3f4a5b6z" + " is degraded", "3f1c2a9g"),
     )
 
     def test_a_volume_s_name_and_api_groups_pass_unchanged(self):

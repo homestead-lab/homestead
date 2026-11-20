@@ -622,8 +622,9 @@ _KEPT = {2: lambda found: found[1:-1] in _API_GROUPS,
          len(_PLAIN) - 1: _VOLUME.fullmatch}
 # A name set aside waits as one private-use character, its index into the
 # list of names. The input's own private-use characters are replaced first,
-# so a text cannot forge one, and only those indexes are put back. No rule
-# can match one: it is not a letter, digit, space or any character they name.
+# so a text cannot forge one, and only those indexes are put back. A rule
+# or _hidden_more may take a slot into what it hides; the name then goes with
+# it, and only slots still in the text are put back.
 _SLOTS = re.compile("[\ue000-\uf8ff]")
 _SLOT_COUNT = 0xf8ff - 0xe000 + 1
 

@@ -54,7 +54,7 @@ def before(raw, keeping=False):
     for index, (pattern, flags, word) in enumerate(BEFORE):
         kept = None
         if keeping and index == 2:
-            kept = lambda m: m.group(0)[1:-1] in ALERTS._API_GROUPS
+            kept = lambda m: m.group(0)[1:-1] in KEPT_GROUPS
         elif keeping and index == len(BEFORE) - 1:
             kept = lambda m: KEPT_VOLUME.fullmatch(m.group(0))
         text = re.sub(pattern, (lambda m, kept=kept, word=word: m.group(0) if kept(m) else m.expand(word))
@@ -62,6 +62,17 @@ def before(raw, keeping=False):
     return text
 
 
+# The API groups plain_error keeps (pinned against the module in test_longhorn_alert_errors).
+KEPT_GROUPS = {
+    "longhorn.io", "kubevirt.io", "cdi.kubevirt.io", "subresources.kubevirt.io", "upload.cdi.kubevirt.io",
+    "storage.k8s.io", "snapshot.storage.k8s.io", "coordination.k8s.io", "networking.k8s.io", "scheduling.k8s.io",
+    "metrics.k8s.io", "discovery.k8s.io", "rbac.authorization.k8s.io", "apiextensions.k8s.io",
+    "admissionregistration.k8s.io", "certificates.k8s.io", "cluster.x-k8s.io", "helm.cattle.io", "upgrade.cattle.io",
+    "k8s.cni.cncf.io", "harvesterhci.io", "network.harvesterhci.io", "loadbalancer.harvesterhci.io",
+    "devices.harvesterhci.io", "metallb.io", "cert-manager.io",
+    "volumes.longhorn.io", "engines.longhorn.io", "replicas.longhorn.io", "nodes.longhorn.io",
+    "settings.longhorn.io", "volumeattachments.longhorn.io",
+}
 KEPT_VOLUME = re.compile(r"pvc-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:-r-[0-9a-f]{8}|-e-\d{1,3})?")
 
 
