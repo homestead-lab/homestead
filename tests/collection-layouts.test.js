@@ -35,7 +35,7 @@ test("collapsed rows keep failure and update signals, remote rows omit local upd
   const html=c.workloadTableRows([a]);
   assert.match(html,/>Update image</);assert.match(html,/Registry unreachable/);assert.match(html,/>Blocked</);
   assert.match(html,/class="wl-row wl-problem bad"/,"a problem colours the row's edge");
-  assert.match(html,/<div class="wl-reason xs">Cannot start: Insufficient memory<\/div>/,"and says why");
+  assert.match(html,/>Blocked<\/span><span class="wl-reason xs">Cannot start: Insufficient memory<\/span>/,"and says why beside its chip");
   assert.doesNotMatch(c.workloadTableRows([remote]),/>Update image<|Registry unreachable/);
 });
 test("detail values and identity controls escape hostile names and image references",()=>{
@@ -100,17 +100,27 @@ test("a card shows the image's name and tag with the full reference on hover; a 
 
 /* The Containers page in the one-bar design (Nov 2026): a summary line, rows
    with one labelled action, the details sidebar and hover cards. */
-test("the summary line counts the apps working normally and links each one that is not",()=>{
+test("the summary line counts the apps running normally and links each one that is not, set apart by dots",()=>{
   const c=context(),ok=workload(null,"alpha"),down=workload(null,"paperless"),off=workload(null,"spare");
   off.desired=0;off.ready=0;
   vm.runInContext('STATE.data.uptime={apps:{"apps/paperless":{state:"down",since:0,last:{error:"connection refused"},strip:[]}}}',c);
   const line=c.workloadSummary([ok,down,off],{updateCount:2});
-  assert.match(line,/<b>1 of 2 running apps is working normally\.<\/b>/);
-  assert.match(line,/<button type="button" class="linkish sum-link sum-bad" onclick="openDetails\('app',[^"]*paperless[^"]*\)">paperless is down<\/button>\./);
-  assert.match(line,/1 app is stopped\./);
-  assert.match(line,/onclick="imageUpdateCenter\(\)">Updates are ready for 2 apps\.<\/button>/);
-  assert.match(c.workloadSummary([ok],{current:true}),/<b>The running app is working normally\.<\/b> Every image is current\./);
-  assert.match(c.workloadSummary([ok,ok],{q:"al"}),/All 2 running apps matching “al” are working normally/);
+  const wide=line.match(/<span class="sum-wide">([\s\S]*)<\/span><span class="sum-narrow">/)[1];
+  assert.match(wide,/^<b>1 of 3 apps is running normally\.<\/b> <button type="button" class="linkish sum-link sum-bad" onclick="openDetails\('app',[^"]*paperless[^"]*\)">paperless is down<\/button>/);
+  assert.match(wide,/aria-hidden="true">·<\/span> <span class="sum-note">1 app is stopped<\/span>/);
+  assert.match(wide,/·<\/span> <button type="button" class="linkish sum-link sum-info" onclick="imageUpdateCenter\(\)">Updates are ready for 2 apps<\/button>$/);
+  // A phone keeps the sentence short and the apps in trouble.
+  assert.match(line,/<span class="sum-narrow"><b>1 of 3 apps is running\.<\/b> <button[^>]*>paperless is down<\/button><\/span>$/);
+  assert.match(c.workloadSummary([ok]),/<b>The app is running normally\.<\/b><\/span>/);
+  assert.match(c.workloadSummary([ok,ok],{q:"al"}),/All 2 apps matching “al” are running normally/);
+});
+test("a row's status is a chip and a plain reason, or Running with its copies and an update waiting",()=>{
+  const c=context(),ok=workload(null,"alpha"),slow=workload(null,"assistant"),many=workload(null,"edge");
+  many.desired=3;many.ready=3;
+  vm.runInContext('STATE.data.uptime={apps:{"apps/assistant":{state:"slow",since:0,last:{ok:true,ms:2400,code:200},strip:[]}}}',c);
+  assert.equal(c.workloadStatusWords(slow,null),'<span class="ui-chip warn slim">Slow</span><span class="wl-reason xs">Responses take 2.4 seconds.</span>');
+  assert.equal(c.workloadStatusWords(many,null),'<span class="wl-state dim">Running, 3 copies</span>');
+  assert.equal(c.workloadStatusWords(ok,{available:true,images:[]}),'<span class="wl-state dim">Running</span><span class="wl-reason xs">Update ready</span>');
 });
 test("a row's labelled action fits the app: its update, its logs when in trouble, Start when stopped, else the app",()=>{
   const c=context(),first=w=>(c.workloadRowActions(w,vm.runInContext(`workloadUpdate(${JSON.stringify(w.ns)},${JSON.stringify(w.name)})`,c),w.desired===0).match(/<div class="actionbar"><button[^>]*>(?:<svg[^>]*><\/svg>)?([^<]+)<\/button>/)||[])[1];

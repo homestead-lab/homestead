@@ -948,6 +948,9 @@ function listOptions(controls, items) {
   return `<details class="actionmenu headmenu list-options"><summary class="btn" aria-label="List options"><span class="list-options-label">Options</span>${icon("sliders")}</summary>
     <div class="actionmenu-pop list-options-pop">${controls}${menuItems(items)}</div></details>`;
 }
+/* The dot between the things a summary line points to (design.md "Summary line"). */
+const SUM_DOT = ' <span class="dim sum-dot" aria-hidden="true">·</span> ';
+if (typeof window !== "undefined") window.SUM_DOT = SUM_DOT;
 /* The top of a page: one line saying how things stand, and the numbers
    behind it a tap away. Items are HTML; the detail stays open across the
    page's own refreshes until closed. */
@@ -969,11 +972,12 @@ if (typeof window !== "undefined") { window.summaryLine = summaryLine; window.su
 
 /* A card's or a row's buttons: the first `shown` as buttons, the rest in the
    same ⋯ menu the page headers use, so every card and row reads the same way
-   and none runs onto a second line. Items as for moreMenu, plus pri, and
-   group: the menu puts a heading over each run of items with a new group. */
+   and none runs onto a second line. Items as for moreMenu, plus pri; plain,
+   a button that shows its label without its icon; and group: the menu puts a
+   heading over each run of items with a new group. */
 function actionBar(items, { shown = 2, label = "More actions", iconOnly = false } = {}) {
   const rows = (items || []).filter(Boolean);
-  const button = item => `<button type="button" class="btn sm${iconOnly ? " iconic" : ""}${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.ariaLabel ? ` aria-label="${esc(item.ariaLabel)}"` : ""}${item.disabled ? " disabled" : ""}
+  const button = item => `<button type="button" class="btn sm${iconOnly ? " iconic" : ""}${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.ariaLabel ? ` aria-label="${esc(item.ariaLabel)}"` : ""}${item.disabled ? " disabled" : ""}${item.plain ? ' data-plain="true"' : ""}
     onclick="${item.run}">${item.icon ? icon(item.icon) : ""}${iconOnly && item.icon ? `<span class="sr-only">${esc(item.label)}</span>` : esc(item.label)}</button>`;
   const rest = rows.slice(shown);
   const heading = (item, i) => item.group && item.group !== rest[i - 1]?.group ? `<div class="actionmenu-group" aria-hidden="true">${esc(item.group)}</div>` : "";

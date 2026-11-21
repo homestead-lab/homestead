@@ -22,19 +22,6 @@ function lhLargest(cap) {
     { tip: `The largest allocation for ${c} empty cop${c === 1 ? "y" : "ies"} on different hosts. This is not space for rebuilds and does not guarantee placement, because existing data and snapshots also need physical space.` })).join("");
 }
 
-/* The Volumes page's per-node card. */
-function lhCapacityCard(cap, st) {
-  if (!cap) return `<div class="card flat statwide"><div class="ctitle">Per-node disks</div><div class="csub">free of total</div>
-      ${(st?.disks || []).map(d => `<div class="drow"><div class="dl">${esc(lhShort(d.node))}</div>
-        <div class="dv mono nowrap">${esc(sizePair(d.avail_gb, d.cap_gb))}</div></div>`).join("") || '<div class="csub" style="margin-top:8px">Longhorn has not reported any host disks yet.</div>'}</div>`;
-  return `<div class="card flat statwide lh-card"><div class="between"><div class="ctitle">Allocated per host</div>
-      <span class="row" style="gap:10px"><a class="dim xs" data-need="admin" onclick="lhDisks()" data-tip="Every disk on every host. Disks can be added to Longhorn here.">Disks</a>
-        <a class="dim xs" onclick="go('settings');settingsTab('cluster')" data-tip="Over-provisioning is ${cap.over_provisioning}%">Longhorn settings</a></span></div>
-    ${lhNodeRows(cap) || '<div class="csub" style="margin-top:8px">Longhorn has not reported any host disks yet.</div>'}
-    <div class="dim xs" style="margin-top:8px">Largest empty volume</div><div class="row lh-largest">${lhLargest(cap)}</div></div>`;
-}
-window.lhCapacityCard = lhCapacityCard;
-
 /* Settings > Hardware and storage: over-provisioning, minimal free space, the V2 engine. */
 async function lhSettingsPaint() {
   const host = $("#lhSettingsCard");
@@ -135,5 +122,5 @@ window.lhSettingsSave = async () => {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  lhLevel, lhShort, lhNodeRows, lhLargest, lhCapacityCard, lhSettingsPaint, lhWaitWords, lhNodeDownChoice
+  lhLevel, lhShort, lhNodeRows, lhLargest, lhSettingsPaint, lhWaitWords, lhNodeDownChoice
 };

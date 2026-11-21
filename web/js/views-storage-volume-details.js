@@ -1,4 +1,4 @@
-/* Homestead views: the Volumes page's summary line and attention list, a volume's details sidebar and its hover cards (design.md "Details sidebar", "Hover cards"). Part of the Volumes page, split from views-storage.js (#911); a classic script. */
+/* Homestead views: the Volumes page's summary line and copies, a volume's details sidebar and its hover cards (design.md "Details sidebar", "Hover cards"). Part of the Volumes page, split from views-storage.js (#911); a classic script. */
 // A volume's key: its name, and its cluster's in the view of every cluster,
 // where two clusters can each have a volume of the same name.
 const volumeKey = x => x.site?.id ? `${x.site.id}/${x.name}` : x.name;
@@ -9,79 +9,85 @@ const gibPerDay = bytes => (bytes / 1024 ** 3).toFixed(1);
 // Longhorn's own reason, as a sentence.
 const reasonSentence = text => { const s = String(text || "").trim(); return s ? `${s[0].toUpperCase()}${s.slice(1)}${/[.!?]$/.test(s) ? "" : "."}` : ""; };
 
-/* What is wrong with a volume, if anything: {tone, chip, word, line}. The
-   line is a sentence for the row and the sidebar; the word finishes "<name> …"
-   in the summary. A volume no app uses is for the attention list, not a fault. */
+/* What is wrong with a volume, if anything: {tone, chip, word, line, note}.
+   The word finishes "<name> …" in the summary; the note is the short line
+   under the row's copies; the line is the full sentence for the sidebar and
+   the hover card. Filling up is shown under the usage instead (usage: true).
+   A volume no app uses is not a fault: its Attached to cell says so. */
 function volumeProblem(x) {
-  if (x.restore?.error) return { tone: "bad", chip: "Restore failed", word: "could not be restored", line: reasonSentence(x.restore.error) };
-  if (x.rebuild?.error) return { tone: "bad", chip: "Rebuild failed", word: "could not rebuild a copy", line: reasonSentence(x.rebuild.error) };
-  const short = x.copies_short;
-  if (short && !short.whole) return { tone: "bad", chip: "No whole copy", word: "has no whole copy", line: "No complete copy is left, so Longhorn cannot rebuild it." };
-  if (x.state === "attached" && x.robustness === "faulted") return { tone: "bad", chip: "Faulted", word: "is faulted", line: reasonSentence(x.health_reason) || "Longhorn cannot read or write it." };
-  if (x.state === "attached" && x.robustness === "degraded" && !x.rebuild) return { tone: "warn", chip: "Degraded", word: "is missing a copy",
-    line: reasonSentence(x.health_reason) || "A copy is missing, and Longhorn rebuilds it when there is room." };
-  if (short) return { tone: "warn", chip: `${short.whole} of ${short.wanted} copies`, word: `has ${short.whole} of ${short.wanted} copies`,
-    line: "Longhorn rebuilds missing copies only while a volume is attached. Rebuild now starts it." };
+  if (x.restore?.error) return { tone: "bad", chip: "Restore failed", word: "could not be restored", note: "The restore failed.", line: reasonSentence(x.restore.error) };
+  if (x.rebuild?.error) return { tone: "bad", chip: "Rebuild failed", word: "could not rebuild a copy", note: "A rebuild failed.", line: reasonSentence(x.rebuild.error) };
+  const short = x.copies_short, missing = n => `${n} cop${n === 1 ? "y is" : "ies are"} missing.`;
+  if (short && !short.whole) return { tone: "bad", chip: "No whole copy", word: "has no whole copy", note: "No whole copy is left.", line: "No complete copy is left, so Longhorn cannot rebuild it." };
+  if (x.state === "attached" && x.robustness === "faulted") return { tone: "bad", chip: "Faulted", word: "is faulted", note: "Longhorn cannot read or write it.", line: reasonSentence(x.health_reason) || "Longhorn cannot read or write it." };
+  if (x.state === "attached" && x.robustness === "degraded" && !x.rebuild) {
+    const want = Math.max(+x.replicas || 0, (x.copies || []).length), gone = Math.max(1, want - (x.copies || []).filter(c => c.healthy).length);
+    return { tone: "warn", chip: "Degraded", word: gone === 1 ? "is missing a copy" : `is missing ${gone} copies`, note: missing(gone),
+      line: reasonSentence(x.health_reason) || "A copy is missing, and Longhorn rebuilds it when there is room." };
+  }
+  if (short) {
+    const gone = Math.max(1, short.wanted - short.whole);
+    return { tone: "warn", chip: `${short.whole} of ${short.wanted} copies`, word: gone === 1 ? "is missing a copy" : `is missing ${gone} copies`, note: missing(gone),
+      line: "Longhorn rebuilds missing copies only while a volume is attached. Rebuild copy starts it now." };
+  }
   const soon = forecastFor(`volume:${x.name}`), warn = STATE.data.forecast?.warn_days || 14;
-  if (soon && soon.days_left <= warn) return { tone: soon.days_left <= 3 ? "bad" : "warn", chip: `Full ${forecastWhen(soon.days_left)}`,
+  if (soon && soon.days_left <= warn) return { tone: soon.days_left <= 3 ? "bad" : "warn", chip: `Full ${forecastWhen(soon.days_left)}`, usage: true,
     word: `is full ${forecastWhen(soon.days_left)}`, line: `It grows by about ${gibPerDay(soon.per_day)} GiB a day, so it is full by ${forecastDate(soon.full_on)}.` };
   return null;
 }
 
-/* The page's one line (design.md "Summary line"): whether the data is safe,
-   each volume that is not as a link to its details, and the free space. */
-function volumeSummary(v, st, { q = "", spare = 0 } = {}) {
-  const troubled = v.map(x => [x, volumeProblem(x)]).filter(([, p]) => p);
-  const scope = q ? ` matching “${esc(q)}”` : "", n = v.length;
-  const head = !n ? `No Longhorn volumes${scope}.`
-    : !troubled.length ? `${n === 1 ? "The volume" : `All ${n} volumes`}${scope} ${n === 1 ? "is" : "are"} healthy.`
-    : `${n - troubled.length} of ${n} volumes${scope} ${n - troubled.length === 1 ? "is" : "are"} healthy.`;
-  const shown = troubled.slice(0, 3).map(([x, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('volume',${jsq(volumeKey(x))})">${esc(volumeTitle(x))} ${esc(p.word)}</button>`);
-  const pool = (STATE.data.forecast?.rows || []).find(r => r.kind === "pool" && r.days_left !== null && r.days_left <= (STATE.data.forecast.show_days || 60));
-  return [`<b>${head}</b>`,
-    shown.length ? `${shown.join(", ")}${troubled.length > 3 ? ` and ${troubled.length - 3} more` : ""}.` : "",
-    st ? `<span data-card="storage|pool">${esc(st.avail_gb)} GiB of ${esc(st.cap_gb)} GiB is free${pool ? `, and all storage is full ${esc(forecastWhen(pool.days_left))}` : ""}.</span>` : "",
-    spare ? `<button type="button" class="linkish sum-link" onclick="STATE.volSpare=true;viewStorage()">${spare === 1 ? "1 volume is" : `${spare} volumes are`} not used by any app.</button>` : "",
-  ].filter(Boolean).join(" ");
-}
+// Sizes as people read them: 1,392 rather than 1392.
+const GIB_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 });
+const gibText = n => Number.isFinite(+n) ? GIB_FORMAT.format(+n) : "?";
 
-/* What needs a person on this page, one line each with the button that deals
-   with it: a volume or disk filling up, copies to rebuild, volumes nothing
-   uses and old copies. The page's one notice; nothing to do shows nothing. */
-function volumeAttention(v, forecast, oldCopies = []) {
-  const items = [];
-  const show = forecast?.show_days || 60;
-  for (const r of (forecast?.rows || []).filter(r => r.days_left !== null && r.days_left <= show)) {
-    const vol = r.kind === "volume" ? v.find(x => x.name === r.volume) : null;
-    const name = r.kind === "pool" ? "All Longhorn storage" : r.kind === "disk" ? `The disk ${r.label}` : r.label;
-    const button = vol ? UI.button("Expand volume", `volumeEdit(${JSON.stringify(vol)})`, { attrs: 'data-need="operator"' })
-      : r.kind === "disk" ? UI.button("Open host", `nodeDetail(${jsArg(r.node)})`) : "";
-    items.push([forecastTone(r.days_left, forecast.warn_days), `${esc(name)} is full ${esc(forecastWhen(r.days_left))}`,
-      `${esc(r.pct)}% full, growing by ${gibPerDay(r.per_day)} GiB a day.`, button]);
-  }
-  for (const x of v.filter(x => x.copies_short?.whole)) items.push(["warn", `${esc(volumeTitle(x))} has ${x.copies_short.whole} of ${x.copies_short.wanted} copies`,
-    "Longhorn rebuilds missing copies only while a volume is attached.", UI.button("Rebuild now", `volumeRebuild(${jsArg(x.name)})`, { attrs: 'data-need="operator"' })]);
-  const spare = v.filter(x => ["orphaned", "unclaimed"].includes(volumeUse(x).kind));
-  if (spare.length) items.push(["info", `${spare.length === 1 ? "1 volume is" : `${spare.length} volumes are`} not used by any app`,
-    "Review them before deleting, to free their space.", UI.button(STATE.volSpare ? "Show all volumes" : "Show them", "STATE.volSpare=!STATE.volSpare;viewStorage()")]);
-  if (oldCopies.length) items.push(["info", `${oldCopies.length === 1 ? "1 old copy is" : `${oldCopies.length} old copies are`} kept from a storage class change`,
-    "Remove each one once its app works with the new copy.", UI.button("Review old copies", "document.getElementById('volOldCopies')?.scrollIntoView({behavior:'smooth'})")]);
-  if (!items.length) return "";
-  return `<div class="card flat attention-list" role="region" aria-label="Needs attention"><div class="ctitle">Needs attention</div>${items.map(([tone, head, line, button]) =>
-    `<div class="attention-item ${tone}"><i class="attention-dot" aria-hidden="true"></i><div class="attention-text"><b>${head}.</b> <span class="dim">${line}</span></div>${button || ""}</div>`).join("")}</div>`;
+/* The page's one line (design.md "Summary line"): the free space, then each
+   volume or disk that needs a person as a link, set apart by a dot. A phone
+   shows the short form: the free space and how many need attention. */
+function volumeSummary(v, st, { q = "", reading = false } = {}) {
+  // Copies before space, and the worst of each first.
+  const rank = p => (p.usage ? 2 : 0) + (p.tone === "bad" ? 0 : 1);
+  const troubled = v.map(x => [x, volumeProblem(x)]).filter(([, p]) => p).sort((a, b) => rank(a[1]) - rank(b[1]));
+  const f = STATE.data.forecast, warn = f?.warn_days || 14;
+  const stores = (f?.rows || []).filter(r => r.kind !== "volume" && r.days_left !== null && r.days_left <= warn);
+  const free = st ? `<span data-card="storage|pool"><b>${gibText(st.avail_gb)} GiB of ${gibText(st.cap_gb)} GiB is free.</b></span>`
+    : reading ? '<span class="dim">Reading the free space…</span>' : `<b>${v.length === 1 ? "1 volume" : `${v.length} volumes`}.</b>`;
+  const links = [...troubled.slice(0, 3).map(([x, p]) => `<button type="button" class="linkish sum-link sum-${p.tone}" onclick="openDetails('volume',${jsq(volumeKey(x))})">${esc(volumeTitle(x))} ${esc(p.word)}</button>`),
+    troubled.length > 3 ? `<span class="sum-note">${troubled.length - 3} more</span>` : "",
+    ...stores.map(r => {
+      const tone = forecastTone(r.days_left, warn), words = `${r.kind === "pool" ? "All Longhorn storage" : `The disk ${esc(r.label)}`} is full ${esc(forecastWhen(r.days_left))}`;
+      return r.kind === "disk" ? `<button type="button" class="linkish sum-link sum-${tone}" onclick="nodeDetail(${jsq(r.node)})">${words}</button>` : `<span class="sum-${tone}">${words}</span>`;
+    }),
+    q ? `<span class="sum-note">${v.length === 1 ? "1 volume matches" : `${v.length} volumes match`} “${esc(q)}”</span>` : ""].filter(Boolean);
+  const needs = troubled.length + stores.length;
+  const wide = `${free}${links.length ? ` ${links.join(SUM_DOT)}` : ""}`;
+  const narrow = `${st ? `<b>${gibText(st.avail_gb)} GiB free.</b>` : free}${needs ? ` <button type="button" class="linkish sum-link sum-warn" onclick="volumeNeedsOnly(true)">${needs === 1 ? "1 volume needs" : `${needs} volumes need`} attention</button>` : ""}`;
+  return `<span class="sum-wide">${wide}</span><span class="sum-narrow">${narrow}</span>`;
 }
+if (typeof window === "object") window.volumeNeedsOnly = on => { STATE.volNeeds = on; viewStorage(); };
 
 /* Copies as dots: one for each copy the volume should have, filled when it is
    whole, amber when it is not running, an empty ring when it is missing. */
 function volumeCopyDots(x) {
   if (x.copies === null) return `<span class="dim xs" data-tip="${esc(volumeCopiesTip(x))}">Unknown</span>`;
-  const copies = x.copies || [], want = Math.max(+x.replicas || 0, copies.length);
+  const copies = x.copies || [], short = x.copies_short;
+  // A detached volume short of copies says how many are whole; Longhorn may list none.
+  const want = Math.max(+x.replicas || 0, copies.length, short?.wanted || 0), whole = short ? short.whole : null;
   const dots = Array.from({ length: want }, (_, i) => {
     const c = copies[i];
-    return `<i class="copydot ${!c && copies.length ? "missing" : !c ? "unknown" : c.healthy ? "ok" : "warn"}"></i>`;
+    const kind = whole !== null ? (i < whole ? "ok" : "missing") : !c && copies.length ? "missing" : !c ? "ok" : c.healthy ? "ok" : "warn";
+    return `<i class="copydot ${kind}"></i>`;
   }).join("");
-  const label = copies.length ? `${copies.filter(c => c.healthy).length} of ${want} copies whole` : `${want} cop${want === 1 ? "y" : "ies"}`;
+  const label = whole !== null ? `${whole} of ${want} copies whole` : copies.length ? `${copies.filter(c => c.healthy).length} of ${want} copies whole` : `${want} cop${want === 1 ? "y" : "ies"}`;
   return `<span class="copydots" role="img" tabindex="0" aria-label="${esc(label)}" data-card="volume-copies|${esc(volumeKey(x))}">${dots}</span>`;
+}
+
+/* The row's Copies cell: the dots, then a short line when a copy is missing,
+   being rebuilt or restored. Its hover card gives Longhorn's reason. */
+function volumeCopiesCell(x) {
+  const busy = volumeBusy(x), problem = volumeProblem(x), key = esc(volumeKey(x));
+  const doing = busy && !busy.error && `${x.restore ? "Restoring" : x.rebalancing ? "Moving a copy" : "Rebuilding"} ${+busy.pct || 0}%`;
+  const note = doing ? `${volumeProgressBar(busy.pct)}${esc(doing)}` : problem && !problem.usage ? esc(problem.note) : "";
+  return `${volumeCopyDots(x)}${note ? `<div class="vol-note xs" data-card="volume-health|${key}">${note}</div>` : ""}`;
 }
 
 function volumeOverview(name) {
@@ -186,5 +192,5 @@ if (typeof HOVER_CARDS === "object") {
 
 // Node only (tests): the same names, for require(). The browser has no `module`.
 if (typeof module === "object" && module.exports) module.exports = {
-  volumeKey, volumeByName, volumeTitle, accessWords, gibPerDay, reasonSentence, volumeProblem, volumeSummary, volumeAttention, volumeCopyDots, volumeOverview,
+  volumeKey, volumeByName, volumeTitle, accessWords, gibPerDay, reasonSentence, volumeProblem, GIB_FORMAT, gibText, volumeSummary, volumeCopyDots, volumeCopiesCell, volumeOverview,
 };
