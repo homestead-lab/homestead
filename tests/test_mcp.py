@@ -824,7 +824,8 @@ class CatalogueTests(unittest.TestCase):
                          "/api/operations/power-recovery/preview", "/api/operations/power-recovery/resolve",
                          "/api/operations/resume", "/api/operations/storage-recovery/act",
                          "/api/operations/storage-recovery/preview", "/api/operations/vm-recovery/preview",
-                         "/api/operations/vm-recovery/resolve", "/api/statefulset/restart-elsewhere",
+                         "/api/operations/vm-recovery/resolve", "/api/operations/vm-recovery/removal-preview",
+                         "/api/operations/vm-recovery/remove", "/api/statefulset/restart-elsewhere",
                          "/api/restore-swap", "/api/volumes/previous/swap-back"),
                         "recovery after a failure is a person's judgement; restore_backup restores a backup"),
         "/api/restore-tests/run": "a test restore runs on the restore-test schedule an admin set; a held tool "

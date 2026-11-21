@@ -489,6 +489,8 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/operations/storage-recovery/preview` | admin |  | homestead_operations |
 | GET | `/api/operations/vm-recovery/preview` | admin |  | homestead_route_policy |
 | POST | `/api/operations/vm-recovery/preview` | admin |  | homestead_operations |
+| POST | `/api/operations/vm-recovery/removal-preview` | admin |  | homestead_operations |
+| POST | `/api/operations/vm-recovery/remove` | admin |  | homestead_operations |
 | GET | `/api/operations/vm-recovery/resolve` | admin |  | homestead_route_policy |
 | POST | `/api/operations/vm-recovery/resolve` | admin |  | homestead_operations |
 | GET | `/api/os-updates` | viewer |  | homestead_os_rollout |
